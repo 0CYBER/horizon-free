@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -20,6 +21,24 @@ except ImportError:
     import lab
 
 ROOT = lab.ROOT
+
+
+def install_original_mod(source, mod_dir, filename=None):
+    """Replace our own previous versions, retaining backups outside Fabric's mod scan."""
+    mod_dir.mkdir(parents=True, exist_ok=True)
+    filename = filename or source.name
+    for old in mod_dir.glob("horizon-lab-*.jar"):
+        if old.name == filename:
+            continue
+        with zipfile.ZipFile(old) as archive:
+            if json.loads(archive.read("fabric.mod.json"))["id"] != "horizonlab":
+                raise ValueError(f"Refusing to replace another mod: {old}")
+        backup = mod_dir.parent / ".horizon-mod-backups"
+        backup.mkdir(exist_ok=True)
+        destination = backup / f"{old.stem}-{lab.digest(old, 'sha256')[:12]}.jar"
+        shutil.move(str(old), str(destination))
+    if source.resolve() != (mod_dir / filename).resolve():
+        shutil.copyfile(source, mod_dir / filename)
 CACHE = ROOT / ".local" / "runtime"
 
 

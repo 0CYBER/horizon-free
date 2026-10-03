@@ -27,7 +27,8 @@ def prepare(instance, baseline=False):
     launcher = runtime.fetch(artifact["url"], directory / "jars/server.jar", artifact["sha1"])
     server, libraries = lab.unpack_server(launcher, directory, game["version"])
     libraries = [server, *libraries, *runtime.fabric_libraries()]
-    mods = json.loads((ROOT / "packs/mods.lock.json").read_text())["projects"]
+    pack_lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
+    mods = pack_lock["projects"]
     selection = ["fabric-api"] if baseline else ["fabric-api", "lithium", "ferrite-core"]
     mod_dir = instance / "mods"
     mod_dir.mkdir(parents=True, exist_ok=True)
@@ -36,10 +37,10 @@ def prepare(instance, baseline=False):
         source = runtime.fetch(entry["url"], ROOT / ".local/pack-cache" / entry["filename"],
                                entry["hashes"]["sha512"], "sha512")
         shutil.copyfile(source, mod_dir / entry["filename"])
-    original = ROOT / "dist/horizon-lab-0.2.0.jar"
+    original = ROOT / "dist" / f"horizon-lab-{pack_lock['pack_version']}.jar"
     if not original.exists():
         raise FileNotFoundError("Build the original mod first with tools/build_mod.py, or use the server starter ZIP")
-    shutil.copyfile(original, mod_dir / original.name)
+    runtime.install_original_mod(original, mod_dir)
     return libraries
 
 

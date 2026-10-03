@@ -36,7 +36,8 @@ def compare(baseline, candidate):
         before, after = baseline["stats"][key], candidate["stats"][key]
         rows.append({"metric": key, "baseline": before, "candidate": after,
                      "change_percent": 100 * (after / before - 1) if before else None})
-    for key in ["heap_used_end_bytes", "gc_time_ms", "observed_ticks_per_second"]:
+    for key in ["heap_used_end_bytes", "heap_used_peak_sampled_bytes", "nonheap_used_peak_sampled_bytes",
+                "process_cpu_mean_cores", "gc_time_ms", "observed_ticks_per_second"]:
         if key in baseline and key in candidate:
             before, after = baseline[key], candidate[key]
             rows.append({"metric": key, "baseline": before, "candidate": after,

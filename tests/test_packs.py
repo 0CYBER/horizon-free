@@ -10,6 +10,37 @@ from tools import build_pack, compare_benchmarks, runtime
 
 
 class PackTests(unittest.TestCase):
+    def test_original_mod_upgrade_preserves_backup_and_other_mods(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            mods = root / "instance/mods"
+            mods.mkdir(parents=True)
+            old = mods / "horizon-lab-0.2.0.jar"
+            with zipfile.ZipFile(old, "w") as archive:
+                archive.writestr("fabric.mod.json", json.dumps({"id": "horizonlab"}))
+            old_bytes = old.read_bytes()
+            other = mods / "other.jar"
+            other.write_bytes(b"another mod")
+            new = root / "horizon-lab-0.3.0.jar"
+            new.write_bytes(b"new original fixture")
+            runtime.install_original_mod(new, mods)
+            self.assertFalse(old.exists())
+            self.assertEqual((mods / new.name).read_bytes(), new.read_bytes())
+            self.assertEqual(other.read_bytes(), b"another mod")
+            backups = list((mods.parent / ".horizon-mod-backups").glob("*.jar"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), old_bytes)
+
+    def test_original_mod_upgrade_refuses_unrelated_named_jar(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with zipfile.ZipFile(root / "horizon-lab-0.1.0.jar", "w") as archive:
+                archive.writestr("fabric.mod.json", json.dumps({"id": "someoneelse"}))
+            new = root / "horizon-lab-0.3.0.jar"
+            new.write_bytes(b"new original fixture")
+            with self.assertRaisesRegex(ValueError, "another mod"):
+                runtime.install_original_mod(new, root)
+
     def test_every_profile_has_correct_game_and_exact_dependency_closure(self):
         lock = build_pack.read_lock()
         for profile in build_pack.PROFILES.values():
@@ -39,7 +70,8 @@ class PackTests(unittest.TestCase):
                 pack = build_pack.build("m2-balanced", original)
             with zipfile.ZipFile(pack) as archive:
                 names = archive.namelist()
-                self.assertEqual([n for n in names if n.endswith(".jar")], ["overrides/mods/horizon-lab-0.2.0.jar"])
+                self.assertEqual([n for n in names if n.endswith(".jar")],
+                                 [f"overrides/mods/horizon-lab-{build_pack.read_lock()['pack_version']}.jar"])
                 index = json.loads(archive.read("modrinth.index.json"))
                 self.assertEqual(index["dependencies"]["minecraft"], "26.3")
                 for entry in index["files"]:

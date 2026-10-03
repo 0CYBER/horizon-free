@@ -1,17 +1,25 @@
 {
   "schemaVersion": 1,
   "id": "horizonlab",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "name": "Horizon Lab",
   "description": "Client frame pacing and server tick measurements for reproducible optimization experiments.",
-  "authors": ["Ludovic"],
+  "authors": [
+    "Ludovic"
+  ],
   "license": "MIT",
   "environment": "*",
   "entrypoints": {
-    "main": ["dev.horizonlab.HorizonLab"],
-    "client": ["dev.horizonlab.client.HorizonClient"]
+    "main": [
+      "dev.horizonlab.HorizonLab"
+    ],
+    "client": [
+      "dev.horizonlab.client.HorizonClient"
+    ]
   },
-  "mixins": ["horizonlab.mixins.json"],
+  "mixins": [
+    "horizonlab.mixins.json"
+  ],
   "depends": {
     "fabricloader": ">=0.19.5",
     "fabric-api": "*",
