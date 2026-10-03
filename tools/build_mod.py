@@ -47,6 +47,10 @@ def test_metrics():
                     SOURCE / "test/java/dev/horizonlab/budget/WakeableIdleWaitTest.java"]
     subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, idle_sources)], check=True)
     subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.budget.WakeableIdleWaitTest"], check=True)
+    dispatch_sources = [SOURCE / "main/java/dev/horizonlab/budget/DispatchRetry.java",
+                        SOURCE / "test/java/dev/horizonlab/budget/DispatchRetryTest.java"]
+    subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, dispatch_sources)], check=True)
+    subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.budget.DispatchRetryTest"], check=True)
 
 
 def build():
@@ -106,6 +110,28 @@ def build():
             info.external_attr = 0o100644 << 16
             archive.writestr(info, entries[name])
     print(f"Built {output} ({output.stat().st_size} bytes, sha256 {lab.digest(output, 'sha256')})")
+    return output
+
+
+def build_dispatch_fixture():
+    """Create a private integration-test mod; never include it in release packs."""
+    arguments = [json.loads(line) for line in (BUILD / "javac.args").read_text().splitlines()]
+    classpath = arguments[arguments.index("-classpath") + 1] + os.pathsep + str(BUILD / "classes")
+    classes = BUILD / "dispatch-fixture"
+    if classes.exists():
+        shutil.rmtree(classes)
+    classes.mkdir(parents=True)
+    subprocess.run(["javac", "--release", "25", "-proc:none", "-classpath", classpath,
+                    "-d", str(classes), str(SOURCE / "test/java/dev/horizonlab/dispatch/DispatchIntegration.java")], check=True)
+    output = BUILD / "dispatch-fixture.jar"
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(classes.rglob("*.class")):
+            archive.write(path, path.relative_to(classes).as_posix())
+        archive.writestr("fabric.mod.json", json.dumps({"schemaVersion": 1, "id": "horizon_dispatch_fixture",
+            "version": "1.0.0", "environment": "client",
+            "entrypoints": {"client": ["dev.horizonlab.dispatch.DispatchIntegration"]},
+            "depends": {"horizonlab": "*", "distanthorizons": "3.3.4"}}))
+    print(f"Private dispatch integration fixture: {output}")
     return output
 
 

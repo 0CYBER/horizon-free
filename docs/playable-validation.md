@@ -73,7 +73,7 @@ continued updating, and worlds/databases/workers closed cleanly. The actual
 publisher queue microbenchmark passes identity/priority/count checks on Linux,
 Windows and Apple Silicon macOS; its raw results and timing overshoot are documented
 in [the queue experiment](debounce-queue.md). These are separate from game-FPS,
-block-update-latency or RAM-reduction claims. All eleven pack overrides retain
+block-update-latency or RAM-reduction claims. All twelve pack overrides retain
 simulation distance 12 and explicitly set the intended experimental flags.
 
 The 0.6.0 resident-memory sampler ran in the actual adaptive-pacing demo world.
