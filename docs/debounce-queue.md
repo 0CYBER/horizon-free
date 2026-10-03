@@ -51,3 +51,33 @@ allocated during the interval, not retained heap or process memory. Hardware,
 timer behavior and workload can change results. The CI publishes raw output
 for Linux, Windows and Apple Silicon macOS. No game-FPS claim follows from this
 microbenchmark alone.
+
+## Hosted results, 3 October 2026
+
+Raw output is checked in under
+[`benchmarks/debounce-queue-2026-10-03`](../benchmarks/debounce-queue-2026-10-03/).
+The tables show medians of three trials. Allocations and CPU refer only to this
+synthetic queue polling interval, not the entire game. The macOS runner is hosted
+Apple Silicon with three logical CPUs; it is not the user's M2 Pro.
+
+| Platform / queued entries | Upstream allocation | Waiting allocation | Upstream worker CPU | Waiting worker CPU |
+| --- | ---: | ---: | ---: | ---: |
+| macOS ARM64 / 1 | 80,066,144 B | 768 B | 247.157 ms | 0.873 ms |
+| macOS ARM64 / 64 | 34,344,320 B | 2,112 B | 248.550 ms | 1.154 ms |
+| Linux x64 / 1 | 99,456,064 B | 7,520 B | 248.446 ms | 2.960 ms |
+| Linux x64 / 64 | 31,971,072 B | 7,488 B | 249.987 ms | 2.890 ms |
+| Windows x64 / 1 | 95,728,256 B | 5,536 B | 250.000 ms | Below counter resolution |
+| Windows x64 / 64 | 32,051,200 B | 5,376 B | 250.000 ms | Below counter resolution |
+
+Each upstream interval lasted about 250 ms. Waiting medians were 250.068 ms on
+Linux, 250.593–250.856 ms on Windows, and 251.431–252.426 ms on macOS. One macOS
+trial lasted 258.012 ms, demonstrating timer overshoot. These are interval-ending
+times; they are not measurements of a real block change reaching the screen.
+
+The real 0.7.0 adaptive-queue demo world renders and records with the hook enabled.
+Thread inspection reached the injected debounce parking path. A 120-second run
+wrote 643 frame intervals and 2,408 server ticks with matching CSV counts/means,
+and 119–120 RSS samples. Distant-terrain data continued updating; game worlds and
+DH databases closed cleanly. A separate 60-second profile confirmed allocation
+counter activity on the queue thread. Its workload/cache state differs from the
+earlier profile, so those profiles are not a numerical before/after comparison.
