@@ -98,8 +98,10 @@ class PublicationTests(unittest.TestCase):
     def test_private_paths_rejected(self):
         for path in [".local/minecraft/source.java", "decompiled/Foo.txt", "game.JAR", "capture.jfr", "source/Foo.java"]:
             self.assertTrue(check_public_tree.prohibited(path), path)
-        for path in ["tools/lab.py", "crates/voxel-kernels/src/lib.rs", "Cargo.lock", "docs/analysis.md"]:
+        for path in ["tools/lab.py", "crates/voxel-kernels/src/lib.rs", "Cargo.lock", "docs/analysis.md",
+                     "mods/horizon-lab/src/main/java/dev/horizonlab/HorizonLab.java"]:
             self.assertFalse(check_public_tree.prohibited(path), path)
+        self.assertTrue(check_public_tree.prohibited("mods/horizon-lab/src/main/java/net/minecraft/Client.java"))
 
     def test_force_added_ignored_file_is_detected_in_index_and_history(self):
         with tempfile.TemporaryDirectory() as temp:

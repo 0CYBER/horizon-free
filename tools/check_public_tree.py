@@ -12,6 +12,9 @@ PRIVATE_EXTENSIONS = {".jar", ".class", ".jfr", ".hprof", ".java"}
 
 def prohibited(path):
     parsed = PurePosixPath(path)
+    # Only original Horizon Lab sources may be tracked; recovered game Java stays private.
+    if parsed.suffix == ".java" and path.startswith("mods/horizon-lab/src/"):
+        return not ("/dev/horizonlab/" in path)
     return bool(parsed.parts and parsed.parts[0] in PRIVATE_ROOTS) or parsed.suffix.lower() in PRIVATE_EXTENSIONS
 
 

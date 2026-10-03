@@ -1,14 +1,65 @@
-# Minecraft Optimization Lab
+# Minecraft Optimization Lab / Horizon Lab
 
-A personal research workspace for understanding Minecraft Java Edition and testing original performance improvements, including Rust kernels. Not affiliated with Mojang or Microsoft.
+Client-first performance research for Minecraft Java **26.3**, preserving vanilla gameplay rules. Any language or renderer may be used when measured gains justify it. Not affiliated with Mojang or Microsoft.
 
-**Current scope:** complete local client/server decompilation for pinned Java Edition **26.3**, class inventories and output checks, and a tested Rust occupancy experiment. This is not a playable Rust port, a rebuilt Minecraft distribution, or proof of a game-level speedup.
+**First playable release:** pinned Java performance packs, distant terrain, an original frame/tick recorder, and Mac/client/server starter downloads. The M2 Pro/16 GB Mac is the first testing target. A Rust rewrite or custom renderer has not been completed; no M2 FPS improvement has been measured yet.
 
-The game JARs, libraries, decompiled Java, inventories, and logs live **inside this checkout** under **`.local/`**, which is gitignored. GitHub contains only our tooling, original Rust code, and research documentation. A fresh clone regenerates the local game workspace from official downloads.
+## Play on your Mac
 
-## Prepare and inspect the game
+Download **horizon-mac-starter-0.2.0.zip** from [Releases](https://github.com/ludovic111/minecraft-optimization-lab/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
 
-Requires Python 3.11+, JDK 25+, and Git. No Microsoft account credentials are needed for these downloads or decompilation. Use your normal licensed launcher and sign-in when playing or collecting client performance measurements.
+Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on your 16 GB M2 Pro. Prism can download Java automatically. Start at 1280×800 or 1920×1200; full Retina resolution is a larger GPU workload. [START-HERE.txt](packs/START-HERE.txt) has details. The same `.mrpack` files import into Prism on Windows and Linux.
+
+| Profile | Full-detail chunks | Distant LOD radius | Suggested maximum heap |
+| --- | ---: | ---: | ---: |
+| baseline | 12 | none | 6144 MiB |
+| m2-balanced | 12 | 128 | 6144 MiB |
+| low-memory | 8 | none | 3072 MiB |
+| far-distance | 12 | 256 | 8192 MiB, with sufficient physical RAM |
+| cinematic | 12 | 128 | 6144 MiB |
+| vulkan | 12 | 128 | 6144 MiB |
+
+Balanced combines [Sodium](https://modrinth.com/mod/sodium), [Lithium](https://modrinth.com/mod/lithium), [FerriteCore](https://modrinth.com/mod/ferrite-core), [ImmediatelyFast](https://modrinth.com/mod/immediatelyfast), [EntityCulling](https://modrinth.com/mod/entityculling), and [Distant Horizons](https://modrinth.com/mod/distanthorizons). Cinematic adds [Iris](https://modrinth.com/mod/iris) and [Complementary Reimagined](https://modrinth.com/shader/complementary-reimagined), initially disabled. Vulkan independently experiments with the game's own backend and fallback, without Iris.
+
+Distant LOD is simplified terrain. Nearby blocks retain full detail. Initial generation costs CPU/disk/memory and needs warm-up. DH adjusts clouds, chunk fade and transparency to blend its renderer; assess appearance as well as speed. Shaders cost GPU time and have [Mac-specific limits](https://shaders.properties/current/reference/miscellaneous/macos/). Universal CPU/GPU support and exact vanilla equivalence remain validation goals. Simulation distance stays 12 in every profile; normal 20 TPS rules are retained.
+
+## Measure on your hardware
+
+Press **F8** during gameplay to start a 120-second recording, or again to stop early. Rebind in Controls if needed. This also works with restricted chat accounts. Alternatively: `/horizon bench <label> 120`, `/horizon stop`, `/horizon status`.
+
+Use separate identical world copies and the same camera route, resolution, render/simulation distance, heap, VSync and FPS limit. Warm up, then alternate at least three baseline/optimized runs. Test fresh chunk exploration separately. For everyday play cap FPS or enable VSync to reduce power usage.
+
+The instance's `horizon-benchmarks/` folder receives JSON/CSV frame and integrated-server tick timings: average FPS, slowest-1%-average FPS, p95/p99 durations, stalls, JVM heap/GC, GPU/backend/driver and render settings. Frames include presentation/limiting waits and exclude menus/pauses/unfocused time. Tick `meanRate` is execution capacity, **not TPS**; observed tick counts are separate. Heap is **not process RSS or unified GPU memory**.
+
+```sh
+python3 tools/compare_benchmarks.py baseline-frames.json optimized-frames.json --strict
+```
+
+The comparison flags captured setting differences, but cannot verify route, world, shader state or cache warm-up. See [validation evidence](docs/playable-validation.md). Software-renderer test FPS is not evidence of a Mac/GPU speedup.
+
+## Build and run
+
+Requires Python 3.10+ and JDK 25. No Gradle, Rust or native compilation is required for playable packs.
+
+```sh
+python3 tools/build_mod.py
+python3 tools/build_release.py
+```
+
+Gitignored `dist/` contains six packs, our original instrumentation JAR, client/server starter ZIPs and SHA256SUMS. [mods.lock.json](packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
+
+The server starter uses Lithium/FerriteCore and `/horizonserver bench <label> <seconds>`. [Server instructions](docs/server-quickstart.txt) cover setup and a baseline. Files are prepared before you accept Minecraft's EULA locally. A 50-active-player workload remains to be measured.
+
+Local smoke testing uses the game's built-in limited demo; normal play uses Prism's licensed account authentication:
+
+```sh
+python3 tools/build_pack.py --profile m2-balanced --instance .local/runtime/m2-balanced
+vscreen run python3 tools/runtime.py demo --instance .local/runtime/m2-balanced
+```
+
+## Local game inspection
+
+Game JARs, decompiled Java, libraries, inventories, worlds and logs live **inside this checkout** under gitignored **`.local/`**. No game code is in Git history or release downloads. Fresh clones regenerate the inspection workspace from official downloads; Microsoft credentials are not needed for this step.
 
 ```sh
 git clone https://github.com/ludovic111/minecraft-optimization-lab.git
@@ -19,51 +70,24 @@ python3 tools/lab.py decompile
 python3 tools/lab.py status
 ```
 
-`research-lock.json` pins the version manifest and Vineflower 1.12.0 with checksums. Preparation verifies official artifact hashes, extracts the inner server game JAR from its launcher bundle, and supplies client/server libraries to the decompiler. No game process is launched, no game authentication is implemented, and no server `eula.txt` is written by the tooling.
+`research-lock.json` pins the official manifest and Vineflower. The inner server JAR is extracted and checked; client/server libraries provide decompiler context. Output: `.local/minecraft/26.3/sources/{client,server}/` and coverage/inventory reports. Current inventories cover 11,383 client classes and 7,762 server classes, producing 7,301/5,037 Java files. See [decompilation status](docs/decompilation-status.md).
 
-The default decompilation uses four threads and a 6 GiB Java heap, with one side processed at a time:
+Class-file SourceFile metadata covers inner classes, which often share a source file. Coverage does not prove semantic equivalence or recompilability; original bytecode remains the reference. Completed source directories are not overwritten automatically. Older obfuscated releases require a separate remapping stage.
 
-```sh
-python3 tools/lab.py decompile --side client --threads 4 --heap 6G
-python3 tools/lab.py decompile --side server --java /path/to/jdk-25/bin/java
-```
-
-Outputs:
-
-```text
-.local/minecraft/26.3/
-  jars/client.jar
-  jars/server.jar              # Downloaded launcher bundle
-  jars/server-game.jar         # Actual server bytecode
-  libraries/{client,server}/
-  sources/client/              # Decompiled client, including shared game logic
-  sources/server/              # Decompiled dedicated server
-  reports/*-inventory.json     # Every class, SourceFile, method count, size
-  reports/*-coverage.json      # Missing files and detected failure markers
-  reports/*-decompiler.log
-```
-
-Inner classes generally share a `.java` file with their enclosing class. Source coverage compares class-file `SourceFile` metadata with emitted Java, and scans Vineflower error markers. An exit code of 2 from `decompile` or `status` means coverage/failure markers need investigation. This does not establish semantic equivalence, preservation of every synthetic method, or recompilability; keep the original bytecode as the reference. Completed source directories are never overwritten automatically. Move a directory aside before repeating decompilation.
-
-For older obfuscated versions, preparation deliberately stops: a version-specific remapping stage is needed. The tool does not silently present obfuscated output as readable source. The current pin can be updated by reviewing an official version manifest and its checksums.
-
-## Run the original Rust experiment
-
-Requires Rust 1.85+; there are no third-party crate dependencies.
+## Original Rust research
 
 ```sh
 cargo test --workspace
 cargo run --release --bin voxel-bench -- 100 > .local/voxel-benchmark.csv
 ```
 
-`voxel-kernels` compares a scalar reference with a row-bitset algorithm for counting exposed faces in synthetic 16×16×16 sections. It checks empty, full, flat, checkerboard, and seeded random occupancy at three densities. Each result is the median of 21 samples, with warm-up, alternating measurement order, and checks against the reference. The repeat count is configurable.
+The dependency-free occupancy experiment compares scalar and bitset exposed-face counting for synthetic 16³ sections. It has no real mesh, material/AO/light work, neighboring-section context, JNI bridge or game integration. Speedups are kernel-only, not Minecraft FPS. [Research plan](docs/optimization-plan.md) describes profiling, improved Java baselines, native integration and behavior checks before expanding scope.
 
-All cubes are treated as opaque/full, and external neighbors as air. There is no mesh output, texture lookup, AO, lighting, GPU work, cross-section neighborhood, JNI bridge, or Minecraft integration yet. A speedup here applies only to this kernel relative to our scalar reference, not to Minecraft's renderer or its frame rate. See [the optimization plan](docs/optimization-plan.md).
-
-## Develop
+## Validation and ownership
 
 ```sh
 python3 -m unittest discover -s tests -v
+python3 tools/build_mod.py --test-only
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -71,10 +95,6 @@ python3 tools/check_public_tree.py
 python3 tools/check_public_tree.py --history
 ```
 
-CI is offline with respect to Minecraft: it tests the original tooling and Rust kernels without downloading or publishing game files. The optional hooks and CI reject `.local/`, game/profiling binaries, and `.java` files even if force-added. Original Java mod sources would need an explicit reviewed exception before adding them. The path check is a guardrail, not a substitute for reviewing a public diff.
+CI checks offline tools/Rust and compiles the original mod/builds packs on Linux, Windows and Apple Silicon macOS. Game dependencies download to ephemeral `.local/`; CI uploads only our original JAR and packs. Compilation is not Mac GPU gameplay testing. Publication checks allow Java only under our original `dev/horizonlab` namespace; review diffs as well.
 
-## Ownership and references
-
-The [MIT license](LICENSE) applies only to the original code and documentation tracked in this repository. It does not relicense downloaded game content, local decompiled Java, dependency JARs, or Vineflower. Their respective licenses still apply.
-
-Mojang [announced removal of Java Edition obfuscation](https://www.minecraft.net/en-us/article/removing-obfuscation-in-java-edition) without changing the [Minecraft EULA](https://www.minecraft.net/en-us/eula). Keep game code and modified game builds local; publish original tools and independent optimization work. Decompiler behavior is documented by [Vineflower](https://vineflower.org/usage/).
+[MIT](LICENSE) covers only our original tracked work. Dependencies retain their licenses. Mojang [removed obfuscation](https://www.minecraft.net/en-us/article/removing-obfuscation-in-java-edition) without changing [Minecraft's EULA](https://www.minecraft.net/en-us/eula). Decompiled game source remains local; published code implements independent tooling and instrumentation.
