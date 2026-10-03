@@ -66,7 +66,7 @@ function compareReports(a,b){
     else if(JSON.stringify(a[key])!==JSON.stringify(b[key]))warnings.push('JVM '+key+' differs. Treat it as an explicit experiment variable.');
   }
   if(a.kind==='frames'){
-    for(const key of ['adaptive_budget_enabled','adaptive_target_fps','precise_worker_pacing','debounce_queue_wait','wakeable_idle_wait','dispatch_retry_backoff','dh_thread_count','dh_runtime_ratio']){
+    for(const key of ['adaptive_budget_enabled','adaptive_target_fps','precise_worker_pacing','debounce_queue_wait','wakeable_idle_wait','dispatch_retry_backoff','tick_membership_dedup','dh_thread_count','dh_runtime_ratio']){
       if(key in a&&key in b&&JSON.stringify(a[key])!==JSON.stringify(b[key]))warnings.push('Experiment '+key+' differs.');
     }
     for(const [label,r] of [['Baseline',a],['Candidate',b]]){
@@ -124,6 +124,7 @@ function renderDetails(side){
   }
   fields.push(['Rejected dispatch retry', r.dispatch_retry_backoff===true?'on':r.dispatch_retry_backoff===false?'off':'not captured']);
   fields.push(['Wakeable queue idle', r.wakeable_idle_wait===true?'on':r.wakeable_idle_wait===false?'off':'not captured']);
+  if(r.kind==='frames')fields.push(['Tick membership deduplication',r.tick_membership_dedup===true?'on':r.tick_membership_dedup===false?'off':'not captured']);
   for(const [label,value]of fields)target.append(text('dt',label),text('dd',value));
 }
 async function loadFiles(side,files){
