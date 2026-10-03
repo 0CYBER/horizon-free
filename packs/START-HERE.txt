@@ -46,6 +46,8 @@ PROFILES
   retries while a DH update is still inside its existing 250 ms debounce period.
   Incoming work wakes the queue worker. OS timers can overshoot the requested
   1 ms maximum wait; evaluate terrain update latency as well as CPU/FPS.
+  Version 0.9 also lets incoming work wake an empty queue's former 50 ms sleep.
+  Cache maintenance keeps its 50 ms cadence; the original debounce stays intact.
 - adaptive-queue: combines queue-wait with adaptive terrain and precise pacing.
   For an isolated comparison use queue-wait versus m2-balanced. For the combined
   controls use adaptive-queue versus adaptive-pacing. Disable the queue hook in

@@ -43,6 +43,10 @@ def test_metrics():
                         SOURCE / "test/java/dev/horizonlab/budget/DebounceWaitTest.java"]
     subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, debounce_sources)], check=True)
     subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.budget.DebounceWaitTest"], check=True)
+    idle_sources = [SOURCE / "main/java/dev/horizonlab/budget/WakeableIdleWait.java",
+                    SOURCE / "test/java/dev/horizonlab/budget/WakeableIdleWaitTest.java"]
+    subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, idle_sources)], check=True)
+    subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.budget.WakeableIdleWaitTest"], check=True)
 
 
 def build():
@@ -164,6 +168,23 @@ def benchmark_headers():
                                 "-cp", os.pathsep.join([str(tests), classpath]),
                                 "dev.horizonlab.metrics.ObjectHeaderBenchmark", str(enabled).lower()],
                                stdout=report, check=True)
+    print(output.read_text(), end="")
+
+
+def benchmark_idle():
+    arguments = [json.loads(line) for line in (BUILD / "javac.args").read_text().splitlines()]
+    classpath = os.pathsep.join([str(BUILD / "classes"), arguments[arguments.index("-classpath") + 1]])
+    tests = BUILD / "idle-benchmark"
+    tests.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["javac", "--release", "25", "-proc:none", "-cp", classpath,
+                    "-d", str(tests), str(SOURCE / "test/java/dev/horizonlab/budget/IdleQueueBenchmark.java")], check=True)
+    output = ROOT / "dist/idle-queue-benchmark.txt"
+    with output.open("w", encoding="utf-8") as report:
+        report.write(f"Java {subprocess.check_output(['java', '--version'], text=True).splitlines()[0]}\n")
+        report.write(f"Platform {platform.system()} {platform.release()} {platform.machine()}; logical CPUs {os.cpu_count()}\n")
+        report.flush()
+        subprocess.run(["java", "-cp", os.pathsep.join([str(tests), classpath]),
+                        "dev.horizonlab.budget.IdleQueueBenchmark"], stdout=report, check=True)
     print(output.read_text(), end="")
 
 
