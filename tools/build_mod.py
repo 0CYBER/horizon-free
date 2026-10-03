@@ -29,6 +29,8 @@ def test_metrics():
     sources.append(SOURCE / "test/java/dev/horizonlab/metrics/MetricsTest.java")
     subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, sources)], check=True)
     subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.metrics.MetricsTest"], check=True)
+    subprocess.run(["java", "-XX:+UseCompactObjectHeaders", "-cp", str(destination),
+                    "dev.horizonlab.metrics.MetricsTest"], check=True)
     budget_sources = [SOURCE / "main/java/dev/horizonlab/budget/TerrainBudget.java",
                       SOURCE / "test/java/dev/horizonlab/budget/TerrainBudgetTest.java"]
     subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, budget_sources)], check=True)
@@ -141,15 +143,42 @@ def benchmark_debounce():
     print(output.read_text(), end="")
 
 
+def benchmark_headers():
+    arguments = [json.loads(line) for line in (BUILD / "javac.args").read_text().splitlines()]
+    classpath = arguments[arguments.index("-classpath") + 1]
+    tests = BUILD / "header-benchmark"
+    tests.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["javac", "--release", "25", "-proc:none", "-cp", classpath,
+                    "-d", str(tests), str(SOURCE / "test/java/dev/horizonlab/metrics/ObjectHeaderBenchmark.java")], check=True)
+    output = ROOT / "dist/object-header-benchmark.txt"
+    with output.open("w", encoding="utf-8") as report:
+        report.write(f"Java {subprocess.check_output(['java', '--version'], text=True).splitlines()[0]}\n")
+        report.write(f"Platform {platform.system()} {platform.release()} {platform.machine()}; logical CPUs {os.cpu_count()}\n")
+        report.flush()
+        for repeat in range(3):
+            for enabled in [False, True]:
+                report.write(f"fork={repeat} requested_compact_headers={enabled}\n")
+                report.flush()
+                subprocess.run(["java", "-Xms128M", "-Xmx512M",
+                                "-XX:" + ("+" if enabled else "-") + "UseCompactObjectHeaders",
+                                "-cp", os.pathsep.join([str(tests), classpath]),
+                                "dev.horizonlab.metrics.ObjectHeaderBenchmark", str(enabled).lower()],
+                               stdout=report, check=True)
+    print(output.read_text(), end="")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-only", action="store_true")
     parser.add_argument("--benchmark-workers", action="store_true", help="Measure tiny-job executor pacing; not Minecraft FPS")
+    parser.add_argument("--benchmark-headers", action="store_true", help="Measure object allocation with compact headers off/on; not game RAM")
     args = parser.parse_args()
-    if args.test_only and args.benchmark_workers:
-        parser.error("--benchmark-workers requires the compiled mod; omit --test-only")
+    if args.test_only and (args.benchmark_workers or args.benchmark_headers):
+        parser.error("Benchmarks require the compiled mod; omit --test-only")
     test_metrics()
     if not args.test_only:
         build()
         if args.benchmark_workers:
             benchmark_workers()
+        if args.benchmark_headers:
+            benchmark_headers()

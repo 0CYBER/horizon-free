@@ -48,6 +48,8 @@ jobs:
         run: python -c "from tools.build_mod import benchmark_workers; benchmark_workers()"
       - name: Measure isolated debounce queue polling
         run: python -c "from tools.build_mod import benchmark_debounce; benchmark_debounce()"
+      - name: Measure object allocations with compact headers off and on
+        run: python -c "from tools.build_mod import benchmark_headers; benchmark_headers()"
       - name: Test pack integrity and comparisons
         run: python -m unittest discover -s tests -v
       - name: Upload original mod and pack manifests only
@@ -59,3 +61,4 @@ jobs:
             dist/horizon-lab-*.jar
             dist/worker-pacing-benchmark.txt
             dist/debounce-queue-benchmark.txt
+            dist/object-header-benchmark.txt

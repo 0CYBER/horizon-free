@@ -1,4 +1,4 @@
-Horizon server 0.2.0 — Minecraft 26.3, Fabric 0.19.5, Java 25
+Horizon server @PACK_VERSION@ — Minecraft 26.3, Fabric 0.19.5, Java 25
 
 Install Python 3.10+ and native Java 25. Extract this ZIP and open a terminal here.
 
@@ -34,6 +34,11 @@ benchmarking 50 players include normal exploration, entity farms, redstone and
 chunk loading; repeat with 1, 10 and 100. Do not change simulation/view distance
 between matched runs or turn off game logic to manufacture a speedup.
 This first release has not been validated under a 50-player real workload.
+
+Optional Java 25 HotSpot experiment: add --compact-headers to the run command.
+Reports capture the actual compact object header flag and collector names.
+Compare against the same workload with the flag omitted; object allocation
+changes do not establish a whole-server RAM/TPS gain.
 
 Compare generated reports:
   python3 tools/compare_benchmarks.py baseline-ticks.json optimized-ticks.json --strict

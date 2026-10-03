@@ -78,6 +78,8 @@ class PackTests(unittest.TestCase):
                 # A missing/currently wrong version invokes the game's graphics API reset migration.
                 self.assertEqual(options["version"], "5023")
                 self.assertEqual(json.loads(options["preferredGraphicsBackend"]), "opengl")
+                # The default Fancy startup preset otherwise overwrites the requested view distance.
+                self.assertEqual(json.loads(options["graphicsPreset"]), "custom")
                 for entry in index["files"]:
                     self.assertEqual(set(entry["hashes"]), {"sha1", "sha512"})
                     self.assertTrue(entry["downloads"][0].startswith("https://cdn.modrinth.com/"))
@@ -118,6 +120,18 @@ class ComparisonTests(unittest.TestCase):
         for other in [empty, self.report("ticks")]:
             with self.assertRaises(ValueError):
                 compare_benchmarks.compare(self.report(), other)
+
+    def test_jvm_experiment_warns_without_rejecting_an_intentional_change(self):
+        baseline = self.report()
+        baseline.update(compact_object_headers=False, garbage_collectors=["G1 Young Generation"])
+        candidate = copy.deepcopy(baseline)
+        candidate["compact_object_headers"] = True
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertEqual(result["mismatches"], [])
+        self.assertTrue(any("compact_object_headers differs" in warning for warning in result["warnings"]))
+        del candidate["compact_object_headers"]
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertTrue(any("not captured" in warning for warning in result["warnings"]))
 
 
 if __name__ == "__main__":

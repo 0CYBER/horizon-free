@@ -28,6 +28,12 @@ public final class MetricsTest {
         check((long) snapshot.metadata().get("heap_used_peak_sampled_bytes") >=
             (long) snapshot.metadata().get("heap_used_end_bytes"), "heap peak includes the final sample");
         check((int) snapshot.metadata().get("resource_samples") >= 2, "start/end resource snapshots");
+        check(snapshot.metadata().get("garbage_collectors") instanceof java.util.List, "collector configuration captured");
+        var diagnostic = java.lang.management.ManagementFactory.getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class);
+        if (diagnostic != null) {
+            boolean actual = Boolean.parseBoolean(diagnostic.getVMOption("UseCompactObjectHeaders").getValue());
+            check(snapshot.metadata().get("compact_object_headers").equals(actual), "header option reflects the actual VM");
+        }
         if (snapshot.metadata().containsKey("process_cpu_seconds")) {
             check((double) snapshot.metadata().get("process_cpu_seconds") >= 0, "CPU time is nonnegative");
         }

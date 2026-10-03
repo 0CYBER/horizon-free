@@ -22,6 +22,21 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 
 ## Interpretation limits
 
+The exact 0.8.0 JAR (SHA-256
+`b674be112cd148406b6b79c14f54b91a4da1ac0e03fe744aaee857c5a51eae8a`)
+loaded the complete adaptive-queue stack with compact headers enabled. A fresh
+options file retained custom graphics preset, render distance 12 and simulation
+distance 12 in the actual frame report. The 120-second run produced 793 frame
+intervals and 2,409 server-tick samples; CSV counts and mean durations match JSON.
+Both reports captured compact headers as true, G1 collector names and 120 RSS
+samples. The offline viewer displayed these actual settings, RSS and CSV charts;
+general frame/tick, invalid-input, escaping and mobile checks also passed.
+World/database shutdown completed cleanly. This software-rendered integration
+test is not a matched RAM/FPS comparison. Cross-platform builds, native-reader
+tests, metrics under compact headers, isolated allocation probes and 20 Python
+tests passed on Linux, Windows and hosted Apple Silicon macOS 26. See
+[object layouts and measurement limits](compact-headers.md).
+
 Generated pack options now carry data version 5023, verified against `version.json`
 inside the checksum-verified Minecraft 26.3 JAR. Without this marker, the game's
 legacy-options migration reset the intended backend to Default. The fixed Vulkan
