@@ -61,6 +61,10 @@ function compareReports(a,b){
   const differences=SETTINGS.filter(key=>JSON.stringify(a[key])!==JSON.stringify(b[key])).map(key=>({setting:key,baseline:a[key]??null,candidate:b[key]??null}));
   if(a.kind==='ticks'&&a.peak_players!==b.peak_players)differences.push({setting:'peak_players',baseline:a.peak_players??null,candidate:b.peak_players??null});
   const warnings=['World, camera route, shaders and terrain-cache warm-up still need to match. These are not verified by the captured settings.'];
+  for(const key of ['compact_object_headers','garbage_collectors']){
+    if(!(key in a)||!(key in b))warnings.push(key+' was not captured in both reports; JVM configuration equivalence is unknown.');
+    else if(JSON.stringify(a[key])!==JSON.stringify(b[key]))warnings.push('JVM '+key+' differs. Treat it as an explicit experiment variable.');
+  }
   if(Math.abs(a.elapsed_seconds-b.elapsed_seconds)>Math.max(2,Math.min(a.elapsed_seconds,b.elapsed_seconds)*.1))warnings.push('Recording durations differ. Match durations when comparing memory peaks and collection totals.');
   for(const [label,r] of [['Baseline',a],['Candidate',b]]){
     if(r.elapsed_seconds<60)warnings.push(label+' recording is shorter than 60 seconds. Use longer repeated runs.');
@@ -95,6 +99,7 @@ function renderDetails(side){
   if(!entry)return;
   const r=entry.report,fields=[['Profile',r.profile||r.label||'Unlabeled'],['Recording',format(r.elapsed_seconds)+' s · '+format(r.stats.count)+' samples'],['Platform',[r.os,r.architecture].filter(Boolean).join(' ')||'Not captured']];
   if(r.kind==='frames')fields.push(['Graphics',[r.gpu,r.graphics_backend].filter(Boolean).join(' · ')||'Not captured'],['Window',number(r.framebuffer_width)?r.framebuffer_width+' × '+r.framebuffer_height:'Not captured'],['Experiments','Adaptive: '+(r.adaptive_budget_enabled?'on':'off')+' · precise pacing: '+(r.precise_worker_pacing?'on':'off')+' · queue wait: '+(r.debounce_queue_wait?'on':'off')]);
+  fields.push(['JVM', 'Compact headers: '+(r.compact_object_headers===true?'on':r.compact_object_headers===false?'off':'not captured')+' · GC: '+(Array.isArray(r.garbage_collectors)?r.garbage_collectors.join(', '):'not captured')]);
   for(const [label,value]of fields)target.append(text('dt',label),text('dd',value));
 }
 async function loadFiles(side,files){

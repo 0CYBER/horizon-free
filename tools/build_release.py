@@ -29,7 +29,7 @@ def main():
     build_pack.write_zip(ROOT / "dist" / f"horizon-mac-starter-{version}.zip", client)
     server = {"LICENSE": client["LICENSE"], "dist/" + mod.name: mod.read_bytes(),
               "Compare-Benchmarks.html": viewer,
-              "START-HERE.txt": (ROOT / "docs/server-quickstart.txt").read_bytes(),
+              "START-HERE.txt": (ROOT / "docs/server-quickstart.txt").read_text().replace("@PACK_VERSION@", version).encode(),
               "research-lock.json": (ROOT / "research-lock.json").read_bytes()}
     for name in ["lab.py", "runtime.py", "server.py", "compare_benchmarks.py"]:
         server["tools/" + name] = (ROOT / "tools" / name).read_bytes()

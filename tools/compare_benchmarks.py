@@ -23,6 +23,11 @@ def compare(baseline, candidate):
     mismatches = [f"{key}: {baseline.get(key)!r} vs {candidate.get(key)!r}" for key in MATCH_FIELDS
                   if baseline.get(key) != candidate.get(key)]
     warnings = ["World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool."]
+    for field in ["compact_object_headers", "garbage_collectors"]:
+        if field not in baseline or field not in candidate:
+            warnings.append(f"{field} was not captured in both reports; JVM configuration equivalence is unknown.")
+        elif baseline[field] != candidate[field]:
+            warnings.append(f"JVM {field} differs: {baseline[field]!r} vs {candidate[field]!r}. Treat this as an explicit experiment variable.")
     if abs(baseline.get("elapsed_seconds", 0) - candidate.get("elapsed_seconds", 0)) > max(
             2, min(baseline.get("elapsed_seconds", 0), candidate.get("elapsed_seconds", 0)) * 0.1):
         warnings.append("Recording durations differ; match durations when comparing memory peaks and collection totals.")

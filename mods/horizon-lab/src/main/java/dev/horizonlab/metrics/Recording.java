@@ -82,6 +82,15 @@ public final class Recording {
         metadata.put("os_version", System.getProperty("os.version"));
         metadata.put("architecture", System.getProperty("os.arch"));
         metadata.put("logical_processors", Runtime.getRuntime().availableProcessors());
+        metadata.put("garbage_collectors", ManagementFactory.getGarbageCollectorMXBeans().stream()
+            .map(java.lang.management.MemoryManagerMXBean::getName).sorted().toList());
+        try {
+            var diagnostic = ManagementFactory.getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class);
+            if (diagnostic != null) metadata.put("compact_object_headers",
+                Boolean.parseBoolean(diagnostic.getVMOption("UseCompactObjectHeaders").getValue()));
+        } catch (RuntimeException | LinkageError unavailable) {
+            // Other VM implementations may not expose this option; absence is distinct from false.
+        }
         var endHeap = memory.getHeapMemoryUsage();
         peakHeap = Math.max(peakHeap, endHeap.getUsed());
         metadata.put("heap_used_end_bytes", endHeap.getUsed());

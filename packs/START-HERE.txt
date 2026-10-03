@@ -105,6 +105,18 @@ assess visual differences as well as speed. For collector experiments test
 Java 25's -XX:+UseZGC against its default G1 in both profiles; ZGC trades some
 CPU/memory for shorter pauses and is not an automatic win on a 16 GB machine.
 
+OPTIONAL JAVA MEMORY EXPERIMENT
+With Java 25 HotSpot, add -XX:+UseCompactObjectHeaders to the instance's Java JVM
+arguments and restart. Retain your other arguments. Packs do not enable this flag
+automatically. For a separate off/on test use duplicate balanced instances with
+-XX:-UseCompactObjectHeaders and -XX:+UseCompactObjectHeaders respectively.
+Use one flag at a time and keep the collector, heap and workload identical.
+Reports and the offline viewer show the actual compact-header setting and GC.
+Some object layouts shrink; others do not. Whole-game RAM/FPS gains need testing.
+
+Version 0.8 explicitly selects the custom graphics preset so Minecraft's startup
+preset does not override the pack's render distance. Check the recorded settings.
+
 This build is a playable Java optimization stack with original measurement code.
 It is NOT a completed Rust rewrite, a new custom renderer, or a measured M2 speedup.
 It has no gameplay feature additions and is intended to preserve vanilla rules;

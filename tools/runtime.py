@@ -137,6 +137,7 @@ def main():
     parser.add_argument("command", choices=["prepare", "demo"])
     parser.add_argument("--instance", type=Path, default=CACHE / "demo")
     parser.add_argument("--heap", default="4G")
+    parser.add_argument("--compact-headers", action="store_true", help="Enable Java 25 compact object headers for this demo process")
     args = parser.parse_args()
     if not re.fullmatch(r"[1-9][0-9]*[MGmg]", args.heap):
         parser.error("--heap must look like 4G")
@@ -145,7 +146,8 @@ def main():
         return
     instance = args.instance.resolve()
     instance.mkdir(parents=True, exist_ok=True)
-    command = ["java", "-Xms512M", f"-Xmx{args.heap}", "--enable-native-access=ALL-UNNAMED",
+    command = ["java", "-Xms512M", f"-Xmx{args.heap}", *(["-XX:+UseCompactObjectHeaders"] if args.compact_headers else []),
+               "--enable-native-access=ALL-UNNAMED",
                f"-Djava.library.path={natives}", f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
                "-Dfabric.log.disableAnsi=true", "-cp", os.pathsep.join(map(str, jars)),
                "net.fabricmc.loader.impl.launch.knot.KnotClient",
