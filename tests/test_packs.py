@@ -74,6 +74,10 @@ class PackTests(unittest.TestCase):
                                  [f"overrides/mods/horizon-lab-{build_pack.read_lock()['pack_version']}.jar"])
                 index = json.loads(archive.read("modrinth.index.json"))
                 self.assertEqual(index["dependencies"]["minecraft"], "26.3")
+                options = dict(line.split(":", 1) for line in archive.read("overrides/options.txt").decode().splitlines())
+                # A missing/currently wrong version invokes the game's graphics API reset migration.
+                self.assertEqual(options["version"], "5023")
+                self.assertEqual(json.loads(options["preferredGraphicsBackend"]), "opengl")
                 for entry in index["files"]:
                     self.assertEqual(set(entry["hashes"]), {"sha1", "sha512"})
                     self.assertTrue(entry["downloads"][0].startswith("https://cdn.modrinth.com/"))

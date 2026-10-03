@@ -22,6 +22,19 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 
 ## Interpretation limits
 
+Generated pack options now carry data version 5023, verified against `version.json`
+inside the checksum-verified Minecraft 26.3 JAR. Without this marker, the game's
+legacy-options migration reset the intended backend to Default. The fixed Vulkan
+preference starts the actual Vulkan backend with the pinned Sodium/DH/ImmediatelyFast
+stack, renders the demo world, and records 256 frame intervals / 2,372 server ticks
+over 120 seconds with matching CSV/JSON and 119–121 RSS samples. The frame report
+identifies Vulkan and its driver. DH data continues updating and saves/databases
+close cleanly. With an unavailable Vulkan driver path confined to a separate test
+process, the game reports backend creation failure and reaches the menu using its
+OpenGL fallback. These checks do not establish Vulkan speed, distant-LOD visual
+correctness, shader compatibility, or behavior on the user's Mac. Balanced remains
+the OpenGL first test; Vulkan remains an optional independent comparison.
+
 The 0.7.0 optional debounce queue hook initializes and renders with the combined
 adaptive/pacing controls. The exact candidate JAR wrote 643 frame intervals and
 2,408 server-tick samples over 120 seconds; CSV counts and means match the reports,
