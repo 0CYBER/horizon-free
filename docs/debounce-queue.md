@@ -46,7 +46,20 @@ about 5 ms into an idle interval. Separate upstream-sleep and wakeable-park work
 check the same update identity and empty queue after removal. Four warm-up pairs
 precede 20 alternating measured pairs. Output reports actual arrival time and
 publication-start-to-pop latency. Local Linux medians were 45.181 ms upstream and
-0.199 ms wakeable; hosted platform results are recorded after CI finishes.
+0.199 ms wakeable.
+
+Hosted medians and nearest-rank p95 over 20 measured trials:
+
+| Platform | Upstream median | Wakeable median | Wakeable p95 | Wakeable maximum |
+| --- | ---: | ---: | ---: | ---: |
+| macOS ARM64 | 84.273 ms | 0.068 ms | 0.103 ms | 16.096 ms |
+| Linux x64 | 45.065 ms | 0.053 ms | 0.073 ms | 0.073 ms |
+| Windows x64 | 45.159 ms | 0.074 ms | 0.127 ms | 0.182 ms |
+
+The upstream Mac maximum was 108.892 ms; its requested 50 ms sleep overshot.
+The wakeable Mac maximum also shows scheduler variability. The hosted ARM Mac
+has three logical CPUs and is not the user's M2 Pro. [Raw trials](../benchmarks/idle-queue-2026-10-03)
+are from [CI run 37155695460](https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37155695460).
 
 This isolates idle wakeup, including enqueue/pop overhead. It does not simulate
 the existing 250 ms debounce, preprocessing, chunk generation, meshing, network

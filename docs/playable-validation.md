@@ -22,6 +22,20 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 
 ## Interpretation limits
 
+The exact 0.9.0 JAR (SHA-256
+`2c5a731d4c93df427cc6054f120a52bf9456b3343b94ad9b79de1584b14d783f`)
+ran the combined queue/adaptive/pacing profile with a 3 GiB heap and compact
+headers enabled. Thread inspection reached the new wakeable idle park in all
+three dimension queues. The 120-second capture produced 806 frame intervals and
+2,411 server ticks, with matching CSV counts/means and 120 RSS samples each.
+The frame report captures the idle hook as true and actual render/simulation
+distances 12/12. The offline viewer reads the new flag, JVM settings and raw CSV;
+general viewer checks also pass. World/database/worker shutdown completed cleanly.
+Concurrency tests and the actual publisher-queue wake-latency probe pass on
+Linux, Windows and hosted Apple Silicon macOS; [raw results and limits](debounce-queue.md)
+keep idle wakeup separate from terrain completion and FPS. A 3 GiB heap passing
+this short world test is not a recommendation for heavy or long-running worlds.
+
 The exact 0.8.0 JAR (SHA-256
 `b674be112cd148406b6b79c14f54b91a4da1ac0e03fe744aaee857c5a51eae8a`)
 loaded the complete adaptive-queue stack with compact headers enabled. A fresh
