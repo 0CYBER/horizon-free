@@ -108,7 +108,7 @@ def benchmark_workers():
             for ratio in ["0.5", "0.05"]:
                 for mode in ["upstream", "precise"]:
                     subprocess.run(["java", "-cp", os.pathsep.join([str(tests), classpath]),
-                                    "dev.horizonlab.budget.WorkerPacingBenchmark", ratio, "10000", "2000", mode],
+                                    "dev.horizonlab.budget.WorkerPacingBenchmark", ratio, "10000", "50000", mode],
                                    stdout=report, check=True)
     print(output.read_text(), end="")
 
@@ -118,6 +118,8 @@ if __name__ == "__main__":
     parser.add_argument("--test-only", action="store_true")
     parser.add_argument("--benchmark-workers", action="store_true", help="Measure tiny-job executor pacing; not Minecraft FPS")
     args = parser.parse_args()
+    if args.test_only and args.benchmark_workers:
+        parser.error("--benchmark-workers requires the compiled mod; omit --test-only")
     test_metrics()
     if not args.test_only:
         build()

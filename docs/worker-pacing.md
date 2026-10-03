@@ -46,12 +46,17 @@ python3 tools/build_mod.py --benchmark-workers
 ```
 
 `dist/worker-pacing-benchmark.txt` records three runs per mode and requested budget,
-using 2,000 jobs with a nominal ten-microsecond workload after warm-up. It compares
+using 50,000 jobs with a nominal ten-microsecond workload after warm-up. It compares
 the actual upstream executor with a subclass using the original pacing routine.
 Worker CPU time and allocation counters exclude allocations on the producer thread.
 This is a timer/allocation microbenchmark, not Minecraft FPS, player TPS or a full
 terrain generation benchmark. Hosted Linux, macOS and Windows runs produce their
 own artifacts; contention and warm-up can change the results.
+
+The first 2,000-job Windows runs exposed CPU-counter quantization: a single worker
+could appear above one core or at zero CPU during a very short interval. Those
+figures are not reliable CPU-duty results. The longer workload provides a larger
+measurement window; counters and scheduling still have finite precision.
 
 Deterministic tests simulate multiple job sizes, timer overshoot, configuration
 changes, idle time and invalid ratios. Native game validation must also check terrain
