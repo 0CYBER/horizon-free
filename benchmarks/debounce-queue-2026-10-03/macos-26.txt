@@ -1,0 +1,14 @@
+Java openjdk 25.0.4.1 2026-08-18 LTS
+Platform Darwin 25.6.0 arm64; logical CPUs 3
+mode=upstream size=1 polls=2050320 worker_cpu_ms=218.517 wall_ms=250.000 worker_allocated_bytes=65610240
+mode=wait size=1 polls=24 worker_cpu_ms=1.116 wall_ms=250.103 worker_allocated_bytes=768
+mode=upstream size=1 polls=2641880 worker_cpu_ms=247.157 wall_ms=250.000 worker_allocated_bytes=84540160
+mode=wait size=1 polls=26 worker_cpu_ms=0.873 wall_ms=258.012 worker_allocated_bytes=832
+mode=upstream size=1 polls=2502067 worker_cpu_ms=248.481 wall_ms=250.000 worker_allocated_bytes=80066144
+mode=wait size=1 polls=22 worker_cpu_ms=0.693 wall_ms=252.426 worker_allocated_bytes=704
+mode=upstream size=64 polls=1073260 worker_cpu_ms=249.930 wall_ms=250.000 worker_allocated_bytes=34344320
+mode=wait size=64 polls=21 worker_cpu_ms=0.624 wall_ms=251.431 worker_allocated_bytes=672
+mode=upstream size=64 polls=1117775 worker_cpu_ms=248.519 wall_ms=250.000 worker_allocated_bytes=35768800
+mode=wait size=64 polls=66 worker_cpu_ms=1.172 wall_ms=252.401 worker_allocated_bytes=2112
+mode=upstream size=64 polls=1017233 worker_cpu_ms=248.550 wall_ms=250.000 worker_allocated_bytes=32551456
+mode=wait size=64 polls=74 worker_cpu_ms=1.154 wall_ms=250.207 worker_allocated_bytes=2368

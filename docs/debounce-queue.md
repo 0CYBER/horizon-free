@@ -1,0 +1,83 @@
+# Debounce queue experiment
+
+The local profile showed substantial allocation on the distant-terrain chunk
+update queue thread. Direct per-thread allocation counters confirmed activity
+there; sampled stacks repeatedly entered player-position reads and queue
+reinsertion. Inspection of the pinned DH 3.3.4 bytecode explains a mechanism:
+an update younger than its existing 250 ms debounce deadline is removed and
+reinserted, while the outer queue loop sleeps only when both queues are empty.
+A nonempty pending queue can therefore retry continuously before it can do work.
+
+The optional `queue-wait` profile keeps balanced graphics, distances, simulation
+settings, mods and worker budgets. Its original hook performs the existing
+debounce reinsertion, then requests a wait of up to 1 ms, bounded by the remaining
+deadline, if no preprocessing work is pending. It only waits on the queue worker,
+never a caller such as the render thread. Incoming queued work unparks a debounce
+wait; the original empty-queue sleep remains unchanged. OS scheduling determines
+when the worker resumes.
+The same update object, priority queue, debounce timestamp, overload policy,
+executor dispatch and normal simulation remain in use. Executor-unavailable and
+rejected-dispatch retries are outside this hook.
+
+`adaptive-queue` combines this hook with the existing adaptive terrain budget
+and precise worker pacing. Use `queue-wait` versus `m2-balanced` to isolate the
+queue change, and `adaptive-queue` versus `adaptive-pacing` to evaluate the
+combination. Each profile explicitly enables only its requested experiments.
+Set `enabled=false` in `config/horizon-queue-wait.properties` and restart to
+disable the queue hook. It is disabled by default and requires exact DH 3.3.4.
+
+Requested waits are not hard latency bounds: operating-system timers can
+overshoot, and arrival/worker scheduling affect responsiveness. Parking leaves
+the interruption flag intact, so the existing shutdown loop still handles it.
+New arrival wakeups reduce the chance of delaying useful preprocessing, but
+real terrain completion, block-change visibility and platform behavior need
+evaluation alongside CPU, allocations and frame pacing.
+
+## Isolated measurement
+
+Run `python -c "from tools.build_mod import benchmark_debounce; benchmark_debounce()"`
+after building the mod. It uses the actual publisher's `ChunkPosQueue`, with
+synthetic entries and a 250 ms pending-debounce interval. The upstream mode
+repeatedly pops and reinserts the nearest update; the waiting mode inserts the
+same bounded-wait policy between retries. Warm-ups precede three alternating
+trials at one and 64 queued entries. Each trial checks update identity, nearest
+priority and queue count, then reports wall time, worker CPU and worker allocation.
+
+This benchmark isolates redundant polling; it does not simulate game chunk
+lighting, rendering, network traffic or terrain completion. Thread CPU counters
+can be coarse, particularly on Windows, so a zero reading is below measurement
+resolution, not proof of zero CPU cost. Allocation counts are cumulative bytes
+allocated during the interval, not retained heap or process memory. Hardware,
+timer behavior and workload can change results. The CI publishes raw output
+for Linux, Windows and Apple Silicon macOS. No game-FPS claim follows from this
+microbenchmark alone.
+
+## Hosted results, 3 October 2026
+
+Raw output is checked in under
+[`benchmarks/debounce-queue-2026-10-03`](../benchmarks/debounce-queue-2026-10-03/).
+The tables show medians of three trials. Allocations and CPU refer only to this
+synthetic queue polling interval, not the entire game. The macOS runner is hosted
+Apple Silicon with three logical CPUs; it is not the user's M2 Pro.
+
+| Platform / queued entries | Upstream allocation | Waiting allocation | Upstream worker CPU | Waiting worker CPU |
+| --- | ---: | ---: | ---: | ---: |
+| macOS ARM64 / 1 | 80,066,144 B | 768 B | 247.157 ms | 0.873 ms |
+| macOS ARM64 / 64 | 34,344,320 B | 2,112 B | 248.550 ms | 1.154 ms |
+| Linux x64 / 1 | 99,456,064 B | 7,520 B | 248.446 ms | 2.960 ms |
+| Linux x64 / 64 | 31,971,072 B | 7,488 B | 249.987 ms | 2.890 ms |
+| Windows x64 / 1 | 95,728,256 B | 5,536 B | 250.000 ms | Below counter resolution |
+| Windows x64 / 64 | 32,051,200 B | 5,376 B | 250.000 ms | Below counter resolution |
+
+Each upstream interval lasted about 250 ms. Waiting medians were 250.068 ms on
+Linux, 250.593–250.856 ms on Windows, and 251.431–252.426 ms on macOS. One macOS
+trial lasted 258.012 ms, demonstrating timer overshoot. These are interval-ending
+times; they are not measurements of a real block change reaching the screen.
+
+The real 0.7.0 adaptive-queue demo world renders and records with the hook enabled.
+Thread inspection reached the injected debounce parking path. A 120-second run
+wrote 643 frame intervals and 2,408 server ticks with matching CSV counts/means,
+and 119–120 RSS samples. Distant-terrain data continued updating; game worlds and
+DH databases closed cleanly. A separate 60-second profile confirmed allocation
+counter activity on the queue thread. Its workload/cache state differs from the
+earlier profile, so those profiles are not a numerical before/after comparison.

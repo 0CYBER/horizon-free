@@ -94,7 +94,7 @@ function renderDetails(side){
   const entry=state[side],target=$(side+'Details');target.replaceChildren();
   if(!entry)return;
   const r=entry.report,fields=[['Profile',r.profile||r.label||'Unlabeled'],['Recording',format(r.elapsed_seconds)+' s · '+format(r.stats.count)+' samples'],['Platform',[r.os,r.architecture].filter(Boolean).join(' ')||'Not captured']];
-  if(r.kind==='frames')fields.push(['Graphics',[r.gpu,r.graphics_backend].filter(Boolean).join(' · ')||'Not captured'],['Window',number(r.framebuffer_width)?r.framebuffer_width+' × '+r.framebuffer_height:'Not captured'],['Experiments','Adaptive: '+(r.adaptive_budget_enabled?'on':'off')+' · precise pacing: '+(r.precise_worker_pacing?'on':'off')]);
+  if(r.kind==='frames')fields.push(['Graphics',[r.gpu,r.graphics_backend].filter(Boolean).join(' · ')||'Not captured'],['Window',number(r.framebuffer_width)?r.framebuffer_width+' × '+r.framebuffer_height:'Not captured'],['Experiments','Adaptive: '+(r.adaptive_budget_enabled?'on':'off')+' · precise pacing: '+(r.precise_worker_pacing?'on':'off')+' · queue wait: '+(r.debounce_queue_wait?'on':'off')]);
   for(const [label,value]of fields)target.append(text('dt',label),text('dd',value));
 }
 async function loadFiles(side,files){

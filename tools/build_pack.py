@@ -21,6 +21,8 @@ PROFILES = {
     "adaptive": {"title": "Adaptive terrain experiment", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144, "adaptive": True},
     "worker-pacing": {"title": "Precise worker pacing experiment", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144, "pacing": True},
     "adaptive-pacing": {"title": "Adaptive precise pacing experiment", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144, "adaptive": True, "pacing": True},
+    "queue-wait": {"title": "Debounce queue wait experiment", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144, "queue_wait": True},
+    "adaptive-queue": {"title": "Adaptive pacing and queue wait experiment", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144, "adaptive": True, "pacing": True, "queue_wait": True},
     "low-memory": {"title": "Low memory", "mods": CORE, "render": 8, "lod": 0, "heap": 3072},
     "far-distance": {"title": "Far distance", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 256, "heap": 8192},
     "cinematic": {"title": "Cinematic (optional)", "mods": CORE + ["distanthorizons", "iris", "complementary-reimagined"], "render": 12, "lod": 128, "heap": 6144},
@@ -73,12 +75,14 @@ def overrides(profile_name, mod_bytes):
     files = {f"mods/horizon-lab-{read_lock()['pack_version']}.jar": mod_bytes,
              "config/horizon-profile.txt": (profile_name + "\n").encode(),
              "options.txt": options(profile).encode()}
-    experiment = profile_name in ["adaptive", "worker-pacing", "adaptive-pacing"]
+    experiment = any(profile.get(key, False) for key in ["adaptive", "pacing", "queue_wait"])
     config = ROOT / "packs/config" / f"{'m2-balanced' if experiment else profile_name}.toml"
     files["config/horizon-adaptive.properties"] = (
         f"enabled={str(profile.get('adaptive', False)).lower()}\ntargetFps=60\n").encode()
     files["config/horizon-worker-pacing.properties"] = (
         f"enabled={str(profile.get('pacing', False)).lower()}\n").encode()
+    files["config/horizon-queue-wait.properties"] = (
+        f"enabled={str(profile.get('queue_wait', False)).lower()}\n").encode()
     if profile["lod"]:
         if not config.exists():
             raise FileNotFoundError(f"Missing verified DH profile config: {config}")

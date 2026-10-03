@@ -1,0 +1,14 @@
+Java openjdk 25.0.4.1 2026-08-18 LTS
+Platform Linux 6.17.0-1022-azure x86_64; logical CPUs 4
+mode=upstream size=1 polls=3147912 worker_cpu_ms=248.446 wall_ms=250.000 worker_allocated_bytes=100733184
+mode=wait size=1 polls=234 worker_cpu_ms=3.085 wall_ms=250.068 worker_allocated_bytes=7488
+mode=upstream size=1 polls=3108002 worker_cpu_ms=249.985 wall_ms=250.000 worker_allocated_bytes=99456064
+mode=wait size=1 polls=235 worker_cpu_ms=2.960 wall_ms=250.088 worker_allocated_bytes=7520
+mode=upstream size=1 polls=3073051 worker_cpu_ms=248.404 wall_ms=250.000 worker_allocated_bytes=98337632
+mode=wait size=1 polls=235 worker_cpu_ms=2.904 wall_ms=250.067 worker_allocated_bytes=7520
+mode=upstream size=64 polls=999765 worker_cpu_ms=248.680 wall_ms=250.000 worker_allocated_bytes=31992480
+mode=wait size=64 polls=235 worker_cpu_ms=2.887 wall_ms=250.067 worker_allocated_bytes=7520
+mode=upstream size=64 polls=999096 worker_cpu_ms=250.000 wall_ms=250.000 worker_allocated_bytes=31971072
+mode=wait size=64 polls=234 worker_cpu_ms=2.890 wall_ms=250.068 worker_allocated_bytes=7488
+mode=upstream size=64 polls=992373 worker_cpu_ms=249.987 wall_ms=250.000 worker_allocated_bytes=31755936
+mode=wait size=64 polls=234 worker_cpu_ms=2.891 wall_ms=250.068 worker_allocated_bytes=7488

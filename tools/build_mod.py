@@ -37,6 +37,10 @@ def test_metrics():
                       SOURCE / "test/java/dev/horizonlab/budget/WorkerPacerTest.java"]
     subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, worker_sources)], check=True)
     subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.budget.WorkerPacerTest"], check=True)
+    debounce_sources = [SOURCE / "main/java/dev/horizonlab/budget/DebounceWait.java",
+                        SOURCE / "test/java/dev/horizonlab/budget/DebounceWaitTest.java"]
+    subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, debounce_sources)], check=True)
+    subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.budget.DebounceWaitTest"], check=True)
 
 
 def build():
@@ -113,6 +117,23 @@ def benchmark_workers():
                     subprocess.run(["java", "-cp", os.pathsep.join([str(tests), classpath]),
                                     "dev.horizonlab.budget.WorkerPacingBenchmark", ratio, "10000", "50000", mode],
                                    stdout=report, check=True)
+    print(output.read_text(), end="")
+
+
+def benchmark_debounce():
+    arguments = [json.loads(line) for line in (BUILD / "javac.args").read_text().splitlines()]
+    classpath = os.pathsep.join([str(BUILD / "classes"), arguments[arguments.index("-classpath") + 1]])
+    tests = BUILD / "debounce-benchmark"
+    tests.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["javac", "--release", "25", "-proc:none", "-cp", classpath,
+                    "-d", str(tests), str(SOURCE / "test/java/dev/horizonlab/budget/DebounceQueueBenchmark.java")], check=True)
+    output = ROOT / "dist/debounce-queue-benchmark.txt"
+    with output.open("w", encoding="utf-8") as report:
+        report.write(f"Java {subprocess.check_output(['java', '--version'], text=True).splitlines()[0]}\n")
+        report.write(f"Platform {platform.system()} {platform.release()} {platform.machine()}; logical CPUs {os.cpu_count()}\n")
+        report.flush()
+        subprocess.run(["java", "-cp", os.pathsep.join([str(tests), classpath]),
+                        "dev.horizonlab.budget.DebounceQueueBenchmark"], stdout=report, check=True)
     print(output.read_text(), end="")
 
 

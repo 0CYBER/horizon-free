@@ -22,6 +22,18 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 
 ## Interpretation limits
 
+The 0.7.0 optional debounce queue hook initializes and renders with the combined
+adaptive/pacing controls. The exact candidate JAR wrote 643 frame intervals and
+2,408 server-tick samples over 120 seconds; CSV counts and means match the reports,
+which capture all three controls as enabled and include resident-memory samples.
+Thread inspection reached the injected debounce parking path, DH terrain data
+continued updating, and worlds/databases/workers closed cleanly. The actual
+publisher queue microbenchmark passes identity/priority/count checks on Linux,
+Windows and Apple Silicon macOS; its raw results and timing overshoot are documented
+in [the queue experiment](debounce-queue.md). These are separate from game-FPS,
+block-update-latency or RAM-reduction claims. All eleven pack overrides retain
+simulation distance 12 and explicitly set the intended experimental flags.
+
 The 0.6.0 resident-memory sampler ran in the actual adaptive-pacing demo world.
 A 120-second recording produced 370 frame intervals and 2,407 server-tick samples;
 both CSV counts and mean durations match their JSON summaries. Each report has
