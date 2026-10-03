@@ -40,7 +40,7 @@ def prepare(instance, baseline=False):
     original = ROOT / "dist" / f"horizon-lab-{pack_lock['pack_version']}.jar"
     if not original.exists():
         raise FileNotFoundError("Build the original mod first with tools/build_mod.py, or use the server starter ZIP")
-    shutil.copyfile(original, mod_dir / original.name)
+    runtime.install_original_mod(original, mod_dir)
     return libraries
 
 

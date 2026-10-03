@@ -128,7 +128,10 @@ def prepare_instance(profile_name, destination, mod_jar):
         target = destination / mod_path(entry)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
+    runtime.install_original_mod(mod_jar, destination / "mods", f"horizon-lab-{lock['pack_version']}.jar")
     for name, data in overrides(profile_name, mod_jar.read_bytes()).items():
+        if name.startswith("mods/"):
+            continue
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)

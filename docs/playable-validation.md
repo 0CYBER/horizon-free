@@ -22,6 +22,23 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 
 ## Interpretation limits
 
+The 0.3.0 adaptive profile rendered the actual demo world and applied live DH duty-cycle
+changes from 0.5 down to 0.05 under software-renderer frame pressure. Opening the pause
+menu released the override and reported an effective ratio of 0.5 again. A separate
+baseline instance starts without DH. API adapter tests cover suspension/resumption,
+changed user ceilings, and yielding to an existing or changed override from another mod.
+The real recorder wrote 193 frame intervals and 1,651 integrated-server tick samples,
+with matching CSV counts, sampled heap peaks and process CPU data. Dedicated-server
+0.3.0 dependencies initialize and exit with EULA false. No populated server result
+is inferred. The updated offline suite has 19 Python tests, including upgrade backups
+and refusing to replace an unrelated JAR with a matching filename.
+
+A 60-second JFR recording identified foreground, server and DH worker activity. It
+also demonstrated why allocation sampling must be corroborated: large sample weights
+at timestamp boxing did not correspond to the largest per-thread allocation counter
+deltas. Profiles stay private under `.local/`; neither sample weights nor this
+software-renderer workload establish a real-hardware optimization result.
+
 The local Linux host uses **Mesa llvmpipe software rendering**. It is useful for mod/mixin/startup/report validation, not for predicting M2 Pro, Windows GPU or Linux discrete-GPU performance. Warm-up/world loading on this host is slow. Demo credentials produce expected unavailable account-properties/Realms logs, and chat availability can be restricted; the independent F8 measurement shortcut avoids relying on chat.
 
 CI compiles/builds on Linux, Windows and Apple Silicon macOS. Successful compilation is not graphics, authentication, UI or Mac-driver runtime validation. macOS 27 and the user's actual M2 Pro have not been tested here. Optional cinematic shaders and Vulkan are experiments; the OpenGL balanced pack is the first manual test.
