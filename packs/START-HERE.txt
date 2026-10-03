@@ -142,3 +142,10 @@ from their publishers with pinned hashes. No decompiled Minecraft is distributed
 
 Source, build commands and measured validation:
 https://github.com/ludovic111/minecraft-optimization-lab
+
+TERRAIN / SHADER COMPARISONS
+Version 0.12 records actual DH radius/quality, worker count/duty cycle, Iris state
+and field of view at capture boundaries. If visual settings changed, the viewer
+flags the run. Older reports without these fields cannot establish quality
+equivalence. Snapshots cannot detect a change that was restored before the end,
+and do not prove that all requested distant terrain finished rendering.

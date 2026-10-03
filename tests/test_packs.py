@@ -158,6 +158,22 @@ class ComparisonTests(unittest.TestCase):
         result = compare_benchmarks.compare(baseline, candidate)
         self.assertTrue(any("not captured" in warning for warning in result["warnings"]))
 
+    def test_terrain_quality_and_shader_changes_cannot_look_like_equal_workloads(self):
+        baseline = self.report()
+        baseline.update(dh_capture_status="available", dh_lod_radius_chunks=128, dh_horizontal_quality="MEDIUM",
+                        iris_capture_status="available", iris_shaders_enabled=False, dh_thread_count=2)
+        candidate = copy.deepcopy(baseline)
+        candidate.update(dh_lod_radius_chunks=256, iris_shaders_enabled=True, iris_shader_pack="Example pack",
+                         dh_thread_count=1, visual_settings_changed=["render_distance"])
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertTrue(any("dh_lod_radius_chunks" in field for field in result["mismatches"]))
+        self.assertTrue(any("iris_shaders_enabled" in field for field in result["mismatches"]))
+        self.assertTrue(any("dh_thread_count differs" in warning for warning in result["warnings"]))
+        self.assertTrue(any("changed between capture boundaries" in warning for warning in result["warnings"]))
+        legacy = self.report()
+        result = compare_benchmarks.compare(legacy, copy.deepcopy(legacy))
+        self.assertTrue(any("terrain configuration was not captured" in warning for warning in result["warnings"]))
+
 
 if __name__ == "__main__":
     unittest.main()
