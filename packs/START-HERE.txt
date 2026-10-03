@@ -58,8 +58,13 @@ PROFILES
   This is a separate experiment: adaptive, worker-pacing and queue-wait are off.
   Set enabled=false in config/horizon-dispatch-retry.properties and restart
   to disable it. A synthetic applied-hook test checks exact task completion.
+- tick-dedup: same balanced settings, with compact reusable storage for private
+  terrain tick membership checks. Action order and visual settings stay the same.
+  Set enabled=false in config/horizon-tick-dedup.properties and restart to disable.
+  Compare against m2-balanced for an isolated test; no Mac FPS gain is measured yet.
 - foreground-first: combines adaptive terrain, precise pacing, wakeable queue
-  waits and bounded rejected dispatch retries. Uses OpenGL and a 120 FPS
+  waits, bounded rejected dispatch retries and (since 0.13) tick membership reuse.
+  Uses OpenGL and a 120 FPS
   adaptive goal. This is not an FPS cap; terrain may take longer to appear.
 - foreground-vulkan: the same combined controls with Vulkan preference and
   OpenGL fallback. On Apple Silicon the game bundles a MoltenVK library.

@@ -119,24 +119,32 @@ def build():
 
 
 def build_dispatch_fixture():
+    return build_integration_fixture("dispatch", "dev.horizonlab.dispatch.DispatchIntegration")
+
+
+def build_tick_dedup_fixture():
+    return build_integration_fixture("tick-dedup", "dev.horizonlab.dispatch.TickDedupIntegration")
+
+
+def build_integration_fixture(name, entrypoint):
     """Create a private integration-test mod; never include it in release packs."""
     arguments = [json.loads(line) for line in (BUILD / "javac.args").read_text().splitlines()]
     classpath = arguments[arguments.index("-classpath") + 1] + os.pathsep + str(BUILD / "classes")
-    classes = BUILD / "dispatch-fixture"
+    classes = BUILD / f"{name}-fixture"
     if classes.exists():
         shutil.rmtree(classes)
     classes.mkdir(parents=True)
     subprocess.run(["javac", "--release", "25", "-proc:none", "-classpath", classpath,
-                    "-d", str(classes), str(SOURCE / "test/java/dev/horizonlab/dispatch/DispatchIntegration.java")], check=True)
-    output = BUILD / "dispatch-fixture.jar"
+                    "-d", str(classes), str(SOURCE / "test/java" / (entrypoint.replace(".", "/") + ".java"))], check=True)
+    output = BUILD / f"{name}-fixture.jar"
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(classes.rglob("*.class")):
             archive.write(path, path.relative_to(classes).as_posix())
-        archive.writestr("fabric.mod.json", json.dumps({"schemaVersion": 1, "id": "horizon_dispatch_fixture",
+        archive.writestr("fabric.mod.json", json.dumps({"schemaVersion": 1, "id": "horizon_" + name.replace("-", "_") + "_fixture",
             "version": "1.0.0", "environment": "client",
-            "entrypoints": {"client": ["dev.horizonlab.dispatch.DispatchIntegration"]},
+            "entrypoints": {"client": [entrypoint]},
             "depends": {"horizonlab": "*", "distanthorizons": "3.3.4"}}))
-    print(f"Private dispatch integration fixture: {output}")
+    print(f"Private {name} integration fixture: {output}")
     return output
 
 

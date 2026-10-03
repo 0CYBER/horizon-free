@@ -2,6 +2,8 @@
 
 `foreground-first` combines the adaptive background-terrain budget, precise
 worker pacing, bounded/wakeable queue waits and rejected-dispatch retries.
+From version 0.13 it also includes compact per-tick membership storage; the
+original action collections and their iteration order remain unchanged.
 `foreground-vulkan` uses the same combination with Vulkan preference and the
 game's OpenGL fallback. Both retain balanced mods, 12 full-detail chunks,
 128-chunk LOD radius, two DH workers and simulation distance 12.
@@ -17,7 +19,7 @@ Start with balanced, then compare the combined OpenGL profile at equal graphics,
 heap and world settings. The individual profiles remain available for isolating
 each hook. Compare `foreground-first` against `foreground-vulkan` only after the
 isolated Vulkan pack works on the device. Each combined profile explicitly
-enables all four controls; changing `/horizon adaptive off` disables only the
+enables these controls; changing `/horizon adaptive off` disables only the
 adaptive controller. Other hooks require their configuration flag and restart.
 
 Change `targetFps` in `config/horizon-adaptive.properties` to evaluate a different

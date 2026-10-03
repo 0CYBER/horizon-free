@@ -61,12 +61,17 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Compile the private dispatch fixture
         run: python -c "from tools.build_mod import build_dispatch_fixture; build_dispatch_fixture()"
+      - name: Compile the private terrain tick membership fixture
+        run: python -c "from tools.build_mod import build_tick_dedup_fixture; build_tick_dedup_fixture()"
       - name: Install headless graphics libraries for applied-hook checks
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb libgl1 libegl1 libvulkan1 mesa-vulkan-drivers libasound2t64 libxkbcommon0
       - name: Exercise the applied dispatcher hooks and upstream rejection path
         if: runner.os == 'Linux'
         run: python tools/test_dispatch.py
+      - name: Verify applied tick membership transitions and allocation
+        if: runner.os == 'Linux'
+        run: python tools/test_tick_dedup.py
       - name: Upload original mod and pack manifests only
         uses: actions/upload-artifact@v4
         with:
@@ -79,3 +84,4 @@ jobs:
             dist/idle-queue-benchmark.txt
             dist/object-header-benchmark.txt
             dist/dispatch-integration.json
+            dist/tick-dedup-integration.json

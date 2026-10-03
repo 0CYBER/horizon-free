@@ -15,6 +15,7 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
     private static boolean workerPacing;
     private static boolean debounceWait;
     private static boolean dispatchRetry;
+    private static boolean tickDedup;
 
     @Override public void onLoad(String mixinPackage) {
         var loader = FabricLoader.getInstance();
@@ -63,15 +64,32 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
         } catch (Exception error) {
             LoggerFactory.getLogger("horizonlab").warn("Dispatch retry disabled: invalid configuration", error);
         }
+        try {
+            Properties properties = new Properties();
+            var dedupFile = loader.getConfigDir().resolve("horizon-tick-dedup.properties");
+            if (Files.exists(dedupFile)) {
+                try (var reader = Files.newBufferedReader(dedupFile)) { properties.load(reader); }
+            }
+            boolean requested = Boolean.parseBoolean(properties.getProperty("enabled", "false"));
+            boolean supported = loader.getModContainer("distanthorizons")
+                .map(mod -> mod.getMetadata().getVersion().getFriendlyString().equals("3.3.4")).orElse(false);
+            tickDedup = requested && supported;
+            if (requested) LoggerFactory.getLogger("horizonlab").info(
+                "DH tick membership deduplication: {} (requires pinned DH 3.3.4)", tickDedup ? "enabled" : "unavailable");
+        } catch (Exception error) {
+            LoggerFactory.getLogger("horizonlab").warn("Tick membership deduplication disabled: invalid configuration", error);
+        }
     }
 
     public static boolean workerPacingEnabled() { return workerPacing; }
     public static boolean debounceWaitEnabled() { return debounceWait; }
     public static boolean dispatchRetryEnabled() { return dispatchRetry; }
+    public static boolean tickDedupEnabled() { return tickDedup; }
     @Override public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         if (mixinClassName.endsWith("DhWorkerPacingMixin")) return workerPacing;
         if (mixinClassName.endsWith("DhDebounceWaitMixin")) return debounceWait;
         if (mixinClassName.endsWith("DhPriorityDispatchMixin")) return dispatchRetry;
+        if (mixinClassName.endsWith("DhTickDedupMixin")) return tickDedup;
         return true;
     }
     @Override public String getRefMapperConfig() { return null; }

@@ -66,7 +66,7 @@ class PackTests(unittest.TestCase):
         for name, backend in [("foreground-first", "opengl"), ("foreground-vulkan", "vulkan")]:
             files = build_pack.overrides(name, b"original fixture")
             self.assertEqual(files["config/horizon-adaptive.properties"], b"enabled=true\ntargetFps=120\n")
-            for key in ["worker-pacing", "queue-wait", "dispatch-retry"]:
+            for key in ["worker-pacing", "queue-wait", "dispatch-retry", "tick-dedup"]:
                 self.assertEqual(files[f"config/horizon-{key}.properties"], b"enabled=true\n")
             options = dict(line.split(":", 1) for line in files["options.txt"].decode().splitlines())
             self.assertEqual(options["simulationDistance"], "12")
@@ -74,6 +74,18 @@ class PackTests(unittest.TestCase):
             self.assertEqual(options["maxFps"], "260")
             self.assertEqual(json.loads(options["preferredGraphicsBackend"]), backend)
             self.assertNotIn("config/iris.properties", files)
+
+    def test_tick_membership_experiment_preserves_visual_and_worker_settings(self):
+        original = build_pack.overrides("m2-balanced", b"fixture")
+        for name in build_pack.PROFILES:
+            files = build_pack.overrides(name, b"fixture")
+            self.assertEqual(files["config/horizon-tick-dedup.properties"],
+                             b"enabled=true\n" if name in {"tick-dedup", "foreground-first", "foreground-vulkan"} else b"enabled=false\n")
+        candidate = build_pack.overrides("tick-dedup", b"fixture")
+        for filename in ["options.txt", "config/DistantHorizons.toml", "config/horizon-adaptive.properties",
+                         "config/horizon-worker-pacing.properties", "config/horizon-queue-wait.properties",
+                         "config/horizon-dispatch-retry.properties"]:
+            self.assertEqual(original[filename], candidate[filename])
 
     def test_wrong_game_or_download_path_is_rejected(self):
         for field, value in [("game_versions", ["1.21"]), ("filename", "../bad.jar"), ("url", "http://unsafe.invalid")]:
