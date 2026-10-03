@@ -22,6 +22,22 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 
 ## Interpretation limits
 
+The 0.6.0 resident-memory sampler ran in the actual adaptive-pacing demo world.
+A 120-second recording produced 370 frame intervals and 2,407 server-tick samples;
+both CSV counts and mean durations match their JSON summaries. Each report has
+120 successful RSS samples, a peak of about 2,643 MiB, and a last-sample age under
+800 ms. The runtime JAR matches the release candidate byte-for-byte. After capture,
+the sampler thread waits without further scheduled reads. Native-read tests also
+pass on hosted Windows x64, Linux x64 and Apple Silicon macOS 26; unsupported
+reader behavior preserves timing samples and omits unavailable RSS fields.
+These numbers validate reporting in this particular software-rendered workload,
+not a RAM reduction or a prediction of the user's Mac memory use.
+
+The 0.5.0 offline viewer passed Chromium checks using real frame/tick JSON and CSV
+files, charts, exports, malformed inputs, kind mismatches, escaped profile labels,
+and mobile layout. It is self-contained and has no network dependencies. Its game
+runtime classes are identical to 0.4.0, apart from mod version metadata.
+
 The 0.4.0 worker-pacing hook also renders the demo world with the complete mod stack.
 Both pacing and adaptive controls are captured as enabled in the final build's
 120-second frame report. It produced 359 frame intervals and 2,401 integrated-server
