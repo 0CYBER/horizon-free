@@ -37,3 +37,8 @@ statistical speedup, game FPS gain, whole-game RAM reduction, completed terrain
 or performance on an M2 GPU. Actual game profiles and repeated Mac comparisons
 are required for those conclusions. Table capacity remains proportional to the
 largest tick membership, as the upstream hash table already did.
+
+The [sanitized Linux CI result](../benchmarks/tick-membership-2026-10-04/linux-applied-hooks.json)
+includes its source commit and workflow provenance. It independently reproduced
+the same allocation counts and transition checks. Its CPU timings are another
+single warmed observation, not a statistical estimate or Mac result.

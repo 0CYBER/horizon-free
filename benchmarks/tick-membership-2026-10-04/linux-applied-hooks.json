@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "architecture": "x86_64",
+  "minecraft": "26.3",
+  "distant_horizons": "3.3.4",
+  "results": [
+    {
+      "enabled": false,
+      "allocated_bytes": 245760208,
+      "cpu_ns": 423649902,
+      "wall_ns": 481491629,
+      "nodes_per_tick": 512,
+      "measured_ticks": 20000,
+      "verified_transitions": 6000,
+      "checksum": 10240000
+    },
+    {
+      "enabled": true,
+      "allocated_bytes": 208,
+      "cpu_ns": 185922780,
+      "wall_ns": 192151484,
+      "nodes_per_tick": 512,
+      "measured_ticks": 20000,
+      "verified_transitions": 6000,
+      "checksum": 10240000
+    }
+  ],
+  "notes": [
+    "Actual publisher tick holder under Fabric, warmed with preallocated nodes and a reused action list.",
+    "Checks duplicate/null membership, enable/disable precedence, published iteration order and clear boundaries.",
+    "Only private membership checks change; action collections and traversal remain upstream.",
+    "CPU and allocation measure the calling thread in one isolated loop; no statistical speed claim.",
+    "Not a game FPS, visible terrain completion, whole-game RAM or Mac GPU benchmark."
+  ],
+  "provenance": {
+    "source_commit": "e091816ce06686d64d0f7a181a42701aa67e5bf7",
+    "ci_run": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37162939262",
+    "artifact": "horizon-ubuntu-latest"
+  }
+}
