@@ -97,6 +97,23 @@ public final class HorizonClient implements ClientModInitializer {
         context.put("wakeable_idle_wait", dev.horizonlab.mixin.HorizonMixinPlugin.debounceWaitEnabled());
         context.put("dispatch_retry_backoff", dev.horizonlab.mixin.HorizonMixinPlugin.dispatchRetryEnabled());
         context.put("adaptive_target_fps", targetFps);
+        context.putAll(visualSettings(client));
+        var device = RenderSystem.getDevice().getDeviceInfo();
+        context.put("gpu", device.name());
+        context.put("graphics_backend", device.backendName());
+        context.put("graphics_driver", device.driverInfo());
+        context.put("mods", FabricLoader.getInstance().getAllMods().stream()
+            .map(mod -> mod.getMetadata().getId() + "@" + mod.getMetadata().getVersion().getFriendlyString())
+            .sorted().toList());
+        frames = new Recording(label, "frames", output, seconds, context);
+        previousStart = 0;
+        if (client.getSingleplayerServer() != null) HorizonLab.startTicks(label, seconds, output, profile);
+        message("Recording " + seconds + " seconds. Close chat, keep the game focused, and run your route.");
+        return 1;
+    }
+
+    private static Map<String, Object> visualSettings(Minecraft client) {
+        Map<String, Object> context = new LinkedHashMap<>();
         context.put("render_distance", client.options.renderDistance().get());
         context.put("simulation_distance", client.options.simulationDistance().get());
         context.put("vsync", client.options.enableVsync().get());
@@ -104,10 +121,6 @@ public final class HorizonClient implements ClientModInitializer {
         context.put("fps_limit_unlimited", client.options.framerateLimit().get() >= Options.UNLIMITED_FRAMERATE_CUTOFF);
         context.put("framebuffer_width", client.getWindow().getWidth());
         context.put("framebuffer_height", client.getWindow().getHeight());
-        var device = RenderSystem.getDevice().getDeviceInfo();
-        context.put("gpu", device.name());
-        context.put("graphics_backend", device.backendName());
-        context.put("graphics_driver", device.driverInfo());
         context.put("graphics_preset", client.options.graphicsPreset().get().toString());
         context.put("ambient_occlusion", client.options.ambientOcclusion().get());
         context.put("improved_transparency", client.options.improvedTransparency().get());
@@ -117,14 +130,14 @@ public final class HorizonClient implements ClientModInitializer {
         context.put("particles", client.options.particles().get().toString());
         context.put("clouds", client.options.cloudStatus().get().toString());
         context.put("cloud_range", client.options.cloudRange().get());
-        context.put("mods", FabricLoader.getInstance().getAllMods().stream()
-            .map(mod -> mod.getMetadata().getId() + "@" + mod.getMetadata().getVersion().getFriendlyString())
-            .sorted().toList());
-        frames = new Recording(label, "frames", output, seconds, context);
-        previousStart = 0;
-        if (client.getSingleplayerServer() != null) HorizonLab.startTicks(label, seconds, output, profile);
-        message("Recording " + seconds + " seconds. Close chat, keep the game focused, and run your route.");
-        return 1;
+        context.put("fov", client.options.fov().get());
+        var loader = FabricLoader.getInstance();
+        if (loader.isModLoaded("distanthorizons")) {
+            try { context.putAll(DistantTerrainSettings.read()); }
+            catch (RuntimeException | LinkageError unavailable) { context.put("dh_capture_status", "unavailable"); }
+        } else context.put("dh_capture_status", "not_installed");
+        context.putAll(ShaderSettings.read(loader.isModLoaded("iris")));
+        return context;
     }
 
     public static void frameStart() {
@@ -164,6 +177,20 @@ public final class HorizonClient implements ClientModInitializer {
         frames = null;
         previousStart = 0;
         HorizonLab.finishTicks();
+        Map<String, Object> end = visualSettings(Minecraft.getInstance());
+        java.util.List<String> changed = new java.util.ArrayList<>();
+        for (var setting : end.entrySet()) {
+            // Adaptive duty cycle is expected to change; visual quality changes are separate.
+            if (!setting.getKey().equals("dh_runtime_ratio")
+                    && !java.util.Objects.equals(recording.context.get(setting.getKey()), setting.getValue()))
+                changed.add(setting.getKey());
+        }
+        for (String setting : recording.context.keySet()) {
+            if ((setting.startsWith("dh_") || setting.startsWith("iris_")) && !end.containsKey(setting))
+                changed.add(setting);
+        }
+        recording.context.put("visual_settings_end", end);
+        recording.context.put("visual_settings_changed", changed);
         Reports.write(recording.finish()).whenComplete((path, error) -> {
             if (error != null) HorizonLab.LOGGER.error("Frame report failed", error);
             else {

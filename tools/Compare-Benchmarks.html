@@ -30,7 +30,7 @@
 </main>
 <script>
 'use strict';
-const SETTINGS=['minecraft','kind','os','os_version','architecture','gpu','graphics_backend','graphics_driver','java_version','heap_max_bytes','framebuffer_width','framebuffer_height','render_distance','simulation_distance','vsync','fps_limit','graphics_preset','ambient_occlusion','improved_transparency','mipmap_levels','entity_distance_scaling','entity_shadows','particles','clouds','cloud_range'];
+const SETTINGS=['minecraft','kind','os','os_version','architecture','gpu','graphics_backend','graphics_driver','java_version','heap_max_bytes','framebuffer_width','framebuffer_height','render_distance','simulation_distance','vsync','fps_limit','graphics_preset','ambient_occlusion','improved_transparency','mipmap_levels','entity_distance_scaling','entity_shadows','particles','clouds','cloud_range','fov','dh_capture_status','dh_rendering_enabled','dh_renderer_mode','dh_lod_radius_chunks','dh_horizontal_quality','dh_vertical_quality','dh_max_horizontal_resolution','dh_transparency','dh_lod_shading','dh_lod_only_mode','dh_camera_quality_dropoff','dh_ambient_occlusion','iris_capture_status','iris_shaders_enabled','iris_shader_pack'];
 const state={baseline:null,candidate:null},generation={baseline:0,candidate:0};
 let comparison=null,chartData=null;
 const $=id=>document.getElementById(id);
@@ -64,6 +64,19 @@ function compareReports(a,b){
   for(const key of ['compact_object_headers','garbage_collectors']){
     if(!(key in a)||!(key in b))warnings.push(key+' was not captured in both reports; JVM configuration equivalence is unknown.');
     else if(JSON.stringify(a[key])!==JSON.stringify(b[key]))warnings.push('JVM '+key+' differs. Treat it as an explicit experiment variable.');
+  }
+  if(a.kind==='frames'){
+    for(const key of ['adaptive_budget_enabled','adaptive_target_fps','precise_worker_pacing','debounce_queue_wait','wakeable_idle_wait','dispatch_retry_backoff','dh_thread_count','dh_runtime_ratio']){
+      if(key in a&&key in b&&JSON.stringify(a[key])!==JSON.stringify(b[key]))warnings.push('Experiment '+key+' differs.');
+    }
+    for(const [label,r] of [['Baseline',a],['Candidate',b]]){
+      if(!['available','not_installed'].includes(r.dh_capture_status))warnings.push(label+' distant-terrain configuration was not captured; quality equivalence is unknown.');
+      if(!['available','not_installed'].includes(r.iris_capture_status))warnings.push(label+' Iris state was not captured; shader equivalence is unknown.');
+      if(Array.isArray(r.visual_settings_changed)&&r.visual_settings_changed.length){
+        differences.push({setting:label+' visual settings changed during recording',baseline:label==='Baseline'?r.visual_settings_changed:null,candidate:label==='Candidate'?r.visual_settings_changed:null});
+        warnings.push(label+' visual settings changed between capture boundaries: '+r.visual_settings_changed.join(', ')+'.');
+      }
+    }
   }
   if(Math.abs(a.elapsed_seconds-b.elapsed_seconds)>Math.max(2,Math.min(a.elapsed_seconds,b.elapsed_seconds)*.1))warnings.push('Recording durations differ. Match durations when comparing memory peaks and collection totals.');
   for(const [label,r] of [['Baseline',a],['Candidate',b]]){
@@ -102,6 +115,10 @@ function renderDetails(side){
   if(r.kind==='frames')fields.push(['Graphics',[r.gpu,r.graphics_backend].filter(Boolean).join(' · ')||'Not captured'],['Window',number(r.framebuffer_width)?r.framebuffer_width+' × '+r.framebuffer_height:'Not captured'],['Experiments','Adaptive: '+(r.adaptive_budget_enabled?'on':'off')+' · precise pacing: '+(r.precise_worker_pacing?'on':'off')+' · queue wait: '+(r.debounce_queue_wait?'on':'off')]);
   fields.push(['JVM', 'Compact headers: '+(r.compact_object_headers===true?'on':r.compact_object_headers===false?'off':'not captured')+' · GC: '+(Array.isArray(r.garbage_collectors)?r.garbage_collectors.join(', '):'not captured')]);
   if(r.kind==='frames'){
+    fields.push(['Distant terrain',r.dh_capture_status==='not_installed'?'Not installed':r.dh_capture_status==='available'?(r.dh_rendering_enabled?'Enabled':'Disabled')+' · '+r.dh_lod_radius_chunks+' chunk radius · '+r.dh_horizontal_quality+'/'+r.dh_vertical_quality+' quality · '+r.dh_max_horizontal_resolution+' resolution':'Not captured']);
+    if(number(r.dh_thread_count))fields.push(['Terrain workers',r.dh_thread_count+' · runtime ratio at start '+format(r.dh_runtime_ratio)+(number(r.visual_settings_end?.dh_runtime_ratio)?' / end '+format(r.visual_settings_end.dh_runtime_ratio):'')]);
+    fields.push(['Iris shaders',r.iris_capture_status==='not_installed'?'Not installed':r.iris_capture_status==='available'?r.iris_shaders_enabled?'Enabled · '+(r.iris_shader_pack||'pack name unavailable'):'Disabled':'Not captured']);
+    if(number(r.fov))fields.push(['Field of view',format(r.fov)]);
     fields.push(['Frame limit',r.fps_limit_unlimited===true||(r.minecraft==='26.3'&&number(r.fps_limit)&&r.fps_limit>=260)?'Uncapped':number(r.fps_limit)?r.fps_limit+' FPS':'not captured']);
     if(r.adaptive_budget_enabled&&number(r.adaptive_target_fps))fields.push(['Adaptive frame goal',r.adaptive_target_fps+' FPS (not a cap)']);
   }

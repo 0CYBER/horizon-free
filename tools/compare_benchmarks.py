@@ -9,7 +9,10 @@ MATCH_FIELDS = ("minecraft", "kind", "os", "os_version", "architecture", "gpu", 
                 "java_version", "heap_max_bytes", "framebuffer_width", "framebuffer_height", "render_distance",
                 "simulation_distance", "vsync", "fps_limit", "graphics_preset", "ambient_occlusion",
                 "improved_transparency", "mipmap_levels", "entity_distance_scaling", "entity_shadows", "particles",
-                "clouds", "cloud_range")
+                "clouds", "cloud_range", "fov", "dh_capture_status", "dh_rendering_enabled", "dh_renderer_mode",
+                "dh_lod_radius_chunks", "dh_horizontal_quality", "dh_vertical_quality", "dh_max_horizontal_resolution",
+                "dh_transparency", "dh_lod_shading", "dh_lod_only_mode", "dh_camera_quality_dropoff",
+                "dh_ambient_occlusion", "iris_capture_status", "iris_shaders_enabled", "iris_shader_pack")
 
 
 def compare(baseline, candidate):
@@ -23,6 +26,19 @@ def compare(baseline, candidate):
     mismatches = [f"{key}: {baseline.get(key)!r} vs {candidate.get(key)!r}" for key in MATCH_FIELDS
                   if baseline.get(key) != candidate.get(key)]
     warnings = ["World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool."]
+    if baseline["kind"] == "frames":
+        for field in ["adaptive_budget_enabled", "adaptive_target_fps", "precise_worker_pacing", "debounce_queue_wait",
+                      "wakeable_idle_wait", "dispatch_retry_backoff", "dh_thread_count", "dh_runtime_ratio"]:
+            if field in baseline and field in candidate and baseline[field] != candidate[field]:
+                warnings.append(f"Experiment {field} differs: {baseline[field]!r} vs {candidate[field]!r}.")
+        for name, report in [("baseline", baseline), ("candidate", candidate)]:
+            if report.get("dh_capture_status") not in ["available", "not_installed"]:
+                warnings.append(f"{name} distant-terrain configuration was not captured; quality equivalence is unknown.")
+            if report.get("iris_capture_status") not in ["available", "not_installed"]:
+                warnings.append(f"{name} Iris state was not captured; shader equivalence is unknown.")
+            if report.get("visual_settings_changed"):
+                mismatches.append(f"{name} visual settings changed during recording")
+                warnings.append(f"{name} visual settings changed between capture boundaries: {report['visual_settings_changed']!r}.")
     for field in ["compact_object_headers", "garbage_collectors"]:
         if field not in baseline or field not in candidate:
             warnings.append(f"{field} was not captured in both reports; JVM configuration equivalence is unknown.")
