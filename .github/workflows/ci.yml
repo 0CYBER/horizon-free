@@ -1,0 +1,27 @@
+name: checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Keep game artifacts out of Git
+        run: |
+          python3 tools/check_public_tree.py
+          python3 tools/check_public_tree.py --history
+      - name: Test offline research tooling
+        run: python3 -m unittest discover -s tests -v
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Check formatting and lint
+        run: |
+          cargo +stable fmt --all -- --check
+          cargo +stable clippy --workspace --all-targets -- -D warnings
+      - name: Test voxel kernel correctness
+        run: cargo +stable test --workspace

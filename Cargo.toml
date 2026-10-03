@@ -1,0 +1,12 @@
+[workspace]
+members = ["crates/voxel-kernels"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
