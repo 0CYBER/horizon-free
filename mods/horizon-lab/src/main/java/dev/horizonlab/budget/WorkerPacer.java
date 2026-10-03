@@ -3,6 +3,7 @@ package dev.horizonlab.budget;
 /** Per-worker primitive state; amortizes short waits without discarding fractional milliseconds. */
 public final class WorkerPacer {
     public static final long QUANTUM_NS = 250_000;
+    public static final long MAX_CREDIT_NS = 50_000_000;
     private long started;
     private long completed;
     private double debtNs;
@@ -27,7 +28,7 @@ public final class WorkerPacer {
     }
 
     public void pauseCompleted(long now) {
-        debtNs = Math.max(-QUANTUM_NS, debtNs - Math.max(0, now - completed));
+        debtNs = Math.max(-MAX_CREDIT_NS, debtNs - Math.max(0, now - completed));
         completed = now;
     }
 

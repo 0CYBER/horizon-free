@@ -16,7 +16,8 @@ the game's primary allocation cost.
 
 The original Horizon hook accumulates fractional waits until at least 250 microseconds
 are due, then sleeps with nanosecond precision. Measured timer overshoot earns credit
-against later waits. Primitive state is allocated once per worker rather than boxing
+against later waits, capped at 50 milliseconds to bound recovery after a long stall.
+Primitive state is allocated once per worker rather than boxing
 each timestamp. Changes to the duty-cycle setting discard stale debt; an idle worker
 also discards it. Interruption during sleep releases debt with the upstream hook's
 interruption behavior. The runnable, queues, result, exception and execution order
