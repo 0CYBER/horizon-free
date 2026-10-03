@@ -44,6 +44,8 @@ jobs:
         run: python tools/build_mod.py
       - name: Build pinned portable packs
         run: python tools/build_pack.py
+      - name: Measure isolated worker pacing on this platform
+        run: python -c "from tools.build_mod import benchmark_workers; benchmark_workers()"
       - name: Test pack integrity and comparisons
         run: python -m unittest discover -s tests -v
       - name: Upload original mod and pack manifests only
@@ -53,3 +55,4 @@ jobs:
           path: |
             dist/*.mrpack
             dist/horizon-lab-*.jar
+            dist/worker-pacing-benchmark.txt
