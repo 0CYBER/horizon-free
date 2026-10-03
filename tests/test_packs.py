@@ -50,6 +50,18 @@ class PackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Missing pinned dependency"):
             build_pack.validate_selection(build_pack.read_lock(), ["iris"])
 
+    def test_dispatch_experiment_does_not_enable_other_controllers(self):
+        for name, profile in build_pack.PROFILES.items():
+            files = build_pack.overrides(name, b"original fixture")
+            dispatch = files["config/horizon-dispatch-retry.properties"].decode()
+            self.assertEqual(dispatch, "enabled=true\n" if name == "dispatch-retry" else "enabled=false\n")
+            if name == "dispatch-retry":
+                for setting in ["worker-pacing", "queue-wait"]:
+                    self.assertEqual(files[f"config/horizon-{setting}.properties"], b"enabled=false\n")
+                self.assertTrue(files["config/horizon-adaptive.properties"].startswith(b"enabled=false\n"))
+                self.assertEqual(files["config/DistantHorizons.toml"],
+                                 build_pack.overrides("m2-balanced", b"original fixture")["config/DistantHorizons.toml"])
+
     def test_wrong_game_or_download_path_is_rejected(self):
         for field, value in [("game_versions", ["1.21"]), ("filename", "../bad.jar"), ("url", "http://unsafe.invalid")]:
             lock = copy.deepcopy(build_pack.read_lock())

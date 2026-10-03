@@ -9,7 +9,8 @@ YOUR MAC
 2. Sign into your Microsoft account in Prism yourself. No credentials are
    shared with this project. You need an owned Minecraft Java license.
 3. Enable Prism automatic Java downloads, using Java 25 ARM64 on Apple Silicon.
-   Instance > Edit > Settings > Java: maximum memory 6144 MiB, minimum 512 MiB.
+   Instance > Edit > Settings > Java: check the Memory override box, then set
+   maximum memory 6144 MiB and minimum 512 MiB.
    If auto Java fails, install a native ARM64 Java 25 JDK and select it there.
 4. Launch. Start with a new test world or a COPY of a world from Minecraft 26.3.
    This release is 26.3; do not load an older-version world for a fair comparison.
@@ -52,6 +53,11 @@ PROFILES
   For an isolated comparison use queue-wait versus m2-balanced. For the combined
   controls use adaptive-queue versus adaptive-pacing. Disable the queue hook in
   config/horizon-queue-wait.properties (enabled=false), then restart.
+- dispatch-retry: same balanced settings, with bounded retries when DH rejects
+  a task submission. The original task is requeued; other executors can progress.
+  This is a separate experiment: adaptive, worker-pacing and queue-wait are off.
+  Set enabled=false in config/horizon-dispatch-retry.properties and restart
+  to disable it. A synthetic applied-hook test checks exact task completion.
 - low-memory: 8 full-detail chunks, no LOD. Set maximum memory 3072 MiB.
   For a matched comparison set both instances to the same render distance.
 - far-distance: 12 full-detail plus 256 LOD chunks. Start with 8192 MiB ONLY on
