@@ -64,7 +64,7 @@ python3 tools/build_mod.py
 python3 tools/build_release.py
 ```
 
-Gitignored `dist/` contains nine packs, our original instrumentation JAR, client/server starter ZIPs and SHA256SUMS. [mods.lock.json](packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
+Gitignored `dist/` contains eleven packs, our original instrumentation JAR, client/server starter ZIPs and SHA256SUMS. [mods.lock.json](packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
 
 The server starter uses Lithium/FerriteCore and `/horizonserver bench <label> <seconds>`. [Server instructions](docs/server-quickstart.txt) cover setup and a baseline. Files are prepared before you accept Minecraft's EULA locally. A 50-active-player workload remains to be measured.
 
