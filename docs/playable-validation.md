@@ -18,9 +18,11 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 - Original Java metrics tests cover percentiles, the average of the slowest 1% (not the reciprocal of p99), stall boundaries, bounded samples/overflow, filename sanitization, exclusions and player counts.
 - Existing three Rust differential tests, formatting and Clippy checks pass. Rust kernels remain unintegrated.
 
+- The exact published balanced pack was then re-run through real demo world rendering, with its published original mod binary checked byte-for-byte against the runtime. F8 produced nonempty frame/tick JSON and matching raw CSV; each reported sample count and mean duration were checked against the CSV.
+
 ## Interpretation limits
 
-The local Linux host uses **Mesa llvmpipe software rendering**. It is useful for mod/mixin/startup/report validation, not for predicting M2 Pro, Windows GPU or Linux discrete-GPU performance. Warm-up/world loading on this host is slow. Demo credentials produce expected unavailable account-properties/Realms logs, and chat restrictions prevent chat commands; the independent F8 measurement shortcut supports this case.
+The local Linux host uses **Mesa llvmpipe software rendering**. It is useful for mod/mixin/startup/report validation, not for predicting M2 Pro, Windows GPU or Linux discrete-GPU performance. Warm-up/world loading on this host is slow. Demo credentials produce expected unavailable account-properties/Realms logs, and chat availability can be restricted; the independent F8 measurement shortcut avoids relying on chat.
 
 CI compiles/builds on Linux, Windows and Apple Silicon macOS. Successful compilation is not graphics, authentication, UI or Mac-driver runtime validation. macOS 27 and the user's actual M2 Pro have not been tested here. Optional cinematic shaders and Vulkan are experiments; the OpenGL balanced pack is the first manual test.
 
