@@ -58,6 +58,7 @@ final class DistantTerrainBudget {
     void suspend() {
         if (setting != null && owned != null && java.util.Objects.equals(setting.getApiValue(), owned)) {
             setting.clearValue();
+            HorizonLab.LOGGER.info("Adaptive terrain override released; effective runtime ratio: {}", setting.getValue());
         }
         owned = null;
         policy = setting == null ? null : new TerrainBudget(setting.getTrueValue());

@@ -61,6 +61,14 @@ def build():
     argfile = BUILD / "javac.args"
     argfile.write_text("\n".join(json.dumps(arg) for arg in command) + "\n")
     subprocess.run(["javac", "@" + str(argfile)], cwd=ROOT, check=True)
+    adapter_tests = BUILD / "adapter-tests"
+    adapter_tests.mkdir(parents=True, exist_ok=True)
+    test_classpath = os.pathsep.join(map(str, [classes, *jars]))
+    subprocess.run(["javac", "--release", "25", "-proc:none", "-classpath", test_classpath,
+                    "-d", str(adapter_tests),
+                    str(SOURCE / "test/java/dev/horizonlab/client/DistantTerrainBudgetTest.java")], check=True)
+    subprocess.run(["java", "-cp", os.pathsep.join([str(adapter_tests), test_classpath]),
+                    "dev.horizonlab.client.DistantTerrainBudgetTest"], check=True)
     output = ROOT / "dist" / f"horizon-lab-{lock['pack_version']}.jar"
     output.parent.mkdir(exist_ok=True)
     entries = {path.relative_to(classes).as_posix(): path.read_bytes() for path in classes.rglob("*.class")}
