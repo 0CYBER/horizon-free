@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import platform
 from pathlib import Path
 import shutil
 import subprocess
@@ -32,6 +33,10 @@ def test_metrics():
                       SOURCE / "test/java/dev/horizonlab/budget/TerrainBudgetTest.java"]
     subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, budget_sources)], check=True)
     subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.budget.TerrainBudgetTest"], check=True)
+    worker_sources = [SOURCE / "main/java/dev/horizonlab/budget/WorkerPacer.java",
+                      SOURCE / "test/java/dev/horizonlab/budget/WorkerPacerTest.java"]
+    subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, worker_sources)], check=True)
+    subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.budget.WorkerPacerTest"], check=True)
 
 
 def build():
@@ -87,10 +92,36 @@ def build():
     return output
 
 
+def benchmark_workers():
+    arguments = [json.loads(line) for line in (BUILD / "javac.args").read_text().splitlines()]
+    classpath = os.pathsep.join([str(BUILD / "classes"), arguments[arguments.index("-classpath") + 1]])
+    tests = BUILD / "worker-benchmark"
+    tests.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["javac", "--release", "25", "-proc:none", "-cp", classpath,
+                    "-d", str(tests), str(SOURCE / "test/java/dev/horizonlab/budget/WorkerPacingBenchmark.java")], check=True)
+    output = ROOT / "dist/worker-pacing-benchmark.txt"
+    with output.open("w", encoding="utf-8") as report:
+        report.write(f"Java {subprocess.check_output(['java', '--version'], text=True).splitlines()[0]}\n")
+        report.write(f"Platform {platform.system()} {platform.release()} {platform.machine()}; logical CPUs {os.cpu_count()}\n")
+        report.flush()
+        for repeat in range(3):
+            for ratio in ["0.5", "0.05"]:
+                for mode in ["upstream", "precise"]:
+                    subprocess.run(["java", "-cp", os.pathsep.join([str(tests), classpath]),
+                                    "dev.horizonlab.budget.WorkerPacingBenchmark", ratio, "10000", "50000", mode],
+                                   stdout=report, check=True)
+    print(output.read_text(), end="")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-only", action="store_true")
+    parser.add_argument("--benchmark-workers", action="store_true", help="Measure tiny-job executor pacing; not Minecraft FPS")
     args = parser.parse_args()
+    if args.test_only and args.benchmark_workers:
+        parser.error("--benchmark-workers requires the compiled mod; omit --test-only")
     test_metrics()
     if not args.test_only:
         build()
+        if args.benchmark_workers:
+            benchmark_workers()

@@ -34,6 +34,14 @@ PROFILES
   heap usage exceeds 85%, then recovers gradually. Distant terrain can take longer
   to appear. It does not reduce your view distance or change normal simulation.
   This is a heuristic, not proof that background work caused a slow frame.
+- worker-pacing: same balanced configuration, with an experimental precise worker
+  timer for pinned DH 3.3.4. It accumulates tiny sleep durations instead of rounding
+  each one down to milliseconds, and avoids per-task timestamp boxing. This can
+  substantially change background CPU and distant-generation completion times.
+- adaptive-pacing: combines the adaptive controller with that precise worker timer.
+  Compare against balanced on your Mac; no actual M2 graphics result is established.
+  Disable the timer in config/horizon-worker-pacing.properties (enabled=false),
+  then restart. /horizon adaptive off changes only the adaptive controller.
 - low-memory: 8 full-detail chunks, no LOD. Set maximum memory 3072 MiB.
   For a matched comparison set both instances to the same render distance.
 - far-distance: 12 full-detail plus 256 LOD chunks. Start with 8192 MiB ONLY on
