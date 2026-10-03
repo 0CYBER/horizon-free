@@ -2,9 +2,11 @@
 
 ## Starting point
 
+The first playable Java foundation is in the root README. Client optimization has priority. Vanilla gameplay, world formats and multiplayer behavior must be preserved; existing modpack compatibility is not required. Any language, renderer or architecture is in scope when measured gains justify it. Windows/Linux and Apple Silicon/Intel macOS are targets, with the M2 Pro/16 GB Mac prioritized.
+
 Inspect both pinned game JARs locally, retain bytecode as the reference, and measure actual Minecraft workloads before selecting a subsystem to replace. The Rust face-count experiment establishes a small correctness/benchmark workflow; it does not identify a Minecraft bottleneck.
 
-Whole-game translation is a long-term research objective. Decompiled Java is an inspection artifact, not the original source tree: build configuration, comments, tooling history, and some source-level constructs cannot be recovered faithfully. A mechanically translated Rust game would also have to preserve behavior, data formats, networking, rendering, and mod compatibility. An isolated hot-path replacement is a useful first experiment.
+Whole-game translation is a long-term research objective. Decompiled Java is an inspection artifact, not the original source tree: build configuration, comments, tooling history, and some source-level constructs cannot be recovered faithfully. A mechanically translated Rust game would also have to preserve behavior, data formats, networking and rendering. An isolated hot-path replacement is a useful first experiment.
 
 ## Local code map
 

@@ -220,13 +220,13 @@ def prepare():
 def coverage(directory, side, source_root=None):
     source_root = source_root or directory / "sources" / side
     data = json.loads((directory / "reports" / f"{side}-inventory.json").read_text(encoding="utf-8"))
-    actual = {str(path.relative_to(source_root)) for path in source_root.rglob("*.java")}
+    actual = {path.relative_to(source_root).as_posix() for path in source_root.rglob("*.java")}
     expected = set(data["expected_source_files"])
     placeholders = []
     for path in source_root.rglob("*.java"):
         contents = path.read_text(encoding="utf-8", errors="replace")
         if re.search(r"\$VF:.*(?:couldn't|could not|failed)", contents, re.IGNORECASE):
-            placeholders.append(str(path.relative_to(source_root)))
+            placeholders.append(path.relative_to(source_root).as_posix())
     return {"side": side, "input_classes": data["class_count"],
             "expected_source_files": len(expected), "emitted_source_files": len(actual),
             "missing_source_files": sorted(expected - actual),
