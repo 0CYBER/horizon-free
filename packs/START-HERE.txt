@@ -80,6 +80,14 @@ MEASURE ON YOUR M2 PRO
 5. Repeat at least three times, alternating baseline/optimized. For daily play
    turn VSync back on or cap FPS to your display; uncapped FPS spends more power.
 
+COMPARE WITHOUT PYTHON
+Open Compare-Benchmarks.html from this ZIP in Safari, Chrome, Firefox or Edge.
+Choose one baseline JSON and one candidate JSON from horizon-benchmarks. You can
+select each JSON together with its matching CSV to see duration charts. Frame and
+tick reports are compared separately. Files stay on your device; the viewer needs
+no server, account, installation or network access. Check its settings/route/warm-up
+warnings before drawing conclusions. Save comparison exports a summary JSON.
+
 DH changes clouds, chunk fade and transparency to blend its distant renderer;
 assess visual differences as well as speed. For collector experiments test
 Java 25's -XX:+UseZGC against its default G1 in both profiles; ZGC trades some
