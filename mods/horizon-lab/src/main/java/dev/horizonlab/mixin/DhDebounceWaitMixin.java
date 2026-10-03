@@ -5,6 +5,7 @@ import com.seibel.distanthorizons.core.api.internal.chunkUpdating.ChunkUpdateDat
 import com.seibel.distanthorizons.core.api.internal.chunkUpdating.ChunkUpdateQueueManager;
 import com.seibel.distanthorizons.core.pos.DhChunkPos;
 import dev.horizonlab.budget.DebounceWait;
+import dev.horizonlab.budget.WakeableIdleWait;
 import java.util.concurrent.locks.LockSupport;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -21,15 +22,39 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class DhDebounceWaitMixin {
     @Shadow @Final public ChunkPosQueue preUpdateQueue;
     @Unique private volatile Thread horizonQueueWorker;
+    @Unique private long horizonLastIdleCleanup;
 
     @Inject(method = "runQueueingLoop", at = @At("HEAD"), remap = false)
     private void horizonRememberWorker(CallbackInfo callback) {
         horizonQueueWorker = Thread.currentThread();
+        horizonLastIdleCleanup = System.nanoTime();
     }
 
     @Inject(method = "runQueueingLoop", at = @At("RETURN"), remap = false)
     private void horizonReleaseWorker(CallbackInfo callback) {
         horizonQueueWorker = null;
+    }
+
+    @Redirect(method = "runQueueingLoop", at = @At(value = "INVOKE",
+        target = "Ljava/lang/Thread;sleep(J)V"), require = 1, allow = 1, remap = false)
+    private void horizonWakeableIdle(long milliseconds) throws InterruptedException {
+        if (milliseconds != 50 || Thread.currentThread() != horizonQueueWorker) {
+            Thread.sleep(milliseconds);
+            return;
+        }
+        long remaining = 50_000_000L - (System.nanoTime() - horizonLastIdleCleanup);
+        WakeableIdleWait.pause(this, Math.max(0, remaining));
+    }
+
+    // Early wakeups must not turn the former 50 ms maintenance cadence into per-arrival work.
+    @Redirect(method = "runQueueingLoop", at = @At(value = "INVOKE",
+        target = "Lcom/google/common/cache/Cache;cleanUp()V"), require = 1, allow = 1, remap = false)
+    private void horizonBoundIdleMaintenance(com.google.common.cache.Cache<?, ?> cache) {
+        long now = System.nanoTime();
+        if (Thread.currentThread() != horizonQueueWorker || now - horizonLastIdleCleanup >= 50_000_000L) {
+            cache.cleanUp();
+            horizonLastIdleCleanup = System.nanoTime();
+        }
     }
 
     // Ordinal zero is specifically the debounce retry. Executor rejection retries remain unchanged.

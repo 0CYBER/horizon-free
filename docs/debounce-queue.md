@@ -13,8 +13,10 @@ settings, mods and worker budgets. Its original hook performs the existing
 debounce reinsertion, then requests a wait of up to 1 ms, bounded by the remaining
 deadline, if no preprocessing work is pending. It only waits on the queue worker,
 never a caller such as the render thread. Incoming queued work unparks a debounce
-wait; the original empty-queue sleep remains unchanged. OS scheduling determines
-when the worker resumes.
+wait. Starting with 0.9, incoming work can also wake an empty queue's idle wait,
+which previously slept for 50 ms. The idle park ends by the next 50 ms cache
+maintenance deadline; early wakeups do not trigger maintenance more often than
+that cadence. OS scheduling determines when the worker resumes.
 The same update object, priority queue, debounce timestamp, overload policy,
 executor dispatch and normal simulation remain in use. Executor-unavailable and
 rejected-dispatch retries are outside this hook.
@@ -27,11 +29,32 @@ Set `enabled=false` in `config/horizon-queue-wait.properties` and restart to
 disable the queue hook. It is disabled by default and requires exact DH 3.3.4.
 
 Requested waits are not hard latency bounds: operating-system timers can
-overshoot, and arrival/worker scheduling affect responsiveness. Parking leaves
-the interruption flag intact, so the existing shutdown loop still handles it.
+overshoot, and arrival/worker scheduling affect responsiveness. Debounce parking
+leaves the interruption flag intact, so the existing shutdown loop handles it.
+The wakeable idle wait throws with a cleared interrupt flag, as `Thread.sleep`
+did; the original catch restores the flag and exits on the next loop check.
 New arrival wakeups reduce the chance of delaying useful preprocessing, but
 real terrain completion, block-change visibility and platform behavior need
 evaluation alongside CPU, allocations and frame pacing.
+
+## Idle wakeup experiment in 0.9
+
+After building, run
+`python -c "from tools.build_mod import benchmark_idle; benchmark_idle()"`.
+An actual publisher queue starts empty; synthetic incoming work is published
+about 5 ms into an idle interval. Separate upstream-sleep and wakeable-park workers
+check the same update identity and empty queue after removal. Four warm-up pairs
+precede 20 alternating measured pairs. Output reports actual arrival time and
+publication-start-to-pop latency. Local Linux medians were 45.181 ms upstream and
+0.199 ms wakeable; hosted platform results are recorded after CI finishes.
+
+This isolates idle wakeup, including enqueue/pop overhead. It does not simulate
+the existing 250 ms debounce, preprocessing, chunk generation, meshing, network
+delivery or a visible block update. Those delays remain separate. OS scheduling
+can change latency; this is not an FPS measurement or a hard responsiveness bound.
+Concurrency tests cover arrival before park, arrival while parked, pending
+interrupts and interruption while parked. The runtime hook still requires exact
+DH 3.3.4 and is enabled only with the existing queue experiment.
 
 ## Isolated measurement
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "horizonlab",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "name": "Horizon Lab",
   "description": "Client frame pacing and server tick measurements for reproducible optimization experiments.",
   "authors": [
