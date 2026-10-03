@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")"
-PACK="$PWD/horizon-m2-balanced-0.2.0.mrpack"
+PACK="$PWD/horizon-m2-balanced-@PACK_VERSION@.mrpack"
 if [[ ! -f "$PACK" ]]; then
   printf 'Keep this script beside the .mrpack files from the extracted starter ZIP.\n'
   exit 1

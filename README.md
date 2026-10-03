@@ -14,6 +14,7 @@ Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on 
 | --- | ---: | ---: | ---: |
 | baseline | 12 | none | 6144 MiB |
 | m2-balanced | 12 | 128 | 6144 MiB |
+| adaptive (experiment) | 12 | 128 | 6144 MiB |
 | low-memory | 8 | none | 3072 MiB |
 | far-distance | 12 | 256 | 8192 MiB, with sufficient physical RAM |
 | cinematic | 12 | 128 | 6144 MiB |
@@ -24,6 +25,11 @@ Balanced combines [Sodium](https://modrinth.com/mod/sodium), [Lithium](https://m
 Distant LOD is simplified terrain. Nearby blocks retain full detail. Initial generation costs CPU/disk/memory and needs warm-up. DH adjusts clouds, chunk fade and transparency to blend its renderer; assess appearance as well as speed. Shaders cost GPU time and have [Mac-specific limits](https://shaders.properties/current/reference/miscellaneous/macos/). Universal CPU/GPU support and exact vanilla equivalence remain validation goals. Simulation distance stays 12 in every profile; normal 20 TPS rules are retained.
 
 ## Measure on your hardware
+
+The optional [adaptive terrain experiment](docs/adaptive-terrain.md) throttles distant
+terrain background work when frames slow down or heap pressure rises, keeping the
+balanced profile's view distances and simulation settings. It remains opt-in until
+real hardware demonstrates a benefit.
 
 Press **F8** during gameplay to start a 120-second recording, or again to stop early. Rebind in Controls if needed. This also works with restricted chat accounts. Alternatively: `/horizon bench <label> 120`, `/horizon stop`, `/horizon status`.
 
@@ -46,7 +52,7 @@ python3 tools/build_mod.py
 python3 tools/build_release.py
 ```
 
-Gitignored `dist/` contains six packs, our original instrumentation JAR, client/server starter ZIPs and SHA256SUMS. [mods.lock.json](packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
+Gitignored `dist/` contains seven packs, our original instrumentation JAR, client/server starter ZIPs and SHA256SUMS. [mods.lock.json](packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
 
 The server starter uses Lithium/FerriteCore and `/horizonserver bench <label> <seconds>`. [Server instructions](docs/server-quickstart.txt) cover setup and a baseline. Files are prepared before you accept Minecraft's EULA locally. A 50-active-player workload remains to be measured.
 

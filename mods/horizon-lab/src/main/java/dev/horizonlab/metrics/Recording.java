@@ -22,6 +22,14 @@ public final class Recording {
     private int peakPlayers;
     private final long initialGcCount;
     private final long initialGcMs;
+    private final java.lang.management.MemoryMXBean memory = ManagementFactory.getMemoryMXBean();
+    private final com.sun.management.OperatingSystemMXBean operatingSystem =
+        ManagementFactory.getOperatingSystemMXBean() instanceof com.sun.management.OperatingSystemMXBean bean ? bean : null;
+    private final long initialCpuNs;
+    private long nextResourceSampleNs;
+    private long peakHeap;
+    private long peakNonHeap;
+    private int resourceSamples;
 
     public Recording(String label, String kind, Path output, int seconds, Map<String, Object> context) {
         if (seconds < 1 || seconds > 600) throw new IllegalArgumentException("Duration must be 1..600 seconds");
@@ -34,10 +42,14 @@ public final class Recording {
         this.deadlineNs = startedNs + seconds * 1_000_000_000L;
         this.initialGcCount = gcCount();
         this.initialGcMs = gcMs();
+        this.initialCpuNs = operatingSystem == null ? -1 : operatingSystem.getProcessCpuTime();
+        sampleResources(startedNs);
     }
 
     public synchronized void add(long ns) {
         if (ns <= 0) return;
+        long now = System.nanoTime();
+        if (now >= nextResourceSampleNs) sampleResources(now);
         if (count == samples.length) { dropped++; return; }
         samples[count++] = ns;
     }
@@ -46,6 +58,7 @@ public final class Recording {
     public synchronized void players(int players) { peakPlayers = Math.max(players, peakPlayers); }
 
     public synchronized Snapshot finish() {
+        sampleResources(System.nanoTime());
         Map<String, Object> metadata = new LinkedHashMap<>(context);
         metadata.put("label", label);
         metadata.put("kind", kind);
@@ -61,12 +74,31 @@ public final class Recording {
         metadata.put("os_version", System.getProperty("os.version"));
         metadata.put("architecture", System.getProperty("os.arch"));
         metadata.put("logical_processors", Runtime.getRuntime().availableProcessors());
-        metadata.put("heap_used_end_bytes", ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed());
-        metadata.put("heap_committed_end_bytes", ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getCommitted());
+        var endHeap = memory.getHeapMemoryUsage();
+        peakHeap = Math.max(peakHeap, endHeap.getUsed());
+        metadata.put("heap_used_end_bytes", endHeap.getUsed());
+        metadata.put("heap_committed_end_bytes", endHeap.getCommitted());
         metadata.put("heap_max_bytes", Runtime.getRuntime().maxMemory());
+        metadata.put("heap_used_peak_sampled_bytes", peakHeap);
+        metadata.put("nonheap_used_peak_sampled_bytes", peakNonHeap);
+        metadata.put("resource_samples", resourceSamples);
+        metadata.put("resource_sample_interval_ms", 1000);
+        long endCpuNs = operatingSystem == null ? -1 : operatingSystem.getProcessCpuTime();
+        if (initialCpuNs >= 0 && endCpuNs >= initialCpuNs) {
+            double cpuSeconds = (endCpuNs - initialCpuNs) / 1e9;
+            metadata.put("process_cpu_seconds", cpuSeconds);
+            metadata.put("process_cpu_mean_cores", cpuSeconds / elapsed);
+        }
         metadata.put("gc_collections", gcCount() - initialGcCount);
         metadata.put("gc_time_ms", gcMs() - initialGcMs);
         return new Snapshot(label, kind, output, Arrays.copyOf(samples, count), metadata);
+    }
+
+    private void sampleResources(long now) {
+        peakHeap = Math.max(peakHeap, memory.getHeapMemoryUsage().getUsed());
+        peakNonHeap = Math.max(peakNonHeap, memory.getNonHeapMemoryUsage().getUsed());
+        resourceSamples++;
+        nextResourceSampleNs = now + 1_000_000_000L;
     }
 
     private static long gcCount() {

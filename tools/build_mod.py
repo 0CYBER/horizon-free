@@ -28,11 +28,18 @@ def test_metrics():
     sources.append(SOURCE / "test/java/dev/horizonlab/metrics/MetricsTest.java")
     subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, sources)], check=True)
     subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.metrics.MetricsTest"], check=True)
+    budget_sources = [SOURCE / "main/java/dev/horizonlab/budget/TerrainBudget.java",
+                      SOURCE / "test/java/dev/horizonlab/budget/TerrainBudgetTest.java"]
+    subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, budget_sources)], check=True)
+    subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.budget.TerrainBudgetTest"], check=True)
 
 
 def build():
     lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
     _, jars, _ = runtime.prepare_client(assets=False)
+    dh = lock["projects"]["distanthorizons"]
+    jars.append(runtime.fetch(dh["url"], ROOT / ".local/pack-cache" / dh["filename"],
+                              dh["hashes"]["sha512"], "sha512"))
     api = lock["projects"]["fabric-api"]
     api_jar = runtime.fetch(api["url"], ROOT / ".local/pack-cache" / api["filename"],
                             api["hashes"]["sha512"], "sha512")

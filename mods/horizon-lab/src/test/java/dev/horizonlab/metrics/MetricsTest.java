@@ -25,6 +25,12 @@ public final class MetricsTest {
         check(snapshot.metadata().get("dropped_samples").equals(2), "overflow reported");
         check(snapshot.metadata().get("excluded_frames").equals(1), "excluded frames reported");
         check(snapshot.metadata().get("peak_players").equals(50), "workload size reported");
+        check((long) snapshot.metadata().get("heap_used_peak_sampled_bytes") >=
+            (long) snapshot.metadata().get("heap_used_end_bytes"), "heap peak includes the final sample");
+        check((int) snapshot.metadata().get("resource_samples") >= 2, "start/end resource snapshots");
+        if (snapshot.metadata().containsKey("process_cpu_seconds")) {
+            check((double) snapshot.metadata().get("process_cpu_seconds") >= 0, "CPU time is nonnegative");
+        }
         check(!snapshot.label().contains("/"), "safe report filename");
         System.out.println("Metrics tests passed.");
     }

@@ -26,6 +26,9 @@ public final class HorizonClient implements ClientModInitializer {
     private static Recording frames;
     private static long previousStart;
     private static String profile = "custom";
+    private static DistantTerrainBudget terrainBudget;
+    private static long previousBudgetFrame;
+    private static int targetFps = 60;
 
     @Override public void onInitializeClient() {
         KeyMapping benchmarkKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
@@ -41,6 +44,15 @@ public final class HorizonClient implements ClientModInitializer {
         try {
             if (Files.exists(profileFile)) profile = Files.readString(profileFile).strip();
         } catch (Exception error) { HorizonLab.LOGGER.warn("Profile label could not be read", error); }
+        Path budgetFile = FabricLoader.getInstance().getConfigDir().resolve("horizon-adaptive.properties");
+        try {
+            if (Files.exists(budgetFile)) {
+                var properties = new java.util.Properties();
+                try (var reader = Files.newBufferedReader(budgetFile)) { properties.load(reader); }
+                targetFps = Math.clamp(Integer.parseInt(properties.getProperty("targetFps", "60")), 10, 240);
+                if (Boolean.parseBoolean(properties.getProperty("enabled", "false"))) enableBudget();
+            }
+        } catch (Exception error) { HorizonLab.LOGGER.warn("Adaptive budget disabled: invalid configuration", error); }
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(
             literal("horizon")
                 .then(literal("bench")
@@ -51,8 +63,22 @@ public final class HorizonClient implements ClientModInitializer {
                             .executes(command -> start(StringArgumentType.getString(command, "label"),
                                 IntegerArgumentType.getInteger(command, "seconds"))))))
                 .then(literal("stop").executes(command -> { finish(); return 1; }))
+                .then(literal("adaptive")
+                    .then(literal("on").executes(command -> {
+                        if (frames != null) { message("Finish the recording before changing the budget"); return 0; }
+                        message(enableBudget() ? "Adaptive terrain budget enabled" : "Distant Horizons is required");
+                        return 1;
+                    }))
+                    .then(literal("off").executes(command -> {
+                        if (frames != null) { message("Finish the recording before changing the budget"); return 0; }
+                        if (terrainBudget != null) terrainBudget.suspend();
+                        terrainBudget = null;
+                        previousBudgetFrame = 0;
+                        message("Adaptive terrain budget disabled"); return 1;
+                    })))
                 .then(literal("status").executes(command -> {
-                    message("Profile: " + profile + "; recording: " + (frames != null)); return 1;
+                    message("Profile: " + profile + "; recording: " + (frames != null)
+                        + "; adaptive: " + (terrainBudget == null ? "off" : terrainBudget.status())); return 1;
                 }))));
         HorizonLab.LOGGER.info("Horizon client profile: {}. F8 or /horizon bench <label> [seconds]", profile);
     }
@@ -64,6 +90,8 @@ public final class HorizonClient implements ClientModInitializer {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("minecraft", "26.3");
         context.put("profile", profile);
+        context.put("adaptive_budget_enabled", terrainBudget != null);
+        context.put("adaptive_target_fps", targetFps);
         context.put("render_distance", client.options.renderDistance().get());
         context.put("simulation_distance", client.options.simulationDistance().get());
         context.put("vsync", client.options.enableVsync().get());
@@ -95,17 +123,33 @@ public final class HorizonClient implements ClientModInitializer {
 
     public static void frameStart() {
         Recording recording = frames;
-        if (recording == null) return;
+        if (recording == null && terrainBudget == null) return;
         long now = System.nanoTime();
-        if (now >= recording.deadlineNs) { finish(); return; }
+        if (recording != null && now >= recording.deadlineNs) { finish(); recording = null; }
         Minecraft client = Minecraft.getInstance();
         if (client.level == null || client.isPaused() || !client.isWindowActive() || client.gui.screen() != null) {
-            recording.exclude();
+            if (recording != null) recording.exclude();
+            if (terrainBudget != null && previousBudgetFrame != 0) terrainBudget.suspend();
+            previousBudgetFrame = 0;
             previousStart = 0;
             return;
         }
-        if (previousStart != 0) recording.add(now - previousStart);
-        previousStart = now;
+        if (terrainBudget != null) {
+            int cap = client.options.framerateLimit().get();
+            double targetMs = 1000.0 / Math.min(targetFps, Math.max(1, cap));
+            terrainBudget.observe(now, previousBudgetFrame == 0 ? 0 : now - previousBudgetFrame, targetMs);
+            previousBudgetFrame = now;
+        }
+        if (recording != null) {
+            if (previousStart != 0) recording.add(now - previousStart);
+            previousStart = now;
+        }
+    }
+
+    private static boolean enableBudget() {
+        if (!FabricLoader.getInstance().isModLoaded("distanthorizons")) return false;
+        if (terrainBudget == null) terrainBudget = new DistantTerrainBudget();
+        return true;
     }
 
     private static void finish() {

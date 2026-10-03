@@ -18,6 +18,7 @@ CORE = ["fabric-api", "sodium", "lithium", "ferrite-core", "immediatelyfast", "e
 PROFILES = {
     "baseline": {"title": "Vanilla baseline", "mods": ["fabric-api"], "render": 12, "lod": 0, "heap": 6144},
     "m2-balanced": {"title": "M2 Pro balanced", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144},
+    "adaptive": {"title": "Adaptive terrain experiment", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144, "adaptive": True},
     "low-memory": {"title": "Low memory", "mods": CORE, "render": 8, "lod": 0, "heap": 3072},
     "far-distance": {"title": "Far distance", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 256, "heap": 8192},
     "cinematic": {"title": "Cinematic (optional)", "mods": CORE + ["distanthorizons", "iris", "complementary-reimagined"], "render": 12, "lod": 128, "heap": 6144},
@@ -67,10 +68,12 @@ def options(profile):
 
 def overrides(profile_name, mod_bytes):
     profile = PROFILES[profile_name]
-    files = {"mods/horizon-lab-0.2.0.jar": mod_bytes,
+    files = {f"mods/horizon-lab-{read_lock()['pack_version']}.jar": mod_bytes,
              "config/horizon-profile.txt": (profile_name + "\n").encode(),
              "options.txt": options(profile).encode()}
-    config = ROOT / "packs/config" / f"{profile_name}.toml"
+    config = ROOT / "packs/config" / f"{'m2-balanced' if profile_name == 'adaptive' else profile_name}.toml"
+    files["config/horizon-adaptive.properties"] = (
+        f"enabled={str(profile.get('adaptive', False)).lower()}\ntargetFps=60\n").encode()
     if profile["lod"]:
         if not config.exists():
             raise FileNotFoundError(f"Missing verified DH profile config: {config}")
@@ -136,7 +139,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=PROFILES)
     parser.add_argument("--instance", type=Path, help="Local demo smoke-test directory (no normal account launch)")
-    parser.add_argument("--mod", type=Path, default=ROOT / "dist/horizon-lab-0.2.0.jar")
+    parser.add_argument("--mod", type=Path, default=ROOT / "dist" / f"horizon-lab-{read_lock()['pack_version']}.jar")
     args = parser.parse_args()
     if not args.mod.exists():
         parser.error("Build the original mod first: python3 tools/build_mod.py")

@@ -39,7 +39,8 @@ class PackTests(unittest.TestCase):
                 pack = build_pack.build("m2-balanced", original)
             with zipfile.ZipFile(pack) as archive:
                 names = archive.namelist()
-                self.assertEqual([n for n in names if n.endswith(".jar")], ["overrides/mods/horizon-lab-0.2.0.jar"])
+                self.assertEqual([n for n in names if n.endswith(".jar")],
+                                 [f"overrides/mods/horizon-lab-{build_pack.read_lock()['pack_version']}.jar"])
                 index = json.loads(archive.read("modrinth.index.json"))
                 self.assertEqual(index["dependencies"]["minecraft"], "26.3")
                 for entry in index["files"]:

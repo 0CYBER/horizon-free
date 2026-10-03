@@ -1,11 +1,11 @@
-HORIZON LAB 0.2.0 — first playable optimization release
+HORIZON LAB @PACK_VERSION@ — playable optimization experiments
 
 YOUR MAC
 1. Extract this ZIP. Double-click Mac-Start.command. If macOS asks, use Open
    from the file's context menu. It installs the official Prism Launcher in
    ~/Applications if needed and opens the M2 balanced pack import.
    Alternatively install Prism yourself: https://prismlauncher.org/download/macOS/
-   then Add Instance > Import > horizon-m2-balanced-0.2.0.mrpack.
+   then Add Instance > Import > horizon-m2-balanced-@PACK_VERSION@.mrpack.
 2. Sign into your Microsoft account in Prism yourself. No credentials are
    shared with this project. You need an owned Minecraft Java license.
 3. Enable Prism automatic Java downloads, using Java 25 ARM64 on Apple Silicon.
@@ -27,6 +27,13 @@ PROFILES
 - baseline: original game renderer and simulation with Fabric API and the same
   Horizon timing instrument. 12 full-detail chunks, no performance mods or LOD.
   Use the SAME 6144 MiB maximum heap as m2-balanced for a fair comparison.
+- adaptive: same render distances, worker count and mods as m2-balanced, with
+  experimental foreground-first terrain work scheduling. /horizon adaptive off
+  disables it; /horizon adaptive on enables it. /horizon status shows its budget.
+  It reduces DH background duty cycle when frames fall below a 60 FPS target or
+  heap usage exceeds 85%, then recovers gradually. Distant terrain can take longer
+  to appear. It does not reduce your view distance or change normal simulation.
+  This is a heuristic, not proof that background work caused a slow frame.
 - low-memory: 8 full-detail chunks, no LOD. Set maximum memory 3072 MiB.
   For a matched comparison set both instances to the same render distance.
 - far-distance: 12 full-detail plus 256 LOD chunks. Start with 8192 MiB ONLY on
@@ -57,7 +64,9 @@ MEASURE ON YOUR M2 PRO
    /horizon status shows the profile. F8 also works when chat is restricted.
 4. Open Prism's instance Minecraft folder > horizon-benchmarks. Each run writes
    frames JSON/CSV and integrated-server ticks JSON/CSV. They include average FPS,
-   slowest-1%-average FPS, p95/p99 frame durations, stalls and JVM heap/GC data.
+   slowest-1%-average FPS, p95/p99 frame durations, stalls, sampled peak JVM heap,
+   process CPU time and GC data. Heap is sampled once per second during gameplay;
+   shorter peaks can be missed. CPU measurement spans the whole recording.
    Menus, pauses and unfocused frames are excluded. Tick execution time is not
    the observed TPS. JVM heap is not whole-process memory or unified GPU memory.
 5. Repeat at least three times, alternating baseline/optimized. For daily play
