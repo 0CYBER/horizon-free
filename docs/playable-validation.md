@@ -22,6 +22,16 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 
 ## Interpretation limits
 
+The 0.4.0 worker-pacing hook also renders the demo world with the complete mod stack.
+Both pacing and adaptive controls are captured as enabled in the final build's
+120-second frame report. It produced 359 frame intervals and 2,401 integrated-server
+tick samples, verified against raw CSV counts and heap/resource fields. The DH database
+received terrain-data updates during this run. The earlier hook build saved/quitted
+and closed its databases/workers cleanly. Hosted executor benchmarks pass on Linux,
+Windows and Apple Silicon macOS; [their results](worker-pacing.md) remain separate
+from game-performance claims. The revised policy tests include 1 ms and 15 ms timer
+overshoot and bounded credit after long stalls.
+
 The 0.3.0 adaptive profile rendered the actual demo world and applied live DH duty-cycle
 changes from 0.5 down to 0.05 under software-renderer frame pressure. Opening the pause
 menu released the override and reported an effective ratio of 0.5 again. A separate

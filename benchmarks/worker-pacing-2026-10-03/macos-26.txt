@@ -1,0 +1,14 @@
+Java openjdk 25.0.4.1 2026-08-18 LTS
+Platform Darwin 25.6.0 arm64; logical CPUs 3
+upstream requested ratio 0.500; 50000 tasks of 10000 ns; worker CPU/wall 0.346; 1643.771 ms; worker allocation 1403064 bytes
+precise requested ratio 0.500; 50000 tasks of 10000 ns; worker CPU/wall 0.514; 1061.526 ms; worker allocation 15456 bytes
+upstream requested ratio 0.050; 50000 tasks of 10000 ns; worker CPU/wall 0.466; 1238.603 ms; worker allocation 1449704 bytes
+precise requested ratio 0.050; 50000 tasks of 10000 ns; worker CPU/wall 0.063; 11385.730 ms; worker allocation 204024 bytes
+upstream requested ratio 0.500; 50000 tasks of 10000 ns; worker CPU/wall 0.703; 785.293 ms; worker allocation 1417064 bytes
+precise requested ratio 0.500; 50000 tasks of 10000 ns; worker CPU/wall 0.509; 1097.416 ms; worker allocation 14496 bytes
+upstream requested ratio 0.050; 50000 tasks of 10000 ns; worker CPU/wall 0.431; 1293.360 ms; worker allocation 1529184 bytes
+precise requested ratio 0.050; 50000 tasks of 10000 ns; worker CPU/wall 0.065; 10727.658 ms; worker allocation 198104 bytes
+upstream requested ratio 0.500; 50000 tasks of 10000 ns; worker CPU/wall 0.620; 896.747 ms; worker allocation 1490864 bytes
+precise requested ratio 0.500; 50000 tasks of 10000 ns; worker CPU/wall 0.518; 1062.565 ms; worker allocation 13096 bytes
+upstream requested ratio 0.050; 50000 tasks of 10000 ns; worker CPU/wall 0.605; 975.086 ms; worker allocation 1450064 bytes
+precise requested ratio 0.050; 50000 tasks of 10000 ns; worker CPU/wall 0.060; 11976.557 ms; worker allocation 196840 bytes

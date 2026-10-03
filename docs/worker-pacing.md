@@ -63,3 +63,31 @@ changes, idle time and invalid ratios. Native game validation must also check te
 progress, frame/tick capture and clean shutdown. On the M2 Pro, compare balanced,
 worker-pacing and adaptive-pacing with identical cold and warm worlds. Record distant
 terrain completion times alongside foreground performance and CPU use.
+
+## Hosted executor measurements
+
+[Raw platform results](../benchmarks/worker-pacing-2026-10-03/) came from
+[CI run 37147381649](https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37147381649),
+using the 50,000-job workload and the revised overshoot credit. Median worker CPU
+seconds per elapsed second across three runs were:
+
+| Platform | Requested budget | Upstream | Precise |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 | 0.50 | 0.620 | 0.514 |
+| macOS ARM64 | 0.05 | 0.466 | 0.063 |
+| Linux x64 | 0.50 | 1.000 | 0.524 |
+| Linux x64 | 0.05 | 0.976 | 0.076 |
+| Windows x64 | 0.50 | 0.996 | 0.556 |
+| Windows x64 | 0.05 | 0.867 | 0.078 |
+
+These are isolated worker ratios, not game CPU reductions or FPS gains. The macOS
+runner exposes three logical CPUs and is not the user's M2 Pro. At the 0.05 setting,
+processing the fixed workload takes roughly 10–11 seconds with the precise timer;
+many upstream runs finish in under two seconds because the requested delay is not
+being applied consistently. Lower background activity costs completion time.
+Actual CPU ratios exceed the nominal task-time ratio because executor/sleep overhead
+also consumes CPU. OS preemption and counter precision affect each run.
+
+Median worker allocation per job at the 0.50 setting fell from approximately 28–30
+bytes to 0.3–1.3 bytes on these runners. This supports removal of the per-job boxed
+timestamp; it does not establish a significant whole-game heap reduction.
