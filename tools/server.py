@@ -51,6 +51,7 @@ def main():
     parser.add_argument("--heap", default="4G")
     parser.add_argument("--baseline", action="store_true", help="Use a separate instance for the baseline")
     parser.add_argument("--compact-headers", action="store_true", help="Enable Java 25 compact object headers for this server process")
+    parser.add_argument("--gc", choices=["default", "g1", "zgc"], default="default", help="Select a collector for this process; default leaves JVM policy in use")
     args = parser.parse_args()
     if not re.fullmatch(r"[1-9][0-9]*[MGmg]", args.heap):
         parser.error("--heap must look like 4G")
@@ -67,7 +68,7 @@ def main():
             eula.write_text("# Read https://www.minecraft.net/eula then change this value yourself.\neula=false\n")
         print(f"Server prepared. Read Minecraft's EULA and set eula=true in {eula} before running.")
         return
-    subprocess.run(["java", "-Xms512M", f"-Xmx{args.heap}", *(["-XX:+UseCompactObjectHeaders"] if args.compact_headers else []),
+    subprocess.run(["java", *runtime.jvm_options(args.heap, args.compact_headers, args.gc),
                     "--enable-native-access=ALL-UNNAMED",
                     "-cp", os.pathsep.join(map(str, libraries)), "net.fabricmc.loader.impl.launch.knot.KnotServer",
                     "--nogui"], cwd=instance, check=True)

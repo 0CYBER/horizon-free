@@ -17,6 +17,7 @@ import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Options;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.network.chat.Component;
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument;
@@ -100,6 +101,7 @@ public final class HorizonClient implements ClientModInitializer {
         context.put("simulation_distance", client.options.simulationDistance().get());
         context.put("vsync", client.options.enableVsync().get());
         context.put("fps_limit", client.options.framerateLimit().get());
+        context.put("fps_limit_unlimited", client.options.framerateLimit().get() >= Options.UNLIMITED_FRAMERATE_CUTOFF);
         context.put("framebuffer_width", client.getWindow().getWidth());
         context.put("framebuffer_height", client.getWindow().getHeight());
         var device = RenderSystem.getDevice().getDeviceInfo();

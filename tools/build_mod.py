@@ -31,6 +31,8 @@ def test_metrics():
     subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.metrics.MetricsTest"], check=True)
     subprocess.run(["java", "-XX:+UseCompactObjectHeaders", "-cp", str(destination),
                     "dev.horizonlab.metrics.MetricsTest"], check=True)
+    subprocess.run(["java", "-Xms32M", "-Xmx256M", "-XX:+UseZGC", "-XX:+UseCompactObjectHeaders", "-cp", str(destination),
+                    "dev.horizonlab.metrics.MetricsTest"], check=True)
     budget_sources = [SOURCE / "main/java/dev/horizonlab/budget/TerrainBudget.java",
                       SOURCE / "test/java/dev/horizonlab/budget/TerrainBudgetTest.java"]
     subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, budget_sources)], check=True)

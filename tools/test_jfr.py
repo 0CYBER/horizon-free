@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify the streaming JFR reader against the JDK's own JSON exporter."""
 
+import argparse
 import json
 from pathlib import Path
 import subprocess
@@ -9,10 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / ".local/jfr-tests"
 
 
-def main():
+def main(collector="default"):
     BUILD.mkdir(parents=True, exist_ok=True)
     fixture = BUILD / "fixture.jfr"
-    subprocess.run(["java", "-Xmx128M", str(ROOT / "tests/java/JfrFixture.java"), str(fixture)], check=True)
+    gc_flags = ["-XX:+UseZGC"] if collector == "zgc" else []
+    subprocess.run(["java", "-Xmx128M", *gc_flags, str(ROOT / "tests/java/JfrFixture.java"), str(fixture)], check=True)
     summary = json.loads(subprocess.check_output(
         ["java", str(ROOT / "tools/JfrSummary.java"), str(fixture)], text=True))
     events = json.loads(subprocess.check_output(
@@ -65,4 +67,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gc", choices=["default", "zgc"], default="default")
+    main(parser.parse_args().gc)

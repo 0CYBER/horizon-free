@@ -22,6 +22,41 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 
 ## Interpretation limits
 
+The exact 0.11.0 JAR (SHA-256
+`c2f59ca0b2f1e356f51b41cd0d9f1d98d6b86e240f5b5a1424f27de57f0e9c4a`)
+ran `foreground-first` with an explicit G1 collector, compact headers and 3 GiB
+heap. Its 120-second OpenGL world capture produced 640 frame intervals and
+2,401 server ticks with matching CSV counts/means and 120 RSS samples each.
+All four controls and the wakeable idle path were reported enabled, with adaptive
+goal 120 FPS, uncapped rendering and actual distances 12/12. World saves, all
+three DH database closures, worker shutdown and client quit completed. The offline
+viewer displayed the actual combined state, goal/cap distinction and collector
+accounting guidance. These software-rendered checks validate integration rather
+than establishing M2 FPS, RAM, LOD-completion or real-GPU visual improvements.
+
+The same exact JAR then ran `foreground-vulkan` with all controls enabled,
+adaptive goal 120, uncapped rendering and distances 12/12. The actual Vulkan
+backend and driver were captured. Its 120-second recording produced 618 frame
+intervals and 2,413 server ticks with matching CSV counts/means and 120 RSS
+samples each. This verifies the combination on Linux software Vulkan; it does
+not validate MoltenVK, all distant-geometry visuals or GPU performance on the Mac.
+
+The exact 0.10.0 JAR (SHA-256
+`101790057c969333e2d9753640d4996649e8ced27e465897d8b6beab2474ed4c`)
+ran the standalone dispatch-retry profile with 3 GiB heap and compact headers.
+Its 120-second recording produced 568 frame intervals and 2,407 server ticks,
+with matching CSV counts/means and 120/119 RSS samples. The actual frame report
+retained custom graphics preset and 12/12 render/simulation distances, enabled
+the dispatcher hook, and disabled adaptive/pacing/debounce/idle hooks. The world
+saved, all three DH databases closed, worker threads stopped and the client quit.
+The offline viewer read actual dispatch metadata, JVM settings, RSS and CSV.
+Applied-hook fixtures verify exact task completion, independent-executor progress,
+recovered slots and shutdown against the actual upstream rejection path in Linux
+CI; Windows and ARM macOS compile the fixture. [Results and limits](dispatch-retry.md)
+describe synthetic, caller-only failure-path measurements. An unchanged client
+from the same saved world did not reproduce the earlier game allocation storm;
+these variable captures do not prove a repeatable game-FPS or RAM improvement.
+
 The exact 0.9.0 JAR (SHA-256
 `2c5a731d4c93df427cc6054f120a52bf9456b3343b94ad9b79de1584b14d783f`)
 ran the combined queue/adaptive/pacing profile with a 3 GiB heap and compact
@@ -73,7 +108,7 @@ continued updating, and worlds/databases/workers closed cleanly. The actual
 publisher queue microbenchmark passes identity/priority/count checks on Linux,
 Windows and Apple Silicon macOS; its raw results and timing overshoot are documented
 in [the queue experiment](debounce-queue.md). These are separate from game-FPS,
-block-update-latency or RAM-reduction claims. All twelve pack overrides retain
+block-update-latency or RAM-reduction claims. All fourteen pack overrides retain
 simulation distance 12 and explicitly set the intended experimental flags.
 
 The 0.6.0 resident-memory sampler ran in the actual adaptive-pacing demo world.

@@ -40,6 +40,11 @@ Reports capture the actual compact object header flag and collector names.
 Compare against the same workload with the flag omitted; object allocation
 changes do not establish a whole-server RAM/TPS gain.
 
+Optional collector comparison: select --gc g1 or --gc zgc on the run command.
+Match world, player activity, heap, Java and header mode; use one collector at a
+time. gc_time_ms includes collector cycle accounting, not a measured pause total.
+Use JFR pause events for pause analysis and compare RSS/CPU/TPS together.
+
 Compare generated reports:
   python3 tools/compare_benchmarks.py baseline-ticks.json optimized-ticks.json --strict
 

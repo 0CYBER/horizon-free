@@ -37,6 +37,11 @@ when comparing peaks. Process CPU counters cover the whole process over the
 recording wall time, including native work and the integrated server; they do
 not identify which thread or mod caused CPU use.
 
+`gc_time_ms` sums collector MXBean collection-time counters. With concurrent
+collectors these can include cycle duration and overlapping phases; it is not a
+direct stop-the-world pause measurement. The viewer calls it collection time.
+Use [JFR pause events](profiling.md) when investigating GC-induced stalls.
+
 The native-read test exercises the real library, overlapping recordings,
 background execution, idle cancellation and unavailable-reader behavior on
 the build platform. This validates measurement availability, not an FPS or

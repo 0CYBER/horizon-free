@@ -42,6 +42,15 @@ def install_original_mod(source, mod_dir, filename=None):
 CACHE = ROOT / ".local" / "runtime"
 
 
+def jvm_options(heap, compact_headers=False, collector="default"):
+    options = ["-Xms512M", f"-Xmx{heap}"]
+    if compact_headers:
+        options.append("-XX:+UseCompactObjectHeaders")
+    if collector != "default":
+        options.append({"g1": "-XX:+UseG1GC", "zgc": "-XX:+UseZGC"}[collector])
+    return options
+
+
 def fetch(url, path, checksum, algorithm="sha1"):
     for attempt in range(3):
         try:
@@ -138,6 +147,7 @@ def main():
     parser.add_argument("--instance", type=Path, default=CACHE / "demo")
     parser.add_argument("--heap", default="4G")
     parser.add_argument("--compact-headers", action="store_true", help="Enable Java 25 compact object headers for this demo process")
+    parser.add_argument("--gc", choices=["default", "g1", "zgc"], default="default", help="Select a collector for this process; default leaves JVM policy in use")
     args = parser.parse_args()
     if not re.fullmatch(r"[1-9][0-9]*[MGmg]", args.heap):
         parser.error("--heap must look like 4G")
@@ -146,7 +156,7 @@ def main():
         return
     instance = args.instance.resolve()
     instance.mkdir(parents=True, exist_ok=True)
-    command = ["java", "-Xms512M", f"-Xmx{args.heap}", *(["-XX:+UseCompactObjectHeaders"] if args.compact_headers else []),
+    command = ["java", *jvm_options(args.heap, args.compact_headers, args.gc),
                "--enable-native-access=ALL-UNNAMED",
                f"-Djava.library.path={natives}", f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
                "-Dfabric.log.disableAnsi=true", "-cp", os.pathsep.join(map(str, jars)),
