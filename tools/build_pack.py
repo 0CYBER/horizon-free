@@ -64,7 +64,8 @@ def mod_path(entry):
 
 def options(profile):
     # Simulation distance stays at the vanilla default in every profile.
-    values = {"renderDistance": profile["render"], "simulationDistance": 12, "enableVsync": "false",
+    values = {"version": read_lock()["options_data_version"],
+              "renderDistance": profile["render"], "simulationDistance": 12, "enableVsync": "false",
               "maxFps": 260, "guiScale": 2, "onboardAccessibility": "false",
               "preferredGraphicsBackend": json.dumps(profile.get("backend", "opengl"))}
     return "".join(f"{key}:{value}\n" for key, value in values.items())

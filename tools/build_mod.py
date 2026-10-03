@@ -46,6 +46,10 @@ def test_metrics():
 def build():
     lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
     _, jars, _ = runtime.prepare_client(assets=False)
+    with zipfile.ZipFile(jars[0]) as game_archive:
+        game_version = json.loads(game_archive.read("version.json"))
+    if game_version["world_version"] != lock["options_data_version"]:
+        raise ValueError("Pack options data version does not match the verified game JAR")
     dh = lock["projects"]["distanthorizons"]
     jars.append(runtime.fetch(dh["url"], ROOT / ".local/pack-cache" / dh["filename"],
                               dh["hashes"]["sha512"], "sha512"))
