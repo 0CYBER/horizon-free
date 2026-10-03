@@ -1,0 +1,104 @@
+Java openjdk 25.0.4.1 2026-08-18 LTS
+Platform Darwin 25.6.0 arm64; logical CPUs 3
+fork=0 requested_compact_headers=False
+compact_object_headers=false
+type=AABB objects=100000 allocated_bytes=6400000 bytes_per_object=64.000
+type=AABB objects=100000 allocated_bytes=6400000 bytes_per_object=64.000
+type=AABB objects=100000 allocated_bytes=6400000 bytes_per_object=64.000
+type=Vec3 objects=100000 allocated_bytes=4000000 bytes_per_object=40.000
+type=Vec3 objects=100000 allocated_bytes=4000000 bytes_per_object=40.000
+type=Vec3 objects=100000 allocated_bytes=4000000 bytes_per_object=40.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Object objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Object objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Object objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+fork=0 requested_compact_headers=True
+compact_object_headers=true
+type=AABB objects=100000 allocated_bytes=5600000 bytes_per_object=56.000
+type=AABB objects=100000 allocated_bytes=5600000 bytes_per_object=56.000
+type=AABB objects=100000 allocated_bytes=5600000 bytes_per_object=56.000
+type=Vec3 objects=100000 allocated_bytes=3200000 bytes_per_object=32.000
+type=Vec3 objects=100000 allocated_bytes=3200000 bytes_per_object=32.000
+type=Vec3 objects=100000 allocated_bytes=3200000 bytes_per_object=32.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Long objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Long objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Object objects=100000 allocated_bytes=800000 bytes_per_object=8.000
+type=Object objects=100000 allocated_bytes=800000 bytes_per_object=8.000
+type=Object objects=100000 allocated_bytes=800000 bytes_per_object=8.000
+fork=1 requested_compact_headers=False
+compact_object_headers=false
+type=AABB objects=100000 allocated_bytes=6400000 bytes_per_object=64.000
+type=AABB objects=100000 allocated_bytes=6400000 bytes_per_object=64.000
+type=AABB objects=100000 allocated_bytes=6400000 bytes_per_object=64.000
+type=Vec3 objects=100000 allocated_bytes=4000000 bytes_per_object=40.000
+type=Vec3 objects=100000 allocated_bytes=4000000 bytes_per_object=40.000
+type=Vec3 objects=100000 allocated_bytes=4000000 bytes_per_object=40.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Object objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Object objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Object objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+fork=1 requested_compact_headers=True
+compact_object_headers=true
+type=AABB objects=100000 allocated_bytes=5600000 bytes_per_object=56.000
+type=AABB objects=100000 allocated_bytes=5600000 bytes_per_object=56.000
+type=AABB objects=100000 allocated_bytes=5600000 bytes_per_object=56.000
+type=Vec3 objects=100000 allocated_bytes=3200000 bytes_per_object=32.000
+type=Vec3 objects=100000 allocated_bytes=3200000 bytes_per_object=32.000
+type=Vec3 objects=100000 allocated_bytes=3200000 bytes_per_object=32.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Long objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Long objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Object objects=100000 allocated_bytes=800000 bytes_per_object=8.000
+type=Object objects=100000 allocated_bytes=800000 bytes_per_object=8.000
+type=Object objects=100000 allocated_bytes=800000 bytes_per_object=8.000
+fork=2 requested_compact_headers=False
+compact_object_headers=false
+type=AABB objects=100000 allocated_bytes=6400000 bytes_per_object=64.000
+type=AABB objects=100000 allocated_bytes=6400000 bytes_per_object=64.000
+type=AABB objects=100000 allocated_bytes=6400000 bytes_per_object=64.000
+type=Vec3 objects=100000 allocated_bytes=4000000 bytes_per_object=40.000
+type=Vec3 objects=100000 allocated_bytes=4000000 bytes_per_object=40.000
+type=Vec3 objects=100000 allocated_bytes=4000000 bytes_per_object=40.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Object objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Object objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Object objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+fork=2 requested_compact_headers=True
+compact_object_headers=true
+type=AABB objects=100000 allocated_bytes=5600000 bytes_per_object=56.000
+type=AABB objects=100000 allocated_bytes=5600000 bytes_per_object=56.000
+type=AABB objects=100000 allocated_bytes=5600000 bytes_per_object=56.000
+type=Vec3 objects=100000 allocated_bytes=3200000 bytes_per_object=32.000
+type=Vec3 objects=100000 allocated_bytes=3200000 bytes_per_object=32.000
+type=Vec3 objects=100000 allocated_bytes=3200000 bytes_per_object=32.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=DhChunkPos objects=100000 allocated_bytes=2400000 bytes_per_object=24.000
+type=Long objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Long objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Long objects=100000 allocated_bytes=1600000 bytes_per_object=16.000
+type=Object objects=100000 allocated_bytes=800000 bytes_per_object=8.000
+type=Object objects=100000 allocated_bytes=800000 bytes_per_object=8.000
+type=Object objects=100000 allocated_bytes=800000 bytes_per_object=8.000

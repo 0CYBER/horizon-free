@@ -40,7 +40,8 @@ volatile array, and their values are checked after measurement. The benchmark
 asserts that the running VM reports the requested flag. Output includes Java/OS/CPU
 architecture and goes to gitignored `dist/object-header-benchmark.txt`.
 
-The local Linux x64 Java 25 measurements yielded:
+Local Linux x64 and hosted Linux x64, Windows x64 and Apple Silicon macOS 26
+measurements yielded the same medians:
 
 | Type | Headers off, bytes/object | Headers on, bytes/object |
 | --- | ---: | ---: |
@@ -49,6 +50,11 @@ The local Linux x64 Java 25 measurements yielded:
 | Distant Horizons `DhChunkPos` | 24 | 24 |
 | Boxed `Long`, outside cache | 24 | 16 |
 | Plain `Object` | 16 | 8 |
+
+[Raw platform results](../benchmarks/object-headers-2026-10-03) come from
+[CI run 37153955462](https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37153955462).
+Each platform has nine measured batches per type/mode across three JVM forks.
+The hosted ARM Mac has three logical CPUs and is not the user's M2 Pro.
 
 These are allocations for specific object layouts, not a measured reduction in
 whole-game retained heap, process RSS, FPS or server TPS. Changing headers can
