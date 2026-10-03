@@ -23,6 +23,9 @@ def compare(baseline, candidate):
     mismatches = [f"{key}: {baseline.get(key)!r} vs {candidate.get(key)!r}" for key in MATCH_FIELDS
                   if baseline.get(key) != candidate.get(key)]
     warnings = ["World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool."]
+    if abs(baseline.get("elapsed_seconds", 0) - candidate.get("elapsed_seconds", 0)) > max(
+            2, min(baseline.get("elapsed_seconds", 0), candidate.get("elapsed_seconds", 0)) * 0.1):
+        warnings.append("Recording durations differ; match durations when comparing memory peaks and collection totals.")
     for name, report in [("baseline", baseline), ("candidate", candidate)]:
         if report.get("dropped_samples", 0):
             warnings.append(f"{name} exceeded the recording buffer: {report['dropped_samples']} dropped samples.")
