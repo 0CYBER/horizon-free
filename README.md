@@ -60,6 +60,10 @@ Open `Compare-Benchmarks.html` from the starter ZIP or [the source file](tools/C
 
 The comparison flags captured setting differences, but cannot verify route, world, shader state or cache warm-up. See [validation evidence](docs/playable-validation.md). Software-renderer test FPS is not evidence of a Mac/GPU speedup.
 
+For CPU/allocation investigation, [capture and stream a private JFR summary](docs/profiling.md).
+It distinguishes directly observed allocation counters from sampled hot methods;
+profiling runs remain separate from normal timing comparisons.
+
 ## Build and run
 
 Requires Python 3.10+ and JDK 25. No Gradle, Rust or native compilation is required for playable packs.

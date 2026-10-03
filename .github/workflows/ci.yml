@@ -42,6 +42,8 @@ jobs:
           java-version: '25'
       - name: Compile original mod and test metrics
         run: python tools/build_mod.py
+      - name: Verify streaming JFR analysis against the JDK exporter
+        run: python tools/test_jfr.py
       - name: Build pinned portable packs
         run: python tools/build_pack.py
       - name: Measure isolated worker pacing on this platform
