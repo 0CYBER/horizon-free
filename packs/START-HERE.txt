@@ -42,6 +42,14 @@ PROFILES
   Compare against balanced on your Mac; no actual M2 graphics result is established.
   Disable the timer in config/horizon-worker-pacing.properties (enabled=false),
   then restart. /horizon adaptive off changes only the adaptive controller.
+- queue-wait: same balanced settings, with a short wait instead of continuous
+  retries while a DH update is still inside its existing 250 ms debounce period.
+  Incoming work wakes the queue worker. OS timers can overshoot the requested
+  1 ms maximum wait; evaluate terrain update latency as well as CPU/FPS.
+- adaptive-queue: combines queue-wait with adaptive terrain and precise pacing.
+  For an isolated comparison use queue-wait versus m2-balanced. For the combined
+  controls use adaptive-queue versus adaptive-pacing. Disable the queue hook in
+  config/horizon-queue-wait.properties (enabled=false), then restart.
 - low-memory: 8 full-detail chunks, no LOD. Set maximum memory 3072 MiB.
   For a matched comparison set both instances to the same render distance.
 - far-distance: 12 full-detail plus 256 LOD chunks. Start with 8192 MiB ONLY on

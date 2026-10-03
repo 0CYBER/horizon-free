@@ -92,6 +92,7 @@ public final class HorizonClient implements ClientModInitializer {
         context.put("profile", profile);
         context.put("adaptive_budget_enabled", terrainBudget != null);
         context.put("precise_worker_pacing", dev.horizonlab.mixin.HorizonMixinPlugin.workerPacingEnabled());
+        context.put("debounce_queue_wait", dev.horizonlab.mixin.HorizonMixinPlugin.debounceWaitEnabled());
         context.put("adaptive_target_fps", targetFps);
         context.put("render_distance", client.options.renderDistance().get());
         context.put("simulation_distance", client.options.simulationDistance().get());
