@@ -61,7 +61,7 @@ jobs:
         run: python -c "from tools.build_mod import build_dispatch_fixture; build_dispatch_fixture()"
       - name: Install headless graphics libraries for applied-hook checks
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1 libegl1 libasound2t64 libxkbcommon0
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1 libegl1 libvulkan1 mesa-vulkan-drivers libasound2t64 libxkbcommon0
       - name: Exercise the applied dispatcher hooks and upstream rejection path
         if: runner.os == 'Linux'
         run: python tools/test_dispatch.py
