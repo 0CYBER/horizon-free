@@ -3,7 +3,7 @@
   "minecraft": "26.3",
   "java_major": 25,
   "fabric_loader": "0.19.5",
-  "pack_version": "0.10.0",
+  "pack_version": "0.11.0",
   "options_data_version": 5023,
   "projects": {
     "sodium": {

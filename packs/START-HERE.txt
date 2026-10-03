@@ -58,6 +58,14 @@ PROFILES
   This is a separate experiment: adaptive, worker-pacing and queue-wait are off.
   Set enabled=false in config/horizon-dispatch-retry.properties and restart
   to disable it. A synthetic applied-hook test checks exact task completion.
+- foreground-first: combines adaptive terrain, precise pacing, wakeable queue
+  waits and bounded rejected dispatch retries. Uses OpenGL and a 120 FPS
+  adaptive goal. This is not an FPS cap; terrain may take longer to appear.
+- foreground-vulkan: the same combined controls with Vulkan preference and
+  OpenGL fallback. On Apple Silicon the game bundles a MoltenVK library.
+  Test the isolated vulkan pack first, then compare both combined profiles
+  using equal worlds, heap, resolution and camera routes. Check the actual
+  backend in the benchmark viewer; a fallback is not a Vulkan result.
 - low-memory: 8 full-detail chunks, no LOD. Set maximum memory 3072 MiB.
   For a matched comparison set both instances to the same render distance.
 - far-distance: 12 full-detail plus 256 LOD chunks. Start with 8192 MiB ONLY on

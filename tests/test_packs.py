@@ -54,13 +54,26 @@ class PackTests(unittest.TestCase):
         for name, profile in build_pack.PROFILES.items():
             files = build_pack.overrides(name, b"original fixture")
             dispatch = files["config/horizon-dispatch-retry.properties"].decode()
-            self.assertEqual(dispatch, "enabled=true\n" if name == "dispatch-retry" else "enabled=false\n")
+            self.assertEqual(dispatch, "enabled=true\n" if name in {"dispatch-retry", "foreground-first", "foreground-vulkan"} else "enabled=false\n")
             if name == "dispatch-retry":
                 for setting in ["worker-pacing", "queue-wait"]:
                     self.assertEqual(files[f"config/horizon-{setting}.properties"], b"enabled=false\n")
                 self.assertTrue(files["config/horizon-adaptive.properties"].startswith(b"enabled=false\n"))
                 self.assertEqual(files["config/DistantHorizons.toml"],
                                  build_pack.overrides("m2-balanced", b"original fixture")["config/DistantHorizons.toml"])
+
+    def test_combined_profiles_enable_all_controls_without_changing_simulation(self):
+        for name, backend in [("foreground-first", "opengl"), ("foreground-vulkan", "vulkan")]:
+            files = build_pack.overrides(name, b"original fixture")
+            self.assertEqual(files["config/horizon-adaptive.properties"], b"enabled=true\ntargetFps=120\n")
+            for key in ["worker-pacing", "queue-wait", "dispatch-retry"]:
+                self.assertEqual(files[f"config/horizon-{key}.properties"], b"enabled=true\n")
+            options = dict(line.split(":", 1) for line in files["options.txt"].decode().splitlines())
+            self.assertEqual(options["simulationDistance"], "12")
+            self.assertEqual(options["renderDistance"], "12")
+            self.assertEqual(options["maxFps"], "260")
+            self.assertEqual(json.loads(options["preferredGraphicsBackend"]), backend)
+            self.assertNotIn("config/iris.properties", files)
 
     def test_wrong_game_or_download_path_is_rejected(self):
         for field, value in [("game_versions", ["1.21"]), ("filename", "../bad.jar"), ("url", "http://unsafe.invalid")]:

@@ -22,6 +22,22 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 
 ## Interpretation limits
 
+The exact 0.10.0 JAR (SHA-256
+`101790057c969333e2d9753640d4996649e8ced27e465897d8b6beab2474ed4c`)
+ran the standalone dispatch-retry profile with 3 GiB heap and compact headers.
+Its 120-second recording produced 568 frame intervals and 2,407 server ticks,
+with matching CSV counts/means and 120/119 RSS samples. The actual frame report
+retained custom graphics preset and 12/12 render/simulation distances, enabled
+the dispatcher hook, and disabled adaptive/pacing/debounce/idle hooks. The world
+saved, all three DH databases closed, worker threads stopped and the client quit.
+The offline viewer read actual dispatch metadata, JVM settings, RSS and CSV.
+Applied-hook fixtures verify exact task completion, independent-executor progress,
+recovered slots and shutdown against the actual upstream rejection path in Linux
+CI; Windows and ARM macOS compile the fixture. [Results and limits](dispatch-retry.md)
+describe synthetic, caller-only failure-path measurements. An unchanged client
+from the same saved world did not reproduce the earlier game allocation storm;
+these variable captures do not prove a repeatable game-FPS or RAM improvement.
+
 The exact 0.9.0 JAR (SHA-256
 `2c5a731d4c93df427cc6054f120a52bf9456b3343b94ad9b79de1584b14d783f`)
 ran the combined queue/adaptive/pacing profile with a 3 GiB heap and compact
@@ -73,7 +89,7 @@ continued updating, and worlds/databases/workers closed cleanly. The actual
 publisher queue microbenchmark passes identity/priority/count checks on Linux,
 Windows and Apple Silicon macOS; its raw results and timing overshoot are documented
 in [the queue experiment](debounce-queue.md). These are separate from game-FPS,
-block-update-latency or RAM-reduction claims. All twelve pack overrides retain
+block-update-latency or RAM-reduction claims. All fourteen pack overrides retain
 simulation distance 12 and explicitly set the intended experimental flags.
 
 The 0.6.0 resident-memory sampler ran in the actual adaptive-pacing demo world.

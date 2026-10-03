@@ -9,7 +9,7 @@ Native renderer buffers and GPU allocations are outside this optimization.
 ## Try on your Mac
 
 Import the balanced pack normally. In Prism, edit the instance's Java settings
-and add `-XX:+UseCompactObjectHeaders` to its JVM arguments, retaining any existing
+check the Java Arguments override box, and add `-XX:+UseCompactObjectHeaders` to its JVM arguments, retaining any existing
 arguments. Use Java 25 HotSpot matching your CPU architecture. Restart the game.
 Remove the argument to return to the launcher's default, or use
 `-XX:-UseCompactObjectHeaders` to explicitly test the disabled mode. Do not supply
