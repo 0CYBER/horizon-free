@@ -73,7 +73,11 @@ MEASURE ON YOUR M2 PRO
 4. Open Prism's instance Minecraft folder > horizon-benchmarks. Each run writes
    frames JSON/CSV and integrated-server ticks JSON/CSV. They include average FPS,
    slowest-1%-average FPS, p95/p99 frame durations, stalls, sampled peak JVM heap,
-   process CPU time and GC data. Heap is sampled once per second during gameplay;
+   process CPU time, process resident memory (RSS) when available, and GC data.
+   RSS reads run once per second on a shared background thread during recordings.
+   They include resident native pages; this is not a complete GPU/unified-memory
+   measurement. Last RSS is the last sample, not necessarily the finish time.
+   Heap is sampled once per second during gameplay;
    shorter peaks can be missed. CPU measurement spans the whole recording.
    Menus, pauses and unfocused frames are excluded. Tick execution time is not
    the observed TPS. JVM heap is not whole-process memory or unified GPU memory.

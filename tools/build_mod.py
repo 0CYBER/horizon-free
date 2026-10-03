@@ -25,7 +25,7 @@ def test_metrics():
     destination = BUILD / "metric-tests"
     destination.mkdir(parents=True, exist_ok=True)
     sources = [SOURCE / "main/java/dev/horizonlab/metrics" / name
-               for name in ["SampleStats.java", "Recording.java"]]
+               for name in ["SampleStats.java", "Recording.java", "ProcessMemoryMonitor.java"]]
     sources.append(SOURCE / "test/java/dev/horizonlab/metrics/MetricsTest.java")
     subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, sources)], check=True)
     subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.metrics.MetricsTest"], check=True)
@@ -71,9 +71,12 @@ def build():
     test_classpath = os.pathsep.join(map(str, [classes, *jars]))
     subprocess.run(["javac", "--release", "25", "-proc:none", "-classpath", test_classpath,
                     "-d", str(adapter_tests),
-                    str(SOURCE / "test/java/dev/horizonlab/client/DistantTerrainBudgetTest.java")], check=True)
+                    str(SOURCE / "test/java/dev/horizonlab/client/DistantTerrainBudgetTest.java"),
+                    str(SOURCE / "test/java/dev/horizonlab/metrics/ResidentMemoryTest.java")], check=True)
     subprocess.run(["java", "-cp", os.pathsep.join([str(adapter_tests), test_classpath]),
                     "dev.horizonlab.client.DistantTerrainBudgetTest"], check=True)
+    subprocess.run(["java", "--enable-native-access=ALL-UNNAMED", "-cp", os.pathsep.join([str(adapter_tests), test_classpath]),
+                    "dev.horizonlab.metrics.ResidentMemoryTest"], check=True)
     output = ROOT / "dist" / f"horizon-lab-{lock['pack_version']}.jar"
     output.parent.mkdir(exist_ok=True)
     entries = {path.relative_to(classes).as_posix(): path.read_bytes() for path in classes.rglob("*.class")}

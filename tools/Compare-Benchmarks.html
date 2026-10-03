@@ -26,7 +26,7 @@
     <section id="chartSection" class="section hidden"><div class="chart"><div class="chart-tools"><h2 id="chartTitle">Frame pacing</h2><label><input id="logScale" type="checkbox" checked> Log scale</label></div><div class="legend"><span><i class="dot"></i>Baseline</span><span><i class="dot" style="background:var(--candidate)"></i>Candidate</span></div><svg id="timeline" viewBox="0 0 960 300" role="img" aria-label="Recorded duration timeline"></svg><div id="chartInfo" class="chart-info">Move over the chart to inspect a time bucket.</div><p id="chartNote" class="footnote"></p></div></section>
     <p id="csvHint" class="footnote"></p>
   </section>
-  <footer>No installation, account or network access is needed. Repeat at least three matched runs and test fresh terrain separately from a warm cache. JVM memory excludes some native and GPU allocations.</footer>
+  <footer>No installation, account or network access is needed. Repeat at least three matched runs and test fresh terrain separately from a warm cache. Heap/nonheap exclude native allocations. Process RSS is not a complete GPU/unified-memory measurement.</footer>
 </main>
 <script>
 'use strict';
@@ -79,13 +79,15 @@ function compareReports(a,b){
     warnings.push('Tick durations exclude scheduler sleep. Observed TPS includes recording time spent paused; tick execution capacity is not TPS.');
   }
   add('95th percentile duration','p95Ms','ms',1,true);add('99th percentile duration','p99Ms','ms',1,true);add('Longest duration','maxMs','ms',1,true);
+  add('Sampled peak process RSS','process_rss_peak_sampled_bytes','MiB',1048576);add('Last sampled process RSS','process_rss_last_sampled_bytes','MiB',1048576);
   add('Sampled peak JVM heap','heap_used_peak_sampled_bytes','MiB',1048576);add('JVM heap at end','heap_used_end_bytes','MiB',1048576);
   add('Sampled peak nonheap','nonheap_used_peak_sampled_bytes','MiB',1048576);add('Average process CPU','process_cpu_mean_cores','cores');
   if(number(a.gc_time_ms)&&number(b.gc_time_ms)){
     const av=a.gc_time_ms/a.elapsed_seconds,bv=b.gc_time_ms/b.elapsed_seconds;
     rows.push({label:'GC collection time / second',key:'gc_collection_ms_per_second',unit:'ms/s',baseline:av,candidate:bv,change_percent:av?100*(bv/av-1):null});
   }
-  warnings.push('Memory peaks are sampled and can miss short spikes. Heap/nonheap are not process RSS or GPU memory. CPU includes all Java threads and the integrated server.');
+  warnings.push('Memory peaks are sampled and can miss short spikes. RSS includes resident JVM and native pages, but is not a complete GPU/unified-memory measurement. Heap/nonheap measure JVM pools only. CPU includes the whole process and integrated server.');
+  for(const [label,r] of [['Baseline',a],['Candidate',b]])if(number(r.process_rss_last_sample_age_ms)&&r.process_rss_last_sample_age_ms>2500)warnings.push(label+' resident-memory sample is '+format(r.process_rss_last_sample_age_ms/1000)+' seconds old. The background reader may be slow or unavailable.');
   return{kind:a.kind,differences,warnings,metrics:rows};
 }
 function renderDetails(side){
