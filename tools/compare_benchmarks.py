@@ -5,7 +5,7 @@ import argparse
 import json
 from pathlib import Path
 
-MATCH_FIELDS = ("minecraft", "kind", "os", "architecture", "gpu", "graphics_backend", "graphics_driver",
+MATCH_FIELDS = ("minecraft", "kind", "os", "os_version", "architecture", "gpu", "graphics_backend", "graphics_driver",
                 "java_version", "heap_max_bytes", "framebuffer_width", "framebuffer_height", "render_distance",
                 "simulation_distance", "vsync", "fps_limit", "graphics_preset", "ambient_occlusion",
                 "improved_transparency", "mipmap_levels", "entity_distance_scaling", "entity_shadows", "particles",
@@ -40,7 +40,7 @@ def compare(baseline, candidate):
         rows.append({"metric": key, "baseline": before, "candidate": after,
                      "change_percent": 100 * (after / before - 1) if before else None})
     for key in ["heap_used_end_bytes", "heap_used_peak_sampled_bytes", "nonheap_used_peak_sampled_bytes",
-                "process_cpu_mean_cores", "gc_time_ms", "observed_ticks_per_second"]:
+                "process_rss_last_sampled_bytes", "process_rss_peak_sampled_bytes", "process_cpu_mean_cores", "gc_time_ms", "observed_ticks_per_second"]:
         if key in baseline and key in candidate:
             before, after = baseline[key], candidate[key]
             rows.append({"metric": key, "baseline": before, "candidate": after,

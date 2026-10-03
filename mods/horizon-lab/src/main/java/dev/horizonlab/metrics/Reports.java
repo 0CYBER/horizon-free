@@ -30,7 +30,7 @@ public final class Reports {
                 report.put("stats", stats);
                 report.put("samples_file", csv.getFileName().toString());
                 report.put("note", snapshot.kind().equals("frames")
-                    ? "Frame start intervals include frame limiting and presentation waits; menus, pauses and unfocused frames are excluded. Not GPU timings or process RSS."
+                    ? "Frame start intervals include frame limiting and presentation waits; menus, pauses and unfocused frames are excluded. Not GPU timings. Process RSS, when available, is sampled separately."
                     : "Tick execution durations exclude scheduler sleep. meanRate is execution capacity, not observed TPS.");
                 Path json = snapshot.output().resolve(name + ".json");
                 Files.writeString(json, new GsonBuilder().setPrettyPrinting().create().toJson(report) + "\n");

@@ -30,6 +30,11 @@ public final class Recording {
     private long peakHeap;
     private long peakNonHeap;
     private int resourceSamples;
+    private long residentEnd;
+    private long residentPeak;
+    private int residentSamples;
+    private long residentSampleNs;
+    private boolean finished;
 
     public Recording(String label, String kind, Path output, int seconds, Map<String, Object> context) {
         if (seconds < 1 || seconds > 600) throw new IllegalArgumentException("Duration must be 1..600 seconds");
@@ -44,10 +49,11 @@ public final class Recording {
         this.initialGcMs = gcMs();
         this.initialCpuNs = operatingSystem == null ? -1 : operatingSystem.getProcessCpuTime();
         sampleResources(startedNs);
+        ProcessMemoryMonitor.track(this);
     }
 
     public synchronized void add(long ns) {
-        if (ns <= 0) return;
+        if (ns <= 0 || finished) return;
         long now = System.nanoTime();
         if (now >= nextResourceSampleNs) sampleResources(now);
         if (count == samples.length) { dropped++; return; }
@@ -58,6 +64,8 @@ public final class Recording {
     public synchronized void players(int players) { peakPlayers = Math.max(players, peakPlayers); }
 
     public synchronized Snapshot finish() {
+        finished = true;
+        ProcessMemoryMonitor.untrack(this);
         sampleResources(System.nanoTime());
         Map<String, Object> metadata = new LinkedHashMap<>(context);
         metadata.put("label", label);
@@ -83,6 +91,13 @@ public final class Recording {
         metadata.put("nonheap_used_peak_sampled_bytes", peakNonHeap);
         metadata.put("resource_samples", resourceSamples);
         metadata.put("resource_sample_interval_ms", 1000);
+        if (residentSamples > 0) {
+            metadata.put("process_rss_last_sampled_bytes", residentEnd);
+            metadata.put("process_rss_peak_sampled_bytes", residentPeak);
+            metadata.put("process_rss_samples", residentSamples);
+            metadata.put("process_rss_sample_interval_ms", 1000);
+            metadata.put("process_rss_last_sample_age_ms", (System.nanoTime() - residentSampleNs) / 1e6);
+        }
         long endCpuNs = operatingSystem == null ? -1 : operatingSystem.getProcessCpuTime();
         if (initialCpuNs >= 0 && endCpuNs >= initialCpuNs) {
             double cpuSeconds = (endCpuNs - initialCpuNs) / 1e9;
@@ -92,6 +107,14 @@ public final class Recording {
         metadata.put("gc_collections", gcCount() - initialGcCount);
         metadata.put("gc_time_ms", gcMs() - initialGcMs);
         return new Snapshot(label, kind, output, Arrays.copyOf(samples, count), metadata);
+    }
+
+    synchronized void residentMemory(long bytes) {
+        if (finished || bytes <= 0) return;
+        residentEnd = bytes;
+        residentPeak = Math.max(residentPeak, bytes);
+        residentSamples++;
+        residentSampleNs = System.nanoTime();
     }
 
     private void sampleResources(long now) {

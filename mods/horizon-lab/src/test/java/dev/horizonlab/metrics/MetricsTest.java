@@ -32,6 +32,20 @@ public final class MetricsTest {
             check((double) snapshot.metadata().get("process_cpu_seconds") >= 0, "CPU time is nonnegative");
         }
         check(!snapshot.label().contains("/"), "safe report filename");
+        check(!snapshot.metadata().containsKey("process_rss_peak_sampled_bytes"), "unavailable RSS is absent, not zero");
+        Recording resident = new Recording("memory", "frames", Path.of("unused"), 10, Map.of());
+        resident.residentMemory(-1);
+        resident.residentMemory(100);
+        resident.residentMemory(200);
+        resident.residentMemory(150);
+        resident.add(10_000_000);
+        var residentSnapshot = resident.finish();
+        resident.residentMemory(999);
+        resident.add(10_000_000);
+        check(residentSnapshot.metadata().get("process_rss_last_sampled_bytes").equals(150L), "last RSS is not called end memory");
+        check(residentSnapshot.metadata().get("process_rss_peak_sampled_bytes").equals(200L), "RSS peak can exceed last sample");
+        check(residentSnapshot.metadata().get("process_rss_samples").equals(3), "invalid memory samples excluded");
+        check(resident.finish().samples().length == 1, "late samples do not change a finished recording");
         System.out.println("Metrics tests passed.");
     }
 

@@ -4,6 +4,8 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import dev.horizonlab.metrics.Recording;
 import dev.horizonlab.metrics.Reports;
+import dev.horizonlab.metrics.ProcessMemoryMonitor;
+import dev.horizonlab.metrics.ResidentMemory;
 import java.nio.file.Path;
 import java.util.Map;
 import net.fabricmc.api.ModInitializer;
@@ -20,6 +22,7 @@ public final class HorizonLab implements ModInitializer {
     private static volatile Recording ticks;
 
     @Override public void onInitialize() {
+        ProcessMemoryMonitor.configure(new ResidentMemory());
         CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> dispatcher.register(
             Commands.literal("horizonserver")
                 .requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
