@@ -99,3 +99,8 @@ python3 tools/test_quad_sizes.py
 Linux uses Xvfb by default; `--native-display` uses an existing screen. The output
 is gitignored `dist/quad-size-integration.json`; game logs and the test agent/fixture
 remain in `.local/`. No account or world is needed for this demo-mode probe.
+
+The [reusable local applied probe](../benchmarks/quad-reuse-2026-10-04/local-shallow-size-applied.json)
+reproduces the initial sizes and records eight-byte object alignment and compressed
+references. All four processes exit successfully. A separate Java source-launcher
+check verifies agent loading from a quoted path containing spaces.
