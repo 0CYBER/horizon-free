@@ -27,7 +27,8 @@ def main():
     args = parser.parse_args()
     root = build_pack.ROOT
     fixture = build_mod.build_integration_fixture('client-graphics',
-        'dev.horizonlab.metrics.ClientGraphicsIntegration', fixture_dependencies={})
+        'dev.horizonlab.metrics.ClientGraphicsIntegration',
+        fixture_mixins=['GraphicsBackendTraceMixin'], fixture_dependencies={})
     version = build_pack.read_lock()['pack_version']
     mod = root / 'dist' / f'horizon-lab-{version}.jar'
     original_hash = hashlib.sha256(mod.read_bytes()).hexdigest()
@@ -48,8 +49,12 @@ def main():
             raise RuntimeError('Graphics probe did not finish; diagnostics remain private') from None
         marker = 'HORIZON_CLIENT_GRAPHICS_RESULT '
         reports = [json.loads(line.split(marker, 1)[1]) for line in run.stdout.splitlines() if marker in line]
+        trace_marker = 'HORIZON_GRAPHICS_BACKEND_ATTEMPT '
+        attempts = [json.loads(line.split(trace_marker, 1)[1]) for line in run.stdout.splitlines() if trace_marker in line]
         if run.returncode or len(reports) != 1:
-            print('HORIZON_FIXTURE_FAILURE ' + json.dumps(failure_summary(run, len(reports))), flush=True)
+            diagnostics = failure_summary(run, len(reports))
+            diagnostics['backend_attempts'] = attempts
+            print('HORIZON_FIXTURE_FAILURE ' + json.dumps(diagnostics), flush=True)
             raise RuntimeError('Graphics probe failed; diagnostics remain private')
         report = reports[0]
         if report['title_screen_observed'] is not True or report['title_client_ticks'] < 40:
@@ -61,7 +66,7 @@ def main():
         screenshot = instance / 'client-graphics-private.png'
         if not screenshot.is_file() or hashlib.sha256(screenshot.read_bytes()).hexdigest() != report['private_png_sha256']:
             raise AssertionError('Private screenshot evidence is missing or changed')
-        report.update(profile=profile, launcher_exit_code=run.returncode)
+        report.update(profile=profile, launcher_exit_code=run.returncode, backend_attempts=attempts)
         results.append(report)
         print(json.dumps(report), flush=True)
     output = root / 'dist/client-graphics-smoke.json'
