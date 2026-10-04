@@ -150,6 +150,170 @@
     "Library/device creation and readback request were observed, but no completed nonuniform readback report was produced.",
     "All failures retained; neither successful rendering nor a screenshot-specific root cause is established.",
     "Baseline includes the same original measurement mod and private test fixture; no core optimization mods or distant terrain.",
-    "Full logs, screenshots, game binaries and assets remain private."
-  ]
+    "Full logs, screenshots, game binaries and assets remain private.",
+    "Later selected stack locations place the observed failures in the screenshot callback; the independently logged Vulkan identifier is not established as their cause."
+  ],
+  "later_stack_run": {
+    "source_commit": "a77476b54e7bf4a1b3a96cb9d8108ed7c1c7b2b0",
+    "run_url": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37193954843",
+    "cases": [
+      {
+        "case": [
+          "--profile",
+          "baseline",
+          "--backend",
+          "vulkan"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": 1,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.AssertionError",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": true,
+            "vulkan_error_codes": [
+              "VK_ERROR_FEATURE_NOT_PRESENT"
+            ],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+              "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+              "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+              "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+            ],
+            "profile": "baseline",
+            "preferred_backend": "vulkan"
+          }
+        ]
+      },
+      {
+        "case": [
+          "--profile",
+          "core-performance",
+          "--backend",
+          "vulkan"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": 1,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.AssertionError",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": true,
+            "vulkan_error_codes": [
+              "VK_ERROR_FEATURE_NOT_PRESENT"
+            ],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+              "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+              "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+              "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+            ],
+            "profile": "core-performance",
+            "preferred_backend": "vulkan"
+          }
+        ]
+      },
+      {
+        "case": [
+          "--profile",
+          "vulkan"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": 1,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.AssertionError",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": true,
+            "vulkan_error_codes": [
+              "VK_ERROR_FEATURE_NOT_PRESENT"
+            ],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+              "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+              "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+              "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+            ],
+            "profile": "vulkan",
+            "preferred_backend": "vulkan"
+          }
+        ]
+      }
+    ]
+  }
 }

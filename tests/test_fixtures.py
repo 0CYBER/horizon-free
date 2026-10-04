@@ -57,6 +57,23 @@ class FixtureDiagnosticTests(unittest.TestCase):
         self.assertNotIn('Private', json.dumps(result))
         self.assertNotIn('Bad', json.dumps(result))
 
+    def test_owned_probe_failure_is_separate_from_logged_vulkan_codes(self):
+        output = '\n'.join([
+            'logged separately: VK_ERROR_FEATURE_NOT_PRESENT private-message',
+            'java.lang.AssertionError: Uniform title readback',
+            'HORIZON_CLIENT_GRAPHICS_READBACK_RECEIVED',
+            'HORIZON_CLIENT_GRAPHICS_READBACK_INSPECTED {"framebuffer_width":1280,"framebuffer_height":646,"sampled_pixels":4160,"distinct_sampled_rgb":1,"ignored":"private-token"}',
+            'HORIZON_CLIENT_GRAPHICS_READBACK_INSPECTED {"framebuffer_width":"private-path"}',
+            'HORIZON_CLIENT_GRAPHICS_READBACK_INSPECTED private-malformed',
+        ])
+        result = graphics_failure_summary(subprocess.CompletedProcess([], 1, output), 0)
+        self.assertEqual(result['probe_failure_categories'], ['uniform_readback'])
+        self.assertTrue(result['readback_callback_received'])
+        self.assertEqual(result['readback_inspections'][0]['distinct_sampled_rgb'], 1)
+        self.assertEqual(len(result['readback_inspections']), 1)
+        self.assertEqual(result['vulkan_error_codes'], ['VK_ERROR_FEATURE_NOT_PRESENT'])
+        self.assertNotIn('private', json.dumps(result))
+
     def test_type_list_and_names_are_bounded(self):
         output = '\n'.join('Caused by: sample.Failure%d: private-message' % index for index in range(20))
         output = 'Caused by: sample.' + 'A' * 201 + ': private-message\n' + output

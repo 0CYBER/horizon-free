@@ -55,6 +55,7 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
             requested = true;
             System.out.println("HORIZON_CLIENT_GRAPHICS_READBACK_REQUESTED");
             Screenshot.takeScreenshot(client.gameRenderer.mainRenderTarget(), image -> {
+                System.out.println("HORIZON_CLIENT_GRAPHICS_READBACK_RECEIVED");
                 try (image) {
                     int width = image.getWidth(), height = image.getHeight();
                     if (width < 64 || height < 64) throw new AssertionError("Incomplete title framebuffer");
@@ -66,6 +67,12 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
                             samples++;
                         }
                     }
+                    var inspection = new JsonObject();
+                    inspection.addProperty("framebuffer_width", width);
+                    inspection.addProperty("framebuffer_height", height);
+                    inspection.addProperty("sampled_pixels", samples);
+                    inspection.addProperty("distinct_sampled_rgb", colors.size());
+                    System.out.println("HORIZON_CLIENT_GRAPHICS_READBACK_INSPECTED " + inspection);
                     if (samples < 256 || colors.size() < 8) throw new AssertionError("Uniform title readback");
                     var screenshot = client.gameDirectory.toPath().resolve("client-graphics-private.png");
                     image.writeToFile(screenshot);

@@ -73,7 +73,11 @@ from manual run 37193558884 show that all three cases reached the client test
 initializer and requested readback before failing. They produced no completed
 readback report. This narrows the observed sequence; it does not establish whether
 the screenshot operation itself or subsequent rendering failed. Graphics stack
-locations are collected in later probes to distinguish those possibilities.
+locations from the next run, 37193954843, place each observed failure in the
+screenshot callback after Vulkan submission. Later probes also record callback
+entry, a whitelist of numeric readback dimensions/sample counts, and fixed failure
+categories from our own assertions. Separately logged Vulkan codes are not
+treated as the cause of a probe assertion.
 
 For an isolated private preference override:
 
