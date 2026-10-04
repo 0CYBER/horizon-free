@@ -96,6 +96,7 @@ def build():
                     "-d", str(adapter_tests),
                     str(SOURCE / "test/java/dev/horizonlab/client/DistantTerrainBudgetTest.java"),
                     str(SOURCE / "test/java/dev/horizonlab/client/DistantTerrainSettingsTest.java"),
+                    str(SOURCE / "test/java/dev/horizonlab/geometry/RelativeTerrainPositionTest.java"),
                     str(SOURCE / "test/java/dev/horizonlab/metrics/ResidentMemoryTest.java")], check=True)
     subprocess.run(["java", "-cp", os.pathsep.join([str(adapter_tests), test_classpath]),
                     "dev.horizonlab.client.DistantTerrainBudgetTest"], check=True)
@@ -103,6 +104,8 @@ def build():
                     "dev.horizonlab.client.DistantTerrainSettingsTest"], check=True)
     subprocess.run(["java", "--enable-native-access=ALL-UNNAMED", "-cp", os.pathsep.join([str(adapter_tests), test_classpath]),
                     "dev.horizonlab.metrics.ResidentMemoryTest"], check=True)
+    subprocess.run(["java", "-cp", os.pathsep.join([str(adapter_tests), test_classpath]),
+                    "dev.horizonlab.geometry.RelativeTerrainPositionTest"], check=True)
     output = ROOT / "dist" / f"horizon-lab-{lock['pack_version']}.jar"
     output.parent.mkdir(exist_ok=True)
     entries = {path.relative_to(classes).as_posix(): path.read_bytes() for path in classes.rglob("*.class")}

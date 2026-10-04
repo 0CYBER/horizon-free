@@ -66,6 +66,10 @@ PROFILES
   dynamic entity/block-entity whitelists. Registered callbacks stay upstream.
   Disable in config/horizon-culling-empty.properties (enabled=false), then restart.
   Compare against m2-balanced; no whole-game or Mac FPS gain is measured yet.
+- terrain-position: same balanced settings, with equivalent position arithmetic
+  in the full-data lookup. Original rounding and fallback errors are retained.
+  Disable in config/horizon-terrain-position.properties (enabled=false), then
+  restart. Compare against m2-balanced; no game or Mac FPS gain is established.
 - culling-rays: same balanced settings, with two per-instance scratch vectors for
   temporary visibility-ray calculations. Upstream arithmetic and decisions stay
   in place. Disable in config/horizon-culling-rays.properties (enabled=false),
