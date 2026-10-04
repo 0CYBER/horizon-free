@@ -97,6 +97,7 @@ public final class HorizonClient implements ClientModInitializer {
         context.put("wakeable_idle_wait", dev.horizonlab.mixin.HorizonMixinPlugin.debounceWaitEnabled());
         context.put("dispatch_retry_backoff", dev.horizonlab.mixin.HorizonMixinPlugin.dispatchRetryEnabled());
         context.put("tick_membership_dedup", dev.horizonlab.mixin.HorizonMixinPlugin.tickDedupEnabled());
+        context.put("empty_culling_whitelist", dev.horizonlab.mixin.HorizonMixinPlugin.cullingEmptyEnabled());
         context.put("adaptive_target_fps", targetFps);
         context.putAll(visualSettings(client));
         var device = RenderSystem.getDevice().getDeviceInfo();

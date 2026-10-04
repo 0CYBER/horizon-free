@@ -62,6 +62,10 @@ PROFILES
   terrain tick membership checks. Action order and visual settings stay the same.
   Set enabled=false in config/horizon-tick-dedup.properties and restart to disable.
   Compare against m2-balanced for an isolated test; no Mac FPS gain is measured yet.
+- culling-empty: same balanced settings, with a shared empty iterator for empty
+  dynamic entity/block-entity whitelists. Registered callbacks stay upstream.
+  Disable in config/horizon-culling-empty.properties (enabled=false), then restart.
+  Compare against m2-balanced; no whole-game or Mac FPS gain is measured yet.
 - foreground-first: combines adaptive terrain, precise pacing, wakeable queue
   waits, bounded rejected dispatch retries and (since 0.13) tick membership reuse.
   Uses OpenGL and a 120 FPS

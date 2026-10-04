@@ -87,6 +87,18 @@ class PackTests(unittest.TestCase):
                          "config/horizon-dispatch-retry.properties"]:
             self.assertEqual(original[filename], candidate[filename])
 
+    def test_empty_culling_experiment_preserves_balanced_settings(self):
+        original = build_pack.overrides("m2-balanced", b"fixture")
+        for name in build_pack.PROFILES:
+            files = build_pack.overrides(name, b"fixture")
+            self.assertEqual(files["config/horizon-culling-empty.properties"],
+                             b"enabled=true\n" if name == "culling-empty" else b"enabled=false\n")
+        candidate = build_pack.overrides("culling-empty", b"fixture")
+        for filename in ["options.txt", "config/DistantHorizons.toml", "config/horizon-adaptive.properties",
+                         "config/horizon-worker-pacing.properties", "config/horizon-queue-wait.properties",
+                         "config/horizon-dispatch-retry.properties", "config/horizon-tick-dedup.properties"]:
+            self.assertEqual(original[filename], candidate[filename])
+
     def test_wrong_game_or_download_path_is_rejected(self):
         for field, value in [("game_versions", ["1.21"]), ("filename", "../bad.jar"), ("url", "http://unsafe.invalid")]:
             lock = copy.deepcopy(build_pack.read_lock())
