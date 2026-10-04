@@ -49,6 +49,10 @@ The latter adds only the pinned core performance mods and leaves every original
 controller disabled. Then test balanced separately for its additional distant
 terrain. Matching captured settings does not prove pixel-identical rendering.
 [Core comparison protocol and selected observations](docs/core-performance.md)
+
+[Heap budget experiment](docs/heap-budget.md): three pairs with 3 GiB versus
+1.5 GiB maximum heap show variable RAM savings and GC/frame-time tradeoffs;
+playable defaults remain unchanged.
 include three repeated matched-view software-rendered pairs with 14–21% higher
 FPS in this workload; M2 performance remains unmeasured.
 
