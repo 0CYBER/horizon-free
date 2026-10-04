@@ -108,6 +108,9 @@ Version 0.17 also records loaded mod versions and the Java vendor, VM and runtim
 build in client and server reports. Both comparison tools flag software changes
 as explicit experiment variables; older reports remain usable with an unknown
 software warning. The viewer can expand the complete loaded mod list.
+[Live software identity check](benchmarks/software-identity-2026-10-04/live-observations.json)
+records the metadata and file-count validation; its short capture is not a
+performance comparison.
 
 
 The comparison flags captured setting differences, but cannot verify route, world, shader state or cache warm-up. See [validation evidence](docs/playable-validation.md). Software-renderer test FPS is not evidence of a Mac/GPU speedup.

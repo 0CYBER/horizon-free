@@ -154,6 +154,7 @@ function renderDetails(side){
     const versions=[...new Set(r.mods)].sort(),list=text('details','');
     list.append(text('summary',versions.length+' loaded mods'),text('div',versions.join('\n')));
     list.lastChild.style.whiteSpace='pre-wrap';
+    list.lastChild.style.maxHeight='16rem';list.lastChild.style.overflow='auto';
     const value=text('dd','');value.append(list);target.append(text('dt','Software'),value);
   }else target.append(text('dt','Software'),text('dd','Loaded mod versions not captured'));
 }
