@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 
 MATCH_FIELDS = ("minecraft", "kind", "os", "os_version", "architecture", "gpu", "graphics_backend", "graphics_driver",
-                "java_version", "heap_max_bytes", "framebuffer_width", "framebuffer_height", "render_distance",
+                "server_runtime_kind", "client_graphics_capture_status", "java_version", "heap_max_bytes", "framebuffer_width", "framebuffer_height", "render_distance",
                 "simulation_distance", "vsync", "fps_limit", "graphics_preset", "ambient_occlusion",
                 "improved_transparency", "mipmap_levels", "entity_distance_scaling", "entity_shadows", "particles",
                 "clouds", "cloud_range", "fov", "world_difficulty", "dh_capture_status", "dh_rendering_enabled", "dh_renderer_mode",
@@ -92,6 +92,21 @@ def software_warnings(baseline, candidate):
     return warnings
 
 
+def server_context_warnings(baseline, candidate):
+    warnings = []
+    for name, report in [("baseline", baseline), ("candidate", candidate)]:
+        kind = report.get("server_runtime_kind")
+        if kind not in ["integrated", "dedicated"]:
+            warnings.append(f"{name} server runtime kind was not captured; integrated/dedicated equivalence is unknown.")
+        if kind == "integrated":
+            captured = report.get("client_graphics_capture_status") == "captured_at_recording_start" and all(
+                isinstance(report.get(key), str) and report[key].strip() for key in ["gpu", "graphics_backend", "graphics_driver"])
+            if not captured:
+                warnings.append(f"{name} integrated-server client graphics were not captured; shared rendering workload is unknown.")
+    warnings.append("Integrated-server graphics context is a recording-start snapshot; later graphics changes and full client workload equivalence are not verified.")
+    return warnings
+
+
 def compare(baseline, candidate):
     for report in [baseline, candidate]:
         if report.get("schema") != 1 or report.get("kind") not in ["frames", "ticks"]:
@@ -105,6 +120,7 @@ def compare(baseline, candidate):
     warnings = ["World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool."]
     warnings.extend(software_warnings(baseline, candidate))
     if baseline["kind"] == "ticks":
+        warnings.extend(server_context_warnings(baseline, candidate))
         tick_mismatches, tick_warnings = compare_tick_states(baseline, candidate)
         mismatches.extend(tick_mismatches)
         warnings.extend(tick_warnings)

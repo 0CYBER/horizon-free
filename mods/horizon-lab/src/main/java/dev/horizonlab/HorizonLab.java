@@ -31,7 +31,8 @@ public final class HorizonLab implements ModInitializer {
                         .then(Commands.argument("seconds", IntegerArgumentType.integer(10, 600))
                             .executes(command -> {
                                 boolean started = startTicks(StringArgumentType.getString(command, "label"),
-                                    IntegerArgumentType.getInteger(command, "seconds"), Path.of("horizon-benchmarks"), "server");
+                                    IntegerArgumentType.getInteger(command, "seconds"), Path.of("horizon-benchmarks"), "server",
+                                    command.getSource().getServer().isDedicatedServer() ? "dedicated" : "integrated", Map.of());
                                 command.getSource().sendSuccess(() -> Component.literal(started
                                     ? "Horizon: recording tick times; run the intended workload now."
                                     : "Horizon: a tick recording is already active."), false);
@@ -42,10 +43,16 @@ public final class HorizonLab implements ModInitializer {
     }
 
     public static synchronized boolean startTicks(String label, int seconds, Path output, String profile) {
+        return startTicks(label, seconds, output, profile, "unknown", Map.of());
+    }
+
+    public static synchronized boolean startTicks(String label, int seconds, Path output, String profile,
+                                                 String runtimeKind, Map<String, ?> clientContext) {
         if (ticks != null) return false;
         Map<String, Object> context = dev.horizonlab.metrics.SoftwareContext.capture();
         context.put("profile", profile);
         context.put("minecraft", "26.3");
+        context.putAll(dev.horizonlab.metrics.ServerContext.capture(runtimeKind, clientContext));
         ticks = new Recording(label, "ticks", output, seconds, context);
         return true;
     }

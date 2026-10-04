@@ -5,6 +5,16 @@ import java.util.Map;
 
 public final class MetricsTest {
     public static void main(String[] args) {
+        var sourceContext = new java.util.LinkedHashMap<String, Object>();
+        sourceContext.putAll(Map.of("gpu", "GPU", "graphics_backend", "OpenGL", "graphics_driver", "Driver", "private_path", "secret"));
+        var serverContext = ServerContext.capture("integrated", sourceContext);
+        sourceContext.put("graphics_backend", "Vulkan");
+        check(serverContext.get("graphics_backend").equals("OpenGL"), "graphics snapshot does not track later mutations");
+        check(!serverContext.containsKey("private_path"), "server context only copies graphics allowlist");
+        check(serverContext.get("client_graphics_capture_status").equals("captured_at_recording_start"), "integrated graphics captured");
+        check(!ServerContext.capture("dedicated", sourceContext).containsKey("gpu"), "dedicated server does not claim client graphics");
+        check(ServerContext.capture("integrated", Map.of("gpu", "GPU")).get("client_graphics_capture_status").equals("not_supplied"), "partial graphics snapshot is unavailable");
+        check(ServerContext.capture("unrecognized", Map.of()).get("server_runtime_kind").equals("unknown"), "legacy server kind unknown");
         SampleStats empty = SampleStats.of(new long[0], 0);
         check(empty.count() == 0 && empty.meanRate() == 0, "empty recording");
         SampleStats fixed = SampleStats.of(new long[]{10_000_000, 10_000_000, 10_000_000}, 3);
