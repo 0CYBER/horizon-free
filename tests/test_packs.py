@@ -99,6 +99,18 @@ class PackTests(unittest.TestCase):
                          "config/horizon-dispatch-retry.properties", "config/horizon-tick-dedup.properties"]:
             self.assertEqual(original[filename], candidate[filename])
 
+    def test_ray_scratch_experiment_preserves_balanced_settings(self):
+        baseline = build_pack.overrides("m2-balanced", b"fixture")
+        candidate = build_pack.overrides("culling-rays", b"fixture")
+        for name in build_pack.PROFILES:
+            self.assertEqual(build_pack.overrides(name, b"fixture")["config/horizon-culling-rays.properties"],
+                             b"enabled=true\n" if name == "culling-rays" else b"enabled=false\n")
+        for filename in ["options.txt", "config/DistantHorizons.toml", "config/horizon-adaptive.properties",
+                         "config/horizon-worker-pacing.properties", "config/horizon-queue-wait.properties",
+                         "config/horizon-dispatch-retry.properties", "config/horizon-tick-dedup.properties",
+                         "config/horizon-culling-empty.properties", "config/horizon-terrain-read-wait.properties"]:
+            self.assertEqual(baseline[filename], candidate[filename])
+
     def test_terrain_read_shutdown_fix_only_requested_with_distant_terrain(self):
         for name, profile in build_pack.PROFILES.items():
             files = build_pack.overrides(name, b"fixture")

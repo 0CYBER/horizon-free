@@ -18,6 +18,7 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
     private static boolean tickDedup;
     private static boolean cullingEmpty;
     private static boolean terrainReadWait;
+    private static boolean cullingRayScratch;
 
     @Override public void onLoad(String mixinPackage) {
         var loader = FabricLoader.getInstance();
@@ -114,6 +115,21 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
         } catch (Exception error) {
             LoggerFactory.getLogger("horizonlab").warn("Interruptible terrain read disabled: invalid configuration", error);
         }
+        try {
+            Properties properties = new Properties();
+            var rayFile = loader.getConfigDir().resolve("horizon-culling-rays.properties");
+            if (Files.exists(rayFile)) {
+                try (var reader = Files.newBufferedReader(rayFile)) { properties.load(reader); }
+            }
+            boolean requested = Boolean.parseBoolean(properties.getProperty("enabled", "false"));
+            boolean supported = loader.getModContainer("entityculling")
+                .map(mod -> mod.getMetadata().getVersion().getFriendlyString().equals("1.11.2")).orElse(false);
+            cullingRayScratch = requested && supported;
+            if (requested) LoggerFactory.getLogger("horizonlab").info(
+                "Culling ray scratch vectors: {} (requires pinned Entity Culling 1.11.2)", cullingRayScratch ? "enabled" : "unavailable");
+        } catch (Exception error) {
+            LoggerFactory.getLogger("horizonlab").warn("Culling ray scratch vectors disabled: invalid configuration", error);
+        }
     }
 
     public static boolean workerPacingEnabled() { return workerPacing; }
@@ -121,6 +137,7 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
     public static boolean dispatchRetryEnabled() { return dispatchRetry; }
     public static boolean tickDedupEnabled() { return tickDedup; }
     public static boolean cullingEmptyEnabled() { return cullingEmpty; }
+    public static boolean cullingRayScratchEnabled() { return cullingRayScratch; }
     public static boolean terrainReadWaitEnabled() { return terrainReadWait; }
     @Override public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         if (mixinClassName.endsWith("DhWorkerPacingMixin")) return workerPacing;
@@ -128,6 +145,7 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith("DhPriorityDispatchMixin")) return dispatchRetry;
         if (mixinClassName.endsWith("DhTickDedupMixin")) return tickDedup;
         if (mixinClassName.endsWith("CullingEmptyWhitelistMixin")) return cullingEmpty;
+        if (mixinClassName.endsWith("CullingRayScratchMixin")) return cullingRayScratch;
         if (mixinClassName.endsWith("DhTerrainReadWaitMixin")) return terrainReadWait;
         return true;
     }

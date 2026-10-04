@@ -65,6 +65,8 @@ jobs:
         run: python -c "from tools.build_mod import build_tick_dedup_fixture; build_tick_dedup_fixture()"
       - name: Compile the private culling whitelist fixture
         run: python -c "from tools.build_mod import build_culling_empty_fixture; build_culling_empty_fixture()"
+      - name: Compile the private culling ray geometry fixture
+        run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('culling-rays', 'dev.horizonlab.dispatch.CullingRayIntegration', ['entityculling'], ['CullingRayAccess'])"
       - name: Compile the private terrain read shutdown fixture
         run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('terrain-read', 'dev.horizonlab.dispatch.TerrainReadIntegration')"
       - name: Install headless graphics libraries for applied-hook checks
@@ -79,6 +81,9 @@ jobs:
       - name: Verify live culling whitelist registration and empty iteration
         if: runner.os == 'Linux'
         run: python tools/test_culling_empty.py
+      - name: Compare applied culling ray geometry and provider queries
+        if: runner.os == 'Linux'
+        run: python tools/test_culling_rays.py
       - name: Verify interrupted DH reads and preserved shared futures
         if: runner.os == 'Linux'
         run: python tools/test_terrain_read.py
@@ -97,3 +102,4 @@ jobs:
             dist/tick-dedup-integration.json
             dist/culling-empty-integration.json
             dist/terrain-read-integration.json
+            dist/culling-rays-integration.json

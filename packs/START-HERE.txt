@@ -66,6 +66,10 @@ PROFILES
   dynamic entity/block-entity whitelists. Registered callbacks stay upstream.
   Disable in config/horizon-culling-empty.properties (enabled=false), then restart.
   Compare against m2-balanced; no whole-game or Mac FPS gain is measured yet.
+- culling-rays: same balanced settings, with two per-instance scratch vectors for
+  temporary visibility-ray calculations. Upstream arithmetic and decisions stay
+  in place. Disable in config/horizon-culling-rays.properties (enabled=false),
+  then restart. Compare against m2-balanced; game/Mac gains remain unmeasured.
 - foreground-first: combines adaptive terrain, precise pacing, wakeable queue
   waits, bounded rejected dispatch retries and (since 0.13) tick membership reuse.
   Uses OpenGL and a 120 FPS
