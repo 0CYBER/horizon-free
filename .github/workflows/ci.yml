@@ -61,7 +61,32 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Start native macOS clients and verify framebuffer readback
         if: runner.os == 'macOS'
-        run: python tools/test_client_graphics.py --native-display
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          cases = [
+              ['--profile', 'baseline', '--backend', 'vulkan'],
+              ['--profile', 'core-performance', '--backend', 'vulkan'],
+              ['--profile', 'core-performance'],
+              ['--profile', 'm2-balanced'],
+              ['--profile', 'vulkan'],
+          ]
+          failed = []
+          observations = []
+          for case in cases:
+              result = subprocess.run([sys.executable, 'tools/test_client_graphics.py', '--native-display', *case])
+              observation = {'case': case, 'exit_code': result.returncode}
+              if result.returncode:
+                  failed.append(case)
+              else:
+                  observation['report'] = json.loads(Path('dist/client-graphics-smoke.json').read_text())
+              observations.append(observation)
+          Path('dist/client-graphics-macos-cases.json').write_text(json.dumps(observations, indent=2) + '\n')
+          if failed:
+              print('HORIZON_MAC_GRAPHICS_FAILED_CASES', failed, flush=True)
+              sys.exit(1)
+          PY
       - name: Compile the private dispatch fixture
         run: python -c "from tools.build_mod import build_dispatch_fixture; build_dispatch_fixture()"
       - name: Compile the private tick-manager state fixture
@@ -127,3 +152,4 @@ jobs:
             dist/quad-reuse-integration.json
             dist/quad-size-integration.json
             dist/client-graphics-smoke.json
+            dist/client-graphics-macos-cases.json

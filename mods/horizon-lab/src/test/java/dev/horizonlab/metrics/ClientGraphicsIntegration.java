@@ -18,6 +18,7 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
     private boolean requested;
 
     @Override public void onInitializeClient() {
+        System.out.println("HORIZON_CLIENT_GRAPHICS_INITIALIZER_READY");
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (requested || !(client.gui.screen() instanceof TitleScreen)) return;
             if (titleStarted == 0) titleStarted = System.nanoTime();

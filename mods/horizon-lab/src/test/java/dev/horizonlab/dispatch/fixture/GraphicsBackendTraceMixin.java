@@ -43,6 +43,12 @@ public abstract class GraphicsBackendTraceMixin {
         try {
             GpuDevice device = backend.createDevice(options);
             trace(backend, "create_device", null);
+            var info = device.getDeviceInfo();
+            var metadata = new JsonObject();
+            metadata.addProperty("gpu", info.name());
+            metadata.addProperty("graphics_backend", info.backendName());
+            metadata.addProperty("graphics_driver", info.driverInfo());
+            System.out.println("HORIZON_GRAPHICS_DEVICE_CREATED " + metadata);
             return device;
         } catch (BackendCreationException | RuntimeException | LinkageError | AssertionError failure) {
             trace(backend, "create_device", failure);
