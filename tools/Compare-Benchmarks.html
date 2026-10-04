@@ -56,11 +56,29 @@ function parseCsv(source,count){
     return duration/1e6;
   });
 }
+function softwareWarnings(a,b){
+  const warnings=[];
+  for(const key of ['java_vendor','java_vm_name','java_runtime_version']){
+    if(![a,b].every(r=>typeof r[key]==='string'&&r[key].length))warnings.push(key+' was not captured in both reports; Java implementation equivalence is unknown.');
+    else if(a[key]!==b[key])warnings.push('Software '+key+' differs. Treat it as an explicit experiment variable.');
+  }
+  const mods=[a,b].map(r=>Array.isArray(r.mods)&&r.mods.every(entry=>typeof entry==='string'&&entry.length)?new Set(r.mods):null);
+  if(mods.some(entries=>entries===null))warnings.push('Loaded mod versions were not captured in both reports; software equivalence is unknown.');
+  else{
+    const only=[...mods[0]].filter(entry=>!mods[1].has(entry)).sort(),other=[...mods[1]].filter(entry=>!mods[0].has(entry)).sort();
+    if(only.length||other.length){
+      warnings.push('Loaded mod versions differ. Treat added, removed or upgraded mods as explicit experiment variables.');
+      for(const [label,entries] of [['baseline',only],['candidate',other]])if(entries.length)warnings.push('Only '+label+': '+entries.slice(0,12).join(', ')+(entries.length>12?'; '+(entries.length-12)+' more':'')+'.');
+    }
+  }
+  return warnings;
+}
 function compareReports(a,b){
   if(a.kind!==b.kind)throw Error('Compare frame runs with frame runs, or tick runs with tick runs.');
   const differences=SETTINGS.filter(key=>JSON.stringify(a[key])!==JSON.stringify(b[key])).map(key=>({setting:key,baseline:a[key]??null,candidate:b[key]??null}));
   if(a.kind==='ticks'&&a.peak_players!==b.peak_players)differences.push({setting:'peak_players',baseline:a.peak_players??null,candidate:b.peak_players??null});
   const warnings=['World, camera route, shaders and terrain-cache warm-up still need to match. These are not verified by the captured settings.'];
+  warnings.push(...softwareWarnings(a,b));
   for(const key of ['compact_object_headers','garbage_collectors']){
     if(!(key in a)||!(key in b))warnings.push(key+' was not captured in both reports; JVM configuration equivalence is unknown.');
     else if(JSON.stringify(a[key])!==JSON.stringify(b[key]))warnings.push('JVM '+key+' differs. Treat it as an explicit experiment variable.');
@@ -114,6 +132,7 @@ function renderDetails(side){
   const r=entry.report,fields=[['Profile',r.profile||r.label||'Unlabeled'],['Recording',format(r.elapsed_seconds)+' s · '+format(r.stats.count)+' samples'],['Platform',[r.os,r.architecture].filter(Boolean).join(' ')||'Not captured']];
   if(r.kind==='frames')fields.push(['Graphics',[r.gpu,r.graphics_backend].filter(Boolean).join(' · ')||'Not captured'],['Window',number(r.framebuffer_width)?r.framebuffer_width+' × '+r.framebuffer_height:'Not captured'],['Experiments','Adaptive: '+(r.adaptive_budget_enabled?'on':'off')+' · precise pacing: '+(r.precise_worker_pacing?'on':'off')+' · queue wait: '+(r.debounce_queue_wait?'on':'off')]);
   fields.push(['JVM', 'Compact headers: '+(r.compact_object_headers===true?'on':r.compact_object_headers===false?'off':'not captured')+' · GC: '+(Array.isArray(r.garbage_collectors)?r.garbage_collectors.join(', '):'not captured')]);
+  fields.push(['Java',[r.java_vendor,r.java_vm_name,r.java_runtime_version||r.java_version].filter(Boolean).join(' · ')||'Not captured']);
   if(r.kind==='frames'){
     fields.push(['Distant terrain',r.dh_capture_status==='not_installed'?'Not installed':r.dh_capture_status==='available'?(r.dh_rendering_enabled?'Enabled':'Disabled')+' · '+r.dh_lod_radius_chunks+' chunk radius · '+r.dh_horizontal_quality+'/'+r.dh_vertical_quality+' quality · '+r.dh_max_horizontal_resolution+' resolution':'Not captured']);
     if(number(r.dh_thread_count))fields.push(['Terrain workers',r.dh_thread_count+' · runtime ratio at start '+format(r.dh_runtime_ratio)+(number(r.visual_settings_end?.dh_runtime_ratio)?' / end '+format(r.visual_settings_end.dh_runtime_ratio):'')]);
@@ -131,6 +150,12 @@ function renderDetails(side){
   if(r.kind==='frames')fields.push(['Empty culling whitelist',r.empty_culling_whitelist===true?'on':r.empty_culling_whitelist===false?'off':'not captured']);
   if(r.kind==='frames')fields.push(['Interruptible terrain read',r.interruptible_terrain_read===true?'on':r.interruptible_terrain_read===false?'off':'not captured']);
   for(const [label,value]of fields)target.append(text('dt',label),text('dd',value));
+  if(Array.isArray(r.mods)&&r.mods.every(entry=>typeof entry==='string'&&entry.length)){
+    const versions=[...new Set(r.mods)].sort(),list=text('details','');
+    list.append(text('summary',versions.length+' loaded mods'),text('div',versions.join('\n')));
+    list.lastChild.style.whiteSpace='pre-wrap';
+    const value=text('dd','');value.append(list);target.append(text('dt','Software'),value);
+  }else target.append(text('dt','Software'),text('dd','Loaded mod versions not captured'));
 }
 async function loadFiles(side,files){
   const token=++generation[side];state[side]=null;render();

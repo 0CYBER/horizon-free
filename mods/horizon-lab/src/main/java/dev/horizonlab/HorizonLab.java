@@ -43,7 +43,10 @@ public final class HorizonLab implements ModInitializer {
 
     public static synchronized boolean startTicks(String label, int seconds, Path output, String profile) {
         if (ticks != null) return false;
-        ticks = new Recording(label, "ticks", output, seconds, Map.of("profile", profile, "minecraft", "26.3"));
+        Map<String, Object> context = dev.horizonlab.metrics.SoftwareContext.capture();
+        context.put("profile", profile);
+        context.put("minecraft", "26.3");
+        ticks = new Recording(label, "ticks", output, seconds, context);
         return true;
     }
 
