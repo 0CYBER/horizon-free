@@ -55,3 +55,26 @@ are fixed-order single forks with three sequential observations, not independent
 repetitions or a statistical speed estimate. Compiler-diagnostic observations
 are kept separate. Live captures and independent platform checks are required
 before recommending it.
+
+Raw [current applied-hook results](../benchmarks/terrain-position-2026-10-04/local-applied-hooks.json)
+and [earlier exploratory observations](../benchmarks/terrain-position-2026-10-04/exploratory-observations.json)
+retain warm-up, diagnostics and source-provenance limits.
+
+The independent [Linux CI lookup fixture](../benchmarks/terrain-position-2026-10-04/linux-applied-hooks.json)
+matched the same output/data fingerprints. Its three caller CPU observations
+were about 59.7/52.7/52.5 ms upstream and 56.1/47.9/47.7 ms with the hook,
+for two million checks each. These sequential observations favor the hook in
+that workload, but do not establish whole-game or cross-hardware performance.
+Windows, macOS ARM and Linux compilation and publisher differential checks pass.
+The independent Linux production JAR matches the local binary byte-for-byte.
+
+The [live software-rendered observations](../benchmarks/terrain-position-2026-10-04/live-observations.json)
+record 221 control frames versus 219 candidate frames in roughly 120 seconds,
+with zero excluded frames and matching captured visual settings. Separate copies
+of the same private world used matched stationary cameras and approximately
+five-minute warm-up. No FPS gain is established. The candidate saved, reloaded,
+saved again and quit; the control saved and quit. Both foreground launchers
+returned zero and left no crash report or game process. The actual JSON/CSV pair
+also passed offline viewer checks, including flag differences and mobile layout.
+The hook remains optional and disabled in combined profiles. These checks do
+not measure Apple Silicon graphics, unified memory or performance.
