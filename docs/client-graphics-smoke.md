@@ -118,3 +118,7 @@ Overrides use separate runtime folders. The shipped profiles retain their
 configured preferences. These probes make no FPS, CPU/RAM reduction, hardware-GPU
 compatibility or M2 Pro performance claim. Actual-world performance comparisons
 still use the [Mac first-test procedure](mac-first-test.md).
+
+For a shader-enabled world rather than a disabled shader configuration, use the
+separate [cinematic shader probe](shader-world-smoke.md). It requires actual Iris
+runtime activation and the pinned pack identity.

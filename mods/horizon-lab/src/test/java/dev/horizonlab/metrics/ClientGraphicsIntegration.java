@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.Map;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
@@ -24,6 +25,30 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
     private boolean opening;
     private int overlayWaitTicks;
     private final boolean worldMode = Files.exists(FabricLoader.getInstance().getConfigDir().resolve("client-graphics-world.flag"));
+
+    @SuppressWarnings("unchecked")
+    private static void captureShaders(JsonObject result) throws ReflectiveOperationException, java.io.IOException {
+        // Reuse the production recorder's read-only Iris API inspection. The
+        // bridge and enabling flag exist solely in this private test fixture.
+        var method = Class.forName("dev.horizonlab.client.ShaderSettings").getDeclaredMethod("read", boolean.class);
+        method.setAccessible(true);
+        var settings = (Map<String, Object>) method.invoke(null, FabricLoader.getInstance().isModLoaded("iris"));
+        String status = String.valueOf(settings.get("iris_capture_status"));
+        boolean enabled = Boolean.TRUE.equals(settings.get("iris_shaders_enabled"));
+        result.addProperty("iris_capture_status", status);
+        result.addProperty("iris_shaders_enabled", enabled);
+        var flag = FabricLoader.getInstance().getConfigDir().resolve("client-graphics-shaders.flag");
+        boolean required = Files.isRegularFile(flag);
+        result.addProperty("shader_required", required);
+        if (required) {
+            String expected = Files.readString(flag).strip();
+            boolean match = expected.equals(settings.get("iris_shader_pack"));
+            result.addProperty("iris_expected_pack_matches", match);
+            // Do not export arbitrary pack names or paths from runtime APIs.
+            if (!status.equals("available") || !enabled) throw new AssertionError("Required shader pack is inactive");
+            if (!match) throw new AssertionError("Unexpected active shader pack");
+        }
+    }
 
     @Override public void onInitializeClient() {
         System.out.println("HORIZON_CLIENT_GRAPHICS_INITIALIZER_READY");
@@ -94,6 +119,8 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
                     result.addProperty("window_active", client.isWindowActive());
                     result.addProperty("overlay_present", client.gui.overlay() != null);
                     result.addProperty("overlay_wait_ticks", overlayWaitTicks);
+                    result.addProperty("heap_max_bytes", Runtime.getRuntime().maxMemory());
+                    captureShaders(result);
                     result.addProperty("framebuffer_width", width);
                     result.addProperty("framebuffer_height", height);
                     result.addProperty("sampled_pixels", samples);
