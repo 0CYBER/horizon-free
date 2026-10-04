@@ -111,6 +111,18 @@ class PackTests(unittest.TestCase):
                          "config/horizon-culling-empty.properties", "config/horizon-terrain-read-wait.properties"]:
             self.assertEqual(baseline[filename], candidate[filename])
 
+    def test_position_experiment_preserves_balanced_settings(self):
+        baseline = build_pack.overrides("m2-balanced", b"fixture")
+        candidate = build_pack.overrides("terrain-position", b"fixture")
+        for name in build_pack.PROFILES:
+            self.assertEqual(build_pack.overrides(name, b"fixture")["config/horizon-terrain-position.properties"],
+                             b"enabled=true\n" if name == "terrain-position" else b"enabled=false\n")
+        for filename in ["options.txt", "config/DistantHorizons.toml", "config/horizon-adaptive.properties",
+                         "config/horizon-worker-pacing.properties", "config/horizon-queue-wait.properties",
+                         "config/horizon-dispatch-retry.properties", "config/horizon-tick-dedup.properties",
+                         "config/horizon-culling-empty.properties", "config/horizon-culling-rays.properties", "config/horizon-terrain-read-wait.properties"]:
+            self.assertEqual(baseline[filename], candidate[filename])
+
     def test_terrain_read_shutdown_fix_only_requested_with_distant_terrain(self):
         for name, profile in build_pack.PROFILES.items():
             files = build_pack.overrides(name, b"fixture")
@@ -187,6 +199,15 @@ class ComparisonTests(unittest.TestCase):
         for other in [empty, self.report("ticks")]:
             with self.assertRaises(ValueError):
                 compare_benchmarks.compare(self.report(), other)
+
+    def test_position_hook_change_is_an_explicit_experiment(self):
+        baseline = self.report()
+        baseline["terrain_position_arithmetic"] = False
+        candidate = copy.deepcopy(baseline)
+        candidate["terrain_position_arithmetic"] = True
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertEqual(result["mismatches"], [])
+        self.assertTrue(any("terrain_position_arithmetic differs" in warning for warning in result["warnings"]))
 
     def test_excluded_frames_disclose_that_process_counters_cover_inactive_time(self):
         baseline = self.report()

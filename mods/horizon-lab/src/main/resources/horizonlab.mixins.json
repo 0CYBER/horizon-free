@@ -14,7 +14,8 @@
     "DhTickDedupMixin",
     "CullingEmptyWhitelistMixin",
     "DhTerrainReadWaitMixin",
-    "CullingRayScratchMixin"
+    "CullingRayScratchMixin",
+    "DhRelativePositionMixin"
   ],
   "injectors": {
     "defaultRequire": 1

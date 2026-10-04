@@ -12,6 +12,7 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 
 /** Internal hooks are opt-in and limited to the inspected, pinned DH version. */
 public final class HorizonMixinPlugin implements IMixinConfigPlugin {
+    private static boolean terrainPosition;
     private static boolean workerPacing;
     private static boolean debounceWait;
     private static boolean dispatchRetry;
@@ -130,8 +131,24 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
         } catch (Exception error) {
             LoggerFactory.getLogger("horizonlab").warn("Culling ray scratch vectors disabled: invalid configuration", error);
         }
+        try {
+            Properties properties = new Properties();
+            var positionFile = loader.getConfigDir().resolve("horizon-terrain-position.properties");
+            if (Files.exists(positionFile)) {
+                try (var reader = Files.newBufferedReader(positionFile)) { properties.load(reader); }
+            }
+            boolean requested = Boolean.parseBoolean(properties.getProperty("enabled", "false"));
+            boolean supported = loader.getModContainer("distanthorizons")
+                .map(mod -> mod.getMetadata().getVersion().getFriendlyString().equals("3.3.4")).orElse(false);
+            terrainPosition = requested && supported;
+            if (requested) LoggerFactory.getLogger("horizonlab").info(
+                "Relative terrain position arithmetic: {} (requires pinned DH 3.3.4)", terrainPosition ? "enabled" : "unavailable");
+        } catch (Exception error) {
+            LoggerFactory.getLogger("horizonlab").warn("Terrain position arithmetic disabled: invalid configuration", error);
+        }
     }
 
+    public static boolean terrainPositionEnabled() { return terrainPosition; }
     public static boolean workerPacingEnabled() { return workerPacing; }
     public static boolean debounceWaitEnabled() { return debounceWait; }
     public static boolean dispatchRetryEnabled() { return dispatchRetry; }
@@ -147,6 +164,7 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith("CullingEmptyWhitelistMixin")) return cullingEmpty;
         if (mixinClassName.endsWith("CullingRayScratchMixin")) return cullingRayScratch;
         if (mixinClassName.endsWith("DhTerrainReadWaitMixin")) return terrainReadWait;
+        if (mixinClassName.endsWith("DhRelativePositionMixin")) return terrainPosition;
         return true;
     }
     @Override public String getRefMapperConfig() { return null; }

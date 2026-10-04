@@ -6,7 +6,7 @@ Client-first performance research for Minecraft Java **26.3**, preserving vanill
 
 ## Play on your Mac
 
-Download **horizon-mac-starter-0.15.0.zip** from [Releases](https://github.com/ludovic111/minecraft-optimization-lab/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
+Download **horizon-mac-starter-0.16.0.zip** from [Releases](https://github.com/ludovic111/minecraft-optimization-lab/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
 
 Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on your 16 GB M2 Pro. Prism can download Java automatically. Start at 1280×800 or 1920×1200; full Retina resolution is a larger GPU workload. [START-HERE.txt](packs/START-HERE.txt) has details. The same `.mrpack` files import into Prism on Windows and Linux.
 
@@ -22,6 +22,7 @@ Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on 
 | dispatch-retry (experimental) | 12 | 128 | 6144 MiB |
 | tick-dedup (experimental) | 12 | 128 | 6144 MiB |
 | culling-empty (experimental) | 12 | 128 | 6144 MiB |
+| terrain-position (experimental) | 12 | 128 | 6144 MiB |
 | culling-rays (experimental) | 12 | 128 | 6144 MiB |
 | foreground-first (combined experiment) | 12 | 128 | 6144 MiB |
 | foreground-vulkan (combined experiment) | 12 | 128 | 6144 MiB |
@@ -35,6 +36,11 @@ Balanced combines [Sodium](https://modrinth.com/mod/sodium), [Lithium](https://m
 Distant LOD is simplified terrain. Nearby blocks retain full detail. Initial generation costs CPU/disk/memory and needs warm-up. DH adjusts clouds, chunk fade and transparency to blend its renderer; assess appearance as well as speed. Shaders cost GPU time and have [Mac-specific limits](https://shaders.properties/current/reference/miscellaneous/macos/). Universal CPU/GPU support and exact vanilla equivalence remain validation goals. Simulation distance stays 12 in every profile; normal 20 TPS rules are retained.
 
 The optional `queue-wait` pack yields during pending distant-terrain debounce retries; `adaptive-queue` combines it with the existing controllers. [Queue experiment and measurement limits](docs/debounce-queue.md).
+
+Version 0.16 adds a separate [terrain position arithmetic experiment](docs/terrain-position.md)
+for the sampled full-data lookup. It retains the pinned library’s unusual
+negative-coordinate rounding and invalid-level errors. Balanced keeps it off;
+whole-game and Mac performance still require measurement.
 
 Version 0.15 adds an isolated [culling ray scratch experiment](docs/culling-rays.md)
 that reuses two numeric vectors within each culling instance while retaining
