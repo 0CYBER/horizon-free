@@ -158,3 +158,9 @@ and field of view at capture boundaries. If visual settings changed, the viewer
 flags the run. Older reports without these fields cannot establish quality
 equivalence. Snapshots cannot detect a change that was restored before the end,
 and do not prove that all requested distant terrain finished rendering.
+
+Since 0.14, profiles with Distant Horizons request an interruptible blending-read
+wait for its generation workers during shutdown. Ordinary Minecraft callers and
+chunk saves keep their original behavior. To disable, set enabled=false in
+config/horizon-terrain-read-wait.properties and restart. This is a scoped shutdown
+correctness fix, not a claim of greater FPS or faster terrain generation.

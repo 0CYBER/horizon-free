@@ -38,7 +38,9 @@ The optional `queue-wait` pack yields during pending distant-terrain debounce re
 Version 0.14 adds an isolated [empty culling whitelist experiment](docs/culling-empty.md)
 that avoids allocating iterators while there are no dynamic handlers. Live
 registration and nonempty callbacks retain upstream behavior. Balanced keeps it
-off; whole-game gains still need hardware comparisons.
+off; whole-game gains still need hardware comparisons. DH profiles also request
+a scoped [interruptible blending-read wait](docs/terrain-read-wait.md) to let
+background workers leave a pending metadata read during shutdown.
 
 Version 0.13 adds an isolated [tick membership experiment](docs/tick-membership.md)
 that reuses compact storage for DH's private per-tick membership checks. The

@@ -29,8 +29,13 @@ A local warmed loop of four million empty checks allocated 128,001,248 bytes
 upstream versus 1,248 with the hook. CPU was 41 ms versus 33 ms in that single
 observation. These counts isolate this allocation path; JIT escape analysis can
 produce different results in other calling contexts. They are not game FPS,
-whole-game RAM, statistical speed estimates or Mac GPU results. Live culling
-thread profiles, matching workloads and repeated hardware tests remain needed.
+whole-game RAM, statistical speed estimates or Mac GPU results. Repeated matching workloads and real hardware tests remain needed. A fixed-order
+Linux software-rendered pair observed about 97,445 versus 35,128 allocated bytes
+per second on `CullThread`, over separate 64-second counter spans. The captured
+graphics matched and both recordings excluded zero frames, but this one pair is
+not a repeatable FPS or retained-RAM result. The candidate also encountered an
+intermittent shutdown wait after its world had saved; the control exited normally.
+See the [terrain read shutdown check](terrain-read-wait.md).
 
 For local world smoke checks, the baseline and candidate use separate copies of
 the same peaceful demo-world snapshot. An earlier capture was interrupted by a

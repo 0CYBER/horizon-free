@@ -99,6 +99,12 @@ class PackTests(unittest.TestCase):
                          "config/horizon-dispatch-retry.properties", "config/horizon-tick-dedup.properties"]:
             self.assertEqual(original[filename], candidate[filename])
 
+    def test_terrain_read_shutdown_fix_only_requested_with_distant_terrain(self):
+        for name, profile in build_pack.PROFILES.items():
+            files = build_pack.overrides(name, b"fixture")
+            self.assertEqual(files["config/horizon-terrain-read-wait.properties"],
+                             b"enabled=true\n" if profile["lod"] else b"enabled=false\n")
+
     def test_wrong_game_or_download_path_is_rejected(self):
         for field, value in [("game_versions", ["1.21"]), ("filename", "../bad.jar"), ("url", "http://unsafe.invalid")]:
             lock = copy.deepcopy(build_pack.read_lock())

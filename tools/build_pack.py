@@ -95,6 +95,8 @@ def overrides(profile_name, mod_bytes):
         f"enabled={str(profile.get('tick_dedup', False)).lower()}\n").encode()
     files["config/horizon-culling-empty.properties"] = (
         f"enabled={str(profile.get('culling_empty', False)).lower()}\n").encode()
+    files["config/horizon-terrain-read-wait.properties"] = (
+        f"enabled={str(bool(profile['lod'])).lower()}\n").encode()
     if profile["lod"]:
         if not config.exists():
             raise FileNotFoundError(f"Missing verified DH profile config: {config}")
