@@ -28,4 +28,28 @@ The research workflow runs both cases and retains selected failed outcomes.
 It fails if either case fails and remains separate from required OpenGL CI.
 This is a short initialization/readback/save check, not a shader FPS, physical
 M2 GPU, exhaustive visual quality or distant-terrain completion benchmark.
-Recorded outcomes are added after real probes finish.
+
+## Observed results
+
+The [selected shader observations](../benchmarks/shader-worlds-2026-10-04/live-observations.json)
+retain successful and failed cases. On Linux llvmpipe, the OpenGL cinematic
+world probe passes with the pinned shader pack actually active, matching identity,
+nonuniform readback and clean save/exit. Its private image was visually inspected.
+This is a software-renderer startup result, not a shader FPS or physical Mac claim.
+
+The Linux Vulkan cinematic case fails before readback, with a Distant Horizons
+lightmap handler in selected stack locations. A fresh private isolation instance
+with the DH JAR removed reaches ordinary Vulkan world readback but Iris reports
+shaders inactive. The strict activation assertion rejects it; ordinary world
+pixels alone would have produced a misleading shader success.
+
+Hosted Mac run 37198566508 times out in both OpenGL and Vulkan cinematic cases,
+with no completed probe report. The previous timeout wrapper retained only
+`completed: false`; initialization/readback/waiting state is unknown. This does
+not establish shader support or incompatibility on physical Apple GPUs.
+
+Later timeout diagnostics preserve selected initialization/readback stages,
+actual child exit status after bounded cleanup, and the last private waiting-state
+snapshot. Waiting state contains only six booleans and a tick count; arbitrary
+screen names, messages and paths are excluded. An unsuccessful research run
+remains unsuccessful. Playable shader/backend defaults remain unchanged.
