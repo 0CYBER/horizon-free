@@ -1,6 +1,11 @@
 name: macOS Vulkan research
 on:
   workflow_dispatch:
+    inputs:
+      world:
+        description: Create or open disposable demo worlds instead of title probes
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -18,15 +23,19 @@ jobs:
       - name: Build original mod and private probe dependencies
         run: python tools/build_mod.py
       - name: Probe vanilla, core and distant-terrain Vulkan cases
+        env:
+          HORIZON_GRAPHICS_WORLD: ${{ inputs.world }}
         run: |
           python - <<'PY'
-          import json, subprocess, sys
+          import json, os, subprocess, sys
           from pathlib import Path
           cases = [
               ['--profile', 'baseline', '--backend', 'vulkan'],
               ['--profile', 'core-performance', '--backend', 'vulkan'],
               ['--profile', 'vulkan'],
           ]
+          if os.environ.get('HORIZON_GRAPHICS_WORLD') == 'true':
+              cases = [case + ['--world'] for case in cases]
           observations = []
           for case in cases:
               result = subprocess.run([sys.executable, 'tools/test_client_graphics.py', '--native-display', *case], capture_output=True, text=True)

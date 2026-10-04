@@ -62,6 +62,8 @@ The manual **macOS Vulkan research** workflow separately probes vanilla, core an
 the distant-terrain Vulkan profile. It runs every case, retains selected successful
 and failed outcomes, and exits unsuccessfully when a case fails. Its exploratory
 results do not count as passing the required OpenGL checks.
+Its optional `world` input selects disposable demo-world probes for every case;
+the default still probes titles.
 
 Local Linux software OpenGL/Vulkan title readbacks passed. Early macOS OpenGL
 title checks for core and balanced also passed with **Apple Software Renderer**.
@@ -88,6 +90,13 @@ was not recorded in those failures; later probes wait for its removal before
 counting readiness. This tests an initialization hypothesis while preserving the
 same nonuniform-image requirement. It is not evidence that the game's displayed
 Vulkan window was uniform or that a physical M2 GPU has the same problem.
+
+After the overlay guard, run 37194690645 has mixed results: core and distant-terrain
+title probes pass on the Apple Paravirtual Vulkan device, with no overlay and
+nonuniform readback, then exit cleanly. Vanilla still fails the uniform-readback
+assertion. The overall research run therefore remains failed. These outcomes
+justify retaining the readiness guard; they do not establish the cause of the
+remaining failure, full visual correctness, world rendering or physical M2 speed.
 
 For an isolated private preference override:
 
