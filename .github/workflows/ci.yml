@@ -71,6 +71,8 @@ jobs:
         run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('terrain-position', 'dev.horizonlab.dispatch.PositionIntegration')"
       - name: Compile the private terrain quad reuse fixture
         run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('quad-reuse', 'dev.horizonlab.dispatch.QuadReuseIntegration')"
+      - name: Compile the private object-size agent and terrain quad fixture
+        run: python -c "from tools.test_quad_sizes import build_agent; from tools.build_mod import build_integration_fixture; build_agent(); build_integration_fixture('quad-size', 'dev.horizonlab.dispatch.QuadSizeIntegration')"
       - name: Compile the private terrain read shutdown fixture
         run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('terrain-read', 'dev.horizonlab.dispatch.TerrainReadIntegration')"
       - name: Install headless graphics libraries for applied-hook checks
@@ -94,6 +96,9 @@ jobs:
       - name: Verify actual terrain quad geometry and allocation
         if: runner.os == 'Linux'
         run: python tools/test_quad_reuse.py
+      - name: Measure actual builder and quad shallow sizes in both header modes
+        if: runner.os == 'Linux'
+        run: python tools/test_quad_sizes.py
       - name: Verify interrupted DH reads and preserved shared futures
         if: runner.os == 'Linux'
         run: python tools/test_terrain_read.py
@@ -115,3 +120,4 @@ jobs:
             dist/culling-rays-integration.json
             dist/terrain-position-integration.json
             dist/quad-reuse-integration.json
+            dist/quad-size-integration.json
