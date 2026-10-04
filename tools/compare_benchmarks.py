@@ -9,7 +9,7 @@ MATCH_FIELDS = ("minecraft", "kind", "os", "os_version", "architecture", "gpu", 
                 "java_version", "heap_max_bytes", "framebuffer_width", "framebuffer_height", "render_distance",
                 "simulation_distance", "vsync", "fps_limit", "graphics_preset", "ambient_occlusion",
                 "improved_transparency", "mipmap_levels", "entity_distance_scaling", "entity_shadows", "particles",
-                "clouds", "cloud_range", "fov", "dh_capture_status", "dh_rendering_enabled", "dh_renderer_mode",
+                "clouds", "cloud_range", "fov", "world_difficulty", "dh_capture_status", "dh_rendering_enabled", "dh_renderer_mode",
                 "dh_lod_radius_chunks", "dh_horizontal_quality", "dh_vertical_quality", "dh_max_horizontal_resolution",
                 "dh_transparency", "dh_lod_shading", "dh_lod_only_mode", "dh_camera_quality_dropoff",
                 "dh_ambient_occlusion", "iris_capture_status", "iris_shaders_enabled", "iris_shader_pack")

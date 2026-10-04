@@ -30,7 +30,7 @@
 </main>
 <script>
 'use strict';
-const SETTINGS=['minecraft','kind','os','os_version','architecture','gpu','graphics_backend','graphics_driver','java_version','heap_max_bytes','framebuffer_width','framebuffer_height','render_distance','simulation_distance','vsync','fps_limit','graphics_preset','ambient_occlusion','improved_transparency','mipmap_levels','entity_distance_scaling','entity_shadows','particles','clouds','cloud_range','fov','dh_capture_status','dh_rendering_enabled','dh_renderer_mode','dh_lod_radius_chunks','dh_horizontal_quality','dh_vertical_quality','dh_max_horizontal_resolution','dh_transparency','dh_lod_shading','dh_lod_only_mode','dh_camera_quality_dropoff','dh_ambient_occlusion','iris_capture_status','iris_shaders_enabled','iris_shader_pack'];
+const SETTINGS=['minecraft','kind','os','os_version','architecture','gpu','graphics_backend','graphics_driver','java_version','heap_max_bytes','framebuffer_width','framebuffer_height','render_distance','simulation_distance','vsync','fps_limit','graphics_preset','ambient_occlusion','improved_transparency','mipmap_levels','entity_distance_scaling','entity_shadows','particles','clouds','cloud_range','fov','world_difficulty','dh_capture_status','dh_rendering_enabled','dh_renderer_mode','dh_lod_radius_chunks','dh_horizontal_quality','dh_vertical_quality','dh_max_horizontal_resolution','dh_transparency','dh_lod_shading','dh_lod_only_mode','dh_camera_quality_dropoff','dh_ambient_occlusion','iris_capture_status','iris_shaders_enabled','iris_shader_pack'];
 const state={baseline:null,candidate:null},generation={baseline:0,candidate:0};
 let comparison=null,chartData=null;
 const $=id=>document.getElementById(id);
@@ -119,6 +119,7 @@ function renderDetails(side){
     if(number(r.dh_thread_count))fields.push(['Terrain workers',r.dh_thread_count+' · runtime ratio at start '+format(r.dh_runtime_ratio)+(number(r.visual_settings_end?.dh_runtime_ratio)?' / end '+format(r.visual_settings_end.dh_runtime_ratio):'')]);
     fields.push(['Iris shaders',r.iris_capture_status==='not_installed'?'Not installed':r.iris_capture_status==='available'?r.iris_shaders_enabled?'Enabled · '+(r.iris_shader_pack||'pack name unavailable'):'Disabled':'Not captured']);
     if(number(r.fov))fields.push(['Field of view',format(r.fov)]);
+    if(r.world_difficulty)fields.push(['World difficulty',r.world_difficulty]);
     fields.push(['Frame limit',r.fps_limit_unlimited===true||(r.minecraft==='26.3'&&number(r.fps_limit)&&r.fps_limit>=260)?'Uncapped':number(r.fps_limit)?r.fps_limit+' FPS':'not captured']);
     if(r.adaptive_budget_enabled&&number(r.adaptive_target_fps))fields.push(['Adaptive frame goal',r.adaptive_target_fps+' FPS (not a cap)']);
   }

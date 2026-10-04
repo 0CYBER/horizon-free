@@ -31,3 +31,14 @@ observation. These counts isolate this allocation path; JIT escape analysis can
 produce different results in other calling contexts. They are not game FPS,
 whole-game RAM, statistical speed estimates or Mac GPU results. Live culling
 thread profiles, matching workloads and repeated hardware tests remain needed.
+
+For local world smoke checks, the baseline and candidate use separate copies of
+the same peaceful demo-world snapshot. An earlier capture was interrupted by a
+zombie killing the player and is excluded from performance comparisons. Release
+packs do not change world difficulty. Frame reports now capture actual world
+difficulty at their start/end boundaries so comparison tools can flag a mismatch.
+
+The [sanitized Linux CI result](../benchmarks/culling-empty-2026-10-04/linux-applied-hooks.json)
+includes its source/workflow provenance and independently checks live registration
+and the applied shortcut. CPU timings can include JIT folding of this empty loop;
+they are not per-check costs or estimates of game speed.
