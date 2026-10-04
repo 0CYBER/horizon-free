@@ -12,6 +12,7 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 
 /** Internal hooks are opt-in and limited to the inspected, pinned DH version. */
 public final class HorizonMixinPlugin implements IMixinConfigPlugin {
+    private static boolean quadReuse;
     private static boolean terrainPosition;
     private static boolean workerPacing;
     private static boolean debounceWait;
@@ -146,8 +147,24 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
         } catch (Exception error) {
             LoggerFactory.getLogger("horizonlab").warn("Terrain position arithmetic disabled: invalid configuration", error);
         }
+        try {
+            Properties properties = new Properties();
+            var quadFile = loader.getConfigDir().resolve("horizon-quad-reuse.properties");
+            if (Files.exists(quadFile)) {
+                try (var reader = Files.newBufferedReader(quadFile)) { properties.load(reader); }
+            }
+            boolean requested = Boolean.parseBoolean(properties.getProperty("enabled", "false"));
+            boolean supported = loader.getModContainer("distanthorizons")
+                .map(mod -> mod.getMetadata().getVersion().getFriendlyString().equals("3.3.4")).orElse(false);
+            quadReuse = requested && supported;
+            if (requested) LoggerFactory.getLogger("horizonlab").info(
+                "Discarded terrain quad reuse: {} (requires pinned DH 3.3.4)", quadReuse ? "enabled" : "unavailable");
+        } catch (Exception error) {
+            LoggerFactory.getLogger("horizonlab").warn("Terrain quad reuse disabled: invalid configuration", error);
+        }
     }
 
+    public static boolean quadReuseEnabled() { return quadReuse; }
     public static boolean terrainPositionEnabled() { return terrainPosition; }
     public static boolean workerPacingEnabled() { return workerPacing; }
     public static boolean debounceWaitEnabled() { return debounceWait; }
@@ -165,6 +182,7 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith("CullingRayScratchMixin")) return cullingRayScratch;
         if (mixinClassName.endsWith("DhTerrainReadWaitMixin")) return terrainReadWait;
         if (mixinClassName.endsWith("DhRelativePositionMixin")) return terrainPosition;
+        if (mixinClassName.endsWith("DhQuadReuseMixin")) return quadReuse;
         return true;
     }
     @Override public String getRefMapperConfig() { return null; }

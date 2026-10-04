@@ -52,7 +52,7 @@ def compare(baseline, candidate):
     warnings.extend(software_warnings(baseline, candidate))
     if baseline["kind"] == "frames":
         for field in ["adaptive_budget_enabled", "adaptive_target_fps", "precise_worker_pacing", "debounce_queue_wait",
-                      "wakeable_idle_wait", "dispatch_retry_backoff", "tick_membership_dedup", "empty_culling_whitelist", "culling_ray_scratch", "terrain_position_arithmetic", "interruptible_terrain_read", "dh_thread_count", "dh_runtime_ratio"]:
+                      "wakeable_idle_wait", "dispatch_retry_backoff", "tick_membership_dedup", "empty_culling_whitelist", "culling_ray_scratch", "terrain_position_arithmetic", "terrain_quad_reuse", "interruptible_terrain_read", "dh_thread_count", "dh_runtime_ratio"]:
             if field in baseline and field in candidate and baseline[field] != candidate[field]:
                 warnings.append(f"Experiment {field} differs: {baseline[field]!r} vs {candidate[field]!r}.")
         for name, report in [("baseline", baseline), ("candidate", candidate)]:
