@@ -25,6 +25,13 @@ PROFILES
 - m2-balanced: 12 chunks of full-detail terrain plus 128 chunks of distant LOD.
   Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, Distant Horizons.
   Recommended first test for your 16 GB M2 Pro. OpenGL, shaders not installed.
+- core-performance: 12 full-detail chunks, no distant LOD or shaders, with Sodium,
+  Lithium, FerriteCore, ImmediatelyFast and EntityCulling. After a first balanced smoke test,
+  compare this against baseline to test the core mods at the same view and
+  simulation distances.
+  Use the same heap, resolution, world copy, camera route and Java flags in both.
+  All original experimental controllers are disabled. This is a full-detail
+  comparison profile; it does not add balanced's 128-chunk distant horizon.
 - baseline: original game renderer and simulation with Fabric API and the same
   Horizon timing instrument. 12 full-detail chunks, no performance mods or LOD.
   Use the SAME 6144 MiB maximum heap as m2-balanced for a fair comparison.

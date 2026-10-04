@@ -6,13 +6,14 @@ Client-first performance research for Minecraft Java **26.3**, preserving vanill
 
 ## Play on your Mac
 
-Download **horizon-mac-starter-0.18.0.zip** from [Releases](https://github.com/ludovic111/minecraft-optimization-lab/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
+Download **horizon-mac-starter-0.19.0.zip** from [Releases](https://github.com/ludovic111/minecraft-optimization-lab/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
 
 Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on your 16 GB M2 Pro. Prism can download Java automatically. Start at 1280×800 or 1920×1200; full Retina resolution is a larger GPU workload. [START-HERE.txt](packs/START-HERE.txt) has details. The same `.mrpack` files import into Prism on Windows and Linux.
 
 | Profile | Full-detail chunks | Distant LOD radius | Suggested maximum heap |
 | --- | ---: | ---: | ---: |
 | baseline | 12 | none | 6144 MiB |
+| core-performance | 12 | none | 6144 MiB |
 | m2-balanced | 12 | 128 | 6144 MiB |
 | adaptive (experiment) | 12 | 128 | 6144 MiB |
 | worker-pacing (experiment) | 12 | 128 | 6144 MiB |
@@ -35,6 +36,14 @@ Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on 
 Balanced combines [Sodium](https://modrinth.com/mod/sodium), [Lithium](https://modrinth.com/mod/lithium), [FerriteCore](https://modrinth.com/mod/ferrite-core), [ImmediatelyFast](https://modrinth.com/mod/immediatelyfast), [EntityCulling](https://modrinth.com/mod/entityculling), and [Distant Horizons](https://modrinth.com/mod/distanthorizons). Cinematic adds [Iris](https://modrinth.com/mod/iris) and [Complementary Reimagined](https://modrinth.com/shader/complementary-reimagined), initially disabled. Vulkan independently experiments with the game's own backend and fallback, without Iris.
 
 Distant LOD is simplified terrain. Nearby blocks retain full detail. Initial generation costs CPU/disk/memory and needs warm-up. DH adjusts clouds, chunk fade and transparency to blend its renderer; assess appearance as well as speed. Shaders cost GPU time and have [Mac-specific limits](https://shaders.properties/current/reference/miscellaneous/macos/). Universal CPU/GPU support and exact vanilla equivalence remain validation goals. Simulation distance stays 12 in every profile; normal 20 TPS rules are retained.
+
+For the first comparison at the same view distance, use `baseline` versus
+`core-performance`: both select 12 full-detail chunks and no distant LOD or shaders.
+The latter adds only the pinned core performance mods and leaves every original
+controller disabled. Then test balanced separately for its additional distant
+terrain. Matching captured settings does not prove pixel-identical rendering.
+[Core comparison protocol and selected observations](docs/core-performance.md)
+include one software-rendered pair; M2 performance remains unmeasured.
 
 The optional `queue-wait` pack yields during pending distant-terrain debounce retries; `adaptive-queue` combines it with the existing controllers. [Queue experiment and measurement limits](docs/debounce-queue.md).
 
@@ -135,7 +144,7 @@ python3 tools/build_mod.py
 python3 tools/build_release.py
 ```
 
-Gitignored `dist/` contains nineteen packs, our original instrumentation JAR, client/server starter ZIPs and SHA256SUMS. [mods.lock.json](packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
+Gitignored `dist/` contains twenty packs, our original instrumentation JAR, client/server starter ZIPs and SHA256SUMS. [mods.lock.json](packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
 
 The server starter uses Lithium/FerriteCore and `/horizonserver bench <label> <seconds>`. [Server instructions](docs/server-quickstart.txt) cover setup and a baseline. Files are prepared before you accept Minecraft's EULA locally. A 50-active-player workload remains to be measured.
 

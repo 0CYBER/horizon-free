@@ -17,6 +17,7 @@ ROOT = lab.ROOT
 CORE = ["fabric-api", "sodium", "lithium", "ferrite-core", "immediatelyfast", "entityculling"]
 PROFILES = {
     "baseline": {"title": "Vanilla baseline", "mods": ["fabric-api"], "render": 12, "lod": 0, "heap": 6144},
+    "core-performance": {"title": "Full-detail performance comparison", "mods": CORE, "render": 12, "lod": 0, "heap": 6144},
     "m2-balanced": {"title": "M2 Pro balanced", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144},
     "adaptive": {"title": "Adaptive terrain experiment", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144, "adaptive": True},
     "worker-pacing": {"title": "Precise worker pacing experiment", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144, "pacing": True},
