@@ -1,0 +1,1399 @@
+{
+  "schema": 1,
+  "measurement": "Three fixed-order graphics API experiments, OpenGL then Vulkan, same core profile; descriptive stationary Linux software-rendering observations",
+  "release": "0.20.0",
+  "source_commit": "86e33927409b2e78a3f60678375ebfa39dc5cfb7",
+  "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+  "private_fixture_sha256": "fe02ea765362f8185517dc206816e4ef0b5b83925776d1512ca7d9e2d347b3ae",
+  "host_cpu": "Intel Core i7-7500U, 2 physical cores / 4 logical processors",
+  "protocol": {
+    "warmup_seconds": 180,
+    "capture_seconds": 120,
+    "gc": "g1",
+    "compact_headers": true,
+    "framebuffer": [
+      1280,
+      800
+    ],
+    "full_detail_chunks": 12,
+    "simulation_chunks": 12,
+    "lod": "not installed",
+    "camera_yaw": 141.5,
+    "camera_pitch": 16.950002670288086,
+    "world_clock": 6000,
+    "advance_time": false,
+    "advance_weather": false,
+    "experiment_variable": "graphics API and corresponding driver identity only",
+    "minimum_heap_bytes": 536870912,
+    "host_total_ram_bytes": 32456794112,
+    "new_process_per_run": true,
+    "stationary_position": [
+      -56.5,
+      69.0,
+      55.5
+    ],
+    "same_initial_world_copies": true,
+    "private_fixture_present_in_both_profiles": true,
+    "camera_enforced_each_client_tick": true,
+    "world_difficulty": "PEACEFUL",
+    "profiling_during_capture": false,
+    "native_gpu_access": "unavailable to this user",
+    "order": [
+      "opengl",
+      "vulkan",
+      "opengl",
+      "vulkan",
+      "opengl",
+      "vulkan"
+    ]
+  },
+  "settings": {
+    "minecraft": "26.3",
+    "kind": "frames",
+    "os": "Linux",
+    "os_version": "7.0.0-31-generic",
+    "architecture": "amd64",
+    "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+    "java_version": "25.0.4.1",
+    "heap_max_bytes": 3221225472,
+    "framebuffer_width": 1280,
+    "framebuffer_height": 800,
+    "render_distance": 12,
+    "simulation_distance": 12,
+    "vsync": false,
+    "fps_limit": 260,
+    "graphics_preset": "CUSTOM",
+    "ambient_occlusion": true,
+    "improved_transparency": false,
+    "mipmap_levels": 4,
+    "entity_distance_scaling": 1.0,
+    "entity_shadows": true,
+    "particles": "ALL",
+    "clouds": "FANCY",
+    "cloud_range": 128,
+    "fov": 70,
+    "world_difficulty": "PEACEFUL",
+    "dh_capture_status": "not_installed",
+    "iris_capture_status": "not_installed",
+    "iris_shaders_enabled": false,
+    "garbage_collectors": [
+      "G1 Concurrent GC",
+      "G1 Old Generation",
+      "G1 Young Generation"
+    ],
+    "compact_object_headers": true,
+    "fps_limit_unlimited": true
+  },
+  "software": {
+    "java_vendor": "Ubuntu",
+    "java_vm_name": "OpenJDK 64-Bit Server VM",
+    "java_runtime_version": "25.0.4.1+1-1-26.04.4-Ubuntu",
+    "core-performance_mods": [
+      "entityculling@1.11.2",
+      "fabric-advancement-api-v1@1.0.0+38c7a2d55d",
+      "fabric-api-base@2.0.6+fcdff87f5d",
+      "fabric-api-lookup-api-v1@2.0.24+3434d6d95d",
+      "fabric-api@0.161.0+26.3",
+      "fabric-biome-api-v1@20.0.9+74ed1ea55d",
+      "fabric-block-api-v1@3.1.0+0ae6f9115d",
+      "fabric-block-getter-api-v2@2.0.9+3434d6d95d",
+      "fabric-command-api-v2@3.1.2+fcdff87f5d",
+      "fabric-content-registries-v0@15.0.4+74ed1ea55d",
+      "fabric-convention-tags-v2@4.10.3+6b5b47fd5d",
+      "fabric-crash-report-info-v1@1.0.7+fcdff87f5d",
+      "fabric-creative-tab-api-v1@5.0.21+fcdff87f5d",
+      "fabric-data-attachment-api-v1@2.2.30+3434d6d95d",
+      "fabric-data-generation-api-v1@27.2.4+427eab975d",
+      "fabric-debug-api-v1@1.0.4+3434d6d95d",
+      "fabric-dimensions-v1@5.1.19+47f74c985d",
+      "fabric-entity-events-v1@6.0.4+3434d6d95d",
+      "fabric-events-interaction-v0@5.3.6+3434d6d95d",
+      "fabric-game-rule-api-v1@4.0.10+3434d6d95d",
+      "fabric-item-api-v1@14.7.0+cf6bc2db5d",
+      "fabric-key-mapping-api-v1@2.0.8+3434d6d95d",
+      "fabric-lifecycle-events-v1@4.1.9+ffef5f675d",
+      "fabric-loot-api-v3@4.0.8+4068fd645d",
+      "fabric-menu-api-v1@2.0.27+ed66f0a35d",
+      "fabric-message-api-v1@7.0.10+3434d6d95d",
+      "fabric-model-loading-api-v1@8.0.35+fcdff87f5d",
+      "fabric-networking-api-v1@6.3.8+fcdff87f5d",
+      "fabric-object-builder-api-v1@24.1.9+3434d6d95d",
+      "fabric-particles-v1@5.0.24+3434d6d95d",
+      "fabric-permission-api-v1@1.0.8+fcdff87f5d",
+      "fabric-recipe-api-v1@10.0.8+fcdff87f5d",
+      "fabric-registry-sync-v0@8.0.1+fcdff87f5d",
+      "fabric-renderer-api-v1@17.0.15+79385d0b5d",
+      "fabric-renderer-indigo@9.1.23+b9d63e335d",
+      "fabric-rendering-fluids-v1@6.0.6+3434d6d95d",
+      "fabric-rendering-v1@27.0.14+901a437c5d",
+      "fabric-resource-conditions-api-v1@6.1.5+3434d6d95d",
+      "fabric-resource-loader-v0@3.3.26+4fc5413f5d",
+      "fabric-resource-loader-v1@3.0.4+fcdff87f5d",
+      "fabric-screen-api-v1@5.2.4+48607d035d",
+      "fabric-serialization-api-v1@2.0.7+74ed1ea55d",
+      "fabric-sound-api-v1@2.0.7+3434d6d95d",
+      "fabric-tag-api-v1@2.1.10+fcdff87f5d",
+      "fabric-transfer-api-v1@8.0.25+fcdff87f5d",
+      "fabric-transitive-access-wideners-v1@8.1.16+52268a0e5d",
+      "fabricloader@0.19.5",
+      "ferritecore@9.0.0",
+      "horizon_client_batch_private_fixture@1",
+      "horizonlab@0.20.0",
+      "immediatelyfast@1.17.1+26.3",
+      "java@25",
+      "lithium@0.26.2+mc26.3",
+      "minecraft@26.3",
+      "mixinextras@0.5.5",
+      "sodium@0.9.2+mc26.3",
+      "transition@1.0.25",
+      "trender@1.0.17"
+    ]
+  },
+  "observed_graphics_devices": {
+    "opengl": {
+      "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+      "graphics_backend": "OpenGL",
+      "graphics_driver": "4.5 (Core Profile) Mesa 26.0.8-1ubuntu0.3"
+    },
+    "vulkan": {
+      "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+      "graphics_backend": "Vulkan",
+      "graphics_driver": "1.4.335 llvmpipe Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)"
+    }
+  },
+  "runs": [
+    {
+      "index": 1,
+      "profile": "core-performance",
+      "heap_max_bytes": 3221225472,
+      "preferred_backend": "opengl",
+      "frames": {
+        "elapsed_seconds": 120.153584097,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 347.84,
+        "process_cpu_mean_cores": 2.8949614996019486,
+        "process_rss_peak_sampled_bytes": 2477109248,
+        "process_rss_samples": 121,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 1009881368,
+        "heap_committed_end_bytes": 1071644672,
+        "nonheap_used_peak_sampled_bytes": 254096760,
+        "gc_collections": 4,
+        "gc_time_ms": 81,
+        "visual_settings_changed": [],
+        "stats": {
+          "count": 788,
+          "meanMs": 152.0083139213198,
+          "p50Ms": 150.158758,
+          "p95Ms": 166.80906,
+          "p99Ms": 193.089751,
+          "maxMs": 206.398834,
+          "meanRate": 6.578587540399958,
+          "lowOnePercentRate": 5.0333509709501385,
+          "over16Ms": 788,
+          "over33Ms": 788,
+          "over50Ms": 788,
+          "over100Ms": 788
+        },
+        "private_report_sha256": "cd07998b15250fd23370d52b24e3eaecc4a92625f6bf6386fc91ced9ea8bd8a3",
+        "private_csv_sha256": "3c9c468e268633ee61730cce1a581579bc1dc04a0eef155da8a0258b6a114f31"
+      },
+      "ticks": {
+        "elapsed_seconds": 120.0357362,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 347.41,
+        "process_cpu_mean_cores": 2.894221429367965,
+        "process_rss_peak_sampled_bytes": 2477109248,
+        "process_rss_samples": 119,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 1007582424,
+        "heap_committed_end_bytes": 1071644672,
+        "nonheap_used_peak_sampled_bytes": 254096888,
+        "gc_collections": 3,
+        "gc_time_ms": 34,
+        "observed_ticks_per_second": 20.00237659224687,
+        "tick_state_capture_status": "sampled_server_ticks",
+        "tick_state_samples": 2401,
+        "tick_state_invalid_samples": 0,
+        "tick_state_first": {
+          "configured_tick_rate": 20.0,
+          "frozen": false,
+          "runs_game_elements": true,
+          "stepping": false,
+          "sprinting": false
+        },
+        "tick_state_last": {
+          "configured_tick_rate": 20.0,
+          "frozen": false,
+          "runs_game_elements": true,
+          "stepping": false,
+          "sprinting": false
+        },
+        "tick_state_changed": [],
+        "tick_state_frozen_samples": 0,
+        "tick_state_stepping_samples": 0,
+        "tick_state_sprinting_samples": 0,
+        "tick_state_suppressed_samples": 0,
+        "tick_state_nonstandard_rate_samples": 0,
+        "stats": {
+          "count": 2401,
+          "meanMs": 6.455001293211162,
+          "p50Ms": 5.894067,
+          "p95Ms": 10.875816,
+          "p99Ms": 12.977439,
+          "maxMs": 104.81229,
+          "meanRate": 154.91863666266303,
+          "lowOnePercentRate": 53.81944456404321,
+          "over16Ms": 5,
+          "over33Ms": 1,
+          "over50Ms": 1,
+          "over100Ms": 1
+        },
+        "private_report_sha256": "628119729341eab93cb9f979ccfa1eabab16c8eca45ef85ba426dd0dc8ce909d",
+        "private_csv_sha256": "5eb14710cddd59e2e04717a943b526cd9edf3b14a21be02e6f237e1038b81015"
+      },
+      "saved_camera_and_position_verified": true,
+      "saved_clock_and_weather_rules_verified": true,
+      "all_original_experiments_disabled": true,
+      "csv_counts_and_means_verified": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 2,
+      "profile": "core-performance",
+      "heap_max_bytes": 3221225472,
+      "preferred_backend": "vulkan",
+      "frames": {
+        "elapsed_seconds": 120.172179139,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 390.27,
+        "process_cpu_mean_cores": 3.2475902725254318,
+        "process_rss_peak_sampled_bytes": 2450522112,
+        "process_rss_samples": 120,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 804081728,
+        "heap_committed_end_bytes": 851443712,
+        "nonheap_used_peak_sampled_bytes": 256187672,
+        "gc_collections": 7,
+        "gc_time_ms": 94,
+        "visual_settings_changed": [],
+        "stats": {
+          "count": 800,
+          "meanMs": 149.77992711000002,
+          "p50Ms": 147.274745,
+          "p95Ms": 163.343135,
+          "p99Ms": 192.980528,
+          "maxMs": 228.786552,
+          "meanRate": 6.676462055329945,
+          "lowOnePercentRate": 4.923152733569755,
+          "over16Ms": 800,
+          "over33Ms": 800,
+          "over50Ms": 800,
+          "over100Ms": 800
+        },
+        "private_report_sha256": "6cb7acdbbfddc5941a9050694ea572a480e1e1cd1f76c3cca0d27ea14c9d15ee",
+        "private_csv_sha256": "b769b3c38abd0676f82e9789df256f7a36e20a69c1878bfdbdda35c64c762077"
+      },
+      "ticks": {
+        "elapsed_seconds": 120.019155508,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 389.7,
+        "process_cpu_mean_cores": 3.2469816868026884,
+        "process_rss_peak_sampled_bytes": 2450522112,
+        "process_rss_samples": 119,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 797318320,
+        "heap_committed_end_bytes": 851443712,
+        "nonheap_used_peak_sampled_bytes": 256187672,
+        "gc_collections": 7,
+        "gc_time_ms": 94,
+        "observed_ticks_per_second": 20.005139928183873,
+        "tick_state_capture_status": "sampled_server_ticks",
+        "tick_state_samples": 2401,
+        "tick_state_invalid_samples": 0,
+        "tick_state_first": {
+          "sprinting": false,
+          "configured_tick_rate": 20.0,
+          "frozen": false,
+          "runs_game_elements": true,
+          "stepping": false
+        },
+        "tick_state_last": {
+          "sprinting": false,
+          "configured_tick_rate": 20.0,
+          "frozen": false,
+          "runs_game_elements": true,
+          "stepping": false
+        },
+        "tick_state_changed": [],
+        "tick_state_frozen_samples": 0,
+        "tick_state_stepping_samples": 0,
+        "tick_state_sprinting_samples": 0,
+        "tick_state_suppressed_samples": 0,
+        "tick_state_nonstandard_rate_samples": 0,
+        "stats": {
+          "count": 2401,
+          "meanMs": 7.460477525197834,
+          "p50Ms": 7.512912,
+          "p95Ms": 11.778145,
+          "p99Ms": 15.595841,
+          "maxMs": 105.966919,
+          "meanRate": 134.03967730249042,
+          "lowOnePercentRate": 47.089042063473464,
+          "over16Ms": 12,
+          "over33Ms": 2,
+          "over50Ms": 1,
+          "over100Ms": 1
+        },
+        "private_report_sha256": "8c92e3738b223391a930a8f584e0c5d4d175ed6760e2f1288c4934749f28134f",
+        "private_csv_sha256": "2bf1a67d91baa81dcba26689c3341e607cb791d5368a3c6ae60a4e1951c6816a"
+      },
+      "saved_camera_and_position_verified": true,
+      "saved_clock_and_weather_rules_verified": true,
+      "all_original_experiments_disabled": true,
+      "csv_counts_and_means_verified": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 3,
+      "profile": "core-performance",
+      "heap_max_bytes": 3221225472,
+      "preferred_backend": "opengl",
+      "frames": {
+        "elapsed_seconds": 120.056324059,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 350.33,
+        "process_cpu_mean_cores": 2.918047031223738,
+        "process_rss_peak_sampled_bytes": 2591977472,
+        "process_rss_samples": 120,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 1075990672,
+        "heap_committed_end_bytes": 1157627904,
+        "nonheap_used_peak_sampled_bytes": 267130304,
+        "gc_collections": 4,
+        "gc_time_ms": 83,
+        "visual_settings_changed": [],
+        "stats": {
+          "count": 788,
+          "meanMs": 151.81724787944162,
+          "p50Ms": 150.208456,
+          "p95Ms": 161.170166,
+          "p99Ms": 189.927463,
+          "maxMs": 229.628978,
+          "meanRate": 6.586866867683585,
+          "lowOnePercentRate": 5.032806449497176,
+          "over16Ms": 788,
+          "over33Ms": 788,
+          "over50Ms": 788,
+          "over100Ms": 788
+        },
+        "private_report_sha256": "124233d2d6dab370c18a3b8c949f0899deb5629e11d4290510595724e2327d10",
+        "private_csv_sha256": "83ef22a1c4e92fd1552b70d8c9cb6ecb001f2b243caa842231f2f10c736ccb79"
+      },
+      "ticks": {
+        "elapsed_seconds": 120.025903195,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 350.24,
+        "process_cpu_mean_cores": 2.918036779369057,
+        "process_rss_peak_sampled_bytes": 2591977472,
+        "process_rss_samples": 119,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 1069699216,
+        "heap_committed_end_bytes": 1157627904,
+        "nonheap_used_peak_sampled_bytes": 267144984,
+        "gc_collections": 4,
+        "gc_time_ms": 83,
+        "observed_ticks_per_second": 20.004015267431207,
+        "tick_state_capture_status": "sampled_server_ticks",
+        "tick_state_samples": 2401,
+        "tick_state_invalid_samples": 0,
+        "tick_state_first": {
+          "runs_game_elements": true,
+          "frozen": false,
+          "configured_tick_rate": 20.0,
+          "sprinting": false,
+          "stepping": false
+        },
+        "tick_state_last": {
+          "runs_game_elements": true,
+          "frozen": false,
+          "configured_tick_rate": 20.0,
+          "sprinting": false,
+          "stepping": false
+        },
+        "tick_state_changed": [],
+        "tick_state_frozen_samples": 0,
+        "tick_state_stepping_samples": 0,
+        "tick_state_sprinting_samples": 0,
+        "tick_state_suppressed_samples": 0,
+        "tick_state_nonstandard_rate_samples": 0,
+        "stats": {
+          "count": 2401,
+          "meanMs": 6.844892980841316,
+          "p50Ms": 6.746907,
+          "p95Ms": 11.092248,
+          "p99Ms": 13.688587,
+          "maxMs": 90.747713,
+          "meanRate": 146.0943221170842,
+          "lowOnePercentRate": 52.41429004586254,
+          "over16Ms": 6,
+          "over33Ms": 1,
+          "over50Ms": 1,
+          "over100Ms": 0
+        },
+        "private_report_sha256": "9aab7214126f9d0d68671355deb809d849c70dfc6ddaf6103755fc066181a58a",
+        "private_csv_sha256": "a085e22102cae4c2506bba9af9c054aed5460328124215fc6903615009ecef2b"
+      },
+      "saved_camera_and_position_verified": true,
+      "saved_clock_and_weather_rules_verified": true,
+      "all_original_experiments_disabled": true,
+      "csv_counts_and_means_verified": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 4,
+      "profile": "core-performance",
+      "heap_max_bytes": 3221225472,
+      "preferred_backend": "vulkan",
+      "frames": {
+        "elapsed_seconds": 120.187180036,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 390.09,
+        "process_cpu_mean_cores": 3.2456872678363466,
+        "process_rss_peak_sampled_bytes": 2649251840,
+        "process_rss_samples": 121,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 1001858864,
+        "heap_committed_end_bytes": 1052770304,
+        "nonheap_used_peak_sampled_bytes": 258206776,
+        "gc_collections": 5,
+        "gc_time_ms": 81,
+        "visual_settings_changed": [],
+        "stats": {
+          "count": 799,
+          "meanMs": 149.98913831539426,
+          "p50Ms": 147.613269,
+          "p95Ms": 162.691502,
+          "p99Ms": 193.393776,
+          "maxMs": 339.206983,
+          "meanRate": 6.66714944316314,
+          "lowOnePercentRate": 4.648886358081644,
+          "over16Ms": 799,
+          "over33Ms": 799,
+          "over50Ms": 799,
+          "over100Ms": 799
+        },
+        "private_report_sha256": "f874a0079bacef32e4489127853b5b7ce09045f20c6208d223310f0538ec35e9",
+        "private_csv_sha256": "2be1e690fe825ddb89b2cacc8501dcdc99264a2019eedd1d63c924dab8462031"
+      },
+      "ticks": {
+        "elapsed_seconds": 120.03598902,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 389.56,
+        "process_cpu_mean_cores": 3.2453600222770924,
+        "process_rss_peak_sampled_bytes": 2647678976,
+        "process_rss_samples": 119,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 993470256,
+        "heap_committed_end_bytes": 1052770304,
+        "nonheap_used_peak_sampled_bytes": 258220144,
+        "gc_collections": 5,
+        "gc_time_ms": 81,
+        "observed_ticks_per_second": 20.002334463207973,
+        "tick_state_capture_status": "sampled_server_ticks",
+        "tick_state_samples": 2401,
+        "tick_state_invalid_samples": 0,
+        "tick_state_first": {
+          "frozen": false,
+          "configured_tick_rate": 20.0,
+          "sprinting": false,
+          "stepping": false,
+          "runs_game_elements": true
+        },
+        "tick_state_last": {
+          "frozen": false,
+          "configured_tick_rate": 20.0,
+          "sprinting": false,
+          "stepping": false,
+          "runs_game_elements": true
+        },
+        "tick_state_changed": [],
+        "tick_state_frozen_samples": 0,
+        "tick_state_stepping_samples": 0,
+        "tick_state_sprinting_samples": 0,
+        "tick_state_suppressed_samples": 0,
+        "tick_state_nonstandard_rate_samples": 0,
+        "stats": {
+          "count": 2401,
+          "meanMs": 7.602049678050812,
+          "p50Ms": 7.643544,
+          "p95Ms": 11.980796,
+          "p99Ms": 16.134273,
+          "maxMs": 104.202906,
+          "meanRate": 131.54347082041207,
+          "lowOnePercentRate": 46.56100162622679,
+          "over16Ms": 15,
+          "over33Ms": 1,
+          "over50Ms": 1,
+          "over100Ms": 1
+        },
+        "private_report_sha256": "1815a4e1a4af311ad8c8efe31489104c587123506abc25c9d5b26e81b4f8abdc",
+        "private_csv_sha256": "2fb5a1706c3b7131171a7e31c61c9bd68a79045f70234f1ba893d556c0a35ba9"
+      },
+      "saved_camera_and_position_verified": true,
+      "saved_clock_and_weather_rules_verified": true,
+      "all_original_experiments_disabled": true,
+      "csv_counts_and_means_verified": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 5,
+      "profile": "core-performance",
+      "heap_max_bytes": 3221225472,
+      "preferred_backend": "opengl",
+      "frames": {
+        "elapsed_seconds": 120.141155848,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 345.92,
+        "process_cpu_mean_cores": 2.8792797735161675,
+        "process_rss_peak_sampled_bytes": 2542481408,
+        "process_rss_samples": 121,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 1021313024,
+        "heap_committed_end_bytes": 1080033280,
+        "nonheap_used_peak_sampled_bytes": 276024160,
+        "gc_collections": 7,
+        "gc_time_ms": 162,
+        "visual_settings_changed": [],
+        "stats": {
+          "count": 786,
+          "meanMs": 152.3643664211196,
+          "p50Ms": 150.108701,
+          "p95Ms": 164.780584,
+          "p99Ms": 195.064161,
+          "maxMs": 246.696535,
+          "meanRate": 6.563214375440658,
+          "lowOnePercentRate": 4.730799650015679,
+          "over16Ms": 786,
+          "over33Ms": 786,
+          "over50Ms": 786,
+          "over100Ms": 786
+        },
+        "private_report_sha256": "3daa848bd6d5a7b298d110ff3a0cc94ebc0e8e710b3e5d9552205897526c23fd",
+        "private_csv_sha256": "6b6d4774f7dc0e00455fabe3a3f3e3d940792eda5104d590337a68a309573740"
+      },
+      "ticks": {
+        "elapsed_seconds": 120.05069484,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 345.62,
+        "process_cpu_mean_cores": 2.8789504339032113,
+        "process_rss_peak_sampled_bytes": 2542350336,
+        "process_rss_samples": 119,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 1021313024,
+        "heap_committed_end_bytes": 1080033280,
+        "nonheap_used_peak_sampled_bytes": 276037432,
+        "gc_collections": 7,
+        "gc_time_ms": 162,
+        "observed_ticks_per_second": 19.99988424223601,
+        "tick_state_capture_status": "sampled_server_ticks",
+        "tick_state_samples": 2401,
+        "tick_state_invalid_samples": 0,
+        "tick_state_first": {
+          "stepping": false,
+          "runs_game_elements": true,
+          "frozen": false,
+          "configured_tick_rate": 20.0,
+          "sprinting": false
+        },
+        "tick_state_last": {
+          "stepping": false,
+          "runs_game_elements": true,
+          "frozen": false,
+          "configured_tick_rate": 20.0,
+          "sprinting": false
+        },
+        "tick_state_changed": [],
+        "tick_state_frozen_samples": 0,
+        "tick_state_stepping_samples": 0,
+        "tick_state_sprinting_samples": 0,
+        "tick_state_suppressed_samples": 0,
+        "tick_state_nonstandard_rate_samples": 0,
+        "stats": {
+          "count": 2401,
+          "meanMs": 6.49890183881716,
+          "p50Ms": 5.698113,
+          "p95Ms": 10.934786,
+          "p99Ms": 14.222431,
+          "maxMs": 114.197729,
+          "meanRate": 153.8721502188447,
+          "lowOnePercentRate": 45.37289297382295,
+          "over16Ms": 10,
+          "over33Ms": 3,
+          "over50Ms": 1,
+          "over100Ms": 1
+        },
+        "private_report_sha256": "004abe6a6e3771977276e136727550723873a2119789c7b79c3f586e41b52523",
+        "private_csv_sha256": "686a516cace23c0777c27fb496fa558c6d051650e1e434f75278a4f03819d39f"
+      },
+      "saved_camera_and_position_verified": true,
+      "saved_clock_and_weather_rules_verified": true,
+      "all_original_experiments_disabled": true,
+      "csv_counts_and_means_verified": true,
+      "launcher_exit_code": 0
+    },
+    {
+      "index": 6,
+      "profile": "core-performance",
+      "heap_max_bytes": 3221225472,
+      "preferred_backend": "vulkan",
+      "frames": {
+        "elapsed_seconds": 120.137302725,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 390.69,
+        "process_cpu_mean_cores": 3.2520290628990396,
+        "process_rss_peak_sampled_bytes": 2579107840,
+        "process_rss_samples": 121,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 1009195616,
+        "heap_committed_end_bytes": 1075838976,
+        "nonheap_used_peak_sampled_bytes": 263075296,
+        "gc_collections": 5,
+        "gc_time_ms": 65,
+        "visual_settings_changed": [],
+        "stats": {
+          "count": 800,
+          "meanMs": 149.7570683625,
+          "p50Ms": 147.253499,
+          "p95Ms": 162.429325,
+          "p99Ms": 195.384425,
+          "maxMs": 212.396743,
+          "meanRate": 6.677481142856062,
+          "lowOnePercentRate": 4.990726441113792,
+          "over16Ms": 800,
+          "over33Ms": 800,
+          "over50Ms": 800,
+          "over100Ms": 800
+        },
+        "private_report_sha256": "f154cec8b3b9c08caa655da1d2000a68f82d1c248456e7ca500848bef98b6d9c",
+        "private_csv_sha256": "3c2f20a48c0b21571684cd5cc8f00dfec7e66302c4b750067ff87d6a442680fb"
+      },
+      "ticks": {
+        "elapsed_seconds": 120.02219743,
+        "dropped_samples": 0,
+        "excluded_frames": 0,
+        "process_cpu_seconds": 390.29,
+        "process_cpu_mean_cores": 3.251815150506864,
+        "process_rss_peak_sampled_bytes": 2578583552,
+        "process_rss_samples": 119,
+        "process_rss_sample_interval_ms": 1000,
+        "heap_used_peak_sampled_bytes": 1009195616,
+        "heap_committed_end_bytes": 1075838976,
+        "nonheap_used_peak_sampled_bytes": 263075296,
+        "gc_collections": 5,
+        "gc_time_ms": 65,
+        "observed_ticks_per_second": 20.004632904678523,
+        "tick_state_capture_status": "sampled_server_ticks",
+        "tick_state_samples": 2401,
+        "tick_state_invalid_samples": 0,
+        "tick_state_first": {
+          "frozen": false,
+          "runs_game_elements": true,
+          "stepping": false,
+          "sprinting": false,
+          "configured_tick_rate": 20.0
+        },
+        "tick_state_last": {
+          "frozen": false,
+          "runs_game_elements": true,
+          "stepping": false,
+          "sprinting": false,
+          "configured_tick_rate": 20.0
+        },
+        "tick_state_changed": [],
+        "tick_state_frozen_samples": 0,
+        "tick_state_stepping_samples": 0,
+        "tick_state_sprinting_samples": 0,
+        "tick_state_suppressed_samples": 0,
+        "tick_state_nonstandard_rate_samples": 0,
+        "stats": {
+          "count": 2401,
+          "meanMs": 7.593380528946272,
+          "p50Ms": 7.637564,
+          "p95Ms": 11.882044,
+          "p99Ms": 15.984876,
+          "maxMs": 131.101803,
+          "meanRate": 131.6936503034399,
+          "lowOnePercentRate": 44.15759061263884,
+          "over16Ms": 16,
+          "over33Ms": 2,
+          "over50Ms": 1,
+          "over100Ms": 1
+        },
+        "private_report_sha256": "79111d8836b3ae8bd929051201e72a1a1beff418381117328c713ab59332984d",
+        "private_csv_sha256": "79f648203fb065eaf36c3849bec848dc2fd2c4e2eee8e5af0a4f78cdd61e6f92"
+      },
+      "saved_camera_and_position_verified": true,
+      "saved_clock_and_weather_rules_verified": true,
+      "all_original_experiments_disabled": true,
+      "csv_counts_and_means_verified": true,
+      "launcher_exit_code": 0
+    }
+  ],
+  "pairs": [
+    {
+      "pair": 1,
+      "frames": {
+        "kind": "frames",
+        "mismatches": [
+          "graphics_backend: 'OpenGL' vs 'Vulkan'",
+          "graphics_driver: '4.5 (Core Profile) Mesa 26.0.8-1ubuntu0.3' vs '1.4.335 llvmpipe Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)'"
+        ],
+        "warnings": [
+          "World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool."
+        ],
+        "metrics": [
+          {
+            "metric": "meanRate",
+            "baseline": 6.578587540399958,
+            "candidate": 6.676462055329945,
+            "change_percent": 1.487773999037434
+          },
+          {
+            "metric": "lowOnePercentRate",
+            "baseline": 5.0333509709501385,
+            "candidate": 4.923152733569755,
+            "change_percent": -2.189361282699931
+          },
+          {
+            "metric": "p95Ms",
+            "baseline": 166.80906,
+            "candidate": 163.343135,
+            "change_percent": -2.0777798280261273
+          },
+          {
+            "metric": "p99Ms",
+            "baseline": 193.089751,
+            "candidate": 192.980528,
+            "change_percent": -0.05656592306653163
+          },
+          {
+            "metric": "maxMs",
+            "baseline": 206.398834,
+            "candidate": 228.786552,
+            "change_percent": 10.846823873045718
+          },
+          {
+            "metric": "heap_used_end_bytes",
+            "baseline": 434868512,
+            "candidate": 545849320,
+            "change_percent": 25.52054355225426
+          },
+          {
+            "metric": "heap_used_peak_sampled_bytes",
+            "baseline": 1009881368,
+            "candidate": 804081728,
+            "change_percent": -20.378595597577164
+          },
+          {
+            "metric": "nonheap_used_peak_sampled_bytes",
+            "baseline": 254096760,
+            "candidate": 256187672,
+            "change_percent": 0.8228802287758352
+          },
+          {
+            "metric": "process_rss_last_sampled_bytes",
+            "baseline": 2474905600,
+            "candidate": 2450522112,
+            "change_percent": -0.9852290123712248
+          },
+          {
+            "metric": "process_rss_peak_sampled_bytes",
+            "baseline": 2477109248,
+            "candidate": 2450522112,
+            "change_percent": -1.0733130168346983
+          },
+          {
+            "metric": "process_cpu_mean_cores",
+            "baseline": 2.8949614996019486,
+            "candidate": 3.2475902725254318,
+            "change_percent": 12.180775909177676
+          },
+          {
+            "metric": "gc_time_ms",
+            "baseline": 81,
+            "candidate": 94,
+            "change_percent": 16.049382716049386
+          }
+        ],
+        "experiment_variable": {
+          "field": "graphics API and driver identity",
+          "control": "OpenGL",
+          "candidate": "Vulkan"
+        }
+      },
+      "ticks": {
+        "kind": "ticks",
+        "mismatches": [],
+        "warnings": [
+          "World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool.",
+          "Tick-manager state is sampled after measured server invocations. Changes entirely between samples, paused intervals and completed world work are not verified.",
+          "Tick durations exclude scheduler sleep. Observed TPS counts measured invocations, including frozen ticks, and includes recording time spent paused; tick execution capacity is not TPS."
+        ],
+        "metrics": [
+          {
+            "metric": "meanMs",
+            "baseline": 6.455001293211162,
+            "candidate": 7.460477525197834,
+            "change_percent": 15.576700705608658
+          },
+          {
+            "metric": "p95Ms",
+            "baseline": 10.875816,
+            "candidate": 11.778145,
+            "change_percent": 8.296655625656047
+          },
+          {
+            "metric": "p99Ms",
+            "baseline": 12.977439,
+            "candidate": 15.595841,
+            "change_percent": 20.17656950651048
+          },
+          {
+            "metric": "maxMs",
+            "baseline": 104.81229,
+            "candidate": 105.966919,
+            "change_percent": 1.1016160414012433
+          },
+          {
+            "metric": "heap_used_end_bytes",
+            "baseline": 432771360,
+            "candidate": 543752168,
+            "change_percent": 25.64421268542354
+          },
+          {
+            "metric": "heap_used_peak_sampled_bytes",
+            "baseline": 1007582424,
+            "candidate": 797318320,
+            "change_percent": -20.868179018573272
+          },
+          {
+            "metric": "nonheap_used_peak_sampled_bytes",
+            "baseline": 254096888,
+            "candidate": 256187672,
+            "change_percent": 0.8228294397686575
+          },
+          {
+            "metric": "process_rss_last_sampled_bytes",
+            "baseline": 2474774528,
+            "candidate": 2450522112,
+            "change_percent": -0.9799848723834881
+          },
+          {
+            "metric": "process_rss_peak_sampled_bytes",
+            "baseline": 2477109248,
+            "candidate": 2450522112,
+            "change_percent": -1.0733130168346983
+          },
+          {
+            "metric": "process_cpu_mean_cores",
+            "baseline": 2.894221429367965,
+            "candidate": 3.2469816868026884,
+            "change_percent": 12.188433609648119
+          },
+          {
+            "metric": "gc_time_ms",
+            "baseline": 34,
+            "candidate": 94,
+            "change_percent": 176.47058823529412
+          },
+          {
+            "metric": "observed_ticks_per_second",
+            "baseline": 20.00237659224687,
+            "candidate": 20.005139928183873,
+            "change_percent": 0.013815038049402872
+          }
+        ],
+        "experiment_variable": {
+          "field": "graphics API and driver identity",
+          "control": "OpenGL",
+          "candidate": "Vulkan"
+        }
+      }
+    },
+    {
+      "pair": 2,
+      "frames": {
+        "kind": "frames",
+        "mismatches": [
+          "graphics_backend: 'OpenGL' vs 'Vulkan'",
+          "graphics_driver: '4.5 (Core Profile) Mesa 26.0.8-1ubuntu0.3' vs '1.4.335 llvmpipe Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)'"
+        ],
+        "warnings": [
+          "World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool."
+        ],
+        "metrics": [
+          {
+            "metric": "meanRate",
+            "baseline": 6.586866867683585,
+            "candidate": 6.66714944316314,
+            "change_percent": 1.2188279661979662
+          },
+          {
+            "metric": "lowOnePercentRate",
+            "baseline": 5.032806449497176,
+            "candidate": 4.648886358081644,
+            "change_percent": -7.628350012424756
+          },
+          {
+            "metric": "p95Ms",
+            "baseline": 161.170166,
+            "candidate": 162.691502,
+            "change_percent": 0.9439315214206712
+          },
+          {
+            "metric": "p99Ms",
+            "baseline": 189.927463,
+            "candidate": 193.393776,
+            "change_percent": 1.8250720276298482
+          },
+          {
+            "metric": "maxMs",
+            "baseline": 229.628978,
+            "candidate": 339.206983,
+            "change_percent": 47.71958920620201
+          },
+          {
+            "metric": "heap_used_end_bytes",
+            "baseline": 885352192,
+            "candidate": 504788144,
+            "change_percent": -42.98448136671017
+          },
+          {
+            "metric": "heap_used_peak_sampled_bytes",
+            "baseline": 1075990672,
+            "candidate": 1001858864,
+            "change_percent": -6.88963296142775
+          },
+          {
+            "metric": "nonheap_used_peak_sampled_bytes",
+            "baseline": 267130304,
+            "candidate": 258206776,
+            "change_percent": -3.340515046918824
+          },
+          {
+            "metric": "process_rss_last_sampled_bytes",
+            "baseline": 2559868928,
+            "candidate": 2649251840,
+            "change_percent": 3.491698774977281
+          },
+          {
+            "metric": "process_rss_peak_sampled_bytes",
+            "baseline": 2591977472,
+            "candidate": 2649251840,
+            "change_percent": 2.209678464365905
+          },
+          {
+            "metric": "process_cpu_mean_cores",
+            "baseline": 2.918047031223738,
+            "candidate": 3.2456872678363466,
+            "change_percent": 11.228065658530761
+          },
+          {
+            "metric": "gc_time_ms",
+            "baseline": 83,
+            "candidate": 81,
+            "change_percent": -2.409638554216864
+          }
+        ],
+        "experiment_variable": {
+          "field": "graphics API and driver identity",
+          "control": "OpenGL",
+          "candidate": "Vulkan"
+        }
+      },
+      "ticks": {
+        "kind": "ticks",
+        "mismatches": [],
+        "warnings": [
+          "World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool.",
+          "Tick-manager state is sampled after measured server invocations. Changes entirely between samples, paused intervals and completed world work are not verified.",
+          "Tick durations exclude scheduler sleep. Observed TPS counts measured invocations, including frozen ticks, and includes recording time spent paused; tick execution capacity is not TPS."
+        ],
+        "metrics": [
+          {
+            "metric": "meanMs",
+            "baseline": 6.844892980841316,
+            "candidate": 7.602049678050812,
+            "change_percent": 11.061629441523158
+          },
+          {
+            "metric": "p95Ms",
+            "baseline": 11.092248,
+            "candidate": 11.980796,
+            "change_percent": 8.01053131880931
+          },
+          {
+            "metric": "p99Ms",
+            "baseline": 13.688587,
+            "candidate": 16.134273,
+            "change_percent": 17.866606684824383
+          },
+          {
+            "metric": "maxMs",
+            "baseline": 90.747713,
+            "candidate": 104.202906,
+            "change_percent": 14.827032610728153
+          },
+          {
+            "metric": "heap_used_end_bytes",
+            "baseline": 885352192,
+            "candidate": 500593840,
+            "change_percent": -43.458225492256986
+          },
+          {
+            "metric": "heap_used_peak_sampled_bytes",
+            "baseline": 1069699216,
+            "candidate": 993470256,
+            "change_percent": -7.12620509203028
+          },
+          {
+            "metric": "nonheap_used_peak_sampled_bytes",
+            "baseline": 267144984,
+            "candidate": 258220144,
+            "change_percent": -3.3408225999107644
+          },
+          {
+            "metric": "process_rss_last_sampled_bytes",
+            "baseline": 2559868928,
+            "candidate": 2647678976,
+            "change_percent": 3.430255629088208
+          },
+          {
+            "metric": "process_rss_peak_sampled_bytes",
+            "baseline": 2591977472,
+            "candidate": 2647678976,
+            "change_percent": 2.1489964554753715
+          },
+          {
+            "metric": "process_cpu_mean_cores",
+            "baseline": 2.918036779369057,
+            "candidate": 3.2453600222770924,
+            "change_percent": 11.217241853230163
+          },
+          {
+            "metric": "gc_time_ms",
+            "baseline": 83,
+            "candidate": 81,
+            "change_percent": -2.409638554216864
+          },
+          {
+            "metric": "observed_ticks_per_second",
+            "baseline": 20.004015267431207,
+            "candidate": 20.002334463207973,
+            "change_percent": -0.008402334235224629
+          }
+        ],
+        "experiment_variable": {
+          "field": "graphics API and driver identity",
+          "control": "OpenGL",
+          "candidate": "Vulkan"
+        }
+      }
+    },
+    {
+      "pair": 3,
+      "frames": {
+        "kind": "frames",
+        "mismatches": [
+          "graphics_backend: 'OpenGL' vs 'Vulkan'",
+          "graphics_driver: '4.5 (Core Profile) Mesa 26.0.8-1ubuntu0.3' vs '1.4.335 llvmpipe Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)'"
+        ],
+        "warnings": [
+          "World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool."
+        ],
+        "metrics": [
+          {
+            "metric": "meanRate",
+            "baseline": 6.563214375440658,
+            "candidate": 6.677481142856062,
+            "change_percent": 1.7410183620237385
+          },
+          {
+            "metric": "lowOnePercentRate",
+            "baseline": 4.730799650015679,
+            "candidate": 4.990726441113792,
+            "change_percent": 5.494352124957391
+          },
+          {
+            "metric": "p95Ms",
+            "baseline": 164.780584,
+            "candidate": 162.429325,
+            "change_percent": -1.4269029414290646
+          },
+          {
+            "metric": "p99Ms",
+            "baseline": 195.064161,
+            "candidate": 195.384425,
+            "change_percent": 0.16418392715409347
+          },
+          {
+            "metric": "maxMs",
+            "baseline": 246.696535,
+            "candidate": 212.396743,
+            "change_percent": -13.90363751967575
+          },
+          {
+            "metric": "heap_used_end_bytes",
+            "baseline": 446413024,
+            "candidate": 760146416,
+            "change_percent": 70.27872735182565
+          },
+          {
+            "metric": "heap_used_peak_sampled_bytes",
+            "baseline": 1021313024,
+            "candidate": 1009195616,
+            "change_percent": -1.1864538799810753
+          },
+          {
+            "metric": "nonheap_used_peak_sampled_bytes",
+            "baseline": 276024160,
+            "candidate": 263075296,
+            "change_percent": -4.6912067407432705
+          },
+          {
+            "metric": "process_rss_last_sampled_bytes",
+            "baseline": 2542481408,
+            "candidate": 2579107840,
+            "change_percent": 1.4405781644952764
+          },
+          {
+            "metric": "process_rss_peak_sampled_bytes",
+            "baseline": 2542481408,
+            "candidate": 2579107840,
+            "change_percent": 1.4405781644952764
+          },
+          {
+            "metric": "process_cpu_mean_cores",
+            "baseline": 2.8792797735161675,
+            "candidate": 3.2520290628990396,
+            "change_percent": 12.94592115748696
+          },
+          {
+            "metric": "gc_time_ms",
+            "baseline": 162,
+            "candidate": 65,
+            "change_percent": -59.876543209876544
+          }
+        ],
+        "experiment_variable": {
+          "field": "graphics API and driver identity",
+          "control": "OpenGL",
+          "candidate": "Vulkan"
+        }
+      },
+      "ticks": {
+        "kind": "ticks",
+        "mismatches": [],
+        "warnings": [
+          "World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool.",
+          "Tick-manager state is sampled after measured server invocations. Changes entirely between samples, paused intervals and completed world work are not verified.",
+          "Tick durations exclude scheduler sleep. Observed TPS counts measured invocations, including frozen ticks, and includes recording time spent paused; tick execution capacity is not TPS."
+        ],
+        "metrics": [
+          {
+            "metric": "meanMs",
+            "baseline": 6.49890183881716,
+            "candidate": 7.593380528946272,
+            "change_percent": 16.84097894188712
+          },
+          {
+            "metric": "p95Ms",
+            "baseline": 10.934786,
+            "candidate": 11.882044,
+            "change_percent": 8.662794132413755
+          },
+          {
+            "metric": "p99Ms",
+            "baseline": 14.222431,
+            "candidate": 15.984876,
+            "change_percent": 12.392009495423117
+          },
+          {
+            "metric": "maxMs",
+            "baseline": 114.197729,
+            "candidate": 131.101803,
+            "change_percent": 14.802460738952172
+          },
+          {
+            "metric": "heap_used_end_bytes",
+            "baseline": 444315872,
+            "candidate": 758049264,
+            "change_percent": 70.6104399529531
+          },
+          {
+            "metric": "heap_used_peak_sampled_bytes",
+            "baseline": 1021313024,
+            "candidate": 1009195616,
+            "change_percent": -1.1864538799810753
+          },
+          {
+            "metric": "nonheap_used_peak_sampled_bytes",
+            "baseline": 276037432,
+            "candidate": 263075296,
+            "change_percent": -4.695789229049197
+          },
+          {
+            "metric": "process_rss_last_sampled_bytes",
+            "baseline": 2542350336,
+            "candidate": 2578583552,
+            "change_percent": 1.4251858009863172
+          },
+          {
+            "metric": "process_rss_peak_sampled_bytes",
+            "baseline": 2542350336,
+            "candidate": 2578583552,
+            "change_percent": 1.4251858009863172
+          },
+          {
+            "metric": "process_cpu_mean_cores",
+            "baseline": 2.8789504339032113,
+            "candidate": 3.251815150506864,
+            "change_percent": 12.951411466231178
+          },
+          {
+            "metric": "gc_time_ms",
+            "baseline": 162,
+            "candidate": 65,
+            "change_percent": -59.876543209876544
+          },
+          {
+            "metric": "observed_ticks_per_second",
+            "baseline": 19.99988424223601,
+            "candidate": 20.004632904678523,
+            "change_percent": 0.0237434496370037
+          }
+        ],
+        "experiment_variable": {
+          "field": "graphics API and driver identity",
+          "control": "OpenGL",
+          "candidate": "Vulkan"
+        }
+      }
+    }
+  ],
+  "summary_of_paired_percent_changes": {
+    "frames.meanRate": {
+      "paired_percent_changes": [
+        1.487773999037434,
+        1.2188279661979662,
+        1.7410183620237385
+      ],
+      "minimum": 1.2188279661979662,
+      "maximum": 1.7410183620237385,
+      "arithmetic_mean": 1.4825401090863795,
+      "median": 1.487773999037434
+    },
+    "frames.lowOnePercentRate": {
+      "paired_percent_changes": [
+        -2.189361282699931,
+        -7.628350012424756,
+        5.494352124957391
+      ],
+      "minimum": -7.628350012424756,
+      "maximum": 5.494352124957391,
+      "arithmetic_mean": -1.4411197233890984,
+      "median": -2.189361282699931
+    },
+    "frames.p95Ms": {
+      "paired_percent_changes": [
+        -2.0777798280261273,
+        0.9439315214206712,
+        -1.4269029414290646
+      ],
+      "minimum": -2.0777798280261273,
+      "maximum": 0.9439315214206712,
+      "arithmetic_mean": -0.8535837493448403,
+      "median": -1.4269029414290646
+    },
+    "frames.process_rss_peak_sampled_bytes": {
+      "paired_percent_changes": [
+        -1.0733130168346983,
+        2.209678464365905,
+        1.4405781644952764
+      ],
+      "minimum": -1.0733130168346983,
+      "maximum": 2.209678464365905,
+      "arithmetic_mean": 0.8589812040088277,
+      "median": 1.4405781644952764
+    },
+    "frames.process_cpu_mean_cores": {
+      "paired_percent_changes": [
+        12.180775909177676,
+        11.228065658530761,
+        12.94592115748696
+      ],
+      "minimum": 11.228065658530761,
+      "maximum": 12.94592115748696,
+      "arithmetic_mean": 12.1182542417318,
+      "median": 12.180775909177676
+    },
+    "frames.gc_time_ms": {
+      "paired_percent_changes": [
+        16.049382716049386,
+        -2.409638554216864,
+        -59.876543209876544
+      ],
+      "minimum": -59.876543209876544,
+      "maximum": 16.049382716049386,
+      "arithmetic_mean": -15.412266349348007,
+      "median": -2.409638554216864
+    },
+    "ticks.meanMs": {
+      "paired_percent_changes": [
+        15.576700705608658,
+        11.061629441523158,
+        16.84097894188712
+      ],
+      "minimum": 11.061629441523158,
+      "maximum": 16.84097894188712,
+      "arithmetic_mean": 14.493103029672978,
+      "median": 15.576700705608658
+    },
+    "ticks.observed_ticks_per_second": {
+      "paired_percent_changes": [
+        0.013815038049402872,
+        -0.008402334235224629,
+        0.0237434496370037
+      ],
+      "minimum": -0.008402334235224629,
+      "maximum": 0.0237434496370037,
+      "arithmetic_mean": 0.009718717817060648,
+      "median": 0.013815038049402872
+    }
+  },
+  "limits": [
+    "Only one stationary world view on a Linux software renderer; no native GPU or Mac performance measurement.",
+    "Three pairs, always OpenGL first; not randomized, no significance or confidence interval claim.",
+    "Graphics API and corresponding driver identity mismatches are explicit experiment variables; other captured settings and software identities match.",
+    "This is one settled view without LOD/shaders; it does not establish movement, terrain generation, hardware GPU performance or pixel-identical output.",
+    "Separate JVMs reduce process carryover but OS file cache, JIT state, entities and thermal state can still vary.",
+    "Reported GC time is JVM collector-accounting time, not a JFR stop-the-world pause measurement.",
+    "RSS is sampled once per second and excludes a complete GPU/unified-memory accounting.",
+    "Tick-manager state is sampled after measured invocations, not completed-world-work or pause tracing.",
+    "Do not pool these graphics API experiments with heap or vanilla/core comparisons.",
+    "The fixture camera enforcement and private clock/weather rules are not included in playable packs.",
+    "Matching settings and saved poses do not prove identical pixels, entity activity or exhaustive vanilla equivalence."
+  ]
+}
