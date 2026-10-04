@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+  "architecture": "x86_64",
+  "minecraft": "26.3",
+  "distant_horizons": "3.3.4",
+  "original_mod_sha256": "2196637c5b2180a33fa5b926ab51069ab480618c1186b8a02872c7e758be0a70",
+  "results": [
+    {
+      "enabled": false,
+      "compact_headers": false,
+      "builder_shallow_bytes": 48,
+      "quad_shallow_bytes": 56,
+      "pending_scratch_shallow_bytes": 0,
+      "geometry_quads": 1,
+      "java_vendor": "Ubuntu",
+      "java_runtime_version": "25.0.4.1+1-1-26.04.4-Ubuntu",
+      "object_alignment_bytes": 8,
+      "compressed_oops": true,
+      "compressed_class_pointers": true
+    },
+    {
+      "enabled": true,
+      "compact_headers": false,
+      "builder_shallow_bytes": 48,
+      "quad_shallow_bytes": 56,
+      "pending_scratch_shallow_bytes": 56,
+      "geometry_quads": 1,
+      "java_vendor": "Ubuntu",
+      "java_runtime_version": "25.0.4.1+1-1-26.04.4-Ubuntu",
+      "object_alignment_bytes": 8,
+      "compressed_oops": true,
+      "compressed_class_pointers": true
+    },
+    {
+      "enabled": false,
+      "compact_headers": true,
+      "builder_shallow_bytes": 40,
+      "quad_shallow_bytes": 48,
+      "pending_scratch_shallow_bytes": 0,
+      "geometry_quads": 1,
+      "java_vendor": "Ubuntu",
+      "java_runtime_version": "25.0.4.1+1-1-26.04.4-Ubuntu",
+      "object_alignment_bytes": 8,
+      "compressed_oops": true,
+      "compressed_class_pointers": true
+    },
+    {
+      "enabled": true,
+      "compact_headers": true,
+      "builder_shallow_bytes": 48,
+      "quad_shallow_bytes": 48,
+      "pending_scratch_shallow_bytes": 48,
+      "geometry_quads": 1,
+      "java_vendor": "Ubuntu",
+      "java_runtime_version": "25.0.4.1+1-1-26.04.4-Ubuntu",
+      "object_alignment_bytes": 8,
+      "compressed_oops": true,
+      "compressed_class_pointers": true
+    }
+  ],
+  "differences": [
+    {
+      "compact_headers": false,
+      "additional_builder_shallow_bytes": 0,
+      "additional_builder_and_scratch_bytes": 56
+    },
+    {
+      "compact_headers": true,
+      "additional_builder_shallow_bytes": 8,
+      "additional_builder_and_scratch_bytes": 56
+    }
+  ],
+  "notes": [
+    "Instrumentation.getObjectSize measures shallow object sizes inside real applied Fabric clients.",
+    "Four adjacent north-facing quads premerge to one retained geometry quad in each combination.",
+    "Builder plus pending scratch difference excludes referenced lists, existing pools and every other game object.",
+    "Object alignment/header/compressed-reference settings can differ on other JVMs or architectures.",
+    "Not deep heap, GC residency, whole-game RSS/unified RAM, FPS or Apple Silicon performance.",
+    "The agent and fixture are private test binaries excluded from playable packs."
+  ],
+  "provenance": {
+    "source_commit": "1243e148d455cd83f18b66f70bcfe2b8a4b746c9",
+    "four_processes_exited_successfully": true,
+    "agent_path_with_spaces_verified_separately": true
+  }
+}

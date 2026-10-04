@@ -66,3 +66,41 @@ and exited with code zero; the control saved, closed its terrain databases and
 exited with code zero.
 Actual JSON/CSV comparison and mobile layout checks pass. The hook remains an
 optional experiment, disabled in combined profiles.
+
+The [initial shallow-size observations](../benchmarks/quad-reuse-2026-10-04/shallow-size-observations.json)
+measure the actual hooked classes with `Instrumentation.getObjectSize` inside
+four separate Fabric demo clients on local Linux x64 Java 25. They use four
+adjacent north-facing quads, which premerge to one geometry quad in every mode.
+
+| Compact headers | Hook | Builder bytes | Quad bytes | Pending scratch bytes |
+| --- | --- | ---: | ---: | ---: |
+| Off | Off | 48 | 56 | 0 |
+| Off | On | 48 | 56 | 56 |
+| On | Off | 40 | 48 | 0 |
+| On | On | 48 | 48 | 48 |
+
+Without compact headers, the extra reference fits the measured builder's existing
+alignment padding. With compact headers, the builder itself grows by eight bytes.
+In this workload both modes add 56 shallow bytes per builder including the pending
+scratch. This excludes existing pools, referenced lists and every other game
+object. JVM alignment and compressed-reference settings or other architectures
+can change layouts. It is not a deep heap, residency, RSS, unified RAM or Mac
+measurement, and does not demonstrate a net game memory benefit.
+
+The reusable probe keeps both test binaries outside playable packs and records
+JVM runtime, alignment and compressed-reference settings. With Java 25 and the
+usual build prerequisites, reproduce it using:
+
+```sh
+python3 tools/build_mod.py
+python3 tools/test_quad_sizes.py
+```
+
+Linux uses Xvfb by default; `--native-display` uses an existing screen. The output
+is gitignored `dist/quad-size-integration.json`; game logs and the test agent/fixture
+remain in `.local/`. No account or world is needed for this demo-mode probe.
+
+The [reusable local applied probe](../benchmarks/quad-reuse-2026-10-04/local-shallow-size-applied.json)
+reproduces the initial sizes and records eight-byte object alignment and compressed
+references. All four processes exit successfully. A separate Java source-launcher
+check verifies agent loading from a quoted path containing spaces.
