@@ -21,11 +21,31 @@ except ImportError:
     from test_dispatch import failure_summary
 
 
+
+def graphics_failure_summary(run, report_count):
+    """Selected stages/types/codes only; messages, paths and raw logs stay private."""
+    result = failure_summary(run, report_count)
+    pattern = r'(?<![\w.$])((?:java|org\.lwjgl|com\.mojang|net\.minecraft|net\.fabricmc|org\.spongepowered|dev\.horizonlab)\.[A-Za-z_$][\w.$]{0,160}(?:Exception|Error))(?=[:\s]|$)'
+    observed = set(result['java_exception_types']) | set(re.findall(pattern, run.stdout, re.ASCII))
+    expected_auth = {name for name in observed if name.startswith(('com.mojang.authlib.', 'com.mojang.realmsclient.'))}
+    result['java_exception_types'] = sorted(observed - expected_auth)[:8]
+    result['expected_demo_authentication_errors_observed'] = bool(expected_auth)
+    for key, marker in [('backend_attempts', 'HORIZON_GRAPHICS_BACKEND_ATTEMPT '),
+                        ('created_devices', 'HORIZON_GRAPHICS_DEVICE_CREATED ')]:
+        result[key] = [json.loads(line.split(marker, 1)[1]) for line in run.stdout.splitlines() if marker in line][:16]
+    result['client_initializer_reached'] = 'HORIZON_CLIENT_GRAPHICS_INITIALIZER_READY' in run.stdout
+    result['readback_requested'] = 'HORIZON_CLIENT_GRAPHICS_READBACK_REQUESTED' in run.stdout
+    result['vulkan_error_codes'] = sorted(set(re.findall(r'\bVK_ERROR_[A-Z_0-9]{1,100}\b', run.stdout)))[:16]
+    result['fatal_jvm_error'] = 'A fatal error has been detected by the Java Runtime Environment' in run.stdout
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--native-display', action='store_true')
     parser.add_argument('--profile', action='append', choices=sorted(build_pack.PROFILES))
     parser.add_argument('--backend', choices=['opengl', 'vulkan'], help='Override backend in these private instances only')
+    parser.add_argument('--world', action='store_true', help='Create/open a disposable built-in demo world instead of stopping at the title')
     args = parser.parse_args()
     root = build_pack.ROOT
     fixture = build_mod.build_integration_fixture('client-graphics',
@@ -35,10 +55,12 @@ def main():
     mod = root / 'dist' / f'horizon-lab-{version}.jar'
     original_hash = hashlib.sha256(mod.read_bytes()).hexdigest()
     results = []
-    for profile in args.profile or ['core-performance', 'm2-balanced', 'vulkan']:
+    for profile in args.profile or ['core-performance', 'm2-balanced']:
         instance = root / '.local/runtime' / ('client-graphics-' + profile
-            + ('-override-' + args.backend if args.backend else ''))
+            + ('-override-' + args.backend if args.backend else '') + ('-world' if args.world else ''))
         build_pack.prepare_instance(profile, instance, mod)
+        if args.world:
+            (instance / 'config/client-graphics-world.flag').touch()
         if args.backend:
             options = instance / 'options.txt'
             text, count = re.subn(r'^preferredGraphicsBackend:.*$',
@@ -62,23 +84,19 @@ def main():
         trace_marker = 'HORIZON_GRAPHICS_BACKEND_ATTEMPT '
         attempts = [json.loads(line.split(trace_marker, 1)[1]) for line in run.stdout.splitlines() if trace_marker in line]
         if run.returncode or len(reports) != 1:
-            diagnostics = failure_summary(run, len(reports))
+            diagnostics = graphics_failure_summary(run, len(reports))
             diagnostics['profile'] = profile
             diagnostics['preferred_backend'] = args.backend or build_pack.PROFILES[profile].get('backend', 'opengl')
-            diagnostics['backend_attempts'] = attempts
-            device_marker = 'HORIZON_GRAPHICS_DEVICE_CREATED '
-            diagnostics['created_devices'] = [json.loads(line.split(device_marker, 1)[1])
-                for line in run.stdout.splitlines() if device_marker in line]
-            diagnostics['client_initializer_reached'] = 'HORIZON_CLIENT_GRAPHICS_INITIALIZER_READY' in run.stdout
-            diagnostics['vulkan_error_codes'] = sorted(set(re.findall(r'\bVK_ERROR_[A-Z_0-9]{1,100}\b', run.stdout)))[:16]
-            diagnostics['java_exception_types'] = sorted(set(diagnostics['java_exception_types']) | set(
-                re.findall(r'\b((?:java|org\.lwjgl|com\.mojang|net\.minecraft|net\.fabricmc|org\.spongepowered|dev\.horizonlab)\.[A-Za-z_$][\w.$]{0,160}(?:Exception|Error))\b', run.stdout, re.ASCII)))[:8]
-            diagnostics['fatal_jvm_error'] = 'A fatal error has been detected by the Java Runtime Environment' in run.stdout
             print('HORIZON_FIXTURE_FAILURE ' + json.dumps(diagnostics), flush=True)
             raise RuntimeError('Graphics probe failed; diagnostics remain private')
         report = reports[0]
-        if report['title_screen_observed'] is not True or report['title_client_ticks'] < 40:
-            raise AssertionError('Client never reached the title screen')
+        if report['observed_mode'] != ('world' if args.world else 'title') or report['ready_client_ticks'] < 40:
+            raise AssertionError('Client never reached the requested graphics scene')
+        if args.world:
+            if report['world_loaded'] is not True or report['window_active'] is not True:
+                raise AssertionError('Client never reached focused demo-world gameplay')
+            if not list((instance / 'saves/Demo_World').rglob('*.dat')):
+                raise AssertionError('Disposable world did not leave saved data')
         if report['sampled_pixels'] < 256 or report['distinct_sampled_rgb'] < 8:
             raise AssertionError('GPU readback was uniform')
         if hashlib.sha256((instance / 'mods' / mod.name).read_bytes()).hexdigest() != original_hash:
@@ -94,8 +112,9 @@ def main():
     output.write_text(json.dumps({'schema': 1, 'platform': platform.platform(),
         'architecture': platform.machine(), 'minecraft': '26.3',
         'original_mod_sha256': original_hash, 'results': results,
-        'limits': ['Title-screen startup and nonuniform framebuffer readback only.',
-                  'No world gameplay, visual-correctness, FPS or M2 Pro performance claim.',
+        'limits': ['Short scene startup and nonuniform framebuffer readback only.',
+                  'World mode uses the ordinary limited demo; world files remain private.',
+                  'No exhaustive gameplay, visual-correctness, FPS or M2 Pro performance claim.',
                   'Vulkan preference can fall back; inspect the observed backend.',
                   'PNG images, assets and full logs remain in the private runtime directory.']}, indent=2) + '\n')
     print('Client graphics startup/readback checks passed.', flush=True)

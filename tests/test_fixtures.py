@@ -3,9 +3,28 @@ import subprocess
 import unittest
 
 from tools.test_dispatch import failure_summary
+from tools.test_client_graphics import graphics_failure_summary
 
 
 class FixtureDiagnosticTests(unittest.TestCase):
+    def test_graphics_diagnostics_separate_demo_auth_and_exclude_methods_messages(self):
+        output = '\n'.join([
+            'com.mojang.authlib.exceptions.InvalidCredentialsException: private-token',
+            ' at com.mojang.authlib.minecraft.client.MinecraftClient.buildHttpException(File.java:1)',
+            'java.lang.AssertionError: /private/world/path',
+            'Caused by: java.lang.RuntimeException: private-message VK_ERROR_FEATURE_NOT_PRESENT',
+            'HORIZON_CLIENT_GRAPHICS_INITIALIZER_READY',
+            'HORIZON_CLIENT_GRAPHICS_READBACK_REQUESTED',
+        ])
+        result = graphics_failure_summary(subprocess.CompletedProcess([], 1, output), 0)
+        self.assertEqual(result['java_exception_types'], ['java.lang.AssertionError', 'java.lang.RuntimeException'])
+        self.assertTrue(result['expected_demo_authentication_errors_observed'])
+        self.assertTrue(result['client_initializer_reached'])
+        self.assertTrue(result['readback_requested'])
+        self.assertEqual(result['vulkan_error_codes'], ['VK_ERROR_FEATURE_NOT_PRESENT'])
+        self.assertNotIn('private', json.dumps(result))
+        self.assertNotIn('buildHttpException', json.dumps(result))
+
     def test_only_exit_count_and_exception_types_leave_private_log(self):
         output = '\n'.join([
             'Exception in thread "private-thread-name" java.lang.NoClassDefFoundError: private-token',
