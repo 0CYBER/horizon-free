@@ -40,3 +40,29 @@ The hook adds a reference and can retain one discarded object per builder.
 Lower allocation is not a measurement of lower retained heap, process RSS,
 unified memory, game FPS or Apple Silicon performance. Live startup, capture,
 save/reload and independent platform checks are required before recommending it.
+
+Raw [production-hook results](../benchmarks/quad-reuse-2026-10-04/local-applied-hooks.json)
+and [private exploratory observations](../benchmarks/quad-reuse-2026-10-04/exploratory-observations.json)
+retain protocol and provenance limits. The current fixture fingerprints include
+opaque/translucent list boundaries, face indices and list sizes. A baseline
+without DH reaches the menu and exits with code zero.
+
+The independent [Linux CI fixture](../benchmarks/quad-reuse-2026-10-04/linux-applied-hooks.json)
+matched the geometry and four-worker fingerprints. Its allocation totals matched
+the local reduction, but caller CPU was about 40.4 ms upstream versus 44.1 ms
+with reuse, so this check does not support a universal CPU improvement. Windows,
+macOS ARM and Linux checks pass, and the Linux production JAR matches the local
+binary byte-for-byte.
+
+The [live software-rendered observations](../benchmarks/quad-reuse-2026-10-04/live-observations.json)
+record 220 control versus 224 candidate frames over roughly 120 seconds, with
+zero exclusions and matching captured settings and first saved cameras. Peak
+sampled RSS differed by less than one percent. Preceding render-loader allocation
+counter rates were higher with reuse in this pair. Task completion/geometry
+volumes and cache/JIT effects are not quantitatively controlled, so neither the
+small frame/RSS differences nor these counters establish a useful game
+performance or memory improvement. The candidate saved, reloaded, saved again
+and exited with code zero; the control saved, closed its terrain databases and
+exited with code zero.
+Actual JSON/CSV comparison and mobile layout checks pass. The hook remains an
+optional experiment, disabled in combined profiles.

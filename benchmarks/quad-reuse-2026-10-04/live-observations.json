@@ -1,0 +1,166 @@
+{
+  "schema": 1,
+  "minecraft": "26.3",
+  "distant_horizons": "3.3.4",
+  "original_mod_sha256": "2196637c5b2180a33fa5b926ab51069ab480618c1186b8a02872c7e758be0a70",
+  "platform": "Linux x86_64",
+  "graphics": "llvmpipe software OpenGL",
+  "settings": {
+    "heap_bytes": 3221225472,
+    "gc": "G1",
+    "compact_headers": true,
+    "render_distance": 12,
+    "simulation_distance": 12,
+    "lod_radius_chunks": 128,
+    "lod_quality": "MEDIUM/MEDIUM/BLOCK",
+    "terrain_workers": 2,
+    "runtime_ratio": 0.5,
+    "world_difficulty": "PEACEFUL"
+  },
+  "results": [
+    {
+      "profile": "m2-balanced",
+      "quad_reuse_enabled": false,
+      "elapsed_seconds": 120.415309971,
+      "frame_samples": 220,
+      "tick_samples": 2400,
+      "excluded_frames": 0,
+      "dropped_samples": 0,
+      "visual_settings_changed": [],
+      "frame_stats": {
+        "count": 220,
+        "meanMs": 542.3438610045455,
+        "p50Ms": 522.365908,
+        "p95Ms": 713.237831,
+        "p99Ms": 860.91664,
+        "maxMs": 885.115974,
+        "meanRate": 1.8438486574693962,
+        "lowOnePercentRate": 1.1446485854821962,
+        "over16Ms": 220,
+        "over33Ms": 220,
+        "over50Ms": 220,
+        "over100Ms": 220
+      },
+      "tick_stats": {
+        "count": 2400,
+        "meanMs": 9.639125558749999,
+        "p50Ms": 9.137695,
+        "p95Ms": 16.989389,
+        "p99Ms": 25.152306,
+        "maxMs": 52.879001,
+        "meanRate": 103.74385040479541,
+        "lowOnePercentRate": 30.37834831626593,
+        "over16Ms": 133,
+        "over33Ms": 8,
+        "over50Ms": 2,
+        "over100Ms": 0
+      },
+      "process_rss_peak_sampled_bytes": 3129790464,
+      "render_loader_allocation_counters": [
+        {
+          "thread_id": 124,
+          "thread": "DH-Render Loader Thread[1]",
+          "counter_observations": 2,
+          "observed_seconds": 64.375191422,
+          "observed_allocated_bytes": 97869576,
+          "observed_bytes_per_second": 1520299.5725237317
+        },
+        {
+          "thread_id": 123,
+          "thread": "DH-Render Loader Thread[0]",
+          "counter_observations": 2,
+          "observed_seconds": 64.375191422,
+          "observed_allocated_bytes": 91443128,
+          "observed_bytes_per_second": 1420471.5509203072
+        }
+      ],
+      "preceding_jfr_gc_pause_total_ms": 263.975028,
+      "preceding_jfr_gc_pause_longest_ms": 45.0698
+    },
+    {
+      "profile": "quad-reuse",
+      "quad_reuse_enabled": true,
+      "elapsed_seconds": 120.476138714,
+      "frame_samples": 224,
+      "tick_samples": 2401,
+      "excluded_frames": 0,
+      "dropped_samples": 0,
+      "visual_settings_changed": [],
+      "frame_stats": {
+        "count": 224,
+        "meanMs": 532.6331643258928,
+        "p50Ms": 505.6209,
+        "p95Ms": 735.235244,
+        "p99Ms": 774.189261,
+        "maxMs": 926.006251,
+        "meanRate": 1.8774647674551252,
+        "lowOnePercentRate": 1.208934822852848,
+        "over16Ms": 224,
+        "over33Ms": 224,
+        "over50Ms": 224,
+        "over100Ms": 224
+      },
+      "tick_stats": {
+        "count": 2401,
+        "meanMs": 9.308558193669304,
+        "p50Ms": 8.82277,
+        "p95Ms": 16.529268,
+        "p99Ms": 22.206144,
+        "maxMs": 95.741877,
+        "meanRate": 107.42802259968617,
+        "lowOnePercentRate": 30.32324112917506,
+        "over16Ms": 114,
+        "over33Ms": 8,
+        "over50Ms": 3,
+        "over100Ms": 0
+      },
+      "process_rss_peak_sampled_bytes": 3100016640,
+      "render_loader_allocation_counters": [
+        {
+          "thread_id": 125,
+          "thread": "DH-Render Loader Thread[1]",
+          "counter_observations": 2,
+          "observed_seconds": 64.347664971,
+          "observed_allocated_bytes": 116155920,
+          "observed_bytes_per_second": 1805130.3035214841
+        },
+        {
+          "thread_id": 124,
+          "thread": "DH-Render Loader Thread[0]",
+          "counter_observations": 2,
+          "observed_seconds": 64.347664971,
+          "observed_allocated_bytes": 104401656,
+          "observed_bytes_per_second": 1622462.229935638
+        }
+      ],
+      "preceding_jfr_gc_pause_total_ms": 166.770211,
+      "preceding_jfr_gc_pause_longest_ms": 46.786101
+    }
+  ],
+  "provenance": {
+    "source_commit": "0a0cd667d5cfdee7c59f5fe2c7a2eb15bd19e66e",
+    "workflow_run": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37175709062",
+    "runtime_mod_matches_linux_ci": true,
+    "initial_player_snapshot_sha256": "b4d11dbd6443625415a1e32aa242d0e2d09cd77ddb1becfde5d35cb6ab8d278a",
+    "source_level_snapshot_sha256": "86a3c75ea993e50c4428da4dbadc5856688a9367f035c41b8bb49863a9aeb644",
+    "first_saved_player_position": [
+      -56.5,
+      69.0,
+      55.5
+    ],
+    "first_saved_player_rotation": [
+      141.5,
+      16.950002670288086
+    ],
+    "first_saved_cameras_matched": true
+  },
+  "notes": [
+    "Fixed-order candidate then control single pair from separate copies of the same private world. Both stationary captures start approximately 307 seconds after the demo popup is dismissed; first saved cameras match.",
+    "Both reports have zero menu/pause/focus exclusions, no dropped samples and matching captured settings apart from the isolated quad hook. CSV counts and actual offline viewer timelines pass.",
+    "The preceding 60-second JFR recordings begin approximately 121 seconds after dismissal. Allocation counters have their own approximately 64-second spans; GC pause data is from those recordings, not from the later frame captures.",
+    "Render-loader allocation counter rates are higher in this candidate observation. Task-completion/geometry volumes and cache/JIT effects are not controlled quantitatively. No useful live allocation improvement is established.",
+    "Frame count and sampled peak RSS differences in this single software-rendered pair do not establish a meaningful game speed or retained-memory gain. RSS is not complete GPU/unified RAM. Not an Apple Silicon benchmark.",
+    "Candidate saved, reloaded, saved again and exited with launcher code zero. Control saved, closed all terrain databases and exited with launcher code zero.",
+    "No private worlds, full game logs or JFR recordings are included in these selected observations."
+  ]
+}
