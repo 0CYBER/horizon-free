@@ -117,3 +117,27 @@ and 119–120 RSS samples. Distant-terrain data continued updating; game worlds 
 DH databases closed cleanly. A separate 60-second profile confirmed allocation
 counter activity on the queue thread. Its workload/cache state differs from the
 earlier profile, so those profiles are not a numerical before/after comparison.
+
+## Stationary live allocation observation, 4 October 2026
+
+A [selected real-game pair](../benchmarks/debounce-queue-2026-10-04/live-observations.json)
+uses separate copies of the same private world, matching graphics/JVM settings
+and first saved cameras, with the released 0.18 production JAR. Both captures
+have zero exclusions/drops and both worlds save and exit with code zero. JFR
+starts roughly 121 seconds after demo dismissal; the later 120-second frame
+capture starts roughly 307 seconds after dismissal.
+
+Overworld queue allocation counters record about 15.3 MB/s upstream versus
+11.5 KB/s with waiting across their roughly 64-second spans. This supports a
+large targeted allocation difference in this observation. Work/geometry volumes
+are not quantitatively controlled, and daylight, entities and cache/JIT state
+can differ. The later control capture has 230 frames versus 225 with waiting;
+sampled peak RSS is lower in control and whole-process CPU differs little.
+No useful game FPS, retained-memory or whole-process CPU gain is established.
+This is Linux software rendering, not an Apple Silicon test. The hook remains
+optional, and actual terrain update latency still needs hardware measurement.
+
+Both JSON/CSV viewer charts and the 390-pixel layout pass. An earlier failed
+capture had zero eligible frames and 209 exclusions after the virtual keyboard
+ended and the game paused. The viewer rejects that real report, clears prior
+comparison results and asks for focused gameplay; it is excluded from the pair.
