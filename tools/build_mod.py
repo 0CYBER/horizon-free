@@ -136,7 +136,7 @@ def build_culling_empty_fixture():
     return build_integration_fixture("culling-empty", "dev.horizonlab.dispatch.CullingEmptyIntegration", ["entityculling"])
 
 
-def build_integration_fixture(name, entrypoint, extra_projects=(), fixture_mixins=()):
+def build_integration_fixture(name, entrypoint, extra_projects=(), fixture_mixins=(), fixture_dependencies=None):
     """Create a private integration-test mod; never include it in release packs."""
     arguments = [json.loads(line) for line in (BUILD / "javac.args").read_text().splitlines()]
     classpath = arguments[arguments.index("-classpath") + 1] + os.pathsep + str(BUILD / "classes")
@@ -157,7 +157,8 @@ def build_integration_fixture(name, entrypoint, extra_projects=(), fixture_mixin
     output = BUILD / f"{name}-fixture.jar"
     metadata = {"schemaVersion": 1, "id": "horizon_" + name.replace("-", "_") + "_fixture",
                 "version": "1.0.0", "environment": "client", "entrypoints": {"client": [entrypoint]},
-                "depends": {"horizonlab": "*", "distanthorizons": "3.3.4"}}
+                "depends": {"horizonlab": "*", **({"distanthorizons": "3.3.4"}
+                    if fixture_dependencies is None else fixture_dependencies)}}
     if fixture_mixins:
         metadata["mixins"] = [name + "-fixture.mixins.json"]
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
