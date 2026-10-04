@@ -98,6 +98,15 @@ assertion. The overall research run therefore remains failed. These outcomes
 justify retaining the readiness guard; they do not establish the cause of the
 remaining failure, full visual correctness, world rendering or physical M2 speed.
 
+The subsequent world-mode run 37195149166 passes all three cases on the hosted
+Apple Paravirtual Vulkan device. Each reaches focused gameplay without an overlay,
+returns a nonuniform framebuffer, produces saved demo-world data and exits with
+code zero. This verifies short Vulkan world startup on that runner, while the
+failed title observations remain retained. A local Linux core Vulkan world probe
+also passes, and its private screenshot was visually inspected. These checks do
+not prove exhaustive graphics/gameplay equivalence, completed distant terrain,
+physical M2 GPU compatibility or an FPS improvement.
+
 For an isolated private preference override:
 
 ```sh
