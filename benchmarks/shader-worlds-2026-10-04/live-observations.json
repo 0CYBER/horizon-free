@@ -204,6 +204,139 @@
     "Linux Vulkan plus DH fails before readback; selected stack locations alone do not establish the root cause.",
     "Removing DH privately produces an ordinary Vulkan world readback but Iris reports shaders inactive; the required-activation assertion rejects it.",
     "Both hosted Mac cases hit the 240-second private fixture timeout; earlier diagnostics do not retain stages or waiting state. They do not establish shader compatibility or incompatibility.",
-    "Full logs, raw PNGs, world data, assets and shader ZIPs remain private."
-  ]
+    "Full logs, raw PNGs, world data, assets and shader ZIPs remain private.",
+    "Diagnostic repeat: OpenGL loads a world but retains a screen before readback; Vulkan initializes its device but records no waiting-state snapshot. Both time out; screen identity and root causes are unknown."
+  ],
+  "mac_diagnostic_repeat": {
+    "source_commit": "ed416c91cf980f136b7431314bccea7f266fe049",
+    "run_url": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37199837867",
+    "cases": [
+      {
+        "case": [
+          "--profile",
+          "cinematic",
+          "--backend",
+          "opengl",
+          "--world",
+          "--shaders"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": -15,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.IllegalStateException",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "OpenGL",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "OpenGL",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Software Renderer",
+                "graphics_backend": "OpenGL",
+                "graphics_driver": "4.1 APPLE-23.1.1"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": false,
+            "readback_callback_received": false,
+            "readback_inspections": [],
+            "last_waiting_state": {
+              "world_loaded": true,
+              "player_present": true,
+              "overlay_present": false,
+              "screen_present": true,
+              "window_active": true,
+              "paused": false,
+              "ready_client_ticks": 0
+            },
+            "probe_failure_categories": [],
+            "vulkan_error_codes": [],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.renderer.LevelRenderer.mixinextras$bridge$renderGroup$135",
+              "net.minecraft.client.renderer.LevelRenderer.wrapOperation$bio000$iris$beginTerrainLayer",
+              "net.minecraft.client.renderer.LevelRenderer.executeSolid",
+              "net.minecraft.client.renderer.LevelRenderer.lambda$addMainPass$0",
+              "com.mojang.blaze3d.framegraph.FrameGraphBuilder.execute",
+              "net.minecraft.client.renderer.LevelRenderer.render",
+              "net.minecraft.client.renderer.GameRenderer.mixinextras$bridge$render$86",
+              "net.minecraft.client.renderer.GameRenderer.wrapOperation$bjf000$iris$renderLevel"
+            ],
+            "fixture": "client-graphics",
+            "profile": "cinematic",
+            "completed": false,
+            "timed_out": true,
+            "timeout_seconds": 240
+          }
+        ]
+      },
+      {
+        "case": [
+          "--profile",
+          "cinematic",
+          "--backend",
+          "vulkan",
+          "--world",
+          "--shaders"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": -15,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": false,
+            "readback_callback_received": false,
+            "readback_inspections": [],
+            "last_waiting_state": null,
+            "probe_failure_categories": [],
+            "vulkan_error_codes": [],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [],
+            "fixture": "client-graphics",
+            "profile": "cinematic",
+            "completed": false,
+            "timed_out": true,
+            "timeout_seconds": 240
+          }
+        ]
+      }
+    ]
+  }
 }

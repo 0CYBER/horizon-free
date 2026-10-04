@@ -53,3 +53,15 @@ actual child exit status after bounded cleanup, and the last private waiting-sta
 snapshot. Waiting state contains only six booleans and a tick count; arbitrary
 screen names, messages and paths are excluded. An unsuccessful research run
 remains unsuccessful. Playable shader/backend defaults remain unchanged.
+
+Diagnostic repeat [37199837867](https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37199837867)
+uses the richer diagnostics. Both cases again hit the 240-second timeout and
+require bounded termination. OpenGL initializes its device and loads a world
+with a player, no overlay, an active window and no pause; a screen remains
+present and the fixture never reaches readback readiness. Selected stack
+locations include Iris terrain rendering, but do not identify the screen or
+establish a root cause. Vulkan initializes its device and client entrypoint,
+but provides no waiting-state snapshot or readback request before timeout.
+Neither case yields an actual shader-activation assertion or saved/clean-exit
+success. The research workflow correctly fails; required non-shader OpenGL
+checks pass independently on Windows, Linux and macOS.
