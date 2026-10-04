@@ -1,0 +1,930 @@
+{
+  "schema": 1,
+  "measurement": "Failed hosted macOS Vulkan graphics probes, not performance measurements",
+  "source_commit": "8282a731ecc08691f798a3ec596c7cc1d4f1dad1",
+  "run_url": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37193558884",
+  "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+  "cases": [
+    {
+      "case": [
+        "--profile",
+        "baseline",
+        "--backend",
+        "vulkan"
+      ],
+      "exit_code": 1,
+      "failure": [
+        {
+          "exit_code": 1,
+          "result_count": 0,
+          "java_exception_types": [
+            "java.lang.AssertionError",
+            "java.lang.RuntimeException"
+          ],
+          "expected_demo_authentication_errors_observed": true,
+          "backend_attempts": [
+            {
+              "backend": "Vulkan",
+              "operation": "load_library",
+              "result": "success"
+            },
+            {
+              "backend": "Vulkan",
+              "operation": "create_device",
+              "result": "success"
+            }
+          ],
+          "created_devices": [
+            {
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+            }
+          ],
+          "client_initializer_reached": true,
+          "readback_requested": true,
+          "vulkan_error_codes": [
+            "VK_ERROR_FEATURE_NOT_PRESENT"
+          ],
+          "fatal_jvm_error": false,
+          "profile": "baseline",
+          "preferred_backend": "vulkan"
+        }
+      ]
+    },
+    {
+      "case": [
+        "--profile",
+        "core-performance",
+        "--backend",
+        "vulkan"
+      ],
+      "exit_code": 1,
+      "failure": [
+        {
+          "exit_code": 1,
+          "result_count": 0,
+          "java_exception_types": [
+            "java.lang.AssertionError",
+            "java.lang.RuntimeException"
+          ],
+          "expected_demo_authentication_errors_observed": true,
+          "backend_attempts": [
+            {
+              "backend": "Vulkan",
+              "operation": "load_library",
+              "result": "success"
+            },
+            {
+              "backend": "Vulkan",
+              "operation": "create_device",
+              "result": "success"
+            }
+          ],
+          "created_devices": [
+            {
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+            }
+          ],
+          "client_initializer_reached": true,
+          "readback_requested": true,
+          "vulkan_error_codes": [
+            "VK_ERROR_FEATURE_NOT_PRESENT"
+          ],
+          "fatal_jvm_error": false,
+          "profile": "core-performance",
+          "preferred_backend": "vulkan"
+        }
+      ]
+    },
+    {
+      "case": [
+        "--profile",
+        "vulkan"
+      ],
+      "exit_code": 1,
+      "failure": [
+        {
+          "exit_code": 1,
+          "result_count": 0,
+          "java_exception_types": [
+            "java.lang.AssertionError",
+            "java.lang.RuntimeException"
+          ],
+          "expected_demo_authentication_errors_observed": true,
+          "backend_attempts": [
+            {
+              "backend": "Vulkan",
+              "operation": "load_library",
+              "result": "success"
+            },
+            {
+              "backend": "Vulkan",
+              "operation": "create_device",
+              "result": "success"
+            }
+          ],
+          "created_devices": [
+            {
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+            }
+          ],
+          "client_initializer_reached": true,
+          "readback_requested": true,
+          "vulkan_error_codes": [
+            "VK_ERROR_FEATURE_NOT_PRESENT"
+          ],
+          "fatal_jvm_error": false,
+          "profile": "vulkan",
+          "preferred_backend": "vulkan"
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "Apple Paravirtual device and MoltenVK on a hosted ARM Mac; not physical M2 Pro GPU testing.",
+    "Library/device creation and readback request were observed, but no completed nonuniform readback report was produced.",
+    "All failures retained; neither successful rendering nor a screenshot-specific root cause is established.",
+    "Baseline includes the same original measurement mod and private test fixture; no core optimization mods or distant terrain.",
+    "Full logs, screenshots, game binaries and assets remain private.",
+    "Later selected stack locations place the observed failures in the screenshot callback; the independently logged Vulkan identifier is not established as their cause.",
+    "Actual assertions rejected uniform callback images in all three cases. Overlay state was not recorded, and displayed-window correctness is not established.",
+    "After guarding overlays, core/distant-terrain title readbacks pass but vanilla remains uniform; the aggregate research run fails. No world-rendering or physical-M2 claim.",
+    "Later world probes pass all three Vulkan cases on the hosted Mac; failed title cases remain retained. These are short startup/readback/save probes, not physical-GPU performance tests."
+  ],
+  "later_stack_run": {
+    "source_commit": "a77476b54e7bf4a1b3a96cb9d8108ed7c1c7b2b0",
+    "run_url": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37193954843",
+    "cases": [
+      {
+        "case": [
+          "--profile",
+          "baseline",
+          "--backend",
+          "vulkan"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": 1,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.AssertionError",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": true,
+            "vulkan_error_codes": [
+              "VK_ERROR_FEATURE_NOT_PRESENT"
+            ],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+              "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+              "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+              "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+            ],
+            "profile": "baseline",
+            "preferred_backend": "vulkan"
+          }
+        ]
+      },
+      {
+        "case": [
+          "--profile",
+          "core-performance",
+          "--backend",
+          "vulkan"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": 1,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.AssertionError",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": true,
+            "vulkan_error_codes": [
+              "VK_ERROR_FEATURE_NOT_PRESENT"
+            ],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+              "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+              "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+              "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+            ],
+            "profile": "core-performance",
+            "preferred_backend": "vulkan"
+          }
+        ]
+      },
+      {
+        "case": [
+          "--profile",
+          "vulkan"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": 1,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.AssertionError",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": true,
+            "vulkan_error_codes": [
+              "VK_ERROR_FEATURE_NOT_PRESENT"
+            ],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+              "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+              "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+              "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+            ],
+            "profile": "vulkan",
+            "preferred_backend": "vulkan"
+          }
+        ]
+      }
+    ]
+  },
+  "later_pixel_run": {
+    "source_commit": "213498c77ed643617083dacf4aaa283a1cb4815a",
+    "run_url": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37194354615",
+    "cases": [
+      {
+        "case": [
+          "--profile",
+          "baseline",
+          "--backend",
+          "vulkan"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": 1,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.AssertionError",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": true,
+            "readback_callback_received": true,
+            "readback_inspections": [
+              {
+                "framebuffer_width": 1280,
+                "framebuffer_height": 646,
+                "sampled_pixels": 4160,
+                "distinct_sampled_rgb": 1
+              }
+            ],
+            "probe_failure_categories": [
+              "uniform_readback"
+            ],
+            "vulkan_error_codes": [
+              "VK_ERROR_FEATURE_NOT_PRESENT"
+            ],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+              "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+              "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+              "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+            ],
+            "profile": "baseline",
+            "preferred_backend": "vulkan"
+          }
+        ]
+      },
+      {
+        "case": [
+          "--profile",
+          "core-performance",
+          "--backend",
+          "vulkan"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": 1,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.AssertionError",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": true,
+            "readback_callback_received": true,
+            "readback_inspections": [
+              {
+                "framebuffer_width": 1280,
+                "framebuffer_height": 646,
+                "sampled_pixels": 4160,
+                "distinct_sampled_rgb": 1
+              }
+            ],
+            "probe_failure_categories": [
+              "uniform_readback"
+            ],
+            "vulkan_error_codes": [
+              "VK_ERROR_FEATURE_NOT_PRESENT"
+            ],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+              "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+              "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+              "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+            ],
+            "profile": "core-performance",
+            "preferred_backend": "vulkan"
+          }
+        ]
+      },
+      {
+        "case": [
+          "--profile",
+          "vulkan"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": 1,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.AssertionError",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": true,
+            "readback_callback_received": true,
+            "readback_inspections": [
+              {
+                "framebuffer_width": 1280,
+                "framebuffer_height": 646,
+                "sampled_pixels": 4160,
+                "distinct_sampled_rgb": 1
+              }
+            ],
+            "probe_failure_categories": [
+              "uniform_readback"
+            ],
+            "vulkan_error_codes": [
+              "VK_ERROR_FEATURE_NOT_PRESENT"
+            ],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+              "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+              "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+              "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+            ],
+            "profile": "vulkan",
+            "preferred_backend": "vulkan"
+          }
+        ]
+      }
+    ]
+  },
+  "later_overlay_run": {
+    "source_commit": "a1d8c1b8246008ac4076cdcaf0f64c71eaf4c767",
+    "run_url": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37194690645",
+    "cases": [
+      {
+        "case": [
+          "--profile",
+          "baseline",
+          "--backend",
+          "vulkan"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": 1,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.AssertionError",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": true,
+            "readback_callback_received": true,
+            "readback_inspections": [
+              {
+                "framebuffer_width": 1280,
+                "framebuffer_height": 646,
+                "sampled_pixels": 4160,
+                "distinct_sampled_rgb": 1
+              }
+            ],
+            "probe_failure_categories": [
+              "uniform_readback"
+            ],
+            "vulkan_error_codes": [
+              "VK_ERROR_FEATURE_NOT_PRESENT"
+            ],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+              "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+              "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+              "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+            ],
+            "profile": "baseline",
+            "preferred_backend": "vulkan"
+          }
+        ]
+      },
+      {
+        "case": [
+          "--profile",
+          "core-performance",
+          "--backend",
+          "vulkan"
+        ],
+        "exit_code": 0,
+        "report": {
+          "schema": 1,
+          "platform": "macOS-26.6.2-arm64-arm-64bit",
+          "architecture": "arm64",
+          "minecraft": "26.3",
+          "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+          "results": [
+            {
+              "observed_mode": "title",
+              "title_screen_observed": true,
+              "world_loaded": false,
+              "ready_client_ticks": 42,
+              "window_active": true,
+              "overlay_present": false,
+              "overlay_wait_ticks": 105,
+              "framebuffer_width": 1280,
+              "framebuffer_height": 646,
+              "sampled_pixels": 4160,
+              "distinct_sampled_rgb": 163,
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2",
+              "private_png_sha256": "3c802923766cf9e7f45020bc2d858c23de655cb8e35fa058a050e7b09a1d3708",
+              "profile": "core-performance",
+              "preferred_backend": "vulkan",
+              "launcher_exit_code": 0,
+              "backend_attempts": [
+                {
+                  "backend": "Vulkan",
+                  "operation": "load_library",
+                  "result": "success"
+                },
+                {
+                  "backend": "Vulkan",
+                  "operation": "create_device",
+                  "result": "success"
+                }
+              ]
+            }
+          ],
+          "limits": [
+            "Short scene startup and nonuniform framebuffer readback only.",
+            "World mode uses the ordinary limited demo; world files remain private.",
+            "No exhaustive gameplay, visual-correctness, FPS or M2 Pro performance claim.",
+            "Vulkan preference can fall back; inspect the observed backend.",
+            "PNG images, assets and full logs remain in the private runtime directory."
+          ]
+        }
+      },
+      {
+        "case": [
+          "--profile",
+          "vulkan"
+        ],
+        "exit_code": 0,
+        "report": {
+          "schema": 1,
+          "platform": "macOS-26.6.2-arm64-arm-64bit",
+          "architecture": "arm64",
+          "minecraft": "26.3",
+          "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+          "results": [
+            {
+              "observed_mode": "title",
+              "title_screen_observed": true,
+              "world_loaded": false,
+              "ready_client_ticks": 42,
+              "window_active": true,
+              "overlay_present": false,
+              "overlay_wait_ticks": 122,
+              "framebuffer_width": 1280,
+              "framebuffer_height": 646,
+              "sampled_pixels": 4160,
+              "distinct_sampled_rgb": 163,
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2",
+              "private_png_sha256": "3c802923766cf9e7f45020bc2d858c23de655cb8e35fa058a050e7b09a1d3708",
+              "profile": "vulkan",
+              "preferred_backend": "vulkan",
+              "launcher_exit_code": 0,
+              "backend_attempts": [
+                {
+                  "backend": "Vulkan",
+                  "operation": "load_library",
+                  "result": "success"
+                },
+                {
+                  "backend": "Vulkan",
+                  "operation": "create_device",
+                  "result": "success"
+                }
+              ]
+            }
+          ],
+          "limits": [
+            "Short scene startup and nonuniform framebuffer readback only.",
+            "World mode uses the ordinary limited demo; world files remain private.",
+            "No exhaustive gameplay, visual-correctness, FPS or M2 Pro performance claim.",
+            "Vulkan preference can fall back; inspect the observed backend.",
+            "PNG images, assets and full logs remain in the private runtime directory."
+          ]
+        }
+      }
+    ]
+  },
+  "later_world_run": {
+    "source_commit": "5f9f973295c5cc948a6999a849c2c843f5e831f6",
+    "run_url": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37195149166",
+    "cases": [
+      {
+        "case": [
+          "--profile",
+          "baseline",
+          "--backend",
+          "vulkan",
+          "--world"
+        ],
+        "exit_code": 0,
+        "report": {
+          "schema": 1,
+          "platform": "macOS-26.6.2-arm64-arm-64bit",
+          "architecture": "arm64",
+          "minecraft": "26.3",
+          "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+          "results": [
+            {
+              "observed_mode": "world",
+              "title_screen_observed": false,
+              "world_loaded": true,
+              "ready_client_ticks": 42,
+              "window_active": true,
+              "overlay_present": false,
+              "overlay_wait_ticks": 323,
+              "framebuffer_width": 1280,
+              "framebuffer_height": 646,
+              "sampled_pixels": 4160,
+              "distinct_sampled_rgb": 1278,
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2",
+              "private_png_sha256": "9e9be2562390f24fe8c8e0442ef9cdfd47910febd95d8f0c0f5706191a53f1f6",
+              "profile": "baseline",
+              "preferred_backend": "vulkan",
+              "launcher_exit_code": 0,
+              "backend_attempts": [
+                {
+                  "backend": "Vulkan",
+                  "operation": "load_library",
+                  "result": "success"
+                },
+                {
+                  "backend": "Vulkan",
+                  "operation": "create_device",
+                  "result": "success"
+                }
+              ]
+            }
+          ],
+          "limits": [
+            "Short scene startup and nonuniform framebuffer readback only.",
+            "World mode uses the ordinary limited demo; world files remain private.",
+            "No exhaustive gameplay, visual-correctness, FPS or M2 Pro performance claim.",
+            "Vulkan preference can fall back; inspect the observed backend.",
+            "PNG images, assets and full logs remain in the private runtime directory."
+          ]
+        }
+      },
+      {
+        "case": [
+          "--profile",
+          "core-performance",
+          "--backend",
+          "vulkan",
+          "--world"
+        ],
+        "exit_code": 0,
+        "report": {
+          "schema": 1,
+          "platform": "macOS-26.6.2-arm64-arm-64bit",
+          "architecture": "arm64",
+          "minecraft": "26.3",
+          "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+          "results": [
+            {
+              "observed_mode": "world",
+              "title_screen_observed": false,
+              "world_loaded": true,
+              "ready_client_ticks": 51,
+              "window_active": true,
+              "overlay_present": false,
+              "overlay_wait_ticks": 90,
+              "framebuffer_width": 1280,
+              "framebuffer_height": 646,
+              "sampled_pixels": 4160,
+              "distinct_sampled_rgb": 1024,
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2",
+              "private_png_sha256": "e0a6ad253ca0490b35217ce9ad799dc7d4c04e4ecf446eeacd1aa5196db317bb",
+              "profile": "core-performance",
+              "preferred_backend": "vulkan",
+              "launcher_exit_code": 0,
+              "backend_attempts": [
+                {
+                  "backend": "Vulkan",
+                  "operation": "load_library",
+                  "result": "success"
+                },
+                {
+                  "backend": "Vulkan",
+                  "operation": "create_device",
+                  "result": "success"
+                }
+              ]
+            }
+          ],
+          "limits": [
+            "Short scene startup and nonuniform framebuffer readback only.",
+            "World mode uses the ordinary limited demo; world files remain private.",
+            "No exhaustive gameplay, visual-correctness, FPS or M2 Pro performance claim.",
+            "Vulkan preference can fall back; inspect the observed backend.",
+            "PNG images, assets and full logs remain in the private runtime directory."
+          ]
+        }
+      },
+      {
+        "case": [
+          "--profile",
+          "vulkan",
+          "--world"
+        ],
+        "exit_code": 0,
+        "report": {
+          "schema": 1,
+          "platform": "macOS-26.6.2-arm64-arm-64bit",
+          "architecture": "arm64",
+          "minecraft": "26.3",
+          "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+          "results": [
+            {
+              "observed_mode": "world",
+              "title_screen_observed": false,
+              "world_loaded": true,
+              "ready_client_ticks": 53,
+              "window_active": true,
+              "overlay_present": false,
+              "overlay_wait_ticks": 88,
+              "framebuffer_width": 1280,
+              "framebuffer_height": 646,
+              "sampled_pixels": 4160,
+              "distinct_sampled_rgb": 1287,
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2",
+              "private_png_sha256": "a17d1740e34cc9f49b67a4c56f51d0843f756e9d2eb3d19d6a926ad5f8f0ed36",
+              "profile": "vulkan",
+              "preferred_backend": "vulkan",
+              "launcher_exit_code": 0,
+              "backend_attempts": [
+                {
+                  "backend": "Vulkan",
+                  "operation": "load_library",
+                  "result": "success"
+                },
+                {
+                  "backend": "Vulkan",
+                  "operation": "create_device",
+                  "result": "success"
+                }
+              ]
+            }
+          ],
+          "limits": [
+            "Short scene startup and nonuniform framebuffer readback only.",
+            "World mode uses the ordinary limited demo; world files remain private.",
+            "No exhaustive gameplay, visual-correctness, FPS or M2 Pro performance claim.",
+            "Vulkan preference can fall back; inspect the observed backend.",
+            "PNG images, assets and full logs remain in the private runtime directory."
+          ]
+        }
+      }
+    ]
+  },
+  "local_linux_core_vulkan_world": {
+    "schema": 1,
+    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "architecture": "x86_64",
+    "minecraft": "26.3",
+    "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+    "results": [
+      {
+        "observed_mode": "world",
+        "title_screen_observed": false,
+        "world_loaded": true,
+        "ready_client_ticks": 47,
+        "window_active": true,
+        "overlay_present": false,
+        "overlay_wait_ticks": 111,
+        "framebuffer_width": 1280,
+        "framebuffer_height": 800,
+        "sampled_pixels": 4288,
+        "distinct_sampled_rgb": 1895,
+        "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+        "graphics_backend": "Vulkan",
+        "graphics_driver": "1.4.335 llvmpipe Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)",
+        "private_png_sha256": "52b26102b3037cab4ab6b7011a6c1255eebaa808d1d3dd5e77ff23fcde092acb",
+        "profile": "core-performance",
+        "preferred_backend": "vulkan",
+        "launcher_exit_code": 0,
+        "backend_attempts": [
+          {
+            "backend": "Vulkan",
+            "operation": "load_library",
+            "result": "success"
+          },
+          {
+            "backend": "Vulkan",
+            "operation": "create_device",
+            "result": "success"
+          }
+        ]
+      }
+    ],
+    "limits": [
+      "Short scene startup and nonuniform framebuffer readback only.",
+      "World mode uses the ordinary limited demo; world files remain private.",
+      "No exhaustive gameplay, visual-correctness, FPS or M2 Pro performance claim.",
+      "Vulkan preference can fall back; inspect the observed backend.",
+      "PNG images, assets and full logs remain in the private runtime directory."
+    ]
+  }
+}

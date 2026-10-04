@@ -22,12 +22,21 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
     private int titleTicks;
     private boolean requested;
     private boolean opening;
+    private int overlayWaitTicks;
     private final boolean worldMode = Files.exists(FabricLoader.getInstance().getConfigDir().resolve("client-graphics-world.flag"));
 
     @Override public void onInitializeClient() {
         System.out.println("HORIZON_CLIENT_GRAPHICS_INITIALIZER_READY");
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (requested) return;
+            // TitleScreen can exist beneath the asynchronous loading overlay.
+            // Count readiness only after it clears, for both title and world mode.
+            if (client.gui.overlay() != null) {
+                overlayWaitTicks++;
+                titleStarted = 0;
+                titleTicks = 0;
+                return;
+            }
             if (worldMode) {
                 if (!opening && client.gui.screen() instanceof TitleScreen screen) {
                     opening = true;
@@ -55,6 +64,7 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
             requested = true;
             System.out.println("HORIZON_CLIENT_GRAPHICS_READBACK_REQUESTED");
             Screenshot.takeScreenshot(client.gameRenderer.mainRenderTarget(), image -> {
+                System.out.println("HORIZON_CLIENT_GRAPHICS_READBACK_RECEIVED");
                 try (image) {
                     int width = image.getWidth(), height = image.getHeight();
                     if (width < 64 || height < 64) throw new AssertionError("Incomplete title framebuffer");
@@ -66,6 +76,12 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
                             samples++;
                         }
                     }
+                    var inspection = new JsonObject();
+                    inspection.addProperty("framebuffer_width", width);
+                    inspection.addProperty("framebuffer_height", height);
+                    inspection.addProperty("sampled_pixels", samples);
+                    inspection.addProperty("distinct_sampled_rgb", colors.size());
+                    System.out.println("HORIZON_CLIENT_GRAPHICS_READBACK_INSPECTED " + inspection);
                     if (samples < 256 || colors.size() < 8) throw new AssertionError("Uniform title readback");
                     var screenshot = client.gameDirectory.toPath().resolve("client-graphics-private.png");
                     image.writeToFile(screenshot);
@@ -76,6 +92,8 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
                     result.addProperty("world_loaded", worldMode && client.level != null);
                     result.addProperty("ready_client_ticks", titleTicks);
                     result.addProperty("window_active", client.isWindowActive());
+                    result.addProperty("overlay_present", client.gui.overlay() != null);
+                    result.addProperty("overlay_wait_ticks", overlayWaitTicks);
                     result.addProperty("framebuffer_width", width);
                     result.addProperty("framebuffer_height", height);
                     result.addProperty("sampled_pixels", samples);

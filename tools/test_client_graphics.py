@@ -23,7 +23,7 @@ except ImportError:
 
 
 def graphics_failure_summary(run, report_count):
-    """Selected stages/types/codes only; messages, paths and raw logs stay private."""
+    """Selected stages/types/codes/methods only; messages and paths stay private."""
     result = failure_summary(run, report_count)
     pattern = r'(?<![\w.$])((?:java|org\.lwjgl|com\.mojang|net\.minecraft|net\.fabricmc|org\.spongepowered|dev\.horizonlab)\.[A-Za-z_$][\w.$]{0,160}(?:Exception|Error))(?=[:\s]|$)'
     observed = set(result['java_exception_types']) | set(re.findall(pattern, run.stdout, re.ASCII))
@@ -35,8 +35,40 @@ def graphics_failure_summary(run, report_count):
         result[key] = [json.loads(line.split(marker, 1)[1]) for line in run.stdout.splitlines() if marker in line][:16]
     result['client_initializer_reached'] = 'HORIZON_CLIENT_GRAPHICS_INITIALIZER_READY' in run.stdout
     result['readback_requested'] = 'HORIZON_CLIENT_GRAPHICS_READBACK_REQUESTED' in run.stdout
+    result['readback_callback_received'] = 'HORIZON_CLIENT_GRAPHICS_READBACK_RECEIVED' in run.stdout
+    inspection_marker = 'HORIZON_CLIENT_GRAPHICS_READBACK_INSPECTED '
+    inspections = []
+    fields = ('framebuffer_width', 'framebuffer_height', 'sampled_pixels', 'distinct_sampled_rgb')
+    for line in run.stdout.splitlines():
+        if inspection_marker not in line:
+            continue
+        try:
+            item = json.loads(line.split(inspection_marker, 1)[1])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict) and all(type(item.get(field)) is int
+                and 0 <= item[field] <= 2_147_483_647 for field in fields):
+            inspections.append({field: item[field] for field in fields})
+        if len(inspections) == 4:
+            break
+    result['readback_inspections'] = inspections
+    # These exact messages belong to our private fixture. Never emit arbitrary
+    # exception messages or infer that a separately logged Vulkan code caused it.
+    categories = {'Uniform title readback': 'uniform_readback',
+                  'Incomplete title framebuffer': 'small_framebuffer',
+                  'Private client graphics readback failed': 'callback_exception'}
+    result['probe_failure_categories'] = [category for message, category in categories.items()
+        if 'java.lang.AssertionError: ' + message in run.stdout]
     result['vulkan_error_codes'] = sorted(set(re.findall(r'\bVK_ERROR_[A-Z_0-9]{1,100}\b', run.stdout)))[:16]
     result['fatal_jvm_error'] = 'A fatal error has been detected by the Java Runtime Environment' in run.stdout
+    # Only Java stack-frame lines from graphics namespaces. Strip module prefixes,
+    # filenames, line numbers and messages; these identify locations, not causes.
+    stack_pattern = (r'^\s*at (?:[A-Za-z0-9_.@$-]{1,80}/{1,2})?'
+                     r'((?:com\.mojang\.(?:renderpearl|blaze3d)\.|'
+                     r'net\.minecraft\.client\.(?:renderer\.|Screenshot\.))'
+                     r'[A-Za-z0-9_.$<>]{1,180})\(')
+    methods = re.findall(stack_pattern, run.stdout, re.MULTILINE | re.ASCII)
+    result['observed_graphics_stack_methods'] = list(dict.fromkeys(methods))[:8]
     return result
 
 
@@ -92,6 +124,8 @@ def main():
         report = reports[0]
         if report['observed_mode'] != ('world' if args.world else 'title') or report['ready_client_ticks'] < 40:
             raise AssertionError('Client never reached the requested graphics scene')
+        if report['overlay_present'] is not False:
+            raise AssertionError('Client graphics scene still has a loading overlay')
         if args.world:
             if report['world_loaded'] is not True or report['window_active'] is not True:
                 raise AssertionError('Client never reached focused demo-world gameplay')
