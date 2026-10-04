@@ -23,7 +23,7 @@ except ImportError:
 
 
 def graphics_failure_summary(run, report_count):
-    """Selected stages/types/codes only; messages, paths and raw logs stay private."""
+    """Selected stages/types/codes/methods only; messages and paths stay private."""
     result = failure_summary(run, report_count)
     pattern = r'(?<![\w.$])((?:java|org\.lwjgl|com\.mojang|net\.minecraft|net\.fabricmc|org\.spongepowered|dev\.horizonlab)\.[A-Za-z_$][\w.$]{0,160}(?:Exception|Error))(?=[:\s]|$)'
     observed = set(result['java_exception_types']) | set(re.findall(pattern, run.stdout, re.ASCII))
@@ -37,6 +37,14 @@ def graphics_failure_summary(run, report_count):
     result['readback_requested'] = 'HORIZON_CLIENT_GRAPHICS_READBACK_REQUESTED' in run.stdout
     result['vulkan_error_codes'] = sorted(set(re.findall(r'\bVK_ERROR_[A-Z_0-9]{1,100}\b', run.stdout)))[:16]
     result['fatal_jvm_error'] = 'A fatal error has been detected by the Java Runtime Environment' in run.stdout
+    # Only Java stack-frame lines from graphics namespaces. Strip module prefixes,
+    # filenames, line numbers and messages; these identify locations, not causes.
+    stack_pattern = (r'^\s*at (?:[A-Za-z0-9_.@$-]{1,80}/{1,2})?'
+                     r'((?:com\.mojang\.(?:renderpearl|blaze3d)\.|'
+                     r'net\.minecraft\.client\.(?:renderer\.|Screenshot\.))'
+                     r'[A-Za-z0-9_.$<>]{1,180})\(')
+    methods = re.findall(stack_pattern, run.stdout, re.MULTILINE | re.ASCII)
+    result['observed_graphics_stack_methods'] = list(dict.fromkeys(methods))[:8]
     return result
 
 

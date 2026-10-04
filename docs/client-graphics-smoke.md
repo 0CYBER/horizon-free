@@ -16,7 +16,10 @@ world mode also checks for saved world data after a clean process exit.
 The startup wrapper observes backend library/device creation and preserves the
 original calls and thrown exceptions. Selected diagnostics contain initialization
 stages, bounded exception type names, Vulkan error-code identifiers and device
-labels. Expected demo authentication errors are reported separately. Full log
+labels. Failed probes also select up to eight graphics stack method names, without
+module prefixes, filenames, line numbers or messages. Those observed locations
+do not by themselves identify a root cause. Expected demo authentication errors
+are reported separately. Full log
 messages, raw screenshots, assets and world files stay under gitignored `.local/`.
 Nonuniform pixels are not proof of correct visuals, full LOD completion or
 exhaustive gameplay equivalence.
@@ -63,8 +66,14 @@ title checks for core and balanced also passed with **Apple Software Renderer**.
 The macOS runner's **Apple Paravirtual device**, using MoltenVK 1.4.2, created
 Vulkan devices but all three Vulkan cases failed with `VK_ERROR_FEATURE_NOT_PRESENT`.
 The failure also occurs with vanilla; these observations do not isolate an
-optimization-mod fault or prove behavior on a physical M2 GPU. Later diagnostics
-identify whether readback was requested before failure.
+optimization-mod fault or prove behavior on a physical M2 GPU.
+
+The separate [readback-stage observations](../benchmarks/mac-vulkan-2026-10-04/live-observations.json)
+from manual run 37193558884 show that all three cases reached the client test
+initializer and requested readback before failing. They produced no completed
+readback report. This narrows the observed sequence; it does not establish whether
+the screenshot operation itself or subsequent rendering failed. Graphics stack
+locations are collected in later probes to distinguish those possibilities.
 
 For an isolated private preference override:
 

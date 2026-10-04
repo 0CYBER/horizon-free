@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "measurement": "Failed hosted macOS Vulkan graphics probes, not performance measurements",
+  "source_commit": "8282a731ecc08691f798a3ec596c7cc1d4f1dad1",
+  "run_url": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37193558884",
+  "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+  "cases": [
+    {
+      "case": [
+        "--profile",
+        "baseline",
+        "--backend",
+        "vulkan"
+      ],
+      "exit_code": 1,
+      "failure": [
+        {
+          "exit_code": 1,
+          "result_count": 0,
+          "java_exception_types": [
+            "java.lang.AssertionError",
+            "java.lang.RuntimeException"
+          ],
+          "expected_demo_authentication_errors_observed": true,
+          "backend_attempts": [
+            {
+              "backend": "Vulkan",
+              "operation": "load_library",
+              "result": "success"
+            },
+            {
+              "backend": "Vulkan",
+              "operation": "create_device",
+              "result": "success"
+            }
+          ],
+          "created_devices": [
+            {
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+            }
+          ],
+          "client_initializer_reached": true,
+          "readback_requested": true,
+          "vulkan_error_codes": [
+            "VK_ERROR_FEATURE_NOT_PRESENT"
+          ],
+          "fatal_jvm_error": false,
+          "profile": "baseline",
+          "preferred_backend": "vulkan"
+        }
+      ]
+    },
+    {
+      "case": [
+        "--profile",
+        "core-performance",
+        "--backend",
+        "vulkan"
+      ],
+      "exit_code": 1,
+      "failure": [
+        {
+          "exit_code": 1,
+          "result_count": 0,
+          "java_exception_types": [
+            "java.lang.AssertionError",
+            "java.lang.RuntimeException"
+          ],
+          "expected_demo_authentication_errors_observed": true,
+          "backend_attempts": [
+            {
+              "backend": "Vulkan",
+              "operation": "load_library",
+              "result": "success"
+            },
+            {
+              "backend": "Vulkan",
+              "operation": "create_device",
+              "result": "success"
+            }
+          ],
+          "created_devices": [
+            {
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+            }
+          ],
+          "client_initializer_reached": true,
+          "readback_requested": true,
+          "vulkan_error_codes": [
+            "VK_ERROR_FEATURE_NOT_PRESENT"
+          ],
+          "fatal_jvm_error": false,
+          "profile": "core-performance",
+          "preferred_backend": "vulkan"
+        }
+      ]
+    },
+    {
+      "case": [
+        "--profile",
+        "vulkan"
+      ],
+      "exit_code": 1,
+      "failure": [
+        {
+          "exit_code": 1,
+          "result_count": 0,
+          "java_exception_types": [
+            "java.lang.AssertionError",
+            "java.lang.RuntimeException"
+          ],
+          "expected_demo_authentication_errors_observed": true,
+          "backend_attempts": [
+            {
+              "backend": "Vulkan",
+              "operation": "load_library",
+              "result": "success"
+            },
+            {
+              "backend": "Vulkan",
+              "operation": "create_device",
+              "result": "success"
+            }
+          ],
+          "created_devices": [
+            {
+              "gpu": "Apple Paravirtual device",
+              "graphics_backend": "Vulkan",
+              "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+            }
+          ],
+          "client_initializer_reached": true,
+          "readback_requested": true,
+          "vulkan_error_codes": [
+            "VK_ERROR_FEATURE_NOT_PRESENT"
+          ],
+          "fatal_jvm_error": false,
+          "profile": "vulkan",
+          "preferred_backend": "vulkan"
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "Apple Paravirtual device and MoltenVK on a hosted ARM Mac; not physical M2 Pro GPU testing.",
+    "Library/device creation and readback request were observed, but no completed nonuniform readback report was produced.",
+    "All failures retained; neither successful rendering nor a screenshot-specific root cause is established.",
+    "Baseline includes the same original measurement mod and private test fixture; no core optimization mods or distant terrain.",
+    "Full logs, screenshots, game binaries and assets remain private."
+  ]
+}

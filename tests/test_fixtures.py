@@ -39,6 +39,24 @@ class FixtureDiagnosticTests(unittest.TestCase):
             'java_exception_types': ['java.lang.NoClassDefFoundError', 'java.lang.ClassNotFoundException']})
         self.assertNotIn('private', json.dumps(report))
 
+    def test_graphics_stack_locations_are_selected_and_bounded(self):
+        frames = ['    at knot//com.mojang.renderpearl.backend.vulkan.Buffer.method%d(PrivateFile.java:42)' % index
+                  for index in range(12)]
+        output = '\n'.join([
+            'message: at com.mojang.blaze3d.Bad.message(Private.java:1)',
+            '    at com.mojang.authlib.Auth.privateToken(PrivateFile.java:2)',
+            '    at net.minecraft.client.Screenshot.takeScreenshot(/private/file.java:3)',
+            *frames, *frames,
+        ])
+        result = graphics_failure_summary(subprocess.CompletedProcess([], 1, output), 0)
+        methods = result['observed_graphics_stack_methods']
+        self.assertEqual(len(methods), 8)
+        self.assertEqual(methods[0], 'net.minecraft.client.Screenshot.takeScreenshot')
+        self.assertEqual(methods[1], 'com.mojang.renderpearl.backend.vulkan.Buffer.method0')
+        self.assertNotIn('private', json.dumps(result))
+        self.assertNotIn('Private', json.dumps(result))
+        self.assertNotIn('Bad', json.dumps(result))
+
     def test_type_list_and_names_are_bounded(self):
         output = '\n'.join('Caused by: sample.Failure%d: private-message' % index for index in range(20))
         output = 'Caused by: sample.' + 'A' * 201 + ': private-message\n' + output
