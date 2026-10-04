@@ -46,6 +46,22 @@ class PackTests(unittest.TestCase):
         for profile in build_pack.PROFILES.values():
             build_pack.validate_selection(lock, profile["mods"])
 
+    def test_core_performance_matches_baseline_view_and_simulation(self):
+        baseline = build_pack.PROFILES["baseline"]
+        candidate = build_pack.PROFILES["core-performance"]
+        self.assertEqual(candidate["mods"], build_pack.CORE)
+        for key in ["render", "lod", "heap"]:
+            self.assertEqual(candidate[key], baseline[key])
+        files = build_pack.overrides("core-performance", b"original fixture")
+        before = build_pack.overrides("baseline", b"original fixture")
+        for name, value in before.items():
+            if name != "config/horizon-profile.txt":
+                self.assertEqual(files[name], value, name)
+        self.assertNotIn("config/DistantHorizons.toml", files)
+        self.assertNotIn("config/iris.properties", files)
+        self.assertNotIn("distanthorizons", candidate["mods"])
+        self.assertNotIn("iris", candidate["mods"])
+
     def test_missing_exact_iris_sodium_dependency_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Missing pinned dependency"):
             build_pack.validate_selection(build_pack.read_lock(), ["iris"])
