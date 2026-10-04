@@ -42,6 +42,8 @@ For the first comparison at the same view distance, use `baseline` versus
 The latter adds only the pinned core performance mods and leaves every original
 controller disabled. Then test balanced separately for its additional distant
 terrain. Matching captured settings does not prove pixel-identical rendering.
+[Core comparison protocol and selected observations](docs/core-performance.md)
+include one software-rendered pair; M2 performance remains unmeasured.
 
 The optional `queue-wait` pack yields during pending distant-terrain debounce retries; `adaptive-queue` combines it with the existing controllers. [Queue experiment and measurement limits](docs/debounce-queue.md).
 

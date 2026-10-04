@@ -26,8 +26,9 @@ PROFILES
   Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, Distant Horizons.
   Recommended first test for your 16 GB M2 Pro. OpenGL, shaders not installed.
 - core-performance: 12 full-detail chunks, no distant LOD or shaders, with Sodium,
-  Lithium, FerriteCore, ImmediatelyFast and EntityCulling. Compare this against
-  baseline first to test the core mods at the same view and simulation distances.
+  Lithium, FerriteCore, ImmediatelyFast and EntityCulling. After a first balanced smoke test,
+  compare this against baseline to test the core mods at the same view and
+  simulation distances.
   Use the same heap, resolution, world copy, camera route and Java flags in both.
   All original experimental controllers are disabled. This is a full-detail
   comparison profile; it does not add balanced's 128-chunk distant horizon.
