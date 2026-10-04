@@ -107,9 +107,7 @@ public final class HorizonClient implements ClientModInitializer {
         context.put("gpu", device.name());
         context.put("graphics_backend", device.backendName());
         context.put("graphics_driver", device.driverInfo());
-        context.put("mods", FabricLoader.getInstance().getAllMods().stream()
-            .map(mod -> mod.getMetadata().getId() + "@" + mod.getMetadata().getVersion().getFriendlyString())
-            .sorted().toList());
+        context.putAll(dev.horizonlab.metrics.SoftwareContext.capture());
         frames = new Recording(label, "frames", output, seconds, context);
         previousStart = 0;
         if (client.getSingleplayerServer() != null) HorizonLab.startTicks(label, seconds, output, profile);

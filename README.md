@@ -6,7 +6,7 @@ Client-first performance research for Minecraft Java **26.3**, preserving vanill
 
 ## Play on your Mac
 
-Download **horizon-mac-starter-0.16.0.zip** from [Releases](https://github.com/ludovic111/minecraft-optimization-lab/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
+Download **horizon-mac-starter-0.17.0.zip** from [Releases](https://github.com/ludovic111/minecraft-optimization-lab/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
 
 Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on your 16 GB M2 Pro. Prism can download Java automatically. Start at 1280×800 or 1920×1200; full Retina resolution is a larger GPU workload. [START-HERE.txt](packs/START-HERE.txt) has details. The same `.mrpack` files import into Prism on Windows and Linux.
 
@@ -104,6 +104,14 @@ python3 tools/compare_benchmarks.py baseline-frames.json optimized-frames.json -
 ```
 
 Open `Compare-Benchmarks.html` from the starter ZIP or [the source file](tools/Compare-Benchmarks.html) in your browser to compare without Python. Select each JSON and optionally its matching CSV. It exports summary JSON, flags settings and duration differences, and charts frames by recorded active time or ticks by sample number. It is self-contained and makes no network requests.
+Version 0.17 also records loaded mod versions and the Java vendor, VM and runtime
+build in client and server reports. Both comparison tools flag software changes
+as explicit experiment variables; older reports remain usable with an unknown
+software warning. The viewer can expand the complete loaded mod list.
+[Live software identity check](benchmarks/software-identity-2026-10-04/live-observations.json)
+records the metadata and file-count validation; its short capture is not a
+performance comparison.
+
 
 The comparison flags captured setting differences, but cannot verify route, world, shader state or cache warm-up. See [validation evidence](docs/playable-validation.md). Software-renderer test FPS is not evidence of a Mac/GPU speedup.
 

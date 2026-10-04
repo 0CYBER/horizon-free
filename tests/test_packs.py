@@ -209,6 +209,34 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(result["mismatches"], [])
         self.assertTrue(any("terrain_position_arithmetic differs" in warning for warning in result["warnings"]))
 
+    def test_mod_comparison_detects_upgrades_and_ignores_order(self):
+        baseline = self.report()
+        baseline.update(mods=["minecraft@26.3", "horizonlab@0.16.0", "sodium@0.9.2"],
+                        java_vendor="Eclipse Adoptium", java_vm_name="OpenJDK 64-Bit Server VM",
+                        java_runtime_version="25.0.4.1+1")
+        candidate = copy.deepcopy(baseline)
+        candidate["mods"] = list(reversed(candidate["mods"]))
+        self.assertFalse(compare_benchmarks.software_warnings(baseline, candidate))
+        candidate["mods"].remove("horizonlab@0.16.0")
+        candidate["mods"].extend(["horizonlab@0.17.0", "iris@1.11.7"])
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertEqual(result["mismatches"], [])
+        self.assertIn("Only baseline: horizonlab@0.16.0.", result["warnings"])
+        self.assertIn("Only candidate: horizonlab@0.17.0, iris@1.11.7.", result["warnings"])
+        for field in ["java_vendor", "java_vm_name", "java_runtime_version"]:
+            candidate[field] = "Different implementation"
+            self.assertTrue(any(f"Software {field} differs" in warning
+                                for warning in compare_benchmarks.software_warnings(baseline, candidate)))
+
+    def test_legacy_or_invalid_software_identity_stays_unknown(self):
+        baseline = self.report("ticks")
+        for entries in [None, "sodium@0.9.2", [3], [""]]:
+            candidate = copy.deepcopy(baseline)
+            candidate["mods"] = entries
+            result = compare_benchmarks.compare(baseline, candidate)
+            self.assertTrue(any("Loaded mod versions were not captured" in warning for warning in result["warnings"]))
+            self.assertFalse(any("Loaded mod versions differ." in warning for warning in result["warnings"]))
+
     def test_excluded_frames_disclose_that_process_counters_cover_inactive_time(self):
         baseline = self.report()
         candidate = copy.deepcopy(baseline)

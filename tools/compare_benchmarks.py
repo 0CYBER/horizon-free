@@ -15,6 +15,29 @@ MATCH_FIELDS = ("minecraft", "kind", "os", "os_version", "architecture", "gpu", 
                 "dh_ambient_occlusion", "iris_capture_status", "iris_shaders_enabled", "iris_shader_pack")
 
 
+def software_warnings(baseline, candidate):
+    warnings = []
+    for field in ["java_vendor", "java_vm_name", "java_runtime_version"]:
+        if not all(isinstance(report.get(field), str) and report[field] for report in [baseline, candidate]):
+            warnings.append(f"{field} was not captured in both reports; Java implementation equivalence is unknown.")
+        elif baseline[field] != candidate[field]:
+            warnings.append(f"Software {field} differs: {baseline[field]!r} vs {candidate[field]!r}. Treat it as an explicit experiment variable.")
+    mods = []
+    for report in [baseline, candidate]:
+        entries = report.get("mods")
+        mods.append(set(entries) if isinstance(entries, list) and all(isinstance(entry, str) and entry for entry in entries) else None)
+    if any(entries is None for entries in mods):
+        warnings.append("Loaded mod versions were not captured in both reports; software equivalence is unknown.")
+    elif mods[0] != mods[1]:
+        warnings.append("Loaded mod versions differ. Treat added, removed or upgraded mods as explicit experiment variables.")
+        for label, entries in [("baseline", mods[0] - mods[1]), ("candidate", mods[1] - mods[0])]:
+            ordered = sorted(entries)
+            if ordered:
+                suffix = f"; {len(ordered) - 12} more" if len(ordered) > 12 else ""
+                warnings.append(f"Only {label}: " + ", ".join(ordered[:12]) + suffix + ".")
+    return warnings
+
+
 def compare(baseline, candidate):
     for report in [baseline, candidate]:
         if report.get("schema") != 1 or report.get("kind") not in ["frames", "ticks"]:
@@ -26,6 +49,7 @@ def compare(baseline, candidate):
     mismatches = [f"{key}: {baseline.get(key)!r} vs {candidate.get(key)!r}" for key in MATCH_FIELDS
                   if baseline.get(key) != candidate.get(key)]
     warnings = ["World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool."]
+    warnings.extend(software_warnings(baseline, candidate))
     if baseline["kind"] == "frames":
         for field in ["adaptive_budget_enabled", "adaptive_target_fps", "precise_worker_pacing", "debounce_queue_wait",
                       "wakeable_idle_wait", "dispatch_retry_backoff", "tick_membership_dedup", "empty_culling_whitelist", "culling_ray_scratch", "terrain_position_arithmetic", "interruptible_terrain_read", "dh_thread_count", "dh_runtime_ratio"]:
