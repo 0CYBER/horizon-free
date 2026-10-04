@@ -59,6 +59,13 @@ jobs:
         run: python -c "from tools.build_mod import benchmark_headers; benchmark_headers()"
       - name: Test pack integrity and comparisons
         run: python -m unittest discover -s tests -v
+      - name: Start recommended OpenGL macOS clients and verify framebuffer readback
+        if: runner.os == 'macOS'
+        run: |
+          python tools/test_client_graphics.py --native-display
+          cp dist/client-graphics-smoke.json dist/client-graphics-macos-title.json
+          python tools/test_client_graphics.py --native-display --world
+          cp dist/client-graphics-smoke.json dist/client-graphics-macos-world.json
       - name: Compile the private dispatch fixture
         run: python -c "from tools.build_mod import build_dispatch_fixture; build_dispatch_fixture()"
       - name: Compile the private tick-manager state fixture
@@ -123,3 +130,6 @@ jobs:
             dist/terrain-position-integration.json
             dist/quad-reuse-integration.json
             dist/quad-size-integration.json
+            dist/client-graphics-smoke.json
+            dist/client-graphics-macos-title.json
+            dist/client-graphics-macos-world.json

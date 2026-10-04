@@ -12,6 +12,10 @@ Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on 
 
 If Prism is already installed, follow the [Mac import and first comparison guide](docs/mac-first-test.md).
 
+Core and balanced also pass [macOS title/demo-world rendering probes](docs/client-graphics-smoke.md)
+on the hosted ARM64 software renderer, including readback, saves and clean exits.
+Physical M2 GPU performance and macOS 27 remain to be tested.
+
 | Profile | Full-detail chunks | Distant LOD radius | Suggested maximum heap |
 | --- | ---: | ---: | ---: |
 | baseline | 12 | none | 6144 MiB |

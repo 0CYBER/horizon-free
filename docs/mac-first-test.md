@@ -1,7 +1,8 @@
 # First test on the M2 Pro Mac
 
-For the 16 GB M2 Pro, start with the published 0.20.0 packs. The client has been
-built on Apple Silicon macOS; gameplay and FPS on this Mac remain unmeasured.
+For the 16 GB M2 Pro, start with the published 0.20.0 packs. Core and balanced
+pass title/demo-world rendering and save/exit probes on the hosted macOS ARM64
+software renderer. Gameplay and FPS on this physical Mac remain unmeasured.
 The Linux software-rendering observations do not predict an M2 speedup.
 
 ## Import after installing Prism

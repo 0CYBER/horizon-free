@@ -1,0 +1,401 @@
+{
+  "schema": 1,
+  "measurement": "Client scene startup, framebuffer readback and clean exit; not a performance benchmark",
+  "release_binary": "0.20.0",
+  "production_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+  "macos_required_ci": {
+    "run": 37192178667,
+    "source_commit": "a5000edf11094e00ebef0fc362aa4adc322f2df6",
+    "all_jobs_passed": true,
+    "reports": {
+      "title": {
+        "schema": 1,
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
+        "architecture": "arm64",
+        "minecraft": "26.3",
+        "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+        "results": [
+          {
+            "observed_mode": "title",
+            "title_screen_observed": true,
+            "world_loaded": false,
+            "ready_client_ticks": 53,
+            "window_active": true,
+            "framebuffer_width": 1280,
+            "framebuffer_height": 646,
+            "sampled_pixels": 4160,
+            "distinct_sampled_rgb": 1525,
+            "gpu": "Apple Software Renderer",
+            "graphics_backend": "OpenGL",
+            "graphics_driver": "4.1 APPLE-23.1.1",
+            "private_png_sha256": "ed503082baca3a8646e7e864bf363e6e2a705a2b4aade2ec4bae6d3a108b07ab",
+            "profile": "core-performance",
+            "preferred_backend": "opengl",
+            "launcher_exit_code": 0,
+            "backend_attempts": [
+              {
+                "backend": "OpenGL",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "OpenGL",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ]
+          },
+          {
+            "observed_mode": "title",
+            "title_screen_observed": true,
+            "world_loaded": false,
+            "ready_client_ticks": 55,
+            "window_active": true,
+            "framebuffer_width": 1280,
+            "framebuffer_height": 646,
+            "sampled_pixels": 4160,
+            "distinct_sampled_rgb": 1855,
+            "gpu": "Apple Software Renderer",
+            "graphics_backend": "OpenGL",
+            "graphics_driver": "4.1 APPLE-23.1.1",
+            "private_png_sha256": "959fe6afbe1897cd9711c083e88ccc617ee9d8669983987abda84e0f5979e82d",
+            "profile": "m2-balanced",
+            "preferred_backend": "opengl",
+            "launcher_exit_code": 0,
+            "backend_attempts": [
+              {
+                "backend": "OpenGL",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "OpenGL",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ]
+          }
+        ],
+        "limits": [
+          "Short scene startup and nonuniform framebuffer readback only.",
+          "World mode uses the ordinary limited demo; world files remain private.",
+          "No exhaustive gameplay, visual-correctness, FPS or M2 Pro performance claim.",
+          "Vulkan preference can fall back; inspect the observed backend.",
+          "PNG images, assets and full logs remain in the private runtime directory."
+        ]
+      },
+      "world": {
+        "schema": 1,
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
+        "architecture": "arm64",
+        "minecraft": "26.3",
+        "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+        "results": [
+          {
+            "observed_mode": "world",
+            "title_screen_observed": false,
+            "world_loaded": true,
+            "ready_client_ticks": 40,
+            "window_active": true,
+            "framebuffer_width": 1280,
+            "framebuffer_height": 646,
+            "sampled_pixels": 4160,
+            "distinct_sampled_rgb": 1537,
+            "gpu": "Apple Software Renderer",
+            "graphics_backend": "OpenGL",
+            "graphics_driver": "4.1 APPLE-23.1.1",
+            "private_png_sha256": "31be5cc8188b3494d76232cba79cf320a64523b4906ab720a38997a125eb37fa",
+            "profile": "core-performance",
+            "preferred_backend": "opengl",
+            "launcher_exit_code": 0,
+            "backend_attempts": [
+              {
+                "backend": "OpenGL",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "OpenGL",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ]
+          },
+          {
+            "observed_mode": "world",
+            "title_screen_observed": false,
+            "world_loaded": true,
+            "ready_client_ticks": 40,
+            "window_active": true,
+            "framebuffer_width": 1280,
+            "framebuffer_height": 646,
+            "sampled_pixels": 4160,
+            "distinct_sampled_rgb": 2074,
+            "gpu": "Apple Software Renderer",
+            "graphics_backend": "OpenGL",
+            "graphics_driver": "4.1 APPLE-23.1.1",
+            "private_png_sha256": "0929c865d723fe0eea8f37bcc45e9636c6f342d04fe507f9bd592dfd30d73f42",
+            "profile": "m2-balanced",
+            "preferred_backend": "opengl",
+            "launcher_exit_code": 0,
+            "backend_attempts": [
+              {
+                "backend": "OpenGL",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "OpenGL",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ]
+          }
+        ],
+        "limits": [
+          "Short scene startup and nonuniform framebuffer readback only.",
+          "World mode uses the ordinary limited demo; world files remain private.",
+          "No exhaustive gameplay, visual-correctness, FPS or M2 Pro performance claim.",
+          "Vulkan preference can fall back; inspect the observed backend.",
+          "PNG images, assets and full logs remain in the private runtime directory."
+        ]
+      }
+    }
+  },
+  "earlier_vulkan_research": {
+    "run": 37191171799,
+    "source_commit": "3858ab38b51f434ebe892b564e013c7c8bcaba45",
+    "outcomes": [
+      {
+        "exit_code": 1,
+        "result_count": 0,
+        "java_exception_types": [
+          "java.lang.AssertionError",
+          "java.lang.RuntimeException"
+        ],
+        "profile": "baseline",
+        "preferred_backend": "vulkan",
+        "backend_attempts": [
+          {
+            "backend": "Vulkan",
+            "operation": "load_library",
+            "result": "success"
+          },
+          {
+            "backend": "Vulkan",
+            "operation": "create_device",
+            "result": "success"
+          }
+        ],
+        "created_devices": [
+          {
+            "gpu": "Apple Paravirtual device",
+            "graphics_backend": "Vulkan",
+            "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+          }
+        ],
+        "client_initializer_reached": true,
+        "vulkan_error_codes": [
+          "VK_ERROR_FEATURE_NOT_PRESENT"
+        ],
+        "fatal_jvm_error": false,
+        "expected_demo_authentication_errors_observed": true
+      },
+      {
+        "exit_code": 1,
+        "result_count": 0,
+        "java_exception_types": [
+          "java.lang.AssertionError",
+          "java.lang.RuntimeException"
+        ],
+        "profile": "core-performance",
+        "preferred_backend": "vulkan",
+        "backend_attempts": [
+          {
+            "backend": "Vulkan",
+            "operation": "load_library",
+            "result": "success"
+          },
+          {
+            "backend": "Vulkan",
+            "operation": "create_device",
+            "result": "success"
+          }
+        ],
+        "created_devices": [
+          {
+            "gpu": "Apple Paravirtual device",
+            "graphics_backend": "Vulkan",
+            "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+          }
+        ],
+        "client_initializer_reached": true,
+        "vulkan_error_codes": [
+          "VK_ERROR_FEATURE_NOT_PRESENT"
+        ],
+        "fatal_jvm_error": false,
+        "expected_demo_authentication_errors_observed": true
+      },
+      {
+        "exit_code": 1,
+        "result_count": 0,
+        "java_exception_types": [
+          "java.lang.AssertionError",
+          "java.lang.RuntimeException"
+        ],
+        "profile": "vulkan",
+        "preferred_backend": "vulkan",
+        "backend_attempts": [
+          {
+            "backend": "Vulkan",
+            "operation": "load_library",
+            "result": "success"
+          },
+          {
+            "backend": "Vulkan",
+            "operation": "create_device",
+            "result": "success"
+          }
+        ],
+        "created_devices": [
+          {
+            "gpu": "Apple Paravirtual device",
+            "graphics_backend": "Vulkan",
+            "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+          }
+        ],
+        "client_initializer_reached": true,
+        "vulkan_error_codes": [
+          "VK_ERROR_FEATURE_NOT_PRESENT"
+        ],
+        "fatal_jvm_error": false,
+        "expected_demo_authentication_errors_observed": true
+      }
+    ],
+    "full_private_logs_uploaded": false,
+    "readback_request_stage_not_yet_captured": true
+  },
+  "selected_local_software_checks": {
+    "linux-opengl": {
+      "title_screen_observed": true,
+      "title_client_ticks": 56,
+      "framebuffer_width": 1280,
+      "framebuffer_height": 800,
+      "sampled_pixels": 4288,
+      "distinct_sampled_rgb": 1762,
+      "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+      "graphics_backend": "OpenGL",
+      "graphics_driver": "4.5 (Core Profile) Mesa 26.0.8-1ubuntu0.3",
+      "private_png_sha256": "cf4eaa7d576ec8f608205258774fbd2384bf5382da86b60628d590f959145fd3",
+      "profile": "core-performance",
+      "launcher_exit_code": 0,
+      "backend_attempts": [
+        {
+          "backend": "OpenGL",
+          "operation": "load_library",
+          "result": "success"
+        },
+        {
+          "backend": "OpenGL",
+          "operation": "create_device",
+          "result": "success"
+        }
+      ]
+    },
+    "linux-vulkan": {
+      "title_screen_observed": true,
+      "title_client_ticks": 56,
+      "framebuffer_width": 1280,
+      "framebuffer_height": 800,
+      "sampled_pixels": 4288,
+      "distinct_sampled_rgb": 1743,
+      "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+      "graphics_backend": "Vulkan",
+      "graphics_driver": "1.4.335 llvmpipe Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)",
+      "private_png_sha256": "edfc9b8431505c9c009da7bb8be0ed5676effb90757cd4ae4bda525e4db5da8c",
+      "profile": "vulkan",
+      "launcher_exit_code": 0,
+      "backend_attempts": [
+        {
+          "backend": "Vulkan",
+          "operation": "load_library",
+          "result": "success"
+        },
+        {
+          "backend": "Vulkan",
+          "operation": "create_device",
+          "result": "success"
+        }
+      ]
+    },
+    "linux-world-core": {
+      "observed_mode": "world",
+      "title_screen_observed": false,
+      "world_loaded": true,
+      "ready_client_ticks": 51,
+      "window_active": true,
+      "framebuffer_width": 1280,
+      "framebuffer_height": 800,
+      "sampled_pixels": 4288,
+      "distinct_sampled_rgb": 1297,
+      "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+      "graphics_backend": "OpenGL",
+      "graphics_driver": "4.5 (Core Profile) Mesa 26.0.8-1ubuntu0.3",
+      "private_png_sha256": "1a8ba681681f5e37986e1b411e5ebc80d47279c54368f43f935707092b70ffd0",
+      "profile": "core-performance",
+      "preferred_backend": "opengl",
+      "launcher_exit_code": 0,
+      "backend_attempts": [
+        {
+          "backend": "OpenGL",
+          "operation": "load_library",
+          "result": "success"
+        },
+        {
+          "backend": "OpenGL",
+          "operation": "create_device",
+          "result": "success"
+        }
+      ]
+    },
+    "linux-world-balanced": {
+      "observed_mode": "world",
+      "title_screen_observed": false,
+      "world_loaded": true,
+      "ready_client_ticks": 40,
+      "window_active": true,
+      "framebuffer_width": 1280,
+      "framebuffer_height": 800,
+      "sampled_pixels": 4288,
+      "distinct_sampled_rgb": 1551,
+      "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+      "graphics_backend": "OpenGL",
+      "graphics_driver": "4.5 (Core Profile) Mesa 26.0.8-1ubuntu0.3",
+      "private_png_sha256": "82ced9bcf7178a35063e6a7fa9049fe7cfcf26dcb92aace59de6bb022609833a",
+      "profile": "m2-balanced",
+      "preferred_backend": "opengl",
+      "launcher_exit_code": 0,
+      "backend_attempts": [
+        {
+          "backend": "OpenGL",
+          "operation": "load_library",
+          "result": "success"
+        },
+        {
+          "backend": "OpenGL",
+          "operation": "create_device",
+          "result": "success"
+        }
+      ]
+    }
+  },
+  "limits": [
+    "macOS OpenGL uses Apple Software Renderer; Vulkan exposes Apple Paravirtual device. No physical M2 GPU performance test.",
+    "World-mode checks ordinary limited-demo world startup and saved data, not exhaustive gameplay or completed LOD generation.",
+    "A nonuniform framebuffer does not prove pixel-correct rendering.",
+    "Three exploratory Vulkan cases fail with VK_ERROR_FEATURE_NOT_PRESENT after successful device creation; later stage remains to be isolated.",
+    "The probe uses 3 GiB; balanced can warn about low memory. The 16 GB Mac starter suggests 6 GiB.",
+    "No FPS, CPU/RAM reduction, statistical speedup or universal hardware-compatibility claim.",
+    "Raw PNGs, assets, world files and full logs remain private. Production JAR matches the published binary and excludes probe classes."
+  ]
+}
