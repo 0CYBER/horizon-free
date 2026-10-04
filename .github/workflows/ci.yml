@@ -61,6 +61,8 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Compile the private dispatch fixture
         run: python -c "from tools.build_mod import build_dispatch_fixture; build_dispatch_fixture()"
+      - name: Compile the private tick-manager state fixture
+        run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('tick-state', 'dev.horizonlab.metrics.TickStateIntegration')"
       - name: Compile the private terrain tick membership fixture
         run: python -c "from tools.build_mod import build_tick_dedup_fixture; build_tick_dedup_fixture()"
       - name: Compile the private culling whitelist fixture

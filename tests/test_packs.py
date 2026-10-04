@@ -265,6 +265,55 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(result["metrics"][0]["change_percent"], 50)
         self.assertIn("framebuffer_width", result["mismatches"][0])
 
+    def tick_report(self):
+        report = self.report("ticks")
+        state = dict(configured_tick_rate=20, frozen=False, stepping=False, sprinting=False, runs_game_elements=True)
+        report.update(tick_state_capture_status="sampled_server_ticks", tick_state_samples=1000,
+                      tick_state_first=state, tick_state_last=copy.deepcopy(state), tick_state_changed=[],
+                      observed_ticks_per_second=1000 / 120)
+        report.update({"tick_state_" + field + "_samples": 0
+                       for field in ["frozen", "stepping", "sprinting", "suppressed", "nonstandard_rate"]})
+        return report
+
+    def test_restored_tick_changes_still_disqualify_unchanged_workload(self):
+        baseline = self.tick_report()
+        candidate = copy.deepcopy(baseline)
+        candidate.update(tick_state_changed=["configured_tick_rate", "frozen"],
+                         tick_state_frozen_samples=50, tick_state_nonstandard_rate_samples=50)
+        self.assertEqual(baseline["tick_state_first"], candidate["tick_state_last"])
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertIn("candidate tick-manager state changed during recording", result["mismatches"])
+        self.assertTrue(any("frozen, nonstandard_rate" in warning for warning in result["warnings"]))
+        observed = next(row for row in result["metrics"] if row["metric"] == "observed_ticks_per_second")
+        self.assertAlmostEqual(observed["baseline"], 8.333333333)
+        self.assertTrue(any("execution capacity is not TPS" in warning for warning in result["warnings"]))
+
+    def test_equal_tick_state_ignores_map_order_and_warns_on_custom_rate(self):
+        baseline = self.tick_report()
+        for boundary in ["tick_state_first", "tick_state_last"]:
+            baseline[boundary]["configured_tick_rate"] = 40
+        baseline["tick_state_nonstandard_rate_samples"] = 1000
+        candidate = copy.deepcopy(baseline)
+        candidate["tick_state_first"] = dict(reversed(list(candidate["tick_state_first"].items())))
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertEqual(result["mismatches"], [])
+        self.assertTrue(any("nonstandard_rate" in warning for warning in result["warnings"]))
+        candidate["tick_state_last"]["frozen"] = True
+        self.assertTrue(any("tick_state_last.frozen" in mismatch
+                            for mismatch in compare_benchmarks.compare(baseline, candidate)["mismatches"]))
+
+    def test_legacy_and_malformed_tick_state_are_unknown_not_normal(self):
+        baseline = self.tick_report()
+        for field, bad in [("tick_state_first", None), ("tick_state_samples", True),
+                           ("tick_state_samples", -1), ("tick_state_changed", ["invented"]),
+                           ("tick_state_frozen_samples", 1001)]:
+            candidate = copy.deepcopy(baseline)
+            candidate[field] = bad
+            self.assertFalse(compare_benchmarks.tick_state_available(candidate))
+            result = compare_benchmarks.compare(baseline, candidate)
+            self.assertTrue(any("candidate tick-manager state was not captured" in warning for warning in result["warnings"]))
+        self.assertFalse(compare_benchmarks.tick_state_available(self.report("ticks")))
+
     def test_no_samples_and_mixed_kinds_are_rejected(self):
         empty = self.report()
         empty["stats"]["count"] = 0

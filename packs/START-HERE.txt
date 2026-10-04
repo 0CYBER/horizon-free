@@ -148,6 +148,11 @@ warnings before drawing conclusions. Save comparison exports a summary JSON.
 The viewer also shows Java implementation and loaded mod versions. Expand the
 mod list to inspect it. Upgrades, additions and removals are flagged as experiment
 variables; older reports with missing software identity show an unknown warning.
+Tick reports also show sampled configured rate, freeze, step and sprint state.
+Restored changes remain flagged; old or invalid state is unknown. Observed TPS
+counts measured invocations, including frozen ticks, over recording wall time.
+State is sampled after server invocations; it is not a completed-work or pause
+trace. Compare the accompanying tick reports when judging integrated-server load.
 
 DH changes clouds, chunk fade and transparency to blend its distant renderer;
 assess visual differences as well as speed. For collector experiments test

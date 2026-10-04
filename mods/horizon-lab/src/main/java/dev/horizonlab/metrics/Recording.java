@@ -35,12 +35,14 @@ public final class Recording {
     private int residentSamples;
     private long residentSampleNs;
     private boolean finished;
+    private final TickState tickState;
 
     public Recording(String label, String kind, Path output, int seconds, Map<String, Object> context) {
         if (seconds < 1 || seconds > 600) throw new IllegalArgumentException("Duration must be 1..600 seconds");
         String safeLabel = label.replaceAll("[^A-Za-z0-9_-]", "_");
         this.label = safeLabel.substring(0, Math.min(safeLabel.length(), 64));
         this.kind = kind;
+        this.tickState = kind.equals("ticks") ? new TickState() : null;
         this.output = output;
         this.context = new LinkedHashMap<>(context);
         this.startedNs = System.nanoTime();
@@ -63,6 +65,13 @@ public final class Recording {
     public synchronized void exclude() { excluded++; }
     public synchronized void players(int players) { peakPlayers = Math.max(players, peakPlayers); }
 
+    public synchronized void addTick(long ns, int players, float rate, boolean frozen, boolean stepping, boolean sprinting, boolean runsGameElements) {
+        if (ns <= 0 || finished || !kind.equals("ticks")) return;
+        tickState.observe(rate, frozen, stepping, sprinting, runsGameElements);
+        add(ns);
+        players(players);
+    }
+
     public synchronized Snapshot finish() {
         finished = true;
         ProcessMemoryMonitor.untrack(this);
@@ -73,7 +82,10 @@ public final class Recording {
         metadata.put("schema", 1);
         double elapsed = (System.nanoTime() - startedNs) / 1e9;
         metadata.put("elapsed_seconds", elapsed);
-        if (kind.equals("ticks")) metadata.put("observed_ticks_per_second", (count + (long) dropped) / elapsed);
+        if (kind.equals("ticks")) {
+            metadata.put("observed_ticks_per_second", (count + (long) dropped) / elapsed);
+            metadata.putAll(tickState.metadata());
+        }
         metadata.put("dropped_samples", dropped);
         metadata.put("excluded_frames", excluded);
         metadata.put("peak_players", peakPlayers);

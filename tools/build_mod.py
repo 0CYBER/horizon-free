@@ -25,7 +25,7 @@ def test_metrics():
     destination = BUILD / "metric-tests"
     destination.mkdir(parents=True, exist_ok=True)
     sources = [SOURCE / "main/java/dev/horizonlab/metrics" / name
-               for name in ["SampleStats.java", "Recording.java", "ProcessMemoryMonitor.java"]]
+               for name in ["SampleStats.java", "Recording.java", "ProcessMemoryMonitor.java", "TickState.java"]]
     sources.append(SOURCE / "test/java/dev/horizonlab/metrics/MetricsTest.java")
     subprocess.run(["javac", "--release", "25", "-d", str(destination), *map(str, sources)], check=True)
     subprocess.run(["java", "-cp", str(destination), "dev.horizonlab.metrics.MetricsTest"], check=True)
