@@ -54,7 +54,9 @@ def main():
             (instance / "config/horizon-quad-reuse.properties").write_text(f"enabled={str(enabled).lower()}\n")
             environment = os.environ.copy()
             header_option = "-XX:" + ("+" if headers else "-") + "UseCompactObjectHeaders"
-            environment["_JAVA_OPTIONS"] = f"-javaagent:{agent} {header_option} -Dhorizon.fixture.exit=true"
+            if '"' in str(agent) or "\n" in str(agent):
+                raise ValueError("Instrumentation agent path contains an unsupported quote or newline")
+            environment["_JAVA_OPTIONS"] = f'-javaagent:"{agent}" {header_option} -Dhorizon.fixture.exit=true'
             command = [sys.executable, str(root / "tools/runtime.py"), "demo", "--instance", str(instance), "--heap", "3G"]
             if platform.system() == "Linux" and not args.native_display:
                 command = ["xvfb-run", "-a", *command]
