@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "minecraft": "26.3",
+  "entity_culling": "1.11.2",
+  "original_mod_sha256": "7351b417fc83460def5947636444413874ee812e949342f091ef03674e0c0e58",
+  "platform": "Linux x86_64",
+  "graphics": "llvmpipe software OpenGL",
+  "settings": {
+    "heap_bytes": 3221225472,
+    "gc": "G1",
+    "compact_headers": true,
+    "render_distance": 12,
+    "simulation_distance": 12,
+    "lod_radius_chunks": 128,
+    "lod_quality": "MEDIUM/MEDIUM/BLOCK",
+    "terrain_workers": 2,
+    "runtime_ratio": 0.5,
+    "world_difficulty": "PEACEFUL",
+    "empty_culling_whitelist": false
+  },
+  "results": [
+    {
+      "profile": "m2-balanced",
+      "ray_enabled": false,
+      "elapsed_seconds": 120.02619604,
+      "frame_samples": 599,
+      "tick_samples": 2400,
+      "excluded_frames": 0,
+      "dropped_samples": 0,
+      "visual_settings_changed": [],
+      "culling_allocation_counter": {
+        "thread_id": 49,
+        "thread": "CullThread",
+        "counter_observations": 2,
+        "observed_seconds": 64.509265987,
+        "observed_allocated_bytes": 1817768,
+        "observed_bytes_per_second": 28178.40153949851
+      }
+    },
+    {
+      "profile": "culling-rays",
+      "ray_enabled": true,
+      "elapsed_seconds": 120.099980458,
+      "frame_samples": 584,
+      "tick_samples": 2401,
+      "excluded_frames": 0,
+      "dropped_samples": 0,
+      "visual_settings_changed": [],
+      "culling_allocation_counter": {
+        "thread_id": 49,
+        "thread": "CullThread",
+        "counter_observations": 2,
+        "observed_seconds": 64.321034235,
+        "observed_allocated_bytes": 1798336,
+        "observed_bytes_per_second": 27958.754416629756
+      }
+    }
+  ],
+  "notes": [
+    "Fixed-order single pair using separate copies of the same private saved world and stationary view, with approximately three-minute warm-up before clean frame recordings.",
+    "One earlier candidate frame capture contained pause exclusions and was discarded; its separate preceding allocation recording had already completed.",
+    "Allocation counters have their own roughly 64-second observation spans; recordings started approximately 36-42 seconds after joining. Profiling overhead and JIT/cache effects are not eliminated.",
+    "Both worlds saved and exited with no crash report or remaining game process. The outer foreground control launcher returned 143; it did not expose the game exit status.",
+    "No useful allocation reduction or whole-game speedup is established. Not a Mac, retained-memory or GPU performance benchmark."
+  ],
+  "provenance": {
+    "source_commit": "349724b3b612351daa1616daa79beca8897839ab",
+    "runtime_mod_matches_linux_ci": true,
+    "workflow_run": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37168818519"
+  }
+}

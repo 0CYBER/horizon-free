@@ -47,6 +47,21 @@ include source and workflow provenance. This is not a whole-game FPS/RAM or Mac
 GPU benchmark; repeated real hardware comparisons and live allocation profiles
 are required.
 
+A fixed-order live Linux software-rendering pair observed about 28.18 KB/s
+allocated by `CullThread` with the hook off and 27.96 KB/s with it on, over
+roughly 64-second counter spans. This does not establish a useful reduction.
+Allocation samples were dominated by whitelist iteration; the recorded stacks
+did not include either ray constructor. The separate `culling-empty` experiment
+addresses that observed path. The clean 120-second frame captures produced
+599 control and 584 candidate frames, with zero exclusions and matching CSV
+counts; captured graphics and worker settings matched except the ray flag.
+Both worlds saved and exited without crash reports or remaining game processes.
+The outer control launcher returned 143 without exposing the game exit status;
+that return is not counted as a verified normal game exit. Selected
+[live observations](../benchmarks/culling-rays-2026-10-04/live-observations.json)
+retain the recording limits. These are per-thread diagnostic observations, not
+retained memory, a statistical comparison, or a Mac result.
+
 The factory hook follows the upstream [Mixin constructor redirect contract](https://github.com/SpongePowered/Mixin/blob/master/src/main/java/org/spongepowered/asm/mixin/injection/Redirect.java).
 Compilation uses a checksum-verified publisher JAR; the release mod contains only
 original Horizon classes. Profiles without Entity Culling must still load.
