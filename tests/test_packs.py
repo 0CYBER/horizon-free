@@ -123,6 +123,16 @@ class PackTests(unittest.TestCase):
                          "config/horizon-culling-empty.properties", "config/horizon-culling-rays.properties", "config/horizon-terrain-read-wait.properties"]:
             self.assertEqual(baseline[filename], candidate[filename])
 
+    def test_quad_reuse_profile_is_isolated_at_equal_visual_quality(self):
+        baseline = build_pack.overrides("m2-balanced", b"fixture")
+        candidate = build_pack.overrides("quad-reuse", b"fixture")
+        for name in build_pack.PROFILES:
+            self.assertEqual(build_pack.overrides(name, b"fixture")["config/horizon-quad-reuse.properties"],
+                             b"enabled=true\n" if name == "quad-reuse" else b"enabled=false\n")
+        for filename, content in baseline.items():
+            if filename not in {"config/horizon-profile.txt", "config/horizon-quad-reuse.properties"}:
+                self.assertEqual(content, candidate[filename], filename)
+
     def test_terrain_read_shutdown_fix_only_requested_with_distant_terrain(self):
         for name, profile in build_pack.PROFILES.items():
             files = build_pack.overrides(name, b"fixture")
@@ -208,6 +218,15 @@ class ComparisonTests(unittest.TestCase):
         result = compare_benchmarks.compare(baseline, candidate)
         self.assertEqual(result["mismatches"], [])
         self.assertTrue(any("terrain_position_arithmetic differs" in warning for warning in result["warnings"]))
+
+    def test_quad_reuse_flag_warns_without_implying_changed_quality(self):
+        baseline = self.report()
+        baseline["terrain_quad_reuse"] = False
+        candidate = copy.deepcopy(baseline)
+        candidate["terrain_quad_reuse"] = True
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertEqual(result["mismatches"], [])
+        self.assertTrue(any("terrain_quad_reuse differs" in warning for warning in result["warnings"]))
 
     def test_mod_comparison_detects_upgrades_and_ignores_order(self):
         baseline = self.report()

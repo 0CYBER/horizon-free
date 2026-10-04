@@ -15,7 +15,8 @@
     "CullingEmptyWhitelistMixin",
     "DhTerrainReadWaitMixin",
     "CullingRayScratchMixin",
-    "DhRelativePositionMixin"
+    "DhRelativePositionMixin",
+    "DhQuadReuseMixin"
   ],
   "injectors": {
     "defaultRequire": 1

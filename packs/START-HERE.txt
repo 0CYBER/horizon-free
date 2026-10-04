@@ -66,6 +66,12 @@ PROFILES
   dynamic entity/block-entity whitelists. Registered callbacks stay upstream.
   Disable in config/horizon-culling-empty.properties (enabled=false), then restart.
   Compare against m2-balanced; no whole-game or Mac FPS gain is measured yet.
+- quad-reuse: same balanced settings, with reuse of one discarded terrain quad
+  when DH's existing pool would otherwise allocate a fresh object. Generated
+  opaque/translucent geometry and concurrent builders match upstream. Caller-loop
+  allocations fall in the merging-heavy fixture; CPU results vary with warm-up.
+  It is off in combined profiles. Disable enabled in
+  config/horizon-quad-reuse.properties and restart for a comparison.
 - terrain-position: same balanced settings, with equivalent position arithmetic
   in the full-data lookup. Original rounding and fallback errors are retained.
   Disable in config/horizon-terrain-position.properties (enabled=false), then

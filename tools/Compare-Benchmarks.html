@@ -84,7 +84,7 @@ function compareReports(a,b){
     else if(JSON.stringify(a[key])!==JSON.stringify(b[key]))warnings.push('JVM '+key+' differs. Treat it as an explicit experiment variable.');
   }
   if(a.kind==='frames'){
-    for(const key of ['adaptive_budget_enabled','adaptive_target_fps','precise_worker_pacing','debounce_queue_wait','wakeable_idle_wait','dispatch_retry_backoff','tick_membership_dedup','empty_culling_whitelist','culling_ray_scratch','terrain_position_arithmetic','interruptible_terrain_read','dh_thread_count','dh_runtime_ratio']){
+    for(const key of ['adaptive_budget_enabled','adaptive_target_fps','precise_worker_pacing','debounce_queue_wait','wakeable_idle_wait','dispatch_retry_backoff','tick_membership_dedup','empty_culling_whitelist','culling_ray_scratch','terrain_position_arithmetic','terrain_quad_reuse','interruptible_terrain_read','dh_thread_count','dh_runtime_ratio']){
       if(key in a&&key in b&&JSON.stringify(a[key])!==JSON.stringify(b[key]))warnings.push('Experiment '+key+' differs.');
     }
     for(const [label,r] of [['Baseline',a],['Candidate',b]]){
@@ -145,6 +145,7 @@ function renderDetails(side){
   fields.push(['Rejected dispatch retry', r.dispatch_retry_backoff===true?'on':r.dispatch_retry_backoff===false?'off':'not captured']);
   fields.push(['Wakeable queue idle', r.wakeable_idle_wait===true?'on':r.wakeable_idle_wait===false?'off':'not captured']);
   if(r.kind==='frames')fields.push(['Tick membership deduplication',r.tick_membership_dedup===true?'on':r.tick_membership_dedup===false?'off':'not captured']);
+  if(r.kind==='frames')fields.push(['Terrain quad reuse',r.terrain_quad_reuse===true?'on':r.terrain_quad_reuse===false?'off':'not captured']);
   if(r.kind==='frames')fields.push(['Terrain position arithmetic',r.terrain_position_arithmetic===true?'on':r.terrain_position_arithmetic===false?'off':'not captured']);
   if(r.kind==='frames')fields.push(['Culling ray scratch',r.culling_ray_scratch===true?'on':r.culling_ray_scratch===false?'off':'not captured']);
   if(r.kind==='frames')fields.push(['Empty culling whitelist',r.empty_culling_whitelist===true?'on':r.empty_culling_whitelist===false?'off':'not captured']);

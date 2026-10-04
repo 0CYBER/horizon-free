@@ -97,6 +97,7 @@ public final class HorizonClient implements ClientModInitializer {
         context.put("wakeable_idle_wait", dev.horizonlab.mixin.HorizonMixinPlugin.debounceWaitEnabled());
         context.put("dispatch_retry_backoff", dev.horizonlab.mixin.HorizonMixinPlugin.dispatchRetryEnabled());
         context.put("tick_membership_dedup", dev.horizonlab.mixin.HorizonMixinPlugin.tickDedupEnabled());
+        context.put("terrain_quad_reuse", dev.horizonlab.mixin.HorizonMixinPlugin.quadReuseEnabled());
         context.put("terrain_position_arithmetic", dev.horizonlab.mixin.HorizonMixinPlugin.terrainPositionEnabled());
         context.put("culling_ray_scratch", dev.horizonlab.mixin.HorizonMixinPlugin.cullingRayScratchEnabled());
         context.put("empty_culling_whitelist", dev.horizonlab.mixin.HorizonMixinPlugin.cullingEmptyEnabled());
