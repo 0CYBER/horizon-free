@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 MATCH_FIELDS = ("minecraft", "kind", "os", "os_version", "architecture", "gpu", "graphics_backend", "graphics_driver",
@@ -13,6 +14,59 @@ MATCH_FIELDS = ("minecraft", "kind", "os", "os_version", "architecture", "gpu", 
                 "dh_lod_radius_chunks", "dh_horizontal_quality", "dh_vertical_quality", "dh_max_horizontal_resolution",
                 "dh_transparency", "dh_lod_shading", "dh_lod_only_mode", "dh_camera_quality_dropoff",
                 "dh_ambient_occlusion", "iris_capture_status", "iris_shaders_enabled", "iris_shader_pack")
+
+TICK_STATE_FIELDS = ("configured_tick_rate", "frozen", "stepping", "sprinting", "runs_game_elements")
+
+
+def tick_state_available(report):
+    def number(value):
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return False
+        try:
+            return math.isfinite(value)
+        except OverflowError:
+            return False
+    if report.get("tick_state_capture_status") != "sampled_server_ticks":
+        return False
+    count = report.get("tick_state_samples")
+    if not number(count) or count <= 0 or count > 9_007_199_254_740_991 or count != int(count):
+        return False
+    for boundary in ["tick_state_first", "tick_state_last"]:
+        state = report.get(boundary)
+        if not isinstance(state, dict) or not number(state.get("configured_tick_rate")) or state["configured_tick_rate"] < 1:
+            return False
+        if any(not isinstance(state.get(field), bool) for field in TICK_STATE_FIELDS[1:]):
+            return False
+    changed = report.get("tick_state_changed")
+    if not isinstance(changed, list) or any(field not in TICK_STATE_FIELDS for field in changed):
+        return False
+    return all(number(report.get("tick_state_" + field + "_samples"))
+               and 0 <= report["tick_state_" + field + "_samples"] <= count
+               and report["tick_state_" + field + "_samples"] == int(report["tick_state_" + field + "_samples"])
+               for field in ["frozen", "stepping", "sprinting", "suppressed", "nonstandard_rate"])
+
+
+def compare_tick_states(baseline, candidate):
+    mismatches, warnings = [], []
+    available = [tick_state_available(report) for report in [baseline, candidate]]
+    for name, report, captured in zip(["baseline", "candidate"], [baseline, candidate], available):
+        if not captured:
+            warnings.append(f"{name} tick-manager state was not captured or is invalid; simulation workload equivalence is unknown.")
+            continue
+        if report["tick_state_changed"]:
+            mismatches.append(f"{name} tick-manager state changed during recording")
+            warnings.append(f"{name} sampled tick-manager changes: " + ", ".join(report["tick_state_changed"]) + ".")
+        abnormal = [field for field in ["frozen", "stepping", "sprinting", "suppressed", "nonstandard_rate"]
+                    if report["tick_state_" + field + "_samples"] > 0]
+        if abnormal:
+            warnings.append(f"{name} includes tick-manager samples with " + ", ".join(abnormal) + "; interpret execution times as this workload.")
+    if all(available):
+        for boundary in ["tick_state_first", "tick_state_last"]:
+            for field in TICK_STATE_FIELDS:
+                if baseline[boundary][field] != candidate[boundary][field]:
+                    mismatches.append(f"{boundary}.{field}: {baseline[boundary][field]!r} vs {candidate[boundary][field]!r}")
+    warnings.append("Tick-manager state is sampled after measured server invocations. Changes entirely between samples, paused intervals and completed world work are not verified.")
+    return mismatches, warnings
 
 
 def software_warnings(baseline, candidate):
@@ -50,6 +104,11 @@ def compare(baseline, candidate):
                   if baseline.get(key) != candidate.get(key)]
     warnings = ["World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool."]
     warnings.extend(software_warnings(baseline, candidate))
+    if baseline["kind"] == "ticks":
+        tick_mismatches, tick_warnings = compare_tick_states(baseline, candidate)
+        mismatches.extend(tick_mismatches)
+        warnings.extend(tick_warnings)
+        warnings.append("Tick durations exclude scheduler sleep. Observed TPS counts measured invocations, including frozen ticks, and includes recording time spent paused; tick execution capacity is not TPS.")
     if baseline["kind"] == "frames":
         for field in ["adaptive_budget_enabled", "adaptive_target_fps", "precise_worker_pacing", "debounce_queue_wait",
                       "wakeable_idle_wait", "dispatch_retry_backoff", "tick_membership_dedup", "empty_culling_whitelist", "culling_ray_scratch", "terrain_position_arithmetic", "terrain_quad_reuse", "interruptible_terrain_read", "dh_thread_count", "dh_runtime_ratio"]:

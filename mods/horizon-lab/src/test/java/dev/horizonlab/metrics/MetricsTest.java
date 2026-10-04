@@ -52,6 +52,37 @@ public final class MetricsTest {
         check(residentSnapshot.metadata().get("process_rss_peak_sampled_bytes").equals(200L), "RSS peak can exceed last sample");
         check(residentSnapshot.metadata().get("process_rss_samples").equals(3), "invalid memory samples excluded");
         check(resident.finish().samples().length == 1, "late samples do not change a finished recording");
+        check(!snapshot.metadata().containsKey("tick_state_capture_status"), "frame reports do not pretend to capture server state");
+        Recording ticks = new Recording("ticks", "ticks", Path.of("unused"), 10, Map.of());
+        ticks.addTick(10_000_000, 1, 20, false, false, false, true);
+        ticks.addTick(5_000_000, 1, 40, true, false, false, false);
+        ticks.addTick(5_000_000, 1, 20, true, true, true, true);
+        ticks.addTick(10_000_000, 1, 20, false, false, false, true);
+        var tickSnapshot = ticks.finish();
+        ticks.addTick(10_000_000, 99, 40, true, false, true, false);
+        var tickMetadata = tickSnapshot.metadata();
+        check(tickMetadata.get("tick_state_first").equals(tickMetadata.get("tick_state_last")), "restored boundary states match");
+        check(tickMetadata.get("tick_state_changed").equals(java.util.List.of("configured_tick_rate", "frozen", "stepping", "sprinting", "runs_game_elements")),
+            "intermediate changes are retained after restoration");
+        check(tickMetadata.get("tick_state_samples").equals(4L), "state is sampled with accepted tick durations");
+        check(tickMetadata.get("tick_state_frozen_samples").equals(2L), "frozen includes stepping ticks");
+        check(tickMetadata.get("tick_state_suppressed_samples").equals(1L), "frozen and simulation suppression are distinct");
+        check(tickMetadata.get("tick_state_nonstandard_rate_samples").equals(1L), "custom rate observed between normal boundaries");
+        check((double) tickMetadata.get("observed_ticks_per_second") == 4 / (double) tickMetadata.get("elapsed_seconds"),
+            "observed TPS uses wall time rather than inverse execution duration");
+        check(ticks.finish().metadata().get("tick_state_samples").equals(4L), "late tick observations are ignored");
+        Recording unsampled = new Recording("unsampled", "ticks", Path.of("unused"), 10, Map.of());
+        unsampled.add(10_000_000);
+        check(unsampled.finish().metadata().get("tick_state_capture_status").equals("unavailable"), "missing state is not assumed normal");
+        Recording invalid = new Recording("invalid", "ticks", Path.of("unused"), 10, Map.of());
+        invalid.addTick(1_000_000, 1, Float.NaN, false, false, false, true);
+        invalid.addTick(1_000_000, 1, Float.POSITIVE_INFINITY, false, false, false, true);
+        invalid.addTick(1_000_000, 1, 0, false, false, false, true);
+        invalid.addTick(1_000_000, 1, 20, false, false, false, true);
+        var invalidSnapshot = invalid.finish();
+        check(invalidSnapshot.samples().length == 4, "invalid manager observations do not abort tick duration capture");
+        check(invalidSnapshot.metadata().get("tick_state_capture_status").equals("invalid_samples"), "invalid state is not silently assumed normal");
+        check(invalidSnapshot.metadata().get("tick_state_invalid_samples").equals(3L), "invalid observations counted");
         System.out.println("Metrics tests passed.");
     }
 

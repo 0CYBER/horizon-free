@@ -53,8 +53,9 @@ public final class HorizonLab implements ModInitializer {
     public static void tick(long durationNs, MinecraftServer server) {
         Recording recording = ticks;
         if (recording == null) return;
-        recording.add(durationNs);
-        recording.players(server.getPlayerList().getPlayerCount());
+        var tickRate = server.tickRateManager();
+        recording.addTick(durationNs, server.getPlayerList().getPlayerCount(), tickRate.tickrate(), tickRate.isFrozen(), tickRate.isSteppingForward(),
+            tickRate.isSprinting(), tickRate.runsNormally());
         if (System.nanoTime() >= recording.deadlineNs) finishTicks();
     }
 
