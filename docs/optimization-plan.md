@@ -46,7 +46,7 @@ jfr summary .local/baseline.jfr
 jfr print --events jdk.ExecutionSample,jdk.GarbageCollection .local/baseline.jfr > .local/baseline-events.txt
 ```
 
-Collect CPU profiles, allocation/GC information, frame-time percentiles, server tick-time percentiles, and relevant GPU timings. JFR samples alone do not measure FPS or GPU cost. JVM compilation/warm-up, profiling overhead, world generation, and background activity must be controlled when comparing runs. No gameplay baseline has been collected by this repository's initial setup.
+Collect CPU profiles, allocation/GC information, frame-time percentiles, server tick-time percentiles, and relevant GPU timings. JFR samples alone do not measure FPS or GPU cost. JVM compilation/warm-up, profiling overhead, world generation, and background activity must be controlled when comparing runs. The [core comparison](core-performance.md) now contains stationary Linux software-rendering observations; Mac GPU, movement/generation and populated dedicated-server measurements remain open.
 
 ## First native integration experiment
 
