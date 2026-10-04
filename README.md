@@ -53,6 +53,10 @@ terrain. Matching captured settings does not prove pixel-identical rendering.
 [Heap budget experiment](docs/heap-budget.md): three pairs with 3 GiB versus
 1.5 GiB maximum heap show variable RAM savings and GC/frame-time tradeoffs;
 playable defaults remain unchanged.
+
+[Matched graphics API comparison](docs/graphics-api-comparison.md): Vulkan adds
+about 1.5% average FPS but about 12% CPU in three Linux software-rendered pairs;
+backend defaults remain unchanged and physical Mac performance is unmeasured.
 include three repeated matched-view software-rendered pairs with 14–21% higher
 FPS in this workload; M2 performance remains unmeasured.
 
