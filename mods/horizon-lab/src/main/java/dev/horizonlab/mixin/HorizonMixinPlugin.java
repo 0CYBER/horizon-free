@@ -16,6 +16,8 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
     private static boolean debounceWait;
     private static boolean dispatchRetry;
     private static boolean tickDedup;
+    private static boolean cullingEmpty;
+    private static boolean terrainReadWait;
 
     @Override public void onLoad(String mixinPackage) {
         var loader = FabricLoader.getInstance();
@@ -79,17 +81,54 @@ public final class HorizonMixinPlugin implements IMixinConfigPlugin {
         } catch (Exception error) {
             LoggerFactory.getLogger("horizonlab").warn("Tick membership deduplication disabled: invalid configuration", error);
         }
+        try {
+            Properties properties = new Properties();
+            var cullingFile = loader.getConfigDir().resolve("horizon-culling-empty.properties");
+            if (Files.exists(cullingFile)) {
+                try (var reader = Files.newBufferedReader(cullingFile)) { properties.load(reader); }
+            }
+            boolean requested = Boolean.parseBoolean(properties.getProperty("enabled", "false"));
+            boolean supported = loader.getModContainer("entityculling")
+                .map(mod -> mod.getMetadata().getVersion().getFriendlyString().equals("1.11.2")).orElse(false);
+            cullingEmpty = requested && supported;
+            if (requested) LoggerFactory.getLogger("horizonlab").info(
+                "Empty culling whitelist iteration: {} (requires pinned Entity Culling 1.11.2)", cullingEmpty ? "enabled" : "unavailable");
+        } catch (Exception error) {
+            LoggerFactory.getLogger("horizonlab").warn("Empty culling whitelist iteration disabled: invalid configuration", error);
+        }
+        try {
+            Properties properties = new Properties();
+            var readFile = loader.getConfigDir().resolve("horizon-terrain-read-wait.properties");
+            if (Files.exists(readFile)) {
+                try (var reader = Files.newBufferedReader(readFile)) { properties.load(reader); }
+            }
+            boolean requested = Boolean.parseBoolean(properties.getProperty("enabled", "false"));
+            boolean supported = loader.getModContainer("distanthorizons")
+                .map(mod -> mod.getMetadata().getVersion().getFriendlyString().equals("3.3.4")).orElse(false)
+                && loader.getModContainer("minecraft")
+                .map(mod -> mod.getMetadata().getVersion().getFriendlyString().equals("26.3")).orElse(false);
+            terrainReadWait = requested && supported;
+            if (requested) LoggerFactory.getLogger("horizonlab").info(
+                "Interruptible DH blending metadata reads: {} (requires Minecraft 26.3 and DH 3.3.4)",
+                terrainReadWait ? "enabled" : "unavailable");
+        } catch (Exception error) {
+            LoggerFactory.getLogger("horizonlab").warn("Interruptible terrain read disabled: invalid configuration", error);
+        }
     }
 
     public static boolean workerPacingEnabled() { return workerPacing; }
     public static boolean debounceWaitEnabled() { return debounceWait; }
     public static boolean dispatchRetryEnabled() { return dispatchRetry; }
     public static boolean tickDedupEnabled() { return tickDedup; }
+    public static boolean cullingEmptyEnabled() { return cullingEmpty; }
+    public static boolean terrainReadWaitEnabled() { return terrainReadWait; }
     @Override public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         if (mixinClassName.endsWith("DhWorkerPacingMixin")) return workerPacing;
         if (mixinClassName.endsWith("DhDebounceWaitMixin")) return debounceWait;
         if (mixinClassName.endsWith("DhPriorityDispatchMixin")) return dispatchRetry;
         if (mixinClassName.endsWith("DhTickDedupMixin")) return tickDedup;
+        if (mixinClassName.endsWith("CullingEmptyWhitelistMixin")) return cullingEmpty;
+        if (mixinClassName.endsWith("DhTerrainReadWaitMixin")) return terrainReadWait;
         return true;
     }
     @Override public String getRefMapperConfig() { return null; }

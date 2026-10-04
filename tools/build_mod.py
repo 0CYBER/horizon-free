@@ -126,10 +126,20 @@ def build_tick_dedup_fixture():
     return build_integration_fixture("tick-dedup", "dev.horizonlab.dispatch.TickDedupIntegration")
 
 
-def build_integration_fixture(name, entrypoint):
+def build_culling_empty_fixture():
+    return build_integration_fixture("culling-empty", "dev.horizonlab.dispatch.CullingEmptyIntegration", ["entityculling"])
+
+
+def build_integration_fixture(name, entrypoint, extra_projects=()):
     """Create a private integration-test mod; never include it in release packs."""
     arguments = [json.loads(line) for line in (BUILD / "javac.args").read_text().splitlines()]
     classpath = arguments[arguments.index("-classpath") + 1] + os.pathsep + str(BUILD / "classes")
+    lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
+    for name_project in extra_projects:
+        project = lock["projects"][name_project]
+        jar = runtime.fetch(project["url"], ROOT / ".local/pack-cache" / project["filename"],
+                            project["hashes"]["sha512"], "sha512")
+        classpath += os.pathsep + str(jar)
     classes = BUILD / f"{name}-fixture"
     if classes.exists():
         shutil.rmtree(classes)

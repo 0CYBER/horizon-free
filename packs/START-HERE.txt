@@ -62,6 +62,10 @@ PROFILES
   terrain tick membership checks. Action order and visual settings stay the same.
   Set enabled=false in config/horizon-tick-dedup.properties and restart to disable.
   Compare against m2-balanced for an isolated test; no Mac FPS gain is measured yet.
+- culling-empty: same balanced settings, with a shared empty iterator for empty
+  dynamic entity/block-entity whitelists. Registered callbacks stay upstream.
+  Disable in config/horizon-culling-empty.properties (enabled=false), then restart.
+  Compare against m2-balanced; no whole-game or Mac FPS gain is measured yet.
 - foreground-first: combines adaptive terrain, precise pacing, wakeable queue
   waits, bounded rejected dispatch retries and (since 0.13) tick membership reuse.
   Uses OpenGL and a 120 FPS
@@ -154,3 +158,9 @@ and field of view at capture boundaries. If visual settings changed, the viewer
 flags the run. Older reports without these fields cannot establish quality
 equivalence. Snapshots cannot detect a change that was restored before the end,
 and do not prove that all requested distant terrain finished rendering.
+
+Since 0.14, profiles with Distant Horizons request an interruptible blending-read
+wait for its generation workers during shutdown. Ordinary Minecraft callers and
+chunk saves keep their original behavior. To disable, set enabled=false in
+config/horizon-terrain-read-wait.properties and restart. This is a scoped shutdown
+correctness fix, not a claim of greater FPS or faster terrain generation.

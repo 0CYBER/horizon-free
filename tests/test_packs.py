@@ -87,6 +87,24 @@ class PackTests(unittest.TestCase):
                          "config/horizon-dispatch-retry.properties"]:
             self.assertEqual(original[filename], candidate[filename])
 
+    def test_empty_culling_experiment_preserves_balanced_settings(self):
+        original = build_pack.overrides("m2-balanced", b"fixture")
+        for name in build_pack.PROFILES:
+            files = build_pack.overrides(name, b"fixture")
+            self.assertEqual(files["config/horizon-culling-empty.properties"],
+                             b"enabled=true\n" if name == "culling-empty" else b"enabled=false\n")
+        candidate = build_pack.overrides("culling-empty", b"fixture")
+        for filename in ["options.txt", "config/DistantHorizons.toml", "config/horizon-adaptive.properties",
+                         "config/horizon-worker-pacing.properties", "config/horizon-queue-wait.properties",
+                         "config/horizon-dispatch-retry.properties", "config/horizon-tick-dedup.properties"]:
+            self.assertEqual(original[filename], candidate[filename])
+
+    def test_terrain_read_shutdown_fix_only_requested_with_distant_terrain(self):
+        for name, profile in build_pack.PROFILES.items():
+            files = build_pack.overrides(name, b"fixture")
+            self.assertEqual(files["config/horizon-terrain-read-wait.properties"],
+                             b"enabled=true\n" if profile["lod"] else b"enabled=false\n")
+
     def test_wrong_game_or_download_path_is_rejected(self):
         for field, value in [("game_versions", ["1.21"]), ("filename", "../bad.jar"), ("url", "http://unsafe.invalid")]:
             lock = copy.deepcopy(build_pack.read_lock())
@@ -173,13 +191,14 @@ class ComparisonTests(unittest.TestCase):
     def test_terrain_quality_and_shader_changes_cannot_look_like_equal_workloads(self):
         baseline = self.report()
         baseline.update(dh_capture_status="available", dh_lod_radius_chunks=128, dh_horizontal_quality="MEDIUM",
-                        iris_capture_status="available", iris_shaders_enabled=False, dh_thread_count=2)
+                        iris_capture_status="available", iris_shaders_enabled=False, dh_thread_count=2, world_difficulty="NORMAL")
         candidate = copy.deepcopy(baseline)
         candidate.update(dh_lod_radius_chunks=256, iris_shaders_enabled=True, iris_shader_pack="Example pack",
-                         dh_thread_count=1, visual_settings_changed=["render_distance"])
+                         dh_thread_count=1, world_difficulty="PEACEFUL", visual_settings_changed=["render_distance"])
         result = compare_benchmarks.compare(baseline, candidate)
         self.assertTrue(any("dh_lod_radius_chunks" in field for field in result["mismatches"]))
         self.assertTrue(any("iris_shaders_enabled" in field for field in result["mismatches"]))
+        self.assertTrue(any("world_difficulty" in field for field in result["mismatches"]))
         self.assertTrue(any("dh_thread_count differs" in warning for warning in result["warnings"]))
         self.assertTrue(any("changed between capture boundaries" in warning for warning in result["warnings"]))
         legacy = self.report()

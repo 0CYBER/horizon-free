@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "architecture": "x86_64",
+  "minecraft": "26.3",
+  "entity_culling": "1.11.2",
+  "results": [
+    {
+      "enabled": false,
+      "empty_iterator_calls": 1,
+      "live_registration_checked": true,
+      "block_callback_order_checked": true,
+      "type_guard_checked": true,
+      "allocated_bytes": 128001272,
+      "cpu_ns": 29632156,
+      "wall_ns": 49712014,
+      "measured_calls": 4000000,
+      "result": false
+    },
+    {
+      "enabled": true,
+      "empty_iterator_calls": 0,
+      "live_registration_checked": true,
+      "block_callback_order_checked": true,
+      "type_guard_checked": true,
+      "allocated_bytes": 208,
+      "cpu_ns": 809881,
+      "wall_ns": 801517,
+      "measured_calls": 4000000,
+      "result": false
+    }
+  ],
+  "notes": [
+    "Actual publisher whitelist methods inside Fabric; live registration and block-entity callbacks checked.",
+    "Nonempty iteration, callback order, short circuit, null/wrong-type inputs and clearing retain upstream behavior.",
+    "Empty-state iterator counts use a private instrumented set; allocation loop uses normal empty HashSets.",
+    "Entity callbacks with a valid game entity are not exercised by this menu-only fixture.",
+    "JIT escape analysis can remove allocations in an isolated loop; real culling-thread profiles are needed.",
+    "Not a game FPS, whole-game RAM, visual equivalence or Mac GPU benchmark.",
+    "Much of an empty warmed loop may be folded by the JIT; CPU timings are not per-check costs or game speed estimates."
+  ],
+  "provenance": {
+    "source_commit": "35dd69e9a6279fa89d762a0d24e49b0dbdb11b51",
+    "ci_run": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37164002916",
+    "artifact": "horizon-ubuntu-latest"
+  }
+}
