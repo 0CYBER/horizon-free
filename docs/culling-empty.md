@@ -47,3 +47,12 @@ The [sanitized Linux CI result](../benchmarks/culling-empty-2026-10-04/linux-app
 includes its source/workflow provenance and independently checks live registration
 and the applied shortcut. CPU timings can include JIT folding of this empty loop;
 they are not per-check costs or estimates of game speed.
+
+The final candidate JAR (`c506982631880604513de8ef85e3b4461fbb898702e60b4a6f74ca3b3d4a687f`)
+then recorded 579 frame intervals and 2,408 integrated-server tick durations over
+120 seconds, with zero excluded frames and matching CSV counts/means. Its actual
+frame report retained custom graphics, render/simulation distances 12/12, DH radius
+128 at MEDIUM/MEDIUM quality, two workers at runtime ratio 0.5, compact headers,
+and both the culling shortcut and scoped terrain-read fix enabled. No captured
+visual setting changed. This verifies integration; it is not a repeated hardware
+performance comparison.

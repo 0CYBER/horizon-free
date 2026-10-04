@@ -34,3 +34,17 @@ reads with an interrupt already set, cancelled
 futures, exceptional completion identity, and recognition by DH's shutdown
 exception utility. The private fixture does not enter release packs. This is a
 correctness check, not an FPS, throughput or Mac shutdown benchmark.
+
+The [sanitized Linux CI result](../benchmarks/terrain-read-2026-10-04/linux-applied-hooks.json)
+includes source/workflow provenance and the original mod checksum. The CI JAR
+matches the local candidate byte-for-byte. Windows and hosted Apple Silicon
+macOS 26 compile the fixture and pass the portable build/metrics checks; applied
+read interruption is exercised on Linux, not a live macOS game.
+
+The exact candidate also completed a 120-second local world recording, saved,
+and reloaded that world in the same client. After the first save, thread inspection
+found no remaining DH generation workers and no background workers blocked on a
+future. After reload, two generation workers existed and neither was waiting in
+blending metadata; no background metadata-scan wait was present at that snapshot.
+This is one software-rendered lifecycle observation, not proof that every
+shutdown race, world or platform is covered.
