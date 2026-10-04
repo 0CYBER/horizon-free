@@ -30,7 +30,7 @@
 </main>
 <script>
 'use strict';
-const SETTINGS=['minecraft','kind','os','os_version','architecture','gpu','graphics_backend','graphics_driver','java_version','heap_max_bytes','framebuffer_width','framebuffer_height','render_distance','simulation_distance','vsync','fps_limit','graphics_preset','ambient_occlusion','improved_transparency','mipmap_levels','entity_distance_scaling','entity_shadows','particles','clouds','cloud_range','fov','world_difficulty','dh_capture_status','dh_rendering_enabled','dh_renderer_mode','dh_lod_radius_chunks','dh_horizontal_quality','dh_vertical_quality','dh_max_horizontal_resolution','dh_transparency','dh_lod_shading','dh_lod_only_mode','dh_camera_quality_dropoff','dh_ambient_occlusion','iris_capture_status','iris_shaders_enabled','iris_shader_pack'];
+const SETTINGS=['minecraft','kind','os','os_version','architecture','gpu','graphics_backend','graphics_driver','server_runtime_kind','client_graphics_capture_status','java_version','heap_max_bytes','framebuffer_width','framebuffer_height','render_distance','simulation_distance','vsync','fps_limit','graphics_preset','ambient_occlusion','improved_transparency','mipmap_levels','entity_distance_scaling','entity_shadows','particles','clouds','cloud_range','fov','world_difficulty','dh_capture_status','dh_rendering_enabled','dh_renderer_mode','dh_lod_radius_chunks','dh_horizontal_quality','dh_vertical_quality','dh_max_horizontal_resolution','dh_transparency','dh_lod_shading','dh_lod_only_mode','dh_camera_quality_dropoff','dh_ambient_occlusion','iris_capture_status','iris_shaders_enabled','iris_shader_pack'];
 const state={baseline:null,candidate:null},generation={baseline:0,candidate:0};
 let comparison=null,chartData=null;
 const $=id=>document.getElementById(id);
@@ -102,6 +102,15 @@ function compareTickStates(a,b){
   warnings.push('Tick-manager state is sampled after measured server invocations. Changes entirely between samples, paused intervals and completed world work are not verified.');
   return{differences,warnings};
 }
+function serverContextWarnings(a,b){
+  const warnings=[];
+  for(const [label,r] of [['Baseline',a],['Candidate',b]]){
+    if(!['integrated','dedicated'].includes(r.server_runtime_kind))warnings.push(label+' server runtime kind was not captured; integrated/dedicated equivalence is unknown.');
+    if(r.server_runtime_kind==='integrated'&&!(r.client_graphics_capture_status==='captured_at_recording_start'&&['gpu','graphics_backend','graphics_driver'].every(key=>typeof r[key]==='string'&&r[key].trim().length)))warnings.push(label+' integrated-server client graphics were not captured; shared rendering workload is unknown.');
+  }
+  warnings.push('Integrated-server graphics context is a recording-start snapshot; later graphics changes and full client workload equivalence are not verified.');
+  return warnings;
+}
 function compareReports(a,b){
   if(a.kind!==b.kind)throw Error('Compare frame runs with frame runs, or tick runs with tick runs.');
   const differences=SETTINGS.filter(key=>JSON.stringify(a[key])!==JSON.stringify(b[key])).map(key=>({setting:key,baseline:a[key]??null,candidate:b[key]??null}));
@@ -109,6 +118,7 @@ function compareReports(a,b){
   const warnings=['World, camera route, shaders and terrain-cache warm-up still need to match. These are not verified by the captured settings.'];
   warnings.push(...softwareWarnings(a,b));
   if(a.kind==='ticks'){
+    warnings.push(...serverContextWarnings(a,b));
     const tick=compareTickStates(a,b);differences.push(...tick.differences);warnings.push(...tick.warnings);
   }
   for(const key of ['compact_object_headers','garbage_collectors']){
@@ -166,6 +176,8 @@ function renderDetails(side){
   fields.push(['JVM', 'Compact headers: '+(r.compact_object_headers===true?'on':r.compact_object_headers===false?'off':'not captured')+' · GC: '+(Array.isArray(r.garbage_collectors)?r.garbage_collectors.join(', '):'not captured')]);
   fields.push(['Java',[r.java_vendor,r.java_vm_name,r.java_runtime_version||r.java_version].filter(Boolean).join(' · ')||'Not captured']);
   if(r.kind==='ticks'){
+    fields.push(['Server runtime',['integrated','dedicated'].includes(r.server_runtime_kind)?r.server_runtime_kind:'Not captured']);
+    if(r.server_runtime_kind==='integrated')fields.push(['Shared client graphics',r.client_graphics_capture_status==='captured_at_recording_start'?[r.gpu,r.graphics_backend,r.graphics_driver].filter(Boolean).join(' · ')+' (at recording start)':'Not captured']);
     if(tickStateAvailable(r)){
       const first=r.tick_state_first,last=r.tick_state_last;
       fields.push(['Configured ticks',format(first.configured_tick_rate)+' / s at first sample · '+format(last.configured_tick_rate)+' / s at last sample']);

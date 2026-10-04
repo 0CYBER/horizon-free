@@ -1,16 +1,16 @@
 # First test on the M2 Pro Mac
 
-For the 16 GB M2 Pro, start with the published 0.20.0 packs. Core and balanced
+For the 16 GB M2 Pro, start with the published 0.21.0 packs. Core and balanced
 pass title/demo-world rendering and save/exit probes on the hosted macOS ARM64
 software renderer. Gameplay and FPS on this physical Mac remain unmeasured.
 The Linux software-rendering observations do not predict an M2 speedup.
 
 ## Import after installing Prism
 
-1. Download [horizon-mac-starter-0.20.0.zip](https://github.com/ludovic111/minecraft-optimization-lab/releases/download/v0.20.0/horizon-mac-starter-0.20.0.zip)
+1. Download [horizon-mac-starter-0.21.0.zip](https://github.com/ludovic111/minecraft-optimization-lab/releases/download/v0.21.0/horizon-mac-starter-0.21.0.zip)
    and extract it in Finder.
 2. In Prism, choose **Add Instance > Import**, then select
-   `horizon-m2-balanced-0.20.0.mrpack` from the extracted folder. The individual
+   `horizon-m2-balanced-0.21.0.mrpack` from the extracted folder. The individual
    `.mrpack` is the import file; the starter ZIP contains several different packs.
    [Prism's import guide](https://prismlauncher.org/wiki/help-pages/zip-import/)
    describes the supported archive formats.
@@ -38,8 +38,8 @@ experiments to try after this first launch succeeds.
 
 ## Measure performance at the same view distance
 
-Import `horizon-baseline-0.20.0.mrpack` and
-`horizon-core-performance-0.20.0.mrpack` from the same starter folder. Both use
+Import `horizon-baseline-0.21.0.mrpack` and
+`horizon-core-performance-0.21.0.mrpack` from the same starter folder. Both use
 12 full-detail chunks, 12 simulation chunks and no distant LOD or shaders. Core
 adds the pinned performance mods; all original experimental controllers are off.
 Comparing these two isolates the core stack more closely than comparing baseline

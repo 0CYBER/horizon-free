@@ -6,7 +6,7 @@ Client-first performance research for Minecraft Java **26.3**, preserving vanill
 
 ## Play on your Mac
 
-Download **horizon-mac-starter-0.20.0.zip** from [Releases](https://github.com/ludovic111/minecraft-optimization-lab/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
+Download **horizon-mac-starter-0.21.0.zip** from [Releases](https://github.com/ludovic111/minecraft-optimization-lab/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
 
 Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on your 16 GB M2 Pro. Prism can download Java automatically. Start at 1280×800 or 1920×1200; full Retina resolution is a larger GPU workload. [START-HERE.txt](packs/START-HERE.txt) has details. The same `.mrpack` files import into Prism on Windows and Linux.
 
@@ -216,3 +216,5 @@ python3 tools/check_public_tree.py --history
 CI checks offline tools/Rust and compiles the original mod/builds packs on Linux, Windows and Apple Silicon macOS. Game dependencies download to ephemeral `.local/`; CI uploads only our original JAR and packs. Compilation is not Mac GPU gameplay testing. Publication checks allow Java only under our original `dev/horizonlab` namespace; review diffs as well.
 
 [MIT](LICENSE) covers only our original tracked work. Dependencies retain their licenses. Mojang [removed obfuscation](https://www.minecraft.net/en-us/article/removing-obfuscation-in-java-edition) without changing [Minecraft's EULA](https://www.minecraft.net/en-us/eula). Decompiled game source remains local; published code implements independent tooling and instrumentation.
+
+Integrated-server reports record the shared graphics backend at recording start; see [the context and comparison limits](docs/server-graphics-context.md).

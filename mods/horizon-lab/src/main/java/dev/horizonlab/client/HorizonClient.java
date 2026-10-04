@@ -111,7 +111,7 @@ public final class HorizonClient implements ClientModInitializer {
         context.putAll(dev.horizonlab.metrics.SoftwareContext.capture());
         frames = new Recording(label, "frames", output, seconds, context);
         previousStart = 0;
-        if (client.getSingleplayerServer() != null) HorizonLab.startTicks(label, seconds, output, profile);
+        if (client.getSingleplayerServer() != null) HorizonLab.startTicks(label, seconds, output, profile, "integrated", context);
         message("Recording " + seconds + " seconds. Close chat, keep the game focused, and run your route.");
         return 1;
     }

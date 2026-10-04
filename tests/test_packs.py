@@ -256,6 +256,26 @@ class ComparisonTests(unittest.TestCase):
                 "stats": {"count": 1000, "meanRate": 100, "lowOnePercentRate": 50,
                           "meanMs": 10, "p95Ms": 15, "p99Ms": 20, "maxMs": 30}}
 
+    def test_integrated_tick_graphics_and_server_kind(self):
+        baseline = self.tick_report()
+        baseline.update(server_runtime_kind="integrated", client_graphics_capture_status="captured_at_recording_start",
+                        gpu="GPU", graphics_backend="OpenGL", graphics_driver="Driver")
+        candidate = copy.deepcopy(baseline)
+        candidate["graphics_backend"] = "Vulkan"
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertTrue(any("graphics_backend" in item for item in result["mismatches"]))
+        self.assertFalse(any("were not captured" in item for item in compare_benchmarks.server_context_warnings(baseline, candidate)))
+        candidate["server_runtime_kind"] = "dedicated"
+        self.assertTrue(any("server_runtime_kind" in item for item in compare_benchmarks.compare(baseline, candidate)["mismatches"]))
+
+    def test_legacy_and_missing_integrated_graphics_are_unknown(self):
+        legacy = self.tick_report()
+        self.assertTrue(any("runtime kind was not captured" in item for item in compare_benchmarks.server_context_warnings(legacy, legacy)))
+        legacy.update(server_runtime_kind="integrated", client_graphics_capture_status="captured_at_recording_start", gpu="GPU", graphics_backend="OpenGL")
+        self.assertTrue(any("client graphics were not captured" in item for item in compare_benchmarks.server_context_warnings(legacy, legacy)))
+        dedicated = {"server_runtime_kind": "dedicated", "client_graphics_capture_status": "not_supplied"}
+        self.assertFalse(any("were not captured" in item for item in compare_benchmarks.server_context_warnings(dedicated, dedicated)))
+
     def test_rate_improvement_and_setting_mismatch(self):
         baseline = self.report()
         candidate = copy.deepcopy(baseline)
