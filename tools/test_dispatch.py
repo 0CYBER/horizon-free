@@ -6,15 +6,30 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
 
 try:
     from . import build_mod, build_pack
+    from .test_culling_rays import run_fixture
 except ImportError:
     import build_mod
     import build_pack
+    from test_culling_rays import run_fixture
+
+
+def failure_summary(run, report_count):
+    """Publish only exit/count and bounded Java type names, never log messages."""
+    types = []
+    pattern = r"(?:Caused by:|Exception in thread \"[^\"]*\")\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)(?=[:\s]|$)"
+    for kind in re.findall(pattern, run.stdout, flags=re.ASCII):
+        if len(kind) <= 200 and kind not in types:
+            types.append(kind)
+        if len(types) == 8:
+            break
+    return {"exit_code": run.returncode, "result_count": report_count, "java_exception_types": types}
 
 
 def main():
@@ -37,13 +52,16 @@ def main():
             command = ["xvfb-run", "-a", *command]
         environment = os.environ.copy()
         environment["_JAVA_OPTIONS"] = "-Dhorizon.fixture.exit=true"
-        run = subprocess.run(command, cwd=root, env=environment, text=True, stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, timeout=240)
-        (instance / "fixture.log").write_text(run.stdout)
+        try:
+            run = run_fixture(command, instance, environment)
+        except RuntimeError:
+            print("HORIZON_FIXTURE_FAILURE " + json.dumps({"fixture": "dispatch", "completed": False}), flush=True)
+            raise RuntimeError("Dispatch fixture did not complete; full diagnostics remain private") from None
         marker = "HORIZON_DISPATCH_RESULT "
         reports = [json.loads(line.split(marker, 1)[1]) for line in run.stdout.splitlines() if marker in line]
         if run.returncode or len(reports) != 1:
-            raise RuntimeError(f"Dispatch fixture failed; inspect {instance / 'fixture.log'}")
+            print("HORIZON_FIXTURE_FAILURE " + json.dumps(failure_summary(run, len(reports))), flush=True)
+            raise RuntimeError("Dispatch fixture failed; full diagnostics remain in the private fixture.log")
         report = reports[0]
         if report["enabled"] != enabled or report["tasks_completed"] != 2 or report["occupied_slots"] != 0:
             raise AssertionError("Fixture outcome did not match the selected hook")
