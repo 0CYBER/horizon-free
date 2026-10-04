@@ -124,6 +124,8 @@ def main():
         report = reports[0]
         if report['observed_mode'] != ('world' if args.world else 'title') or report['ready_client_ticks'] < 40:
             raise AssertionError('Client never reached the requested graphics scene')
+        if report['overlay_present'] is not False:
+            raise AssertionError('Client graphics scene still has a loading overlay')
         if args.world:
             if report['world_loaded'] is not True or report['window_active'] is not True:
                 raise AssertionError('Client never reached focused demo-world gameplay')

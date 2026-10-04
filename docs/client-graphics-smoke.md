@@ -10,7 +10,9 @@ The required macOS CI cases use the recommended OpenGL `core-performance` and
 separate instance, creates or opens an ordinary limited-demo world. World mode
 dismisses the demo-help popup, waits for focused, unpaused gameplay, reads back
 the main render target, and stops the client so its integrated server saves.
-Private screenshots must have a nonuniform sample grid and a verified file hash;
+The readiness counter resets while a loading overlay is present: a title screen
+object can already exist underneath asynchronous loading. Private screenshots
+must have a nonuniform sample grid and a verified file hash;
 world mode also checks for saved world data after a clean process exit.
 
 The startup wrapper observes backend library/device creation and preserves the
@@ -78,6 +80,14 @@ screenshot callback after Vulkan submission. Later probes also record callback
 entry, a whitelist of numeric readback dimensions/sample counts, and fixed failure
 categories from our own assertions. Separately logged Vulkan codes are not
 treated as the cause of a probe assertion.
+
+Run 37194354615 identifies the actual probe assertion: each callback received a
+1280×646 image, but its 4,160 sampled pixels had only one distinct RGB colour.
+The strict nonuniform-readback assertion rejected all three cases. Overlay state
+was not recorded in those failures; later probes wait for its removal before
+counting readiness. This tests an initialization hypothesis while preserving the
+same nonuniform-image requirement. It is not evidence that the game's displayed
+Vulkan window was uniform or that a physical M2 GPU has the same problem.
 
 For an isolated private preference override:
 
