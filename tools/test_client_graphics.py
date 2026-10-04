@@ -56,7 +56,9 @@ def graphics_failure_summary(run, report_count):
     # exception messages or infer that a separately logged Vulkan code caused it.
     categories = {'Uniform title readback': 'uniform_readback',
                   'Incomplete title framebuffer': 'small_framebuffer',
-                  'Private client graphics readback failed': 'callback_exception'}
+                  'Private client graphics readback failed': 'callback_exception',
+                  'Required shader pack is inactive': 'shader_inactive',
+                  'Unexpected active shader pack': 'unexpected_shader_pack'}
     result['probe_failure_categories'] = [category for message, category in categories.items()
         if 'java.lang.AssertionError: ' + message in run.stdout]
     result['vulkan_error_codes'] = sorted(set(re.findall(r'\bVK_ERROR_[A-Z_0-9]{1,100}\b', run.stdout)))[:16]
@@ -72,13 +74,24 @@ def graphics_failure_summary(run, report_count):
     return result
 
 
+def validate_shader_report(report, required):
+    if required and (report.get('shader_required') is not True
+            or report.get('iris_capture_status') != 'available'
+            or report.get('iris_shaders_enabled') is not True
+            or report.get('iris_expected_pack_matches') is not True):
+        raise AssertionError('Required runtime shader activation was not verified')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--native-display', action='store_true')
     parser.add_argument('--profile', action='append', choices=sorted(build_pack.PROFILES))
     parser.add_argument('--backend', choices=['opengl', 'vulkan'], help='Override backend in these private instances only')
     parser.add_argument('--world', action='store_true', help='Create/open a disposable built-in demo world instead of stopping at the title')
+    parser.add_argument('--shaders', action='store_true', help='Require the pinned cinematic shader pack in a private world instance')
     args = parser.parse_args()
+    if args.shaders and (not args.world or args.profile not in [None, ['cinematic']]):
+        parser.error('--shaders requires --world and the cinematic profile')
     root = build_pack.ROOT
     fixture = build_mod.build_integration_fixture('client-graphics',
         'dev.horizonlab.metrics.ClientGraphicsIntegration',
@@ -87,12 +100,17 @@ def main():
     mod = root / 'dist' / f'horizon-lab-{version}.jar'
     original_hash = hashlib.sha256(mod.read_bytes()).hexdigest()
     results = []
-    for profile in args.profile or ['core-performance', 'm2-balanced']:
+    for profile in args.profile or (['cinematic'] if args.shaders else ['core-performance', 'm2-balanced']):
         instance = root / '.local/runtime' / ('client-graphics-' + profile
-            + ('-override-' + args.backend if args.backend else '') + ('-world' if args.world else ''))
+            + ('-override-' + args.backend if args.backend else '') + ('-world' if args.world else '')
+            + ('-shaders' if args.shaders else ''))
         build_pack.prepare_instance(profile, instance, mod)
         if args.world:
             (instance / 'config/client-graphics-world.flag').touch()
+        if args.shaders:
+            expected = build_pack.read_lock()['projects']['complementary-reimagined']['filename']
+            (instance / 'config/iris.properties').write_text('enableShaders=true\nshaderPack=' + expected + '\n')
+            (instance / 'config/client-graphics-shaders.flag').write_text(expected + '\n')
         if args.backend:
             options = instance / 'options.txt'
             text, count = re.subn(r'^preferredGraphicsBackend:.*$',
@@ -102,7 +120,7 @@ def main():
             options.write_text(text)
         shutil.copy2(fixture, instance / 'mods/client-graphics-fixture.jar')
         command = [sys.executable, str(root / 'tools/runtime.py'), 'demo',
-                   '--instance', str(instance), '--heap', '3G']
+                   '--instance', str(instance), '--heap', '6G' if args.shaders else '3G']
         if platform.system() == 'Linux' and not args.native_display:
             command = ['xvfb-run', '-a', *command]
         try:
@@ -122,6 +140,7 @@ def main():
             print('HORIZON_FIXTURE_FAILURE ' + json.dumps(diagnostics), flush=True)
             raise RuntimeError('Graphics probe failed; diagnostics remain private')
         report = reports[0]
+        validate_shader_report(report, args.shaders)
         if report['observed_mode'] != ('world' if args.world else 'title') or report['ready_client_ticks'] < 40:
             raise AssertionError('Client never reached the requested graphics scene')
         if report['overlay_present'] is not False:

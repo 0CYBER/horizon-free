@@ -3,10 +3,23 @@ import subprocess
 import unittest
 
 from tools.test_dispatch import failure_summary
-from tools.test_client_graphics import graphics_failure_summary
+from tools.test_client_graphics import graphics_failure_summary, validate_shader_report
 
 
 class FixtureDiagnosticTests(unittest.TestCase):
+    def test_required_shaders_cannot_pass_with_disabled_unknown_or_different_pack(self):
+        report = {'shader_required': True, 'iris_capture_status': 'available',
+                  'iris_shaders_enabled': True, 'iris_expected_pack_matches': True}
+        validate_shader_report(report, True)
+        for field, bad in [('shader_required', False), ('iris_capture_status', 'unavailable'),
+                           ('iris_shaders_enabled', False), ('iris_shaders_enabled', 'true'),
+                           ('iris_expected_pack_matches', False)]:
+            with self.subTest(field=field, bad=bad), self.assertRaises(AssertionError):
+                validate_shader_report({**report, field: bad}, True)
+        with self.assertRaises(AssertionError):
+            validate_shader_report({}, True)
+        validate_shader_report({}, False)
+
     def test_graphics_diagnostics_separate_demo_auth_and_exclude_methods_messages(self):
         output = '\n'.join([
             'com.mojang.authlib.exceptions.InvalidCredentialsException: private-token',

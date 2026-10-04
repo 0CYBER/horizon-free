@@ -1,0 +1,46 @@
+name: macOS shader research
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shader-worlds:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Build original mod and private probe dependencies
+        run: python tools/build_mod.py
+      - name: Verify required cinematic shaders in OpenGL and Vulkan worlds
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          observations = []
+          for backend in ['opengl', 'vulkan']:
+              case = ['--profile', 'cinematic', '--backend', backend, '--world', '--shaders']
+              result = subprocess.run([sys.executable, 'tools/test_client_graphics.py', '--native-display', *case], capture_output=True, text=True)
+              print(result.stdout, end='', flush=True)
+              print(result.stderr, end='', flush=True)
+              observation = {'case': case, 'exit_code': result.returncode}
+              if result.returncode:
+                  marker = 'HORIZON_FIXTURE_FAILURE '
+                  observation['failure'] = [json.loads(line.split(marker, 1)[1]) for line in result.stdout.splitlines() if marker in line]
+              else:
+                  observation['report'] = json.loads(Path('dist/client-graphics-smoke.json').read_text())
+              observations.append(observation)
+          Path('dist/client-graphics-shader-research.json').write_text(json.dumps(observations, indent=2) + '\n')
+          sys.exit(int(any(item['exit_code'] for item in observations)))
+          PY
+      - name: Retain selected observations including failed cases
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-shader-observations
+          path: dist/client-graphics-shader-research.json
