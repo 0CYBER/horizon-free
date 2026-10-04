@@ -158,7 +158,12 @@ The local Linux host uses **Mesa llvmpipe software rendering**. It is useful for
 
 CI compiles/builds on Linux, Windows and Apple Silicon macOS. Successful compilation is not graphics, authentication, UI or Mac-driver runtime validation. macOS 27 and the user's actual M2 Pro have not been tested here. Optional cinematic shaders and Vulkan are experiments; the OpenGL balanced pack is the first manual test.
 
-No numerical game speedup, least-memory claim, exhaustive vanilla equivalence, universal GPU support, or 50-active-player result is claimed. Worlds need copies, repeated matched routes and real hardware measurements before decisions about deeper replacements. New terrain generation and steady-state rendering are separate workloads.
+The [core comparison](core-performance.md) records numerical observations for
+matched software-rendered workloads. They do not establish a Mac or hardware-GPU
+speedup, least-memory result, exhaustive vanilla equivalence, universal GPU
+support, or a 50-active-player result. Worlds need copies, repeated matched routes
+and real hardware measurements before decisions about deeper replacements. New
+terrain generation and steady-state rendering are separate workloads.
 
 ## Release content
 

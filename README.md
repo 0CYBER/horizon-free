@@ -10,6 +10,8 @@ Download **horizon-mac-starter-0.20.0.zip** from [Releases](https://github.com/l
 
 Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on your 16 GB M2 Pro. Prism can download Java automatically. Start at 1280×800 or 1920×1200; full Retina resolution is a larger GPU workload. [START-HERE.txt](packs/START-HERE.txt) has details. The same `.mrpack` files import into Prism on Windows and Linux.
 
+If Prism is already installed, follow the [Mac import and first comparison guide](docs/mac-first-test.md).
+
 | Profile | Full-detail chunks | Distant LOD radius | Suggested maximum heap |
 | --- | ---: | ---: | ---: |
 | baseline | 12 | none | 6144 MiB |
@@ -43,7 +45,8 @@ The latter adds only the pinned core performance mods and leaves every original
 controller disabled. Then test balanced separately for its additional distant
 terrain. Matching captured settings does not prove pixel-identical rendering.
 [Core comparison protocol and selected observations](docs/core-performance.md)
-include one software-rendered pair; M2 performance remains unmeasured.
+include three repeated matched-view software-rendered pairs with 14–21% higher
+FPS in this workload; M2 performance remains unmeasured.
 
 The optional `queue-wait` pack yields during pending distant-terrain debounce retries; `adaptive-queue` combines it with the existing controllers. [Queue experiment and measurement limits](docs/debounce-queue.md).
 
