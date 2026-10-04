@@ -99,6 +99,18 @@ class PackTests(unittest.TestCase):
                          "config/horizon-dispatch-retry.properties", "config/horizon-tick-dedup.properties"]:
             self.assertEqual(original[filename], candidate[filename])
 
+    def test_ray_scratch_experiment_preserves_balanced_settings(self):
+        baseline = build_pack.overrides("m2-balanced", b"fixture")
+        candidate = build_pack.overrides("culling-rays", b"fixture")
+        for name in build_pack.PROFILES:
+            self.assertEqual(build_pack.overrides(name, b"fixture")["config/horizon-culling-rays.properties"],
+                             b"enabled=true\n" if name == "culling-rays" else b"enabled=false\n")
+        for filename in ["options.txt", "config/DistantHorizons.toml", "config/horizon-adaptive.properties",
+                         "config/horizon-worker-pacing.properties", "config/horizon-queue-wait.properties",
+                         "config/horizon-dispatch-retry.properties", "config/horizon-tick-dedup.properties",
+                         "config/horizon-culling-empty.properties", "config/horizon-terrain-read-wait.properties"]:
+            self.assertEqual(baseline[filename], candidate[filename])
+
     def test_terrain_read_shutdown_fix_only_requested_with_distant_terrain(self):
         for name, profile in build_pack.PROFILES.items():
             files = build_pack.overrides(name, b"fixture")
@@ -175,6 +187,16 @@ class ComparisonTests(unittest.TestCase):
         for other in [empty, self.report("ticks")]:
             with self.assertRaises(ValueError):
                 compare_benchmarks.compare(self.report(), other)
+
+    def test_excluded_frames_disclose_that_process_counters_cover_inactive_time(self):
+        baseline = self.report()
+        candidate = copy.deepcopy(baseline)
+        candidate["excluded_frames"] = 28
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertEqual(result["mismatches"], [])
+        self.assertTrue(any("candidate excluded 28" in warning and "Process CPU still spans" in warning
+                            for warning in result["warnings"]))
+        self.assertFalse(any("baseline excluded" in warning for warning in result["warnings"]))
 
     def test_jvm_experiment_warns_without_rejecting_an_intentional_change(self):
         baseline = self.report()

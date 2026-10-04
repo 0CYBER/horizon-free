@@ -65,6 +65,9 @@ def build():
     dh = lock["projects"]["distanthorizons"]
     jars.append(runtime.fetch(dh["url"], ROOT / ".local/pack-cache" / dh["filename"],
                               dh["hashes"]["sha512"], "sha512"))
+    culling = lock["projects"]["entityculling"]
+    jars.append(runtime.fetch(culling["url"], ROOT / ".local/pack-cache" / culling["filename"],
+                              culling["hashes"]["sha512"], "sha512"))
     api = lock["projects"]["fabric-api"]
     api_jar = runtime.fetch(api["url"], ROOT / ".local/pack-cache" / api["filename"],
                             api["hashes"]["sha512"], "sha512")
@@ -130,7 +133,7 @@ def build_culling_empty_fixture():
     return build_integration_fixture("culling-empty", "dev.horizonlab.dispatch.CullingEmptyIntegration", ["entityculling"])
 
 
-def build_integration_fixture(name, entrypoint, extra_projects=()):
+def build_integration_fixture(name, entrypoint, extra_projects=(), fixture_mixins=()):
     """Create a private integration-test mod; never include it in release packs."""
     arguments = [json.loads(line) for line in (BUILD / "javac.args").read_text().splitlines()]
     classpath = arguments[arguments.index("-classpath") + 1] + os.pathsep + str(BUILD / "classes")
@@ -144,16 +147,23 @@ def build_integration_fixture(name, entrypoint, extra_projects=()):
     if classes.exists():
         shutil.rmtree(classes)
     classes.mkdir(parents=True)
+    fixture_sources = [SOURCE / "test/java" / (entrypoint.replace(".", "/") + ".java")]
+    fixture_sources.extend(SOURCE / "test/java/dev/horizonlab/dispatch/fixture" / (mixin + ".java") for mixin in fixture_mixins)
     subprocess.run(["javac", "--release", "25", "-proc:none", "-classpath", classpath,
-                    "-d", str(classes), str(SOURCE / "test/java" / (entrypoint.replace(".", "/") + ".java"))], check=True)
+                    "-d", str(classes), *map(str, fixture_sources)], check=True)
     output = BUILD / f"{name}-fixture.jar"
+    metadata = {"schemaVersion": 1, "id": "horizon_" + name.replace("-", "_") + "_fixture",
+                "version": "1.0.0", "environment": "client", "entrypoints": {"client": [entrypoint]},
+                "depends": {"horizonlab": "*", "distanthorizons": "3.3.4"}}
+    if fixture_mixins:
+        metadata["mixins"] = [name + "-fixture.mixins.json"]
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        if fixture_mixins:
+            archive.writestr(metadata["mixins"][0], json.dumps({"required": True, "package": "dev.horizonlab.dispatch.fixture",
+                "compatibilityLevel": "JAVA_25", "client": list(fixture_mixins), "injectors": {"defaultRequire": 1}}))
         for path in sorted(classes.rglob("*.class")):
             archive.write(path, path.relative_to(classes).as_posix())
-        archive.writestr("fabric.mod.json", json.dumps({"schemaVersion": 1, "id": "horizon_" + name.replace("-", "_") + "_fixture",
-            "version": "1.0.0", "environment": "client",
-            "entrypoints": {"client": [entrypoint]},
-            "depends": {"horizonlab": "*", "distanthorizons": "3.3.4"}}))
+        archive.writestr("fabric.mod.json", json.dumps(metadata))
     print(f"Private {name} integration fixture: {output}")
     return output
 
