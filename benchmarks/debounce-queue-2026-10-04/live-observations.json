@@ -1,0 +1,196 @@
+{
+  "schema": 1,
+  "measurement": "Single fixed-order stationary Linux software-rendered pair; targeted allocation observation, not a statistical FPS/RAM comparison",
+  "minecraft": "26.3",
+  "distant_horizons": "3.3.4",
+  "java_vendor": "Ubuntu",
+  "java_runtime_version": "25.0.4.1+1-1-26.04.4-Ubuntu",
+  "graphics": "llvmpipe LLVM21.1.8 OpenGL, 1280x800",
+  "captured_settings_match": true,
+  "settings": {
+    "render_distance": 12,
+    "simulation_distance": 12,
+    "lod_radius": 128,
+    "lod_quality": "MEDIUM/MEDIUM BLOCK",
+    "terrain_workers": 2,
+    "runtime_ratio_start_and_end": 0.5,
+    "world_difficulty": "PEACEFUL",
+    "fov": 70,
+    "heap_max": "3G",
+    "collector": "G1",
+    "compact_headers": true,
+    "frame_limit": "uncapped",
+    "other_original_controllers": false,
+    "interruptible_terrain_read": true
+  },
+  "runs": [
+    {
+      "profile": "m2-balanced",
+      "elapsed_seconds": 120.305371929,
+      "frame_samples": 230,
+      "tick_samples": 2401,
+      "tick_elapsed_seconds": 120.040272048,
+      "excluded_frames": 0,
+      "dropped_samples": 0,
+      "frame_stats": {
+        "count": 230,
+        "meanMs": 519.2565329826086,
+        "p50Ms": 492.583608,
+        "p95Ms": 700.364095,
+        "p99Ms": 803.28719,
+        "maxMs": 955.16614,
+        "meanRate": 1.9258303679994195,
+        "lowOnePercentRate": 1.146414365311511,
+        "over16Ms": 230,
+        "over33Ms": 230,
+        "over50Ms": 230,
+        "over100Ms": 230
+      },
+      "tick_execution_stats": {
+        "count": 2401,
+        "meanMs": 9.248066071636819,
+        "p50Ms": 8.529226,
+        "p95Ms": 16.494711,
+        "p99Ms": 23.483163,
+        "maxMs": 65.248147,
+        "meanRate": 108.13071535755256,
+        "lowOnePercentRate": 29.893225023275733,
+        "over16Ms": 113,
+        "over33Ms": 9,
+        "over50Ms": 2,
+        "over100Ms": 0
+      },
+      "process_cpu_seconds": 432.81,
+      "process_rss_peak_sampled_bytes": 2898677760,
+      "queue_wait": false,
+      "wakeable_idle": false,
+      "queue_allocation_counters": [
+        {
+          "thread_id": 86,
+          "thread": "DH-Chunk Update Queue [minecraft:overworld] Thread[0]",
+          "counter_observations": 2,
+          "observed_seconds": 64.391610411,
+          "observed_allocated_bytes": 982644080,
+          "observed_bytes_per_second": 15260436.471893786
+        },
+        {
+          "thread_id": 93,
+          "thread": "DH-Chunk Update Queue [minecraft:the_end] Thread[0]",
+          "counter_observations": 2,
+          "observed_seconds": 64.391610411,
+          "observed_allocated_bytes": 66520,
+          "observed_bytes_per_second": 1033.0538338055978
+        },
+        {
+          "thread_id": 98,
+          "thread": "DH-Chunk Update Queue [minecraft:the_nether] Thread[0]",
+          "counter_observations": 2,
+          "observed_seconds": 64.391610411,
+          "observed_allocated_bytes": 66408,
+          "observed_bytes_per_second": 1031.3144767793467
+        }
+      ],
+      "preceding_jfr_gc_pause_total_ms": 178.149902,
+      "preceding_jfr_gc_pause_longest_ms": 34.011115,
+      "world_save_and_exit_zero": true
+    },
+    {
+      "profile": "queue-wait",
+      "elapsed_seconds": 120.448597645,
+      "frame_samples": 225,
+      "tick_samples": 2401,
+      "tick_elapsed_seconds": 120.040563501,
+      "excluded_frames": 0,
+      "dropped_samples": 0,
+      "frame_stats": {
+        "count": 225,
+        "meanMs": 529.5368389244444,
+        "p50Ms": 502.825816,
+        "p95Ms": 717.088739,
+        "p99Ms": 798.871994,
+        "maxMs": 843.221511,
+        "meanRate": 1.8884427418328913,
+        "lowOnePercentRate": 1.2159699757233216,
+        "over16Ms": 225,
+        "over33Ms": 225,
+        "over50Ms": 225,
+        "over100Ms": 225
+      },
+      "tick_execution_stats": {
+        "count": 2401,
+        "meanMs": 9.375896729279466,
+        "p50Ms": 8.803401,
+        "p95Ms": 16.938218,
+        "p99Ms": 22.983944,
+        "maxMs": 63.421671,
+        "meanRate": 106.65646485601272,
+        "lowOnePercentRate": 31.02504677094056,
+        "over16Ms": 128,
+        "over33Ms": 7,
+        "over50Ms": 2,
+        "over100Ms": 0
+      },
+      "process_cpu_seconds": 430.67,
+      "process_rss_peak_sampled_bytes": 2989219840,
+      "queue_wait": true,
+      "wakeable_idle": true,
+      "queue_allocation_counters": [
+        {
+          "thread_id": 88,
+          "thread": "DH-Chunk Update Queue [minecraft:overworld] Thread[0]",
+          "counter_observations": 2,
+          "observed_seconds": 64.387296767,
+          "observed_allocated_bytes": 739640,
+          "observed_bytes_per_second": 11487.359108684974
+        },
+        {
+          "thread_id": 93,
+          "thread": "DH-Chunk Update Queue [minecraft:the_nether] Thread[0]",
+          "counter_observations": 2,
+          "observed_seconds": 64.387296767,
+          "observed_allocated_bytes": 0,
+          "observed_bytes_per_second": 0.0
+        },
+        {
+          "thread_id": 100,
+          "thread": "DH-Chunk Update Queue [minecraft:the_end] Thread[0]",
+          "counter_observations": 2,
+          "observed_seconds": 64.387296767,
+          "observed_allocated_bytes": 0,
+          "observed_bytes_per_second": 0.0
+        }
+      ],
+      "preceding_jfr_gc_pause_total_ms": 151.522451,
+      "preceding_jfr_gc_pause_longest_ms": 47.79999,
+      "world_save_and_exit_zero": true
+    }
+  ],
+  "provenance": {
+    "production_mod_source_commit": "24c65f512dece83b153b206e33cd4c4294b42de2",
+    "original_mod_sha256": "2196637c5b2180a33fa5b926ab51069ab480618c1186b8a02872c7e758be0a70",
+    "initial_player_snapshot_sha256": "b4d11dbd6443625415a1e32aa242d0e2d09cd77ddb1becfde5d35cb6ab8d278a",
+    "source_level_snapshot_sha256": "86a3c75ea993e50c4428da4dbadc5856688a9367f035c41b8bb49863a9aeb644",
+    "first_saved_cameras_match": true,
+    "saved_camera": {
+      "position": [
+        -56.5,
+        69.0,
+        55.5
+      ],
+      "rotation": [
+        141.5,
+        16.950002670288086
+      ]
+    }
+  },
+  "notes": [
+    "Separate copies of the same private world; candidate then control. JFR begins about121seconds after demo dismissal; frame capture begins about307seconds after dismissal.",
+    "JFR allocation counters span about64seconds; pause measurements are from the preceding JFR recordings, not the later frame capture.",
+    "Recorded overworld queue allocation counter rate is about15.3MB/s upstream versus11.5KB/s with waiting. Task-completion and generated geometry volumes are not controlled quantitatively.",
+    "Control has230frames versus225candidate; sampled peak RSS is lower in control, and later whole-process CPU differences are small. No game FPS, retained-memory or whole-process CPU improvement is established.",
+    "Daylight advances normally; lighting, entity activity and cache/JIT differences are not fully controlled. No Apple Silicon or hardware-GPU result.",
+    "Tick meanRate is inverse execution duration, not observed TPS. Both recordings contain2401tick execution samples over about120seconds.",
+    "Actual JSON/CSV viewer comparisons and390pxlayout pass. The real discarded capture with zero eligible frames and209exclusions is rejected by the viewer and excluded from performance comparisons.",
+    "No private worlds, full game logs or JFR recordings are published."
+  ]
+}
