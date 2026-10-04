@@ -28,5 +28,7 @@ python3 tools/test_server_graphics.py --native-display --backend vulkan
 The private fixture starts a normal 10-second frame/tick recording through the
 client recorder, checks both reports against the actual device, saves the demo
 world and exits. It does not change simulation rate or gameplay rules. Windows
-compiles the fixture; Linux and hosted macOS run the OpenGL check. Full logs,
+compiles the fixture; Linux and hosted macOS check the actual game-selected backend. An explicit
+`--backend` experiment still rejects fallback; the default metadata check does
+not require a particular renderer. Full logs,
 worlds and fixture JARs remain private and outside playable downloads.
