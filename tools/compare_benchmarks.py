@@ -50,6 +50,8 @@ def compare(baseline, candidate):
     for name, report in [("baseline", baseline), ("candidate", candidate)]:
         if report.get("dropped_samples", 0):
             warnings.append(f"{name} exceeded the recording buffer: {report['dropped_samples']} dropped samples.")
+        if report["kind"] == "frames" and report.get("excluded_frames", 0):
+            warnings.append(f"{name} excluded {report['excluded_frames']} menu, paused or unfocused frame starts. Process CPU still spans the whole recording.")
         if report.get("elapsed_seconds", 0) < 60:
             warnings.append(f"{name} is shorter than 60 seconds; use longer repeated runs for decisions.")
     if baseline["kind"] == "ticks" and baseline.get("peak_players") != candidate.get("peak_players"):

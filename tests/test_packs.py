@@ -188,6 +188,16 @@ class ComparisonTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 compare_benchmarks.compare(self.report(), other)
 
+    def test_excluded_frames_disclose_that_process_counters_cover_inactive_time(self):
+        baseline = self.report()
+        candidate = copy.deepcopy(baseline)
+        candidate["excluded_frames"] = 28
+        result = compare_benchmarks.compare(baseline, candidate)
+        self.assertEqual(result["mismatches"], [])
+        self.assertTrue(any("candidate excluded 28" in warning and "Process CPU still spans" in warning
+                            for warning in result["warnings"]))
+        self.assertFalse(any("baseline excluded" in warning for warning in result["warnings"]))
+
     def test_jvm_experiment_warns_without_rejecting_an_intentional_change(self):
         baseline = self.report()
         baseline.update(compact_object_headers=False, garbage_collectors=["G1 Young Generation"])

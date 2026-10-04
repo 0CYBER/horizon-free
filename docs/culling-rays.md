@@ -37,8 +37,15 @@ with the original constructors versus 920 with scratch reuse. Single caller CPU
 observations were about 167 versus 149 ms. Another unchanged run allocated only
 6,259,360 bytes, illustrating how JIT compilation and escape analysis vary during
 these loops. No fixed per-check allocation or statistical speedup is inferred.
-This is not a whole-game FPS/RAM or Mac GPU benchmark; repeated real hardware
-comparisons and live allocation profiles are required.
+The independent Linux CI run allocated only 1,040 bytes upstream versus 920
+with scratch reuse, and its caller CPU observation was about 102 versus 119 ms.
+That run provides no useful allocation reduction and is slower in this loop.
+The hook therefore stays isolated and disabled in every recommended profile.
+Raw [local](../benchmarks/culling-rays-2026-10-04/local-applied-hooks.json) and
+[CI](../benchmarks/culling-rays-2026-10-04/linux-applied-hooks.json) observations
+include source and workflow provenance. This is not a whole-game FPS/RAM or Mac
+GPU benchmark; repeated real hardware comparisons and live allocation profiles
+are required.
 
 The factory hook follows the upstream [Mixin constructor redirect contract](https://github.com/SpongePowered/Mixin/blob/master/src/main/java/org/spongepowered/asm/mixin/injection/Redirect.java).
 Compilation uses a checksum-verified publisher JAR; the release mod contains only
