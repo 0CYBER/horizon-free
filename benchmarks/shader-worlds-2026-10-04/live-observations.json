@@ -1,0 +1,342 @@
+{
+  "schema": 1,
+  "measurement": "Shader world activation/startup probes; not FPS or physical M2 measurements",
+  "release": "0.20.0",
+  "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+  "local_source_commit": "99d6aae5e06a3fc9a9a69c433f48f32729776861",
+  "linux_opengl": {
+    "schema": 1,
+    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "architecture": "x86_64",
+    "minecraft": "26.3",
+    "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+    "results": [
+      {
+        "observed_mode": "world",
+        "title_screen_observed": false,
+        "world_loaded": true,
+        "ready_client_ticks": 40,
+        "window_active": true,
+        "overlay_present": false,
+        "overlay_wait_ticks": 79,
+        "heap_max_bytes": 6442450944,
+        "iris_capture_status": "available",
+        "iris_shaders_enabled": true,
+        "shader_required": true,
+        "iris_expected_pack_matches": true,
+        "framebuffer_width": 1280,
+        "framebuffer_height": 800,
+        "sampled_pixels": 4288,
+        "distinct_sampled_rgb": 3777,
+        "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+        "graphics_backend": "OpenGL",
+        "graphics_driver": "4.5 (Core Profile) Mesa 26.0.8-1ubuntu0.3",
+        "private_png_sha256": "1a221bb9bedb21770f08ffcde593539c02d4e7cad48516bf7fad4215d7b14cde",
+        "profile": "cinematic",
+        "preferred_backend": "opengl",
+        "launcher_exit_code": 0,
+        "backend_attempts": [
+          {
+            "backend": "OpenGL",
+            "operation": "load_library",
+            "result": "success"
+          },
+          {
+            "backend": "OpenGL",
+            "operation": "create_device",
+            "result": "success"
+          }
+        ]
+      }
+    ],
+    "limits": [
+      "Short scene startup and nonuniform framebuffer readback only.",
+      "World mode uses the ordinary limited demo; world files remain private.",
+      "No exhaustive gameplay, visual-correctness, FPS or M2 Pro performance claim.",
+      "Vulkan preference can fall back; inspect the observed backend.",
+      "PNG images, assets and full logs remain in the private runtime directory."
+    ]
+  },
+  "linux_vulkan_failure": {
+    "exit_code": 1,
+    "result_count": 0,
+    "java_exception_types": [
+      "java.awt.AWTError",
+      "java.lang.NullPointerException",
+      "java.lang.RuntimeException",
+      "net.minecraft.ReportedException"
+    ],
+    "expected_demo_authentication_errors_observed": true,
+    "backend_attempts": [
+      {
+        "backend": "Vulkan",
+        "operation": "load_library",
+        "result": "success"
+      },
+      {
+        "backend": "Vulkan",
+        "operation": "create_device",
+        "result": "success"
+      }
+    ],
+    "created_devices": [
+      {
+        "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+        "graphics_backend": "Vulkan",
+        "graphics_driver": "1.4.335 llvmpipe Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)"
+      }
+    ],
+    "client_initializer_reached": true,
+    "readback_requested": false,
+    "readback_callback_received": false,
+    "readback_inspections": [],
+    "probe_failure_categories": [],
+    "vulkan_error_codes": [],
+    "fatal_jvm_error": false,
+    "observed_graphics_stack_methods": [
+      "net.minecraft.client.renderer.Lightmap.handler$zzk000$distanthorizons$render",
+      "net.minecraft.client.renderer.Lightmap.render",
+      "net.minecraft.client.renderer.GameRenderer.render"
+    ],
+    "profile": "cinematic",
+    "preferred_backend": "vulkan"
+  },
+  "linux_vulkan_without_dh": {
+    "private_dh_jar_removed": true,
+    "new_demo_world": true,
+    "exit_code": 1,
+    "result_count": 0,
+    "original_mod_sha256": "e651ef49bc97486e8dacfd4b640465c442525cd645e2dba71ddea9fb64347dd8",
+    "failure": {
+      "exit_code": 1,
+      "result_count": 0,
+      "java_exception_types": [
+        "java.lang.AssertionError",
+        "java.lang.RuntimeException"
+      ],
+      "expected_demo_authentication_errors_observed": true,
+      "backend_attempts": [
+        {
+          "backend": "Vulkan",
+          "operation": "load_library",
+          "result": "success"
+        },
+        {
+          "backend": "Vulkan",
+          "operation": "create_device",
+          "result": "success"
+        }
+      ],
+      "created_devices": [
+        {
+          "gpu": "llvmpipe (LLVM 21.1.8, 256 bits)",
+          "graphics_backend": "Vulkan",
+          "graphics_driver": "1.4.335 llvmpipe Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)"
+        }
+      ],
+      "client_initializer_reached": true,
+      "readback_requested": true,
+      "readback_callback_received": true,
+      "readback_inspections": [
+        {
+          "framebuffer_width": 1280,
+          "framebuffer_height": 800,
+          "sampled_pixels": 4288,
+          "distinct_sampled_rgb": 1804
+        }
+      ],
+      "probe_failure_categories": [
+        "shader_inactive"
+      ],
+      "vulkan_error_codes": [],
+      "fatal_jvm_error": false,
+      "observed_graphics_stack_methods": [
+        "net.minecraft.client.Screenshot.lambda$takeScreenshot$1",
+        "com.mojang.renderpearl.backend.vulkan.DestructionQueue.rotate",
+        "com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder.submit",
+        "com.mojang.renderpearl.frontend.FrontendCommandEncoder.submit"
+      ]
+    }
+  },
+  "mac_source_commit": "857c5a4aa553f83799631ad48340e43a13c78549",
+  "mac_run_url": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37198566508",
+  "mac_cases": [
+    {
+      "case": [
+        "--profile",
+        "cinematic",
+        "--backend",
+        "opengl",
+        "--world",
+        "--shaders"
+      ],
+      "exit_code": 1,
+      "failure": [
+        {
+          "fixture": "client-graphics",
+          "profile": "cinematic",
+          "completed": false
+        }
+      ]
+    },
+    {
+      "case": [
+        "--profile",
+        "cinematic",
+        "--backend",
+        "vulkan",
+        "--world",
+        "--shaders"
+      ],
+      "exit_code": 1,
+      "failure": [
+        {
+          "fixture": "client-graphics",
+          "profile": "cinematic",
+          "completed": false
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "Linux llvmpipe software renderer; no physical M2 shader performance or native GPU test.",
+    "OpenGL requires actual pinned shader activation and matching runtime pack identity, with nonuniform readback, focused gameplay, saved data and clean exit.",
+    "Linux Vulkan plus DH fails before readback; selected stack locations alone do not establish the root cause.",
+    "Removing DH privately produces an ordinary Vulkan world readback but Iris reports shaders inactive; the required-activation assertion rejects it.",
+    "Both hosted Mac cases hit the 240-second private fixture timeout; earlier diagnostics do not retain stages or waiting state. They do not establish shader compatibility or incompatibility.",
+    "Full logs, raw PNGs, world data, assets and shader ZIPs remain private.",
+    "Diagnostic repeat: OpenGL loads a world but retains a screen before readback; Vulkan initializes its device but records no waiting-state snapshot. Both time out; screen identity and root causes are unknown."
+  ],
+  "mac_diagnostic_repeat": {
+    "source_commit": "ed416c91cf980f136b7431314bccea7f266fe049",
+    "run_url": "https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37199837867",
+    "cases": [
+      {
+        "case": [
+          "--profile",
+          "cinematic",
+          "--backend",
+          "opengl",
+          "--world",
+          "--shaders"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": -15,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.IllegalStateException",
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "OpenGL",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "OpenGL",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Software Renderer",
+                "graphics_backend": "OpenGL",
+                "graphics_driver": "4.1 APPLE-23.1.1"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": false,
+            "readback_callback_received": false,
+            "readback_inspections": [],
+            "last_waiting_state": {
+              "world_loaded": true,
+              "player_present": true,
+              "overlay_present": false,
+              "screen_present": true,
+              "window_active": true,
+              "paused": false,
+              "ready_client_ticks": 0
+            },
+            "probe_failure_categories": [],
+            "vulkan_error_codes": [],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [
+              "net.minecraft.client.renderer.LevelRenderer.mixinextras$bridge$renderGroup$135",
+              "net.minecraft.client.renderer.LevelRenderer.wrapOperation$bio000$iris$beginTerrainLayer",
+              "net.minecraft.client.renderer.LevelRenderer.executeSolid",
+              "net.minecraft.client.renderer.LevelRenderer.lambda$addMainPass$0",
+              "com.mojang.blaze3d.framegraph.FrameGraphBuilder.execute",
+              "net.minecraft.client.renderer.LevelRenderer.render",
+              "net.minecraft.client.renderer.GameRenderer.mixinextras$bridge$render$86",
+              "net.minecraft.client.renderer.GameRenderer.wrapOperation$bjf000$iris$renderLevel"
+            ],
+            "fixture": "client-graphics",
+            "profile": "cinematic",
+            "completed": false,
+            "timed_out": true,
+            "timeout_seconds": 240
+          }
+        ]
+      },
+      {
+        "case": [
+          "--profile",
+          "cinematic",
+          "--backend",
+          "vulkan",
+          "--world",
+          "--shaders"
+        ],
+        "exit_code": 1,
+        "failure": [
+          {
+            "exit_code": -15,
+            "result_count": 0,
+            "java_exception_types": [
+              "java.lang.RuntimeException"
+            ],
+            "expected_demo_authentication_errors_observed": true,
+            "backend_attempts": [
+              {
+                "backend": "Vulkan",
+                "operation": "load_library",
+                "result": "success"
+              },
+              {
+                "backend": "Vulkan",
+                "operation": "create_device",
+                "result": "success"
+              }
+            ],
+            "created_devices": [
+              {
+                "gpu": "Apple Paravirtual device",
+                "graphics_backend": "Vulkan",
+                "graphics_driver": "1.2.350 MoltenVK 1.4.2"
+              }
+            ],
+            "client_initializer_reached": true,
+            "readback_requested": false,
+            "readback_callback_received": false,
+            "readback_inspections": [],
+            "last_waiting_state": null,
+            "probe_failure_categories": [],
+            "vulkan_error_codes": [],
+            "fatal_jvm_error": false,
+            "observed_graphics_stack_methods": [],
+            "fixture": "client-graphics",
+            "profile": "cinematic",
+            "completed": false,
+            "timed_out": true,
+            "timeout_seconds": 240
+          }
+        ]
+      }
+    ]
+  }
+}

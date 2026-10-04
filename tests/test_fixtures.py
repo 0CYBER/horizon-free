@@ -4,9 +4,28 @@ import unittest
 
 from tools.test_dispatch import failure_summary
 from tools.test_client_graphics import graphics_failure_summary, validate_shader_report
+from tools.test_culling_rays import FixtureTimeout
 
 
 class FixtureDiagnosticTests(unittest.TestCase):
+    def test_timeout_preserves_selected_stages_without_private_content(self):
+        output = '\n'.join([
+            'private-token /private/world/path',
+            'HORIZON_CLIENT_GRAPHICS_INITIALIZER_READY',
+            'HORIZON_CLIENT_GRAPHICS_WAIT_STATE {"world_loaded":true,"player_present":true,"overlay_present":false,"screen_present":true,"window_active":false,"paused":true,"ready_client_ticks":0,"ignored":"private-token"}',
+            'HORIZON_CLIENT_GRAPHICS_WAIT_STATE {"world_loaded":"private-token"}',
+        ])
+        error = FixtureTimeout(subprocess.CompletedProcess(['private-command'], -15, output), 'private-log')
+        self.assertIsInstance(error, RuntimeError)
+        result = graphics_failure_summary(error.run, 0)
+        self.assertEqual(result['exit_code'], -15)
+        self.assertTrue(result['client_initializer_reached'])
+        self.assertFalse(result['readback_requested'])
+        self.assertEqual(result['last_waiting_state'], {'world_loaded': True, 'player_present': True,
+            'overlay_present': False, 'screen_present': True, 'window_active': False, 'paused': True,
+            'ready_client_ticks': 0})
+        self.assertNotIn('private', json.dumps(result))
+
     def test_required_shaders_cannot_pass_with_disabled_unknown_or_different_pack(self):
         report = {'shader_required': True, 'iris_capture_status': 'available',
                   'iris_shaders_enabled': True, 'iris_expected_pack_matches': True}

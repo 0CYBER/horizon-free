@@ -18,6 +18,13 @@ except ImportError:
     import build_pack
 
 
+class FixtureTimeout(RuntimeError):
+    """Keep timeout output private while allowing selected caller diagnostics."""
+    def __init__(self, run, private_log):
+        super().__init__(f"Private fixture timed out; inspect {private_log}")
+        self.run = run
+
+
 def run_fixture(command, instance, environment):
     # Keep all children of this private fixture in a controllable process group.
     process = subprocess.Popen(command, cwd=build_pack.ROOT, env=environment, text=True,
@@ -37,7 +44,8 @@ def run_fixture(command, instance, environment):
         except subprocess.TimeoutExpired:
             stop_tree(True); output, _ = process.communicate(timeout=10)
         (instance / "fixture.log").write_text(output)
-        raise RuntimeError(f"Private fixture timed out; inspect {instance / 'fixture.log'}") from None
+        raise FixtureTimeout(subprocess.CompletedProcess(command, process.returncode, output),
+                             instance / 'fixture.log') from None
     (instance / "fixture.log").write_text(output)
     return subprocess.CompletedProcess(command, process.returncode, output)
 

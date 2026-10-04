@@ -24,6 +24,7 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
     private boolean requested;
     private boolean opening;
     private int overlayWaitTicks;
+    private long lastWaitingState;
     private final boolean worldMode = Files.exists(FabricLoader.getInstance().getConfigDir().resolve("client-graphics-world.flag"));
 
     @SuppressWarnings("unchecked")
@@ -54,6 +55,19 @@ public final class ClientGraphicsIntegration implements ClientModInitializer {
         System.out.println("HORIZON_CLIENT_GRAPHICS_INITIALIZER_READY");
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (requested) return;
+            long now = System.nanoTime();
+            if (now - lastWaitingState >= 5_000_000_000L) {
+                lastWaitingState = now;
+                var state = new JsonObject();
+                state.addProperty("world_loaded", client.level != null);
+                state.addProperty("player_present", client.player != null);
+                state.addProperty("overlay_present", client.gui.overlay() != null);
+                state.addProperty("screen_present", client.gui.screen() != null);
+                state.addProperty("window_active", client.isWindowActive());
+                state.addProperty("paused", client.isPaused());
+                state.addProperty("ready_client_ticks", titleTicks);
+                System.out.println("HORIZON_CLIENT_GRAPHICS_WAIT_STATE " + state);
+            }
             // TitleScreen can exist beneath the asynchronous loading overlay.
             // Count readiness only after it clears, for both title and world mode.
             if (client.gui.overlay() != null) {

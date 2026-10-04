@@ -12,12 +12,12 @@ import sys
 
 try:
     from . import build_mod, build_pack
-    from .test_culling_rays import run_fixture
+    from .test_culling_rays import FixtureTimeout, run_fixture
     from .test_dispatch import failure_summary
 except ImportError:
     import build_mod
     import build_pack
-    from test_culling_rays import run_fixture
+    from test_culling_rays import FixtureTimeout, run_fixture
     from test_dispatch import failure_summary
 
 
@@ -52,6 +52,20 @@ def graphics_failure_summary(run, report_count):
         if len(inspections) == 4:
             break
     result['readback_inspections'] = inspections
+    waiting_marker = 'HORIZON_CLIENT_GRAPHICS_WAIT_STATE '
+    boolean_fields = ('world_loaded', 'player_present', 'overlay_present',
+                      'screen_present', 'window_active', 'paused')
+    result['last_waiting_state'] = None
+    for line in run.stdout.splitlines():
+        if waiting_marker not in line:
+            continue
+        try:
+            state = json.loads(line.split(waiting_marker, 1)[1])
+        except json.JSONDecodeError:
+            continue
+        if (isinstance(state, dict) and all(type(state.get(field)) is bool for field in boolean_fields)
+                and type(state.get('ready_client_ticks')) is int and 0 <= state['ready_client_ticks'] <= 2_147_483_647):
+            result['last_waiting_state'] = {field: state[field] for field in (*boolean_fields, 'ready_client_ticks')}
     # These exact messages belong to our private fixture. Never emit arbitrary
     # exception messages or infer that a separately logged Vulkan code caused it.
     categories = {'Uniform title readback': 'uniform_readback',
@@ -125,9 +139,11 @@ def main():
             command = ['xvfb-run', '-a', *command]
         try:
             run = run_fixture(command, instance, os.environ.copy())
-        except RuntimeError:
-            print('HORIZON_FIXTURE_FAILURE ' + json.dumps({'fixture': 'client-graphics',
-                'profile': profile, 'completed': False}), flush=True)
+        except FixtureTimeout as error:
+            diagnostics = graphics_failure_summary(error.run, 0)
+            diagnostics.update(fixture='client-graphics', profile=profile,
+                completed=False, timed_out=True, timeout_seconds=240)
+            print('HORIZON_FIXTURE_FAILURE ' + json.dumps(diagnostics), flush=True)
             raise RuntimeError('Graphics probe did not finish; diagnostics remain private') from None
         marker = 'HORIZON_CLIENT_GRAPHICS_RESULT '
         reports = [json.loads(line.split(marker, 1)[1]) for line in run.stdout.splitlines() if marker in line]
