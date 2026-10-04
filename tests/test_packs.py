@@ -179,6 +179,52 @@ class PackTests(unittest.TestCase):
         self.assertFalse(runtime.library_allowed(library, "linux", "aarch64"))
         self.assertFalse(runtime.library_allowed(library, "osx", "x86_64"))
 
+    def test_conditional_client_jvm_arguments_follow_official_platform_rules(self):
+        windows = "-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump"
+        manifest = {"arguments": {"jvm": [
+            {"rules": [{"action": "allow", "os": {"name": "osx"}}], "value": ["-XstartOnFirstThread"]},
+            {"rules": [{"action": "allow", "os": {"name": "windows"}}], "value": windows},
+            {"rules": [{"action": "allow", "os": {"arch": "x86"}}], "value": "-Xss1M"},
+            "-cp", "${classpath}", "--enable-native-access=ALL-UNNAMED",
+        ]}}
+        self.assertEqual(runtime.conditional_client_jvm_options(manifest, "osx", "aarch64"), ["-XstartOnFirstThread"])
+        self.assertEqual(runtime.conditional_client_jvm_options(manifest, "osx", "x86_64"), ["-XstartOnFirstThread"])
+        self.assertEqual(runtime.conditional_client_jvm_options(manifest, "windows", "AMD64"), [windows])
+        self.assertEqual(runtime.conditional_client_jvm_options(manifest, "windows", "arm64"), [windows])
+        self.assertEqual(runtime.conditional_client_jvm_options(manifest, "linux", "x86_64"), [])
+        self.assertEqual(runtime.conditional_client_jvm_options(manifest, "windows", "x86"), [windows, "-Xss1M"])
+        # Client platform flags must not leak into the shared server JVM policy.
+        self.assertEqual(runtime.jvm_options("3G", True, "g1"),
+                         ["-Xms512M", "-Xmx3G", "-XX:+UseCompactObjectHeaders", "-XX:+UseG1GC"])
+
+    def test_conditional_client_jvm_arguments_observe_rule_order_and_reject_placeholders(self):
+        argument = {"rules": [{"action": "allow", "os": {"name": "osx"}},
+                              {"action": "disallow", "os": {"arch": "x86_64"}}], "value": "-XstartOnFirstThread"}
+        manifest = {"arguments": {"jvm": [argument]}}
+        self.assertEqual(runtime.conditional_client_jvm_options(manifest, "osx", "aarch64"), ["-XstartOnFirstThread"])
+        self.assertEqual(runtime.conditional_client_jvm_options(manifest, "osx", "x86_64"), [])
+        self.assertEqual(runtime.conditional_client_jvm_options({}, "linux", "x86_64"), [])
+        argument["value"] = "${unsupported}"
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            runtime.conditional_client_jvm_options(manifest, "osx", "aarch64")
+
+    def test_demo_command_includes_mac_first_thread_flag_before_main_class(self):
+        manifest = {"id": "26.3", "assetIndex": {"id": "fixture"}, "arguments": {"jvm": [
+            {"rules": [{"action": "allow", "os": {"name": "osx"}}], "value": "-XstartOnFirstThread"}]}}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with mock.patch.object(runtime, "prepare_client", return_value=(manifest, [root / "game.jar"], root / "natives")), \
+                 mock.patch.object(runtime.platform, "system", return_value="Darwin"), \
+                 mock.patch.object(runtime.subprocess, "run") as run, \
+                 mock.patch("sys.argv", ["runtime.py", "demo", "--instance", str(root / "instance")]):
+                runtime.main()
+            command = run.call_args.args[0]
+            self.assertEqual(command.count("-XstartOnFirstThread"), 1)
+            self.assertLess(command.index("-XstartOnFirstThread"),
+                            command.index("net.fabricmc.loader.impl.launch.knot.KnotClient"))
+            self.assertEqual(command.count("-cp"), 1)
+            self.assertTrue(run.call_args.kwargs["check"])
+
     def test_native_architecture_is_selected_even_with_os_only_rules(self):
         intel = {"name": "org.lwjgl:lwjgl:3.4.3:natives-macos"}
         arm = {"name": "org.lwjgl:lwjgl:3.4.3:natives-macos-arm64"}
