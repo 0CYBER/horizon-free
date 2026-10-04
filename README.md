@@ -135,7 +135,7 @@ python3 tools/build_mod.py
 python3 tools/build_release.py
 ```
 
-Gitignored `dist/` contains fourteen packs, our original instrumentation JAR, client/server starter ZIPs and SHA256SUMS. [mods.lock.json](packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
+Gitignored `dist/` contains nineteen packs, our original instrumentation JAR, client/server starter ZIPs and SHA256SUMS. [mods.lock.json](packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
 
 The server starter uses Lithium/FerriteCore and `/horizonserver bench <label> <seconds>`. [Server instructions](docs/server-quickstart.txt) cover setup and a baseline. Files are prepared before you accept Minecraft's EULA locally. A 50-active-player workload remains to be measured.
 
@@ -145,6 +145,11 @@ Local smoke testing uses the game's built-in limited demo; normal play uses Pris
 python3 tools/build_pack.py --profile m2-balanced --instance .local/runtime/m2-balanced
 vscreen run python3 tools/runtime.py demo --instance .local/runtime/m2-balanced
 ```
+
+The standalone demo launcher applies the pinned official manifest's conditional
+JVM flags, including macOS `-XstartOnFirstThread` and the Windows heap-dump-path
+option. Prism applies its own official manifest. Server JVM policy is separate;
+this launcher correction is not a measured graphics performance improvement.
 
 ## Local game inspection
 

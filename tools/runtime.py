@@ -91,6 +91,20 @@ def library_allowed(library, system=None, architecture=None):
     return allowed
 
 
+def conditional_client_jvm_options(manifest, system=None, architecture=None):
+    """Use official OS/architecture flags alongside our managed JVM/classpath options."""
+    options = []
+    for argument in manifest.get("arguments", {}).get("jvm", []):
+        if not isinstance(argument, dict) or not library_allowed(argument, system, architecture):
+            continue
+        value = argument["value"]
+        values = [value] if isinstance(value, str) else value
+        if not isinstance(values, list) or any(not isinstance(item, str) or "${" in item for item in values):
+            raise ValueError("Unsupported conditional client JVM argument")
+        options.extend(values)
+    return options
+
+
 def native_library_matches(library, architecture=None):
     """Modern manifests list both x64 and ARM natives with OS-only rules."""
     architecture = (architecture or platform.machine()).lower()
@@ -157,6 +171,7 @@ def main():
     instance = args.instance.resolve()
     instance.mkdir(parents=True, exist_ok=True)
     command = ["java", *jvm_options(args.heap, args.compact_headers, args.gc),
+               *conditional_client_jvm_options(manifest),
                "--enable-native-access=ALL-UNNAMED",
                f"-Djava.library.path={natives}", f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
                "-Dfabric.log.disableAnsi=true", "-cp", os.pathsep.join(map(str, jars)),
