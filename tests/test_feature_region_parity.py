@@ -15,6 +15,7 @@ class FeatureRegionCorpusTests(unittest.TestCase):
         self.assertTrue(all(any(v['type'] == 'spring_feature' for v in f['features']) for f in fixtures))
         self.assertTrue(all([v['active'] for v in f['features'] if v['type'] == 'end_podium'] == [False, True] for f in fixtures))
         self.assertEqual({None if f['write_zone'] is None else tuple(f['write_zone']) for f in fixtures}, {None, (0, 0, 0), (1, 1, 0), (-1, -1, 1), (0, 0, -1)})
+        self.assertEqual({f['upgrading'] for f in fixtures}, {False, True})
         self.assertEqual({f['worldgen'] for f in fixtures}, {False, True})
         self.assertEqual({f['legacy'] for f in fixtures}, {False, True})
         self.assertEqual({f['stage'] for f in fixtures}, {'empty', 'terrain'})

@@ -20,3 +20,26 @@ impl GenerationWriteZone {
         self.contains_chunk(position.chunk())
     }
 }
+
+/// The center chunk's generation height while an upgrade is active. Normal
+/// generation has no vertical write-policy gate (storage bounds are separate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UpgradeWriteHeight {
+    min_y: i32,
+    max_y: i32,
+}
+impl UpgradeWriteHeight {
+    pub const BELOW_ZERO: Self = Self {
+        min_y: -64,
+        max_y: -1,
+    };
+    pub fn new(min_y: i32, height: i32) -> Self {
+        Self {
+            min_y,
+            max_y: min_y.wrapping_add(height).wrapping_sub(1),
+        }
+    }
+    pub fn contains(self, y: i32) -> bool {
+        y >= self.min_y && y <= self.max_y
+    }
+}

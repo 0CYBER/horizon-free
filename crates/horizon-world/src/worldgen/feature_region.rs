@@ -378,6 +378,7 @@ pub struct TerrainFeatureAccess<'a, 'r, B: TerrainBlockStates, F> {
     region: &'a mut TerrainRegion<'r, B>,
     write: F,
     write_zone: Option<super::write_zone::GenerationWriteZone>,
+    upgrade_height: Option<super::write_zone::UpgradeWriteHeight>,
 }
 impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
     pub fn new(region: &'a mut TerrainRegion<'r, B>, write: F) -> Self {
@@ -385,12 +386,18 @@ impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
             region,
             write,
             write_zone: None,
+            upgrade_height: None,
         }
     }
     /// Apply the horizontal write radius before invoking mutation policy/effects.
-    /// Upgrading-world vertical restrictions remain the owning world's policy.
     pub fn with_write_zone(mut self, zone: super::write_zone::GenerationWriteZone) -> Self {
         self.write_zone = Some(zone);
+        self
+    }
+    /// Restrict writes to the upgrading center chunk's generation height.
+    /// The owning lifecycle supplies this only while an upgrade is active.
+    pub fn with_upgrade_height(mut self, height: super::write_zone::UpgradeWriteHeight) -> Self {
+        self.upgrade_height = Some(height);
         self
     }
 }
@@ -407,6 +414,12 @@ where
         if self.write_zone.is_some_and(|zone| {
             !zone.contains_block(BlockPos::new(position[0], position[1], position[2]))
         }) {
+            return Ok(false);
+        }
+        if self
+            .upgrade_height
+            .is_some_and(|height| !height.contains(position[1]))
+        {
             return Ok(false);
         }
         (self.write)(self.region, position, state, flags)

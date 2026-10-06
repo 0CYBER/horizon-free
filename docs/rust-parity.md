@@ -833,3 +833,21 @@ all-target Clippy pass. Collection order is normalized; Rust exposes borrowed or
 owned data instead of unrestricted Java aliases. Entity construction from NBT,
 complete serializers, active entity behavior and resident chunk lifecycle
 integration remain pending.
+
+## Upgrading-world write heights
+
+Feature access can now enforce the upgrading center chunk's generation height
+before invoking its write callback. Below-zero proto-chunk upgrades use Y = -64
+through -1, inclusive. Ordinary generation has no vertical policy gate; storage
+bounds remain separate. Reads and tick scheduling keep their existing behavior,
+and generation-time destruction shares the write guard.
+
+The [upgrade-height comparison](../benchmarks/rust-feature-region-upgrade-height-2026-10-06/scoped-parity.json)
+matches **29,247,433 lines per reference JAR**, including **10,098 height cases**,
+20,125 horizontal zone cases and all 192 resident fixtures. The reference calls
+actual `WorldGenRegion.ensureCanWrite` with a native ProtoChunk before and after
+installing below-zero upgrade data. Direct write probes cover boundary and extreme
+heights, ordinary/upgrading modes and horizontal rejection. Five focused Rust
+region tests, all-target Clippy and both Python fixture tests pass. Upgrade
+activation, target-status cleanup, old-bedrock replacement, hole masking, biome
+retention and the complete generation lifecycle remain pending.

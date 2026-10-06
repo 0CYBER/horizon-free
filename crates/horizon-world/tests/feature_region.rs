@@ -243,3 +243,50 @@ fn query_bindings_reject_foreign_registries_and_preserve_resolved_tag_snapshot()
     assert!(region.water_at([-1, 16, 0]).unwrap());
     assert!(region.fluid_state([0, 0, 0]).is_err());
 }
+
+#[test]
+fn upgrade_height_rejects_mutations_before_callbacks_but_preserves_reads_and_ticks() {
+    use horizon_world::worldgen::write_zone::{GenerationWriteZone, UpgradeWriteHeight};
+    use std::cell::Cell;
+    let registry = registry();
+    let mut chunk =
+        TerrainChunk::new(ChunkPos::new(0, 0), -64, 128, &registry, Properties).unwrap();
+    let stone = registry.default_state("minecraft:stone").unwrap();
+    chunk.set_block_worldgen(0, 0, 0, stone).unwrap();
+    let mut region =
+        TerrainRegion::new(vec![chunk], WorldGenerationContext::new(-64, 128, 0)).unwrap();
+    let calls = Cell::new(0);
+    {
+        let write = |region: &mut TerrainRegion<'_, Properties>, p, state, _| {
+            calls.set(calls.get() + 1);
+            region.set_block_worldgen(p, state)?;
+            Ok(true)
+        };
+        let mut world = TerrainFeatureAccess::new(&mut region, write)
+            .with_write_zone(GenerationWriteZone::new(ChunkPos::new(0, 0), 0))
+            .with_upgrade_height(UpgradeWriteHeight::BELOW_ZERO);
+        assert!(!world.set_block([0, 0, 0], stone, 2).unwrap());
+        assert!(!world.destroy_block_without_entity([0, 0, 0], true).unwrap());
+        assert!(!world.set_block([0, -65, 0], stone, 2).unwrap());
+        assert!(!world.set_block([16, -1, 0], stone, 2).unwrap());
+        assert_eq!(calls.get(), 0);
+        assert_eq!(world.block_state([0, 0, 0]).unwrap(), stone);
+        world.schedule_block_tick([0, 0, 0], stone, 1).unwrap();
+        assert!(world.set_block([0, -1, 0], stone, 2).unwrap());
+        assert!(
+            world
+                .destroy_block_without_entity([0, -1, 0], true)
+                .unwrap()
+        );
+        assert_eq!(calls.get(), 2);
+    }
+    assert_eq!(region.block([0, 0, 0]).unwrap(), stone);
+    assert_eq!(region.chunk(0, 0).unwrap().block_ticks().count(), 1);
+    let write = |_: &mut TerrainRegion<'_, Properties>, _, _, _| {
+        calls.set(calls.get() + 1);
+        Ok(true)
+    };
+    let mut world = TerrainFeatureAccess::new(&mut region, write);
+    assert!(world.set_block([0, i32::MAX, 0], stone, 2).unwrap());
+    assert_eq!(calls.get(), 3);
+}

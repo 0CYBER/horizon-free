@@ -2,12 +2,12 @@ use horizon_core::random::{LegacyRandom, RandomSource, WorldgenRandom, Xoroshiro
 use horizon_world::worldgen::{
     anchor::WorldGenerationContext,
     block_feature::FeatureBlockBindings,
-    feature::FeatureBlocks,
+    feature::{FeatureBlocks, FeatureWorld},
     feature_graph::FeatureDefinition,
     feature_region::{RegionError, TerrainFeatureAccess, TerrainRegion},
     placement::{FeaturePlacer, PlacementContext, PlacementModifier},
     terrain::TerrainError,
-    write_zone::GenerationWriteZone,
+    write_zone::{GenerationWriteZone, UpgradeWriteHeight},
 };
 // Feature chains against a resident multi-chunk region.
 use horizon_core::position::ChunkPos;
@@ -221,6 +221,9 @@ fn run(
                         n(&zone[2]),
                     ));
                 }
+                if f["upgrading"].as_bool().unwrap() {
+                    world = world.with_upgrade_height(UpgradeWriteHeight::BELOW_ZERO);
+                }
                 placer.place_with_context(
                     &modifiers,
                     &mut world,
@@ -246,6 +249,42 @@ fn run(
             }
         }
         writeln!(out, "repeat {repeat}")?;
+    }
+    for y in [i32::MIN, -65, -64, -63, -1, 0, 1, 319, 320, i32::MAX] {
+        for x in [0, 16] {
+            let result = {
+                let write = |region: &mut TerrainRegion<'_, Properties<'_>>,
+                             p: [i32; 3],
+                             state: BlockStateId,
+                             flags: i32|
+                 -> Result<bool, RegionError> {
+                    writeln!(out, "write {} {} {} {} {flags}", p[0], p[1], p[2], state.0)
+                        .map_err(TerrainError::from)?;
+                    let result = reject == 0;
+                    if result {
+                        region.set_block_worldgen(p, state)?;
+                    }
+                    writeln!(out, "written {result}").map_err(TerrainError::from)?;
+                    Ok(result)
+                };
+                let mut world = TerrainFeatureAccess::new(&mut region, write);
+                if let Some(zone) = f["write_zone"].as_array() {
+                    world = world.with_write_zone(GenerationWriteZone::new(
+                        ChunkPos::new(n(&zone[0]), n(&zone[1])),
+                        n(&zone[2]),
+                    ));
+                }
+                if f["upgrading"].as_bool().unwrap() {
+                    world = world.with_upgrade_height(UpgradeWriteHeight::BELOW_ZERO);
+                }
+                world.set_block(
+                    [x, y, 0],
+                    registry.default_state("minecraft:stone").unwrap(),
+                    2,
+                )?
+            };
+            writeln!(out, "heightwrite {x} {y} {result}")?;
+        }
     }
     for command in f["tick_commands"].as_array().unwrap() {
         let kind = command[0].as_str().unwrap();
@@ -448,6 +487,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "zone {} {}",
             zone.contains_chunk(ChunkPos::new(x, z)),
             zone.contains_block(horizon_core::position::BlockPos::new(x, i32::MIN, z))
+        )?;
+    }
+    let heights: Value = serde_json::from_str(&fs::read_to_string(dir.join("heights.json"))?)?;
+    for row in heights.as_array().unwrap() {
+        let y = n(&row[2]);
+        writeln!(
+            out,
+            "heightgate {} true {}",
+            UpgradeWriteHeight::new(n(&row[0]), n(&row[1])).contains(y),
+            UpgradeWriteHeight::BELOW_ZERO.contains(y)
         )?;
     }
     for line in fs::read_to_string(dir.join("inputs.txt"))?.lines() {

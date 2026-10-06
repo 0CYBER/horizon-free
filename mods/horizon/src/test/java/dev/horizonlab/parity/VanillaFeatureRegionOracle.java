@@ -42,6 +42,10 @@ public final class VanillaFeatureRegionOracle {
         String[] names={"centerChunkX","centerChunkZ","writeRadius"};int[] values={x,z,radius};
         for(int i=0;i<names.length;i++){var field=net.minecraft.server.level.WorldGenRegion.class.getDeclaredField(names[i]);field.setAccessible(true);field.setInt(world,values[i]);}
     }
+    private static void center(NativeDestruction world,ProtoChunk chunk)throws ReflectiveOperationException {
+        var field=net.minecraft.server.level.WorldGenRegion.class.getDeclaredField("center");field.setAccessible(true);field.set(world,chunk);
+    }
+    private static BelowZeroRetrogen retrogen(){return BelowZeroRetrogen.CODEC.parse(JsonOps.INSTANCE,JsonParser.parseString("{\"target_status\":\"minecraft:features\"}")).getOrThrow();}
     private static ProtoChunk chunk(Map<ChunkPos,ProtoChunk> chunks,int x,int z) {
         var chunk=chunks.get(new ChunkPos(x>>4,z>>4));if(chunk==null)throw new IllegalArgumentException("missing region chunk");return chunk;
     }
@@ -96,6 +100,16 @@ public final class VanillaFeatureRegionOracle {
                 var row=value.getAsJsonArray();setWriteZone(zoneWorld,row.get(0).getAsInt(),row.get(1).getAsInt(),row.get(2).getAsInt());
                 int x=row.get(3).getAsInt(),z=row.get(4).getAsInt();out.println("zone "+chunkZone.invoke(zoneWorld,x,z)+" "+zoneWorld.isWithinWriteZone(new BlockPos(x,Integer.MIN_VALUE,z)));
             }
+            var heightChunk=new ProtoChunk(new ChunkPos(0,0),UpgradeData.EMPTY,LevelHeightAccessor.create(-64,384),factory,null);
+            center(zoneWorld,heightChunk);setWriteZone(zoneWorld,0,0,0);
+            var upgrade=retrogen();
+            for(var value:JsonParser.parseString(Files.readString(dir.resolve("heights.json"))).getAsJsonArray()) {
+                var row=value.getAsJsonArray();int y=row.get(2).getAsInt();var p=new BlockPos(0,y,0);
+                boolean interval=LevelHeightAccessor.create(row.get(0).getAsInt(),row.get(1).getAsInt()).isInsideBuildHeight(y);
+                heightChunk.setBelowZeroRetrogen(null);boolean normal=zoneWorld.ensureCanWrite(p);
+                heightChunk.setBelowZeroRetrogen(upgrade);boolean upgrading=zoneWorld.ensureCanWrite(p);
+                out.println("heightgate "+interval+" "+normal+" "+upgrading);
+            }
             for(var line:Files.readAllLines(dir.resolve("inputs.txt"))) {
                 var f=JsonParser.parseString(line).getAsJsonObject();long seed=f.get("seed").getAsLong();
                 var features=new ArrayList<Feature>();
@@ -139,6 +153,7 @@ public final class VanillaFeatureRegionOracle {
                     case "setBlock"->{
                         var p=(BlockPos)values[0];var state=(BlockState)values[1];int flags=(Integer)values[2];
                         if(!f.get("write_zone").isJsonNull()&&!destroyer[0].isWithinWriteZone(p))yield false;
+                        if(!destroyer[0].ensureCanWrite(p))yield false;
                         out.println("write "+p.getX()+" "+p.getY()+" "+p.getZ()+" "+Block.getId(state)+" "+flags);
                         int call=calls[0]++;if(call==fail)throw new IllegalArgumentException("injected write failure");
                         boolean result=reject==0||call%reject!=0;
@@ -148,6 +163,9 @@ public final class VanillaFeatureRegionOracle {
                     default->throw new AssertionError("unexpected world method "+method);
                 });
                 destroyer[0]=destruction(world);
+                var centerChunk=chunks.get(new ChunkPos(0,0));
+                if(f.get("upgrading").getAsBoolean())centerChunk.setBelowZeroRetrogen(upgrade);
+                center(destroyer[0],centerChunk);setWriteZone(destroyer[0],0,0,Integer.MAX_VALUE);
                 if(!f.get("write_zone").isJsonNull()){var zone=f.getAsJsonArray("write_zone");setWriteZone(destroyer[0],zone.get(0).getAsInt(),zone.get(1).getAsInt(),zone.get(2).getAsInt());}
                 var modifiers=new ArrayList<PlacementModifier>();for(var value:f.getAsJsonArray("placement"))modifiers.add(PlacementModifier.CODEC.parse(JsonOps.INSTANCE,value).getOrThrow());
                 var placer=new FeaturePlacer(world,generator);
@@ -159,6 +177,10 @@ public final class VanillaFeatureRegionOracle {
                         for(int[] p:new int[][]{{0,0},{15,15},{16,16},{-1,-1}})for(var kind:Heightmap.Types.values())out.println("height "+kind.name()+" "+p[0]+" "+p[1]+" "+(chunk(chunks,p[0],p[1]).getHeight(kind,p[0]&15,p[1]&15)+1));
                     }
                     out.println("repeat "+repeat);
+                }
+                for(int y:new int[]{Integer.MIN_VALUE,-65,-64,-63,-1,0,1,319,320,Integer.MAX_VALUE})for(int x:new int[]{0,16}) {
+                    calls[0]=0;boolean result=world.setBlock(new BlockPos(x,y,0),Blocks.STONE.defaultBlockState(),2);
+                    out.println("heightwrite "+x+" "+y+" "+result);
                 }
                 for(var raw:f.getAsJsonArray("tick_commands")){
                     var command=raw.getAsJsonArray();String kind=command.get(0).getAsString();int id=command.get(1).getAsInt();var xyz=command.get(2).getAsJsonArray();var p=new BlockPos(xyz.get(0).getAsInt(),xyz.get(1).getAsInt(),xyz.get(2).getAsInt());int delay=command.get(3).getAsInt();
