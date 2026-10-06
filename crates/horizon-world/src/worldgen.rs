@@ -46,6 +46,7 @@ pub mod rule_test;
 pub mod settings;
 pub mod simple_block;
 pub mod snow_freeze;
+pub mod speleothem;
 pub mod spike;
 pub mod spring;
 pub mod state_provider;

@@ -57,6 +57,7 @@ pub enum FeatureDefinition {
     EndGateway(super::end_gateway::EndGatewayFeature),
     BonusChest(super::bonus_chest::BonusChestFeature),
     ChorusPlant(super::chorus_plant::ChorusPlantFeature),
+    Speleothem(super::speleothem::SpeleothemFeature),
     Spike(super::spike::SpikeFeature),
     BlueIce(super::blue_ice::BlueIceFeature),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaFeature),
@@ -92,6 +93,7 @@ pub enum FeatureExecutionError<E> {
     EndGateway(super::end_gateway::EndGatewayError<E>),
     BonusChest(super::bonus_chest::BonusChestError<E>),
     ChorusPlant(super::chorus_plant::ChorusPlantError<E>),
+    Speleothem(super::speleothem::SpeleothemError<E>),
     Spike(super::spike::SpikeError<E>),
     BlueIce(super::blue_ice::BlueIceError<E>),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaError<E>),
@@ -118,6 +120,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::EndGateway(e) => e.fmt(f),
             Self::BonusChest(e) => e.fmt(f),
             Self::ChorusPlant(e) => e.fmt(f),
+            Self::Speleothem(e) => e.fmt(f),
             Self::Spike(e) => e.fmt(f),
             Self::BlueIce(e) => e.fmt(f),
             Self::UnderwaterMagma(e) => e.fmt(f),
@@ -312,6 +315,11 @@ impl FeatureDefinition {
                 )
                 .map(Self::ReplaceBlobs)
             }
+            "minecraft:speleothem" => super::speleothem::SpeleothemFeature::from_json(
+                json,
+                blocks.ok_or(DecodeError::Field("speleothem bindings"))?,
+            )
+            .map(Self::Speleothem),
             "minecraft:chorus_plant" => super::chorus_plant::ChorusPlantFeature::new(
                 blocks.ok_or(DecodeError::Field("chorus plant bindings"))?,
             )
@@ -688,6 +696,9 @@ impl FeatureDefinition {
             Self::ReplaceBlobs(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::ReplaceBlobs),
+            Self::Speleothem(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::Speleothem),
             Self::ChorusPlant(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::ChorusPlant),

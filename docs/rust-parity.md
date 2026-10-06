@@ -765,3 +765,19 @@ rejected writes, repeated mutation, random obstacles, wrapped coordinates and
 feature composition. Workspace tests and all-target Clippy pass. Neighbor-update
 execution, random tick growth, drops, rendering and complete End generation remain
 pending.
+
+## Small pointed formations
+
+The `speleothem` feature now chooses its growth direction from ceiling/floor
+blocks, spreads a base patch, selects one- or two-block height, rechecks its base
+and writes waterlogged tip/frustum states. Configured base and pointed states
+select block identities; placement uses their defaults. Unsupported pointed-block
+properties fail during placement after the preceding patch operations.
+
+The [speleothem comparison](../benchmarks/rust-speleothem-2026-10-06/scoped-parity.json)
+matches **2,752,289 lines per reference JAR** across **145,473 fixtures**, including
+all states in support, taller-growth and contained-fluid roles; optional float
+defaults and boundaries; both random streams; rejected writes; partial failures;
+repeated mutation; wrapped positions; and composition. Workspace tests and
+all-target Clippy pass. Neighbor updates, falling behavior, fluid simulation,
+larger clusters and complete cave generation remain pending.
