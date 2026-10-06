@@ -29,6 +29,8 @@ inspection gallery from registry-bound, selected and transformed models, includi
 cutouts, multipart connections, weighted stone variants and stepped lantern
 animation. All 16 scene selections match native model collection. These are not
 yet gameplay blocks; general chunk model rendering remains unfinished.
+[Neighbor face visibility](face-visibility.md) now matches both reference JARs
+across 1,441,816 state pairs, including all pinned suppression-rule families.
 Animation metadata, frame sequences and tick-state selection now have native
 differential coverage, including all bundled animated texture metadata. GPU
 interpolation and game-loop synchronization remain unfinished.

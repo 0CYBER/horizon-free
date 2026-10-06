@@ -5,6 +5,7 @@ pub mod block_collision;
 pub mod block_entities;
 pub mod block_placement;
 pub mod block_properties;
+pub mod block_render;
 pub mod block_support;
 pub mod block_survival;
 pub mod chunk;
