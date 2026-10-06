@@ -2,7 +2,9 @@
 
 The behavior target is the repository's pinned **Minecraft Java Edition 26.3**.
 One-to-one vanilla gameplay parity is the acceptance criterion. It has **not**
-been reached: Horizon's Rust code does not yet run a client, server, or simulation.
+been reached. Horizon now has a [native development client](native-client.md)
+that renders a controlled block scene with a free camera. It does not run a
+complete game server or gameplay simulation.
 The Rust workspace implements core arithmetic/random streams, world data and
 resident sections, scheduled tick ordering, geometry, contained fluid states,
 noise/density evaluation, biome and terrain generation kernels, material rules,
@@ -78,7 +80,9 @@ Negative lengths and the complete Java object/API surface are not supported.
 
 ## Reproduce validation
 
-Requires Rust 1.85 or newer, Python 3.10 or newer, and JDK 25. From the checkout:
+The core/world libraries require Rust 1.85 or newer; the native client's locked
+dependencies require Rust 1.90 or newer. Use current stable Rust, Python 3.10 or
+newer, and JDK 25 for the complete workspace. From the checkout:
 
 ```sh
 cargo test --workspace

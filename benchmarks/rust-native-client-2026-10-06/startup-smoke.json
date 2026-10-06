@@ -1,0 +1,141 @@
+{
+  "adapter": {
+    "backend": "Vulkan",
+    "device": 0,
+    "device_type": "Cpu",
+    "name": "llvmpipe (LLVM 21.1.8, 256 bits)",
+    "vendor": 65541
+  },
+  "arch": "x86_64",
+  "camera_pitch": -0.3839724354387525,
+  "camera_position": [
+    25.0,
+    18.0,
+    25.0
+  ],
+  "camera_yaw": -2.356194490192345,
+  "elapsed_seconds": 0.541997659,
+  "error": null,
+  "merged_quads": 166,
+  "os": "linux",
+  "presented_frames": 30,
+  "project": "Horizon",
+  "resident_chunks": 9,
+  "schema": 1,
+  "scope": "Native opaque-cube renderer and free inspection camera; no gameplay simulation",
+  "window_size": [
+    1280,
+    720
+  ],
+  "executable_sha256": "4907a5678c323ab250934f3dfa32ba10e1554635f81d226ed2a88e7625737c5f",
+  "resource_manifest_sha256": "eda44ebee6904eab880c15458dbd1212dc2799d320a4419fc810e2ceb0e5d9d6",
+  "sources": {
+    "crates/horizon-client/src/assets.rs": "f35107193fc6d08be41891181da1803abf15bd373b62dd63758213809e2c5cbf",
+    "crates/horizon-client/src/camera.rs": "f9821c8a51a004dd4ad9c0952e746eb07926f6040cf8660bc26da5a0728ae572",
+    "crates/horizon-client/src/main.rs": "0cc250b695ba0d1e49107f581695edea1d24cdc2fb8ffa3a46368ef2c40430a7",
+    "crates/horizon-client/src/mesh.rs": "e2fa00435ec8239ba8a3c6539022bb50a10ff9c3850c6faab72f86aabea896ef",
+    "crates/horizon-client/src/render.rs": "4d58443465ea25769d73701d138db6a99c4f939a288e89e1f2b1ee3d017a2737",
+    "crates/horizon-client/src/world.rs": "901aa59c23ea084e926eec014589f4d511c41691a8dc1520534e039c28cfc76c",
+    "crates/horizon-client/src/world.wgsl": "dd7d579d0afb8a61da849171e444fa05a3e9d15bbfe6d019ff6653e8e0774c66",
+    "Cargo.toml": "4f803d21656a1420555bee6369617ddc825219a2cf05f842a209b3f8eaa583ec",
+    "Cargo.lock": "b1674833e1d5e66032589eea75643bf1c1eb2f2d6503e79ff7da8efa1b6d21dc",
+    "crates/horizon-client/Cargo.toml": "3047995858c9cd103ce358dfd991cb81e7d0688a149f4874cc73c36b859bbff7",
+    "tools/prepare_native_client.py": "b16f62acfc6242552af14ff405e2169ebba3adab12b991fc011e78edb4ffa982",
+    "tools/test_native_client.py": "adb9aa87cc28b0980d811ce47c1b09878d2d72cef2e083b278ec41183d231f1b"
+  },
+  "validation": {
+    "rust_workspace_tests": "passed",
+    "clippy_all_targets": "passed",
+    "python_tooling_tests": 149,
+    "mesh_tests": 2,
+    "manual_visual_checks": [
+      "textured scene with 81 chunks and 382 merged quads",
+      "window resize from 1600x1000 to 1280x720"
+    ],
+    "input_checks": [
+      "physical W movement",
+      "physical Right rotation",
+      "captured relative mouse delta (150,-50) changed yaw by -0.3 and pitch by +0.1 radians",
+      "Escape and Ctrl+Q"
+    ]
+  },
+  "environment": {
+    "os": "Ubuntu 26.04.1 LTS",
+    "kernel": "7.0.0-31-generic",
+    "cpu": "Intel Core i7-7500U",
+    "display": "headless Sway Wayland",
+    "renderer": "Vulkan llvmpipe software rasterizer"
+  },
+  "limits": [
+    "Controlled development scene only; no gameplay simulation or vanilla pixel-parity claim",
+    "No hardware FPS or render-distance improvement demonstrated",
+    "macOS and Windows runtime checks and final playable packages remain pending",
+    "Private game resources and screenshots excluded from this report"
+  ],
+  "mouse_check": {
+    "adapter": {
+      "backend": "Vulkan",
+      "device": 0,
+      "device_type": "Cpu",
+      "name": "llvmpipe (LLVM 21.1.8, 256 bits)",
+      "vendor": 65541
+    },
+    "arch": "x86_64",
+    "camera_pitch": -0.2839724354387525,
+    "camera_position": [
+      25.0,
+      18.0,
+      25.0
+    ],
+    "camera_yaw": -2.6561944901923447,
+    "elapsed_seconds": 8.654220098,
+    "error": null,
+    "merged_quads": 166,
+    "os": "linux",
+    "presented_frames": 532,
+    "project": "Horizon",
+    "resident_chunks": 9,
+    "schema": 1,
+    "scope": "Native opaque-cube renderer and free inspection camera; no gameplay simulation",
+    "window_size": [
+      1280,
+      720
+    ]
+  },
+  "physical_keyboard_check": {
+    "adapter": {
+      "backend": "Vulkan",
+      "device": 0,
+      "device_type": "Cpu",
+      "name": "llvmpipe (LLVM 21.1.8, 256 bits)",
+      "vendor": 65541
+    },
+    "arch": "x86_64",
+    "camera_pitch": -0.3839724354387525,
+    "camera_position": [
+      18.943610750255,
+      18.0,
+      18.943610750255
+    ],
+    "camera_yaw": -2.6478875051923443,
+    "elapsed_seconds": 17.488515374,
+    "error": null,
+    "merged_quads": 166,
+    "os": "linux",
+    "presented_frames": 1080,
+    "project": "Horizon",
+    "resident_chunks": 9,
+    "schema": 1,
+    "scope": "Native opaque-cube renderer and free inspection camera; no gameplay simulation",
+    "window_size": [
+      1280,
+      720
+    ],
+    "source_note": "Same camera/input behavior; before subsequent diagnostic formatting and equivalent let-chain cleanup"
+  },
+  "private_capture_sha256": {
+    "first-launch.png": "7e53fa26d3d55f943db41828e1c8dd5b65279f9a130854fff288c75a394ee5aa",
+    "moved-resized.png": "be5a0473ab505740d18ba8eecf1512c15ba93d53d046f49b8dfa96357b25bf22",
+    "mouse-look.png": "7103678309f06938de40ac294f2f9ca1f56b253bc463e792b121ba607cd7b0a3"
+  }
+}

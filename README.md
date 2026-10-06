@@ -1,6 +1,6 @@
 # Horizon
 
-Horizon is a Rust rewrite effort targeting one-to-one vanilla gameplay parity with Minecraft Java **26.3**, alongside client performance research. The Rust implementation has core primitives and world-data storage verified against pinned vanilla classes. It does not yet run a playable game. Existing playable downloads use Java performance packs. Not affiliated with Mojang or Microsoft.
+Horizon is a Rust rewrite effort targeting one-to-one vanilla gameplay parity with Minecraft Java **26.3**, alongside client performance research. The Rust implementation has core primitives and world-data storage verified against pinned vanilla classes, plus a [native development client](docs/native-client.md) for inspecting a controlled block scene. It does not yet run a playable game. Existing playable downloads use Java performance packs. Not affiliated with Mojang or Microsoft.
 
 **First playable release:** pinned Java performance packs, distant terrain, an original frame/tick recorder, and Mac/client/server starter downloads. The M2 Pro/16 GB Mac is the first testing target. A Rust rewrite or custom renderer has not been completed; no M2 FPS improvement has been measured yet.
 
