@@ -813,3 +813,23 @@ Vanilla's actual public/private write-zone methods provide the reference. Worksp
 tests, all-target Clippy and both focused fixture tests pass. The owning world
 still supplies generation-step metadata and upgrading-world vertical restrictions;
 full WorldGenRegion effects remain pending.
+
+## Proto-chunk block-entity storage
+
+Rust now stores pending NBT and caller-owned active block-entity payloads by full
+block position. Active insertion removes pending data, later pending insertion
+cannot overwrite an active entry, and removal clears both maps. Saving uses the
+active serializer when present and otherwise returns a pending snapshot. Changing
+pending coordinate fields retains the existing map key. Coordinate resolution
+matches NumericTag integer narrowing and floating-point flooring before saturating
+conversion, then relocates mismatched X/Z into the owning chunk.
+
+The [block-entity storage comparison](../benchmarks/rust-block-entity-storage-2026-10-06/scoped-parity.json)
+matches **78,251 lines per reference JAR** across **28,511 commands**, using actual
+native ProtoChunks and chest entities. Cases cover replacement, removal, position
+unions, save selection, missing/nonnumeric coordinates, infinities/NaNs, integer
+extremes and positions that alias when packed. Four focused Rust tests and
+all-target Clippy pass. Collection order is normalized; Rust exposes borrowed or
+owned data instead of unrestricted Java aliases. Entity construction from NBT,
+complete serializers, active entity behavior and resident chunk lifecycle
+integration remain pending.
