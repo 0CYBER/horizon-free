@@ -101,6 +101,25 @@ public final class VanillaCollisionContextOracle {
                 int entity=context instanceof EntityCollisionContext ec?(ec.getEntity()==player?1:ec.getEntity()==marker?2:ec.getEntity()==falling?3:0):0;
                 int held=0;for(int i=0;i<ITEMS.length;i++)if(context.isHoldingItem(ITEMS[i]))held|=1<<i;
                 out.printf("context %b %b %b %d %d%n",context.isDescending(),context.isPlacement(),context.alwaysCollideWithFluid(),entity,held);
+                if(f.has("registry")) {
+                    var config=f.getAsJsonArray("registry");var state=Block.stateById(config.get(0).getAsInt());
+                    var pos=new BlockPos(config.get(1).getAsInt(),config.get(2).getAsInt(),config.get(3).getAsInt());
+                    var trace=new Trace();trace.out=out;trace.fail=-1;player.trace=marker.trace=trace;player.liquidShape=liquidShape(2);
+                    player.fallDistance=marker.fallDistance=falling.fallDistance=always?3.0:0.0;player.powderTag=marker.powderTag=false;
+                    player.feet=(ItemStack)allocate.invoke(unsafe,ItemStack.class);stackItem.set(player.feet,Items.LEATHER_BOOTS.builtInRegistryHolder());stackCount.setInt(player.feet,1);
+                    var world=(CollisionGetter)Proxy.newProxyInstance(CollisionGetter.class.getClassLoader(),new Class<?>[]{CollisionGetter.class},(proxy,method,values)->{
+                        var at=(BlockPos)values[0];
+                        if(method.getName().equals("getFluidState")){trace.query("fluid_at "+at.getX()+" "+at.getY()+" "+at.getZ());return Fluids.EMPTY.defaultFluidState();}
+                        if(method.getName().equals("getBlockEntity")){trace.query("block_entity "+at.getX()+" "+at.getY()+" "+at.getZ());return null;}
+                        throw new AssertionError(method);
+                    });
+                    var shape=context.getCollisionShape(state,world,pos);
+                    var cacheField=net.minecraft.world.level.block.state.BlockBehaviour.BlockStateBase.class.getDeclaredField("cache");cacheField.setAccessible(true);var cache=cacheField.get(state);
+                    if(cache!=null){var shapeField=cache.getClass().getDeclaredField("collisionShape");shapeField.setAccessible(true);out.println("cache_equal "+!Shapes.joinIsNotEmpty(shape,(VoxelShape)shapeField.get(cache),BooleanOp.NOT_SAME));}
+                    else{var emit=VanillaFaceSupportOracle.class.getDeclaredMethod("emit",PrintWriter.class,VoxelShape.class);emit.setAccessible(true);emit.invoke(null,out,shape);}
+                    out.println("queries "+trace.calls);
+                    continue;
+                }
                 if(f.has("powder")) {
                     var config=f.getAsJsonArray("powder");
                     var pos=new BlockPos(17,config.get(0).getAsInt(),-33);

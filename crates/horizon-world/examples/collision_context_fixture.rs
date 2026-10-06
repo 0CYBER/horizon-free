@@ -1,14 +1,19 @@
 use horizon_core::{
-    geometry::{Aabb, Axis, Vec3, VoxelShape},
+    geometry::{Aabb, Axis, ShapeOp, Vec3, VoxelShape},
     position::BlockPos,
 };
 use horizon_world::{
+    block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
     chunk::BlockState,
+    collision::CachedCollisionRegistry,
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
+    dynamic_support::DynamicSupportWorld,
     entity_obstruction::EntityIdentity,
     fluid::{FluidKind, FluidState},
     liquid_collision::{LiquidCollision, LiquidCollisionWorld},
+    nbt::{self, Limits},
     powder_snow_collision::{PowderSnowEntity, PowderSnowWorld, powder_snow_collision_shape},
+    registry::{BlockRegistry, BlockStateId},
 };
 use serde_json::Value;
 use std::{
@@ -184,10 +189,111 @@ impl<W: Write> PowderSnowWorld for PowderWorld<'_, W> {
         Ok(self.feet.is_item("minecraft:leather_boots"))
     }
 }
+struct RegistryWorld<'a, W> {
+    liquid: LiquidWorld<'a, W>,
+    powder: PowderSnowEntity,
+    tag: bool,
+    feet: CollisionItem<'a>,
+}
+impl<W: Write> DynamicSupportWorld for RegistryWorld<'_, W> {
+    type Error = io::Error;
+    fn shulker_is_closed(&mut self, p: [i32; 3]) -> io::Result<Option<bool>> {
+        self.liquid
+            .query(&format!("block_entity {} {} {}", p[0], p[1], p[2]))?;
+        Ok(None)
+    }
+    fn moving_piston_shape(&mut self, p: [i32; 3]) -> io::Result<Option<VoxelShape>> {
+        self.liquid
+            .query(&format!("block_entity {} {} {}", p[0], p[1], p[2]))?;
+        Ok(None)
+    }
+}
+impl<W: Write> DynamicCollisionWorld for RegistryWorld<'_, W> {
+    fn shulker_collision_state(
+        &mut self,
+        p: [i32; 3],
+    ) -> io::Result<Option<ShulkerCollisionState>> {
+        self.liquid
+            .query(&format!("block_entity {} {} {}", p[0], p[1], p[2]))?;
+        Ok(None)
+    }
+}
+impl<W: Write> LiquidCollisionWorld for RegistryWorld<'_, W> {
+    type Error = io::Error;
+    fn entity_liquid_shape(&mut self, entity: EntityIdentity) -> io::Result<VoxelShape> {
+        self.liquid.entity_liquid_shape(entity)
+    }
+    fn fluid(&mut self, p: BlockPos) -> io::Result<FluidState> {
+        self.liquid.fluid(p)
+    }
+    fn entity_can_stand(&mut self, entity: EntityIdentity, fluid: FluidState) -> io::Result<bool> {
+        self.liquid.entity_can_stand(entity, fluid)
+    }
+}
+impl<W: Write> PowderSnowWorld for RegistryWorld<'_, W> {
+    type Error = io::Error;
+    fn powder_snow_entity(&mut self, _: EntityIdentity) -> io::Result<PowderSnowEntity> {
+        Ok(self.powder)
+    }
+    fn powder_snow_walkable_tag(&mut self, entity: EntityIdentity) -> io::Result<bool> {
+        self.liquid.query(&format!("walkable_tag {}", entity.0))?;
+        Ok(self.tag)
+    }
+    fn feet_are_leather_boots(&mut self, entity: EntityIdentity) -> io::Result<bool> {
+        self.liquid.query(&format!("feet {}", entity.0))?;
+        Ok(self.feet.is_item("minecraft:leather_boots"))
+    }
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = std::env::args().nth(1).expect("private fixture directory");
     let dir = Path::new(&arg);
+    let registry = if dir.join("block-registry.nbt").exists() {
+        Some(BlockRegistry::from_nbt(
+            &nbt::read_named(
+                &fs::read(dir.join("block-registry.nbt"))?,
+                Limits::default(),
+            )?
+            .0
+            .tag,
+        )?)
+    } else {
+        None
+    };
+    let cached = registry
+        .as_ref()
+        .map(|registry| {
+            let tag = nbt::read_named(
+                &fs::read(dir.join("cached-collision.nbt"))?,
+                Limits::default(),
+            )
+            .map_err(io::Error::other)?
+            .0
+            .tag;
+            CachedCollisionRegistry::from_nbt(&tag, registry).map(std::sync::Arc::new)
+        })
+        .transpose()?;
+    let collisions = cached
+        .as_ref()
+        .map(|cached| BlockCollisionRegistry::new(cached.clone()))
+        .transpose()?;
     let mut out = io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
+    if let (Some(registry), Some(cached)) = (&registry, &cached) {
+        let mut audit = io::BufWriter::new(fs::File::create(dir.join("rust-audit.txt"))?);
+        for index in 0..registry.len() {
+            let id = BlockStateId(index as u32);
+            let label = if cached.cached_shape(id)?.is_none() {
+                "uncached"
+            } else if matches!(
+                registry.state(id).unwrap().name.as_str(),
+                "minecraft:water" | "minecraft:lava"
+            ) {
+                "fluid"
+            } else {
+                "independent"
+            };
+            writeln!(audit, "audit {index} {label}")?;
+        }
+    }
     let fluids = FluidKind::ALL
         .map(|kind| FluidState::from_json(&format!("{{\"id\":\"{}\"}}", kind.name())).unwrap());
     for line in fs::read_to_string(dir.join("inputs.txt"))?.lines() {
@@ -240,6 +346,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             context.entity().map_or(0, |id| id.0),
             held
         )?;
+        if let Some(config) = f.get("registry") {
+            let state = BlockStateId(config[0].as_u64().unwrap() as u32);
+            let p = BlockPos::new(
+                config[1].as_i64().unwrap() as i32,
+                config[2].as_i64().unwrap() as i32,
+                config[3].as_i64().unwrap() as i32,
+            );
+            let mut world = RegistryWorld {
+                liquid: LiquidWorld {
+                    out: &mut out,
+                    calls: 0,
+                    fail: -1,
+                    shape: liquid_shape(2),
+                    above: FluidState::EMPTY,
+                    stand: f["stand"].as_bool().unwrap(),
+                },
+                powder: PowderSnowEntity {
+                    fall_distance: if always { 3.0 } else { 0.0 },
+                    falling_block: context.entity() == Some(falling.identity),
+                },
+                tag: false,
+                feet: CollisionItem {
+                    item: "minecraft:leather_boots",
+                    count: 1,
+                },
+            };
+            let shape = collisions
+                .as_ref()
+                .unwrap()
+                .collision_shape_with_context(&mut world, state, p, &context)?;
+            if let Some(reference) = cached.as_ref().unwrap().cached_shape(state)? {
+                writeln!(
+                    world.liquid.out,
+                    "cache_equal {}",
+                    !shape.join_is_not_empty(reference, ShapeOp::XOR)?
+                )?;
+            } else {
+                emit(world.liquid.out, &shape)?;
+            }
+            writeln!(world.liquid.out, "queries {}", world.liquid.calls)?;
+            continue;
+        }
         if let Some(config) = f.get("powder") {
             let p = BlockPos::new(17, config[0].as_i64().unwrap() as i32, -33);
             let mut world = PowderWorld {

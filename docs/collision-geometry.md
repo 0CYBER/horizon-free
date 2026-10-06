@@ -108,9 +108,9 @@ must select it, while a cached empty shape is a valid `Some` value.
 
 This covers the cached branch of the **no-context** `BlockState.getCollisionShape`
 method. Vanilla's overload taking `CollisionContext` always calls block behavior;
-the cache cannot establish entity collision parity. Dynamic no-context selection is implemented as described below. Entity-dependent
-block selection, world borders, movement integration, fluids, block effects and
-live collision broad-phase queries still need implementation.
+the cache cannot establish entity collision parity. Dynamic and ordinary entity-context selection are implemented as described below.
+Experimental minecart contexts, world borders, movement integration, fluid
+simulation, block effects and live collision broad-phase queries remain pending.
 
 Run the comparisons after preparing the pinned artifacts:
 
@@ -355,3 +355,23 @@ The native block method and walkability predicate execute over controlled entity
 snapshots. The corpus covers fall-distance and top-height boundaries, nonfinite
 values, falling-block instances, item counts, query failures and skipped queries.
 Entity tag loading, freezing, sinking and live movement remain separate work.
+
+
+`BlockCollisionRegistry::collision_shape_with_context` now combines the contextual
+scaffolding, liquid and powder-snow rules with the existing cached/dynamic paths.
+It dispatches these overrides before consulting cached geometry. The pinned
+native audit checks **35,492 context-independent cached states** at seven positions
+with both interface and entity contexts that reject every query: each returns the
+identical cache object without world reads. The **32 cached liquid states** query
+the context and take their separate behavior path. The **199 uncached states**
+continue through explicit behavior implementations.
+
+`python3 tools/test_contextual_collision_parity.py` validates integrated dispatch
+for all **35,723 states**, **11 contexts** and both fluid-flag inputs:
+**785,906 fixtures** and **2,391,334 matching output lines per JAR** in the
+[contextual-registry report](../benchmarks/rust-contextual-collision-2026-10-06/scoped-parity.json).
+Outputs compare cache-relative shape equality or full uncached geometry, plus
+ordered world/entity callbacks. This integration corpus supplies missing block
+entities; active shulker and piston snapshots retain their separate suites.
+These checks establish the recorded collision-query scope, not entity movement
+or whole-game parity.

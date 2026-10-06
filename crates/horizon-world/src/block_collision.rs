@@ -1,8 +1,11 @@
 //! Cached/dynamic no-context collision queries and explicit contextual block rules.
-//! Contextual selection must not fall back to the no-context cache.
+//! Context-sensitive families override the no-context cache explicitly.
 use crate::{
     collision::CachedCollisionRegistry,
+    collision_context::CollisionContext,
     dynamic_support::{DynamicSupport, DynamicSupportError, DynamicSupportWorld},
+    liquid_collision::{LiquidCollision, LiquidCollisionWorld},
+    powder_snow_collision::{PowderSnowWorld, powder_snow_collision_shape},
     registry::{BlockRegistry, BlockStateId},
 };
 use horizon_core::geometry::{Aabb, Direction, Vec3, VoxelShape};
@@ -55,6 +58,7 @@ pub trait DynamicCollisionWorld: DynamicSupportWorld {
 pub enum CollisionQueryError<E> {
     Data(io::Error),
     Dynamic(DynamicSupportError<E>),
+    Context(E),
     Unsupported(BlockStateId),
 }
 impl<E: std::fmt::Display> std::fmt::Display for CollisionQueryError<E> {
@@ -62,6 +66,7 @@ impl<E: std::fmt::Display> std::fmt::Display for CollisionQueryError<E> {
         match self {
             Self::Data(error) => error.fmt(f),
             Self::Dynamic(error) => error.fmt(f),
+            Self::Context(error) => error.fmt(f),
             Self::Unsupported(state) => write!(f, "unsupported block collision state {}", state.0),
         }
     }
@@ -71,12 +76,27 @@ impl<E: std::error::Error + 'static> std::error::Error for CollisionQueryError<E
 pub struct BlockCollisionRegistry<'r> {
     cached: Arc<CachedCollisionRegistry<'r>>,
     dynamic: HashMap<BlockStateId, DynamicSupport>,
+    contextual: HashMap<BlockStateId, ContextualRule>,
+}
+enum ContextualRule {
+    Scaffolding(ScaffoldingCollision),
+    Liquid(LiquidCollision),
+    PowderSnow,
 }
 impl<'r> BlockCollisionRegistry<'r> {
     pub fn new(cached: Arc<CachedCollisionRegistry<'r>>) -> io::Result<Self> {
         let mut dynamic = HashMap::new();
+        let mut contextual = HashMap::new();
         for index in 0..cached.registry().len() {
             let id = BlockStateId(index as u32);
+            let state = cached.registry().state(id).unwrap();
+            if let Some(rule) = ScaffoldingCollision::from_state(state)? {
+                contextual.insert(id, ContextualRule::Scaffolding(rule));
+            } else if let Some(rule) = LiquidCollision::from_state(state)? {
+                contextual.insert(id, ContextualRule::Liquid(rule));
+            } else if state.name == "minecraft:powder_snow" {
+                contextual.insert(id, ContextualRule::PowderSnow);
+            }
             if cached.cached_shape(id)?.is_none() {
                 if let Some(rule) =
                     DynamicSupport::from_state(cached.registry().state(id).unwrap())?
@@ -85,7 +105,11 @@ impl<'r> BlockCollisionRegistry<'r> {
                 }
             }
         }
-        Ok(Self { cached, dynamic })
+        Ok(Self {
+            cached,
+            dynamic,
+            contextual,
+        })
     }
     pub fn registry(&self) -> &'r BlockRegistry {
         self.cached.registry()
@@ -108,6 +132,35 @@ impl<'r> BlockCollisionRegistry<'r> {
             .ok_or(CollisionQueryError::Unsupported(state))?
             .collision_shape(world, position)
             .map_err(CollisionQueryError::Dynamic)
+    }
+
+    /// Ordinary entity/position/placement contexts. The remaining pinned block
+    /// families share their no-context geometry; the native registry audit checks
+    /// cached states with rejecting context/world providers before using that path.
+    /// Experimental minecart position exclusions are a separate context layer.
+    pub fn collision_shape_with_context<W, E>(
+        &self,
+        world: &mut W,
+        state: BlockStateId,
+        position: horizon_core::position::BlockPos,
+        context: &CollisionContext<'_>,
+    ) -> Result<VoxelShape, CollisionQueryError<E>>
+    where
+        W: DynamicCollisionWorld<Error = E>
+            + LiquidCollisionWorld<Error = E>
+            + PowderSnowWorld<Error = E>,
+    {
+        match self.contextual.get(&state) {
+            Some(ContextualRule::Scaffolding(rule)) => Ok(rule.shape(context, position)),
+            Some(ContextualRule::Liquid(rule)) => rule
+                .shape(world, position, context)
+                .map_err(CollisionQueryError::Context),
+            Some(ContextualRule::PowderSnow) => {
+                powder_snow_collision_shape(world, position, context)
+                    .map_err(CollisionQueryError::Context)
+            }
+            None => self.collision_shape(world, state, [position.x, position.y, position.z]),
+        }
     }
 }
 
