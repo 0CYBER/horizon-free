@@ -242,10 +242,10 @@ all support tests. It compares extension/retraction, source heads, progress
 boundaries, collision exclusions and query failures. These snapshots do not
 exercise piston ticks, pushed entities or chunk updates.
 
-The archived block-survival snapshot executes 42 rule kinds with 54 distinct rule/tag
+The archived block-survival snapshot executes 51 rule kinds with 63 distinct rule/tag
 bindings over registry-bound solid flags, air identity, support tags and
-FULL/CENTER/RIGID geometry. The verified snapshot covers **1,274 block definitions
-and 34,758 states**; unsupported definitions return an explicit error. Candidate
+FULL/CENTER/RIGID geometry and empty-context collision. The verified snapshot covers
+**all 1,286 pinned block definitions and 35,723 states**. Candidate
 properties select attachment direction, hanging state, door/plant halves and
 pale moss carpet's serialized `bottom` property. Pressure plates and cactus
 flowers preserve repeated neighbor reads. Downward center support applies the
@@ -259,7 +259,11 @@ Growing plants preserve head/body identity and kelp support restrictions.
 Scaffolding recomputes neighbor distance in native order; chorus plants and flowers
 preserve branching reads and early exits. Piston heads validate base type, facing
 and extension. Mangrove propagules, speleothems, pitcher crops, bells and shelf
-mushrooms use their version-specific attachment rules.
+mushrooms use their version-specific attachment rules. Multiface blocks, vines,
+hanging moss, snow layers and sea pickles preserve support/collision query order.
+Fire uses imported ignition odds and waterlogging; cactus checks horizontal solids
+and lava before its support and upper liquid state. Paths recognize fence gates,
+and mushrooms preserve the light-override tag and solid-render requirement.
 
 Interrupted runs can be resumed with `python3 tools/test_block_survival_parity.py --resume`.
 The runner verifies source, environment, fixture and compiled-artifact hashes
@@ -269,7 +273,7 @@ a parity report is written only after both native comparisons pass.
 
 `python3 tools/test_block_survival_parity.py` compares actual native `canSurvive`
 calls in both pinned JARs. The [block-survival report](../benchmarks/rust-block-survival-2026-10-06/scoped-parity.json)
-records **14,574,905 matching output lines per JAR** across **4,501,019 fixtures**.
+records **35,998,488 matching output lines per JAR** across **9,229,463 fixtures**.
 Each supported candidate state is exercised; behavior representatives are tested
 against every neighbor state, changing repeated reads, integer-coordinate
 wrapping, absent/closed/open shulker snapshots and injected block/entity query
@@ -277,7 +281,6 @@ failures, plus light thresholds, independent fluid sequences and fluid-query
 failures. Native method ownership
 and support-tag fields supply private
 definition metadata; survival results are calculated in Rust. Workspace tests,
-Clippy, the prior **145-test Python suite**, and five focused harness tests passed.
-This establishes the recorded survival
-scope, not full placement, neighbor updates, unsupported plant rules or complete
-block gameplay.
+Clippy and the **147-test Python suite** passed. This establishes the recorded
+survival scope; full placement, neighbor updates, scheduled behavior and complete
+block gameplay remain pending.
