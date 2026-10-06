@@ -1,10 +1,12 @@
 //! A blockstate-driven inspection gallery, separate from gameplay simulation.
 mod catalog;
+mod cube;
 use crate::{Result, sprites::Sprites};
-use catalog::{StateModels, descriptor};
-use horizon_assets::model::Direction;
+pub use catalog::StateModels;
+use catalog::descriptor;
+pub use cube::CubeStyle;
 use horizon_core::position::BlockPos;
-use horizon_world::registry::BlockRegistry;
+use horizon_world::registry::{BlockRegistry, BlockStateId};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -43,13 +45,20 @@ pub struct ModelInstance {
     pub layer: u32,
     pub shade: f32,
 }
-pub struct Gallery {
-    pub quads: Vec<ModelInstance>,
+pub struct PreparedModels {
+    pub catalog: StateModels,
+    pub placements: Vec<(BlockPos, BlockStateId)>,
     pub states: Vec<Value>,
 }
-pub fn gallery(root: &Path, registry: &BlockRegistry, sprites: &mut Sprites) -> Result<Gallery> {
-    let models = StateModels::load(root, registry, &GALLERY.map(|(name, _)| name), sprites)?;
-    let mut instances = Vec::new();
+pub fn prepare(
+    root: &Path,
+    registry: &BlockRegistry,
+    sprites: &mut Sprites,
+) -> Result<PreparedModels> {
+    let mut blocks = GALLERY.map(|(name, _)| name).to_vec();
+    blocks.extend(crate::assets::MATERIALS);
+    let catalog = StateModels::load(root, registry, &blocks, sprites)?;
+    let mut placements = Vec::new();
     let mut states = Vec::new();
     for (index, (name, properties)) in GALLERY.iter().enumerate() {
         let state = registry.resolve(&descriptor(name, properties))?;
@@ -57,33 +66,68 @@ pub fn gallery(root: &Path, registry: &BlockRegistry, sprites: &mut Sprites) -> 
             .state(state)
             .ok_or("missing gallery registry state")?;
         let position = BlockPos::new((index % 4) as i32 * 4 - 7, 4, (index / 4) as i32 * 4 + 14);
-        let origin = [position.x as f32, position.y as f32, position.z as f32];
-        let selected = models.collect(state, position)?;
+        let selected = catalog.collect(state, position)?;
         states.push(json!({"block":actual.name,"properties":actual.properties,"state_id":state.0,
             "position":[position.x,position.y,position.z],
             "models":selected.iter().map(|(v,_)| json!({"model":v.model,"rotations":v.rotations,"uv_lock":v.uv_lock})).collect::<Vec<_>>()}));
-        for (_, faces) in selected {
-            for face in faces {
-                let quad = &face.quad;
-                let shade = match quad.shade_direction_override.unwrap_or(quad.facing) {
-                    Direction::Down => 0.5,
-                    Direction::Up => 1.0,
-                    Direction::North | Direction::South => 0.8,
-                    Direction::West | Direction::East => 0.6,
-                };
-                instances.push(ModelInstance {
-                    positions: quad
-                        .positions
-                        .map(|v| std::array::from_fn(|i| v[i] + origin[i])),
-                    uv: quad.uv,
-                    layer: face.layer,
-                    shade,
-                });
-            }
-        }
+        placements.push((position, state));
     }
-    Ok(Gallery {
-        quads: instances,
+    Ok(PreparedModels {
+        catalog,
+        placements,
         states,
     })
+}
+pub fn instance(face: &catalog::BakedFace, position: BlockPos) -> ModelInstance {
+    let origin = [position.x as f32, position.y as f32, position.z as f32];
+    ModelInstance {
+        positions: face
+            .quad
+            .positions
+            .map(|v| std::array::from_fn(|i| v[i] + origin[i])),
+        uv: face.quad.uv,
+        layer: face.layer,
+        shade: cube::shade(face),
+    }
+}
+
+pub fn load_visibility(
+    root: &Path,
+    registry: &BlockRegistry,
+) -> Result<horizon_world::block_render::FaceVisibility> {
+    use horizon_world::{
+        block_render::{FaceVisibility, RenderDefinition, SkipRendering},
+        collision::CachedCollisionRegistry,
+        nbt::{self, Limits},
+    };
+    use std::{collections::BTreeMap, fs};
+    let data = nbt::read_named(&fs::read(root.join("occlusion.nbt"))?, Limits::default())?
+        .0
+        .tag;
+    let occlusion = CachedCollisionRegistry::from_nbt(&data, registry)?;
+    let raw: BTreeMap<String, Value> =
+        serde_json::from_reader(fs::File::open(root.join("render-definitions.json"))?)?;
+    let definitions = raw
+        .into_iter()
+        .map(|(name, v)| {
+            let skip = match v["rule"].as_str().ok_or("missing render rule")? {
+                "never" => SkipRendering::Never,
+                "same_block" => SkipRendering::SameBlock,
+                "bars" => SkipRendering::Bars,
+                "leaves" => SkipRendering::Leaves,
+                "liquid" => SkipRendering::Liquid,
+                "mangrove_roots" => SkipRendering::MangroveRoots,
+                _ => return Err("unrecognized render rule"),
+            };
+            Ok((
+                name,
+                RenderDefinition {
+                    skip,
+                    can_occlude: v["can_occlude"].as_bool().ok_or("missing occlusion flag")?,
+                    bars_tag: v["bars_tag"].as_bool().ok_or("missing bars tag")?,
+                },
+            ))
+        })
+        .collect::<std::result::Result<_, &str>>()?;
+    Ok(FaceVisibility::new(&occlusion, &definitions)?)
 }

@@ -30,6 +30,7 @@ pub struct Sprites {
     pub pixels: Vec<u8>,
     pub layers: BTreeMap<String, u32>,
     pub animations: Vec<SpriteAnimation>,
+    pub opaque: Vec<bool>,
 }
 impl Sprites {
     pub fn insert(&mut self, root: &Path, name: &str) -> Result<u32> {
@@ -130,6 +131,8 @@ impl Sprites {
                 clip: Arc::new(clip),
             });
         }
+        self.opaque
+            .push(pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         self.layers.insert(name.to_owned(), layer);
         self.size = width;
         self.pixels.extend_from_slice(&frames[initial]);

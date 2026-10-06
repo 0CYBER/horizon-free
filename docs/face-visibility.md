@@ -3,8 +3,8 @@
 `horizon-world::block_render::FaceVisibility` decides whether to emit a model
 quad with a culling direction beside a neighboring block. It prepares immutable
 face geometry from the pinned raw occlusion shapes, shares faces across states,
-and caches shape-pair subtraction with bounded memory. It is ready for chunk
-meshing; it does not yet replace the development scene's cube-only culling.
+and caches shape-pair subtraction with bounded memory. The development client
+now uses it for resident chunk model meshing, including cross-chunk neighbors.
 
 The decision preserves the native order: a canonical full neighbor face hides
 the quad, block-specific suppression can hide it, canonical empty faces bypass

@@ -39,6 +39,7 @@ impl Renderer {
         window: Arc<Window>,
         assets: &Assets,
         quads: &[Quad],
+        model_faces: &[ModelInstance],
         fog_distance: f32,
     ) -> Result<Self> {
         let instance =
@@ -153,7 +154,7 @@ impl Renderer {
                     cache: None,
                 })
             };
-        let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Uint32];
+        let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Uint32,4=>Float32x2,5=>Float32x2,6=>Float32x2,7=>Float32];
         let pipeline = create_pipeline(
             "Horizon opaque cubes",
             "vs_main",
@@ -236,10 +237,10 @@ impl Renderer {
             contents: bytemuck::cast_slice(quads),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        let model_quad_count = u32::try_from(assets.model_quads.len())?;
+        let model_quad_count = u32::try_from(model_faces.len())?;
         let model_quads = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Baked vanilla model faces"),
-            contents: bytemuck::cast_slice(&assets.model_quads),
+            contents: bytemuck::cast_slice(model_faces),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let depth = Self::depth(&device, &config);

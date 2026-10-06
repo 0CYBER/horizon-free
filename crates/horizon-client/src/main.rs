@@ -10,7 +10,7 @@ mod sprites;
 mod world;
 use assets::Assets;
 use camera::Camera;
-use mesh::Quad;
+use mesh::Mesh;
 use render::Renderer;
 use std::{
     collections::HashSet,
@@ -101,7 +101,7 @@ impl Options {
 struct App<'a> {
     assets: &'a Assets,
     world: TestWorld<'a>,
-    mesh: Vec<Quad>,
+    mesh: Mesh,
     options: Options,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
@@ -167,8 +167,11 @@ impl App<'_> {
             "presented_frames": self.frames,
             "elapsed_seconds": self.started.elapsed().as_secs_f64(),
             "resident_chunks": self.world.chunks.len(),
-            "merged_quads": self.mesh.len(),
-            "model_quads": self.assets.model_quads.len(),
+            "merged_quads": self.mesh.cubes.len(),
+            "model_quads": self.mesh.models.len(),
+            "visible_model_faces": self.mesh.visible_faces,
+            "culled_model_faces": self.mesh.culled_faces,
+            "model_blocks": self.mesh.model_blocks,
             "model_gallery": self.assets.model_gallery,
             "sprite_layers": self.assets.texture_layers,
             "animated_sprites": self.assets.animations.len(),
@@ -204,7 +207,8 @@ impl ApplicationHandler for App<'_> {
         match pollster::block_on(Renderer::new(
             window.clone(),
             self.assets,
-            &self.mesh,
+            &self.mesh.cubes,
+            &self.mesh.models,
             ((self.options.radius + 1) * 16) as f32,
         )) {
             Ok(renderer) => self.renderer = Some(renderer),
@@ -305,7 +309,7 @@ impl ApplicationHandler for App<'_> {
                             self.window.as_ref().unwrap().set_title(&format!(
                                 "Horizon — Development | {fps:.0} FPS | {} chunks | {} quads",
                                 self.world.chunks.len(),
-                                self.mesh.len()
+                                self.mesh.cubes.len()
                             ));
                             self.title_at = Instant::now();
                             self.title_frames = self.frames;
@@ -353,12 +357,13 @@ fn run() -> Result<()> {
         format!("{error}\nPrepare pinned resources with: python3 tools/prepare_native_client.py")
     })?;
     let world = TestWorld::new(&assets, options.radius)?;
-    let mesh = mesh::build(&world)?;
+    let mut visibility = models::load_visibility(&options.resources, &assets.registry)?;
+    let mesh = mesh::build(&world, &assets, &mut visibility)?;
     eprintln!(
         "Horizon development scene: {} resident chunks, {} merged cube faces, {} baked model faces.\nClick to capture mouse; WASD/Space/Shift move; arrows rotate; Esc releases; Ctrl+Q quits.",
         world.chunks.len(),
-        mesh.len(),
-        assets.model_quads.len()
+        mesh.cubes.len(),
+        mesh.models.len()
     );
     let now = Instant::now();
     let mut app = App {

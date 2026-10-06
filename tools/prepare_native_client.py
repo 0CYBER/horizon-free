@@ -65,6 +65,29 @@ def main():
     if tags != worldgen.tag_resources(jars['client']):
         raise ValueError('Reference block tags disagree')
     lab.write_json(root / 'block-tags.json', tags)
+    visibility = oracle.with_name('VanillaFaceVisibilityOracle.java')
+    collision = oracle.with_name('VanillaCollisionOracle.java')
+    render_sources = base.source_hashes([visibility, collision, oracle])
+    render_files = ['render-definitions.json', 'occlusion.nbt']
+    tag_hash = lab.digest(root/'block-tags.json', 'sha256')
+    if not (previous.get('render_exporters_sha256') == render_sources
+            and previous.get('server_sha256') == origin['server_sha256']
+            and previous.get('block_tags_sha256') == tag_hash
+            and all((root/name).exists() and previous.get('render_files_sha256', {}).get(name)
+                    == lab.digest(root/name, 'sha256') for name in render_files)):
+        export = lab.LOCAL/'horizon-client-render'; export.mkdir(exist_ok=True)
+        lab.write_json(export/'tags.json', tags)
+        classes = export/'classes'; classes.mkdir(exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+        with (export/'export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(visibility), str(collision), str(oracle)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx768M', '-cp', str(classes)+os.pathsep+dependencies,
+                            'dev.horizonlab.parity.VanillaFaceVisibilityOracle', 'export', str(export)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+        (root/'render-definitions.json').write_bytes((export/'definitions.json').read_bytes())
+        (root/'occlusion.nbt').write_bytes((export/'occlusion.nbt').read_bytes())
     count = 0
     prefixes = ('assets/minecraft/blockstates/', 'assets/minecraft/models/block/',
                 'assets/minecraft/textures/block/')
@@ -82,7 +105,9 @@ def main():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
             count += 1
-    lab.write_json(manifest, {'schema': 2, **origin,
+    lab.write_json(manifest, {'schema': 3, **origin,
+                             'render_exporters_sha256': render_sources,
+                             'render_files_sha256': {name: lab.digest(root/name, 'sha256') for name in render_files},
                              'model_state_exporters_sha256': binding_sources,
                              'model_states_sha256': lab.digest(model_states, 'sha256'), 'data_version': version['world_version'],
                              'facts_sha256': lab.digest(facts, 'sha256'),

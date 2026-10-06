@@ -1,6 +1,14 @@
-//! Greedy opaque-cube meshing for the controlled renderer scene. Model geometry,
-//! weighted variants, tinting, transparency and lighting are separate work.
-use crate::{Result, world::TestWorld};
+//! Resident blockstate model meshing. Greedy rectangles preserve the texture
+//! and signed UV basis of eligible unit-cube faces; other geometry stays baked.
+use crate::{
+    Result,
+    assets::Assets,
+    models::{self, CubeStyle, ModelInstance},
+    world::TestWorld,
+};
+use horizon_core::{geometry::Direction, position::BlockPos};
+use horizon_world::block_render::FaceVisibility;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Quad {
@@ -8,6 +16,17 @@ pub struct Quad {
     pub extent: [f32; 2],
     pub face: u32,
     pub layer: u32,
+    pub uv_origin: [f32; 2],
+    pub uv_u: [f32; 2],
+    pub uv_v: [f32; 2],
+    pub shade: f32,
+}
+pub struct Mesh {
+    pub cubes: Vec<Quad>,
+    pub models: Vec<ModelInstance>,
+    pub visible_faces: usize,
+    pub culled_faces: usize,
+    pub model_blocks: usize,
 }
 fn position(face: usize, plane: usize, u: usize, v: usize) -> [usize; 3] {
     match face {
@@ -16,36 +35,137 @@ fn position(face: usize, plane: usize, u: usize, v: usize) -> [usize; 3] {
         _ => [plane, v, u],
     }
 }
-pub fn build(world: &TestWorld<'_>) -> Result<Vec<Quad>> {
-    let mut quads = Vec::new();
+pub fn build(
+    world: &TestWorld<'_>,
+    assets: &Assets,
+    visibility: &mut FaceVisibility,
+) -> Result<Mesh> {
+    let mut mesh = Mesh {
+        cubes: Vec::new(),
+        models: Vec::new(),
+        visible_faces: 0,
+        culled_faces: 0,
+        model_blocks: 0,
+    };
     for &(cx, cz) in world.chunks.keys() {
-        let mut cells = [-1_i32; 18 * 18 * 18];
-        for y in 0..18 {
-            for z in 0..18 {
-                for x in 0..18 {
-                    cells[index(x, y, z)] = world.layer(
-                        cx * 16 + x as i32 - 1,
-                        y as i32 - 1,
-                        cz * 16 + z as i32 - 1,
-                    )?;
+        let mut masks = vec![[None; 256]; 6 * 16];
+        for y in 0..16 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    let pos = BlockPos::new(cx * 16 + x, y, cz * 16 + z);
+                    let state = world.block(pos.x, pos.y, pos.z);
+                    if world.is_air(state) {
+                        continue;
+                    }
+                    mesh.model_blocks += 1;
+                    let selected = assets.model_catalog.collect(state, pos)?;
+                    let mut visible = [false; 6];
+                    for direction in Direction::ALL {
+                        let [dx, dy, dz] = direction.normal();
+                        let neighbor = world.block(pos.x + dx, pos.y + dy, pos.z + dz);
+                        visible[direction as usize] =
+                            visibility.should_render_face(state, neighbor, direction, true)?;
+                    }
+                    if selected.len() == 1
+                        && let Some(styles) = selected[0].1.cube
+                    {
+                        for (face, style) in styles.into_iter().enumerate() {
+                            if !visible[face] {
+                                mesh.culled_faces += 1;
+                                continue;
+                            }
+                            mesh.visible_faces += 1;
+                            let (plane, u, v) = match face {
+                                0 | 1 => (y, x, z),
+                                2 | 3 => (z, x, y),
+                                _ => (x, z, y),
+                            };
+                            masks[face * 16 + plane as usize][(u + 16 * v) as usize] = Some(style);
+                        }
+                    } else {
+                        for (_, model) in selected {
+                            for face in &model.faces {
+                                if face.quad.cull.is_some_and(|d| !visible[d as usize]) {
+                                    mesh.culled_faces += 1;
+                                    continue;
+                                }
+                                mesh.visible_faces += 1;
+                                mesh.models.push(models::instance(face, pos));
+                            }
+                        }
+                    }
                 }
             }
         }
-        mesh_chunk(&cells, cx, cz, &mut quads);
+        for (index, mask) in masks.iter_mut().enumerate() {
+            merge(mask, index / 16, index % 16, cx, cz, &mut mesh.cubes);
+        }
     }
-    Ok(quads)
+    Ok(mesh)
 }
+fn merge(
+    mask: &mut [Option<CubeStyle>; 256],
+    face: usize,
+    plane: usize,
+    cx: i32,
+    cz: i32,
+    quads: &mut Vec<Quad>,
+) {
+    for v in 0..16 {
+        let mut u = 0;
+        while u < 16 {
+            let Some(style) = mask[u + v * 16] else {
+                u += 1;
+                continue;
+            };
+            let mut width = 1;
+            while u + width < 16 && mask[u + width + v * 16] == Some(style) {
+                width += 1;
+            }
+            let mut height = 1;
+            while v + height < 16
+                && (u..u + width).all(|x| mask[x + (v + height) * 16] == Some(style))
+            {
+                height += 1;
+            }
+            for y in v..v + height {
+                for x in u..u + width {
+                    mask[x + y * 16] = None;
+                }
+            }
+            let p = position(face, plane + usize::from(face % 2 == 1), u, v);
+            let [a, b, c, d, e, f] = style.uv.map(f32::from);
+            quads.push(Quad {
+                origin: [
+                    (cx * 16 + p[0] as i32) as f32,
+                    p[1] as f32,
+                    (cz * 16 + p[2] as i32) as f32,
+                ],
+                extent: [width as f32, height as f32],
+                face: face as u32,
+                layer: style.layer,
+                uv_origin: [a, b],
+                uv_u: [c, d],
+                uv_v: [e, f],
+                shade: f32::from_bits(style.shade_bits),
+            });
+            u += width;
+        }
+    }
+}
+
+#[cfg(test)]
 fn index(x: usize, y: usize, z: usize) -> usize {
     x + 18 * (z + 18 * y)
 }
+#[cfg(test)]
 fn mesh_chunk(cells: &[i32; 18 * 18 * 18], cx: i32, cz: i32, quads: &mut Vec<Quad>) {
     for face in 0..6 {
         for plane in 0..16 {
-            let mut mask = [-1_i32; 256];
+            let mut mask = [None; 256];
             for v in 0..16 {
                 for u in 0..16 {
                     let p = position(face, plane + 1, u + 1, v + 1);
-                    let layer = cells[index(p[0], p[1], p[2])];
                     let mut adjacent = p;
                     let axis = match face {
                         0 | 1 => 1,
@@ -57,52 +177,20 @@ fn mesh_chunk(cells: &[i32; 18 * 18 * 18], cx: i32, cz: i32, quads: &mut Vec<Qua
                     } else {
                         adjacent[axis] += 1;
                     }
+                    let layer = cells[index(p[0], p[1], p[2])];
                     if layer >= 0 && cells[index(adjacent[0], adjacent[1], adjacent[2])] < 0 {
-                        mask[u + v * 16] = layer;
+                        mask[u + 16 * v] = Some(CubeStyle {
+                            layer: layer as u32,
+                            uv: [0, 1, 1, 0, 0, -1],
+                            shade_bits: 1f32.to_bits(),
+                        });
                     }
                 }
             }
-            for v in 0..16 {
-                let mut u = 0;
-                while u < 16 {
-                    let layer = mask[u + v * 16];
-                    if layer < 0 {
-                        u += 1;
-                        continue;
-                    }
-                    let mut width = 1;
-                    while u + width < 16 && mask[u + width + v * 16] == layer {
-                        width += 1;
-                    }
-                    let mut height = 1;
-                    while v + height < 16
-                        && (u..u + width).all(|x| mask[x + (v + height) * 16] == layer)
-                    {
-                        height += 1;
-                    }
-                    for y in v..v + height {
-                        for x in u..u + width {
-                            mask[x + y * 16] = -1;
-                        }
-                    }
-                    let p = position(face, plane + usize::from(face % 2 == 1), u, v);
-                    quads.push(Quad {
-                        origin: [
-                            (cx * 16 + p[0] as i32) as f32,
-                            p[1] as f32,
-                            (cz * 16 + p[2] as i32) as f32,
-                        ],
-                        extent: [width as f32, height as f32],
-                        face: face as u32,
-                        layer: layer as u32,
-                    });
-                    u += width;
-                }
-            }
+            merge(&mut mask, face, plane, cx, cz, quads);
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +264,63 @@ mod tests {
         }
         assert_eq!(actual, expected);
         quads
+    }
+
+    #[test]
+    fn merging_preserves_rotation_mirroring_shade_and_texture() {
+        let bases = [
+            [0, 0, 1, 0, 0, 1],
+            [1, 0, 0, 1, -1, 0],
+            [1, 1, -1, 0, 0, -1],
+            [0, 1, 0, -1, 1, 0],
+            [1, 0, -1, 0, 0, 1],
+            [0, 1, 1, 0, 0, -1],
+            [0, 0, 0, 1, 1, 0],
+            [1, 1, 0, -1, -1, 0],
+        ];
+        let original: [Option<CubeStyle>; 256] = std::array::from_fn(|i| {
+            (i % 17 != 0).then_some(CubeStyle {
+                layer: (i / 64) as u32,
+                uv: bases[(i / 4) % 8],
+                shade_bits: if i % 5 == 0 { 0.5f32 } else { 1f32 }.to_bits(),
+            })
+        });
+        for face in 0..6 {
+            let mut mask = original;
+            let mut quads = Vec::new();
+            merge(&mut mask, face, 4, -2, 3, &mut quads);
+            let mut covered = [false; 256];
+            for q in quads {
+                let p = [q.origin[0] + 32.0, q.origin[1], q.origin[2] - 48.0];
+                let (u0, v0) = match face {
+                    0 | 1 => (p[0] as usize, p[2] as usize),
+                    2 | 3 => (p[0] as usize, p[1] as usize),
+                    _ => (p[2] as usize, p[1] as usize),
+                };
+                for dv in 0..q.extent[1] as usize {
+                    for du in 0..q.extent[0] as usize {
+                        let index = u0 + du + 16 * (v0 + dv);
+                        assert!(!covered[index]);
+                        covered[index] = true;
+                        let style = original[index].unwrap();
+                        assert_eq!(q.layer, style.layer);
+                        assert_eq!(q.shade.to_bits(), style.shade_bits);
+                        let [a, b, c, d, e, f] = style.uv.map(f32::from);
+                        let local = [a + c * 0.25 + e * 0.75, b + d * 0.25 + f * 0.75];
+                        let merged: [f32; 2] = std::array::from_fn(|axis| {
+                            q.uv_origin[axis]
+                                + q.uv_u[axis] * (du as f32 + 0.25)
+                                + q.uv_v[axis] * (dv as f32 + 0.75)
+                        });
+                        assert_eq!(
+                            local.map(|v| v.rem_euclid(1.0)),
+                            merged.map(|v| v.rem_euclid(1.0))
+                        );
+                    }
+                }
+            }
+            assert_eq!(covered, original.map(|v| v.is_some()));
+        }
     }
 
     #[test]

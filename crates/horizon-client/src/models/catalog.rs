@@ -30,12 +30,17 @@ use std::{
 pub struct BakedFace {
     pub quad: ModelQuad,
     pub layer: u32,
+    pub opaque: bool,
+}
+pub struct BakedModel {
+    pub faces: Vec<BakedFace>,
+    pub cube: Option<[super::cube::CubeStyle; 6]>,
 }
 type VariantKey = (String, [u8; 3], bool);
 pub struct StateModels {
     choices: Vec<CompiledChoices>,
     states: BTreeMap<BlockStateId, (usize, SelectedModels)>,
-    baked: BTreeMap<VariantKey, Vec<BakedFace>>,
+    baked: BTreeMap<VariantKey, BakedModel>,
 }
 fn key(variant: &Variant) -> VariantKey {
     (variant.model.clone(), variant.rotations, variant.uv_lock)
@@ -159,14 +164,26 @@ impl StateModels {
         let mut baked = BTreeMap::new();
         for (name, turns, lock) in variants {
             let model = library.resolve(&name)?;
-            let faces = bake_model_transformed(&model, BlockModelTransform::new(turns, lock))?.into_iter().map(|quad| {
-                if quad.material.force_translucent || quad.tint_index != -1 {
-                    return Err("inspection gallery requires untinted opaque or binary-cutout materials".into());
-                }
-                let layer = sprites.insert(root, &quad.material.sprite)?;
-                Ok(BakedFace { quad, layer })
-            }).collect::<Result<_>>()?;
-            baked.insert((name, turns, lock), faces);
+            let faces: Vec<BakedFace> =
+                bake_model_transformed(&model, BlockModelTransform::new(turns, lock))?
+                    .into_iter()
+                    .map(|quad| {
+                        if quad.material.force_translucent || quad.tint_index != -1 {
+                            return Err(
+                        "inspection gallery requires untinted opaque or binary-cutout materials"
+                            .into(),
+                    );
+                        }
+                        let layer = sprites.insert(root, &quad.material.sprite)?;
+                        Ok(BakedFace {
+                            quad,
+                            layer,
+                            opaque: sprites.opaque[layer as usize],
+                        })
+                    })
+                    .collect::<Result<_>>()?;
+            let cube = super::cube::cube_styles(&faces);
+            baked.insert((name, turns, lock), BakedModel { faces, cube });
         }
         Ok(Self {
             choices,
@@ -178,7 +195,7 @@ impl StateModels {
         &self,
         state: BlockStateId,
         position: BlockPos,
-    ) -> Result<Vec<(&Variant, &[BakedFace])>> {
+    ) -> Result<Vec<(&Variant, &BakedModel)>> {
         let (choice, selected) = self
             .states
             .get(&state)
@@ -190,15 +207,7 @@ impl StateModels {
         self.choices[*choice].collect(selected, &mut random, &mut variants)?;
         variants
             .into_iter()
-            .map(|v| {
-                Ok((
-                    v,
-                    self.baked
-                        .get(&key(v))
-                        .ok_or("unbaked block model")?
-                        .as_slice(),
-                ))
-            })
+            .map(|v| Ok((v, self.baked.get(&key(v)).ok_or("unbaked block model")?)))
             .collect()
     }
 }

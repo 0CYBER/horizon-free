@@ -3,8 +3,8 @@
 The behavior target is the repository's pinned **Minecraft Java Edition 26.3**.
 One-to-one vanilla gameplay parity is the acceptance criterion. It has **not**
 been reached. Horizon now has a [native development client](native-client.md)
-that renders a controlled block scene and sixteen blockstate-driven model placements with a
-free camera. It does not run a
+that renders a controlled resident-chunk scene with blockstate-selected models
+and a free camera. It does not run a
 complete game server or gameplay simulation.
 The Rust workspace implements core arithmetic/random streams, world data and
 resident sections, scheduled tick ordering, geometry, contained fluid states,
@@ -24,11 +24,14 @@ binding now also matches native selection across registered and special
 item-frame states. Weighted selection and multipart random draw consumption
 also match native traces. Transformed baking now checks every bundled
 model/rotation/UV-lock tuple and all XYZ quarter-turn combinations against native
-geometry by exact float bits. The native renderer now draws an
-inspection gallery from registry-bound, selected and transformed models, including binary
+geometry by exact float bits. The native renderer now draws its controlled
+resident chunks from registry-bound, selected and transformed models, including binary
 cutouts, multipart connections, weighted stone variants and stepped lantern
 animation. All 16 scene selections match native model collection. These are not
-yet gameplay blocks; general chunk model rendering remains unfinished.
+yet simulated gameplay blocks. Resident chunk meshing now preserves weighted
+variants and UV orientation when greedily merging matching cube faces, and uses
+native-checked neighbor visibility. Full block-catalog material support, lighting
+and chunk streaming remain unfinished.
 [Neighbor face visibility](face-visibility.md) now matches both reference JARs
 across 1,441,816 state pairs, including all pinned suppression-rule families.
 Animation metadata, frame sequences and tick-state selection now have native

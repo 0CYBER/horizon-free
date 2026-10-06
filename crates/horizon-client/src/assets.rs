@@ -53,11 +53,11 @@ pub struct Assets {
     pub registry: BlockRegistry,
     pub properties: Properties,
     pub material_states: [BlockStateId; 6],
-    pub layers: Vec<i32>,
     pub sprite_size: u32,
     pub pixels: Vec<u8>,
     pub texture_layers: u32,
-    pub model_quads: Vec<crate::models::ModelInstance>,
+    pub model_catalog: crate::models::StateModels,
+    pub model_placements: Vec<(horizon_core::position::BlockPos, BlockStateId)>,
     pub model_gallery: Vec<Value>,
     pub animations: Vec<crate::sprites::SpriteAnimation>,
 }
@@ -167,11 +167,6 @@ impl Assets {
                 })
                 .collect::<Result<_>>()?,
         ));
-        let mut layers: Vec<_> = properties
-            .0
-            .iter()
-            .map(|state| if state.air { -1 } else { -2 })
-            .collect();
         let mut material_states = [BlockStateId(0); 6];
         let mut sprites = crate::sprites::Sprites::default();
         for (layer, name) in MATERIALS.iter().enumerate() {
@@ -179,20 +174,19 @@ impl Assets {
                 .default_state(&format!("minecraft:{name}"))
                 .ok_or_else(|| invalid("missing test-scene material"))?;
             material_states[layer] = state;
-            let sprite = sprites.insert(root, &format!("minecraft:block/{name}"))?;
-            layers[state.0 as usize] = sprite as i32;
+            sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
-        let gallery = crate::models::gallery(root, &registry, &mut sprites)?;
+        let models = crate::models::prepare(root, &registry, &mut sprites)?;
         Ok(Self {
             registry,
             properties,
             material_states,
-            layers,
             sprite_size: sprites.size,
             texture_layers: u32::try_from(sprites.layers.len())?,
             pixels: sprites.pixels,
-            model_quads: gallery.quads,
-            model_gallery: gallery.states,
+            model_catalog: models.catalog,
+            model_placements: models.placements,
+            model_gallery: models.states,
             animations: sprites.animations,
         })
     }

@@ -21,7 +21,7 @@ except ImportError:
 
 
 def resource_fingerprint(root):
-    files = [root / 'facts.json', root / 'model-states.json', root / 'block-tags.json', root / 'horizon-resources.json',
+    files = [root / 'facts.json', root / 'model-states.json', root / 'render-definitions.json', root / 'occlusion.nbt', root / 'block-tags.json', root / 'horizon-resources.json',
              *sorted(path for path in (root / 'assets').rglob('*') if path.is_file())]
     digest = hashlib.sha256()
     for path in files:
@@ -50,7 +50,8 @@ def main():
                *sorted((lab.ROOT / 'crates/horizon-assets/src').rglob('*.rs'))]
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaGallerySelectionOracle.java'
     helper = oracle.with_name('VanillaCuboidModelOracle.java')
-    sources += [oracle, helper, lab.ROOT/'tools/test_model_baking_parity.py', lab.ROOT/'tools/test_rust_parity.py', lab.ROOT/'tools/lab.py', lab.ROOT/'tools/prepare_native_client.py']
+    heightmap = oracle.with_name('VanillaHeightmapOracle.java')
+    sources += [oracle, helper, heightmap, lab.ROOT/'tools/test_model_baking_parity.py', lab.ROOT/'tools/test_rust_parity.py', lab.ROOT/'tools/lab.py', lab.ROOT/'tools/prepare_native_client.py']
     for crate in ['horizon-core', 'horizon-world']:
         sources += [lab.ROOT/'crates'/crate/'Cargo.toml', *sorted((lab.ROOT/'crates'/crate/'src').rglob('*.rs'))]
     tested_sources = {
@@ -74,8 +75,10 @@ def main():
                        stdout=log, stderr=subprocess.STDOUT, timeout=120)
     result = json.loads(report.read_text())
     if (result.get('error') is not None or result.get('presented_frames') != 30
-            or result.get('resident_chunks') != 9 or result.get('merged_quads', 0) <= 0
-            or result.get('model_quads') != 209 or len(result.get('model_gallery', [])) != 16
+            or result.get('resident_chunks') != 9 or result.get('merged_quads') != 3169
+            or result.get('visible_model_faces') != 5991 or result.get('culled_model_faces') != 59636
+            or result.get('model_blocks') != 10919
+            or result.get('model_quads') != 179 or len(result.get('model_gallery', [])) != 16
             or result.get('sprite_layers') != 18 or result.get('animated_sprites') != 1
             or not result.get('adapter') or min(result.get('window_size', [0])) <= 0):
         raise RuntimeError('Incomplete native client presentation: ' + str(report))
@@ -85,19 +88,21 @@ def main():
     native = root/'gallery-selection.json'
     with (root/'gallery-selection.log').open('w') as log:
         subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-cp', dependencies,
-                        '-d', str(classes), str(oracle), str(helper)], cwd=lab.ROOT, check=True,
+                        '-d', str(classes), str(oracle), str(helper), str(heightmap)], cwd=lab.ROOT, check=True,
                        stdout=log, stderr=subprocess.STDOUT, timeout=3600)
         subprocess.run(['java', '-Xmx512M', '-cp', str(classes)+os.pathsep+dependencies,
-                        'dev.horizonlab.parity.VanillaGallerySelectionOracle', str(report), str(native)],
+                        'dev.horizonlab.parity.VanillaGallerySelectionOracle', str(report), str(native), str(root/'26.3')],
                        cwd=lab.ROOT, check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
-    selections = json.loads(native.read_text())
+    native_result = json.loads(native.read_text())
+    selections = native_result['gallery']
+    result['native_scene_culling'] = native_result['scene']
     if len(selections) != len(result['model_gallery']):
         raise RuntimeError('Incomplete native gallery selection check')
     result['native_selection'] = {'matched_placements': len(selections),
                                   'selected_parts': sum(len(s['models']) for s in selections),
                                   'client_jar_sha256': lab.digest(jars['client'], 'sha256'),
                                   'output_sha256': lab.digest(native, 'sha256'),
-                                  'scope': 'Actual native registry states, blockstate dispatch, root baking with tagged empty geometry, and legacy collection using state.getSeed(position). Model names and transform matrices match scene selections; no shader/pixel parity claim.'}
+                                  'scope': 'Actual native registry states, blockstate dispatch, tagged root baking and legacy collection using state.getSeed(position). All 16 featured placements match model names/transforms. An independently constructed native scene also matches total occupied blocks and visible/culled model faces using native parent resolution, rotated culling directions and Block.shouldRenderFace. No shader/pixel parity claim.'}
     if resource_fingerprint(root / '26.3') != resources:
         raise RuntimeError('Resources changed during native client verification')
     result['resource_files'] = resources

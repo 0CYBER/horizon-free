@@ -1,4 +1,4 @@
-//! A controlled opaque-cube scene for exercising the native renderer. This is
+//! A controlled blockstate scene for exercising the native renderer. This is
 //! not the vanilla world generator or an authoritative gameplay simulation.
 use crate::{
     Result,
@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 
 pub struct TestWorld<'a> {
     pub chunks: BTreeMap<(i32, i32), TerrainChunk<'a, Properties>>,
-    assets: &'a Assets,
     air: BlockStateId,
 }
 impl<'a> TestWorld<'a> {
@@ -21,7 +20,6 @@ impl<'a> TestWorld<'a> {
             .ok_or("missing air state")?;
         let mut world = Self {
             chunks: BTreeMap::new(),
-            assets,
             air,
         };
         for cz in -radius..=radius {
@@ -73,6 +71,9 @@ impl<'a> TestWorld<'a> {
                 }
             }
         }
+        for (position, state) in &assets.model_placements {
+            world.set(position.x, position.y, position.z, *state)?;
+        }
         Ok(world)
     }
     fn set(&mut self, x: i32, y: i32, z: i32, state: BlockStateId) -> Result<()> {
@@ -82,15 +83,12 @@ impl<'a> TestWorld<'a> {
             .set_block_worldgen(x, y, z, state)?;
         Ok(())
     }
-    pub fn layer(&self, x: i32, y: i32, z: i32) -> Result<i32> {
-        let state = self
-            .chunks
+    pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
+        self.chunks
             .get(&(x >> 4, z >> 4))
-            .map_or(self.air, |chunk| chunk.block(x, y, z));
-        let layer = self.assets.layers[state.0 as usize];
-        if layer == -2 {
-            return Err("test scene contains an unsupported non-cube material".into());
-        }
-        Ok(layer)
+            .map_or(self.air, |chunk| chunk.block(x, y, z))
+    }
+    pub fn is_air(&self, state: BlockStateId) -> bool {
+        state == self.air
     }
 }

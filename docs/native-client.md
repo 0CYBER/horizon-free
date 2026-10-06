@@ -1,28 +1,33 @@
 # Horizon native development client
 
 `horizon-client` opens a native Rust window and renders a controlled block scene
-stored in Horizon's resident chunks, alongside sixteen blockstate-driven model placements. It
-loads the block registry, models and sprites from pinned Java Edition 26.3
-resources. A padded chunk mesh
-culls hidden faces across chunk boundaries and merges adjacent matching faces;
-the GPU draws the rectangles as instances. A separate instanced draw renders
-baked cuboid faces without expanding them into cube approximations. The camera
-is a free inspection tool.
+stored in Horizon's resident chunks. Every occupied cell selects models from its
+registry state, including the terrain and sixteen featured placements. It loads
+block definitions, cuboid models, sprites and occlusion grids from pinned Java
+Edition 26.3 resources. Model selection uses the default block position seed;
+neighbor visibility uses the validated Rust face rules across chunk boundaries.
+The camera remains a free inspection tool.
+
+Eligible opaque unit-cube faces use greedy rectangles only when texture layer,
+UV rotation/mirroring and shading match. Each rectangle retains its signed UV
+basis, so weighted texture variation survives merging. Other baked geometry and
+binary-alpha cutouts use the separate model-face instance pipeline. Geometry
+with nonintegral UV-lock rounding also stays on that path.
 
 This checkpoint has no player simulation, vanilla world generation, block
 interaction, inventory, sound, networking or world save/load. It does not meet
 the [playable-build acceptance criteria](rust-parity.md#completion-criteria-and-playable-builds).
-The model gallery now uses blockstate dispatch, weighted variants, multipart
-conditions and transformed baking. Chunk-wide model rendering, fractional
-transparency, tinting, lighting, resource packs, chunk streaming and full visual
-parity remain unfinished.
+The controlled chunk scene now uses blockstate dispatch, weighted variants,
+multipart conditions and transformed baking. Full block-catalog material support,
+fractional transparency, tinting, lighting, resource packs, chunk streaming and
+full visual parity remain unfinished.
 
 The resource gallery sits beside the pyramid and includes oak stairs, a slab,
 an anvil, a torch, a lantern, connected fences and iron bars, a cobweb, a wall
 grindstone, a ladder, a sideways amethyst cluster and four weighted stone
 placements. Registry state properties select the models: the stairs are an
 upside-down inner corner, the slab is a top slab and the fence gate is open.
-These remain static inspection placements without simulation callbacks. Binary-alpha cutouts are rendered;
+These are resident chunk states; simulation callbacks remain unfinished. Binary-alpha cutouts are rendered;
 the lantern's three frames advance every eight inspection ticks at 20 ticks/s.
 The animation metadata codec and frame selection now use the shared
 `horizon-assets` implementation checked against the pinned client. GPU
@@ -170,8 +175,8 @@ selector and predicate cases: 3,802 definitions and 687,466 state results match,
 with 220 expected binding errors. It checks the native replacement-before-abort
 behavior for overlapping variants, eager multipart validation even when variants
 cover every state, integer-property aliases, nested conditions and empty part
-selections. The development gallery now uses this binder; general chunk model
-rendering remains unfinished.
+selections. The controlled chunk renderer now uses this binder for its model
+catalog.
 
 The Java integer-property parser is shared by `horizon-core`, client binding and
 world-state decoding. Its [codec regression](../benchmarks/rust-blockstate-model-binding-2026-10-06/shared-integer-codec.json)
@@ -231,8 +236,8 @@ python3 tools/test_native_client.py --vscreen
 The mesh tests compare expanded rectangles against independently enumerated
 exposed voxel faces, including solid neighbors, cavities, material boundaries,
 negative chunk origins and random surroundings. The startup runner launches a
-nine-chunk scene, requires 30 presented frames and a clean exit, verifies 209
-baked gallery faces across 18 sprite layers, and writes GPU,
+nine-chunk scene, requires 30 presented frames and a clean exit, verifies 3,169
+greedy cube rectangles and 179 other model faces across 18 sprite layers, and writes GPU,
 platform, binary and source information to ignored
 `.local/horizon-client/startup-smoke.json`. It has an external timeout as well as
 the application's frame deadline. These checks do not establish gameplay or
@@ -265,4 +270,16 @@ IDs, properties, positions and models are recorded in the startup report.
 
 [Neighbor-face visibility](face-visibility.md) now has native client/server
 coverage across all registered states and suppression-rule families. Integrating
-that result with resident chunk model meshing is the next rendering step.
+that result with resident chunk model meshing is now covered by the scene check
+below.
+
+The [resident-model report](../benchmarks/rust-native-chunk-models-2026-10-06/startup-smoke.json)
+checks all 10,919 occupied cells in the bounded startup scene against a separately
+constructed native scene. Actual Java state-model selection, parent geometry,
+rotated culling directions and `Block.shouldRenderFace` produce the same 5,991
+visible and 59,636 culled model faces. The sixteen featured model selections also
+retain their direct native comparison. Expanded greedy-rectangle tests cover
+rotated and mirrored UV bases, texture and shade boundaries, negative origins,
+neighbor seams and cavities; cube projection tests cover all XYZ quarter turns.
+These checks cover CPU mesh behavior and GPU startup, not native shader pixels
+or a hardware performance comparison.

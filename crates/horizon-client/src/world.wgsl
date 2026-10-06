@@ -15,7 +15,9 @@ struct VertexOut {
 }
 @vertex fn vs_main(@builtin(vertex_index) vertex: u32,
     @location(0) origin: vec3<f32>, @location(1) extent: vec2<f32>,
-    @location(2) face: u32, @location(3) layer: u32) -> VertexOut {
+    @location(2) face: u32, @location(3) layer: u32,
+    @location(4) uv_origin: vec2<f32>, @location(5) uv_u: vec2<f32>,
+    @location(6) uv_v: vec2<f32>, @location(7) shade: f32) -> VertexOut {
     let corners = array<vec2<f32>,4>(vec2(0.0,0.0),vec2(1.0,0.0),vec2(1.0,1.0),vec2(0.0,1.0));
     let normal_order = array<u32,6>(0u,1u,2u,0u,2u,3u);
     let reversed_order = array<u32,6>(0u,2u,1u,0u,3u,2u);
@@ -28,9 +30,9 @@ struct VertexOut {
     else { position+=vec3(0.0,offset.y,offset.x); }
     var output: VertexOut;
     output.clip=camera.view_projection*vec4(position,1.0);
-    output.uv=vec2(offset.x,extent.y-offset.y);
+    output.uv=uv_origin+uv_u*offset.x+uv_v*offset.y;
     output.layer=layer;
-    output.shade=select(select(0.8,0.6,face>=4u),select(0.5,1.0,face==1u),face<2u);
+    output.shade=shade;
     output.world_position=position;
     return output;
 }
