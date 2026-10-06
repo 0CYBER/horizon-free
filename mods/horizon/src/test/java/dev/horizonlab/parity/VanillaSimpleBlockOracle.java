@@ -16,7 +16,8 @@ import net.minecraft.world.level.levelgen.*;
 import net.minecraft.world.level.levelgen.feature.SimpleBlockFeature;
 import net.minecraft.world.level.levelgen.feature.Feature;
 import net.minecraft.world.level.levelgen.placement.*;
-import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.chunk.*;
+import net.minecraft.world.level.biome.*;
 import net.minecraft.world.level.levelgen.feature.stateproviders.BlockStateProvider;
 
 /** Actual native simple-block map codec and mutable world placement. */
@@ -34,15 +35,31 @@ public final class VanillaSimpleBlockOracle {
  }
  private static BlockPos pos(JsonArray a){return new BlockPos(a.get(0).getAsInt(),a.get(1).getAsInt(),a.get(2).getAsInt());}
  private static String xyz(BlockPos p){return p.getX()+" "+p.getY()+" "+p.getZ();}
+ private static final class Chunks {
+  static final PalettedContainerFactory FACTORY;
+  static {
+   Holder<Biome> biome=Holder.Reference.createStandAlone(new HolderOwner<Biome>(){},Biomes.PLAINS);
+   var ids=new IdMapper<Holder<Biome>>();ids.add(biome);
+   FACTORY=new PalettedContainerFactory(Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY),Blocks.AIR.defaultBlockState(),null,Strategy.createForBiomes(ids),biome,null);
+  }
+ }
  private static final class World implements InvocationHandler {
   final JsonObject f;final PrintWriter out;final RandomSource random;int calls;
   final TreeMap<BlockPos,BlockState> states=new TreeMap<>(Comparator.<BlockPos>comparingInt(BlockPos::getX).thenComparingInt(BlockPos::getY).thenComparingInt(BlockPos::getZ));
   World(JsonObject f,PrintWriter out,RandomSource random){this.f=f;this.out=out;this.random=random;for(var raw:f.getAsJsonArray("states")){var v=raw.getAsJsonArray();states.put(pos(v),Block.stateById(v.get(3).getAsInt()));}}
+  final Map<ChunkPos,ProtoChunk> chunks=new HashMap<>();
+  ProtoChunk chunk(BlockPos p) {
+   event("chunk "+xyz(p));var key=new ChunkPos(p.getX()>>4,p.getZ()>>4);
+   return chunks.computeIfAbsent(key,cp->new ProtoChunk(cp,UpgradeData.EMPTY,LevelHeightAccessor.create(-64,384),Chunks.FACTORY,null){
+    @Override public void markPosForPostProcessing(BlockPos position){event("post "+xyz(position));super.markPosForPostProcessing(position);}
+   });
+  }
   void event(String text){out.println(text);if(calls++==f.get("fail").getAsInt())throw new Stop();}
   BlockState at(BlockPos p){return states.getOrDefault(p,Block.stateById(f.get("fallback").getAsInt()));}
   public Object invoke(Object proxy,Method method,Object[] args)throws Throwable {
    String name=method.getName();
    if(name.equals("getRandom"))return random;
+   if(name.equals("getChunk")&&args.length==1&&args[0] instanceof BlockPos)return chunk((BlockPos)args[0]);
    if(name.equals("getMinY"))return -64;
    if(name.equals("getHeight")&&(args==null||args.length==0))return 384;
    if(name.equals("getSeaLevel"))return 63;

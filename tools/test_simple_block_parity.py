@@ -88,6 +88,7 @@ def corpus(facts, placement):
 
 def run(corpus, build_name, source_file, scope):
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--prepare',action='store_true');args=parser.parse_args()
+    label=build_name.removeprefix('rust-').removesuffix('-parity')
     build=lab.LOCAL/build_name;build.mkdir(parents=True,exist_ok=True);report_path=build/'report.json';report_path.unlink(missing_ok=True)
     if args.prepare:lab.prepare()
     lock,jars,libraries=base.verify_artifacts();oracle=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSimpleBlockOracle.java'
@@ -119,11 +120,11 @@ def run(corpus, build_name, source_file, scope):
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True));binary=Path(metadata['target_directory'])/'release/examples'/('simple_block_fixture.exe' if os.name=='nt' else 'simple_block_fixture')
     run([binary,build],'rust');references=[]
     for side,jar in jars.items():
-        java(side,side,build);matched=base.compare(build/(side+'.txt'),build/'rust.txt');print(f'{side}: {matched:,} simple-block output lines match Rust',flush=True)
+        java(side,side,build);matched=base.compare(build/(side+'.txt'),build/'rust.txt');print(f'{side}: {matched:,} {label} output lines match Rust',flush=True)
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(build/(side+'.txt'),'sha256'),'matched_output_lines':matched})
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixtures,tested_fixtures)
     report={'schema':1,'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'fixtures':fixture_count,'candidate_states':len(facts['states']),'double_plant_blocks':len(placement['double_plants']),'mossy_carpet_blocks':len(placement['mossy_carpets']),'sources_sha256':tested_sources,'fixtures_sha256':tested_fixtures,'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,'scope':scope}
-    lab.write_json(report_path,report);print(f'Scoped simple-block parity passed: {report_path}',flush=True)
+    lab.write_json(report_path,report);print(f'Scoped {label} parity passed: {report_path}',flush=True)
 
 
 def main():

@@ -428,3 +428,19 @@ Ordinary piles visit at most 98 cells. Rust preserves wrapped native box travers
 but limits pathological iteration to 2^20 cells; negative-count overflow fixtures
 compare failure-terminated prefixes. Dynamic block entities are absent in this
 feature fixture, and resident-world block updates remain pending.
+
+## Disk replacement and postprocessing
+
+Disk features now decode bounded radii and half-heights, traverse circular
+columns in native order, apply optional providers, and mark up to two non-air
+blocks above each replacement run. Failed target predicates end a run; empty
+optional providers preserve it. Postprocessing requests resolve the containing
+resident chunk and retain duplicate marks and prior effects after a failure.
+
+The [disk comparison](../benchmarks/rust-disk-2026-10-06/scoped-parity.json)
+matches **2,816,586 output lines per reference JAR** across **76,409 fixtures**.
+Every candidate state and every possible above-state is covered, alongside
+random providers, rejected writes, partial failures, wrapped coordinates and
+composed placement. Chunk-resolution and native ProtoChunk mark calls are
+traced; later chunk postprocessing execution is outside this comparison.
+Workspace tests, all-target Clippy and all 149 Python tests pass.

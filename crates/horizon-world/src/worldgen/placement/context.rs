@@ -26,6 +26,10 @@ pub enum LayerBlock {
     Ground,
 }
 pub trait PlacementContext {
+    /// Resolve the containing chunk and mark this position for postprocessing.
+    fn mark_postprocessing(&mut self, _position: [i32; 3]) -> Result<(), PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
     /// Test the current fluid at this position against the world's water tag.
     fn water_at(&mut self, _position: [i32; 3]) -> Result<bool, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)

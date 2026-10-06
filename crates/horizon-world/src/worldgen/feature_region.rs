@@ -136,6 +136,10 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     }
 }
 impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
+    fn mark_postprocessing(&mut self, [x, y, z]: [i32; 3]) -> Result<(), PlacementQueryError> {
+        self.chunk_mut(x >> 4, z >> 4)?.mark_postprocessing(x, y, z);
+        Ok(())
+    }
     fn generation(&self) -> WorldGenerationContext {
         self.generation
     }
@@ -193,6 +197,9 @@ impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
     }
 }
 impl<B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, '_, B, F> {
+    fn mark_postprocessing(&mut self, position: [i32; 3]) -> Result<(), PlacementQueryError> {
+        self.region.mark_postprocessing(position)
+    }
     fn generation(&self) -> WorldGenerationContext {
         self.region.generation()
     }

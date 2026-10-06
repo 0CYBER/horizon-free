@@ -134,6 +134,13 @@ fn query(error: impl std::fmt::Display) -> PlacementQueryError {
     PlacementQueryError::Failed(error.to_string())
 }
 impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
+    fn mark_postprocessing(&mut self, p: [i32; 3]) -> Result<(), PlacementQueryError> {
+        self.event(format_args!("chunk {} {} {}", p[0], p[1], p[2]))
+            .map_err(query)?;
+        self.event(format_args!("post {} {} {}", p[0], p[1], p[2]))
+            .map_err(query)?;
+        Ok(())
+    }
     fn water_at(&mut self, p: [i32; 3]) -> Result<bool, PlacementQueryError> {
         Ok(self.fluid_state(p).map_err(query)?.kind().mask() & self.water_mask != 0)
     }

@@ -146,3 +146,29 @@ fn write_callback_controls_mutation_and_receives_all_flags() {
     }
     assert_eq!(flags, [2, 3]);
 }
+
+#[test]
+fn postprocessing_routes_to_resident_chunks_and_preserves_partial_marks() {
+    let registry = registry();
+    let chunk = TerrainChunk::new(ChunkPos::new(-1, 1), -16, 32, &registry, Properties).unwrap();
+    let mut region =
+        TerrainRegion::new(vec![chunk], WorldGenerationContext::new(-16, 32, 8)).unwrap();
+    {
+        let mut world = TerrainFeatureAccess::new(
+            &mut region,
+            |_: &mut TerrainRegion<'_, Properties>, _: [i32; 3], _: BlockStateId, _: i32| {
+                Ok::<_, RegionError>(false)
+            },
+        );
+        world.mark_postprocessing([-1, -1, 16]).unwrap();
+        world.mark_postprocessing([-1, -1, 16]).unwrap();
+        world.mark_postprocessing([-16, 0, 31]).unwrap();
+        world.mark_postprocessing([-1, -17, 16]).unwrap();
+        world.mark_postprocessing([-1, 16, 16]).unwrap();
+        assert!(world.mark_postprocessing([0, 0, 16]).is_err());
+    }
+    assert_eq!(
+        region.chunk(-1, 1).unwrap().postprocessing(),
+        &[vec![255, 255], vec![3840]]
+    );
+}

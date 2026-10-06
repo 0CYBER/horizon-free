@@ -46,6 +46,7 @@ pub enum FeatureDefinition {
     },
     BlockColumn(super::block_column::BlockColumnFeature),
     BlockPile(super::block_pile::BlockPileFeature),
+    Disk(super::disk::DiskFeature),
     SimpleBlock(super::simple_block::SimpleBlockFeature),
     FillLayer(FillLayerFeature),
     ReplaceBlock(ReplaceBlockFeature),
@@ -67,6 +68,7 @@ pub enum FeatureExecutionError<E> {
     Provider(super::state_provider::StateProviderError<E>),
     BlockColumn(super::block_column::BlockColumnError<E>),
     BlockPile(super::block_pile::BlockPileError<E>),
+    Disk(super::disk::DiskError<E>),
     SimpleBlock(super::simple_block::SimpleBlockError<E>),
     Random(InvalidBound),
     Query(PlacementQueryError),
@@ -80,6 +82,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::Provider(e) => e.fmt(f),
             Self::BlockColumn(e) => e.fmt(f),
             Self::BlockPile(e) => e.fmt(f),
+            Self::Disk(e) => e.fmt(f),
             Self::SimpleBlock(e) => e.fmt(f),
             Self::Random(e) => e.fmt(f),
             Self::Query(e) => e.fmt(f),
@@ -246,6 +249,13 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:disk" => super::disk::DiskFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("disk bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(Self::Disk),
             "minecraft:block_pile" => super::block_pile::BlockPileFeature::decode(
                 json,
                 blocks.ok_or(DecodeError::Field("block pile bindings"))?,
@@ -551,6 +561,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::Disk(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::Disk),
             Self::BlockPile(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::BlockPile),
