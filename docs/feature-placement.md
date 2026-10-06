@@ -609,3 +609,20 @@ candidate descriptor, both vertical directions, continuation boundaries,
 replacement conditions, cap composition, failures, rejected writes and random
 stream tails. Workspace tests and all-target Clippy passed. Resident world
 updates and complete generation/gameplay remain unfinished.
+
+
+## Neighbor-based spreading
+
+The random-neighbor-spread feature evaluates and writes its origin provider before
+sampling attempts or testing replacement. Each attempt samples X, Y and Z offsets
+in order, checks replacement, then visits neighbors in native direction order.
+Exactly one accepted neighbor allows placement; finding a second stops the scan.
+Rejected writes preserve the same subsequent queries and random consumption.
+
+The [neighbor-spread report](../benchmarks/rust-neighbor-spread-2026-10-06/scoped-parity.json)
+records **2,650,856 matching lines per JAR** across **79,580 fixtures**. Run
+`python3 tools/test_neighbor_spread_parity.py` to compare all candidate and neighbor
+states, all direction masks, bounded integer providers, named/empty holder sets,
+mutable repeated attempts, partial failures and nested feature/modifier calls.
+Workspace tests and all-target Clippy passed. These feature algorithms still
+require complete chunk mutation, neighbor updates and gameplay integration.

@@ -1,5 +1,6 @@
 //! Inline feature composition. Named holders, tags and registry reloads remain
 //! separate from this bounded executable tree.
+use super::block_predicate::PredicateBlockResolver;
 use super::{
     DecodeError, Object,
     block_feature::{
@@ -28,6 +29,14 @@ pub struct PlacedFeatureDefinition {
 #[derive(Clone, Debug)]
 pub enum FeatureDefinition {
     Basic(BasicFeature),
+    NeighborSpread {
+        provider: super::state_provider::BlockStateProvider,
+        neighbors: std::sync::Arc<std::collections::BTreeSet<crate::registry::BlockStateId>>,
+        can_replace: super::block_predicate::BlockPredicate,
+        attempts: super::value_provider::IntProvider,
+        xz_offset: super::value_provider::IntProvider,
+        y_offset: super::value_provider::IntProvider,
+    },
     Pillar {
         provider: super::state_provider::BlockStateProvider,
         can_replace: super::block_predicate::BlockPredicate,
@@ -233,6 +242,51 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:random_neighbor_spread" => {
+                let bindings =
+                    blocks.ok_or(DecodeError::Field("neighbor spread block bindings"))?;
+                let (providers, catalog, _) = bindings
+                    .simple_blocks
+                    .as_ref()
+                    .ok_or(DecodeError::Field("neighbor spread provider bindings"))?;
+                let provider = catalog.provider_with_budget(
+                    required(&object, "block")?.get(),
+                    providers,
+                    depth + 1,
+                    remaining,
+                )?;
+                let neighbors =
+                    bindings.predicate_block_set(required(&object, "accepted_neighbors")?.get())?;
+                let can_replace = super::block_predicate::BlockPredicate::decode_with_blocks(
+                    required(&object, "can_replace")?.get(),
+                    depth + 1,
+                    remaining,
+                    Some(bindings),
+                )?;
+                let mut integer = |name, low, high| {
+                    let value = super::value_provider::IntProvider::decode(
+                        required(&object, name)?,
+                        depth + 1,
+                        remaining,
+                    )?;
+                    let bounds = value.bounds();
+                    if bounds[0] < low || bounds[1] > high {
+                        return Err(DecodeError::Field("neighbor spread integer range"));
+                    }
+                    Ok(value)
+                };
+                let attempts = integer("attempts", 1, 3000)?;
+                let xz_offset = integer("xz_offset", -16, 16)?;
+                let y_offset = integer("y_offset", -16, 16)?;
+                Ok(Self::NeighborSpread {
+                    provider,
+                    neighbors,
+                    can_replace,
+                    attempts,
+                    xz_offset,
+                    y_offset,
+                })
+            }
             "minecraft:single_block_pillar" => {
                 let bindings =
                     blocks.ok_or(DecodeError::Field("pillar block bindings unavailable"))?;
@@ -486,6 +540,63 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::NeighborSpread {
+                provider,
+                neighbors,
+                can_replace,
+                attempts,
+                xz_offset,
+                y_offset,
+            } => {
+                let state = provider
+                    .get_state(world, random, origin)
+                    .map_err(FeatureExecutionError::Provider)?;
+                world
+                    .set_block(origin, state, 2)
+                    .map_err(|e| FeatureExecutionError::Basic(FeatureError::World(e)))?;
+                let count = attempts.sample(random)?;
+                for _ in 0..count {
+                    if run.remaining.get() == 0 {
+                        return Err(FeatureExecutionError::WorkLimit);
+                    }
+                    run.remaining.set(run.remaining.get() - 1);
+                    let dx = xz_offset.sample(random)?;
+                    let dy = y_offset.sample(random)?;
+                    let dz = xz_offset.sample(random)?;
+                    let position = [
+                        origin[0].wrapping_add(dx),
+                        origin[1].wrapping_add(dy),
+                        origin[2].wrapping_add(dz),
+                    ];
+                    if !can_replace
+                        .test(world, position)
+                        .map_err(FeatureExecutionError::Query)?
+                    {
+                        continue;
+                    }
+                    let mut found = 0;
+                    for direction in horizon_core::geometry::Direction::ALL {
+                        let step = direction.normal();
+                        let neighbor = std::array::from_fn(|i| position[i].wrapping_add(step[i]));
+                        let state = world
+                            .block(neighbor)
+                            .map_err(|e| FeatureExecutionError::Basic(FeatureError::World(e)))?;
+                        found += i32::from(neighbors.contains(&state));
+                        if found > 1 {
+                            break;
+                        }
+                    }
+                    if found == 1 {
+                        let state = provider
+                            .get_state(world, random, position)
+                            .map_err(FeatureExecutionError::Provider)?;
+                        world
+                            .set_block(position, state, 2)
+                            .map_err(|e| FeatureExecutionError::Basic(FeatureError::World(e)))?;
+                    }
+                }
+                Ok(true)
+            }
             Self::Pillar {
                 provider,
                 can_replace,

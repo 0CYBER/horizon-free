@@ -107,6 +107,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_pillar_parity.py
+      - name: Compare exactly-one-neighbor feature spreading
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_neighbor_spread_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable
