@@ -155,3 +155,81 @@ fn equal_grids_share_storage_without_collapsing_shape_identities() {
     ));
     assert!(first.same_identity(collision.cached_shape(BlockStateId(1)).unwrap().unwrap()));
 }
+
+fn canonical_marker(shape: &mut Tag, value: Tag) {
+    let Tag::Compound(fields) = shape else {
+        unreachable!()
+    };
+    fields.insert("canonical".into(), value);
+}
+
+#[test]
+fn canonical_shapes_restore_global_identity_without_normalizing_equal_grids() {
+    use horizon_core::geometry::VoxelShape;
+    let (registry_tag, mut collision_tag) = fixture();
+    let registry = BlockRegistry::from_nbt(&registry_tag).unwrap();
+    assert!(
+        !CachedCollisionRegistry::from_nbt(&collision_tag, &registry)
+            .unwrap()
+            .has_canonical_identities()
+    );
+    let Some(Tag::List(shapes)) = collision_tag.get_mut("shapes") else {
+        unreachable!()
+    };
+    canonical_marker(&mut shapes[0], Tag::Byte(1));
+    canonical_marker(&mut shapes[1], Tag::Byte(2));
+    let mut equal_block = shapes[1].clone();
+    canonical_marker(&mut equal_block, Tag::Byte(0));
+    shapes.push(equal_block);
+    *collision_tag.get_mut("cached_shapes").unwrap() = Tag::IntArray(vec![0, 1, 2]);
+    let collision = CachedCollisionRegistry::from_nbt(&collision_tag, &registry).unwrap();
+    assert!(collision.has_canonical_identities());
+    assert_eq!(collision.unique_grid_count(), 2);
+    let empty = collision.cached_shape(BlockStateId(0)).unwrap().unwrap();
+    let block = collision.cached_shape(BlockStateId(1)).unwrap().unwrap();
+    let separate = collision.cached_shape(BlockStateId(2)).unwrap().unwrap();
+    assert!(empty.same_identity(&VoxelShape::empty()));
+    assert!(block.same_identity(&VoxelShape::block()));
+    assert!(!separate.same_identity(&VoxelShape::block()));
+    assert_eq!(block.boxes(), separate.boxes());
+    assert!(std::ptr::eq(
+        block.boxes().as_ptr(),
+        separate.boxes().as_ptr()
+    ));
+}
+
+#[test]
+fn canonical_identity_claims_require_exact_geometry_and_unique_exports() {
+    let (registry_tag, valid) = fixture();
+    let registry = BlockRegistry::from_nbt(&registry_tag).unwrap();
+    for (index, marker) in [
+        (0, Tag::Byte(2)),
+        (1, Tag::Byte(1)),
+        (1, Tag::Byte(3)),
+        (1, Tag::Int(2)),
+    ] {
+        let mut data = valid.clone();
+        let Some(Tag::List(shapes)) = data.get_mut("shapes") else {
+            unreachable!()
+        };
+        canonical_marker(&mut shapes[index], marker);
+        assert!(CachedCollisionRegistry::from_nbt(&data, &registry).is_err());
+    }
+    let mut duplicate = valid.clone();
+    let Some(Tag::List(shapes)) = duplicate.get_mut("shapes") else {
+        unreachable!()
+    };
+    canonical_marker(&mut shapes[1], Tag::Byte(2));
+    shapes.push(shapes[1].clone());
+    assert!(CachedCollisionRegistry::from_nbt(&duplicate, &registry).is_err());
+    let mut noncanonical_zero = valid;
+    let Some(Tag::List(shapes)) = noncanonical_zero.get_mut("shapes") else {
+        unreachable!()
+    };
+    canonical_marker(&mut shapes[1], Tag::Byte(2));
+    let Some(Tag::LongArray(coords)) = shapes[1].get_mut("x") else {
+        unreachable!()
+    };
+    coords[0] = (-0.0f64).to_bits() as i64;
+    assert!(CachedCollisionRegistry::from_nbt(&noncanonical_zero, &registry).is_err());
+}

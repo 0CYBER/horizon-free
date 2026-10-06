@@ -28,6 +28,7 @@ pub struct CachedCollisionRegistry<'r> {
     shapes: Vec<VoxelShape>,
     state_shapes: Vec<i32>,
     grid_count: usize,
+    canonical_identities: bool,
 }
 impl<'r> CachedCollisionRegistry<'r> {
     pub fn registry(&self) -> &'r BlockRegistry {
@@ -55,8 +56,24 @@ impl<'r> CachedCollisionRegistry<'r> {
             return Err(invalid("too many cached collision shapes"));
         }
         let mut shapes = Vec::with_capacity(entries.len());
+        let mut canonical_identities = true;
+        let mut seen_canonical = [false; 3];
         let mut grids = HashMap::<GridKey, VoxelShape>::new();
         for entry in entries {
+            let canonical = match entry.get("canonical") {
+                None => {
+                    canonical_identities = false;
+                    0
+                }
+                Some(Tag::Byte(value @ 0..=2)) => *value as usize,
+                _ => return Err(invalid("invalid canonical collision identity")),
+            };
+            if canonical != 0 {
+                if seen_canonical[canonical] {
+                    return Err(invalid("duplicate canonical collision identity"));
+                }
+                seen_canonical[canonical] = true;
+            }
             let mut coords: [Vec<f64>; 3] = std::array::from_fn(|_| Vec::new());
             for (i, axis) in ["x", "y", "z"].into_iter().enumerate() {
                 let Some(Tag::LongArray(bits)) = entry.get(axis) else {
@@ -102,40 +119,66 @@ impl<'r> CachedCollisionRegistry<'r> {
                 min,
                 max,
             };
-            if let Some(existing) = grids.get(&key) {
-                shapes.push(existing.fresh_identity());
-                continue;
-            }
-            let shape = match entry.get("cube") {
-                Some(Tag::Byte(0)) => {
-                    VoxelShape::from_mixed_grid(coords, &occupied, coordinate_cubes)
-                }
-                Some(Tag::Byte(1)) => {
-                    if *cube_axes != 7 {
-                        return Err(invalid("cube shape has array-coordinate metadata"));
+            let shape = if let Some(existing) = grids.get(&key) {
+                existing.fresh_identity()
+            } else {
+                match entry.get("cube") {
+                    Some(Tag::Byte(0)) => {
+                        VoxelShape::from_mixed_grid(coords, &occupied, coordinate_cubes)
                     }
-                    let sizes = std::array::from_fn(|i| coords[i].len().saturating_sub(1));
-                    let shape = VoxelShape::from_cube(sizes, &occupied)
-                        .map_err(|e| invalid(e.to_string()))?;
-                    for axis in Axis::ALL {
-                        if shape
-                            .coordinates(axis)
-                            .iter()
-                            .map(|v| v.to_bits())
-                            .ne(coords[axis as usize].iter().map(|v| v.to_bits()))
-                        {
-                            return Err(invalid("cube collision coordinates differ"));
+                    Some(Tag::Byte(1)) => {
+                        if *cube_axes != 7 {
+                            return Err(invalid("cube shape has array-coordinate metadata"));
                         }
+                        let sizes = std::array::from_fn(|i| coords[i].len().saturating_sub(1));
+                        let shape = VoxelShape::from_cube(sizes, &occupied)
+                            .map_err(|e| invalid(e.to_string()))?;
+                        for axis in Axis::ALL {
+                            if shape
+                                .coordinates(axis)
+                                .iter()
+                                .map(|v| v.to_bits())
+                                .ne(coords[axis as usize].iter().map(|v| v.to_bits()))
+                            {
+                                return Err(invalid("cube collision coordinates differ"));
+                            }
+                        }
+                        Ok(shape)
                     }
-                    Ok(shape)
+                    _ => return Err(invalid("invalid collision cube flag")),
                 }
-                _ => return Err(invalid("invalid collision cube flag")),
-            }
-            .map_err(|e| invalid(e.to_string()))?;
-            let shape = shape
+                .map_err(|e| invalid(e.to_string()))?
                 .with_discrete_bounds(min, max)
-                .map_err(|e| invalid(e.to_string()))?;
-            grids.insert(key, shape.clone());
+                .map_err(|e| invalid(e.to_string()))?
+            };
+            let shape = if canonical == 0 {
+                shape
+            } else {
+                let reference = if canonical == 1 {
+                    VoxelShape::empty()
+                } else {
+                    VoxelShape::block()
+                };
+                let expected_count = usize::from(canonical == 2);
+                if cube != reference.is_cube()
+                    || coordinate_cubes != reference.cube_coordinate_axes()
+                    || occupied != vec![true; expected_count]
+                    || min != [0; 3]
+                    || max != [expected_count as i32; 3]
+                    || Axis::ALL.into_iter().any(|axis| {
+                        key.coords[axis as usize]
+                            .iter()
+                            .copied()
+                            .ne(reference.coordinates(axis).iter().map(|v| v.to_bits()))
+                    })
+                {
+                    return Err(invalid(
+                        "canonical collision identity has different geometry",
+                    ));
+                }
+                reference
+            };
+            grids.entry(key).or_insert_with(|| shape.clone());
             shapes.push(shape);
         }
         let Some(Tag::IntArray(state_shapes)) = tag.get("cached_shapes") else {
@@ -153,7 +196,13 @@ impl<'r> CachedCollisionRegistry<'r> {
             shapes,
             state_shapes: state_shapes.clone(),
             grid_count: grids.len(),
+            canonical_identities,
         })
+    }
+    /// Older exports omit native canonical identities. Such imports retain their
+    /// local alias graph but cannot support identity-dependent world iteration.
+    pub fn has_canonical_identities(&self) -> bool {
+        self.canonical_identities
     }
     pub fn shape_count(&self) -> usize {
         self.shapes.len()

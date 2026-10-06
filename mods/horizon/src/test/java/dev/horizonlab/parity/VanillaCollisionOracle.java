@@ -38,6 +38,7 @@ public final class VanillaCollisionOracle {
     }
     private static CompoundTag grid(VoxelShape shape) throws ReflectiveOperationException {
         CompoundTag tag = new CompoundTag();
+        tag.putByte("canonical",(byte)(shape==Shapes.empty()?1:shape==Shapes.block()?2:0));
         tag.putByte("cube", (byte)(shape instanceof CubeVoxelShape ? 1 : 0));
         int cubeAxes=0;for(Direction.Axis axis:Direction.Axis.values())if(shape.getCoords(axis) instanceof CubePointRange)cubeAxes|=1<<axis.ordinal();tag.putByte("cube_axes",(byte)cubeAxes);
         for (Direction.Axis axis : Direction.Axis.values()) {
@@ -79,7 +80,7 @@ public final class VanillaCollisionOracle {
             VoxelShape shape = cached(state);
             if (shape == null) mapping[id] = -1;
             else {
-                cachedCount++; CompoundTag data = grid(shape);grids.add(data); Integer shapeId = ids.get(shape);
+                cachedCount++; CompoundTag data = grid(shape);var geometry=data.copy();geometry.remove("canonical");grids.add(geometry); Integer shapeId = ids.get(shape);
                 if (shapeId == null) { shapeId = shapes.size(); ids.put(shape, shapeId); shapes.add(data); }
                 mapping[id] = shapeId;
             }
@@ -130,6 +131,7 @@ public final class VanillaCollisionOracle {
                 if (shape==null) {out.printf("state %d uncached%n",id); continue;}
                 List<AABB> boxes=shape.toAabbs(); out.printf("state %d cached %d%n",id,boxes.size());
                 out.printf("identity %d%n",identities.computeIfAbsent(shape,key->identities.size()));
+                out.printf("canonical %b %b%n",shape==Shapes.empty(),shape==Shapes.block());
                 int cubeAxes=0;for(Direction.Axis axis:Direction.Axis.values())if(shape.getCoords(axis) instanceof CubePointRange)cubeAxes|=1<<axis.ordinal();out.printf("cube %d %d%n",shape instanceof CubeVoxelShape?1:0,cubeAxes);
                 values(out,"axis-extrema",shape.min(Direction.Axis.X),shape.min(Direction.Axis.Y),shape.min(Direction.Axis.Z),shape.max(Direction.Axis.X),shape.max(Direction.Axis.Y),shape.max(Direction.Axis.Z));
                 if (shape.isEmpty()) out.println("bounds none"); else box(out,"bounds",shape.bounds());

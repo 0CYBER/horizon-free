@@ -72,6 +72,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Limits::default(),
     )?;
     let collisions = CachedCollisionRegistry::from_nbt(&root.tag, &registry)?;
+    assert!(collisions.has_canonical_identities());
     let mut section = BlockSection::uniform(BlockStateId(0), &registry)?;
     let mut out = std::io::BufWriter::new(fs::File::create(base.join("rust.txt"))?);
     let mut identities = std::collections::HashMap::new();
@@ -85,6 +86,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let count = identities.len();
                 let identity = *identities.entry(std::ptr::from_ref(shape)).or_insert(count);
                 writeln!(out, "identity {identity}")?;
+                writeln!(
+                    out,
+                    "canonical {} {}",
+                    shape.same_identity(&horizon_core::geometry::VoxelShape::empty()),
+                    shape.same_identity(&horizon_core::geometry::VoxelShape::block())
+                )?;
                 let flags = shape.cube_coordinate_axes();
                 writeln!(
                     out,

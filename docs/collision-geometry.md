@@ -375,3 +375,20 @@ ordered world/entity callbacks. This integration corpus supplies missing block
 entities; active shulker and piston snapshots retain their separate suites.
 These checks establish the recorded collision-query scope, not entity movement
 or whole-game parity.
+
+
+Private shape exports now carry explicit canonical-identity markers. The importer
+restores the global empty/full-block shapes only when their complete grid metadata
+matches, and rejects duplicate or malformed canonical claims. Equal unmarked
+shapes keep distinct identities. Older exports remain readable and report
+`has_canonical_identities() == false`; they cannot establish the canonical identity
+needed by vanilla's block-collision iterator fast path.
+
+The [canonical-identity report](../benchmarks/rust-canonical-collision-2026-10-06/scoped-parity.json)
+adds identity checks for every cached state: **5,566 canonical empty**, **3,348
+canonical full-block** and **26,610 other cached states**, with **1,132,980 matching
+output lines per JAR**. The integrated contextual comparison also passes again
+with **2,391,334 lines per JAR** in its
+[regression report](../benchmarks/rust-canonical-collision-2026-10-06/contextual-regression.json).
+Five import tests cover legacy data, equal-but-distinct grids, canonical restoration
+and malformed identity metadata. Workspace Clippy passes without warnings.

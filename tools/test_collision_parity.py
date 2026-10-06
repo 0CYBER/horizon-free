@@ -57,6 +57,12 @@ def main():
     actual = counts(subprocess.check_output([str(binary), str(base)], cwd=lab.ROOT, text=True))
     if actual != expected:
         raise AssertionError(f"Collision coverage differs: vanilla={expected}, Rust={actual}")
+    canonical = {"empty_states":0,"block_states":0,"other_cached_states":0}
+    for line in (base / "rust.txt").read_text().splitlines():
+        if line == 'canonical true false': canonical['empty_states'] += 1
+        elif line == 'canonical false true': canonical['block_states'] += 1
+        elif line == 'canonical false false': canonical['other_cached_states'] += 1
+    if sum(canonical.values()) != expected['cached_states']: raise AssertionError('incomplete canonical identity comparison')
     references = []
     for side, jar in jars.items():
         java(side, side)
@@ -67,8 +73,8 @@ def main():
     test_rust_parity.ensure_sources_unchanged(sources, tested_sources)
     report = {"schema": 1, "minecraft": lock["minecraft"]["version"], "manifest_sha1": lock["minecraft"]["manifest_sha1"], "platform": platform.platform(),
               "java": subprocess.check_output(["java", "--version"], text=True).splitlines()[0], "rustc": subprocess.check_output(["rustc", "--version"], text=True).strip(),
-              "inputs_sha256": lab.digest(base / "inputs.txt", "sha256"), "rust_output_sha256": lab.digest(base / "rust.txt", "sha256"), "sources_sha256": tested_sources, "references": references,
-              "scope": "Pinned no-context cached collision branch only. Registry identity validation, resident section lookup, grids, discrete extrema including empty shapes, greedy boxes, bounds, translated collide, ray hits, closest points and moved cell lookup. Uncached states and entity-context behavior remain unsupported."}
+              "inputs_sha256": lab.digest(base / "inputs.txt", "sha256"), "rust_output_sha256": lab.digest(base / "rust.txt", "sha256"), "sources_sha256": tested_sources, "references": references, "canonical_identities":canonical,
+              "scope": "Pinned no-context cached collision branch only. Registry identity validation, resident section lookup, grids, native canonical empty/block identities distinct from equal geometry, discrete extrema including empty shapes, greedy boxes, bounds, translated collide, ray hits, closest points and moved cell lookup. Uncached and entity-context behavior have separate comparison suites."}
     lab.write_json(report_path, report)
     lab.write_json(base / "report.json", report)
     print(f"Cached collision comparison passed: {report_path}")
