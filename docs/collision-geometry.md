@@ -479,3 +479,21 @@ passes again with **1,320,187 lines per JAR**, including the existing native ste
 fixtures. All six movement unit tests and workspace Clippy pass. New tests cover
 owned-query failures during both initial and step collection and signed zero
 preservation when collection is skipped.
+
+
+`entity_collision_shapes` now implements `EntityGetter.getEntityCollisions`
+selection over ordered entity snapshots: average-size short circuit, epsilon
+inflation, exact bounds/excluded-identity filtering, spectator suppression and
+lazy collision-policy callbacks. With a source entity it invokes that entity's
+`canCollideWith`; without one it invokes each candidate's
+`canBeCollidedWith(null)`. Selected bounds become shapes after policy evaluation.
+Providers retain responsibility for live storage and each entity type's policy.
+
+`python3 tools/test_entity_collision_parity.py` compares the actual native getter,
+default vehicle-root checks and controlled policy overrides, including failures
+at query/callback boundaries. Tiny/zero-width and nonfinite query boxes, inflated
+boundary contacts, spectators, shared vehicles, null sources and ordered shape
+outputs are covered. The [entity collision report](../benchmarks/rust-entity-collision-2026-10-07/scoped-parity.json)
+records **158,558 matching lines per JAR**. Workspace Clippy passes. This adds the
+selection helper needed by movement; live entity indexing, lifecycle and
+entity-type policy implementations remain pending.

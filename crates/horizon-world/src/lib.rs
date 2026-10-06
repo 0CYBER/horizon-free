@@ -15,6 +15,7 @@ pub mod collision;
 pub mod collision_context;
 pub mod compression;
 pub mod dynamic_support;
+pub mod entity_collision;
 pub mod entity_obstruction;
 pub mod fluid;
 pub mod heightmap;
