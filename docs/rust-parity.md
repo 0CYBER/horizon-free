@@ -592,3 +592,20 @@ prefixes, every constant radius, six provider families, both RNGs, height
 boundaries, wrapped X/Z coordinates, partial failures and composition. Workspace
 tests and all-target Clippy pass. World updates and full generation remain
 pending; pathological descent is bounded to 2^20 visits.
+
+## Bamboo and podzol patches
+
+Bamboo features preserve the initial air gate, real survival checks and native
+attempt-success behavior when survival fails. Podzol patches use ordered surface
+height requests and the native replacement tag. Stalks preserve random draws and
+leaf states, including the first cap overwriting the stopping position when at
+least three stalk positions were attempted.
+
+The [bamboo comparison](../benchmarks/rust-bamboo-2026-10-06/scoped-parity.json)
+matches **3,485,027 lines per reference JAR** over **144,452 fixtures**. Every
+origin/support/podzol state has a failure-terminated prefix; every obstacle state
+has a complete no-podzol run. Tests include both RNGs, signed-zero decoding,
+obstruction heights, rejected writes, repeated mutations, wrapped coordinates
+and composition. Workspace tests and all-target Clippy pass. Fixture surface
+heights are controlled; dynamic height updates, bamboo growth and full gameplay
+remain pending. Pathological wrapped patch loops have a 2^20 work limit.

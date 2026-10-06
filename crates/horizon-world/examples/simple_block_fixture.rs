@@ -50,6 +50,7 @@ struct World<'a, 'r, W, R> {
     reject: i32,
     brightness: i32,
     sea_level: i32,
+    surface_height: i32,
     air: BlockStateId,
     destroy_success: bool,
 }
@@ -213,8 +214,10 @@ impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
     fn max_y(&mut self) -> Result<i32, PlacementQueryError> {
         Ok(319)
     }
-    fn height(&mut self, _: HeightmapType, _: i32, _: i32) -> Result<i32, PlacementQueryError> {
-        Err(PlacementQueryError::Unavailable)
+    fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Result<i32, PlacementQueryError> {
+        self.event(format_args!("height {} {x} {z}", kind.name()))
+            .map_err(query)?;
+        Ok(self.surface_height)
     }
     fn block_state(&mut self, p: [i32; 3]) -> Result<BlockStateId, PlacementQueryError> {
         self.get(p).map_err(query)
@@ -308,6 +311,7 @@ fn fixture<R: RandomSource>(
         reject: f["reject"].as_i64().unwrap() as i32,
         brightness: f["brightness"].as_i64().unwrap() as i32,
         sea_level: f.get("sea").and_then(Value::as_i64).unwrap_or(63) as i32,
+        surface_height: f.get("height").and_then(Value::as_i64).unwrap_or(64) as i32,
         air: blocks.air,
         destroy_success: f
             .get("destroy_success")

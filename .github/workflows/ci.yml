@@ -151,6 +151,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_replace_blobs_parity.py
+      - name: Compare bamboo stalks, podzol patches and leafy caps
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_bamboo_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable

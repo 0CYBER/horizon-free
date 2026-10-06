@@ -2,6 +2,7 @@
 //! Complete terrain generation remains pending.
 pub mod anchor;
 pub mod aquifer;
+pub mod bamboo;
 pub mod biome;
 pub mod biome_chunk;
 pub mod biome_predicate;
