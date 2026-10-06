@@ -712,3 +712,22 @@ coordinates, chunk edges, outside-height reads and missing chunks are included.
 Workspace tests and all-target Clippy pass; a separate regression covers foreign
 registries, binding lifetime and a custom water tag. These queries do not execute
 fluid spreading, block behavior or lighting.
+
+## End gateway structures and exit configuration
+
+The `end_gateway` feature now places its air, bedrock and gateway blocks in native
+box order. A configured exit triggers a block-entity lookup even when the gateway
+write was rejected. Missing or unrelated entities are no-ops; a gateway receives
+its exit/exact fields before its dirty notification.
+
+The [gateway comparison](../benchmarks/rust-end-gateway-2026-10-06/scoped-parity.json)
+matches **754,877 lines per reference JAR** across **5,820 fixtures**, including
+every world-call failure boundary, rejected writes, repeated updates, both random
+streams, placement composition, codec edge cases and bounded prefixes of wrapped
+coordinate boxes. The reference invokes the actual gateway entity setter and
+compares its fields after partial failures. Workspace tests, all-target Clippy and
+all 149 Python tests pass. The Python checks also caught and repaired a shared
+fixture dependency: decoration retains its six-feature corpus independently of
+region spring/tick/query probes; regenerated inputs are byte-identical to their
+validated corpora. Gateway entity creation/removal, dirty propagation, exit search
+and teleportation remain pending.

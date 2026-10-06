@@ -58,6 +58,8 @@ struct World<'a, 'r, W, R> {
     biome: Option<(BiomeWeatherBindings, BiomeTemperature)>,
     air: BlockStateId,
     destroy_success: bool,
+    gateway_entity: bool,
+    gateways: BTreeMap<[i32; 3], ([i32; 3], bool)>,
 }
 impl<W: Write, R> World<'_, '_, W, R> {
     fn event(&mut self, text: std::fmt::Arguments<'_>) -> io::Result<i32> {
@@ -178,6 +180,21 @@ impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
             return Err(PlacementQueryError::Unavailable);
         }
         Ok(BiomeId(0))
+    }
+    fn configure_end_gateway(
+        &mut self,
+        p: [i32; 3],
+        exit: [i32; 3],
+        exact: bool,
+    ) -> Result<(), PlacementQueryError> {
+        self.event(format_args!("entity {} {} {}", p[0], p[1], p[2]))
+            .map_err(query)?;
+        if self.gateway_entity {
+            self.gateways.insert(p, (exit, exact));
+            self.event(format_args!("gateway_changed {} {} {}", p[0], p[1], p[2]))
+                .map_err(query)?;
+        }
+        Ok(())
     }
     fn biome_should_freeze(
         &mut self,
@@ -401,6 +418,8 @@ fn fixture<R: RandomSource>(
         })
         .transpose()?;
     let mut world = World {
+        gateway_entity: f.get("gateway_entity").and_then(Value::as_str) == Some("gateway"),
+        gateways: BTreeMap::new(),
         biome,
         out,
         random: world_random,
@@ -480,6 +499,13 @@ fn fixture<R: RandomSource>(
                 writeln!(world.out, "calls {}", world.calls)?;
                 for (p, state) in &world.states {
                     writeln!(world.out, "stored {} {} {} {}", p[0], p[1], p[2], state.0)?;
+                }
+                for (p, (exit, exact)) in &world.gateways {
+                    writeln!(
+                        world.out,
+                        "gateway {} {} {} {} {} {} {exact}",
+                        p[0], p[1], p[2], exit[0], exit[1], exit[2]
+                    )?;
                 }
                 writeln!(world.out, "end")?;
             }

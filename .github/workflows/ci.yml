@@ -147,6 +147,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_end_podium_parity.py
+      - name: Rust End gateway parity
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_end_gateway_parity.py
       - name: Compare replacement blob search and Manhattan shells
         env:
           RUSTUP_TOOLCHAIN: stable

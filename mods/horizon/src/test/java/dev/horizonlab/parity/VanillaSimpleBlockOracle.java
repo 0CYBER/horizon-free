@@ -11,6 +11,7 @@ import net.minecraft.resources.*;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.*;
 import net.minecraft.world.level.block.*;
+import net.minecraft.world.level.block.entity.*;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.*;
 import net.minecraft.world.level.levelgen.feature.SimpleBlockFeature;
@@ -66,6 +67,7 @@ public final class VanillaSimpleBlockOracle {
   final JsonObject f;final PrintWriter out;final RandomSource random;final Holder<Biome> biome;int calls;
   final TreeMap<BlockPos,BlockState> states=new TreeMap<>(Comparator.<BlockPos>comparingInt(BlockPos::getX).thenComparingInt(BlockPos::getY).thenComparingInt(BlockPos::getZ));
   World(JsonObject f,PrintWriter out,RandomSource random){this.f=f;this.out=out;this.random=random;this.biome=f.has("biome")?Holder.direct(makeBiome(f.getAsJsonObject("biome"))):null;for(var raw:f.getAsJsonArray("states")){var v=raw.getAsJsonArray();states.put(pos(v),Block.stateById(v.get(3).getAsInt()));}}
+  final TreeMap<BlockPos,TheEndGatewayBlockEntity> gateways=new TreeMap<>(Comparator.<BlockPos>comparingInt(BlockPos::getX).thenComparingInt(BlockPos::getY).thenComparingInt(BlockPos::getZ));
   final Map<ChunkPos,ProtoChunk> chunks=new HashMap<>();
   ProtoChunk chunk(BlockPos p) {
    event("chunk "+xyz(p));var key=new ChunkPos(p.getX()>>4,p.getZ()>>4);
@@ -89,7 +91,12 @@ public final class VanillaSimpleBlockOracle {
    if(name.equals("getFluidState")){var p=(BlockPos)args[0];event("fluid "+xyz(p));return (f.has("fluid")?Block.stateById(f.get("fluid").getAsInt()):at(p)).getFluidState();}
    if(name.equals("getBrightness")&&args[0]==LightLayer.BLOCK){event("blocklight "+xyz((BlockPos)args[1]));return f.get("brightness").getAsInt();}
    if(name.equals("getRawBrightness")){var p=(BlockPos)args[0];event("light "+xyz(p)+" "+args[1]);return f.get("brightness").getAsInt();}
-   if(name.equals("getBlockEntity")){event("entity "+xyz((BlockPos)args[0]));return null;}
+   if(name.equals("getBlockEntity")){
+    var p=((BlockPos)args[0]).immutable();event("entity "+xyz(p));String mode=f.has("gateway_entity")?f.get("gateway_entity").getAsString():"none";
+    if(mode.equals("other"))return new ShulkerBoxBlockEntity(p,Blocks.SHULKER_BOX.defaultBlockState());
+    if(mode.equals("gateway"))return gateways.computeIfAbsent(p,key->new TheEndGatewayBlockEntity(key,Blocks.END_GATEWAY.defaultBlockState()){@Override public void setChanged(){event("gateway_changed "+xyz(key));}});
+    return null;
+   }
    if(name.equals("destroyBlock")){
     if(args.length!=3||args[2]!=null)throw new UnsupportedOperationException("only no-entity destruction is defined in this fixture");
     var p=((BlockPos)args[0]).immutable();event("destroy "+xyz(p)+" "+args[1]);boolean result=!f.has("destroy_success")||f.get("destroy_success").getAsBoolean();
@@ -148,7 +155,12 @@ public final class VanillaSimpleBlockOracle {
      for(int repeat=0;repeat<f.get("repeats").getAsInt();repeat++){
       handler.calls=0;try{out.println("place "+decoded.get().place(world,generator,random,origin));}catch(Stop|IllegalArgumentException error){out.println("place error");}
       out.println("next "+random.nextLong()+" "+worldRandom.nextLong());out.println("calls "+handler.calls);
-      for(var entry:handler.states.entrySet())out.println("stored "+xyz(entry.getKey())+" "+Block.getId(entry.getValue()));out.println("end");
+      for(var entry:handler.states.entrySet())out.println("stored "+xyz(entry.getKey())+" "+Block.getId(entry.getValue()));
+      for(var entry:handler.gateways.entrySet()) {
+       var exit=TheEndGatewayBlockEntity.class.getDeclaredField("exitPortal");exit.setAccessible(true);var exact=TheEndGatewayBlockEntity.class.getDeclaredField("exactTeleport");exact.setAccessible(true);
+       out.println("gateway "+xyz(entry.getKey())+" "+xyz((BlockPos)exit.get(entry.getValue()))+" "+exact.getBoolean(entry.getValue()));
+      }
+      out.println("end");
      }
     }out.println("tail "+random.nextLong()+" "+worldRandom.nextLong());
     for(var cache:fixtureCaches)cache.remove();fixtureCaches.clear();

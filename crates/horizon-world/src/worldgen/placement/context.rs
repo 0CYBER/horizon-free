@@ -26,6 +26,18 @@ pub enum LayerBlock {
     Ground,
 }
 pub trait PlacementContext {
+    /// Look up the block entity at this position and set its exit only if it is
+    /// an End gateway. Missing or other entities are successful no-ops. The
+    /// owning world applies the gateway's dirty notification after the update.
+    fn configure_end_gateway(
+        &mut self,
+        _position: [i32; 3],
+        _exit: [i32; 3],
+        _exact: bool,
+    ) -> Result<(), PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+
     /// Use the previously resolved biome, retaining its temperature cache.
     fn biome_should_freeze(
         &mut self,

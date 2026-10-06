@@ -54,6 +54,7 @@ pub enum FeatureDefinition {
     Bamboo(super::bamboo::BambooFeature),
     ReplaceBlobs(super::replace_blobs::ReplaceBlobsFeature),
     EndPodium(super::end_podium::EndPodiumFeature),
+    EndGateway(super::end_gateway::EndGatewayFeature),
     Spike(super::spike::SpikeFeature),
     BlueIce(super::blue_ice::BlueIceFeature),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaFeature),
@@ -86,6 +87,7 @@ pub enum FeatureExecutionError<E> {
     Bamboo(super::bamboo::BambooError<E>),
     ReplaceBlobs(super::replace_blobs::ReplaceBlobsError<E>),
     EndPodium(super::end_podium::EndPodiumError<E>),
+    EndGateway(super::end_gateway::EndGatewayError<E>),
     Spike(super::spike::SpikeError<E>),
     BlueIce(super::blue_ice::BlueIceError<E>),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaError<E>),
@@ -109,6 +111,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::Bamboo(e) => e.fmt(f),
             Self::ReplaceBlobs(e) => e.fmt(f),
             Self::EndPodium(e) => e.fmt(f),
+            Self::EndGateway(e) => e.fmt(f),
             Self::Spike(e) => e.fmt(f),
             Self::BlueIce(e) => e.fmt(f),
             Self::UnderwaterMagma(e) => e.fmt(f),
@@ -303,6 +306,11 @@ impl FeatureDefinition {
                 )
                 .map(Self::ReplaceBlobs)
             }
+            "minecraft:end_gateway" => super::end_gateway::EndGatewayFeature::from_json(
+                json,
+                blocks.ok_or(DecodeError::Field("end gateway bindings"))?,
+            )
+            .map(Self::EndGateway),
             "minecraft:end_podium" => super::end_podium::EndPodiumFeature::from_json(
                 json,
                 blocks.ok_or(DecodeError::Field("end podium bindings"))?,
@@ -666,6 +674,9 @@ impl FeatureDefinition {
             Self::ReplaceBlobs(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::ReplaceBlobs),
+            Self::EndGateway(feature) => feature
+                .place(world, origin)
+                .map_err(FeatureExecutionError::EndGateway),
             Self::EndPodium(feature) => feature
                 .place(world, origin)
                 .map_err(FeatureExecutionError::EndPodium),
