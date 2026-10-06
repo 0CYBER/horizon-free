@@ -17,6 +17,7 @@ pub mod dynamic_support;
 pub mod entity_obstruction;
 pub mod fluid;
 pub mod heightmap;
+pub mod liquid_collision;
 pub mod nbt;
 pub mod piston_shape;
 pub mod region;

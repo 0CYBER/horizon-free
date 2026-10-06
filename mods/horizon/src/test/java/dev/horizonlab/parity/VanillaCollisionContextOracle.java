@@ -19,7 +19,14 @@ public final class VanillaCollisionContextOracle {
     private static final Item[] ITEMS={Items.AIR,Items.STONE,Items.SCAFFOLDING,Items.POWDER_SNOW_BUCKET,Items.LEATHER_BOOTS};
     private static final Fluid[] FLUIDS={Fluids.EMPTY,Fluids.FLOWING_WATER,Fluids.WATER,Fluids.FLOWING_LAVA,Fluids.LAVA};
     private static final class Stop extends RuntimeException {}
+    private static final class Trace {
+        PrintWriter out;int calls,fail;
+        void query(String value){out.println(value);if(calls++==fail)throw new Stop();}
+    }
     public static class PlayerSnapshot extends Player {
+        Trace trace;VoxelShape liquidShape;
+        @Override public VoxelShape getLiquidCollisionShape(){trace.query("liquid_shape 1");return liquidShape;}
+
         boolean descending,stand,fail;
         ItemStack held;
         int calls,lastFluid;
@@ -28,6 +35,7 @@ public final class VanillaCollisionContextOracle {
         @Override public boolean isDescending(){return descending;}
         @Override public ItemStack getMainHandItem(){return held;}
         @Override public boolean canStandOnFluid(FluidState state){
+            if(trace!=null)trace.query("stand 1 "+fluidIndex(state)+" "+state.getAmount()+" "+state.getValueOrElse(FlowingFluid.FALLING,false));
             calls++;lastFluid=-1;for(int i=0;i<FLUIDS.length;i++)if(state.getType()==FLUIDS[i])lastFluid=i;
             if(fail)throw new Stop();return stand;
         }
@@ -37,6 +45,9 @@ public final class VanillaCollisionContextOracle {
         public MarkerSnapshot(){super(null,null);}
         @Override public boolean isDescending(){return descending;}
     }
+    private static int fluidIndex(FluidState state){for(int i=0;i<FLUIDS.length;i++)if(FLUIDS[i]==state.getType())return i;throw new AssertionError();}
+    private static FluidState liquidAbove(int index){return index<0?Fluids.EMPTY.defaultFluidState():(index<16?Blocks.WATER:Blocks.LAVA).defaultBlockState().setValue(LiquidBlock.LEVEL,index%16).getFluidState();}
+    private static VoxelShape liquidShape(int index){return switch(index){case 0->Shapes.empty();case 1->Shapes.block();case 2->Shapes.box(0,0,0,1,0.5,1);case 3->Shapes.box(0.25,-0.5,0.25,0.75,1.5,0.75);default->throw new AssertionError();};}
     private static double number(JsonElement value){return Double.longBitsToDouble(Long.parseUnsignedLong(value.getAsString(),16));}
     public static void main(String[] args)throws Exception {
         net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();
@@ -76,6 +87,20 @@ public final class VanillaCollisionContextOracle {
                 int entity=context instanceof EntityCollisionContext ec?(ec.getEntity()==player?1:ec.getEntity()==marker?2:0):0;
                 int held=0;for(int i=0;i<ITEMS.length;i++)if(context.isHoldingItem(ITEMS[i]))held|=1<<i;
                 out.printf("context %b %b %b %d %d%n",context.isDescending(),context.isPlacement(),context.alwaysCollideWithFluid(),entity,held);
+                if(f.has("liquid")) {
+                    var config=f.getAsJsonArray("liquid");
+                    var state=(config.get(1).getAsBoolean()?Blocks.LAVA:Blocks.WATER).defaultBlockState().setValue(LiquidBlock.LEVEL,config.get(0).getAsInt());
+                    var pos=new BlockPos(17,config.get(2).getAsInt(),-33);
+                    var trace=new Trace();trace.out=out;trace.fail=config.get(5).getAsInt();player.trace=trace;player.liquidShape=liquidShape(config.get(4).getAsInt());
+                    var world=(CollisionGetter)Proxy.newProxyInstance(CollisionGetter.class.getClassLoader(),new Class<?>[]{CollisionGetter.class},(proxy,method,values)->{
+                        if(!method.getName().equals("getFluidState"))throw new AssertionError(method);
+                        var at=(BlockPos)values[0];trace.query("fluid_at "+at.getX()+" "+at.getY()+" "+at.getZ());return liquidAbove(config.get(3).getAsInt());
+                    });
+                    var emit=VanillaFaceSupportOracle.class.getDeclaredMethod("emit",PrintWriter.class,VoxelShape.class);emit.setAccessible(true);
+                    try{emit.invoke(null,out,context.getCollisionShape(state,world,pos));}catch(Stop error){out.println("shape error");}
+                    out.println("queries "+trace.calls);
+                    continue;
+                }
                 if(f.has("scaffolding")) {
                     var config=f.getAsJsonArray("scaffolding");
                     var state=Blocks.SCAFFOLDING.defaultBlockState().setValue(ScaffoldingBlock.DISTANCE,config.get(0).getAsInt()).setValue(ScaffoldingBlock.BOTTOM,config.get(1).getAsBoolean()).setValue(ScaffoldingBlock.WATERLOGGED,config.get(2).getAsBoolean());

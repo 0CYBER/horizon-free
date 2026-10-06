@@ -3,9 +3,11 @@ use horizon_core::{
     position::BlockPos,
 };
 use horizon_world::{
+    chunk::BlockState,
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
     entity_obstruction::EntityIdentity,
     fluid::{FluidKind, FluidState},
+    liquid_collision::{LiquidCollision, LiquidCollisionWorld},
 };
 use serde_json::Value;
 use std::{
@@ -87,6 +89,67 @@ fn emit(out: &mut impl Write, shape: &VoxelShape) -> io::Result<()> {
     }
     Ok(())
 }
+struct LiquidWorld<'a, W> {
+    out: &'a mut W,
+    calls: i32,
+    fail: i32,
+    shape: VoxelShape,
+    above: FluidState,
+    stand: bool,
+}
+impl<W: Write> LiquidWorld<'_, W> {
+    fn query(&mut self, value: &str) -> io::Result<()> {
+        writeln!(self.out, "{value}")?;
+        let index = self.calls;
+        self.calls += 1;
+        if index == self.fail {
+            return Err(io::Error::other("injected liquid query failure"));
+        }
+        Ok(())
+    }
+}
+impl<W: Write> LiquidCollisionWorld for LiquidWorld<'_, W> {
+    type Error = io::Error;
+    fn entity_liquid_shape(&mut self, entity: EntityIdentity) -> io::Result<VoxelShape> {
+        self.query(&format!("liquid_shape {}", entity.0))?;
+        Ok(self.shape.clone())
+    }
+    fn fluid(&mut self, p: BlockPos) -> io::Result<FluidState> {
+        self.query(&format!("fluid_at {} {} {}", p.x, p.y, p.z))?;
+        Ok(self.above)
+    }
+    fn entity_can_stand(&mut self, entity: EntityIdentity, fluid: FluidState) -> io::Result<bool> {
+        self.query(&format!(
+            "stand {} {} {} {}",
+            entity.0,
+            fluid.kind() as u8,
+            fluid.amount(),
+            fluid.falling()
+        ))?;
+        Ok(self.stand)
+    }
+}
+fn liquid_state(lava: bool, level: i64) -> BlockState {
+    BlockState {
+        name: if lava {
+            "minecraft:lava"
+        } else {
+            "minecraft:water"
+        }
+        .into(),
+        properties: [("level".into(), level.to_string())].into(),
+    }
+}
+fn liquid_shape(index: i64) -> VoxelShape {
+    let (min, max) = match index {
+        0 => return VoxelShape::empty(),
+        1 => return VoxelShape::block(),
+        2 => (Vec3::ZERO, Vec3::new(1.0, 0.5, 1.0)),
+        3 => (Vec3::new(0.25, -0.5, 0.25), Vec3::new(0.75, 1.5, 0.75)),
+        _ => unreachable!(),
+    };
+    VoxelShape::from_box(Aabb::new(min, max)).unwrap()
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = std::env::args().nth(1).expect("private fixture directory");
     let dir = Path::new(&arg);
@@ -137,6 +200,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             context.entity().map_or(0, |id| id.0),
             held
         )?;
+        if let Some(config) = f.get("liquid") {
+            let state = liquid_state(config[1].as_bool().unwrap(), config[0].as_i64().unwrap());
+            let above = config[3].as_i64().unwrap();
+            let mut world = LiquidWorld {
+                out: &mut out,
+                calls: 0,
+                fail: config[5].as_i64().unwrap() as i32,
+                shape: liquid_shape(config[4].as_i64().unwrap()),
+                above: if above < 0 {
+                    FluidState::EMPTY
+                } else {
+                    FluidState::from_block(&liquid_state(above >= 16, above % 16))?
+                },
+                stand: f["stand"].as_bool().unwrap(),
+            };
+            let p = BlockPos::new(17, config[2].as_i64().unwrap() as i32, -33);
+            match LiquidCollision::from_state(&state)?
+                .unwrap()
+                .shape(&mut world, p, &context)
+            {
+                Ok(shape) => emit(world.out, &shape)?,
+                Err(_) => writeln!(world.out, "shape error")?,
+            }
+            writeln!(world.out, "queries {}", world.calls)?;
+            continue;
+        }
         if let Some(config) = f.get("scaffolding") {
             let state = horizon_world::chunk::BlockState {
                 name: "minecraft:scaffolding".into(),

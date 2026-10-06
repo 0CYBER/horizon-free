@@ -119,6 +119,9 @@ impl<'a> CollisionContext<'a> {
     pub fn entity(&self) -> Option<EntityIdentity> {
         self.entity
     }
+    pub fn living_entity(&self) -> Option<EntityIdentity> {
+        self.entity.filter(|_| self.living)
+    }
     pub fn is_descending(&self) -> bool {
         self.descending
     }

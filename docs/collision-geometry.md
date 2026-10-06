@@ -323,3 +323,19 @@ queries. Full shape coordinates, bounds, ordered boxes and cube metadata match
 for empty, position, entity and placement contexts, including adjacent doubles
 at both height thresholds. Block placement, distance updates, collapse and live
 entity motion through scaffolding are separate work.
+
+
+`LiquidCollision` implements contextual water/lava collision selection. The
+always-fluid flag returns a full cube before querying entities or neighbors.
+Otherwise, flowing block levels and nonliving contexts return empty. Source
+blocks request the living entity's standing shape, check its height, then read the
+fluid above and invoke the entity's standing predicate. Empty candidate shapes
+still follow those query rules. Above-block coordinates wrap as Java integers.
+
+`python3 tools/test_liquid_collision_parity.py` compares all **32 water/lava block
+states**, all **33 possible above-block liquid/empty states**, full selected shape
+data and ordered callback traces, including failures at each query. The
+[liquid-collision report](../benchmarks/rust-liquid-collision-2026-10-06/scoped-parity.json)
+records **571,179 matching lines per JAR**. Standing shapes and fluid abilities are
+controlled inputs in this suite; each entity type still needs its implementation.
+Fluid spreading, swimming, drowning and live movement remain pending.
