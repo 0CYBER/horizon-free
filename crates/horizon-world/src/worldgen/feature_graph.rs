@@ -45,6 +45,7 @@ pub enum FeatureDefinition {
         cap: Option<Box<PlacedFeatureDefinition>>,
     },
     BlockColumn(super::block_column::BlockColumnFeature),
+    BlockPile(super::block_pile::BlockPileFeature),
     SimpleBlock(super::simple_block::SimpleBlockFeature),
     FillLayer(FillLayerFeature),
     ReplaceBlock(ReplaceBlockFeature),
@@ -65,6 +66,7 @@ pub enum FeatureExecutionError<E> {
     Basic(FeatureError<E>),
     Provider(super::state_provider::StateProviderError<E>),
     BlockColumn(super::block_column::BlockColumnError<E>),
+    BlockPile(super::block_pile::BlockPileError<E>),
     SimpleBlock(super::simple_block::SimpleBlockError<E>),
     Random(InvalidBound),
     Query(PlacementQueryError),
@@ -77,6 +79,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::Basic(e) => e.fmt(f),
             Self::Provider(e) => e.fmt(f),
             Self::BlockColumn(e) => e.fmt(f),
+            Self::BlockPile(e) => e.fmt(f),
             Self::SimpleBlock(e) => e.fmt(f),
             Self::Random(e) => e.fmt(f),
             Self::Query(e) => e.fmt(f),
@@ -243,6 +246,13 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:block_pile" => super::block_pile::BlockPileFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("block pile bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(Self::BlockPile),
             "minecraft:random_neighbor_spread" => {
                 let bindings =
                     blocks.ok_or(DecodeError::Field("neighbor spread block bindings"))?;
@@ -541,6 +551,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::BlockPile(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::BlockPile),
             Self::NeighborSpread {
                 provider,
                 neighbors,

@@ -413,3 +413,18 @@ rejected writes, nested modifiers, repeated calls, random-stream tails and both
 Java random modes. This verifies scoped composition behavior; complete chunk
 generation and gameplay remain pending. Workspace tests and all-target Clippy
 also pass for this implementation.
+
+## Block-pile placement
+
+Rust block piles preserve radius and sparse-candidate random draws, air checks,
+dirt-path acceptance, state-aware FULL upper support, provider fallback reads,
+and update flags 260. Previously read support states are evaluated without an
+extra world read. The [native comparison](../benchmarks/rust-block-pile-2026-10-06/scoped-parity.json)
+matches **11,995,254 lines per reference JAR**, covering every candidate and
+supporting registry state, partial failures, rejected writes, repeated placement,
+and overlay/modifier composition. Workspace tests and all-target Clippy pass.
+
+Ordinary piles visit at most 98 cells. Rust preserves wrapped native box traversal
+but limits pathological iteration to 2^20 cells; negative-count overflow fixtures
+compare failure-terminated prefixes. Dynamic block entities are absent in this
+feature fixture, and resident-world block updates remain pending.

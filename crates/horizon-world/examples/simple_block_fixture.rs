@@ -190,6 +190,14 @@ impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
         direction: Direction,
     ) -> Result<bool, PlacementQueryError> {
         let state = self.get(p).map_err(query)?;
+        self.state_face_sturdy(state, p, direction)
+    }
+    fn state_face_sturdy(
+        &mut self,
+        state: BlockStateId,
+        p: [i32; 3],
+        direction: Direction,
+    ) -> Result<bool, PlacementQueryError> {
         let support = self.support;
         support
             .is_face_sturdy(self, state, p, direction, SupportType::Full)

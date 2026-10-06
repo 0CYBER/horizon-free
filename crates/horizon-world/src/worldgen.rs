@@ -9,6 +9,7 @@ pub mod biome_source;
 pub mod biome_temperature;
 pub mod block_column;
 pub mod block_feature;
+pub mod block_pile;
 pub mod block_predicate;
 pub mod bulk_section;
 pub mod carver;

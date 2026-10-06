@@ -60,6 +60,15 @@ pub trait PlacementContext {
     ) -> Result<bool, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
     }
+    /// Evaluate FULL support using an already-read state, without reading it again.
+    fn state_face_sturdy(
+        &mut self,
+        _state: crate::registry::BlockStateId,
+        _position: [i32; 3],
+        _direction: horizon_core::geometry::Direction,
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
     /// Read the block state and evaluate FULL support on the requested face.
     fn face_sturdy(
         &mut self,
