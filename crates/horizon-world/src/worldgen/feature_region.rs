@@ -377,10 +377,39 @@ impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
 pub struct TerrainFeatureAccess<'a, 'r, B: TerrainBlockStates, F> {
     region: &'a mut TerrainRegion<'r, B>,
     write: F,
+    write_zone: Option<super::write_zone::GenerationWriteZone>,
 }
 impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
     pub fn new(region: &'a mut TerrainRegion<'r, B>, write: F) -> Self {
-        Self { region, write }
+        Self {
+            region,
+            write,
+            write_zone: None,
+        }
+    }
+    /// Apply the horizontal write radius before invoking mutation policy/effects.
+    /// Upgrading-world vertical restrictions remain the owning world's policy.
+    pub fn with_write_zone(mut self, zone: super::write_zone::GenerationWriteZone) -> Self {
+        self.write_zone = Some(zone);
+        self
+    }
+}
+impl<'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'_, 'r, B, F>
+where
+    F: FnMut(&mut TerrainRegion<'r, B>, [i32; 3], BlockStateId, i32) -> Result<bool, RegionError>,
+{
+    fn write_block(
+        &mut self,
+        position: [i32; 3],
+        state: BlockStateId,
+        flags: i32,
+    ) -> Result<bool, RegionError> {
+        if self.write_zone.is_some_and(|zone| {
+            !zone.contains_block(BlockPos::new(position[0], position[1], position[2]))
+        }) {
+            return Ok(false);
+        }
+        (self.write)(self.region, position, state, flags)
     }
 }
 impl<'r, B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, 'r, B, F>
@@ -403,7 +432,7 @@ where
             .registry()
             .default_state("minecraft:air")
             .expect("validated air state");
-        (self.write)(self.region, position, air, 3).map_err(Into::into)
+        self.write_block(position, air, 3).map_err(Into::into)
     }
 
     fn fluid_state(
@@ -480,6 +509,6 @@ where
         state: BlockStateId,
         flags: i32,
     ) -> Result<bool, Self::Error> {
-        (self.write)(self.region, position, state, flags)
+        self.write_block(position, state, flags)
     }
 }

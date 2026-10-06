@@ -56,6 +56,7 @@ pub mod underwater_magma;
 pub mod value_provider;
 pub mod vines;
 pub mod weighted;
+pub mod write_zone;
 use horizon_core::noise::{NoiseBuildError, NormalNoise, Normalization};
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;

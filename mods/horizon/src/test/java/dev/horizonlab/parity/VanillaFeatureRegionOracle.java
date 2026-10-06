@@ -38,6 +38,10 @@ public final class VanillaFeatureRegionOracle {
         var value=(NativeDestruction)((sun.misc.Unsafe)field.get(null)).allocateInstance(NativeDestruction.class);value.world=world;return value;
     }
 
+    private static void setWriteZone(NativeDestruction world,int x,int z,int radius)throws ReflectiveOperationException {
+        String[] names={"centerChunkX","centerChunkZ","writeRadius"};int[] values={x,z,radius};
+        for(int i=0;i<names.length;i++){var field=net.minecraft.server.level.WorldGenRegion.class.getDeclaredField(names[i]);field.setAccessible(true);field.setInt(world,values[i]);}
+    }
     private static ProtoChunk chunk(Map<ChunkPos,ProtoChunk> chunks,int x,int z) {
         var chunk=chunks.get(new ChunkPos(x>>4,z>>4));if(chunk==null)throw new IllegalArgumentException("missing region chunk");return chunk;
     }
@@ -86,6 +90,12 @@ public final class VanillaFeatureRegionOracle {
         }});
         var fluids=new Fluid[]{Fluids.EMPTY,Fluids.FLOWING_WATER,Fluids.WATER,Fluids.FLOWING_LAVA,Fluids.LAVA};
         try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt"),StandardCharsets.UTF_8))) {
+            var zoneWorld=destruction(null);
+            var chunkZone=net.minecraft.server.level.WorldGenRegion.class.getDeclaredMethod("isWithinWriteZone",int.class,int.class);chunkZone.setAccessible(true);
+            for(var value:JsonParser.parseString(Files.readString(dir.resolve("zones.json"))).getAsJsonArray()) {
+                var row=value.getAsJsonArray();setWriteZone(zoneWorld,row.get(0).getAsInt(),row.get(1).getAsInt(),row.get(2).getAsInt());
+                int x=row.get(3).getAsInt(),z=row.get(4).getAsInt();out.println("zone "+chunkZone.invoke(zoneWorld,x,z)+" "+zoneWorld.isWithinWriteZone(new BlockPos(x,Integer.MIN_VALUE,z)));
+            }
             for(var line:Files.readAllLines(dir.resolve("inputs.txt"))) {
                 var f=JsonParser.parseString(line).getAsJsonObject();long seed=f.get("seed").getAsLong();
                 var features=new ArrayList<Feature>();
@@ -128,6 +138,7 @@ public final class VanillaFeatureRegionOracle {
                     case "getBlockState"->{var p=(BlockPos)values[0];yield chunk(chunks,p.getX(),p.getZ()).getBlockState(p);}
                     case "setBlock"->{
                         var p=(BlockPos)values[0];var state=(BlockState)values[1];int flags=(Integer)values[2];
+                        if(!f.get("write_zone").isJsonNull()&&!destroyer[0].isWithinWriteZone(p))yield false;
                         out.println("write "+p.getX()+" "+p.getY()+" "+p.getZ()+" "+Block.getId(state)+" "+flags);
                         int call=calls[0]++;if(call==fail)throw new IllegalArgumentException("injected write failure");
                         boolean result=reject==0||call%reject!=0;
@@ -137,6 +148,7 @@ public final class VanillaFeatureRegionOracle {
                     default->throw new AssertionError("unexpected world method "+method);
                 });
                 destroyer[0]=destruction(world);
+                if(!f.get("write_zone").isJsonNull()){var zone=f.getAsJsonArray("write_zone");setWriteZone(destroyer[0],zone.get(0).getAsInt(),zone.get(1).getAsInt(),zone.get(2).getAsInt());}
                 var modifiers=new ArrayList<PlacementModifier>();for(var value:f.getAsJsonArray("placement"))modifiers.add(PlacementModifier.CODEC.parse(JsonOps.INSTANCE,value).getOrThrow());
                 var placer=new FeaturePlacer(world,generator);
                 for(int repeat=0;repeat<2;repeat++) {

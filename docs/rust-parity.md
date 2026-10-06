@@ -797,3 +797,19 @@ to the existing chunk fixture. Final sections, heightmaps, ticks, tag/fluid prob
 rejected writes and partial failures still agree. Workspace tests, all-target
 Clippy and all 149 Python tests pass. Write-zone policy, POIs, block entities,
 postprocessing execution, lighting and live-world effects remain pending.
+
+## Generation write radii
+
+Feature access can now apply the generation step's horizontal write radius before
+calling the mutation policy. Ordinary writes and destruction share the guard;
+queries and tick scheduling retain their independent routing. The predicate uses
+Java wrapping subtraction and absolute value, including integer-minimum cases.
+
+The [write-zone comparison](../benchmarks/rust-feature-region-write-zone-2026-10-06/scoped-parity.json)
+matches **29,231,123 lines per reference JAR**. It adds **20,125 direct zone cases**
+for both chunk and block coordinates, then exercises unrestricted, zero-radius,
+shifted-center and negative-radius policies across the 192 resident fixtures.
+Vanilla's actual public/private write-zone methods provide the reference. Workspace
+tests, all-target Clippy and both focused fixture tests pass. The owning world
+still supplies generation-step metadata and upgrading-world vertical restrictions;
+full WorldGenRegion effects remain pending.

@@ -7,6 +7,7 @@ use horizon_world::worldgen::{
     feature_region::{RegionError, TerrainFeatureAccess, TerrainRegion},
     placement::{FeaturePlacer, PlacementContext, PlacementModifier},
     terrain::TerrainError,
+    write_zone::GenerationWriteZone,
 };
 // Feature chains against a resident multi-chunk region.
 use horizon_core::position::ChunkPos;
@@ -214,6 +215,12 @@ fn run(
                     Ok(result)
                 };
                 let mut world = TerrainFeatureAccess::new(&mut region, write);
+                if let Some(zone) = f["write_zone"].as_array() {
+                    world = world.with_write_zone(GenerationWriteZone::new(
+                        ChunkPos::new(n(&zone[0]), n(&zone[1])),
+                        n(&zone[2]),
+                    ));
+                }
                 placer.place_with_context(
                     &modifiers,
                     &mut world,
@@ -432,6 +439,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .chain(std::iter::once("horizon:absent".into()))
         .collect();
     let mut out = io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
+    let zones: Value = serde_json::from_str(&fs::read_to_string(dir.join("zones.json"))?)?;
+    for row in zones.as_array().unwrap() {
+        let zone = GenerationWriteZone::new(ChunkPos::new(n(&row[0]), n(&row[1])), n(&row[2]));
+        let (x, z) = (n(&row[3]), n(&row[4]));
+        writeln!(
+            out,
+            "zone {} {}",
+            zone.contains_chunk(ChunkPos::new(x, z)),
+            zone.contains_block(horizon_core::position::BlockPos::new(x, i32::MIN, z))
+        )?;
+    }
     for line in fs::read_to_string(dir.join("inputs.txt"))?.lines() {
         fixture(
             &serde_json::from_str(line)?,
