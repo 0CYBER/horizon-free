@@ -167,6 +167,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_snow_freeze_parity.py
+      - name: Compare generation-stage tick storage and routing
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_generation_tick_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable

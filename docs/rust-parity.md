@@ -661,3 +661,19 @@ mutations, rejected writes, partial failures, extreme heights/sea levels, wrappe
 coordinates and composition. Workspace tests and all-target Clippy pass. The
 fixture uses controlled heights and one biome; lighting propagation, dynamic
 biome selection, world updates and full generation remain pending.
+
+## Generation-stage tick containers
+
+Proto-chunk tick containers now keep the first type/position request in insertion
+order. Newly scheduled ticks retain priority with zero delay; loaded entries
+retain their saved delay. Generation tick access routes requests to the selected
+container and reports no currently executing ticks or aggregate count. Snapshots
+can be promoted into the existing level tick queue.
+
+The [generation-tick comparison](../benchmarks/rust-generation-ticks-2026-10-06/scoped-parity.json)
+matches **101,784 lines per reference JAR**, covering duplicates, saved entries,
+snapshot independence, mixed proto/level routing, lookup failures, promotion,
+priority boundaries and integer/time extremes. Workspace tests, all-target Clippy
+and all 149 Python tests pass. Rust exposes packed entries as an immutable
+borrowed slice; mutating Java's returned list is outside this API. Feature-world
+scheduling integration and block/fluid tick execution remain pending.

@@ -1,5 +1,9 @@
 //! Scheduled block/fluid tick machinery for Java Edition 26.3. Type IDs identify
 //! registry-owned types; each block/fluid registry uses its own LevelTicks.
+mod generation;
+pub use generation::{
+    ProtoChunkTicks, TickContainerAccess, WorldGenTickAccess, WorldGenTickContainers,
+};
 mod heap;
 mod index;
 use crate::position::{BlockPos, ChunkPos};
