@@ -3,5 +3,6 @@
 
 mod json;
 pub mod model;
+pub mod resolve;
 
 pub use json::DecodeError;

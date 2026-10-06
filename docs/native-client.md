@@ -69,8 +69,24 @@ python3 tools/test_cuboid_model_parity.py
 The [archived decoder result](../benchmarks/rust-cuboid-model-decoding-2026-10-06/scoped-parity.json)
 records source, fixture and reference hashes. The oracle uses actual client
 classes; those rendering APIs are absent from the server. This decoder is not
-yet connected to the development renderer. Parent resolution, rotation matrices,
-quad baking, blockstate selection and rendered appearance need their own checks.
+yet connected to the development renderer. Rotation matrices, quad baking,
+blockstate selection and rendered appearance need their own checks.
+
+`ModelLibrary` resolves parent geometry, ambient occlusion, GUI lighting and
+each display context. It shares inherited elements rather than cloning them.
+Texture aliases bind after child overrides are applied; successful and failed
+alias walks are cached. Missing resources use the native missing-model cube;
+parent cycles invalidate their descendants. The
+[resolution comparison](../benchmarks/rust-model-resolution-2026-10-06/scoped-parity.json)
+matches **5,648 requested roots across 439 graphs**, including the full bundled
+block-model catalog, missing parents, 702 cyclic roots, 1,024-model parent chains,
+512-slot alias chains, explicit empty geometry and identity/null transforms.
+It calls native `ModelDiscovery`, `ResolvedModel` and `TextureSlots` APIs.
+
+```sh
+python3 tools/test_model_resolution_parity.py
+cargo +stable test --locked -p horizon-assets
+```
 
 ```sh
 cargo +stable test -p horizon-client

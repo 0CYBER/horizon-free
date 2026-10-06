@@ -15,12 +15,12 @@ public final class VanillaCuboidModelOracle {
     private static long bits(float value) { return Integer.toUnsignedLong(Float.floatToIntBits(value)); }
     private static Object vector(Vector3fc value) { return new long[]{bits(value.x()), bits(value.y()), bits(value.z())}; }
     private static String direction(net.minecraft.core.Direction value) { return value == null ? null : value.getName(); }
-    private static Map<String, Object> map(Object... values) {
+    static Map<String, Object> map(Object... values) {
         var result = new TreeMap<String, Object>();
         for (int i=0;i<values.length;i+=2) result.put((String)values[i], values[i+1]);
         return result;
     }
-    private static Object transform(ItemTransform value) {
+    static Object transform(ItemTransform value) {
         if (value == ItemTransform.NO_TRANSFORM) return "inherit";
         if (value == null) return null;
         return map("rotation", vector(value.rotation()), "translation", vector(value.translation()), "scale", vector(value.scale()));
@@ -40,7 +40,7 @@ public final class VanillaCuboidModelOracle {
         return map("cull", direction(value.cullForDirection()), "tint", value.tintIndex(), "texture", value.texture(),
             "rotation", value.rotation().ordinal(), "uv", uv == null ? null : new long[]{bits(uv.minU()), bits(uv.minV()), bits(uv.maxU()), bits(uv.maxV())});
     }
-    private static Object element(CuboidModelElement value) {
+    static Object element(CuboidModelElement value) {
         if (value == null) return null;
         var faces = new TreeMap<String, Object>();
         value.faces().forEach((key, f) -> faces.put(key.getName(), face(f)));
