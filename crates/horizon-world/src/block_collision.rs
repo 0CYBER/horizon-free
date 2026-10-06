@@ -1,6 +1,7 @@
 //! Cached/dynamic no-context collision queries and explicit contextual block rules.
 //! Context-sensitive families override the no-context cache explicitly.
 use crate::{
+    block_collision_scan::CollisionBlock,
     collision::CachedCollisionRegistry,
     collision_context::CollisionContext,
     dynamic_support::{DynamicSupport, DynamicSupportError, DynamicSupportWorld},
@@ -8,7 +9,7 @@ use crate::{
     powder_snow_collision::{PowderSnowWorld, powder_snow_collision_shape},
     registry::{BlockRegistry, BlockStateId},
 };
-use horizon_core::geometry::{Aabb, Direction, Vec3, VoxelShape};
+use horizon_core::geometry::{Aabb, Axis, Direction, Vec3, VoxelShape};
 use std::{collections::HashMap, io, sync::Arc};
 
 #[derive(Clone, Copy, Debug)]
@@ -77,6 +78,7 @@ pub struct BlockCollisionRegistry<'r> {
     cached: Arc<CachedCollisionRegistry<'r>>,
     dynamic: HashMap<BlockStateId, DynamicSupport>,
     contextual: HashMap<BlockStateId, ContextualRule>,
+    scan_flags: Vec<u8>,
 }
 enum ContextualRule {
     Scaffolding(ScaffoldingCollision),
@@ -87,9 +89,17 @@ impl<'r> BlockCollisionRegistry<'r> {
     pub fn new(cached: Arc<CachedCollisionRegistry<'r>>) -> io::Result<Self> {
         let mut dynamic = HashMap::new();
         let mut contextual = HashMap::new();
+        let mut scan_flags = Vec::with_capacity(cached.registry().len());
         for index in 0..cached.registry().len() {
             let id = BlockStateId(index as u32);
             let state = cached.registry().state(id).unwrap();
+            let large = cached.cached_shape(id)?.is_none_or(|shape| {
+                Axis::ALL
+                    .into_iter()
+                    .any(|axis| shape.min(axis) < 0.0 || shape.max(axis) > 1.0)
+            });
+            scan_flags
+                .push(u8::from(large) | (u8::from(state.name == "minecraft:moving_piston") << 1));
             if let Some(rule) = ScaffoldingCollision::from_state(state)? {
                 contextual.insert(id, ContextualRule::Scaffolding(rule));
             } else if let Some(rule) = LiquidCollision::from_state(state)? {
@@ -109,10 +119,26 @@ impl<'r> BlockCollisionRegistry<'r> {
             cached,
             dynamic,
             contextual,
+            scan_flags,
         })
     }
     pub fn registry(&self) -> &'r BlockRegistry {
         self.cached.registry()
+    }
+    pub fn cached_shapes(&self) -> &CachedCollisionRegistry<'r> {
+        &self.cached
+    }
+    /// Immutable cursor-filter metadata, prepared once for this registry.
+    pub fn collision_block(&self, state: BlockStateId) -> io::Result<CollisionBlock> {
+        let flags = *self
+            .scan_flags
+            .get(state.0 as usize)
+            .ok_or_else(|| crate::compression::invalid("collision scan state outside registry"))?;
+        Ok(CollisionBlock {
+            state,
+            large_collision_shape: flags & 1 != 0,
+            moving_piston: flags & 2 != 0,
+        })
     }
     pub fn collision_shape<W: DynamicCollisionWorld>(
         &self,

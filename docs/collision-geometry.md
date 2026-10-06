@@ -413,3 +413,24 @@ identities. Two Rust API tests cover finite/bounded input requirements, cursor
 visit budgets and termination after errors. Unsupported cursor volumes return
 errors; Java's overflowing iteration counts are outside this bounded API.
 Registry/world integration and live movement still need implementation.
+
+
+`BlockCollisionRegistry` now prepares native cursor-filter flags for every state:
+uncached shapes are large, while cached shapes are large when any axis extends
+outside the unit block. Moving-piston identity is bound to the same registry.
+`SuffocationRegistry` binds the native predicate definitions and resolved
+`causes_suffocation` tag. Default predicates combine tag membership with full
+collision geometry; overrides preserve piston extension, constant predicates and
+lazy shulker block-entity checks. Missing or wrong-type shulker block entities
+count as suffocating. Tag changes require rebinding the suffocation registry.
+
+`python3 tools/test_suffocation_parity.py` checks all **35,723 states** with natural,
+empty and all-block tag bindings at four positions, including integer extremes.
+Every shulker state also covers absent/wrong block entities, all animation states
+and query failures. The [suffocation report](../benchmarks/rust-suffocation-2026-10-06/scoped-parity.json)
+records **1,697,193 matching lines per JAR**, including scan flags and query traces.
+These are registry predicates; live collision-world binding, movement and
+suffocation damage remain separate integration work.
+The [contextual regression](../benchmarks/rust-suffocation-2026-10-06/contextual-regression.json)
+also passes again with **2,391,334 lines per JAR**, and its all-state native audit
+now compares large-shape and moving-piston flags. Workspace Clippy passes.

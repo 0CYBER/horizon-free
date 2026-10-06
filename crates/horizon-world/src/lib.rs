@@ -25,6 +25,7 @@ pub mod powder_snow_collision;
 pub mod region;
 pub mod registry;
 pub mod retrogen;
+pub mod suffocation;
 pub mod tick_data;
 pub mod worldgen;
 

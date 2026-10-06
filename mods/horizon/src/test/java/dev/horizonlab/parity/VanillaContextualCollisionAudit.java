@@ -56,7 +56,7 @@ public final class VanillaContextualCollisionAudit {
                     }
                     label=expected;if(label.equals("independent"))independent++;else contextual++;
                 }
-                out.println("audit "+Block.getId(state)+" "+label);
+                out.println("audit "+Block.getId(state)+" "+label+" "+state.hasLargeCollisionShape()+" "+state.is(Blocks.MOVING_PISTON));
             }
         }
         if(independent!=35492||contextual!=32||uncached!=199)throw new AssertionError("registry classification changed");

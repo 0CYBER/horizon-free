@@ -291,7 +291,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 "independent"
             };
-            writeln!(audit, "audit {index} {label}")?;
+            let block = collisions.as_ref().unwrap().collision_block(id)?;
+            writeln!(
+                audit,
+                "audit {index} {label} {} {}",
+                block.large_collision_shape, block.moving_piston
+            )?;
         }
     }
     let fluids = FluidKind::ALL
