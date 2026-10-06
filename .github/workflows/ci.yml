@@ -139,6 +139,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_blue_ice_parity.py
+      - name: Compare spike geometry and discontinuous roots
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_spike_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable

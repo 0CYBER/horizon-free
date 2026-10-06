@@ -545,3 +545,18 @@ every origin/candidate state through failure-terminated prefixes, full spreading
 runs, all packed-ice neighbor masks, extreme sea levels, wrapped positions,
 partial failures and composition. Workspace tests, all-target Clippy and all
 149 Python tests pass. Ice gameplay and complete world generation remain pending.
+
+## Spike geometry and roots
+
+Spike features now implement descending air search, support predicates, randomized
+height and radius, rare elevated spikes, float taper calculations and independent
+upper/lower replacement tests. Roots retain the native fixed Y=50 boundary,
+corner-specific random lengths, gaps, and exact-state replacement exception.
+
+The [spike comparison](../benchmarks/rust-spike-2026-10-06/scoped-parity.json)
+matches **8,859,761 lines per reference JAR** over **113,127 fixtures**. Every
+output/origin/candidate state is covered by failure-terminated prefixes; complete
+runs include 1,024 seeds per RNG, replacement and support predicates, repeated
+mutations, rejected writes, partial failures and composition. Workspace tests
+and all-target Clippy pass. Complete world generation and block updates remain
+pending. Pathological descent/root work is bounded to 2^20 visits.

@@ -49,6 +49,7 @@ pub enum FeatureDefinition {
     Disk(super::disk::DiskFeature),
     Spring(super::spring::SpringFeature),
     Vines(super::vines::VinesFeature),
+    Spike(super::spike::SpikeFeature),
     BlueIce(super::blue_ice::BlueIceFeature),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaFeature),
     BlockBlob(super::block_blob::BlockBlobFeature),
@@ -75,6 +76,7 @@ pub enum FeatureExecutionError<E> {
     BlockPile(super::block_pile::BlockPileError<E>),
     Disk(super::disk::DiskError<E>),
     BlockBlob(super::block_blob::BlockBlobError<E>),
+    Spike(super::spike::SpikeError<E>),
     BlueIce(super::blue_ice::BlueIceError<E>),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaError<E>),
     SimpleBlock(super::simple_block::SimpleBlockError<E>),
@@ -92,6 +94,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::BlockPile(e) => e.fmt(f),
             Self::Disk(e) => e.fmt(f),
             Self::BlockBlob(e) => e.fmt(f),
+            Self::Spike(e) => e.fmt(f),
             Self::BlueIce(e) => e.fmt(f),
             Self::UnderwaterMagma(e) => e.fmt(f),
             Self::SimpleBlock(e) => e.fmt(f),
@@ -260,6 +263,13 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:spike" => super::spike::SpikeFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("spike bindings"))?,
+                depth + 1,
+                remaining,
+            )
+            .map(Self::Spike),
             "minecraft:blue_ice" => super::blue_ice::BlueIceFeature::new(
                 blocks.ok_or(DecodeError::Field("blue ice bindings"))?,
             )
@@ -599,6 +609,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::Spike(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::Spike),
             Self::BlueIce(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::BlueIce),
