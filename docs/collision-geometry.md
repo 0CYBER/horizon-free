@@ -392,3 +392,24 @@ with **2,391,334 lines per JAR** in its
 [regression report](../benchmarks/rust-canonical-collision-2026-10-06/contextual-regression.json).
 Five import tests cover legacy data, equal-but-distinct grids, canonical restoration
 and malformed identity metadata. Workspace Clippy passes without warnings.
+
+
+`BlockCollisionScan` now implements lazy cursor selection around entity bounds.
+It retains the native epsilon-expanded cursor, X/Y/Z visit order, skipped corners,
+large-shape face filtering, moving-piston edge filtering and suffocation-before-
+shape query order. Only successful chunk lookups are reused; absent chunks are
+queried again. Shape selection uses the global collision world, while suffocation
+uses the selected chunk. Canonical full blocks use native AABB intersection;
+other shapes use moved voxel intersection. Returned positions are independent
+values. Providers supply current block metadata and contextual shape selection.
+
+`python3 tools/test_block_collision_scan_parity.py` compares **4,176 fixtures**
+and **517,820 matching lines per JAR** in the
+[collision-scan report](../benchmarks/rust-block-collision-scan-2026-10-06/scoped-parity.json).
+The native iterator runs over controlled metadata, shapes and chunk availability;
+traces cover early termination, missing chunks, query failures, thin/zero-width
+bounds, integer-coordinate wrapping and equal shapes with different canonical
+identities. Two Rust API tests cover finite/bounded input requirements, cursor
+visit budgets and termination after errors. Unsupported cursor volumes return
+errors; Java's overflowing iteration counts are outside this bounded API.
+Registry/world integration and live movement still need implementation.
