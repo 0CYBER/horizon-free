@@ -1,16 +1,29 @@
 # Horizon native development client
 
 `horizon-client` opens a native Rust window and renders a controlled block scene
-stored in Horizon's resident chunks. It loads six opaque cube textures and the
-block registry from the pinned Java Edition 26.3 resources. A padded chunk mesh
+stored in Horizon's resident chunks, alongside twelve real resource models. It
+loads the block registry, models and sprites from pinned Java Edition 26.3
+resources. A padded chunk mesh
 culls hidden faces across chunk boundaries and merges adjacent matching faces;
-the GPU draws the rectangles as instances. The camera is a free inspection tool.
+the GPU draws the rectangles as instances. A separate instanced draw renders
+baked cuboid faces without expanding them into cube approximations. The camera
+is a free inspection tool.
 
 This checkpoint has no player simulation, vanilla world generation, block
 interaction, inventory, sound, networking or world save/load. It does not meet
 the [playable-build acceptance criteria](rust-parity.md#completion-criteria-and-playable-builds).
-Full block models, weighted variants, texture orientation, transparency, tinting,
-light, resource packs, chunk streaming and visual parity remain unfinished.
+Blockstate dispatch, weighted variants, model transforms/UV locking, fractional
+transparency, tinting, lighting, resource packs, chunk streaming and full visual
+parity remain unfinished.
+
+The resource gallery sits beside the pyramid and includes oak stairs, a slab,
+an anvil, a torch, a lantern, fence parts, iron bars, a cobweb, a grindstone, a
+ladder and an amethyst cluster. These are explicit model selections for geometry
+inspection, not simulated block placements. Binary-alpha cutouts are rendered;
+the lantern's three frames advance every eight inspection ticks at 20 ticks/s.
+General animation metadata compatibility, interpolation and synchronization with
+the eventual game loop still need validation. Sprites currently require matching
+square frame dimensions.
 
 ## Run from a checkout
 
@@ -68,8 +81,8 @@ python3 tools/test_cuboid_model_parity.py
 
 The [archived decoder result](../benchmarks/rust-cuboid-model-decoding-2026-10-06/scoped-parity.json)
 records source, fixture and reference hashes. The oracle uses actual client
-classes; those rendering APIs are absent from the server. This decoder is not
-yet connected to the development renderer. Blockstate selection, transformed
+classes; those rendering APIs are absent from the server. The decoder, parent
+resolver and baker now feed the development gallery. Blockstate selection, transformed
 models, UV locking and rendered appearance still need their own checks.
 
 `ModelLibrary` resolves parent geometry, ambient occlusion, GUI lighting and
@@ -119,11 +132,14 @@ python3 tools/test_native_client.py --vscreen
 The mesh tests compare expanded rectangles against independently enumerated
 exposed voxel faces, including solid neighbors, cavities, material boundaries,
 negative chunk origins and random surroundings. The startup runner launches a
-nine-chunk scene, requires 30 presented frames and a clean exit, and writes GPU,
+nine-chunk scene, requires 30 presented frames and a clean exit, verifies 145
+baked gallery faces across 18 sprite layers, and writes GPU,
 platform, binary and source information to ignored
 `.local/horizon-client/startup-smoke.json`. It has an external timeout as well as
 the application's frame deadline. These checks do not establish gameplay or
-pixel parity with Java.
+pixel parity with Java. Source and resource fingerprints must remain unchanged
+during the run. An animation test covers duration boundaries, wrapping and
+repeated physical frames independently of render frequency.
 
 Initial local validation uses Linux x86_64, a headless Wayland compositor and
 Vulkan llvmpipe software rendering. Textured geometry and resizing were visually
@@ -132,3 +148,8 @@ physical key codes. Captured relative mouse movement and Escape release were
 exercised through a virtual pointer. Native macOS/Metal and
 Windows/Direct3D 12 runtime tests remain pending. Software-renderer frame rates
 are not evidence of a hardware speedup.
+
+The model gallery was also inspected at close range on Linux/Vulkan llvmpipe.
+With the camera stationary, screenshot differences were confined to the lantern
+as its frames changed. The [model-client startup report](../benchmarks/rust-native-model-client-2026-10-06/startup-smoke.json)
+records the bounded presentation check and the scope of this visual inspection.

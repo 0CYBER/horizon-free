@@ -7,6 +7,7 @@ rust-version = "1.90"
 description = "Horizon native development client"
 
 [dependencies]
+horizon-assets = { path = "../horizon-assets" }
 horizon-core = { path = "../horizon-core" }
 horizon-world = { path = "../horizon-world" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "dx12", "wgsl"] }

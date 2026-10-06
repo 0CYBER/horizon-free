@@ -4,7 +4,9 @@
 mod assets;
 mod camera;
 mod mesh;
+mod models;
 mod render;
+mod sprites;
 mod world;
 use assets::Assets;
 use camera::Camera;
@@ -60,7 +62,7 @@ impl Options {
             }
             if argument == "--help" || argument == "-h" {
                 println!(
-                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics.\n\nThis is a controlled cube scene with a free inspection camera, not complete gameplay."
+                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics.\n\nThis is a controlled block/model scene with a free inspection camera, not complete gameplay."
                 );
                 return Ok(None);
             }
@@ -157,7 +159,7 @@ impl App<'_> {
         let report = serde_json::json!({
             "schema": 1,
             "project": "Horizon",
-            "scope": "Native opaque-cube renderer and free inspection camera; no gameplay simulation",
+            "scope": "Native cube and cuboid-model renderer with binary cutouts, stepped sprite animation and free camera; no gameplay simulation",
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
             "adapter": adapter,
@@ -166,6 +168,11 @@ impl App<'_> {
             "elapsed_seconds": self.started.elapsed().as_secs_f64(),
             "resident_chunks": self.world.chunks.len(),
             "merged_quads": self.mesh.len(),
+            "model_quads": self.assets.model_quads.len(),
+            "model_gallery": models::GALLERY,
+            "sprite_layers": self.assets.texture_layers,
+            "animated_sprites": self.assets.animations.len(),
+            "animation_uploads": self.renderer.as_ref().map_or(0, |r| r.animation_uploads),
             "camera_position": self.camera.position.to_array(),
             "camera_yaw": self.camera.yaw,
             "camera_pitch": self.camera.pitch,
@@ -348,9 +355,10 @@ fn run() -> Result<()> {
     let world = TestWorld::new(&assets, options.radius)?;
     let mesh = mesh::build(&world)?;
     eprintln!(
-        "Horizon development scene: {} resident chunks, {} merged cube faces.\nClick to capture mouse; WASD/Space/Shift move; arrows rotate; Esc releases; Ctrl+Q quits.",
+        "Horizon development scene: {} resident chunks, {} merged cube faces, {} baked model faces.\nClick to capture mouse; WASD/Space/Shift move; arrows rotate; Esc releases; Ctrl+Q quits.",
         world.chunks.len(),
-        mesh.len()
+        mesh.len(),
+        assets.model_quads.len()
     );
     let now = Instant::now();
     let mut app = App {

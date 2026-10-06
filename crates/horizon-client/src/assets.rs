@@ -56,6 +56,9 @@ pub struct Assets {
     pub layers: Vec<i32>,
     pub sprite_size: u32,
     pub pixels: Vec<u8>,
+    pub texture_layers: u32,
+    pub model_quads: Vec<crate::models::ModelInstance>,
+    pub animations: Vec<crate::sprites::SpriteAnimation>,
 }
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -169,55 +172,26 @@ impl Assets {
             .map(|state| if state.air { -1 } else { -2 })
             .collect();
         let mut material_states = [BlockStateId(0); 6];
-        let mut pixels = Vec::new();
-        let mut sprite_size = 0;
+        let mut sprites = crate::sprites::Sprites::default();
         for (layer, name) in MATERIALS.iter().enumerate() {
             let state = registry
                 .default_state(&format!("minecraft:{name}"))
                 .ok_or_else(|| invalid("missing test-scene material"))?;
             material_states[layer] = state;
-            layers[state.0 as usize] = layer as i32;
-            let path = root.join(format!("assets/minecraft/textures/block/{name}.png"));
-            let mut decoder = png::Decoder::new(BufReader::new(File::open(path)?));
-            decoder
-                .set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-            let mut reader = decoder.read_info()?;
-            let mut bytes = vec![
-                0;
-                reader
-                    .output_buffer_size()
-                    .ok_or_else(|| invalid("sprite exceeds decoder limits"))?
-            ];
-            let info = reader.next_frame(&mut bytes)?;
-            if info.width != info.height
-                || info.width == 0
-                || (sprite_size != 0 && sprite_size != info.width)
-            {
-                return Err(invalid(
-                    "test-client sprites must be square and use matching dimensions",
-                )
-                .into());
-            }
-            sprite_size = info.width;
-            let channels = info.color_type.samples();
-            for pixel in bytes[..info.buffer_size()].chunks_exact(channels) {
-                let rgba = match info.color_type {
-                    png::ColorType::Rgba => [pixel[0], pixel[1], pixel[2], pixel[3]],
-                    png::ColorType::Rgb => [pixel[0], pixel[1], pixel[2], 255],
-                    png::ColorType::Grayscale => [pixel[0], pixel[0], pixel[0], 255],
-                    png::ColorType::GrayscaleAlpha => [pixel[0], pixel[0], pixel[0], pixel[1]],
-                    _ => return Err(invalid("unsupported expanded sprite format").into()),
-                };
-                pixels.extend(rgba);
-            }
+            let sprite = sprites.insert(root, &format!("minecraft:block/{name}"))?;
+            layers[state.0 as usize] = sprite as i32;
         }
+        let model_quads = crate::models::gallery(root, &mut sprites)?;
         Ok(Self {
             registry,
             properties,
             material_states,
             layers,
-            sprite_size,
-            pixels,
+            sprite_size: sprites.size,
+            texture_layers: u32::try_from(sprites.layers.len())?,
+            pixels: sprites.pixels,
+            model_quads,
+            animations: sprites.animations,
         })
     }
 }

@@ -3,7 +3,8 @@
 The behavior target is the repository's pinned **Minecraft Java Edition 26.3**.
 One-to-one vanilla gameplay parity is the acceptance criterion. It has **not**
 been reached. Horizon now has a [native development client](native-client.md)
-that renders a controlled block scene with a free camera. It does not run a
+that renders a controlled block scene and twelve baked resource models with a
+free camera. It does not run a
 complete game server or gameplay simulation.
 The Rust workspace implements core arithmetic/random streams, world data and
 resident sections, scheduled tick ordering, geometry, contained fluid states,
@@ -18,7 +19,9 @@ block-model JSON files and 2,337 synthetic cases compared against the actual
 client parser. [Decoder scope and validation](native-client.md#validation)
 also include parent/texture resolution over 5,648 roots and cuboid baking over
 7,100 roots with identity blockstate transforms. Blockstate selection, transformed
-models, UV locking and integration with the renderer remain unfinished.
+models and UV locking remain unfinished. The native renderer now draws an
+inspection gallery from the decoded/resolved/baked models, including binary
+cutouts and stepped lantern animation; these are not yet gameplay blocks.
 The playable Java performance packs remain available during development.
 
 ## Completion criteria and playable builds

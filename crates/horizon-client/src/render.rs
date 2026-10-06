@@ -1,5 +1,5 @@
-use crate::{Result, assets::Assets, camera::Camera, mesh::Quad};
-use std::sync::Arc;
+use crate::{Result, assets::Assets, camera::Camera, mesh::Quad, models::ModelInstance};
+use std::{sync::Arc, time::Instant};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 #[repr(C)]
@@ -17,6 +17,14 @@ pub struct Renderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
+    model_pipeline: wgpu::RenderPipeline,
+    model_quads: wgpu::Buffer,
+    model_quad_count: u32,
+    sprite_texture: wgpu::Texture,
+    sprite_size: u32,
+    animations: Vec<(crate::sprites::SpriteAnimation, usize)>,
+    animation_started: Instant,
+    pub animation_uploads: u64,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     quads: wgpu::Buffer,
@@ -72,45 +80,101 @@ impl Renderer {
             label: Some("Horizon cube renderer"),
             source: wgpu::ShaderSource::Wgsl(include_str!("world.wgsl").into()),
         });
-        let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Uint32];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Horizon opaque cubes"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Quad>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &attributes,
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
+        let bindings = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Horizon world bindings"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Horizon world layout"),
+            bind_group_layouts: &[Some(&bindings)],
+            ..Default::default()
+        });
+        let create_pipeline =
+            |label: &str, vertex: &str, fragment: &str, buffer: wgpu::VertexBufferLayout<'_>| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some(vertex),
+                        compilation_options: Default::default(),
+                        buffers: &[Some(buffer)],
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        cull_mode: Some(wgpu::Face::Back),
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: wgpu::TextureFormat::Depth32Float,
+                        depth_write_enabled: Some(true),
+                        depth_compare: Some(wgpu::CompareFunction::Less),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample: Default::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some(fragment),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: config.format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+        let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Uint32];
+        let pipeline = create_pipeline(
+            "Horizon opaque cubes",
+            "vs_main",
+            "fs_main",
+            wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<Quad>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &attributes,
+            },
+        );
+        let model_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x3,3=>Float32x3,4=>Float32x2,5=>Float32x2,6=>Float32x2,7=>Float32x2,8=>Uint32,9=>Float32];
+        let model_pipeline = create_pipeline(
+            "Horizon model geometry",
+            "vs_model",
+            "fs_model",
+            wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<ModelInstance>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &model_attributes,
+            },
+        );
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Horizon camera"),
             size: std::mem::size_of::<Uniforms>() as u64,
@@ -120,11 +184,11 @@ impl Renderer {
         let texture = device.create_texture_with_data(
             &queue,
             &wgpu::TextureDescriptor {
-                label: Some("Pinned cube sprites"),
+                label: Some("Pinned block sprites"),
                 size: wgpu::Extent3d {
                     width: assets.sprite_size,
                     height: assets.sprite_size,
-                    depth_or_array_layers: assets.material_states.len() as u32,
+                    depth_or_array_layers: assets.texture_layers,
                 },
                 mip_level_count: 1,
                 sample_count: 1,
@@ -150,7 +214,7 @@ impl Renderer {
         });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Horizon world resources"),
-            layout: &pipeline.get_bind_group_layout(0),
+            layout: &bindings,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -172,6 +236,12 @@ impl Renderer {
             contents: bytemuck::cast_slice(quads),
             usage: wgpu::BufferUsages::VERTEX,
         });
+        let model_quad_count = u32::try_from(assets.model_quads.len())?;
+        let model_quads = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Baked vanilla model faces"),
+            contents: bytemuck::cast_slice(&assets.model_quads),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
         let depth = Self::depth(&device, &config);
         Ok(Self {
             instance,
@@ -181,6 +251,18 @@ impl Renderer {
             queue,
             config,
             pipeline,
+            model_pipeline,
+            model_quads,
+            model_quad_count,
+            sprite_texture: texture,
+            sprite_size: assets.sprite_size,
+            animations: assets
+                .animations
+                .iter()
+                .map(|a| (a.clone(), a.frame(0)))
+                .collect(),
+            animation_started: Instant::now(),
+            animation_uploads: 0,
             group,
             uniform,
             quads,
@@ -242,6 +324,38 @@ impl Renderer {
                 return Err("surface acquisition failed validation".into());
             }
         };
+        // Inspection textures advance at 20 ticks/s independently of presentation.
+        let tick = self.animation_started.elapsed().as_millis() / 50;
+        for (animation, previous) in &mut self.animations {
+            let frame = animation.frame(tick as u64);
+            if frame != *previous {
+                self.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.sprite_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: animation.layer,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    animation.pixels(frame),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(self.sprite_size * 4),
+                        rows_per_image: Some(self.sprite_size),
+                    },
+                    wgpu::Extent3d {
+                        width: self.sprite_size,
+                        height: self.sprite_size,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                *previous = frame;
+                self.animation_uploads += 1;
+            }
+        }
         let fog = [0.35, 0.55, 0.80, 1.0];
         let p = camera.position.as_vec3();
         let uniforms = Uniforms {
@@ -291,6 +405,9 @@ impl Renderer {
             pass.set_bind_group(0, &self.group, &[]);
             pass.set_vertex_buffer(0, self.quads.slice(..));
             pass.draw(0..6, 0..self.quad_count);
+            pass.set_pipeline(&self.model_pipeline);
+            pass.set_vertex_buffer(0, self.model_quads.slice(..));
+            pass.draw(0..6, 0..self.model_quad_count);
         }
         self.queue.submit([encoder.finish()]);
         self.window.pre_present_notify();
