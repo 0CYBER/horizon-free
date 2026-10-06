@@ -639,3 +639,18 @@ guards, fall/step and 0.05 thresholds, nonfinite values and query failures. Two
 query-budget unit tests and workspace Clippy pass. Registered-world ledge probes,
 live crouching/attribute state and the complete player movement loop are separate
 integration work.
+
+
+Registered-world ledge integration now runs `back_off_from_edge` through
+`no_world_collision` and registry-bound resident chunk scans. The native side
+executes actual `Player.maybeBackOffFromEdge` and its collision probes over
+`ProtoChunk` sections. Every state is used as a supporting block, with additional
+falling, step-height, chunk-edge, diagonal, dynamic-block and guard/error cases.
+
+`python3 tools/test_world_edge_backoff_parity.py` passes with
+**27,109,699 matching lines per JAR** in the
+[world ledge report](../benchmarks/rust-world-edge-backoff-2026-10-07/scoped-parity.json).
+The shared fixture now supports player probes alongside direct movement and
+collision checks; workspace Clippy passes. Entity lists, border applicability and
+collision contexts remain controlled snapshots. A complete player movement/travel
+loop and playable client remain pending.

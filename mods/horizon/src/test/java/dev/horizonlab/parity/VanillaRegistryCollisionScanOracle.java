@@ -49,6 +49,16 @@ public final class VanillaRegistryCollisionScanOracle {
         @Override public boolean onGround(){return grounded;}
         void configure(StepLevel level,AABB bounds,float step,boolean grounded){setLevel(level);setBoundingBox(bounds);this.step=step;this.grounded=grounded;}
     }
+    static final class EdgePlayer extends net.minecraft.world.entity.player.Player {
+        float step;boolean grounded,staying;
+        private EdgePlayer(){super(null,null);}
+        @Override public GameType gameMode(){return GameType.SURVIVAL;}
+        @Override public float maxUpStep(){return step;}
+        @Override public boolean onGround(){return grounded;}
+        @Override protected boolean isStayingOnGroundSurface(){return staying;}
+        void configure(StepLevel level,AABB bounds,float step,boolean grounded,boolean staying){setLevel(level);setBoundingBox(bounds);this.step=step;this.grounded=grounded;this.staying=staying;}
+        Vec3 backoff(Vec3 delta,net.minecraft.world.entity.MoverType mover){return maybeBackOffFromEdge(delta,mover);}
+    }
     static long key(int x,int z){return (long)x<<32|Integer.toUnsignedLong(z);}
     static double number(JsonElement v){return Double.longBitsToDouble(Long.parseUnsignedLong(v.getAsString(),16));}
     public static void main(String[] args)throws Exception {
@@ -65,6 +75,7 @@ public final class VanillaRegistryCollisionScanOracle {
             for(var status:animation.getType().getEnumConstants())if(((Enum<?>)status).name().equals(i==1?"CLOSED":"OPENED"))animation.set(entities[i],status);
             progress.setFloat(entities[i],i==1?0:0.5f);previous.setFloat(entities[i],i==1?0:0.5f);
         }
+        var abilities=net.minecraft.world.entity.player.Player.class.getDeclaredField("abilities");abilities.setAccessible(true);
         var collide=net.minecraft.world.entity.Entity.class.getDeclaredMethod("collide",Vec3.class);collide.setAccessible(true);
         var emit=VanillaFaceSupportOracle.class.getDeclaredMethod("emit",PrintWriter.class,VoxelShape.class);emit.setAccessible(true);
         try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var lines=Files.lines(dir.resolve("inputs.txt"))){
@@ -85,6 +96,10 @@ public final class VanillaRegistryCollisionScanOracle {
                     level.entities=new ArrayList<>();for(var shape:m.getAsJsonArray("entities"))level.entities.add(boxShape(shape));
                     level.border=new StepBorder();level.border.trace=trace;level.border.shape=m.get("border").isJsonNull()?null:boxShape(m.get("border"));
                     var entity=(StepEntity)allocate.invoke(unsafe,StepEntity.class);entity.configure(level,bounds,(float)number(m.get("step")),m.get("grounded").getAsBoolean());var delta=m.getAsJsonArray("delta");
+                    if(m.has("edge")){
+                        var e=m.getAsJsonObject("edge");var player=(EdgePlayer)allocate.invoke(unsafe,EdgePlayer.class);player.configure(level,bounds,(float)number(m.get("step")),m.get("grounded").getAsBoolean(),e.get("staying").getAsBoolean());player.fallDistance=number(e.get("fall"));var a=new net.minecraft.world.entity.player.Abilities();a.flying=e.get("flying").getAsBoolean();abilities.set(player,a);
+                        try{var result=player.backoff(new Vec3(number(delta.get(0)),number(delta.get(1)),number(delta.get(2))),net.minecraft.world.entity.MoverType.valueOf(e.get("mover").getAsString()));out.printf("edge %016x %016x %016x%n",Double.doubleToLongBits(result.x),Double.doubleToLongBits(result.y),Double.doubleToLongBits(result.z));}catch(Stop error){out.println("error");}out.println("done edge "+trace.calls);continue;
+                    }
                     if(m.has("check")&&m.get("check").getAsBoolean()){try{out.println("clear "+level.noCollision(entity,bounds));}catch(Stop error){out.println("error");}out.println("done check "+trace.calls);continue;}
                     try{var result=(Vec3)collide.invoke(entity,new Vec3(number(delta.get(0)),number(delta.get(1)),number(delta.get(2))));out.printf("movement %016x %016x %016x%n",Double.doubleToLongBits(result.x),Double.doubleToLongBits(result.y),Double.doubleToLongBits(result.z));}
                     catch(InvocationTargetException error){if(error.getCause() instanceof Stop)out.println("error");else throw error;}

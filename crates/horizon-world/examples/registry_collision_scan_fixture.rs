@@ -5,10 +5,11 @@ use horizon_core::{
 };
 use horizon_world::{
     block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
-    block_collision_scan::BlockCollisionScan,
+    block_collision_scan::{BlockCollisionScan, BlockCollisionWorld, CollisionScanError},
     collision::CachedCollisionRegistry,
     collision_context::CollisionContext,
     dynamic_support::DynamicSupportWorld,
+    edge_backoff::{EdgeBackoffInput, EdgeBackoffWorld, back_off_from_edge},
     entity_obstruction::EntityIdentity,
     fluid::FluidState,
     heightmap::HeightmapState,
@@ -242,6 +243,39 @@ impl EntityMovementWorld for World<'_> {
         Ok(border.clone())
     }
 }
+struct EdgeWorld<'w, 'c, W> {
+    world: &'w mut W,
+    context: CollisionContext<'c>,
+    step: f32,
+    grounded: bool,
+    staying: bool,
+}
+impl<W, E> EdgeBackoffWorld for EdgeWorld<'_, '_, W>
+where
+    W: BlockCollisionWorld<Error = E> + EntityMovementWorld<Error = E>,
+{
+    type Error = CollisionScanError<E>;
+    fn max_up_step(&mut self) -> Result<f32, Self::Error> {
+        Ok(self.step)
+    }
+    fn staying_on_ground_surface(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.staying)
+    }
+    fn on_ground(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.grounded)
+    }
+    fn no_collision(&mut self, bounds: Aabb) -> Result<bool, Self::Error> {
+        no_world_collision(
+            self.world,
+            CollisionCheckRequest {
+                entity: EntityIdentity(1),
+                context: self.context,
+                bounds,
+                candidate_budget: 1_000_000,
+            },
+        )
+    }
+}
 impl DynamicSupportWorld for World<'_> {
     type Error = io::Error;
     fn shulker_is_closed(&mut self, p: [i32; 3]) -> io::Result<Option<bool>> {
@@ -449,6 +483,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         if let Some(m) = f.get("movement") {
             let v = &m["delta"];
+            if let Some(edge) = m.get("edge") {
+                let mut world = EdgeWorld {
+                    world: &mut bound,
+                    context,
+                    step: number(&m["step"]) as f32,
+                    grounded: m["grounded"].as_bool().unwrap(),
+                    staying: edge["staying"].as_bool().unwrap(),
+                };
+                let result = back_off_from_edge(
+                    &mut world,
+                    EdgeBackoffInput {
+                        movement: Vec3::new(number(&v[0]), number(&v[1]), number(&v[2])),
+                        bounds,
+                        flying: edge["flying"].as_bool().unwrap(),
+                        self_or_player: matches!(
+                            edge["mover"].as_str().unwrap(),
+                            "SELF" | "PLAYER"
+                        ),
+                        fall_distance: number(&edge["fall"]),
+                        query_budget: 10000,
+                    },
+                );
+                let mut t = trace.borrow_mut();
+                match result {
+                    Ok(v) => values(&mut t.out, "edge", [v.x, v.y, v.z])?,
+                    Err(_) => writeln!(t.out, "error")?,
+                };
+                let calls = t.calls;
+                writeln!(t.out, "done edge {calls}")?;
+                continue;
+            }
             if m.get("check").and_then(Value::as_bool) == Some(true) {
                 let result = no_world_collision(
                     &mut bound,
