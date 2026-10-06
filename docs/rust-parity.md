@@ -530,3 +530,18 @@ reject `-0.0`, including negative values that round to float zero. Magma and
 pillar decoding now preserve this. The expanded pillar gate passes **921,111
 lines per JAR** over **41,746 fixtures**. Workspace tests and all-target Clippy
 pass. World updates and magma/fluid gameplay remain pending.
+
+## Blue ice generation
+
+Blue ice features now preserve world sea-level gating, water and packed-ice
+seeding checks, all 200 spreading attempts, signed vertical radius adjustment,
+random draw order and six-direction adjacency. World sea level can differ from
+the generation context's sea level. Rejected writes preserve native success and
+subsequent attempts observe the actual mutable world.
+
+The [blue-ice comparison](../benchmarks/rust-blue-ice-2026-10-06/scoped-parity.json)
+matches **8,954,666 lines per reference JAR** across **79,944 fixtures**, covering
+every origin/candidate state through failure-terminated prefixes, full spreading
+runs, all packed-ice neighbor masks, extreme sea levels, wrapped positions,
+partial failures and composition. Workspace tests, all-target Clippy and all
+149 Python tests pass. Ice gameplay and complete world generation remain pending.

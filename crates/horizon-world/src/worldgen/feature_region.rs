@@ -44,6 +44,7 @@ pub struct TerrainRegion<'r, B: TerrainBlockStates> {
     min_y: i32,
     height: i32,
     generation: WorldGenerationContext,
+    sea_level: i32,
 }
 impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn new(
@@ -69,6 +70,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         }
         Ok(Self {
             chunks: stored,
+            sea_level: generator.sea_level,
             min_y,
             height,
             generation: WorldGenerationContext::with_generator(
@@ -79,6 +81,11 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
                 generator.sea_level,
             ),
         })
+    }
+    /// Override world sea level without changing generator placement anchors.
+    pub fn with_world_sea_level(mut self, sea_level: i32) -> Self {
+        self.sea_level = sea_level;
+        self
     }
     pub fn chunks(&self) -> impl Iterator<Item = &TerrainChunk<'r, B>> {
         self.chunks.values()
@@ -136,6 +143,10 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     }
 }
 impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
+    fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
+        Ok(self.sea_level)
+    }
+
     fn mark_postprocessing(&mut self, [x, y, z]: [i32; 3]) -> Result<(), PlacementQueryError> {
         self.chunk_mut(x >> 4, z >> 4)?.mark_postprocessing(x, y, z);
         Ok(())
@@ -197,6 +208,10 @@ impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
     }
 }
 impl<B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, '_, B, F> {
+    fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
+        self.region.sea_level()
+    }
+
     fn mark_postprocessing(&mut self, position: [i32; 3]) -> Result<(), PlacementQueryError> {
         self.region.mark_postprocessing(position)
     }

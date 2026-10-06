@@ -49,6 +49,7 @@ pub enum FeatureDefinition {
     Disk(super::disk::DiskFeature),
     Spring(super::spring::SpringFeature),
     Vines(super::vines::VinesFeature),
+    BlueIce(super::blue_ice::BlueIceFeature),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaFeature),
     BlockBlob(super::block_blob::BlockBlobFeature),
     SimpleBlock(super::simple_block::SimpleBlockFeature),
@@ -74,6 +75,7 @@ pub enum FeatureExecutionError<E> {
     BlockPile(super::block_pile::BlockPileError<E>),
     Disk(super::disk::DiskError<E>),
     BlockBlob(super::block_blob::BlockBlobError<E>),
+    BlueIce(super::blue_ice::BlueIceError<E>),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaError<E>),
     SimpleBlock(super::simple_block::SimpleBlockError<E>),
     Random(InvalidBound),
@@ -90,6 +92,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::BlockPile(e) => e.fmt(f),
             Self::Disk(e) => e.fmt(f),
             Self::BlockBlob(e) => e.fmt(f),
+            Self::BlueIce(e) => e.fmt(f),
             Self::UnderwaterMagma(e) => e.fmt(f),
             Self::SimpleBlock(e) => e.fmt(f),
             Self::Random(e) => e.fmt(f),
@@ -257,6 +260,10 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:blue_ice" => super::blue_ice::BlueIceFeature::new(
+                blocks.ok_or(DecodeError::Field("blue ice bindings"))?,
+            )
+            .map(Self::BlueIce),
             "minecraft:underwater_magma" => {
                 super::underwater_magma::UnderwaterMagmaFeature::from_json(
                     json,
@@ -592,6 +599,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::BlueIce(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::BlueIce),
             Self::UnderwaterMagma(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::UnderwaterMagma),

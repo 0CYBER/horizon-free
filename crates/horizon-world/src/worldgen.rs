@@ -12,6 +12,7 @@ pub mod block_column;
 pub mod block_feature;
 pub mod block_pile;
 pub mod block_predicate;
+pub mod blue_ice;
 pub mod bulk_section;
 pub mod carver;
 pub mod carving;

@@ -49,6 +49,7 @@ struct World<'a, 'r, W, R> {
     fail: i32,
     reject: i32,
     brightness: i32,
+    sea_level: i32,
 }
 impl<W: Write, R> World<'_, '_, W, R> {
     fn event(&mut self, text: std::fmt::Arguments<'_>) -> io::Result<i32> {
@@ -134,6 +135,10 @@ fn query(error: impl std::fmt::Display) -> PlacementQueryError {
     PlacementQueryError::Failed(error.to_string())
 }
 impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
+    fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
+        Ok(self.sea_level)
+    }
+
     fn schedule_fluid_tick(
         &mut self,
         p: [i32; 3],
@@ -287,6 +292,7 @@ fn fixture<R: RandomSource>(
         fail: f["fail"].as_i64().unwrap() as i32,
         reject: f["reject"].as_i64().unwrap() as i32,
         brightness: f["brightness"].as_i64().unwrap() as i32,
+        sea_level: f.get("sea").and_then(Value::as_i64).unwrap_or(63) as i32,
     };
     match feature {
         Err(_) => writeln!(world.out, "decode error")?,

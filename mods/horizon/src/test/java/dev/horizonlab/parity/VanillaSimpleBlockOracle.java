@@ -63,7 +63,7 @@ public final class VanillaSimpleBlockOracle {
    if(name.equals("getChunk")&&args.length==1&&args[0] instanceof BlockPos)return chunk((BlockPos)args[0]);
    if(name.equals("getMinY"))return -64;
    if(name.equals("getHeight")&&(args==null||args.length==0))return 384;
-   if(name.equals("getSeaLevel"))return 63;
+   if(name.equals("getSeaLevel"))return f.has("sea")?f.get("sea").getAsInt():63;
    if(name.equals("getBlockState")){var p=(BlockPos)args[0];event("get "+xyz(p));var state=at(p);out.println("state "+Block.getId(state));return state;}
    if(name.equals("getFluidState")){var p=(BlockPos)args[0];event("fluid "+xyz(p));return (f.has("fluid")?Block.stateById(f.get("fluid").getAsInt()):at(p)).getFluidState();}
    if(name.equals("getRawBrightness")){var p=(BlockPos)args[0];event("light "+xyz(p)+" "+args[1]);return f.get("brightness").getAsInt();}

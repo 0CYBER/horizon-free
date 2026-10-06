@@ -26,6 +26,10 @@ pub enum LayerBlock {
     Ground,
 }
 pub trait PlacementContext {
+    /// World sea level, independently of the generator's placement context.
+    fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
     fn schedule_fluid_tick(
         &mut self,
         _position: [i32; 3],
