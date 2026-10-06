@@ -67,7 +67,7 @@ terrain completion times alongside foreground performance and CPU use.
 ## Hosted executor measurements
 
 [Raw platform results](../benchmarks/worker-pacing-2026-10-03/) came from
-[CI run 37147381649](https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37147381649),
+[CI run 37147381649](https://github.com/ludovic111/Horizon/actions/runs/37147381649),
 using the 50,000-job workload and the revised overshoot credit. Median worker CPU
 seconds per elapsed second across three runs were:
 

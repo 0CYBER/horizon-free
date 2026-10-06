@@ -1,0 +1,479 @@
+//! Noise-stage chunk filling. Material rules, structures and chunk lifecycle are
+//! separate stages; this module does not produce a complete generated chunk.
+use super::aquifer::{
+    AquiferBlockStates, AquiferError, DisabledAquifer, FluidPicker, NoiseBasedAquifer,
+};
+use crate::{
+    chunk::BlockSection,
+    heightmap::{Heightmap, HeightmapChunk, HeightmapError, HeightmapState, HeightmapType},
+    registry::{BlockRegistry, BlockStateId},
+};
+use horizon_core::{
+    density::{DensitySampler, SampleError, SamplerContext},
+    noise::DensityVolume,
+    position::ChunkPos,
+    random::PositionalRandom,
+};
+use std::io;
+
+/// Behavior and resolved tags for every state in the chunk's immutable registry.
+pub trait TerrainBlockStates {
+    type State: HeightmapState;
+    fn heightmap_state(&self, id: BlockStateId) -> Self::State;
+}
+
+pub trait TerrainAquifer {
+    fn compute_substance(
+        &mut self,
+        context: &mut SamplerContext,
+        position: [i32; 3],
+        density: f64,
+    ) -> Result<Option<BlockStateId>, AquiferError>;
+    fn should_schedule_fluid_update(&self) -> bool;
+}
+impl<P: FluidPicker> TerrainAquifer for DisabledAquifer<P> {
+    fn compute_substance(
+        &mut self,
+        _: &mut SamplerContext,
+        position: [i32; 3],
+        density: f64,
+    ) -> Result<Option<BlockStateId>, AquiferError> {
+        Ok(DisabledAquifer::compute_substance(self, position, density))
+    }
+    fn should_schedule_fluid_update(&self) -> bool {
+        false
+    }
+}
+impl<P: FluidPicker, F: PositionalRandom, B: AquiferBlockStates> TerrainAquifer
+    for NoiseBasedAquifer<P, F, B>
+{
+    fn compute_substance(
+        &mut self,
+        context: &mut SamplerContext,
+        position: [i32; 3],
+        density: f64,
+    ) -> Result<Option<BlockStateId>, AquiferError> {
+        NoiseBasedAquifer::compute_substance(self, context, position, density)
+    }
+    fn should_schedule_fluid_update(&self) -> bool {
+        NoiseBasedAquifer::should_schedule_fluid_update(self)
+    }
+}
+
+#[derive(Debug)]
+pub enum TerrainError {
+    Storage(io::Error),
+    Heightmap(HeightmapError),
+    Sample(SampleError),
+    Aquifer(AquiferError),
+    MissingAir,
+    InvalidState,
+    InvalidVolume,
+    OutsideBuildHeight,
+}
+impl std::fmt::Display for TerrainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+impl std::error::Error for TerrainError {}
+impl From<io::Error> for TerrainError {
+    fn from(value: io::Error) -> Self {
+        Self::Storage(value)
+    }
+}
+impl From<HeightmapError> for TerrainError {
+    fn from(value: HeightmapError) -> Self {
+        Self::Heightmap(value)
+    }
+}
+impl From<SampleError> for TerrainError {
+    fn from(value: SampleError) -> Self {
+        Self::Sample(value)
+    }
+}
+impl From<AquiferError> for TerrainError {
+    fn from(value: AquiferError) -> Self {
+        Self::Aquifer(value)
+    }
+}
+
+/// Resident registry-backed sections, optional heightmaps and ordered per-section
+/// fluid postprocessing offsets for the noise and surface generation stages.
+pub struct TerrainChunk<'r, B: TerrainBlockStates> {
+    stage: PreLightChunkStage,
+    position: ChunkPos,
+    blocks: TerrainBlocks<'r, B>,
+    heightmaps: [Option<Heightmap>; 6],
+    postprocessing: Vec<Vec<u16>>,
+}
+/// The persisted generation statuses before lighting initialization. This models
+/// their block-write heightmap selection, not scheduling or persisted metadata.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PreLightChunkStage {
+    #[default]
+    Empty,
+    StructureStarts,
+    StructureReferences,
+    Biomes,
+    Terrain,
+    Features,
+}
+impl PreLightChunkStage {
+    pub const ALL: [Self; 6] = [
+        Self::Empty,
+        Self::StructureStarts,
+        Self::StructureReferences,
+        Self::Biomes,
+        Self::Terrain,
+        Self::Features,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::StructureStarts => "structure_starts",
+            Self::StructureReferences => "structure_references",
+            Self::Biomes => "biomes",
+            Self::Terrain => "terrain",
+            Self::Features => "features",
+        }
+    }
+    pub fn heightmaps(self) -> &'static [HeightmapType] {
+        if matches!(self, Self::Terrain | Self::Features) {
+            &[
+                HeightmapType::WorldSurface,
+                HeightmapType::OceanFloor,
+                HeightmapType::MotionBlocking,
+                HeightmapType::MotionBlockingNoLeaves,
+            ]
+        } else {
+            &[HeightmapType::WorldSurfaceWg, HeightmapType::OceanFloorWg]
+        }
+    }
+}
+struct TerrainBlocks<'r, B: TerrainBlockStates> {
+    min_y: i32,
+    height: i32,
+    sections: Vec<BlockSection<'r>>,
+    non_air: Vec<u16>,
+    registry: &'r BlockRegistry,
+    properties: B,
+    air: BlockStateId,
+    void_air: BlockStateId,
+}
+impl<B: TerrainBlockStates> HeightmapChunk for TerrainBlocks<'_, B> {
+    type State = B::State;
+    fn min_y(&self) -> i32 {
+        self.min_y
+    }
+    fn height(&self) -> i32 {
+        self.height
+    }
+    fn highest_section_y(&self) -> i32 {
+        self.non_air
+            .iter()
+            .rposition(|&count| count != 0)
+            .map_or(self.min_y, |i| self.min_y + i as i32 * 16)
+    }
+    fn block_state(&self, x: i32, y: i32, z: i32) -> B::State {
+        self.properties.heightmap_state(self.block(x, y, z))
+    }
+}
+impl<B: TerrainBlockStates> TerrainBlocks<'_, B> {
+    fn section_index(&self, y: i32) -> Option<usize> {
+        let dy = i64::from(y) - i64::from(self.min_y);
+        (dy >= 0 && dy < i64::from(self.height)).then_some((dy >> 4) as usize)
+    }
+    fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
+        let Some(section) = self.section_index(y) else {
+            return self.void_air;
+        };
+        if self.non_air[section] == 0 {
+            return self.air;
+        }
+        self.sections[section]
+            .get(local_index(x, y, z))
+            .expect("valid section coordinates")
+    }
+}
+fn local_index(x: i32, y: i32, z: i32) -> usize {
+    (((y & 15) << 8) | ((z & 15) << 4) | (x & 15)) as usize
+}
+
+impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
+    pub fn new(
+        position: ChunkPos,
+        min_y: i32,
+        height: i32,
+        registry: &'r BlockRegistry,
+        properties: B,
+    ) -> Result<Self, TerrainError> {
+        // Share the heightmap's supported range and fail before allocating sections.
+        Heightmap::new(HeightmapType::WorldSurfaceWg, min_y, height)?;
+        let air = registry
+            .default_state("minecraft:air")
+            .ok_or(TerrainError::MissingAir)?;
+        let void_air = registry
+            .default_state("minecraft:void_air")
+            .ok_or(TerrainError::MissingAir)?;
+        let section_count = (height / 16) as usize;
+        let sections = (0..section_count)
+            .map(|_| BlockSection::uniform(air, registry))
+            .collect::<io::Result<Vec<_>>>()?;
+        Ok(Self {
+            stage: PreLightChunkStage::Empty,
+            position,
+            blocks: TerrainBlocks {
+                min_y,
+                height,
+                sections,
+                non_air: vec![0; section_count],
+                registry,
+                properties,
+                air,
+                void_air,
+            },
+            heightmaps: std::array::from_fn(|_| None),
+            postprocessing: vec![Vec::new(); section_count],
+        })
+    }
+    pub(crate) fn registry(&self) -> &BlockRegistry {
+        self.blocks.registry
+    }
+    pub fn highest_filled_section_index(&self) -> Option<usize> {
+        self.blocks.non_air.iter().rposition(|&count| count != 0)
+    }
+    pub fn block_properties(&self, state: BlockStateId) -> B::State {
+        self.blocks.properties.heightmap_state(state)
+    }
+    pub fn same_block(&self, left: BlockStateId, right: BlockStateId) -> bool {
+        self.blocks
+            .registry
+            .state(left)
+            .zip(self.blocks.registry.state(right))
+            .is_some_and(|(left, right)| left.name == right.name)
+    }
+    pub fn generation_stage(&self) -> PreLightChunkStage {
+        self.stage
+    }
+    /// Changing status alone does not prime or clear any heightmaps. Native
+    /// persisted-status assignment also permits earlier statuses.
+    pub fn set_generation_stage(&mut self, stage: PreLightChunkStage) {
+        self.stage = stage;
+    }
+    /// ProtoChunk writes before lighting. The current stage selects heightmaps;
+    /// missing maps are primed after existing maps are updated.
+    pub fn set_block_worldgen(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        state: BlockStateId,
+    ) -> Result<BlockStateId, TerrainError> {
+        let Some(section) = self.blocks.section_index(y) else {
+            return Ok(self.blocks.void_air);
+        };
+        if self.blocks.non_air[section] == 0 && state == self.blocks.air {
+            return Ok(state);
+        }
+        let previous = self.set_block_raw(x, y, z, state)?;
+        let mut missing = Vec::new();
+        for &kind in self.stage.heightmaps() {
+            if self.heightmap(kind).is_some() {
+                self.update_heightmap(kind, x & 15, y, z & 15, state)?;
+            } else {
+                missing.push(kind);
+            }
+        }
+        if !missing.is_empty() {
+            self.prime_heightmaps(&missing)?;
+        }
+        Ok(previous)
+    }
+    pub fn position(&self) -> ChunkPos {
+        self.position
+    }
+    pub fn min_y(&self) -> i32 {
+        self.blocks.min_y
+    }
+    pub fn height(&self) -> i32 {
+        self.blocks.height
+    }
+    pub fn highest_section_y(&self) -> i32 {
+        self.blocks.highest_section_y()
+    }
+    /// ProtoChunk reads collapse an all-air section to its default AIR state.
+    pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
+        self.blocks.block(x, y, z)
+    }
+    pub fn section(&self, index: usize) -> Option<&BlockSection<'r>> {
+        self.blocks.sections.get(index)
+    }
+    pub fn heightmap(&self, kind: HeightmapType) -> Option<&Heightmap> {
+        self.heightmaps[kind as usize].as_ref()
+    }
+    pub fn postprocessing(&self) -> &[Vec<u16>] {
+        &self.postprocessing
+    }
+
+    pub fn ensure_heightmap(&mut self, kind: HeightmapType) -> &mut Heightmap {
+        self.heightmaps[kind as usize].get_or_insert_with(|| {
+            Heightmap::new(kind, self.blocks.min_y, self.blocks.height)
+                .expect("validated chunk range")
+        })
+    }
+    /// Section write only. The caller chooses which generation-stage maps to update.
+    pub fn set_block_raw(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        state: BlockStateId,
+    ) -> Result<BlockStateId, TerrainError> {
+        let section = self
+            .blocks
+            .section_index(y)
+            .ok_or(TerrainError::OutsideBuildHeight)?;
+        let old = self.blocks.sections[section].set(local_index(x, y, z), state)?;
+        let old_air = self.blocks.properties.heightmap_state(old).is_air();
+        let new_air = self.blocks.properties.heightmap_state(state).is_air();
+        if old_air && !new_air {
+            self.blocks.non_air[section] += 1;
+        } else if !old_air && new_air {
+            self.blocks.non_air[section] -= 1;
+        }
+        Ok(old)
+    }
+    pub fn update_heightmap(
+        &mut self,
+        kind: HeightmapType,
+        x: i32,
+        y: i32,
+        z: i32,
+        state: BlockStateId,
+    ) -> Result<bool, TerrainError> {
+        if self.blocks.registry.state(state).is_none() {
+            return Err(TerrainError::InvalidState);
+        }
+        self.ensure_heightmap(kind);
+        let state = self.blocks.properties.heightmap_state(state);
+        Ok(self.heightmaps[kind as usize]
+            .as_mut()
+            .unwrap()
+            .update(&self.blocks, x, y, z, state)?)
+    }
+    pub fn prime_heightmaps(&mut self, kinds: &[HeightmapType]) -> Result<(), TerrainError> {
+        let mut order = Vec::new();
+        for &kind in kinds {
+            self.ensure_heightmap(kind);
+            if !order.contains(&(kind as usize)) {
+                order.push(kind as usize);
+            }
+        }
+        // Split references preserve the supplied set's iteration order.
+        let mut maps: Vec<_> = self
+            .heightmaps
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, map)| {
+                order
+                    .iter()
+                    .position(|&key| key == i)
+                    .map(|position| (position, map.as_mut().unwrap()))
+            })
+            .collect();
+        maps.sort_by_key(|(position, _)| *position);
+        Heightmap::prime(
+            &self.blocks,
+            &mut maps.into_iter().map(|(_, map)| map).collect::<Vec<_>>(),
+        )?;
+        Ok(())
+    }
+    pub fn set_heightmap_raw(
+        &mut self,
+        kind: HeightmapType,
+        words: &[u64],
+    ) -> Result<(), TerrainError> {
+        self.ensure_heightmap(kind);
+        self.heightmaps[kind as usize]
+            .as_mut()
+            .unwrap()
+            .set_raw_data(&self.blocks, words)?;
+        Ok(())
+    }
+    /// Preserves duplicates and insertion order, as ProtoChunk does.
+    pub fn mark_postprocessing(&mut self, x: i32, y: i32, z: i32) {
+        if let Some(section) = self.blocks.section_index(y) {
+            self.postprocessing[section]
+                .push(((x & 15) | ((y & 15) << 4) | ((z & 15) << 8)) as u16);
+        }
+    }
+}
+
+/// Evaluate final density in bulk before writes, then visit Z/X/descending Y.
+/// The aquifer and final density must share this already prepared sampler context.
+/// Failures retain earlier writes and aquifer/cache state; there is no rollback.
+/// Regular gameplay only: developer preliminary-surface markers are not applied.
+pub fn fill_noise<B: TerrainBlockStates>(
+    chunk: &mut TerrainChunk<'_, B>,
+    volume: DensityVolume,
+    final_density: &dyn DensitySampler,
+    context: &mut SamplerContext,
+    aquifer: &mut (impl TerrainAquifer + ?Sized),
+    default_block: BlockStateId,
+) -> Result<(), TerrainError> {
+    let [sx, sy, sz] = volume.sizes();
+    let [bx, by, bz] = volume.minimum();
+    if sx != 16
+        || sz != 16
+        || volume.steps() != [1; 3]
+        || bx != chunk.position.x.wrapping_shl(4)
+        || bz != chunk.position.z.wrapping_shl(4)
+        || by < chunk.min_y()
+        || i64::from(by) + sy as i64 > i64::from(chunk.min_y()) + i64::from(chunk.height())
+        || chunk.blocks.registry.state(default_block).is_none()
+    {
+        return Err(TerrainError::InvalidVolume);
+    }
+    chunk.ensure_heightmap(HeightmapType::OceanFloorWg);
+    chunk.ensure_heightmap(HeightmapType::WorldSurfaceWg);
+    let mut density = vec![0.; volume.size()];
+    final_density.sample_volume(context, &mut density, volume)?;
+    for z in 0..sz {
+        let world_z = bz.wrapping_add(z as i32);
+        for x in 0..sx {
+            let world_x = bx.wrapping_add(x as i32);
+            for y in (0..sy).rev() {
+                let world_y = by.wrapping_add(y as i32);
+                let value = density[volume.index([x, y, z]).expect("valid density coordinates")];
+                let state = aquifer
+                    .compute_substance(context, [world_x, world_y, world_z], f64::from(value))?
+                    .unwrap_or(default_block);
+                if state == chunk.blocks.air {
+                    continue;
+                }
+                chunk.set_block_raw(x as i32, world_y, z as i32, state)?;
+                chunk.update_heightmap(
+                    HeightmapType::OceanFloorWg,
+                    x as i32,
+                    world_y,
+                    z as i32,
+                    state,
+                )?;
+                chunk.update_heightmap(
+                    HeightmapType::WorldSurfaceWg,
+                    x as i32,
+                    world_y,
+                    z as i32,
+                    state,
+                )?;
+                if aquifer.should_schedule_fluid_update()
+                    && chunk.blocks.properties.heightmap_state(state).has_fluid()
+                {
+                    chunk.mark_postprocessing(world_x, world_y, world_z);
+                }
+            }
+        }
+    }
+    Ok(())
+}

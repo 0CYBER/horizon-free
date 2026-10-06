@@ -5,7 +5,7 @@ Version 0.2.0 targets Minecraft 26.3 / Fabric 0.19.5 / Java 25. This is an initi
 ## Local checks
 
 - Official client runs through a Wayland virtual screen in built-in limited demo mode, without Microsoft credentials. Normal Mac play uses licensed Prism sign-in.
-- Balanced stack (Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, Distant Horizons, Fabric API, Horizon Lab) reaches the menu, loads the demo world, logs in locally, renders terrain, and saves/quits.
+- Balanced stack (Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, Distant Horizons, Fabric API, Horizon) reaches the menu, loads the demo world, logs in locally, renders terrain, and saves/quits.
 - DH generates and accepts the current configuration schema: 128-chunk LOD radius, two background threads at 0.5 run-time ratio, priority 3. No old-version guessed config keys.
 - A missing desktop AWT component in the local headless JRE initially caused a DH cloud-texture error. Installing the complete Java 25 runtime resolved it; this was an environment issue, not a packaged mod change.
 - Native libraries are chosen by OS and architecture, including ARM64 selection when the official manifest has OS-only rules. Builds use portable `/` ZIP paths on Windows too.
@@ -167,4 +167,4 @@ terrain generation and steady-state rendering are separate workloads.
 
 ## Release content
 
-Packs embed only the original MIT Horizon Lab JAR and config. Mod/game/library downloads retain upstream licenses and are checked against pinned hashes. No game JAR, class, decompiled source, asset, world or credential is committed or uploaded in a starter. The narrow publication allowance is for original Java under `dev/horizonlab`, and the built JAR checks its emitted class namespace.
+Packs embed only the original MIT Horizon JAR and config. Mod/game/library downloads retain upstream licenses and are checked against pinned hashes. No game JAR, class, decompiled source, asset, world or credential is committed or uploaded in a starter. The narrow publication allowance is for original Java under `dev/horizonlab`, and the built JAR checks its emitted class namespace.

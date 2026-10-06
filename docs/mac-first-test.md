@@ -7,7 +7,7 @@ The Linux software-rendering observations do not predict an M2 speedup.
 
 ## Import after installing Prism
 
-1. Download [horizon-mac-starter-0.21.0.zip](https://github.com/ludovic111/minecraft-optimization-lab/releases/download/v0.21.0/horizon-mac-starter-0.21.0.zip)
+1. Download [horizon-mac-starter-0.21.0.zip](https://github.com/ludovic111/Horizon/releases/download/v0.21.0/horizon-mac-starter-0.21.0.zip)
    and extract it in Finder.
 2. In Prism, choose **Add Instance > Import**, then select
    `horizon-m2-balanced-0.21.0.mrpack` from the extracted folder. The individual

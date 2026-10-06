@@ -1,6 +1,6 @@
 # Measuring resident process memory
 
-Horizon Lab 0.6.0 records process RSS alongside JVM heap and nonheap pools. RSS
+Horizon 0.6.0 records process RSS alongside JVM heap and nonheap pools. RSS
 counts resident pages belonging to the Minecraft process, including native
 allocations and mapped pages. It helps detect cases where reducing heap use
 merely moves memory elsewhere. It is not unique physical-memory ownership or

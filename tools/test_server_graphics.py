@@ -25,7 +25,7 @@ def main():
     fixture = build_mod.build_integration_fixture('server-graphics',
         'dev.horizonlab.metrics.ServerGraphicsIntegration', fixture_dependencies={})
     version = build_pack.read_lock()['pack_version']
-    mod = root / 'dist' / f'horizon-lab-{version}.jar'
+    mod = root / 'dist' / f'horizon-{version}.jar'
     digest = hashlib.sha256(mod.read_bytes()).hexdigest()
     instance = root / '.local/runtime' / ('server-graphics-' + (args.backend or 'default'))
     if instance.exists():

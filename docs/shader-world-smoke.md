@@ -54,7 +54,7 @@ snapshot. Waiting state contains only six booleans and a tick count; arbitrary
 screen names, messages and paths are excluded. An unsuccessful research run
 remains unsuccessful. Playable shader/backend defaults remain unchanged.
 
-Diagnostic repeat [37199837867](https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37199837867)
+Diagnostic repeat [37199837867](https://github.com/ludovic111/Horizon/actions/runs/37199837867)
 uses the richer diagnostics. Both cases again hit the 240-second timeout and
 require bounded termination. OpenGL initializes its device and loads a world
 with a player, no overlay, an active window and no pause; a screen remains

@@ -27,7 +27,9 @@ def install_original_mod(source, mod_dir, filename=None):
     """Replace our own previous versions, retaining backups outside Fabric's mod scan."""
     mod_dir.mkdir(parents=True, exist_ok=True)
     filename = filename or source.name
-    for old in mod_dir.glob("horizon-lab-*.jar"):
+    # Retire both current and pre-rebrand filenames to avoid duplicate mod IDs.
+    candidates = sorted({*mod_dir.glob("horizon-*.jar"), *mod_dir.glob("horizon-lab-*.jar")})
+    for old in candidates:
         if old.name == filename:
             continue
         with zipfile.ZipFile(old) as archive:

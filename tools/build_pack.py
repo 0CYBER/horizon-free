@@ -82,7 +82,7 @@ def options(profile):
 
 def overrides(profile_name, mod_bytes):
     profile = PROFILES[profile_name]
-    files = {f"mods/horizon-lab-{read_lock()['pack_version']}.jar": mod_bytes,
+    files = {f"mods/horizon-{read_lock()['pack_version']}.jar": mod_bytes,
              "config/horizon-profile.txt": (profile_name + "\n").encode(),
              "options.txt": options(profile).encode()}
     experiment = any(profile.get(key, False) for key in ["adaptive", "pacing", "queue_wait", "dispatch_retry", "tick_dedup", "culling_empty", "culling_rays", "terrain_position", "quad_reuse"])
@@ -138,7 +138,7 @@ def build(profile_name, mod_jar):
         files.append({"path": mod_path(entry), "hashes": entry["hashes"], "downloads": [entry["url"]],
                       "fileSize": entry["size"], "env": {"client": "required", "server": "unsupported"}})
     index = {"formatVersion": 1, "game": "minecraft", "versionId": lock["pack_version"],
-             "name": "Horizon Lab — " + profile["title"],
+             "name": "Horizon — " + profile["title"],
              "summary": "Vanilla mechanics, pinned performance mods, measured frame and tick timings.",
              "files": files, "dependencies": {"minecraft": lock["minecraft"], "fabric-loader": lock["fabric_loader"]}}
     entries = {"modrinth.index.json": json.dumps(index, indent=2).encode()}
@@ -161,7 +161,7 @@ def prepare_instance(profile_name, destination, mod_jar):
         target = destination / mod_path(entry)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-    runtime.install_original_mod(mod_jar, destination / "mods", f"horizon-lab-{lock['pack_version']}.jar")
+    runtime.install_original_mod(mod_jar, destination / "mods", f"horizon-{lock['pack_version']}.jar")
     for name, data in overrides(profile_name, mod_jar.read_bytes()).items():
         if name.startswith("mods/"):
             continue
@@ -175,7 +175,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=PROFILES)
     parser.add_argument("--instance", type=Path, help="Local demo smoke-test directory (no normal account launch)")
-    parser.add_argument("--mod", type=Path, default=ROOT / "dist" / f"horizon-lab-{read_lock()['pack_version']}.jar")
+    parser.add_argument("--mod", type=Path, default=ROOT / "dist" / f"horizon-{read_lock()['pack_version']}.jar")
     args = parser.parse_args()
     if not args.mod.exists():
         parser.error("Build the original mod first: python3 tools/build_mod.py")

@@ -15,7 +15,7 @@ ROOT = build_pack.ROOT
 def main():
     lock = build_pack.read_lock()
     version = lock["pack_version"]
-    mod = ROOT / "dist" / f"horizon-lab-{version}.jar"
+    mod = ROOT / "dist" / f"horizon-{version}.jar"
     if not mod.exists():
         raise FileNotFoundError("Run tools/build_mod.py first")
     packs = [build_pack.build(profile, mod) for profile in build_pack.PROFILES]

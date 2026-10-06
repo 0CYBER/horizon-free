@@ -1,0 +1,333 @@
+//! Registry-bound block-writing features and their state codec bindings.
+use super::{
+    DecodeError, Object,
+    density::identifier,
+    feature::FeatureWorld,
+    int_range,
+    placement::{PlacementContext, PlacementQueryError},
+    required,
+};
+use crate::block_properties::{BlockPropertiesRegistry, BlockProperty, BoundBlockProperty};
+use crate::registry::{BlockRegistry, BlockStateId, BlockStateJsonCodec};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
+
+pub struct FeatureBlockBindings<'r> {
+    registry: &'r BlockRegistry,
+    physical_properties: Option<[BoundBlockProperty; 4]>,
+    biomes: Option<Arc<super::biome_predicate::BiomePredicateBindings>>,
+    fluids: super::fluid_predicate::FluidPredicateBindings,
+    pub(crate) codec: BlockStateJsonCodec<'r>,
+    pub(crate) blocks: BTreeMap<String, Arc<BTreeSet<BlockStateId>>>,
+    pub(crate) tags: BTreeMap<String, Arc<BTreeSet<BlockStateId>>>,
+    pub(crate) air: [BlockStateId; 3],
+}
+impl<'r> FeatureBlockBindings<'r> {
+    pub fn with_block_properties(
+        mut self,
+        properties: &BlockPropertiesRegistry<'r>,
+    ) -> Result<Self, DecodeError> {
+        if !std::ptr::eq(self.registry, properties.registry()) {
+            return Err(DecodeError::Field(
+                "block properties use a different registry",
+            ));
+        }
+        self.physical_properties = Some([
+            properties.bind(BlockProperty::Solid),
+            properties.bind(BlockProperty::Replaceable),
+            properties.bind(BlockProperty::Liquid),
+            properties.bind(BlockProperty::SolidRender),
+        ]);
+        Ok(self)
+    }
+    pub fn with_biomes(
+        mut self,
+        biomes: Arc<super::biome_predicate::BiomePredicateBindings>,
+    ) -> Self {
+        self.biomes = Some(biomes);
+        self
+    }
+
+    pub fn with_fluid_tags(
+        mut self,
+        tags: &BTreeMap<String, Vec<String>>,
+    ) -> Result<Self, DecodeError> {
+        self.fluids = self.fluids.with_resolved_tags(tags)?;
+        Ok(self)
+    }
+    pub fn new(
+        registry: &'r BlockRegistry,
+        integers: BTreeSet<(String, String)>,
+    ) -> Result<Self, DecodeError> {
+        Self::with_tags(registry, integers, &BTreeMap::new())
+    }
+    /// Bind an immutable snapshot of already-resolved block tags.
+    pub fn with_tags(
+        registry: &'r BlockRegistry,
+        integers: BTreeSet<(String, String)>,
+        tags: &BTreeMap<String, Vec<String>>,
+    ) -> Result<Self, DecodeError> {
+        let codec = BlockStateJsonCodec::new(registry, integers)
+            .map_err(|e| DecodeError::Registry(e.to_string()))?;
+        let mut blocks = BTreeMap::<String, BTreeSet<BlockStateId>>::new();
+        for id in 0..registry.len() {
+            let id = BlockStateId(id as u32);
+            blocks
+                .entry(registry.state(id).unwrap().name.clone())
+                .or_default()
+                .insert(id);
+        }
+        let mut bound_tags = BTreeMap::new();
+        for (name, entries) in tags {
+            let mut states = BTreeSet::new();
+            for name in entries {
+                states.extend(
+                    blocks
+                        .get(&identifier(name)?)
+                        .ok_or_else(|| DecodeError::Registry(format!("unknown block {name}")))?,
+                );
+            }
+            if bound_tags
+                .insert(super::tags::identifier(name)?, Arc::new(states))
+                .is_some()
+            {
+                return Err(DecodeError::Field("duplicate block tag"));
+            }
+        }
+        let get = |name| {
+            registry
+                .default_state(name)
+                .ok_or_else(|| DecodeError::Registry(format!("unknown air block {name}")))
+        };
+        Ok(Self {
+            registry,
+            codec,
+            biomes: None,
+            physical_properties: None,
+            fluids: super::fluid_predicate::FluidPredicateBindings::new(registry)?,
+            blocks: blocks
+                .into_iter()
+                .map(|(name, states)| (name, Arc::new(states)))
+                .collect(),
+            tags: bound_tags,
+            air: [
+                get("minecraft:air")?,
+                get("minecraft:cave_air")?,
+                get("minecraft:void_air")?,
+            ],
+        })
+    }
+}
+impl super::block_predicate::PredicateBlockResolver for FeatureBlockBindings<'_> {
+    fn predicate_state(&self, json: &str) -> Result<BlockStateId, DecodeError> {
+        self.codec
+            .decode(json, false)
+            .map_err(|e| DecodeError::Registry(e.to_string()))
+    }
+    fn predicate_property(
+        &self,
+        property: BlockProperty,
+    ) -> Result<BoundBlockProperty, DecodeError> {
+        let values = self
+            .physical_properties
+            .as_ref()
+            .ok_or(DecodeError::Field("predicate block property registry"))?;
+        Ok(values[match property {
+            BlockProperty::Solid => 0,
+            BlockProperty::Replaceable => 1,
+            BlockProperty::Liquid => 2,
+            BlockProperty::SolidRender => 3,
+        }]
+        .clone())
+    }
+    fn predicate_biome_set(
+        &self,
+        json: &str,
+    ) -> Result<Arc<BTreeSet<super::biome::BiomeId>>, DecodeError> {
+        self.biomes
+            .as_ref()
+            .ok_or(DecodeError::Field("predicate biome registry"))?
+            .resolve(json)
+    }
+
+    fn predicate_fluid_set(
+        &self,
+        json: &str,
+    ) -> Result<super::fluid_predicate::BoundFluidSet, DecodeError> {
+        self.fluids.resolve(json)
+    }
+    fn predicate_block_set(&self, json: &str) -> Result<Arc<BTreeSet<BlockStateId>>, DecodeError> {
+        if let Ok(name) = serde_json::from_str::<String>(json) {
+            if let Some(tag) = name.strip_prefix('#') {
+                return self
+                    .tags
+                    .get(&super::tags::identifier(tag)?)
+                    .cloned()
+                    .ok_or_else(|| {
+                        DecodeError::Registry(format!("unknown predicate block tag {tag}"))
+                    });
+            }
+            return self
+                .blocks
+                .get(&identifier(&name)?)
+                .cloned()
+                .ok_or_else(|| DecodeError::Registry(format!("unknown predicate block {name}")));
+        }
+        let names: Vec<String> = serde_json::from_str(json)?;
+        if names.len() > 8192 {
+            return Err(DecodeError::Field("predicate block list size"));
+        }
+        let mut states = BTreeSet::new();
+        for name in names {
+            states.extend(
+                self.blocks
+                    .get(&identifier(&name)?)
+                    .ok_or_else(|| {
+                        DecodeError::Registry(format!("unknown predicate block {name}"))
+                    })?
+                    .iter()
+                    .copied(),
+            );
+        }
+        Ok(Arc::new(states))
+    }
+}
+#[derive(Clone, Debug)]
+pub struct FillLayerFeature {
+    height: i32,
+    state: BlockStateId,
+    air: [BlockStateId; 3],
+}
+#[derive(Debug)]
+pub enum BlockFeatureError<E> {
+    World(E),
+    Query(PlacementQueryError),
+}
+impl<E: std::fmt::Display> std::fmt::Display for BlockFeatureError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::World(e) => e.fmt(f),
+            Self::Query(e) => e.fmt(f),
+        }
+    }
+}
+impl<E: std::error::Error + 'static> std::error::Error for BlockFeatureError<E> {}
+impl FillLayerFeature {
+    pub fn from_json(json: &str, bindings: &FeatureBlockBindings<'_>) -> Result<Self, DecodeError> {
+        let object: Object = serde_json::from_str(json)?;
+        let kind = identifier(&serde_json::from_str::<String>(
+            required(&object, "type")?.get(),
+        )?)?;
+        if kind != "minecraft:fill_layer" {
+            return Err(DecodeError::Field("fill-layer feature type"));
+        }
+        Ok(Self {
+            height: int_range(required(&object, "height")?, "fill-layer height", 0, 4064)?,
+            state: bindings
+                .codec
+                .decode(required(&object, "state")?.get(), false)
+                .map_err(|e| DecodeError::Registry(e.to_string()))?,
+            air: bindings.air,
+        })
+    }
+    pub fn place<W: FeatureWorld + PlacementContext>(
+        &self,
+        world: &mut W,
+        origin: [i32; 3],
+    ) -> Result<bool, BlockFeatureError<W::Error>> {
+        for dx in 0..16 {
+            for dz in 0..16 {
+                // Vanilla re-queries the world minimum for each column.
+                let y = world
+                    .min_y()
+                    .map_err(BlockFeatureError::Query)?
+                    .wrapping_add(self.height);
+                let position = [origin[0].wrapping_add(dx), y, origin[2].wrapping_add(dz)];
+                let state = world.block(position).map_err(BlockFeatureError::World)?;
+                if self.air.contains(&state) {
+                    world
+                        .set_block(position, self.state, 2)
+                        .map_err(BlockFeatureError::World)?;
+                }
+            }
+        }
+        Ok(true)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ReplaceBlockFeature {
+    targets: Vec<(super::rule_test::RuleTest, BlockStateId)>,
+}
+impl ReplaceBlockFeature {
+    pub fn from_json(json: &str, bindings: &FeatureBlockBindings<'_>) -> Result<Self, DecodeError> {
+        Self::decode(json, bindings, 0, &mut 65536)
+    }
+    pub(crate) fn decode(
+        json: &str,
+        bindings: &FeatureBlockBindings<'_>,
+        depth: usize,
+        remaining: &mut usize,
+    ) -> Result<Self, DecodeError> {
+        let object: Object = serde_json::from_str(json)?;
+        let kind = identifier(&serde_json::from_str::<String>(
+            required(&object, "type")?.get(),
+        )?)?;
+        if kind != "minecraft:replace_single_block" {
+            return Err(DecodeError::Field("replace-block feature type"));
+        }
+        let targets = decode_targets(&object, bindings, depth, remaining)?;
+        Ok(Self { targets })
+    }
+    pub fn place<W: FeatureWorld>(
+        &self,
+        world: &mut W,
+        random: &mut impl horizon_core::random::RandomSource,
+        origin: [i32; 3],
+    ) -> Result<bool, BlockFeatureError<W::Error>> {
+        for (rule, state) in &self.targets {
+            let current = world.block(origin).map_err(BlockFeatureError::World)?;
+            if rule.test(current, origin, random) {
+                world
+                    .set_block(origin, *state, 2)
+                    .map_err(BlockFeatureError::World)?;
+                break;
+            }
+        }
+        Ok(true)
+    }
+}
+
+pub(crate) type BlockReplacements = Vec<(super::rule_test::RuleTest, BlockStateId)>;
+pub(crate) fn decode_targets(
+    object: &Object,
+    bindings: &FeatureBlockBindings<'_>,
+    depth: usize,
+    remaining: &mut usize,
+) -> Result<BlockReplacements, DecodeError> {
+    let values: Vec<Box<serde_json::value::RawValue>> =
+        serde_json::from_str(required(object, "targets")?.get())?;
+    if values.len() > 8192 {
+        return Err(DecodeError::Field("replacement targets"));
+    }
+    values
+        .iter()
+        .map(|value| {
+            let object: Object = serde_json::from_str(value.get())?;
+            Ok((
+                super::rule_test::RuleTest::decode(
+                    required(&object, "target")?.get(),
+                    bindings,
+                    depth + 1,
+                    remaining,
+                )?,
+                bindings
+                    .codec
+                    .decode(required(&object, "state")?.get(), false)
+                    .map_err(|e| DecodeError::Registry(e.to_string()))?,
+            ))
+        })
+        .collect::<Result<_, DecodeError>>()
+}

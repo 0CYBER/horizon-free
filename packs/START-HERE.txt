@@ -1,4 +1,4 @@
-HORIZON LAB @PACK_VERSION@ — playable optimization experiments
+HORIZON @PACK_VERSION@ — playable optimization experiments
 
 YOUR MAC
 1. Extract this ZIP. Double-click Mac-Start.command. If macOS asks, use Open
@@ -179,7 +179,7 @@ Only original project binaries are embedded. Mods, the game and assets download
 from their publishers with pinned hashes. No decompiled Minecraft is distributed.
 
 Source, build commands and measured validation:
-https://github.com/ludovic111/minecraft-optimization-lab
+https://github.com/ludovic111/Horizon
 
 TERRAIN / SHADER COMPARISONS
 Version 0.12 records actual DH radius/quality, worker count/duty cycle, Iris state

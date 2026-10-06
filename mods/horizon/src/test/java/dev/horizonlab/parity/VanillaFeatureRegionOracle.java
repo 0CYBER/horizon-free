@@ -1,0 +1,97 @@
+package dev.horizonlab.parity;
+import com.google.gson.*;
+import com.mojang.serialization.JsonOps;
+import java.io.*;
+import java.lang.reflect.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.*;
+import net.minecraft.core.*;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.*;
+import net.minecraft.world.level.biome.*;
+import net.minecraft.world.level.block.*;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.*;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.levelgen.*;
+import net.minecraft.world.level.levelgen.feature.Feature;
+import net.minecraft.world.level.levelgen.placement.*;
+
+/** Native feature placement into resident ProtoChunks through a world transport. */
+public final class VanillaFeatureRegionOracle {
+    private static ProtoChunk chunk(Map<ChunkPos,ProtoChunk> chunks,int x,int z) {
+        var chunk=chunks.get(new ChunkPos(x>>4,z>>4));if(chunk==null)throw new IllegalArgumentException("missing region chunk");return chunk;
+    }
+    public static void main(String[] args) throws Exception {
+        if(args[0].equals("export")){VanillaHeightmapOracle.main(args);return;}
+        net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();
+        Path dir=Path.of(args[1]);
+        Holder<Biome> biome=Holder.Reference.createStandAlone(new HolderOwner<Biome>(){},Biomes.PLAINS);
+        var ids=new IdMapper<Holder<Biome>>();ids.add(biome);
+        var factory=new PalettedContainerFactory(Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY),Blocks.AIR.defaultBlockState(),null,Strategy.createForBiomes(ids),biome,null);
+        VanillaHeightmapOracle.bindTags(JsonParser.parseString(Files.readString(dir.resolve("tags.json"))).getAsJsonObject());
+        var contextMethod=VanillaPlacementOracle.class.getDeclaredMethod("context",JsonObject.class);contextMethod.setAccessible(true);
+        var bounds=new JsonObject();bounds.add("context",JsonParser.parseString("[-64,64,0]"));
+        var generator=((PlacementContext)contextMethod.invoke(null,bounds)).generator();
+        try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt"),StandardCharsets.UTF_8))) {
+            for(var line:Files.readAllLines(dir.resolve("inputs.txt"))) {
+                var f=JsonParser.parseString(line).getAsJsonObject();long seed=f.get("seed").getAsLong();
+                var features=new ArrayList<Feature>();
+                for(var value:f.getAsJsonArray("features"))features.add(Feature.DIRECT_CODEC.parse(JsonOps.INSTANCE,value).getOrThrow());
+                RandomSource random=f.get("legacy").getAsBoolean()?new LegacyRandomSource(seed):new XoroshiroRandomSource(seed);
+                if(f.get("worldgen").getAsBoolean())random=new WorldgenRandom(random);
+                var chunks=new TreeMap<ChunkPos,ProtoChunk>(Comparator.<ChunkPos>comparingInt(p->p.x()).thenComparingInt(p->p.z()));
+                for(int cx=-1;cx<=1;cx++)for(int cz=-1;cz<=1;cz++) {
+                    var cp=new ChunkPos(cx,cz);var chunk=new ProtoChunk(cp,UpgradeData.EMPTY,LevelHeightAccessor.create(-64,64),factory,null);
+                    chunk.setPersistedStatus(f.get("stage").getAsString().equals("terrain")?ChunkStatus.TERRAIN:ChunkStatus.EMPTY);
+                    for(int x=0;x<16;x++)for(int z=0;z<16;z++) {
+                        chunk.setBlockState(new BlockPos((cx<<4)+x,-56,(cz<<4)+z),Blocks.STONE.defaultBlockState(),3);
+                        if((x+z)%3!=0)chunk.setBlockState(new BlockPos((cx<<4)+x,-48,(cz<<4)+z),Blocks.DIRT.defaultBlockState(),3);
+                    }
+                    chunks.put(cp,chunk);
+                }
+                int[] calls={0};int fail=f.get("fail").getAsInt(),reject=f.get("reject").getAsInt();
+                var world=(WorldGenLevel)Proxy.newProxyInstance(WorldGenLevel.class.getClassLoader(),new Class<?>[]{WorldGenLevel.class},(proxy,method,values)->switch(method.getName()) {
+                    case "getMinY"->-64;
+                    case "getSeaLevel"->0;
+                    case "getHeight"->{
+                        if(values==null||values.length==0)yield 64;
+                        var kind=(Heightmap.Types)values[0];int x=(Integer)values[1],z=(Integer)values[2];yield chunk(chunks,x,z).getHeight(kind,x&15,z&15)+1;
+                    }
+                    case "getMaxY","isInsideBuildHeight","isOutsideBuildHeight","setBlockAndUpdate"->InvocationHandler.invokeDefault(proxy,method,values);
+                    case "getBlockState"->{var p=(BlockPos)values[0];yield chunk(chunks,p.getX(),p.getZ()).getBlockState(p);}
+                    case "setBlock"->{
+                        var p=(BlockPos)values[0];var state=(BlockState)values[1];int flags=(Integer)values[2];
+                        out.println("write "+p.getX()+" "+p.getY()+" "+p.getZ()+" "+Block.getId(state)+" "+flags);
+                        int call=calls[0]++;if(call==fail)throw new IllegalArgumentException("injected write failure");
+                        boolean result=reject==0||call%reject!=0;
+                        if(result)chunk(chunks,p.getX(),p.getZ()).setBlockState(p,state,flags);
+                        out.println("written "+result);yield result;
+                    }
+                    default->throw new AssertionError("unexpected world method "+method);
+                });
+                var modifiers=new ArrayList<PlacementModifier>();for(var value:f.getAsJsonArray("placement"))modifiers.add(PlacementModifier.CODEC.parse(JsonOps.INSTANCE,value).getOrThrow());
+                var placer=new FeaturePlacer(world,generator);
+                for(int repeat=0;repeat<2;repeat++) {
+                    for(var feature:features) {
+                        calls[0]=0;
+                        try {out.println("place "+placer.place(new PlacedFeature(Holder.direct(feature),modifiers),random,new BlockPos(15,-40,15)));}catch(RuntimeException error){out.println("place error");}
+                        out.println("next "+random.nextLong());
+                        for(int[] p:new int[][]{{0,0},{15,15},{16,16},{-1,-1}})for(var kind:Heightmap.Types.values())out.println("height "+kind.name()+" "+p[0]+" "+p[1]+" "+(chunk(chunks,p[0],p[1]).getHeight(kind,p[0]&15,p[1]&15)+1));
+                    }
+                    out.println("repeat "+repeat);
+                }
+                for(var entry:chunks.entrySet()) {
+                    var cp=entry.getKey();var chunk=entry.getValue();out.println("chunk "+cp.x()+" "+cp.z());
+                    for(var kind:Heightmap.Types.values()) {
+                        if(chunk.hasPrimedHeightmap(kind)){out.println("map "+kind.name());for(long word:chunk.getOrCreateHeightmapUnprimed(kind).getRawData())out.println(Long.toUnsignedString(word,16));}
+                        else out.println("missing "+kind.name());
+                    }
+                    for(int i=0;i<4;i++){out.println("section "+i);var section=chunk.getSection(i);for(int y=0;y<16;y++)for(int z=0;z<16;z++)for(int x=0;x<16;x++)out.println(Block.getId(section.getBlockState(x,y,z)));}
+                }
+                out.println("tail "+random.nextLong());
+            }
+        }
+    }
+}

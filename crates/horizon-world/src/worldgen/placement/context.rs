@@ -1,0 +1,117 @@
+//! Query interface for placement against a generated world.
+use crate::worldgen::feature_sort::FeatureIdentity;
+use crate::{heightmap::HeightmapType, worldgen::anchor::WorldGenerationContext};
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlacementQueryError {
+    Unavailable,
+    WorkLimit,
+    Failed(String),
+}
+impl std::fmt::Display for PlacementQueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WorkLimit => f.write_str("predicate work limit exceeded"),
+            Self::Unavailable => f.write_str("placement world query is unavailable"),
+            Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+impl std::error::Error for PlacementQueryError {}
+/// Classification for layered placement: air states and exact WATER/LAVA blocks
+/// are empty; exact BEDROCK is excluded from ground; every other block is ground.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerBlock {
+    Empty,
+    Bedrock,
+    Ground,
+}
+pub trait PlacementContext {
+    /// Evaluate this candidate state's survival without placing it.
+    fn block_survives(
+        &mut self,
+        _state: crate::registry::BlockStateId,
+        _position: [i32; 3],
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    /// Read the block state and evaluate FULL support on the requested face.
+    fn face_sturdy(
+        &mut self,
+        _position: [i32; 3],
+        _direction: horizon_core::geometry::Direction,
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    /// Test entity obstruction of a unit-block shape with no excluded entity.
+    fn unobstructed_block(&mut self, _position: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    fn biome_identity(
+        &mut self,
+        _position: [i32; 3],
+    ) -> Result<crate::worldgen::biome::BiomeId, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    fn top_feature(&self) -> Option<FeatureIdentity> {
+        None
+    }
+    /// Resolve the biome at this position and test its generation settings for
+    /// the supplied placed feature. Registry equality/ownership belongs here.
+    fn biome_allows_feature(
+        &mut self,
+        _position: [i32; 3],
+        _feature: FeatureIdentity,
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    fn block_state(
+        &mut self,
+        _position: [i32; 3],
+    ) -> Result<crate::registry::BlockStateId, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    /// Read the state at the requested position and test its block-tag identity.
+    fn block_matches_tag(
+        &mut self,
+        _position: [i32; 3],
+        _tag: &str,
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    fn max_y(&mut self) -> Result<i32, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    fn inside_build_height(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        Ok(position[1] >= self.min_y()? && position[1] <= self.max_y()?)
+    }
+    fn outside_build_height(&mut self, y: i32) -> Result<bool, PlacementQueryError> {
+        Ok(y < self.min_y()? || y > self.max_y()?)
+    }
+    fn layer_block(&mut self, _position: [i32; 3]) -> Result<LayerBlock, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    fn generation(&self) -> WorldGenerationContext;
+    /// Recreate the generation bounds for a block-predicate invocation. World
+    /// adapters may perform fallible level/generator queries here; ordinary
+    /// placement retains its already-created immutable generation context.
+    fn predicate_generation(&mut self) -> Result<WorldGenerationContext, PlacementQueryError> {
+        Ok(self.generation())
+    }
+    /// World minimum, which can differ from the generator's minimum.
+    fn min_y(&mut self) -> Result<i32, PlacementQueryError>;
+    fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Result<i32, PlacementQueryError>;
+}
+impl PlacementContext for WorldGenerationContext {
+    fn max_y(&mut self) -> Result<i32, PlacementQueryError> {
+        Ok(self.min_y.wrapping_add(self.height).wrapping_sub(1))
+    }
+    fn generation(&self) -> WorldGenerationContext {
+        *self
+    }
+    fn min_y(&mut self) -> Result<i32, PlacementQueryError> {
+        Ok(self.min_y)
+    }
+    fn height(&mut self, _: HeightmapType, _: i32, _: i32) -> Result<i32, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+}

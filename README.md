@@ -1,12 +1,12 @@
-# Minecraft Optimization Lab / Horizon Lab
+# Horizon
 
-Client-first performance research for Minecraft Java **26.3**, preserving vanilla gameplay rules. Any language or renderer may be used when measured gains justify it. Not affiliated with Mojang or Microsoft.
+Horizon is a Rust rewrite effort targeting one-to-one vanilla gameplay parity with Minecraft Java **26.3**, alongside client performance research. The Rust implementation has core primitives and world-data storage verified against pinned vanilla classes. It does not yet run a playable game. Existing playable downloads use Java performance packs. Not affiliated with Mojang or Microsoft.
 
 **First playable release:** pinned Java performance packs, distant terrain, an original frame/tick recorder, and Mac/client/server starter downloads. The M2 Pro/16 GB Mac is the first testing target. A Rust rewrite or custom renderer has not been completed; no M2 FPS improvement has been measured yet.
 
 ## Play on your Mac
 
-Download **horizon-mac-starter-0.21.0.zip** from [Releases](https://github.com/ludovic111/minecraft-optimization-lab/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
+Download **horizon-mac-starter-0.21.0.zip** from [Releases](https://github.com/ludovic111/Horizon/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
 
 Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on your 16 GB M2 Pro. Prism can download Java automatically. Start at 1280×800 or 1920×1200; full Retina resolution is a larger GPU workload. [START-HERE.txt](packs/START-HERE.txt) has details. The same `.mrpack` files import into Prism on Windows and Linux.
 
@@ -180,8 +180,8 @@ this launcher correction is not a measured graphics performance improvement.
 Game JARs, decompiled Java, libraries, inventories, worlds and logs live **inside this checkout** under gitignored **`.local/`**. No game code is in Git history or release downloads. Fresh clones regenerate the inspection workspace from official downloads; Microsoft credentials are not needed for this step.
 
 ```sh
-git clone https://github.com/ludovic111/minecraft-optimization-lab.git
-cd minecraft-optimization-lab
+git clone https://github.com/ludovic111/Horizon.git
+cd Horizon
 git config core.hooksPath .githooks
 python3 tools/lab.py prepare
 python3 tools/lab.py decompile
@@ -194,12 +194,69 @@ Class-file SourceFile metadata covers inner classes, which often share a source 
 
 ## Original Rust research
 
+The dependency-free `horizon-core` crate starts the Rust simulation foundation:
+integer block/chunk/section positions, legacy and xoroshiro seeded random streams and positional factories,
+padded palette-index storage, scheduled block/fluid tick queues, and double-precision
+bounding-box and voxel-grid collision geometry. Noise samplers, octave stacks and
+bulk density kernels provide the next world-generation foundation. Compiled
+density samplers add gradients, shifted and blended terrain noise, distance
+metrics and arithmetic evaluation.
+Differential runners compare selected
+operations with the checksum-pinned vanilla client and server bytecode.
+[Implemented scope, validation, and remaining rewrite work](docs/rust-parity.md).
+
+```sh
+python3 tools/test_rust_parity.py --prepare
+python3 tools/test_world_parity.py
+python3 tools/test_tick_parity.py
+python3 tools/test_geometry_parity.py
+python3 tools/test_collision_parity.py
+python3 tools/test_noise_parity.py
+python3 tools/test_density_parity.py
+```
+
+The core corpus checks 1,634,520 output lines per reference JAR, including
+signed boundaries, RNG rejection/state consumption and raw storage words.
+Passing it does not establish full gameplay parity or an FPS improvement.
+The separate [noise suite](docs/noise-generation.md) checks 26.3 Perlin/simplex,
+derivatives, density-volume accumulation, stack composition, normal-noise
+normalization and modern/legacy initialization against both reference JARs.
+The [density suite](docs/density-functions.md) checks compiled scalar and bulk
+evaluation, including nested samplers, their different arithmetic paths, and
+selected interval operations used for graph range analysis.
+
+`horizon-world` adds NBT, four region compression codecs, `.mca`/`.mcc`
+reading and export, saved palettes, a version-checked block-state registry,
+and packed resident block sections. The world-data suite checks Rust output
+with the actual vanilla NBT, region and block-state decoders on both JARs.
+It covers all 35,723 exported state IDs and a 100,000-edit section trace.
+[World-data commands and validation limits](docs/world-data.md).
+
+Scheduled ticks now support vanilla ordering, duplicate suppression, save/reload,
+chunk eligibility and callback mutations. The tick suite compares 97,776 output
+lines per reference JAR and checks saved block/fluid lists through vanilla codecs
+and region files. [Scheduler behavior and remaining integration](docs/scheduled-ticks.md).
+
+Voxel shapes preserve vanilla collision tolerances, greedy box ordering, ray faces,
+inside hits, and cube-versus-array cell lookup. A cached collision registry connects
+imported shapes to resident block sections while checking exact state identities.
+Movement helpers resolve supplied colliders and step-up candidates, including
+landing adjustment and the second collider query. Movement-path block visits
+preserve vanilla ordering, step indices and packed-position deduplication.
+Uncached states require block behavior; the entity-context overload also needs
+separate implementation. [Geometry and collision scope](docs/collision-geometry.md).
+
 ```sh
 cargo test --workspace
 cargo run --release --bin voxel-bench -- 100 > .local/voxel-benchmark.csv
 ```
 
 The dependency-free occupancy experiment compares scalar and bitset exposed-face counting for synthetic 16³ sections. It has no real mesh, material/AO/light work, neighboring-section context, JNI bridge or game integration. Speedups are kernel-only, not Minecraft FPS. [Research plan](docs/optimization-plan.md) describes profiling, improved Java baselines, native integration and behavior checks before expanding scope.
+
+Public branding and new mod downloads use **Horizon**. The existing Fabric mod
+ID and `dev.horizonlab` namespace remain stable for installed instances and
+measurement compatibility. The installer backs up both old `horizon-lab-*.jar`
+and new `horizon-*.jar` versions before installing an update.
 
 ## Validation and ownership
 

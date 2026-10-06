@@ -52,7 +52,7 @@ measurements yielded the same medians:
 | Plain `Object` | 16 | 8 |
 
 [Raw platform results](../benchmarks/object-headers-2026-10-03) come from
-[CI run 37153955462](https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37153955462).
+[CI run 37153955462](https://github.com/ludovic111/Horizon/actions/runs/37153955462).
 Each platform has nine measured batches per type/mode across three JVM forks.
 The hosted ARM Mac has three logical CPUs and is not the user's M2 Pro.
 

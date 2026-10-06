@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "minecraft": "26.3",
+  "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+  "java": "openjdk 25.0.4.1 2026-08-18",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "manifest_sha1": "4fe1aa1ef8da1cb95c5bad1fb98890ca56dd8ca3",
+  "commands": {
+    "position": 12375,
+    "legacy": 23,
+    "xoroshiro": 23,
+    "xoroshiro_state": 5,
+    "storage": 274
+  },
+  "inputs_sha256": "dbdebadd4b14ec57d198d22f15e196e0cc9a6b88bac6691db702348a769459c1",
+  "rust_output_sha256": "7801e3274307aab1852d96d996d7f29b1ca1567750d231c5f74c9e3263f84f87",
+  "sources_sha256": {
+    "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaCoreOracle.java": "649b8353fcc3c45a3baf8e2d78dc76cfedfd96de36030b0dddfb2305829cd844",
+    "tools/test_rust_parity.py": "d2d06842abb80d9c718a5bf0e71ab0c098ad4c519b8ef35711e30cf58af140d7",
+    "crates/horizon-core/src/bin/parity.rs": "7b455f2181862e1430e7387633c146877c2d317c2ea682c1e6fa64345dbc5885",
+    "crates/horizon-core/src/lib.rs": "deb2e339f78c9f5bd55a1c8a8428f3e37fae93a02268f9a2fc782dc3e27c2869",
+    "crates/horizon-core/src/position.rs": "8c2a54e912f8c31a774682b3377ca5f2138910350fbf605e760b24e2cbcacfba",
+    "crates/horizon-core/src/random.rs": "2f304dfb580a6bc1b5c51b048a2fa2a57f73c5f28f5eb2447f925bf138513389",
+    "crates/horizon-core/src/storage.rs": "f6c32201c64aefde06e57a2c767be46918df613548a322801546b133799cc33d",
+    "crates/horizon-core/Cargo.toml": "1928b71e389c24c506804f0d8e3104976da6feb27d9bfdbb3b55fb7af0c62664",
+    "Cargo.toml": "9ca59fba126895de9e58952eb5e9421bee0ffdfb5f6d2fcb03d7726e394e7c3f",
+    "Cargo.lock": "f2b104dbb3f64512b6c72e8d8732b7adda849212689e8c816f9a6abf564f4660"
+  },
+  "references": [
+    {
+      "side": "client",
+      "jar_sha256": "4508d006323f24fa02876310c192d739af56516eb259000ac50f0909a68c9a2d",
+      "output_sha256": "7801e3274307aab1852d96d996d7f29b1ca1567750d231c5f74c9e3263f84f87",
+      "matched_output_lines": 1017920
+    },
+    {
+      "side": "server",
+      "jar_sha256": "a362163eec5d1612d520772bc16e5b39c09e3b234fdc045f56bf544284ee8ae6",
+      "output_sha256": "7801e3274307aab1852d96d996d7f29b1ca1567750d231c5f74c9e3263f84f87",
+      "matched_output_lines": 1017920
+    }
+  ],
+  "scope": "Selected integer position, seeded RNG and packed-storage operations only. No gameplay, rendering or performance claim."
+}

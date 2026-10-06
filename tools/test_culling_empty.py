@@ -22,7 +22,7 @@ def main():
     args = parser.parse_args()
     root = build_pack.ROOT
     fixture = build_mod.build_culling_empty_fixture()
-    mod = root / "dist" / f"horizon-lab-{build_pack.read_lock()['pack_version']}.jar"
+    mod = root / "dist" / f"horizon-{build_pack.read_lock()['pack_version']}.jar"
     results = []
     for enabled in [False, True]:
         instance = root / ".local/runtime" / ("culling-empty-fixture-patched" if enabled else "culling-empty-fixture-upstream")

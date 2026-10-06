@@ -59,7 +59,7 @@ Hosted medians and nearest-rank p95 over 20 measured trials:
 The upstream Mac maximum was 108.892 ms; its requested 50 ms sleep overshot.
 The wakeable Mac maximum also shows scheduler variability. The hosted ARM Mac
 has three logical CPUs and is not the user's M2 Pro. [Raw trials](../benchmarks/idle-queue-2026-10-03)
-are from [CI run 37155695460](https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37155695460).
+are from [CI run 37155695460](https://github.com/ludovic111/Horizon/actions/runs/37155695460).
 
 This isolates idle wakeup, including enqueue/pop overhead. It does not simulate
 the existing 250 ms debounce, preprocessing, chunk generation, meshing, network

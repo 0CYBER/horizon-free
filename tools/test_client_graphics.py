@@ -111,7 +111,7 @@ def main():
         'dev.horizonlab.metrics.ClientGraphicsIntegration',
         fixture_mixins=['GraphicsBackendTraceMixin'], fixture_dependencies={})
     version = build_pack.read_lock()['pack_version']
-    mod = root / 'dist' / f'horizon-lab-{version}.jar'
+    mod = root / 'dist' / f'horizon-{version}.jar'
     original_hash = hashlib.sha256(mod.read_bytes()).hexdigest()
     results = []
     for profile in args.profile or (['cinematic'] if args.shaders else ['core-performance', 'm2-balanced']):

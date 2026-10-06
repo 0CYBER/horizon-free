@@ -1,0 +1,606 @@
+//! Java Edition NBT with lossless UTF-16 strings and 26.3 mixed-list wrappers.
+use std::collections::BTreeMap;
+
+/// Java strings can contain unpaired surrogates, which Rust UTF-8 strings cannot.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct JavaString(pub Vec<u16>);
+
+impl From<&str> for JavaString {
+    fn from(value: &str) -> Self {
+        Self(value.encode_utf16().collect())
+    }
+}
+impl JavaString {
+    pub fn to_string(&self) -> Result<String, std::string::FromUtf16Error> {
+        String::from_utf16(&self.0)
+    }
+    pub fn to_string_lossy(&self) -> String {
+        String::from_utf16_lossy(&self.0)
+    }
+}
+
+pub type Compound = BTreeMap<JavaString, Tag>;
+
+/// Float and double variants hold their IEEE bit patterns. Java canonicalizes
+/// NaNs on binary output. Loading, like vanilla's valueOf factories, normalizes
+/// negative zero to positive zero.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Tag {
+    End,
+    Byte(i8),
+    Short(i16),
+    Int(i32),
+    Long(i64),
+    Float(u32),
+    Double(u64),
+    ByteArray(Vec<u8>),
+    String(JavaString),
+    List(Vec<Tag>),
+    Compound(Compound),
+    IntArray(Vec<i32>),
+    LongArray(Vec<i64>),
+}
+
+impl Tag {
+    pub fn id(&self) -> u8 {
+        match self {
+            Self::End => 0,
+            Self::Byte(_) => 1,
+            Self::Short(_) => 2,
+            Self::Int(_) => 3,
+            Self::Long(_) => 4,
+            Self::Float(_) => 5,
+            Self::Double(_) => 6,
+            Self::ByteArray(_) => 7,
+            Self::String(_) => 8,
+            Self::List(_) => 9,
+            Self::Compound(_) => 10,
+            Self::IntArray(_) => 11,
+            Self::LongArray(_) => 12,
+        }
+    }
+    pub fn get(&self, key: &str) -> Option<&Tag> {
+        match self {
+            Self::Compound(map) => map.get(&JavaString::from(key)),
+            _ => None,
+        }
+    }
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Tag> {
+        match self {
+            Self::Compound(map) => map.get_mut(&JavaString::from(key)),
+            _ => None,
+        }
+    }
+    pub fn compound(entries: impl IntoIterator<Item = (impl Into<JavaString>, Tag)>) -> Self {
+        Self::Compound(entries.into_iter().map(|(k, v)| (k.into(), v)).collect())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamedTag {
+    pub name: JavaString,
+    pub tag: Tag,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub max_bytes: usize,
+    pub max_nodes: usize,
+    pub max_depth: usize,
+}
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_bytes: 64 * 1024 * 1024,
+            max_nodes: 1_000_000,
+            max_depth: 512,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Error {
+    pub offset: usize,
+    pub reason: &'static str,
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NBT at byte {}: {}", self.offset, self.reason)
+    }
+}
+impl std::error::Error for Error {}
+
+struct Reader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+    limits: Limits,
+    nodes: usize,
+}
+impl<'a> Reader<'a> {
+    fn error(&self, reason: &'static str) -> Error {
+        Error {
+            offset: self.offset,
+            reason,
+        }
+    }
+    fn take(&mut self, len: usize) -> Result<&'a [u8], Error> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or_else(|| self.error("length overflow"))?;
+        if end > self.limits.max_bytes {
+            return Err(self.error("byte limit exceeded"));
+        }
+        let value = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or_else(|| self.error("truncated input"))?;
+        self.offset = end;
+        Ok(value)
+    }
+    fn number<const N: usize>(&mut self) -> Result<[u8; N], Error> {
+        Ok(self.take(N)?.try_into().unwrap())
+    }
+    fn byte(&mut self) -> Result<u8, Error> {
+        Ok(self.take(1)?[0])
+    }
+    fn count(&mut self, element_bytes: usize) -> Result<usize, Error> {
+        let count = i32::from_be_bytes(self.number()?);
+        if count < 0 {
+            return Err(self.error("negative collection length"));
+        }
+        let count = count as usize;
+        let size = count
+            .checked_mul(element_bytes)
+            .ok_or_else(|| self.error("length overflow"))?;
+        if size > self.bytes.len().saturating_sub(self.offset)
+            || size > self.limits.max_bytes.saturating_sub(self.offset)
+        {
+            return Err(self.error("collection exceeds available bytes"));
+        }
+        Ok(count)
+    }
+    fn string(&mut self) -> Result<JavaString, Error> {
+        let len = u16::from_be_bytes(self.number()?) as usize;
+        let bytes = self.take(len)?;
+        let mut units = Vec::with_capacity(len);
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            let (unit, size) = match b {
+                0..=127 => (u16::from(b), 1),
+                192..=223 if i + 1 < len && bytes[i + 1] & 0xc0 == 0x80 => {
+                    ((u16::from(b & 31) << 6) | u16::from(bytes[i + 1] & 63), 2)
+                }
+                224..=239
+                    if i + 2 < len
+                        && bytes[i + 1] & 0xc0 == 0x80
+                        && bytes[i + 2] & 0xc0 == 0x80 =>
+                {
+                    (
+                        (u16::from(b & 15) << 12)
+                            | (u16::from(bytes[i + 1] & 63) << 6)
+                            | u16::from(bytes[i + 2] & 63),
+                        3,
+                    )
+                }
+                _ => return Err(self.error("invalid Java modified UTF-8")),
+            };
+            // Match DataInput.readUTF, including accepted overlong sequences.
+            units.push(unit);
+            i += size;
+        }
+        Ok(JavaString(units))
+    }
+    fn payload(&mut self, id: u8, depth: usize) -> Result<Tag, Error> {
+        if self.nodes >= self.limits.max_nodes {
+            return Err(self.error("node limit exceeded"));
+        }
+        self.nodes += 1;
+        if matches!(id, 9 | 10) && depth >= self.limits.max_depth {
+            return Err(self.error("depth limit exceeded"));
+        }
+        Ok(match id {
+            0 => Tag::End,
+            1 => Tag::Byte(self.byte()? as i8),
+            2 => Tag::Short(i16::from_be_bytes(self.number()?)),
+            3 => Tag::Int(i32::from_be_bytes(self.number()?)),
+            4 => Tag::Long(i64::from_be_bytes(self.number()?)),
+            5 => {
+                let bits = u32::from_be_bytes(self.number()?);
+                Tag::Float(if f32::from_bits(bits) == 0.0 { 0 } else { bits })
+            }
+            6 => {
+                let bits = u64::from_be_bytes(self.number()?);
+                Tag::Double(if f64::from_bits(bits) == 0.0 { 0 } else { bits })
+            }
+            7 => {
+                let len = self.count(1)?;
+                Tag::ByteArray(self.take(len)?.to_vec())
+            }
+            8 => Tag::String(self.string()?),
+            9 => {
+                let element_id = self.byte()?;
+                let len = self.count(0)?;
+                if len > 0 && (element_id == 0 || element_id > 12) {
+                    return Err(self.error("invalid list element type"));
+                }
+                if len > self.limits.max_nodes.saturating_sub(self.nodes) {
+                    return Err(self.error("node limit exceeded"));
+                }
+                // At least one byte per valid non-End payload; do not allocate from an unchecked count.
+                if len > self.bytes.len().saturating_sub(self.offset) {
+                    return Err(self.error("truncated list"));
+                }
+                let mut values = Vec::with_capacity(len);
+                for _ in 0..len {
+                    let mut value = self.payload(element_id, depth + 1)?;
+                    if let Tag::Compound(map) = &mut value {
+                        if map.len() == 1 && map.contains_key(&JavaString::default()) {
+                            value = map.remove(&JavaString::default()).unwrap();
+                        }
+                    }
+                    values.push(value);
+                }
+                Tag::List(values)
+            }
+            10 => {
+                let mut map = Compound::new();
+                loop {
+                    let id = self.byte()?;
+                    if id == 0 {
+                        break;
+                    }
+                    let name = self.string()?;
+                    let value = self.payload(id, depth + 1)?;
+                    map.insert(name, value); // Java maps retain the last duplicate key.
+                }
+                Tag::Compound(map)
+            }
+            11 => {
+                let len = self.count(4)?;
+                let mut values = Vec::with_capacity(len);
+                for _ in 0..len {
+                    values.push(i32::from_be_bytes(self.number()?));
+                }
+                Tag::IntArray(values)
+            }
+            12 => {
+                let len = self.count(8)?;
+                let mut values = Vec::with_capacity(len);
+                for _ in 0..len {
+                    values.push(i64::from_be_bytes(self.number()?));
+                }
+                Tag::LongArray(values)
+            }
+            _ => return Err(self.error("unknown tag type")),
+        })
+    }
+}
+
+/// Read a file root (type, modified-UTF name, payload), returning bytes consumed.
+pub fn read_named(bytes: &[u8], limits: Limits) -> Result<(NamedTag, usize), Error> {
+    let mut reader = Reader {
+        bytes,
+        offset: 0,
+        limits,
+        nodes: 0,
+    };
+    let id = reader.byte()?;
+    let name = if id == 0 {
+        JavaString::default()
+    } else {
+        reader.string()?
+    };
+    let tag = reader.payload(id, 0)?;
+    Ok((NamedTag { name, tag }, reader.offset))
+}
+
+/// Read a network root (type and payload, without the file name field).
+pub fn read_network(bytes: &[u8], limits: Limits) -> Result<(Tag, usize), Error> {
+    let mut reader = Reader {
+        bytes,
+        offset: 0,
+        limits,
+        nodes: 0,
+    };
+    let id = reader.byte()?;
+    let tag = reader.payload(id, 0)?;
+    Ok((tag, reader.offset))
+}
+
+struct Writer {
+    bytes: Vec<u8>,
+    limits: Limits,
+    nodes: usize,
+}
+impl Writer {
+    fn error(&self, reason: &'static str) -> Error {
+        Error {
+            offset: self.bytes.len(),
+            reason,
+        }
+    }
+    fn put(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        if bytes.len() > self.limits.max_bytes.saturating_sub(self.bytes.len()) {
+            return Err(self.error("byte limit exceeded"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+    fn count(&mut self, len: usize) -> Result<(), Error> {
+        let len = i32::try_from(len).map_err(|_| self.error("collection too long"))?;
+        self.put(&len.to_be_bytes())
+    }
+    fn string(&mut self, string: &JavaString) -> Result<(), Error> {
+        let len: usize = string
+            .0
+            .iter()
+            .map(|&c| match c {
+                1..=127 => 1,
+                0..=2047 => 2,
+                _ => 3,
+            })
+            .sum();
+        let len =
+            u16::try_from(len).map_err(|_| self.error("modified UTF-8 exceeds 65535 bytes"))?;
+        self.put(&len.to_be_bytes())?;
+        for &c in &string.0 {
+            match c {
+                1..=127 => self.put(&[c as u8])?,
+                0..=2047 => self.put(&[0xc0 | (c >> 6) as u8, 0x80 | (c & 63) as u8])?,
+                _ => self.put(&[
+                    0xe0 | (c >> 12) as u8,
+                    0x80 | ((c >> 6) & 63) as u8,
+                    0x80 | (c & 63) as u8,
+                ])?,
+            }
+        }
+        Ok(())
+    }
+    fn payload(&mut self, tag: &Tag, depth: usize) -> Result<(), Error> {
+        if self.nodes >= self.limits.max_nodes {
+            return Err(self.error("node limit exceeded"));
+        }
+        self.nodes += 1;
+        if matches!(tag, Tag::List(_) | Tag::Compound(_)) && depth >= self.limits.max_depth {
+            return Err(self.error("depth limit exceeded"));
+        }
+        match tag {
+            Tag::End => {}
+            Tag::Byte(v) => self.put(&[*v as u8])?,
+            Tag::Short(v) => self.put(&v.to_be_bytes())?,
+            Tag::Int(v) => self.put(&v.to_be_bytes())?,
+            Tag::Long(v) => self.put(&v.to_be_bytes())?,
+            Tag::Float(v) => self.put(
+                &if f32::from_bits(*v).is_nan() {
+                    0x7fc0_0000_u32
+                } else {
+                    *v
+                }
+                .to_be_bytes(),
+            )?,
+            Tag::Double(v) => self.put(
+                &if f64::from_bits(*v).is_nan() {
+                    0x7ff8_0000_0000_0000_u64
+                } else {
+                    *v
+                }
+                .to_be_bytes(),
+            )?,
+            Tag::ByteArray(v) => {
+                self.count(v.len())?;
+                self.put(v)?;
+            }
+            Tag::String(v) => self.string(v)?,
+            Tag::List(values) => {
+                if values.iter().any(|v| matches!(v, Tag::End)) {
+                    return Err(self.error("End cannot be a list element"));
+                }
+                let first = values.first().map_or(0, Tag::id);
+                let id = if values.iter().any(|v| v.id() != first) {
+                    10
+                } else {
+                    first
+                };
+                self.put(&[id])?;
+                self.count(values.len())?;
+                for value in values {
+                    let wrapper = matches!(value, Tag::Compound(c) if c.len() == 1 && c.contains_key(&JavaString::default()));
+                    if id == 10 && (value.id() != 10 || wrapper) {
+                        // Emit one synthetic compound layer without cloning the tree.
+                        if depth + 1 >= self.limits.max_depth {
+                            return Err(self.error("depth limit exceeded"));
+                        }
+                        if self.nodes >= self.limits.max_nodes {
+                            return Err(self.error("node limit exceeded"));
+                        }
+                        self.nodes += 1;
+                        self.put(&[value.id()])?;
+                        self.string(&JavaString::default())?;
+                        self.payload(value, depth + 2)?;
+                        self.put(&[0])?;
+                    } else {
+                        self.payload(value, depth + 1)?;
+                    }
+                }
+            }
+            Tag::Compound(values) => {
+                for (name, value) in values {
+                    if matches!(value, Tag::End) {
+                        return Err(self.error("End cannot be a named value"));
+                    }
+                    self.put(&[value.id()])?;
+                    self.string(name)?;
+                    self.payload(value, depth + 1)?;
+                }
+                self.put(&[0])?;
+            }
+            Tag::IntArray(v) => {
+                self.count(v.len())?;
+                for item in v {
+                    self.put(&item.to_be_bytes())?;
+                }
+            }
+            Tag::LongArray(v) => {
+                self.count(v.len())?;
+                for item in v {
+                    self.put(&item.to_be_bytes())?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn write_named(root: &NamedTag, limits: Limits) -> Result<Vec<u8>, Error> {
+    let mut writer = Writer {
+        bytes: Vec::new(),
+        limits,
+        nodes: 0,
+    };
+    writer.put(&[root.tag.id()])?;
+    if root.tag.id() != 0 {
+        writer.string(&root.name)?;
+    }
+    writer.payload(&root.tag, 0)?;
+    Ok(writer.bytes)
+}
+
+pub fn write_network(tag: &Tag, limits: Limits) -> Result<Vec<u8>, Error> {
+    let mut writer = Writer {
+        bytes: Vec::new(),
+        limits,
+        nodes: 0,
+    };
+    writer.put(&[tag.id()])?;
+    writer.payload(tag, 0)?;
+    Ok(writer.bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn wire_node_budget_includes_mixed_list_wrappers() {
+        let tag = Tag::List(vec![Tag::Int(1), Tag::Byte(2)]);
+        let limits = Limits {
+            max_nodes: 5,
+            ..Limits::default()
+        };
+        let bytes = write_network(&tag, limits).unwrap();
+        assert_eq!(read_network(&bytes, limits).unwrap().0, tag);
+        let limits = Limits {
+            max_nodes: 4,
+            ..limits
+        };
+        assert!(write_network(&tag, limits).is_err());
+        assert!(read_network(&bytes, limits).is_err());
+    }
+    #[test]
+    fn depth_boundary_and_every_truncated_prefix() {
+        let mut tag = Tag::Int(1);
+        for _ in 0..512 {
+            tag = Tag::List(vec![tag]);
+        }
+        let bytes = write_network(&tag, Limits::default()).unwrap();
+        assert_eq!(read_network(&bytes, Limits::default()).unwrap().0, tag);
+        tag = Tag::List(vec![tag]);
+        assert!(write_network(&tag, Limits::default()).is_err());
+        let deeper = write_network(
+            &tag,
+            Limits {
+                max_depth: 513,
+                ..Limits::default()
+            },
+        )
+        .unwrap();
+        assert!(read_network(&deeper, Limits::default()).is_err());
+        let short = Tag::compound([(
+            "list",
+            Tag::List(vec![Tag::Long(42), Tag::ByteArray(vec![1, 2, 3])]),
+        )]);
+        let bytes = write_network(&short, Limits::default()).unwrap();
+        for end in 0..bytes.len() {
+            assert!(read_network(&bytes[..end], Limits::default()).is_err());
+        }
+    }
+    #[test]
+    fn modified_utf_and_mixed_lists_preserve_java_values() {
+        let tag = Tag::List(vec![
+            Tag::Int(3),
+            Tag::String(JavaString(vec![0, 0xd800, 0xdc00, 0xdfff])),
+            Tag::compound([("", Tag::Int(9))]),
+            Tag::compound([("x", Tag::Byte(1))]),
+        ]);
+        let data = write_network(&tag, Limits::default()).unwrap();
+        assert_eq!(data[1], 10);
+        assert_eq!(
+            read_network(&data, Limits::default()).unwrap(),
+            (tag, data.len())
+        );
+    }
+    #[test]
+    fn malformed_lengths_truncation_limits_and_utf_are_rejected() {
+        for data in [
+            &[7, 0xff, 0xff, 0xff, 0xff][..],
+            &[9, 0, 0, 0, 0, 1],
+            &[8, 0, 1, 0xc0],
+            &[13],
+            &[4, 0],
+        ] {
+            assert!(read_network(data, Limits::default()).is_err());
+        }
+        let tag = Tag::List(vec![Tag::List(vec![Tag::Int(1)])]);
+        let bytes = write_network(&tag, Limits::default()).unwrap();
+        assert!(
+            read_network(
+                &bytes,
+                Limits {
+                    max_depth: 1,
+                    ..Limits::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            read_network(
+                &bytes,
+                Limits {
+                    max_nodes: 2,
+                    ..Limits::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            read_network(
+                &bytes,
+                Limits {
+                    max_bytes: bytes.len() - 1,
+                    ..Limits::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            write_network(&Tag::String(JavaString(vec![0; 32768])), Limits::default()).is_err()
+        );
+    }
+    #[test]
+    fn duplicate_keys_last_wins_and_nan_output_is_canonical() {
+        let bytes = [10, 1, 0, 1, b'x', 1, 1, 0, 1, b'x', 2, 0];
+        assert_eq!(
+            read_network(&bytes, Limits::default()).unwrap().0.get("x"),
+            Some(&Tag::Byte(2))
+        );
+        assert_eq!(
+            write_network(&Tag::Float(0xff80_0001), Limits::default()).unwrap(),
+            [5, 0x7f, 0xc0, 0, 0]
+        );
+        assert_eq!(
+            write_network(&Tag::Double((-0.0_f64).to_bits()), Limits::default()).unwrap()[1],
+            0x80
+        );
+    }
+}
