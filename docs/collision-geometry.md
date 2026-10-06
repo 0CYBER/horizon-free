@@ -669,3 +669,22 @@ records **44,566 matching lines per JAR**, including nonfinite arithmetic, float
 underflow, callback mutations and failures at every boundary. Workspace Clippy
 passes. Living-entity fluid/particle behavior, registered block landing effects,
 health/damage and full movement remain pending.
+
+
+`living_fall` implements default living-entity fall power/damage calculation,
+impulse-height exemption and landing damage callback order. It retains separate
+immunity checks for passenger propagation and damage calculation, double/float
+arithmetic and saturating floor-to-int conversion. Positive damage resets the
+impulse context, selects the fall sound, plays block landing sound and dispatches
+hurt. A rejected hurt callback does not change the native positive-damage result.
+`ImpulseContext` also models setter, grace-extension and reset behavior; disabling
+ignore clears grace time while retaining the impact position until a later reset.
+
+`python3 tools/test_living_fall_parity.py` compares actual living methods and
+sequential impulse changes. The
+[living fall report](../benchmarks/rust-living-fall-2026-10-07/scoped-parity.json)
+records **153,025 matching lines per JAR**, including changing immunity, passenger
+callback mutations, nonfinite arithmetic, sound threshold selection and failures
+after partial state changes. Workspace Clippy passes. Attribute provisioning,
+passenger storage/recursion, actual health processing, tick/save/network behavior
+and the complete movement lifecycle remain pending.
