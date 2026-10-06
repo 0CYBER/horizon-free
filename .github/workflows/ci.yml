@@ -131,6 +131,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_vines_parity.py
+      - name: Compare underwater magma floor scans and occlusion
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_underwater_magma_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable

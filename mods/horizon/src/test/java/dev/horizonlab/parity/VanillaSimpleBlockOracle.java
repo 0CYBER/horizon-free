@@ -59,6 +59,7 @@ public final class VanillaSimpleBlockOracle {
   public Object invoke(Object proxy,Method method,Object[] args)throws Throwable {
    String name=method.getName();
    if(name.equals("getRandom"))return random;
+   if(name.equals("isStateAtPosition")){var p=(BlockPos)args[0];event("get "+xyz(p));var state=at(p);out.println("state "+Block.getId(state));return ((java.util.function.Predicate<BlockState>)args[1]).test(state);}
    if(name.equals("getChunk")&&args.length==1&&args[0] instanceof BlockPos)return chunk((BlockPos)args[0]);
    if(name.equals("getMinY"))return -64;
    if(name.equals("getHeight")&&(args==null||args.length==0))return 384;

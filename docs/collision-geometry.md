@@ -173,10 +173,10 @@ a shared property table. Predicates query this table in constant time.
 `python3 tools/test_block_properties_parity.py` compares all **35,723 states** and
 **18,096 synthetic cache/flag/shape cases**, including adjacent floating-point values
 around solidity thresholds and both occlusion flag values. The [block-properties report](../benchmarks/rust-block-properties-2026-10-06/scoped-parity.json)
-records **143,361 matching lines per JAR**. Definition flags, collision and raw
+records **197,180 matching lines per JAR**. Definition flags, collision and raw
 occlusion data are private runtime inputs; Rust calculates solidity and solid
-rendering. The report was produced in an isolated staging copy and archived only
-after the integrated sources and copied fixtures matched every recorded hash.
+rendering and caches full-face occlusion masks. Every state and synthetic shape
+is compared on all six faces; source and fixture hashes are recorded.
 Item/fluid-context replacement and collision with live entities remain separate work.
 
 Face selection now preserves native cube-axis shortcuts, epsilon sample points,

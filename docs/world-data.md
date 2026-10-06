@@ -138,10 +138,11 @@ block's support shape.
 
 Run `python3 tools/test_fluid_parity.py`. The
 [fluid report](../benchmarks/rust-fluid-2026-10-06/scoped-parity.json) records
-**239,190 matching lines per JAR**. It compares all 35,723 block states, five fluid
+**243,331 matching lines per JAR**. It compares all 35,723 block states, five fluid
 identities, every fluid-family pair, own-height bits, source/falling/full flags and
-legacy block conversion. The 40,344 world fixtures request 80,688 surface/camera
+legacy block conversion. An additional 2,432 fluid-state JSON fixtures compare
+all 37 fluid states, native defaults, malformed properties and encoding. The 40,344 world fixtures request 80,688 surface/camera
 height queries, including coordinate overflow and injected failures. The support
 fixtures use actual vanilla stone and air states. Fluid spreading, scheduled
-updates, entity interactions and rendering remain pending. Workspace tests,
-Clippy and 137 Python tests passed at this stage.
+updates, entity interactions and rendering remain pending. Workspace tests
+and all-target Clippy pass.

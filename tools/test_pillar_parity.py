@@ -26,7 +26,7 @@ def corpus(facts,placement):
         yield case(pillar(provider,can_replace=predicate,cap_feature='horizon:moss'),fallback=get(neighbor),fail=fail)
     for origin,direction,chance in itertools.product([[0,-65,0],[0,-64,0],[0,319,0],[0,320,0],[2147483647,-2147483648,-2147483648],[-2147483648,2147483647,2147483647]],['up','down'],[0.0,0.5,1.0]):
         yield case(pillar(direction=direction,chance_to_continue=chance,cap_feature='horizon:stone'),origin=origin)
-    for key,values in [('block',[None,False,0,{},'missing']),('can_replace',[None,False,0,{}, {'type':'true'}]),('direction',[None,'north','UP',False,0]),('chance_to_continue',[None,False,'0.5',-0.01,1.01,0,1]),('cap_feature',[None,'missing',{},False])]:
+    for key,values in [('block',[None,False,0,{},'missing']),('can_replace',[None,False,0,{}, {'type':'true'}]),('direction',[None,'north','UP',False,0]),('chance_to_continue',[None,False,'0.5',-0.01,1.01,-0.0,-1e-100,1e-100,1.0000000001,0,1]),('cap_feature',[None,'missing',{},False])]:
         for value in values:
             definition=pillar();definition[key]=value;yield case(definition)
         definition=pillar();definition.pop(key,None);yield case(definition)

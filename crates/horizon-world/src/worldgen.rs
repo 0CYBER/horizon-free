@@ -40,6 +40,7 @@ pub mod spring;
 pub mod state_provider;
 pub mod tags;
 pub mod terrain;
+pub mod underwater_magma;
 pub mod value_provider;
 pub mod vines;
 pub mod weighted;

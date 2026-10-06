@@ -326,11 +326,11 @@ modifier chains and resident neighboring chunks, including live heightmap update
 World-region side effects and complete feature generation remain pending.
 
 The [inline feature-graph comparison](feature-placement.md#inline-feature-composition)
-adds **737,779 matching lines per JAR** for nested sequences and random selectors,
+adds **1,146,057 matching lines per JAR** for nested sequences, overlays and random selectors,
 including short-circuit results, shared randomness and partial mutations.
 
 The [named feature-resource comparison](feature-placement.md#named-feature-resources)
-adds **1,734,390 matching lines per JAR** for registry-aware feature/placed-feature
+adds **2,528,704 matching lines per JAR** for registry-aware feature/placed-feature
 holders, ordered tags and subsequent nested execution. Complete registry loading,
 reloads and remaining feature algorithms are still pending.
 
@@ -394,7 +394,7 @@ query failures. Named holder references are resolved through immutable resource
 snapshots. Additional predicates, complete registry loading and complete feature placement remain pending.
 
 The [contained-fluid comparison](world-data.md#contained-fluid-states) adds
-**239,190 matching lines per JAR** for fluid-state mapping, liquid-block conversion
+**243,331 matching lines per JAR** for fluid-state mapping, liquid-block conversion
 and surface/camera height queries. It covers every pinned block state and query
 failures; fluid spreading, entity interactions and rendering remain pending.
 
@@ -511,3 +511,22 @@ The expanded [block-property comparison](../benchmarks/rust-block-properties-202
 matches **197,180 lines per reference JAR**, including all 35,723 states and
 18,096 synthetic shape/flag combinations. Workspace tests and all-target Clippy
 pass. Lighting and renderer integration remain separate work.
+
+## Underwater magma and probability decoding
+
+Underwater magma now performs native water-column scans, including the upper
+scan before the lower scan and repeated boundary reads. Each cube position draws
+a probability value before testing block identity and the five required full
+occlusion faces. Rejected writes still count as successful placements.
+
+The [underwater magma comparison](../benchmarks/rust-underwater-magma-2026-10-06/scoped-parity.json)
+matches **6,523,072 lines per reference JAR** over **253,252 fixtures**. Both RNG
+modes cover the complete radius-64 cube, consuming **2,146,689 draws** with zero
+placement probability. Every state in the origin/floor/neighbor roles, scan
+limits, partial failures, wrapped radius-zero columns and composition are tested.
+
+The native comparison exposed signed-zero codec behavior: bounded probabilities
+reject `-0.0`, including negative values that round to float zero. Magma and
+pillar decoding now preserve this. The expanded pillar gate passes **921,111
+lines per JAR** over **41,746 fixtures**. Workspace tests and all-target Clippy
+pass. World updates and magma/fluid gameplay remain pending.

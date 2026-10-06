@@ -181,14 +181,15 @@ routing, missing-neighbor errors and mutation-callback flag/return handling.
 
 `FeatureDefinition` and `PlacedFeatureDefinition` compose the initial block-writing
 features with no-op, sequence, boolean choice, uniform choice, chance-based
-choice and weighted-choice features. Sequences stop on the first false child. Selectors return the
+choice, weighted-choice and overlay features. Overlays execute every child and
+accumulate success. Sequences stop on the first false child. Selectors return the
 chosen child's result directly. Child modifiers and features share world state
 and randomness; each sequence uses one fresh placer across its children.
 Native single-object holder-set shorthand is accepted for sequence/uniform lists.
 
 Run `python3 tools/test_feature_graph_parity.py`. The
 [graph report](../benchmarks/rust-feature-graph-2026-10-06/scoped-parity.json) records
-**737,779 matching lines per JAR** for actual native feature codecs and nested
+**1,146,057 matching lines per JAR** for actual native feature codecs and nested
 placement. Cases include empty/malformed lists, singleton and nested choices,
 zero/one probabilities, negative zero, false child results, partial writes, world
 failures, repeated calls and top-level modifier chains.
@@ -217,9 +218,9 @@ names, missing dependencies and cycles return errors.
 
 Run `python3 tools/test_feature_catalog_parity.py`. The
 [catalog report](../benchmarks/rust-feature-catalog-2026-10-06/scoped-parity.json)
-records **1,734,390 matching lines per JAR** against actual registry-aware holder
-codecs, registered feature snapshots and native `TagLoader`. It compares nine
-named features, fourteen placed features, five tag files, nested/duplicate references,
+records **2,528,704 matching lines per JAR** against actual registry-aware holder
+codecs, registered feature snapshots and native `TagLoader`. It compares ten
+named features, fifteen placed features, five tag files, nested/duplicate references,
 optional/required missing tags, namespace shorthand and subsequent execution.
 Configured fill layers, single-block replacements and scattered ore bind block-state
 metadata through named roots, nested tags and modifier chains. Block-set
@@ -228,7 +229,7 @@ the mutable world, including repeated placement after earlier writes and flowing
 that changes later fluid-predicate results.
 
 Empty named tags retain a native distinction from empty inline lists: a sequence
-can resolve an empty tag and succeed, while a uniform selector resolves it and
+can resolve an empty tag and succeed, an overlay returns false, while a uniform selector resolves it and
 then fails its zero-bound random choice. The inline list codecs reject empty
 lists during decoding. These cases and their random-state effects are compared.
 
@@ -604,9 +605,10 @@ and nested pillars use the same feature catalog and graph work budget.
 
 Run `python3 tools/test_pillar_parity.py`. The
 [pillar report](../benchmarks/rust-pillar-2026-10-06/scoped-parity.json) records
-**921,075 matching lines per JAR** across **41,742 fixtures**, including every
+**921,111 matching lines per JAR** across **41,746 fixtures**, including every
 candidate descriptor, both vertical directions, continuation boundaries,
-replacement conditions, cap composition, failures, rejected writes and random
+signed-zero probability rejection, replacement conditions, cap composition,
+failures, rejected writes and random
 stream tails. Workspace tests and all-target Clippy passed. Resident world
 updates and complete generation/gameplay remain unfinished.
 
@@ -626,3 +628,11 @@ states, all direction masks, bounded integer providers, named/empty holder sets,
 mutable repeated attempts, partial failures and nested feature/modifier calls.
 Workspace tests and all-target Clippy passed. These feature algorithms still
 require complete chunk mutation, neighbor updates and gameplay integration.
+
+## Additional verified feature algorithms
+
+The executable feature graph also includes overlay composition, block piles,
+disks, block blobs, springs, vines and underwater magma. Their version-specific
+reports and remaining integration limits are recorded in [Rust rewrite status](rust-parity.md#overlay-feature-composition).
+These comparisons cover ordered world requests; complete world updates and
+playable gameplay remain pending.

@@ -49,6 +49,7 @@ pub enum FeatureDefinition {
     Disk(super::disk::DiskFeature),
     Spring(super::spring::SpringFeature),
     Vines(super::vines::VinesFeature),
+    UnderwaterMagma(super::underwater_magma::UnderwaterMagmaFeature),
     BlockBlob(super::block_blob::BlockBlobFeature),
     SimpleBlock(super::simple_block::SimpleBlockFeature),
     FillLayer(FillLayerFeature),
@@ -73,6 +74,7 @@ pub enum FeatureExecutionError<E> {
     BlockPile(super::block_pile::BlockPileError<E>),
     Disk(super::disk::DiskError<E>),
     BlockBlob(super::block_blob::BlockBlobError<E>),
+    UnderwaterMagma(super::underwater_magma::UnderwaterMagmaError<E>),
     SimpleBlock(super::simple_block::SimpleBlockError<E>),
     Random(InvalidBound),
     Query(PlacementQueryError),
@@ -88,6 +90,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::BlockPile(e) => e.fmt(f),
             Self::Disk(e) => e.fmt(f),
             Self::BlockBlob(e) => e.fmt(f),
+            Self::UnderwaterMagma(e) => e.fmt(f),
             Self::SimpleBlock(e) => e.fmt(f),
             Self::Random(e) => e.fmt(f),
             Self::Query(e) => e.fmt(f),
@@ -254,6 +257,13 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:underwater_magma" => {
+                super::underwater_magma::UnderwaterMagmaFeature::from_json(
+                    json,
+                    blocks.ok_or(DecodeError::Field("underwater magma bindings"))?,
+                )
+                .map(Self::UnderwaterMagma)
+            }
             "minecraft:vines" => super::vines::VinesFeature::new(
                 blocks.ok_or(DecodeError::Field("vine feature bindings"))?,
             )
@@ -368,7 +378,7 @@ impl FeatureDefinition {
                         as f32,
                     None => 1.0,
                 };
-                if !(0.0..=1.0).contains(&chance) {
+                if !(0.0..=1.0).contains(&chance) || chance.is_sign_negative() {
                     return Err(DecodeError::Field("pillar chance"));
                 }
                 let cap = super::optional(&object, "cap_feature")
@@ -582,6 +592,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::UnderwaterMagma(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::UnderwaterMagma),
             Self::Vines(feature) => feature.place(world, origin).map_err(|e| match e {
                 BlockFeatureError::World(e) => FeatureExecutionError::Basic(FeatureError::World(e)),
                 BlockFeatureError::Query(e) => FeatureExecutionError::Query(e),
