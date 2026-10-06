@@ -688,3 +688,19 @@ callback mutations, nonfinite arithmetic, sound threshold selection and failures
 after partial state changes. Workspace Clippy passes. Attribute provisioning,
 passenger storage/recursion, actual health processing, tick/save/network behavior
 and the complete movement lifecycle remain pending.
+
+
+`push_entities_up` implements the block-replacement push: query old/new shapes,
+subtract old occupied space without optimizing the join, translate to world
+coordinates and select entities using the added shape's bounds. It reads each
+current entity box before calculating its upward displacement and invokes a
+relative teleport even when that displacement is zero.
+
+`python3 tools/test_block_push_parity.py` compares actual `Block.pushEntitiesUp`
+with controlled shapes and selected entity lists. The
+[block push report](../benchmarks/rust-block-push-2026-10-07/scoped-parity.json)
+records **101,006 matching lines per JAR**, including empty/redundant geometry,
+partial shapes, large coordinates, nonfinite entity boxes, mutations of later
+entities and failures after partial effects. Workspace Clippy passes. Registered
+replacement dispatch, actual entity selection and teleport/network semantics
+remain separate integration work.
