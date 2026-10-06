@@ -609,3 +609,20 @@ obstruction heights, rejected writes, repeated mutations, wrapped coordinates
 and composition. Workspace tests and all-target Clippy pass. Fixture surface
 heights are controlled; dynamic height updates, bamboo growth and full gameplay
 remain pending. Pathological wrapped patch loops have a 2^20 work limit.
+
+## Nether delta patches
+
+Delta features now preserve the double-precision rim chance, conditional rim
+offset draws, independent patch radius draws and Manhattan traversal. Placement
+checks block identity and ordered air/nonair neighbors, writes the rim, then
+checks shifted contents against the mutated world. A zero rim component still
+shifts contents even when it disables the rim write.
+
+The [delta comparison](../benchmarks/rust-delta-2026-10-06/scoped-parity.json)
+matches **13,418,994 lines per reference JAR** across **324,269 fixtures**,
+covering every origin/content/rim state and all six neighbor roles, every air
+mask, radius limits, six provider families, both RNGs, repeated mutations,
+rejected writes, partial failures, wrapped positions and composition. Workspace
+tests, all-target Clippy and all 149 Python tests pass. The fixture supplies a
+flat ground/air boundary with mutable overrides; fluid behavior, world updates
+and complete generation remain pending.

@@ -55,7 +55,7 @@ public final class VanillaSimpleBlockOracle {
    });
   }
   void event(String text){out.println(text);if(calls++==f.get("fail").getAsInt())throw new Stop();}
-  BlockState at(BlockPos p){return states.getOrDefault(p,Block.stateById(f.get("fallback").getAsInt()));}
+  BlockState at(BlockPos p){return states.getOrDefault(p,f.has("air_above")&&p.getY()>f.get("air_above").getAsInt()?Blocks.AIR.defaultBlockState():Block.stateById(f.get("fallback").getAsInt()));}
   public Object invoke(Object proxy,Method method,Object[] args)throws Throwable {
    String name=method.getName();
    if(name.equals("getRandom"))return random;

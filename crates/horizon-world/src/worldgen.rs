@@ -19,6 +19,7 @@ pub mod carver;
 pub mod carving;
 pub mod climate;
 pub mod decoration;
+pub mod delta;
 pub mod density;
 pub mod disk;
 pub mod end_podium;

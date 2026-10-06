@@ -51,6 +51,7 @@ struct World<'a, 'r, W, R> {
     brightness: i32,
     sea_level: i32,
     surface_height: i32,
+    air_above: Option<i32>,
     air: BlockStateId,
     destroy_success: bool,
 }
@@ -65,7 +66,13 @@ impl<W: Write, R> World<'_, '_, W, R> {
         Ok(call)
     }
     fn at(&self, p: [i32; 3]) -> BlockStateId {
-        self.states.get(&p).copied().unwrap_or(self.fallback)
+        self.states.get(&p).copied().unwrap_or_else(|| {
+            if self.air_above.is_some_and(|y| p[1] > y) {
+                self.air
+            } else {
+                self.fallback
+            }
+        })
     }
     fn get(&mut self, p: [i32; 3]) -> io::Result<BlockStateId> {
         self.event(format_args!("get {} {} {}", p[0], p[1], p[2]))?;
@@ -312,6 +319,7 @@ fn fixture<R: RandomSource>(
         brightness: f["brightness"].as_i64().unwrap() as i32,
         sea_level: f.get("sea").and_then(Value::as_i64).unwrap_or(63) as i32,
         surface_height: f.get("height").and_then(Value::as_i64).unwrap_or(64) as i32,
+        air_above: f.get("air_above").and_then(Value::as_i64).map(|v| v as i32),
         air: blocks.air,
         destroy_success: f
             .get("destroy_success")

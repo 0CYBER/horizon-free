@@ -155,6 +155,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_bamboo_parity.py
+      - name: Compare Nether delta rims and shifted contents
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_delta_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable
