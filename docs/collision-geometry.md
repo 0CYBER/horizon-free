@@ -558,3 +558,19 @@ passes. Full live entity movement, support-dependent effects and gameplay remain
 pending.
 The [shared scanner regression](../benchmarks/rust-ground-support-2026-10-07/scan-regression.json)
 also passes with **517,820 matching lines per JAR** after extending its fixtures.
+
+
+`movement_support` now implements support-dependent positions, the three public
+offset variants and base-entity block jump/speed factors. It preserves the support
+X/Z coordinates, conditional fence/wall/gate lookup, float-to-double offset
+widening, cached entity block position and lazy block queries. Jump-factor lookup
+always reads the lower block; speed lookup can short-circuit for water, bubble
+columns or a non-unit current factor.
+
+`python3 tools/test_movement_support_parity.py` compares the actual native methods
+with controlled state/tag/property snapshots. The
+[movement support report](../benchmarks/rust-movement-support-2026-10-07/scoped-parity.json)
+records **51,572 matching lines per JAR**, including float boundaries, nonfinite
+positions/offsets/factors, tag/type short circuits and errors at every query.
+Workspace Clippy passes. Registered movement-property provisioning, living-entity
+efficiency and the full movement lifecycle remain pending.
