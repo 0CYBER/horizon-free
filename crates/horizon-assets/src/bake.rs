@@ -1,0 +1,241 @@
+//! Cuboid geometry in block units, before blockstate rotation and UV locking.
+use crate::{json::*, model::*, resolve::ResolvedCuboidModel};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelQuad {
+    pub positions: [[f32; 3]; 4],
+    /// Normalized unit-atlas coordinates, before placement in a larger atlas.
+    pub uv: [[f32; 2]; 4],
+    pub facing: Direction,
+    pub cull: Option<Direction>,
+    pub material: Material,
+    pub tint_index: i32,
+    pub shade_direction_override: Option<Direction>,
+    pub light_emission: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ElementMatrix {
+    pub rows: [[f32; 3]; 3],
+    identity: bool,
+}
+impl ElementMatrix {
+    pub fn from_rotation(rotation: &ElementRotation) -> Self {
+        const DEG: f32 = std::f32::consts::PI / 180.0;
+        let mut matrix = match rotation.value {
+            RotationValue::SingleAxis { angle: 0.0, .. } => Self {
+                rows: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                identity: true,
+            },
+            RotationValue::SingleAxis { axis, angle } => {
+                let (s, c) = sin_cos(angle * DEG);
+                let rows = match axis {
+                    Axis::X => [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]],
+                    Axis::Y => [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]],
+                    Axis::Z => [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+                };
+                Self {
+                    rows,
+                    identity: false,
+                }
+            }
+            RotationValue::EulerXyz([x, y, z]) => {
+                let (sx, cx) = sin_cos(x * DEG);
+                let (sy, cy) = sin_cos(y * DEG);
+                let (sz, cz) = sin_cos(z * DEG);
+                let czsy = cz * sy;
+                let szsy = sz * sy;
+                Self {
+                    rows: [
+                        [cz * cy, -sz * cx + czsy * sx, -sz * -sx + czsy * cx],
+                        [sz * cy, cz * cx + szsy * sx, cz * -sx + szsy * cx],
+                        [-sy, cy * sx, cy * cx],
+                    ],
+                    identity: false,
+                }
+            }
+        };
+        if rotation.rescale && !matrix.identity {
+            let scales: [f32; 3] = std::array::from_fn(|axis| {
+                let basis = std::array::from_fn(|i| if i == axis { 1.0 } else { 0.0 });
+                let column = matrix.direction(basis);
+                let maximum = java_max(java_max(column[0].abs(), column[1].abs()), column[2].abs());
+                1.0 / maximum
+            });
+            for (axis, scale) in scales.into_iter().enumerate() {
+                for row in &mut matrix.rows {
+                    row[axis] *= scale;
+                }
+            }
+        }
+        matrix
+    }
+    fn direction(self, value: [f32; 3]) -> [f32; 3] {
+        self.rows
+            .map(|r| r[0] * value[0] + (r[1] * value[1] + r[2] * value[2]))
+    }
+    fn position(self, value: [f32; 3]) -> [f32; 3] {
+        if self.identity {
+            value
+        } else {
+            self.rows
+                .map(|r| r[0] * value[0] + (r[1] * value[1] + (r[2] * value[2] + 0.0)))
+        }
+    }
+}
+fn java_max(a: f32, b: f32) -> f32 {
+    if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else {
+        a.max(b)
+    }
+}
+/// JOML's default float path uses a double sine rounded to float, and obtains
+/// cosine's magnitude from that rounded sine. Keep all subsequent steps f32.
+fn sin_cos(angle: f32) -> (f32, f32) {
+    let sin = f64::from(angle).sin() as f32;
+    let cos = (1.0 - sin * sin).sqrt();
+    let shifted = angle + std::f32::consts::FRAC_PI_2;
+    let mut period =
+        shifted - (shifted / std::f32::consts::TAU) as i32 as f32 * std::f32::consts::TAU;
+    if period < 0.0 {
+        period += std::f32::consts::TAU;
+    }
+    (
+        sin,
+        if period >= std::f32::consts::PI {
+            -cos
+        } else {
+            cos
+        },
+    )
+}
+
+pub fn default_uv(from: [f32; 3], to: [f32; 3], direction: Direction) -> [f32; 4] {
+    match direction {
+        Direction::Down => [from[0], 16.0 - to[2], to[0], 16.0 - from[2]],
+        Direction::Up => [from[0], from[2], to[0], to[2]],
+        Direction::North => [16.0 - to[0], 16.0 - to[1], 16.0 - from[0], 16.0 - from[1]],
+        Direction::South => [from[0], 16.0 - to[1], to[0], 16.0 - from[1]],
+        Direction::West => [from[2], 16.0 - to[1], to[2], 16.0 - from[1]],
+        Direction::East => [16.0 - to[2], 16.0 - to[1], 16.0 - from[2], 16.0 - from[1]],
+    }
+}
+fn corners(from: [f32; 3], to: [f32; 3], direction: Direction) -> [[f32; 3]; 4] {
+    let selectors = match direction {
+        Direction::Down => [[0, 0, 1], [0, 0, 0], [1, 0, 0], [1, 0, 1]],
+        Direction::Up => [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]],
+        Direction::North => [[1, 1, 0], [1, 0, 0], [0, 0, 0], [0, 1, 0]],
+        Direction::South => [[0, 1, 1], [0, 0, 1], [1, 0, 1], [1, 1, 1]],
+        Direction::West => [[0, 1, 0], [0, 0, 0], [0, 0, 1], [0, 1, 1]],
+        Direction::East => [[1, 1, 1], [1, 0, 1], [1, 0, 0], [1, 1, 0]],
+    };
+    selectors
+        .map(|selector| std::array::from_fn(|i| if selector[i] == 0 { from[i] } else { to[i] }))
+}
+fn facing(vertices: &[[f32; 3]; 4]) -> Option<Direction> {
+    let a: [f32; 3] = std::array::from_fn(|i| vertices[1][i] - vertices[0][i]);
+    let b: [f32; 3] = std::array::from_fn(|i| vertices[2][i] - vertices[0][i]);
+    let n = [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ];
+    let inverse_length = 1.0 / (n[0] * n[0] + (n[1] * n[1] + n[2] * n[2])).sqrt();
+    let n = n.map(|v| v * inverse_length);
+    if n.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let mut best = 0.0;
+    let mut result = None;
+    for (direction, dot) in Direction::ALL
+        .into_iter()
+        .zip([-n[1], n[1], -n[2], n[2], -n[0], n[0]])
+    {
+        if dot >= 0.0 && dot > best {
+            best = dot;
+            result = Some(direction);
+        }
+    }
+    result
+}
+
+pub fn bake_model(model: &ResolvedCuboidModel) -> Result<Vec<ModelQuad>> {
+    let mut output = Vec::new();
+    for element in model.elements() {
+        let element = element
+            .as_ref()
+            .ok_or_else(|| error("null model element"))?;
+        let matrix = element.rotation.as_ref().map(ElementMatrix::from_rotation);
+        for (direction, face) in &element.faces {
+            let face = face.as_ref().ok_or_else(|| error("null model face"))?;
+            let material = model.material(&face.texture)?.cloned().unwrap_or(Material {
+                sprite: "minecraft:missingno".to_owned(),
+                force_translucent: false,
+            });
+            output.push(bake_face(element, face, *direction, matrix, material)?);
+        }
+    }
+    Ok(output)
+}
+fn bake_face(
+    element: &Element,
+    face: &Face,
+    direction: Direction,
+    matrix: Option<ElementMatrix>,
+    material: Material,
+) -> Result<ModelQuad> {
+    let mut positions = corners(element.from, element.to, direction).map(|v| v.map(|c| c / 16.0));
+    if let (Some(rotation), Some(matrix)) = (&element.rotation, matrix) {
+        for vertex in &mut positions {
+            let relative = std::array::from_fn(|i| vertex[i] - rotation.origin[i]);
+            let rotated = matrix.position(relative);
+            *vertex = std::array::from_fn(|i| rotated[i] + rotation.origin[i]);
+        }
+    }
+    let bounds = face
+        .uv
+        .unwrap_or_else(|| default_uv(element.from, element.to, direction));
+    let mut uv = std::array::from_fn(|i| {
+        let corner = (i + usize::from(face.rotation)) % 4;
+        [
+            bounds[if corner < 2 { 0 } else { 2 }] / 16.0,
+            bounds[if corner == 0 || corner == 3 { 1 } else { 3 }] / 16.0,
+        ]
+        // Native TextureAtlasSprite applies origin + extent * coordinate;
+        // even the unit atlas changes negative zero to positive zero.
+        .map(|value| 0.0 + value)
+    });
+    let normal = facing(&positions);
+    if let (None, Some(facing)) = (&element.rotation, normal) {
+        let mut min = [999.0; 3];
+        let mut max = [-999.0; 3];
+        for vertex in &positions {
+            for axis in 0..3 {
+                if vertex[axis] < min[axis] {
+                    min[axis] = vertex[axis];
+                }
+                if vertex[axis] > max[axis] {
+                    max[axis] = vertex[axis];
+                }
+            }
+        }
+        for (index, expected) in corners(min, max, facing).into_iter().enumerate() {
+            let found = (index..4)
+                .find(|i| positions[*i] == expected)
+                .ok_or_else(|| error("cannot reorder model face"))?;
+            positions.swap(index, found);
+            uv.swap(index, found);
+        }
+    }
+    Ok(ModelQuad {
+        positions,
+        uv,
+        facing: normal.unwrap_or(Direction::Up),
+        cull: face.cull,
+        material,
+        tint_index: face.tint_index,
+        shade_direction_override: element.shade_direction_override,
+        light_emission: element.light_emission,
+    })
+}

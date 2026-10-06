@@ -69,8 +69,8 @@ python3 tools/test_cuboid_model_parity.py
 The [archived decoder result](../benchmarks/rust-cuboid-model-decoding-2026-10-06/scoped-parity.json)
 records source, fixture and reference hashes. The oracle uses actual client
 classes; those rendering APIs are absent from the server. This decoder is not
-yet connected to the development renderer. Rotation matrices, quad baking,
-blockstate selection and rendered appearance need their own checks.
+yet connected to the development renderer. Blockstate selection, transformed
+models, UV locking and rendered appearance still need their own checks.
 
 `ModelLibrary` resolves parent geometry, ambient occlusion, GUI lighting and
 each display context. It shares inherited elements rather than cloning them.
@@ -87,6 +87,26 @@ It calls native `ModelDiscovery`, `ResolvedModel` and `TextureSlots` APIs.
 python3 tools/test_model_resolution_parity.py
 cargo +stable test --locked -p horizon-assets
 ```
+
+Cuboid baking now produces positions in block units, normalized unit-atlas UVs,
+face winding and facing, material references, tint indices, shade overrides and
+light-emission metadata. It supports single-axis and Euler element rotations
+with the pinned rescaling rule. The
+[baking comparison](../benchmarks/rust-model-baking-2026-10-06/scoped-parity.json)
+matches **7,100 roots across 440 graphs**, using native `FaceBakery` with a real
+sprite and the default JOML math options. All bundled block models bake without
+errors. Synthetic coverage includes reversed/degenerate bounds, signed zero,
+arbitrary rotations, rescaling, null geometry children and parent cycles.
+Position, UV and matrix fields compare by exact float bits for these fixtures.
+
+```sh
+python3 tools/test_model_baking_parity.py
+```
+
+This comparison uses the identity blockstate transform. Atlas packing,
+transparency classification, actual tint/light evaluation and GPU rendering
+remain separate from the geometry result. Other operating systems still need
+their native validation runs.
 
 ```sh
 cargo +stable test -p horizon-client

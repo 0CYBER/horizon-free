@@ -16,8 +16,9 @@ record the exact tested scope and remaining gaps.
 The `horizon-assets` crate now decodes pinned cuboid models, with all 2,883 bundled
 block-model JSON files and 2,337 synthetic cases compared against the actual
 client parser. [Decoder scope and validation](native-client.md#validation)
-also include parent/texture resolution over 5,648 roots. Quad baking,
-blockstate selection and integration with the renderer remain unfinished.
+also include parent/texture resolution over 5,648 roots and cuboid baking over
+7,100 roots with identity blockstate transforms. Blockstate selection, transformed
+models, UV locking and integration with the renderer remain unfinished.
 The playable Java performance packs remain available during development.
 
 ## Completion criteria and playable builds
