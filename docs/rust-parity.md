@@ -3,17 +3,14 @@
 The behavior target is the repository's pinned **Minecraft Java Edition 26.3**.
 One-to-one vanilla gameplay parity is the acceptance criterion. It has **not**
 been reached: Horizon's Rust code does not yet run a client, server, or simulation.
-It can read and export region files and access saved and resident block sections.
-Scheduled block/fluid queues can now collect and dispatch callbacks with
-vanilla-checked ordering; the actual block/fluid behavior is still absent.
-Double-precision geometry and voxel-grid queries are implemented, with a registry
-adapter for vanilla's no-context cached collision branch.
-Base noise samplers, octave stacks, normal-noise definitions and bulk density
-sampling are implemented. Compiled density samplers now evaluate constants, gradients,
-shifted noise, all eleven unary operators, rounding and selected arithmetic operations. An initial density graph compiler
-integrates range analysis, specialization, uniform-axis slicing, shared caches,
-nested splines and seeded noise;
-complete graph coverage, serialized graphs and generated terrain remain absent.
+The Rust workspace implements core arithmetic/random streams, world data and
+resident sections, scheduled tick ordering, geometry, contained fluid states,
+noise/density evaluation, biome and terrain generation kernels, material rules,
+and parts of feature placement and decoration. All pinned block-survival
+families now have native differential coverage. Full simulation callbacks,
+complete chunk generation, entity behavior, networking, rendering and playable
+integration remain unfinished. The linked subsystem documents and hashed reports
+record the exact tested scope and remaining gaps.
 The playable Java performance packs remain available during development.
 
 ## Completion criteria and playable builds
@@ -389,7 +386,7 @@ graphs, block writes and live heightmaps. It compares complete final resident
 sections; structures, lighting and the full generation lifecycle remain pending.
 
 The [block-state provider comparison](feature-placement.md#block-state-providers)
-adds **105,340,143 matching lines per JAR** for ten state-provider kinds, including
+adds **257,299,719 matching lines per JAR** for ten state-provider kinds, including
 all eight bundled provider definitions. It includes every state under six
 directions, property transforms, nested draw order and empty selections. Rule-based
 selection includes twelve predicate kinds, ordered conditions, empty results and

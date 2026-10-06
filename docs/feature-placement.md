@@ -458,8 +458,8 @@ a parity report is written only after both native comparisons pass.
 
 Run `python3 tools/test_state_provider_parity.py`. The
 [provider report](../benchmarks/rust-state-provider-2026-10-06/scoped-parity.json)
-records **105,340,143 matching lines per JAR**, with 299,507 codec inputs
-and 39,270,062 requested samples across ten provider kinds. Every pinned state is decoded and tested
+records **257,299,719 matching lines per JAR**, with 356,935 codec inputs
+and 79,473,574 requested samples across ten provider kinds. Every pinned state is decoded and tested
 under all six fixed rotations; random/nested rotations, both sampling methods,
 empty tags, weighted boundaries, fallback query failures and four random-stream
 combinations are compared. Every target state is also tested against
@@ -533,11 +533,14 @@ The `would_survive` predicate now decodes a candidate block state and bounded
 offset, then invokes survival at the translated position without placing it.
 Both provider and feature bindings use the shared block-state codec; placement
 chains forward the survival query. The refreshed provider report records
-**105,340,143 matching lines per JAR**, **299,507 inputs**, **39,270,062 requested
-samples** and **16 predicate kinds**. Its survival snapshot covers 15 rules,
-1,138 definitions and 31,171 candidate states, with each rule tested against the
-entire neighbor-state registry, malformed definitions, wrapped offsets,
-short-circuit conditions, optional-child fallthrough and query failures.
-Unsupported survival definitions remain errors. This report does not establish
-full block placement or every block's survival behavior. Workspace tests,
-warning-free Clippy and **143 Python tests** passed at this snapshot.
+**257,299,719 matching lines per JAR**, **356,935 inputs**, **79,473,574 requested
+samples** and **16 predicate kinds**. Its survival snapshot now covers all
+**51 pinned survival families, 1,286 definitions and 35,723 states**. Behavior
+representatives run against the entire neighbor-state registry, with malformed
+definitions, wrapped offsets, brightness thresholds, short-circuit conditions,
+optional-child fallthrough and query failures. Dynamic support and empty-context
+collision use absent block entities in this integration corpus; animated shulker
+and active-piston snapshots have separate geometry comparisons. This establishes
+the recorded provider/predicate integration, while full block placement, updates
+and gameplay remain pending. Workspace tests, warning-free Clippy and the
+**147-test Python suite** passed.
