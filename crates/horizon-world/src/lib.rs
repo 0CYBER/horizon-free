@@ -19,6 +19,7 @@ pub mod nbt;
 pub mod piston_shape;
 pub mod region;
 pub mod registry;
+pub mod retrogen;
 pub mod tick_data;
 pub mod worldgen;
 

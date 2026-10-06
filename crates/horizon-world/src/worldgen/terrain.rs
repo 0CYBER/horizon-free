@@ -103,6 +103,7 @@ impl From<AquiferError> for TerrainError {
 /// fluid postprocessing offsets for the noise and surface generation stages.
 pub struct TerrainChunk<'r, B: TerrainBlockStates> {
     stage: PreLightChunkStage,
+    below_zero_retrogen: Option<crate::retrogen::BelowZeroRetrogen>,
     position: ChunkPos,
     blocks: TerrainBlocks<'r, B>,
     heightmaps: [Option<Heightmap>; 6],
@@ -111,7 +112,8 @@ pub struct TerrainChunk<'r, B: TerrainBlockStates> {
     fluid_ticks: ProtoChunkTicks,
 }
 /// The persisted generation statuses before lighting initialization. This models
-/// their block-write heightmap selection, not scheduling or persisted metadata.
+/// status-dependent storage and upgrade cleanup, not scheduling, lighting or
+/// save-dirty notifications.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PreLightChunkStage {
     #[default]
@@ -212,6 +214,7 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
             .collect::<io::Result<Vec<_>>>()?;
         Ok(Self {
             stage: PreLightChunkStage::Empty,
+            below_zero_retrogen: None,
             position,
             blocks: TerrainBlocks {
                 min_y,
@@ -249,9 +252,36 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
         self.stage
     }
     /// Changing status alone does not prime or clear any heightmaps. Native
-    /// persisted-status assignment also permits earlier statuses.
+    /// persisted-status assignment also permits earlier statuses. Reaching an
+    /// installed upgrade target clears its metadata; save-dirty tracking is separate.
     pub fn set_generation_stage(&mut self, stage: PreLightChunkStage) {
         self.stage = stage;
+        if self
+            .below_zero_retrogen
+            .as_ref()
+            .is_some_and(|data| stage.status() >= data.target_status())
+        {
+            self.below_zero_retrogen = None;
+        }
+    }
+    pub fn below_zero_retrogen(&self) -> Option<&crate::retrogen::BelowZeroRetrogen> {
+        self.below_zero_retrogen.as_ref()
+    }
+    /// Installation alone does not compare the target with the current status.
+    /// A subsequent persisted-stage assignment performs completion cleanup.
+    pub fn set_below_zero_retrogen(&mut self, data: Option<crate::retrogen::BelowZeroRetrogen>) {
+        self.below_zero_retrogen = data;
+    }
+    pub fn is_upgrading(&self) -> bool {
+        self.below_zero_retrogen.is_some()
+    }
+    /// Generation minimum Y and height. Storage bounds remain unchanged.
+    pub fn height_for_generation(&self) -> (i32, i32) {
+        if self.is_upgrading() {
+            (-64, 64)
+        } else {
+            (self.min_y(), self.height())
+        }
     }
     /// ProtoChunk writes before lighting. The current stage selects heightmaps;
     /// missing maps are primed after existing maps are updated.

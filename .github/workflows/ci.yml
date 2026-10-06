@@ -187,6 +187,14 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_generation_tick_parity.py
+      - name: Compare below-zero upgrade metadata codecs
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_retrogen_data_parity.py
+      - name: Compare below-zero upgrade lifecycle and block transformations
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_retrogen_chunk_parity.py
       - name: Compare chunk-status metadata, ordering and codecs
         env:
           RUSTUP_TOOLCHAIN: stable

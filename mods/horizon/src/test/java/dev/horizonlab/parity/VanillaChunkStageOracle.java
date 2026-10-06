@@ -11,10 +11,16 @@ import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.chunk.*;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.levelgen.BelowZeroRetrogen;
+import com.mojang.serialization.JsonOps;
 
 /** Actual pre-light ProtoChunk writes and persisted-status transitions. */
 public final class VanillaChunkStageOracle {
     private static final Map<String,ChunkStatus> STAGES=new HashMap<>();
+    private static BelowZeroRetrogen upgrade(String target,JsonArray words) {
+        var data=new JsonObject();data.addProperty("target_status",target);data.add("missing_bedrock",words);
+        return BelowZeroRetrogen.CODEC.parse(JsonOps.INSTANCE,data).getOrThrow();
+    }
     public static void main(String[] args) throws Exception {
         if(args[0].equals("export")){VanillaHeightmapOracle.main(args);return;}
         net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();
@@ -33,6 +39,11 @@ public final class VanillaChunkStageOracle {
                     var a=value.getAsJsonArray();String op=a.get(0).getAsString();
                     switch(op) {
                         case "stage"->{String name=a.get(1).getAsString();chunk.setPersistedStatus(STAGES.get(name));out.println("stage "+name);}
+                        case "upgrade"->{chunk.setBelowZeroRetrogen(a.get(1).isJsonNull()?null:upgrade(a.get(1).getAsString(),a.get(2).getAsJsonArray()));out.println("upgrade");}
+                        case "upgrade_info"->{var data=chunk.getBelowZeroRetrogen();var bounds=chunk.getHeightAccessorForGeneration();out.println("upgrade_info "+chunk.isUpgrading()+" "+(data==null?"none":data.targetStatus().getName())+" "+bounds.getMinY()+" "+bounds.getHeight());}
+                        case "replace_bedrock"->{BelowZeroRetrogen.replaceOldBedrock(chunk);out.println("replace_bedrock");}
+                        case "mask"->{upgrade("full",a.get(1).getAsJsonArray()).applyBedrockMask(chunk);out.println("mask");}
+                        case "fill"->{var states=a.get(1).getAsJsonArray();int salt=a.get(2).getAsInt();for(int y=0;y<height;y++)for(int z=0;z<16;z++)for(int x=0;x<16;x++)chunk.setBlockState(new BlockPos((cx<<4)+x,min+y,(cz<<4)+z),Block.stateById(states.get((x+3*y+5*z+salt)%states.size()).getAsInt()),3);out.println("fill");}
                         case "set"->{var p=new BlockPos(a.get(1).getAsInt(),a.get(2).getAsInt(),a.get(3).getAsInt());out.println("set "+Block.getId(chunk.setBlockState(p,Block.stateById(a.get(4).getAsInt()),3)));}
                         case "get"->out.println("get "+Block.getId(chunk.getBlockState(new BlockPos(a.get(1).getAsInt(),a.get(2).getAsInt(),a.get(3).getAsInt()))));
                         case "prime"->{int mask=a.get(1).getAsInt();var kinds=EnumSet.noneOf(Heightmap.Types.class);for(var kind:Heightmap.Types.values())if((mask&(1<<kind.ordinal()))!=0)kinds.add(kind);Heightmap.primeHeightmaps(chunk,kinds);out.println("prime "+mask);}

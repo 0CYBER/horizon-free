@@ -2,9 +2,11 @@
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     DATA_VERSION,
+    chunk_status::ChunkStatus,
     heightmap::{HeightmapState, HeightmapType},
     nbt::Tag,
     registry::{BlockRegistry, BlockStateId},
+    retrogen::BelowZeroRetrogen,
     worldgen::{
         tags::TagDefinitions,
         terrain::{PreLightChunkStage, TerrainBlockStates, TerrainChunk},
@@ -93,6 +95,72 @@ fn fixture(
                     .unwrap();
                 chunk.set_generation_stage(stage);
                 writeln!(out, "stage {}", chunk.generation_stage().name())?;
+            }
+            "upgrade" => {
+                let data = if op[1].is_null() {
+                    None
+                } else {
+                    Some(BelowZeroRetrogen::new(
+                        ChunkStatus::parse(op[1].as_str().unwrap())?,
+                        op[2]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|v| v.as_i64().unwrap() as u64)
+                            .collect(),
+                    )?)
+                };
+                chunk.set_below_zero_retrogen(data);
+                writeln!(out, "upgrade")?;
+            }
+            "upgrade_info" => {
+                let (min_y, height) = chunk.height_for_generation();
+                writeln!(
+                    out,
+                    "upgrade_info {} {} {min_y} {height}",
+                    chunk.is_upgrading(),
+                    chunk
+                        .below_zero_retrogen()
+                        .map_or("none", |data| data.target_status().name())
+                )?;
+            }
+            "replace_bedrock" => {
+                BelowZeroRetrogen::replace_old_bedrock(&mut chunk)?;
+                writeln!(out, "replace_bedrock")?;
+            }
+            "mask" => {
+                let data = BelowZeroRetrogen::new(
+                    ChunkStatus::Full,
+                    op[1]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_i64().unwrap() as u64)
+                        .collect(),
+                )?;
+                data.apply_bedrock_mask(&mut chunk)?;
+                writeln!(out, "mask")?;
+            }
+            "fill" => {
+                let states = op[1].as_array().unwrap();
+                let salt = n(&op[2]);
+                let p = chunk.position();
+                for y in 0..chunk.height() {
+                    for z in 0..16 {
+                        for x in 0..16 {
+                            let state = BlockStateId(n(
+                                &states[((x + 3 * y + 5 * z + salt) as usize) % states.len()]
+                            ) as u32);
+                            chunk.set_block_worldgen(
+                                p.x.wrapping_shl(4).wrapping_add(x),
+                                chunk.min_y().wrapping_add(y),
+                                p.z.wrapping_shl(4).wrapping_add(z),
+                                state,
+                            )?;
+                        }
+                    }
+                }
+                writeln!(out, "fill")?;
             }
             "set" => {
                 let previous = chunk.set_block_worldgen(

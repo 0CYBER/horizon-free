@@ -867,3 +867,29 @@ namespaces, obsolete and malformed names, random strings and nonstring NBT.
 World-crate tests and all-target Clippy pass. Codec error text is normalized.
 Status identities do not execute generation tasks: scheduling, lighting,
 post-light lifecycle transitions and the complete gameplay runtime remain pending.
+
+## Below-zero upgrade data and resident transformations
+
+Resident chunks now hold optional below-zero upgrade data. Installation alone
+keeps the data even if the current stage already exceeds its target; assigning a
+persisted stage at or beyond that target clears it. Upgrading chunks expose the
+-64 through -1 generation interval independently of their storage bounds.
+
+The Rust upgrade codec validates nonempty target statuses, accepts vanilla's
+lenient optional bedrock-hole mask, normalizes trailing zero words and omits an
+empty mask when saving. Hole queries wrap local X/Z coordinates. Resident
+transformations replace bedrock in the old Y = 0 through 4 band with default
+deepslate and clear marked columns through the chunk's current generation height.
+
+The [upgrade-data comparison](../benchmarks/rust-retrogen-data-2026-10-06/scoped-parity.json)
+matches **20,626 lines per reference JAR** across **5,114 codec inputs**, including
+canonical output, all 256 column bits, out-of-footprint bits, signed numeric
+streams, malformed optional fields and random masks. Codec error text is normalized.
+The [resident upgrade comparison](../benchmarks/rust-retrogen-chunk-2026-10-06/scoped-parity.json)
+matches **3,028,057 lines per reference JAR** across **138 fixtures**. It checks all
+nine nonempty targets against the six pre-light stages, repeated/backward stage
+assignments, complete stored sections and heightmap words after replacement and
+masking, partial vertical overlap, empty sections and changed generation bounds.
+World-crate tests and all-target Clippy pass. Save-dirty notifications, post-light
+transitions, biome retention, structure restrictions, automatic generation
+scheduling and full saved-world/gameplay integration remain pending.
