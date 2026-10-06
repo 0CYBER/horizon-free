@@ -497,3 +497,25 @@ outputs are covered. The [entity collision report](../benchmarks/rust-entity-col
 records **158,558 matching lines per JAR**. Workspace Clippy passes. This adds the
 selection helper needed by movement; live entity indexing, lifecycle and
 entity-type policy implementations remain pending.
+
+
+`BorderGeometry` now models stationary and moving world-border extents, cached
+stationary collision geometry, center/absolute-limit changes, tick progression,
+partial-tick bounds and movement proximity. The pinned version decrements size
+transition progress once per tick. Ordinary bounds and collision shapes use the
+previous size while moving; completing the transition installs a stationary
+extent at the target. Collision geometry subtracts the floor/ceil-rounded inner
+column from the infinite outer shape. Boundary predicates retain their asymmetric
+inclusive minimum/exclusive maximum tests and native floating-point order.
+
+`python3 tools/test_world_border_parity.py` compares actual `WorldBorder` mutation
+sequences, extent metadata, complete shape geometry and proximity predicates.
+The [border report](../benchmarks/rust-world-border-2026-10-07/scoped-parity.json)
+records **1,138,830 matching lines per JAR**, including zero/large durations,
+wrapping start timestamps, completion, retargeting, signed zero, extreme finite
+centers/sizes and nonfinite query/interpolation inputs. The supported construction
+and mutation domain requires finite nonnegative sizes, finite centers and
+nonnegative absolute limits/durations. A unit test verifies invalid parameters
+leave the existing extent unchanged; workspace Clippy passes. Saved-data codecs,
+listeners, dirty-state events, damage, synchronization and live movement binding
+remain separate work.

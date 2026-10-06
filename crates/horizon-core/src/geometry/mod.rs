@@ -3,6 +3,7 @@
 //! Operation order and Java floating-point edge cases are deliberate. These are
 //! simulation coordinates; rendering may use a separate camera-relative format.
 
+pub mod border;
 mod movement;
 mod shape;
 mod sweep;
