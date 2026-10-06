@@ -10,6 +10,8 @@ import net.minecraft.client.resources.model.cuboid.*;
 import net.minecraft.client.resources.model.geometry.*;
 import net.minecraft.client.resources.model.sprite.Material;
 import net.minecraft.client.renderer.block.dispatch.ModelState;
+import net.minecraft.client.renderer.block.dispatch.Variant;
+import com.mojang.math.Quadrant;
 import net.minecraft.client.renderer.texture.*;
 import net.minecraft.client.resources.metadata.animation.FrameSize;
 import net.minecraft.core.Direction;
@@ -34,7 +36,7 @@ public final class VanillaModelBakingOracle {
         return new long[][]{{bits(m.m00()),bits(m.m10()),bits(m.m20())},
             {bits(m.m01()),bits(m.m11()),bits(m.m21())},{bits(m.m02()),bits(m.m12()),bits(m.m22())}};
     }
-    private static Object bake(ResolvedModel model, Sprite sprite) throws Exception {
+    private static Map<String,Object> bake(ResolvedModel model, Sprite sprite, ModelState state) throws Exception {
         var geometry=model.getTopGeometry();
         var quads=new ArrayList<Object>(); var matrices=new ArrayList<Object>();
         if(geometry==UnbakedGeometry.EMPTY)return map("quads",quads,"matrices",matrices);
@@ -49,19 +51,24 @@ public final class VanillaModelBakingOracle {
                 var uv=face.uvs();
                 if(uv==null)uv=(CuboidFace.UVs)defaultUv.invoke(null,element.from(),element.to(),entry.getKey());
                 var info=new BakedQuad.MaterialInfo(sprite,null,null,null,null,face.tintIndex(),element.shadeDirectionOverride(),element.lightEmission());
-                var quad=FaceBakery.bakeQuad(INTERNER,element.from(),element.to(),uv,face.rotation(),info,entry.getKey(),new ModelState(){},element.rotation());
+                var quad=FaceBakery.bakeQuad(INTERNER,element.from(),element.to(),uv,face.rotation(),info,entry.getKey(),state,element.rotation());
                 var positions=new long[4][3];var uvs=new long[4][2];
                 for(int i=0;i<4;i++) {
                     var p=quad.position(i);positions[i]=new long[]{bits(p.x()),bits(p.y()),bits(p.z())};
                     long packed=quad.packedUV(i);uvs[i]=new long[]{packed >>> 32,packed & 0xffffffffL};
                 }
                 quads.add(map("positions",positions,"uv",uvs,"facing",quad.direction().getName(),
-                    "cull",face.cullForDirection()==null?null:face.cullForDirection().getName(),"tint",face.tintIndex(),
+                    "cull",face.cullForDirection()==null?null:Direction.rotate(state.transformation().getMatrix(),face.cullForDirection()).getName(),"tint",face.tintIndex(),
                     "shade",element.shadeDirectionOverride()==null?null:element.shadeDirectionOverride().getName(),
                     "light",element.lightEmission(),"material",map("sprite",material.sprite().toString(),"translucent",material.forceTranslucent())));
             }
         }
         return map("quads",quads,"matrices",matrices);
+    }
+    private static Object affine(Matrix4fc matrix) {
+        var rows=new long[3][4];
+        for(int r=0;r<3;r++)for(int c=0;c<4;c++)rows[r][c]=bits(matrix.get(c,r));
+        return rows;
     }
     public static void main(String[] args) throws Exception {
         net.minecraft.SharedConstants.tryDetectVersion();
@@ -77,9 +84,19 @@ public final class VanillaModelBakingOracle {
                 var discovery=new ModelDiscovery(models,MissingCuboidModel.missingModel());
                 discovery.addRoot(resolver->{for(var root:row.getAsJsonArray("roots"))resolver.markDependency(Identifier.parse(root.getAsString()));});
                 var resolved=discovery.resolve();
+                ModelState state=new ModelState(){};
+                if(row.has("transform")) {
+                    var t=row.getAsJsonArray("transform");
+                    state=new Variant.SimpleModelState(Quadrant.values()[t.get(0).getAsInt()],Quadrant.values()[t.get(1).getAsInt()],Quadrant.values()[t.get(2).getAsInt()],t.get(3).getAsBoolean()).asModelState();
+                }
                 for(var root:row.getAsJsonArray("roots")) {
-                    String name=root.getAsString();Object value;
-                    try {value=bake(Objects.requireNonNull(resolved.get(Identifier.parse(name))),sprite);}
+                    String name=root.getAsString();Map<String,Object> value;
+                    try {value=bake(Objects.requireNonNull(resolved.get(Identifier.parse(name))),sprite,state);
+                        if(row.has("transform")) {
+                            var inverse=new ArrayList<Object>();
+                            for(var d:Direction.values())inverse.add(affine(state.inverseFaceTransformation(d)));
+                            value.put("transform",map("matrix",affine(state.transformation().getMatrix()),"inverse_uv",inverse));
+                        }}
                     catch(RuntimeException error) {output.write(JSON.toJson(map("case",index,"name",name,"error",true)));output.newLine();continue;}
                     output.write(JSON.toJson(map("case",index,"name",name,"baked",value)));output.newLine();
                 }

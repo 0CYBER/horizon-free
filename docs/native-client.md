@@ -91,7 +91,8 @@ The [archived decoder result](../benchmarks/rust-resource-number-scanner-2026-10
 records source, fixture and reference hashes. The oracle uses actual client
 classes; those rendering APIs are absent from the server. The decoder, parent
 resolver and baker now feed the development gallery. Blockstate selection, transformed
-models, UV locking and rendered appearance still need their own checks.
+models and UV locking have the separate geometry checks described below. Rendered
+appearance still needs its own checks.
 
 `ModelLibrary` resolves parent geometry, ambient occlusion, GUI lighting and
 each display context. It shares inherited elements rather than cloning them.
@@ -124,10 +125,26 @@ Position, UV and matrix fields compare by exact float bits for these fixtures.
 python3 tools/test_model_baking_parity.py
 ```
 
-This comparison uses the identity blockstate transform. Atlas packing,
+That comparison uses the identity blockstate transform. Atlas packing,
 transparency classification, actual tint/light evaluation and GPU rendering
 remain separate from the geometry result. Other operating systems still need
 their native validation runs.
+
+`BlockModelTransform` now prepares all 64 XYZ quarter-turn combinations once
+and shares them across baked models. It rotates geometry around the block center,
+rotates culling directions and applies UV locking in the original face basis.
+The [transformed baking comparison](../benchmarks/rust-blockstate-transforms-2026-10-06/scoped-parity.json)
+checks every distinct model/rotation/UV-lock tuple in bundled blockstates and
+all 128 rotation/lock combinations on 81 synthetic models, plus further arbitrary
+element rotations. Positions, UVs and every orientation/inverse-face matrix
+compare by exact float bits: 19,704 roots and 148,439 quads match, including
+7,884 bundled model/transform tuples. Quaternion basis rounding and numeric identity
+rechecking are retained. This remains geometry validation; renderer integration,
+atlas packing and pixel parity are separate work.
+
+```sh
+python3 tools/test_blockstate_transform_parity.py
+```
 
 Blockstate resources now decode into ordered variant selectors and multipart
 conditions. The [native blockstate comparison](../benchmarks/rust-blockstate-model-decoding-2026-10-06/scoped-parity.json)
@@ -136,7 +153,7 @@ covers all 1,288 bundled definitions and 1,351 synthetic cases (2,639 total,
 `BlockStateModelDispatcher.CODEC` as the pinned loader. The Rust representation
 preserves single versus weighted variants, all three quarter-turn axes, UV-lock
 flags, positive weights and total-weight limits, ordered selectors, nested
-AND/OR conditions and per-term negation. Transformed baking remains separate work.
+AND/OR conditions and per-term negation.
 
 ```sh
 python3 tools/test_blockstate_model_parity.py

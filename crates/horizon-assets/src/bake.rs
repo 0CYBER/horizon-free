@@ -1,5 +1,7 @@
-//! Cuboid geometry in block units, before blockstate rotation and UV locking.
+//! Cuboid geometry in block units, including blockstate rotation and UV locking.
 use crate::{json::*, model::*, resolve::ResolvedCuboidModel};
+mod transform;
+pub use transform::BlockModelTransform;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelQuad {
@@ -161,6 +163,12 @@ fn facing(vertices: &[[f32; 3]; 4]) -> Option<Direction> {
 }
 
 pub fn bake_model(model: &ResolvedCuboidModel) -> Result<Vec<ModelQuad>> {
+    bake_model_transformed(model, BlockModelTransform::new([0; 3], false))
+}
+pub fn bake_model_transformed(
+    model: &ResolvedCuboidModel,
+    transform: BlockModelTransform,
+) -> Result<Vec<ModelQuad>> {
     let mut output = Vec::new();
     for element in model.elements() {
         let element = element
@@ -173,7 +181,9 @@ pub fn bake_model(model: &ResolvedCuboidModel) -> Result<Vec<ModelQuad>> {
                 sprite: "minecraft:missingno".to_owned(),
                 force_translucent: false,
             });
-            output.push(bake_face(element, face, *direction, matrix, material)?);
+            output.push(bake_face(
+                element, face, *direction, matrix, material, transform,
+            )?);
         }
     }
     Ok(output)
@@ -184,6 +194,7 @@ fn bake_face(
     direction: Direction,
     matrix: Option<ElementMatrix>,
     material: Material,
+    transform: BlockModelTransform,
 ) -> Result<ModelQuad> {
     let mut positions = corners(element.from, element.to, direction).map(|v| v.map(|c| c / 16.0));
     if let (Some(rotation), Some(matrix)) = (&element.rotation, matrix) {
@@ -193,18 +204,23 @@ fn bake_face(
             *vertex = std::array::from_fn(|i| rotated[i] + rotation.origin[i]);
         }
     }
+    positions = positions.map(|v| transform.position(v));
     let bounds = face
         .uv
         .unwrap_or_else(|| default_uv(element.from, element.to, direction));
     let mut uv = std::array::from_fn(|i| {
         let corner = (i + usize::from(face.rotation)) % 4;
-        [
-            bounds[if corner < 2 { 0 } else { 2 }] / 16.0,
-            bounds[if corner == 0 || corner == 3 { 1 } else { 3 }] / 16.0,
-        ]
-        // Native TextureAtlasSprite applies origin + extent * coordinate;
-        // even the unit atlas changes negative zero to positive zero.
-        .map(|value| 0.0 + value)
+        transform
+            .uv(
+                direction,
+                [
+                    bounds[if corner < 2 { 0 } else { 2 }] / 16.0,
+                    bounds[if corner == 0 || corner == 3 { 1 } else { 3 }] / 16.0,
+                ],
+            )
+            // Native TextureAtlasSprite applies origin + extent * coordinate;
+            // even the unit atlas changes negative zero to positive zero.
+            .map(|value| 0.0 + value)
     });
     let normal = facing(&positions);
     if let (None, Some(facing)) = (&element.rotation, normal) {
@@ -232,7 +248,7 @@ fn bake_face(
         positions,
         uv,
         facing: normal.unwrap_or(Direction::Up),
-        cull: face.cull,
+        cull: face.cull.map(|d| transform.direction(d)),
         material,
         tint_index: face.tint_index,
         shade_direction_override: element.shade_direction_override,
