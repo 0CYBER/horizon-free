@@ -731,3 +731,21 @@ fixture dependency: decoration retains its six-feature corpus independently of
 region spring/tick/query probes; regenerated inputs are byte-identical to their
 validated corpora. Gateway entity creation/removal, dirty propagation, exit search
 and teleportation remain pending.
+
+## Bonus chest placement and loot assignment
+
+Bonus chest generation now independently shuffles the chunk's X and Z columns,
+searches motion-blocking-no-leaves heights and checks air or empty collision.
+After a chest write it looks up a randomizable container, consuming a loot seed
+only when one exists, then checks torch survival in native horizontal order.
+Rejected writes retain the subsequent entity and torch operations.
+
+The [bonus-chest comparison](../benchmarks/rust-bonus-chest-2026-10-06/scoped-parity.json)
+matches **1,505,542 lines per reference JAR** across **42,396 fixtures**. All
+35,723 states participate in collision prefixes; complete searches cover both
+random streams, missing/unrelated/chest entities, sole viable columns, exhausted
+searches, repeated mutation, rejected writes, partial failures, extreme positions
+and placement composition. Actual native chest loot-table and seed fields are
+compared. Workspace tests and all-target Clippy pass. Heights and entity existence
+are controlled by the fixture; inventory contents, loot generation, automatic
+entity lifecycle and complete spawn generation remain pending.

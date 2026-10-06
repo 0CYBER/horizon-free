@@ -15,6 +15,7 @@ pub mod block_feature;
 pub mod block_pile;
 pub mod block_predicate;
 pub mod blue_ice;
+pub mod bonus_chest;
 pub mod bulk_section;
 pub mod carver;
 pub mod carving;

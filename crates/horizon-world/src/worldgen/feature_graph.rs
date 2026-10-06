@@ -55,6 +55,7 @@ pub enum FeatureDefinition {
     ReplaceBlobs(super::replace_blobs::ReplaceBlobsFeature),
     EndPodium(super::end_podium::EndPodiumFeature),
     EndGateway(super::end_gateway::EndGatewayFeature),
+    BonusChest(super::bonus_chest::BonusChestFeature),
     Spike(super::spike::SpikeFeature),
     BlueIce(super::blue_ice::BlueIceFeature),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaFeature),
@@ -88,6 +89,7 @@ pub enum FeatureExecutionError<E> {
     ReplaceBlobs(super::replace_blobs::ReplaceBlobsError<E>),
     EndPodium(super::end_podium::EndPodiumError<E>),
     EndGateway(super::end_gateway::EndGatewayError<E>),
+    BonusChest(super::bonus_chest::BonusChestError<E>),
     Spike(super::spike::SpikeError<E>),
     BlueIce(super::blue_ice::BlueIceError<E>),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaError<E>),
@@ -112,6 +114,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::ReplaceBlobs(e) => e.fmt(f),
             Self::EndPodium(e) => e.fmt(f),
             Self::EndGateway(e) => e.fmt(f),
+            Self::BonusChest(e) => e.fmt(f),
             Self::Spike(e) => e.fmt(f),
             Self::BlueIce(e) => e.fmt(f),
             Self::UnderwaterMagma(e) => e.fmt(f),
@@ -306,6 +309,10 @@ impl FeatureDefinition {
                 )
                 .map(Self::ReplaceBlobs)
             }
+            "minecraft:bonus_chest" => super::bonus_chest::BonusChestFeature::new(
+                blocks.ok_or(DecodeError::Field("bonus chest bindings"))?,
+            )
+            .map(Self::BonusChest),
             "minecraft:end_gateway" => super::end_gateway::EndGatewayFeature::from_json(
                 json,
                 blocks.ok_or(DecodeError::Field("end gateway bindings"))?,
@@ -674,6 +681,9 @@ impl FeatureDefinition {
             Self::ReplaceBlobs(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::ReplaceBlobs),
+            Self::BonusChest(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::BonusChest),
             Self::EndGateway(feature) => feature
                 .place(world, origin)
                 .map_err(FeatureExecutionError::EndGateway),

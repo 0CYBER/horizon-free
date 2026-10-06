@@ -26,6 +26,25 @@ pub enum LayerBlock {
     Ground,
 }
 pub trait PlacementContext {
+    /// Test the already-read state's collision shape in an empty entity context.
+    fn state_collision_empty(
+        &mut self,
+        _state: crate::registry::BlockStateId,
+        _position: [i32; 3],
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    /// Look up a randomizable container, then consume a loot seed only when one
+    /// exists. Missing or unrelated block entities are successful no-ops.
+    fn set_block_entity_loot_table(
+        &mut self,
+        _position: [i32; 3],
+        _table: &str,
+        _random: &mut impl horizon_core::random::RandomSource,
+    ) -> Result<(), PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+
     /// Look up the block entity at this position and set its exit only if it is
     /// an End gateway. Missing or other entities are successful no-ops. The
     /// owning world applies the gateway's dirty notification after the update.

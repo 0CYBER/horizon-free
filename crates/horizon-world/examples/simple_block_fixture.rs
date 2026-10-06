@@ -48,6 +48,9 @@ struct World<'a, 'r, W, R> {
     water_mask: u8,
     survival: &'a BlockSurvivalRegistry<'r>,
     support: &'a BlockSupportRegistry<'r>,
+    collision: &'a BlockCollisionRegistry<'r>,
+    loot_container: bool,
+    loot: BTreeMap<[i32; 3], (String, i64)>,
     calls: i32,
     fail: i32,
     reject: i32,
@@ -180,6 +183,30 @@ impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
             return Err(PlacementQueryError::Unavailable);
         }
         Ok(BiomeId(0))
+    }
+    fn state_collision_empty(
+        &mut self,
+        state: BlockStateId,
+        p: [i32; 3],
+    ) -> Result<bool, PlacementQueryError> {
+        let collision = self.collision;
+        collision
+            .collision_shape(self, state, p)
+            .map(|shape| shape.is_empty())
+            .map_err(query)
+    }
+    fn set_block_entity_loot_table(
+        &mut self,
+        p: [i32; 3],
+        table: &str,
+        random: &mut impl RandomSource,
+    ) -> Result<(), PlacementQueryError> {
+        self.event(format_args!("entity {} {} {}", p[0], p[1], p[2]))
+            .map_err(query)?;
+        if self.loot_container {
+            self.loot.insert(p, (table.into(), random.next_long()));
+        }
+        Ok(())
     }
     fn configure_end_gateway(
         &mut self,
@@ -361,6 +388,7 @@ fn fixture<R: RandomSource>(
     blocks: FeatureBlocks,
     survival: &BlockSurvivalRegistry<'_>,
     support: &BlockSupportRegistry<'_>,
+    collision: &BlockCollisionRegistry<'_>,
     fluids: &FluidStateTable,
     water_mask: u8,
     out: &mut impl Write,
@@ -418,6 +446,9 @@ fn fixture<R: RandomSource>(
         })
         .transpose()?;
     let mut world = World {
+        collision,
+        loot_container: f.get("loot_entity").and_then(Value::as_str) == Some("chest"),
+        loot: BTreeMap::new(),
         gateway_entity: f.get("gateway_entity").and_then(Value::as_str) == Some("gateway"),
         gateways: BTreeMap::new(),
         biome,
@@ -499,6 +530,9 @@ fn fixture<R: RandomSource>(
                 writeln!(world.out, "calls {}", world.calls)?;
                 for (p, state) in &world.states {
                     writeln!(world.out, "stored {} {} {} {}", p[0], p[1], p[2], state.0)?;
+                }
+                for (p, (table, seed)) in &world.loot {
+                    writeln!(world.out, "loot {} {} {} {table} {seed}", p[0], p[1], p[2])?;
                 }
                 for (p, (exit, exact)) in &world.gateways {
                     writeln!(
@@ -631,7 +665,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &registry,
         &properties,
         support.clone(),
-        collision,
+        collision.clone(),
         &definitions,
         &tags.tags,
         &fluid_tags.tags,
@@ -709,6 +743,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 blocks,
                 &survival,
                 &support,
+                &collision,
                 &fluids,
                 water_mask,
                 &mut out,
@@ -726,6 +761,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 blocks,
                 &survival,
                 &support,
+                &collision,
                 &fluids,
                 water_mask,
                 &mut out,
