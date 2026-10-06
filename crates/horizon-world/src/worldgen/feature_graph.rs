@@ -48,6 +48,7 @@ pub enum FeatureDefinition {
     BlockPile(super::block_pile::BlockPileFeature),
     Disk(super::disk::DiskFeature),
     Spring(super::spring::SpringFeature),
+    Vines(super::vines::VinesFeature),
     BlockBlob(super::block_blob::BlockBlobFeature),
     SimpleBlock(super::simple_block::SimpleBlockFeature),
     FillLayer(FillLayerFeature),
@@ -253,6 +254,10 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:vines" => super::vines::VinesFeature::new(
+                blocks.ok_or(DecodeError::Field("vine feature bindings"))?,
+            )
+            .map(Self::Vines),
             "minecraft:spring_feature" => super::spring::SpringFeature::from_json(
                 json,
                 blocks.ok_or(DecodeError::Field("spring bindings"))?,
@@ -577,6 +582,10 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::Vines(feature) => feature.place(world, origin).map_err(|e| match e {
+                BlockFeatureError::World(e) => FeatureExecutionError::Basic(FeatureError::World(e)),
+                BlockFeatureError::Query(e) => FeatureExecutionError::Query(e),
+            }),
             Self::Spring(feature) => feature.place(world, origin).map_err(|e| match e {
                 BlockFeatureError::World(e) => FeatureExecutionError::Basic(FeatureError::World(e)),
                 BlockFeatureError::Query(e) => FeatureExecutionError::Query(e),

@@ -41,6 +41,7 @@ pub mod state_provider;
 pub mod tags;
 pub mod terrain;
 pub mod value_provider;
+pub mod vines;
 pub mod weighted;
 use horizon_core::noise::{NoiseBuildError, NormalNoise, Normalization};
 use serde_json::value::RawValue;

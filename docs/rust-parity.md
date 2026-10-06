@@ -485,3 +485,17 @@ covers every state in the gating and neighbor roles, all five-neighbor air/rock/
 other combinations and count pairs, all 37 fluid states, malformed fields, tags,
 wrapped positions, partial failures and nested composition. Workspace tests and
 all-target Clippy pass. Full fluid spreading and world updates remain pending.
+
+## Vine feature attachment
+
+Vine features require an air state at the origin and choose the first acceptable
+attachment in Up/North/South/West/East order. They evaluate actual support and
+collision shapes and return success after the write request, including when the
+world rejects that write. Feature and world random streams are unchanged.
+
+The [vine comparison](../benchmarks/rust-vines-2026-10-06/scoped-parity.json)
+matches **4,315,682 lines per reference JAR** across **224,743 fixtures**, covering
+every origin state and every state on each candidate face, support combinations,
+wrapped positions, partial failures and composed placement. Workspace tests and
+all-target Clippy pass. Vine growth, block updates and complete gameplay remain
+pending; this fixture uses absent dynamic block entities.

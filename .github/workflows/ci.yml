@@ -127,6 +127,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_spring_parity.py
+      - name: Compare vine attachment priority and placement
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_vines_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable
