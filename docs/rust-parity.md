@@ -749,3 +749,19 @@ and placement composition. Actual native chest loot-table and seed fields are
 compared. Workspace tests and all-target Clippy pass. Heights and entity existence
 are controlled by the fixture; inventory contents, loot generation, automatic
 entity lifecycle and complete spawn generation remain pending.
+
+## Recursive chorus generation
+
+Chorus generation now checks its air origin and tagged support, builds and
+refreshes connection states, branches recursively within the native depth and
+distance bounds, and places age-five terminal flowers. Clearance checks exclude
+the parent branch, and rejected writes retain native subsequent reads and draws.
+
+The [chorus comparison](../benchmarks/rust-chorus-plant-2026-10-06/scoped-parity.json)
+matches **8,083,367 lines per reference JAR** across **254,296 fixtures**. Every
+state participates in origin/support gates and five neighbor-connection prefixes.
+Full growth covers 1,024 seeds per random generator, early failure boundaries,
+rejected writes, repeated mutation, random obstacles, wrapped coordinates and
+feature composition. Workspace tests and all-target Clippy pass. Neighbor-update
+execution, random tick growth, drops, rendering and complete End generation remain
+pending.

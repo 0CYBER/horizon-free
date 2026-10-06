@@ -155,6 +155,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_bonus_chest_parity.py
+      - name: Compare recursive chorus generation and connection refreshes
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_chorus_plant_parity.py
       - name: Compare replacement blob search and Manhattan shells
         env:
           RUSTUP_TOOLCHAIN: stable
