@@ -453,3 +453,29 @@ records **3,046,929 matching output lines per JAR**. Six collision import/bindin
 tests pass, including legacy-metadata rejection; workspace Clippy passes.
 Live chunk loading, entity lifecycle, movement and the playable client remain
 separate integration work.
+
+
+`resolve_world_movement` now joins registry-backed block scanning to the native
+step-up decision. It selects entity colliders once, including for zero/underflow
+movement, then collects applicable border and block shapes in native order for
+the initial and optional step query. `try_resolve_step_movement` accepts owned or
+borrowed collider lists and propagates provider failures without returning a
+partial displacement. The shared implementation avoids allocating reference
+lists for owned shapes; existing borrowed callers retain the same API.
+
+`python3 tools/test_world_movement_parity.py` runs actual `Entity.collide` over
+registered blocks and resident Java sections, comparing the Rust world collector
+and step solver. Every registered state appears as an obstacle; additional cases
+cover step heights, grounded/falling motion, ceilings, partial/dynamic blocks,
+chunk boundaries, zero/underflow motion and failures during collection. The
+[world movement report](../benchmarks/rust-world-movement-2026-10-07/scoped-parity.json)
+records **7,062,798 matching lines per JAR**. Entity collider lists, border
+proximity/shapes and collision contexts are controlled fixture inputs. Actual
+entity selection, border state, travel/gravity/velocity, grounded side effects
+and playable integration remain pending.
+
+The [geometry regression](../benchmarks/rust-world-movement-2026-10-07/geometry-regression.json)
+passes again with **1,320,187 lines per JAR**, including the existing native step
+fixtures. All six movement unit tests and workspace Clippy pass. New tests cover
+owned-query failures during both initial and step collection and signed zero
+preservation when collection is skipped.

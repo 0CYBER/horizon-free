@@ -28,6 +28,7 @@ pub mod registry_collision_scan;
 pub mod retrogen;
 pub mod suffocation;
 pub mod tick_data;
+pub mod world_movement;
 pub mod worldgen;
 
 pub const DATA_VERSION: i32 = 5023;

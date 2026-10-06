@@ -100,3 +100,27 @@ where
         )
     }
 }
+
+impl<W: crate::world_movement::EntityMovementWorld> crate::world_movement::EntityMovementWorld
+    for RegistryCollisionWorld<'_, '_, W>
+{
+    type Error = CollisionQueryError<W::Error>;
+    fn entity_collisions(
+        &mut self,
+        entity: crate::entity_obstruction::EntityIdentity,
+        bounds: horizon_core::geometry::Aabb,
+    ) -> Result<Vec<VoxelShape>, Self::Error> {
+        self.world
+            .entity_collisions(entity, bounds)
+            .map_err(CollisionQueryError::Context)
+    }
+    fn movement_border(
+        &mut self,
+        entity: crate::entity_obstruction::EntityIdentity,
+        bounds: horizon_core::geometry::Aabb,
+    ) -> Result<Option<VoxelShape>, Self::Error> {
+        self.world
+            .movement_border(entity, bounds)
+            .map_err(CollisionQueryError::Context)
+    }
+}

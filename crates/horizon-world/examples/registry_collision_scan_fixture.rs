@@ -18,6 +18,7 @@ use horizon_world::{
     registry::{BlockRegistry, BlockStateId},
     registry_collision_scan::{CollisionChunks, RegistryCollisionWorld},
     suffocation::{SuffocationDefinition, SuffocationRegistry},
+    world_movement::{EntityMovementWorld, MovementRequest, resolve_world_movement},
     worldgen::{
         tags::TagDefinitions,
         terrain::{TerrainBlockStates, TerrainChunk},
@@ -185,10 +186,58 @@ impl TerrainBlockStates for Properties {
         Air(self.0[id.0 as usize])
     }
 }
+struct MovementShapes {
+    entities: Vec<VoxelShape>,
+    border: Option<VoxelShape>,
+}
 struct World<'r> {
+    movement: Option<MovementShapes>,
     chunks: BTreeMap<(i32, i32), (TerrainChunk<'r, Properties>, Entities)>,
     global: Entities,
     trace: SharedTrace,
+}
+fn query_bounds(trace: &SharedTrace, label: &str, b: Aabb) -> io::Result<()> {
+    let text = format!(
+        "{label} {:016x} {:016x} {:016x} {:016x} {:016x} {:016x}",
+        b.min(Axis::X).to_bits(),
+        b.min(Axis::Y).to_bits(),
+        b.min(Axis::Z).to_bits(),
+        b.max(Axis::X).to_bits(),
+        b.max(Axis::Y).to_bits(),
+        b.max(Axis::Z).to_bits()
+    );
+    trace.borrow_mut().query(text)
+}
+fn box_shape(v: &Value) -> io::Result<VoxelShape> {
+    VoxelShape::from_box(Aabb::new(
+        Vec3::new(number(&v[0]), number(&v[1]), number(&v[2])),
+        Vec3::new(number(&v[3]), number(&v[4]), number(&v[5])),
+    ))
+    .map_err(io::Error::other)
+}
+impl EntityMovementWorld for World<'_> {
+    type Error = io::Error;
+    fn entity_collisions(
+        &mut self,
+        _: EntityIdentity,
+        bounds: Aabb,
+    ) -> io::Result<Vec<VoxelShape>> {
+        query_bounds(&self.trace, "entities", bounds)?;
+        Ok(self.movement.as_ref().unwrap().entities.clone())
+    }
+    fn movement_border(
+        &mut self,
+        _: EntityIdentity,
+        bounds: Aabb,
+    ) -> io::Result<Option<VoxelShape>> {
+        self.trace.borrow_mut().query("border".to_owned())?;
+        query_bounds(&self.trace, "border-test", bounds)?;
+        let border = &self.movement.as_ref().unwrap().border;
+        if border.is_some() {
+            self.trace.borrow_mut().query("border-shape".to_owned())?;
+        }
+        Ok(border.clone())
+    }
 }
 impl DynamicSupportWorld for World<'_> {
     type Error = io::Error;
@@ -355,7 +404,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .0
                 .set_block_worldgen(x, y, z, BlockStateId(b[3].as_u64().unwrap() as u32))?;
         }
+        let movement = f
+            .get("movement")
+            .map(|m| -> io::Result<_> {
+                Ok(MovementShapes {
+                    entities: m["entities"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(box_shape)
+                        .collect::<io::Result<_>>()?,
+                    border: if m["border"].is_null() {
+                        None
+                    } else {
+                        Some(box_shape(&m["border"])?)
+                    },
+                })
+            })
+            .transpose()?;
         let mut world = World {
+            movement,
             chunks,
             global: Entities {
                 mode: f["entities"][0].as_u64().unwrap(),
@@ -376,6 +444,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Vec3::new(number(&v[0]), number(&v[1]), number(&v[2])),
             Vec3::new(number(&v[3]), number(&v[4]), number(&v[5])),
         );
+        if let Some(m) = f.get("movement") {
+            let v = &m["delta"];
+            let result = resolve_world_movement(
+                &mut bound,
+                MovementRequest {
+                    entity: EntityIdentity(1),
+                    context,
+                    bounds,
+                    movement: Vec3::new(number(&v[0]), number(&v[1]), number(&v[2])),
+                    max_step: number(&m["step"]) as f32,
+                    on_ground: m["grounded"].as_bool().unwrap(),
+                    candidate_budget: 1_000_000,
+                },
+            );
+            let mut t = trace.borrow_mut();
+            match result {
+                Ok(v) => values(&mut t.out, "movement", [v.x, v.y, v.z])?,
+                Err(_) => writeln!(t.out, "error")?,
+            }
+            let calls = t.calls;
+            writeln!(t.out, "done movement {calls}")?;
+            continue;
+        }
         let mut scan = BlockCollisionScan::new(
             &mut bound,
             context,

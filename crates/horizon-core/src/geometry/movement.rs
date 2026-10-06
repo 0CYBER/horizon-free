@@ -37,11 +37,27 @@ pub fn resolve_step_movement<'s>(
     on_ground: bool,
     mut collect: impl FnMut(Aabb) -> Vec<&'s VoxelShape>,
 ) -> Vec3 {
+    try_resolve_step_movement(movement, aabb, max_step, on_ground, |bounds| {
+        Ok::<_, std::convert::Infallible>(collect(bounds))
+    })
+    .unwrap_or_else(|never| match never {})
+}
+
+/// The same movement/step decision with fallible, owned or borrowed collider
+/// collections. A provider failure stops before the next query and returns no
+/// movement result. Existing world-query side effects are not rolled back.
+pub fn try_resolve_step_movement<S: std::borrow::Borrow<VoxelShape>, E>(
+    movement: Vec3,
+    aabb: Aabb,
+    max_step: f32,
+    on_ground: bool,
+    mut collect: impl FnMut(Aabb) -> Result<Vec<S>, E>,
+) -> Result<Vec3, E> {
     let resolved = if movement.length_squared() == 0.0 {
         movement
     } else {
-        let shapes = collect(aabb.expand_towards(movement));
-        resolve_shape_movement(movement, aabb, &shapes)
+        let shapes = collect(aabb.expand_towards(movement))?;
+        resolve_borrowed_shape_movement(movement, aabb, &shapes)
     };
     let landed = movement.y != resolved.y && movement.y < 0.0;
     if max_step > 0.0
@@ -57,23 +73,23 @@ pub fn resolve_step_movement<'s>(
         if !landed {
             query = query.expand_towards(Vec3::new(0.0, -(1.0e-5_f32 as f64), 0.0));
         }
-        let shapes = collect(query);
-        for height in candidate_step_heights(step_box, &shapes, max_step, resolved.y as f32) {
-            let candidate = resolve_shape_movement(
+        let shapes = collect(query)?;
+        for height in borrowed_step_heights(step_box, &shapes, max_step, resolved.y as f32) {
+            let candidate = resolve_borrowed_shape_movement(
                 Vec3::new(movement.x, height as f64, movement.z),
                 step_box,
                 &shapes,
             );
             if candidate.horizontal_distance_squared() > resolved.horizontal_distance_squared() {
-                return candidate.subtract(Vec3::new(
+                return Ok(candidate.subtract(Vec3::new(
                     0.0,
                     aabb.min(Axis::Y) - step_box.min(Axis::Y),
                     0.0,
-                ));
+                )));
             }
         }
     }
-    resolved
+    Ok(resolved)
 }
 
 /// Resolve vanilla's Y-first, magnitude-dependent horizontal axis ordering.
@@ -82,6 +98,13 @@ pub fn resolve_step_movement<'s>(
 /// This helper does not collect shapes, step up, set grounded flags, modify
 /// velocity, or apply inside-block effects.
 pub fn resolve_shape_movement(movement: Vec3, aabb: Aabb, shapes: &[&VoxelShape]) -> Vec3 {
+    resolve_borrowed_shape_movement(movement, aabb, shapes)
+}
+fn resolve_borrowed_shape_movement<S: std::borrow::Borrow<VoxelShape>>(
+    movement: Vec3,
+    aabb: Aabb,
+    shapes: &[S],
+) -> Vec3 {
     if shapes.is_empty() {
         return movement;
     }
@@ -92,8 +115,12 @@ pub fn resolve_shape_movement(movement: Vec3, aabb: Aabb, shapes: &[&VoxelShape]
             continue;
         }
         let moved = aabb.move_by(Vec3::new(result[0], result[1], result[2]));
-        result[axis as usize] =
-            VoxelShape::collide_all(axis, moved, shapes.iter().copied(), amount);
+        result[axis as usize] = VoxelShape::collide_all(
+            axis,
+            moved,
+            shapes.iter().map(std::borrow::Borrow::borrow),
+            amount,
+        );
     }
     Vec3::new(result[0], result[1], result[2])
 }
@@ -107,8 +134,18 @@ pub fn candidate_step_heights(
     max_step: f32,
     current_y: f32,
 ) -> Vec<f32> {
+    borrowed_step_heights(aabb, shapes, max_step, current_y)
+}
+
+fn borrowed_step_heights<S: std::borrow::Borrow<VoxelShape>>(
+    aabb: Aabb,
+    shapes: &[S],
+    max_step: f32,
+    current_y: f32,
+) -> Vec<f32> {
     let mut heights = Vec::<f32>::with_capacity(4);
     for shape in shapes {
+        let shape = shape.borrow();
         for coordinate in shape.coordinates(Axis::Y) {
             let height = (*coordinate - aabb.min(Axis::Y)) as f32;
             if height < 0.0 || height == current_y {
@@ -204,5 +241,44 @@ mod tests {
         );
         assert_eq!(block_floor_height(&empty, || &block), 0.0);
         assert_eq!(block_floor_height(&empty, || &empty), f64::NEG_INFINITY);
+    }
+}
+
+#[cfg(test)]
+mod fallible_tests {
+    use super::*;
+    #[test]
+    fn owned_collision_queries_stop_at_first_failure() {
+        let bounds = Aabb::new(Vec3::new(-0.6, 0.0, 0.2), Vec3::new(-0.2, 1.8, 0.8));
+        let ledge = VoxelShape::from_box(Aabb::new(Vec3::ZERO, Vec3::new(1.0, 0.5, 1.0))).unwrap();
+        for fail in [0, 1] {
+            let mut queries = 0;
+            let result =
+                try_resolve_step_movement(Vec3::new(1.0, 0.0, 0.0), bounds, 0.6, true, |_| {
+                    let call = queries;
+                    queries += 1;
+                    if call == fail {
+                        Err(call)
+                    } else {
+                        Ok(vec![ledge.clone()])
+                    }
+                });
+            assert_eq!(result, Err(fail));
+            assert_eq!(queries, fail + 1);
+        }
+        let result = try_resolve_step_movement(
+            Vec3::new(-0.0, -0.0, -0.0),
+            bounds,
+            0.6,
+            true,
+            |_| -> Result<Vec<VoxelShape>, ()> {
+                panic!("zero movement must skip shape collection")
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            [result.x.to_bits(), result.y.to_bits(), result.z.to_bits()],
+            [(-0.0f64).to_bits(); 3]
+        );
     }
 }
