@@ -30,6 +30,10 @@ pub struct FeatureBlockBindings<'r> {
     pub(crate) air: [BlockStateId; 3],
 }
 impl<'r> FeatureBlockBindings<'r> {
+    pub fn registry(&self) -> &'r BlockRegistry {
+        self.registry
+    }
+
     /// Bind provider resources and precompiled placement operations to this registry.
     pub fn with_state_providers(
         mut self,

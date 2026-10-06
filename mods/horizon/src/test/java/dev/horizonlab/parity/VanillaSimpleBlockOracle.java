@@ -71,6 +71,7 @@ public final class VanillaSimpleBlockOracle {
     var p=((BlockPos)args[0]).immutable();var state=(BlockState)args[1];int call=calls;event("set "+xyz(p)+" "+Block.getId(state)+" "+args[2]);
     int reject=f.get("reject").getAsInt();boolean result=reject==0||call%reject!=0;if(result)states.put(p,state);out.println("written "+result);return result;
    }
+   if(name.equals("scheduleTick")&&args[1] instanceof net.minecraft.world.level.material.Fluid fluid){event("fluidtick "+xyz((BlockPos)args[0])+" "+BuiltInRegistries.FLUID.getKey(fluid)+" "+args[2]);return null;}
    if(name.equals("scheduleTick")){event("tick "+xyz((BlockPos)args[0])+" "+Block.getId(((Block)args[1]).defaultBlockState())+" "+args[2]);return null;}
    if(method.isDefault())return InvocationHandler.invokeDefault(proxy,method,args);
    throw new AssertionError(method);

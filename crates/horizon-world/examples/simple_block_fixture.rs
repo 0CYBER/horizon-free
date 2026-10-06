@@ -134,6 +134,22 @@ fn query(error: impl std::fmt::Display) -> PlacementQueryError {
     PlacementQueryError::Failed(error.to_string())
 }
 impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
+    fn schedule_fluid_tick(
+        &mut self,
+        p: [i32; 3],
+        fluid: horizon_world::fluid::FluidKind,
+        delay: i32,
+    ) -> Result<(), PlacementQueryError> {
+        self.event(format_args!(
+            "fluidtick {} {} {} {} {delay}",
+            p[0],
+            p[1],
+            p[2],
+            fluid.name()
+        ))
+        .map_err(query)?;
+        Ok(())
+    }
     fn mark_postprocessing(&mut self, p: [i32; 3]) -> Result<(), PlacementQueryError> {
         self.event(format_args!("chunk {} {} {}", p[0], p[1], p[2]))
             .map_err(query)?;

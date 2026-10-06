@@ -471,3 +471,17 @@ matches **243,331 lines per reference JAR**, including all 37 fluid states,
 2,432 codec fixtures, encoding, legacy block conversion, and the existing
 contained-fluid/height tests. Workspace tests and all-target Clippy pass.
 Fluid spreading, tick execution and entity interaction remain pending.
+
+## Spring features and fluid tick requests
+
+Spring features preserve above/below/origin gating, the separate west/east/north/
+south/below rock and air-count passes, fluid-to-block conversion, writes with
+flags 2, and immediate fluid tick requests after accepted or rejected writes.
+Fluid tick execution is still separate simulation work.
+
+The [spring comparison](../benchmarks/rust-spring-2026-10-06/scoped-parity.json)
+matches **3,649,087 lines per reference JAR** across **172,141 fixtures**. It
+covers every state in the gating and neighbor roles, all five-neighbor air/rock/
+other combinations and count pairs, all 37 fluid states, malformed fields, tags,
+wrapped positions, partial failures and nested composition. Workspace tests and
+all-target Clippy pass. Full fluid spreading and world updates remain pending.

@@ -123,6 +123,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_block_blob_parity.py
+      - name: Compare spring placement and fluid tick scheduling
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_spring_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable

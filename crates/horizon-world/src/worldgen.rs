@@ -36,6 +36,7 @@ pub mod router;
 pub mod rule_test;
 pub mod settings;
 pub mod simple_block;
+pub mod spring;
 pub mod state_provider;
 pub mod tags;
 pub mod terrain;

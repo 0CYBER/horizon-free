@@ -26,6 +26,14 @@ pub enum LayerBlock {
     Ground,
 }
 pub trait PlacementContext {
+    fn schedule_fluid_tick(
+        &mut self,
+        _position: [i32; 3],
+        _fluid: crate::fluid::FluidKind,
+        _delay: i32,
+    ) -> Result<(), PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
     /// Resolve the containing chunk and mark this position for postprocessing.
     fn mark_postprocessing(&mut self, _position: [i32; 3]) -> Result<(), PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
