@@ -43,6 +43,17 @@ pub struct MovementProperties<'r> {
     definitions: BTreeMap<String, MovementCoefficients>,
 }
 impl<'r> MovementProperties<'r> {
+    pub fn registry(&self) -> &'r BlockRegistry {
+        self.registry
+    }
+    pub fn coefficients(&self, state: BlockStateId) -> io::Result<MovementCoefficients> {
+        let state = self
+            .registry
+            .state(state)
+            .ok_or_else(|| invalid("movement state outside registry"))?;
+        Ok(self.definitions[&state.name])
+    }
+
     pub fn from_nbt(tag: &Tag, registry: &'r BlockRegistry) -> io::Result<Self> {
         if tag.get("DataVersion") != Some(&Tag::Int(DATA_VERSION)) {
             return Err(invalid("movement properties DataVersion mismatch"));

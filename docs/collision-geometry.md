@@ -704,3 +704,20 @@ partial shapes, large coordinates, nonfinite entity boxes, mutations of later
 entities and failures after partial effects. Workspace Clippy passes. Registered
 replacement dispatch, actual entity selection and teleport/network semantics
 remain separate integration work.
+
+
+`block_landing` binds audited native landing/bounce families to every registered
+state. It implements fall-distance reduction, hay/honey damage multipliers,
+slime suppression, powder-snow fall sounds, upward dripstone tips, farmland
+replacement with occupant pushes, turtle-egg destruction/decrement and shelf
+mushroom bounce sounds. Random draws, server-class checks, client flags, spawn
+protection, mob griefing, sounds, writes and events retain native order.
+
+`python3 tools/test_block_landing_parity.py` invokes registered native methods for
+all **35,723 states / 1,286 blocks** with eight entity class families. The
+[registered landing report](../benchmarks/rust-block-landing-2026-10-07/scoped-parity.json)
+records **3,524,267 matching lines per JAR**, including float/double boundaries,
+NaN/infinity, failed writes, callback failures, egg hatch preservation and
+farmland collision pushes. Targeted Clippy passes. Actual health, live entity
+selection/storage, teleport/network behavior, audio playback and full movement
+lifecycle integration remain separate work.

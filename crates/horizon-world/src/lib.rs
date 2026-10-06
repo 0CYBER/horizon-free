@@ -5,6 +5,7 @@ pub mod block_collision;
 pub mod block_collision_scan;
 pub mod block_entities;
 pub mod block_entity_push;
+pub mod block_landing;
 pub mod block_placement;
 pub mod block_properties;
 pub mod block_render;
