@@ -694,3 +694,21 @@ fluid identities, missing chunks, out-of-height positions and time/order overflo
 Workspace tests and all-target Clippy pass. This connects generation-stage queues;
 block/fluid tick execution, complete chunk persistence and full world-generation
 effects remain pending.
+
+## Resident block and fluid queries
+
+Feature regions can bind an immutable snapshot of resolved block/fluid tags and
+contained fluid states. The snapshot shares compiled tables with configured
+features and rejects bindings from a different block registry. Feature access
+forwards fluid, water-tag and block-tag queries against current resident storage.
+Missing tags have no members; missing chunks remain query errors.
+
+The [resident query comparison](../benchmarks/rust-feature-region-queries-2026-10-06/scoped-parity.json)
+matches **29,312,766 lines per reference JAR**, retaining the 192 multi-chunk
+feature/tick fixtures and adding insertion/removal probes for **all 35,723 block
+states**. Each probe checks fluid identity, amount, falling/source/full flags,
+water membership and all 300 bundled block tags plus an absent tag. Negative
+coordinates, chunk edges, outside-height reads and missing chunks are included.
+Workspace tests and all-target Clippy pass; a separate regression covers foreign
+registries, binding lifetime and a custom water tag. These queries do not execute
+fluid spreading, block behavior or lighting.

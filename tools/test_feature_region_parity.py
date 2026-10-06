@@ -8,6 +8,7 @@ from pathlib import Path
 import platform
 import random
 import subprocess
+import zipfile
 
 try:
     from . import lab, test_rust_parity as base, test_worldgen_parity as worldgen
@@ -35,6 +36,7 @@ def corpus(facts):
         [{'type':'count_on_every_layer','count':1},{'type':'offset','x':0,'y':1,'z':0}],
         [{'type':'count','count':2},{'type':'heightmap','heightmap':'WORLD_SURFACE'},{'type':'offset','x':1,'y':0,'z':1}],
     ]
+    fixture_index=0
     for legacy in [False,True]:
         for seed in [0,-1]:
             for stage in ['empty','terrain']:
@@ -42,7 +44,8 @@ def corpus(facts):
                     for reject in [0,3]:
                         for placement in chains:
                             for worldgen in [False,True]:
-                                yield {'worldgen':worldgen,'legacy':legacy,'seed':seed,'stage':stage,'fail':fail,'reject':reject,'placement':placement,'features':features,'tick_commands':ticks,'game_time':9223372036854775807 if worldgen else -9223372036854775808,'tick_order':9223372036854775803 if legacy else -9223372036854775808}
+                                yield {'probe_states':list(range(fixture_index,len(facts['states']),192)),'worldgen':worldgen,'legacy':legacy,'seed':seed,'stage':stage,'fail':fail,'reject':reject,'placement':placement,'features':features,'tick_commands':ticks,'game_time':9223372036854775807 if worldgen else -9223372036854775808,'tick_order':9223372036854775803 if legacy else -9223372036854775808}
+                                fixture_index+=1
 
 
 def main():
@@ -55,6 +58,13 @@ def main():
     lock,jars,libraries=base.verify_artifacts()
     tags=worldgen.tag_resources(jars["server"])
     if not tags or tags!=worldgen.tag_resources(jars["client"]):raise ValueError("client/server block tags differ or are empty")
+    def fluid_resources(jar):
+        with zipfile.ZipFile(jar) as archive:
+            prefix='data/minecraft/tags/fluid/'
+            return {'minecraft:'+name[len(prefix):-5]:archive.read(name).decode('utf-8') for name in sorted(archive.namelist()) if name.startswith(prefix) and name.endswith('.json')}
+    fluid_tags=fluid_resources(jars['server'])
+    if fluid_tags!=fluid_resources(jars['client']):raise ValueError('reference fluid tags differ')
+    (build/'fluid-tags.json').write_text(json.dumps(fluid_tags,separators=(',',':')))
     oracle=lab.ROOT/"mods/horizon/src/test/java/dev/horizonlab/parity/VanillaFeatureRegionOracle.java"
     helper=oracle.with_name("VanillaHeightmapOracle.java")
     placement_helper=oracle.with_name("VanillaPlacementOracle.java")
@@ -76,7 +86,7 @@ def main():
     fixtures=list(corpus(facts));inputs=build/"inputs.txt"
     inputs.write_text("".join(json.dumps(value,separators=(",",":"))+"\n" for value in fixtures),encoding="utf-8")
     (build/"tags.json").write_text(json.dumps(tags,separators=(",",":")),encoding="utf-8")
-    fixture_paths=[inputs,build/"tags.json",build/"facts-client.json",build/"facts-server.json"]
+    fixture_paths=[inputs,build/"tags.json",build/"fluid-tags.json",build/"facts-client.json",build/"facts-server.json"]
     tested_fixtures=base.source_hashes(fixture_paths)
     run(["cargo","build","--release","-p","horizon-world","--example","feature_region_fixture"],"compile-rust")
     metadata=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"],cwd=lab.ROOT,text=True))
@@ -91,9 +101,9 @@ def main():
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixture_paths,tested_fixtures)
     report={"schema":1,"minecraft":lock["minecraft"]["version"],"manifest_sha1":lock["minecraft"]["manifest_sha1"],"platform":platform.platform(),
             "java":subprocess.check_output(["java","--version"],text=True).splitlines()[0],"rustc":subprocess.check_output(["rustc","--version"],text=True).strip(),
-            "block_states":len(facts["states"]),"block_tag_files":len(tags),"fixtures":len(fixtures),"worldgen_random_modes":[False,True],"resident_chunks_per_fixture":9,"requested_placements":sum(len(f["features"])*2 for f in fixtures),"direct_tick_requests":sum(len(f["tick_commands"]) for f in fixtures),
+            "block_states":len(facts["states"]),"direct_state_probes":sum(len(f["probe_states"]) for f in fixtures),"block_tag_files":len(tags),"fixtures":len(fixtures),"worldgen_random_modes":[False,True],"resident_chunks_per_fixture":9,"requested_placements":sum(len(f["features"])*2 for f in fixtures),"direct_tick_requests":sum(len(f["tick_commands"]) for f in fixtures),
             "sources_sha256":tested_sources,"fixtures_sha256":tested_fixtures,"rust_output_sha256":lab.digest(build/"rust.txt","sha256"),"references":references,
-            "scope":"Native FeaturePlacer and three basic block-writing features, a composed sequence of four configured fill layers, single-block replacements, scattered ore and water springs share a world proxy backed by nine actual ProtoChunks. Configured water, horizontal logs, air, out-of-height fills and ore/replacement rules test graph-to-region binding. Initial two-layer stone/dirt terrain, both pre-light heightmap groups, count/square/heightmap/layered modifier chains, repeated placements, direct and WorldgenRandom-wrapped random streams, missing-neighbor errors, rejected writes and injected partial failures are compared. Final complete raw sections, heightmap presence and packed words are compared alongside ordered feature writes, update flags, explicit height queries and subsequent random draws. Rust uses resident registry-backed chunks, lazy heightmap priming and a caller-supplied write callback; imported air/fluid facts and bundled block tags bind independently across authenticated JARs. The proxy supplies storage mutation and actual native default scheduleTick/createTick methods routed through WorldGenTickAccess into each ProtoChunk. Separate block/fluid queues, first-request deduplication, nondefault-state block identity, shared tick-order advancement on duplicates and missing-chunk errors, out-of-height requests and wrapped clock values are compared, including saved queue order and priorities. Actual WorldGenRegion construction, write-zone policy, POIs, block entities, postprocessing execution, lighting, block/fluid tick execution, complete feature registries and complete world generation remain outside this comparison."}
+            "scope":"Native FeaturePlacer and three basic block-writing features, a composed sequence of four configured fill layers, single-block replacements, scattered ore and water springs share a world proxy backed by nine actual ProtoChunks. Configured water, horizontal logs, air, out-of-height fills and ore/replacement rules test graph-to-region binding. Initial two-layer stone/dirt terrain, both pre-light heightmap groups, count/square/heightmap/layered modifier chains, repeated placements, direct and WorldgenRandom-wrapped random streams, missing-neighbor errors, rejected writes and injected partial failures are compared. Final complete raw sections, heightmap presence and packed words are compared alongside ordered feature writes, update flags, explicit height queries and subsequent random draws. Rust uses resident registry-backed chunks, lazy heightmap priming and a caller-supplied write callback; imported air/fluid facts and bundled block tags bind independently across authenticated JARs. The proxy supplies storage mutation and actual native default scheduleTick/createTick methods routed through WorldGenTickAccess into each ProtoChunk. Separate block/fluid queues, first-request deduplication, nondefault-state block identity, shared tick-order advancement on duplicates and missing-chunk errors, out-of-height requests and wrapped clock values are compared, including saved queue order and priorities. All block states are also written into resident chunks, queried through feature access, cleared and queried again; contained fluid identity/amount/falling/source/full flags, water-tag membership and every bundled block tag plus an absent tag are compared. Negative coordinates, chunk edges, outside-height and absent chunks are covered. Block/fluid query bindings are an immutable registry-checked shared snapshot. Actual WorldGenRegion construction, write-zone policy, POIs, block entities, postprocessing execution, lighting, block/fluid tick execution, complete feature registries and complete world generation remain outside this comparison."}
 
     lab.write_json(report_path,report);print(f"Scoped feature-region parity passed: {report_path}")
 

@@ -9,6 +9,7 @@ import java.util.*;
 import net.minecraft.core.*;
 import net.minecraft.core.registries.*;
 import net.minecraft.resources.*;
+import net.minecraft.tags.*;
 import net.minecraft.world.ticks.*;
 import net.minecraft.world.level.material.*;
 import net.minecraft.util.RandomSource;
@@ -27,6 +28,30 @@ public final class VanillaFeatureRegionOracle {
     private static ProtoChunk chunk(Map<ChunkPos,ProtoChunk> chunks,int x,int z) {
         var chunk=chunks.get(new ChunkPos(x>>4,z>>4));if(chunk==null)throw new IllegalArgumentException("missing region chunk");return chunk;
     }
+    private static void bindFluidTags(JsonObject resources) {
+        var registry=BuiltInRegistries.FLUID;
+        var loader=new TagLoader<Holder<Fluid>>((id,required)->registry.get(id).map(value->(Holder<Fluid>)value),"tags/fluid");
+        var definitions=new HashMap<Identifier,List<TagLoader.EntryWithSource>>();
+        for(var item:resources.entrySet()) {
+            var file=TagFile.CODEC.parse(JsonOps.INSTANCE,JsonParser.parseString(item.getValue().getAsString())).getOrThrow();
+            var entries=new ArrayList<TagLoader.EntryWithSource>();
+            for(var entry:file.entries())entries.add(new TagLoader.EntryWithSource(entry,"vanilla"));
+            definitions.put(Identifier.parse(item.getKey()),entries);
+        }
+        var tags=new HashMap<TagKey<Fluid>,List<Holder<Fluid>>>();
+        loader.build(definitions).forEach((id,values)->tags.put(TagKey.create(Registries.FLUID,id),List.copyOf(values)));
+        if(tags.size()!=resources.size())throw new AssertionError("incomplete fluid tags");
+        registry.prepareTagReload(new TagLoader.LoadResult<>(Registries.FLUID,tags)).apply();
+    }
+    private static void queryState(WorldGenLevel world, BlockPos p, List<String> tags, PrintWriter out) {
+        out.println("query "+p.getX()+" "+p.getY()+" "+p.getZ());
+        try { var fluid=world.getFluidState(p); boolean falling=fluid.hasProperty(FlowingFluid.FALLING)&&fluid.getValue(FlowingFluid.FALLING); out.println("fluid "+BuiltInRegistries.FLUID.getKey(fluid.getType())+" "+fluid.getAmount()+" "+falling+" "+fluid.isFull()+" "+fluid.isSource()); }
+        catch(RuntimeException error){out.println("fluid error");}
+        try {out.println("water "+world.isWaterAt(p));}catch(RuntimeException error){out.println("water error");}
+        var bits=new StringBuilder();
+        for(var tag:tags){try{bits.append(world.getBlockState(p).is(TagKey.create(Registries.BLOCK,Identifier.parse(tag)))?'1':'0');}catch(RuntimeException error){bits.append('E');}}
+        out.println("tags "+bits);
+    }
     @SuppressWarnings("unchecked")
     public static void main(String[] args) throws Exception {
         if(args[0].equals("export")){VanillaHeightmapOracle.main(args);return;}
@@ -36,6 +61,8 @@ public final class VanillaFeatureRegionOracle {
         var ids=new IdMapper<Holder<Biome>>();ids.add(biome);
         var factory=new PalettedContainerFactory(Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY),Blocks.AIR.defaultBlockState(),null,Strategy.createForBiomes(ids),biome,null);
         VanillaHeightmapOracle.bindTags(JsonParser.parseString(Files.readString(dir.resolve("tags.json"))).getAsJsonObject());
+        bindFluidTags(JsonParser.parseString(Files.readString(dir.resolve("fluid-tags.json"))).getAsJsonObject());
+        var queryTags=new ArrayList<>(new TreeSet<>(JsonParser.parseString(Files.readString(dir.resolve("tags.json"))).getAsJsonObject().keySet()));queryTags.add("horizon:absent");
         var contextMethod=VanillaPlacementOracle.class.getDeclaredMethod("context",JsonObject.class);contextMethod.setAccessible(true);
         var bounds=new JsonObject();bounds.add("context",JsonParser.parseString("[-64,64,0]"));
         var generator=((PlacementContext)contextMethod.invoke(null,bounds)).generator();
@@ -71,7 +98,7 @@ public final class VanillaFeatureRegionOracle {
                     case "getFluidTicks"->fluidTicks;
                     case "getGameTime"->f.get("game_time").getAsLong();
                     case "nextSubTickCount"->tickOrder[0]++;
-                    case "scheduleTick","createTick","isEmptyBlock"->InvocationHandler.invokeDefault(proxy,method,values);
+                    case "scheduleTick","createTick","isEmptyBlock","isWaterAt"->InvocationHandler.invokeDefault(proxy,method,values);
                     case "getMinY"->-64;
                     case "getSeaLevel"->0;
                     case "getHeight"->{
@@ -79,6 +106,7 @@ public final class VanillaFeatureRegionOracle {
                         var kind=(Heightmap.Types)values[0];int x=(Integer)values[1],z=(Integer)values[2];yield chunk(chunks,x,z).getHeight(kind,x&15,z&15)+1;
                     }
                     case "getMaxY","isInsideBuildHeight","isOutsideBuildHeight","setBlockAndUpdate"->InvocationHandler.invokeDefault(proxy,method,values);
+                    case "getFluidState"->{var p=(BlockPos)values[0];yield chunk(chunks,p.getX(),p.getZ()).getFluidState(p);}
                     case "getBlockState"->{var p=(BlockPos)values[0];yield chunk(chunks,p.getX(),p.getZ()).getBlockState(p);}
                     case "setBlock"->{
                         var p=(BlockPos)values[0];var state=(BlockState)values[1];int flags=(Integer)values[2];
@@ -107,6 +135,15 @@ public final class VanillaFeatureRegionOracle {
                     try{if(kind.equals("block"))world.scheduleTick(p,Block.stateById(id).getBlock(),delay);else world.scheduleTick(p,fluids[id],delay);out.println("tickresult ok");}catch(RuntimeException error){out.println("tickresult error");}
                     out.println("tickorder "+tickOrder[0]);
                 }
+                for(var value:f.getAsJsonArray("probe_states")) {
+                    int id=value.getAsInt();int[] xyz=new int[][]{{0,-64,0},{-1,-49,-1},{16,-1,16},{31,-32,31}}[id%4];var p=new BlockPos(xyz[0],xyz[1],xyz[2]);
+                    out.println("probe "+id);
+                    for(var state:new BlockState[]{Block.stateById(id),Blocks.AIR.defaultBlockState()}) {
+                        chunk(chunks,p.getX(),p.getZ()).setBlockState(p,state,3);
+                        queryState(world,p,queryTags,out);
+                    }
+                }
+                for(int[] xyz:new int[][]{{0,-65,0},{31,0,31},{-1,Integer.MIN_VALUE,-1},{16,Integer.MAX_VALUE,16},{-17,-40,0},{32,-40,0},{Integer.MAX_VALUE,Integer.MIN_VALUE,0}})queryState(world,new BlockPos(xyz[0],xyz[1],xyz[2]),queryTags,out);
                 for(var entry:chunks.entrySet()) {
                     var cp=entry.getKey();var chunk=entry.getValue();out.println("chunk "+cp.x()+" "+cp.z());
                     out.println("blockticks "+chunk.getBlockTicks().count());

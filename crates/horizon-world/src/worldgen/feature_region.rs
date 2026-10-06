@@ -21,11 +21,20 @@ use horizon_core::{
         WorldGenTickContainers,
     },
 };
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
+
+struct RegionBlockQueries {
+    fluids: super::fluid_predicate::FluidPredicateBindings,
+    tags: BTreeMap<String, Arc<BTreeSet<BlockStateId>>>,
+}
 
 #[derive(Debug)]
 pub enum RegionError {
     InvalidChunks,
+    InvalidBindings,
     InvalidTickState(BlockStateId),
     MissingChunk([i32; 2]),
     Terrain(TerrainError),
@@ -56,6 +65,7 @@ pub struct TerrainRegion<'r, B: TerrainBlockStates> {
     sea_level: i32,
     game_time: i64,
     next_tick_order: i64,
+    block_queries: Option<RegionBlockQueries>,
 }
 impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn new(
@@ -84,6 +94,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
             sea_level: generator.sea_level,
             game_time: 0,
             next_tick_order: 0,
+            block_queries: None,
             min_y,
             height,
             generation: WorldGenerationContext::with_generator(
@@ -94,6 +105,24 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
                 generator.sea_level,
             ),
         })
+    }
+    /// Bind an immutable snapshot of fluid states and resolved block/fluid tags.
+    /// Tables are shared with configured features; registry identities must match.
+    pub fn with_block_bindings(
+        mut self,
+        bindings: &super::block_feature::FeatureBlockBindings<'r>,
+    ) -> Result<Self, RegionError> {
+        if !std::ptr::eq(
+            self.chunks.first_key_value().unwrap().1.registry(),
+            bindings.registry(),
+        ) {
+            return Err(RegionError::InvalidBindings);
+        }
+        self.block_queries = Some(RegionBlockQueries {
+            fluids: bindings.fluids.clone(),
+            tags: bindings.tags.clone(),
+        });
+        Ok(self)
     }
     /// Supply the owning world's current time and region-local next tick order.
     pub fn with_tick_clock(mut self, game_time: i64, next_tick_order: i64) -> Self {
@@ -107,6 +136,8 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn set_game_time(&mut self, game_time: i64) {
         self.game_time = game_time;
     }
+    /// Raw tick identities are default block-state IDs for block ticks and
+    /// `FluidKind` discriminants for fluid ticks, in separate namespaces.
     pub fn schedule_tick(
         &mut self,
         kind: TickKind,
@@ -217,6 +248,45 @@ impl<B: TerrainBlockStates> WorldGenTickContainers for RegionTickContainers<'_, 
     }
 }
 impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
+    fn fluid_state(
+        &mut self,
+        position: [i32; 3],
+    ) -> Result<crate::fluid::FluidState, PlacementQueryError> {
+        let queries = self
+            .block_queries
+            .as_ref()
+            .ok_or(PlacementQueryError::Unavailable)?;
+        let state = self.block(position)?;
+        queries
+            .fluids
+            .state(state)
+            .ok_or_else(|| PlacementQueryError::Failed("fluid state outside bound registry".into()))
+    }
+    fn water_at(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        let queries = self
+            .block_queries
+            .as_ref()
+            .ok_or(PlacementQueryError::Unavailable)?;
+        Ok(queries
+            .fluids
+            .state_matches_tag(self.block(position)?, "minecraft:water"))
+    }
+    fn block_matches_tag(
+        &mut self,
+        position: [i32; 3],
+        tag: &str,
+    ) -> Result<bool, PlacementQueryError> {
+        let queries = self
+            .block_queries
+            .as_ref()
+            .ok_or(PlacementQueryError::Unavailable)?;
+        let state = self.block(position)?;
+        Ok(queries
+            .tags
+            .get(tag)
+            .is_some_and(|states| states.contains(&state)))
+    }
+
     fn schedule_block_tick(
         &mut self,
         position: [i32; 3],
@@ -314,6 +384,23 @@ impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
     }
 }
 impl<B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, '_, B, F> {
+    fn fluid_state(
+        &mut self,
+        position: [i32; 3],
+    ) -> Result<crate::fluid::FluidState, PlacementQueryError> {
+        self.region.fluid_state(position)
+    }
+    fn water_at(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        self.region.water_at(position)
+    }
+    fn block_matches_tag(
+        &mut self,
+        position: [i32; 3],
+        tag: &str,
+    ) -> Result<bool, PlacementQueryError> {
+        self.region.block_matches_tag(position, tag)
+    }
+
     fn schedule_block_tick(
         &mut self,
         position: [i32; 3],

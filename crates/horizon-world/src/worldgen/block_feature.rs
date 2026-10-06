@@ -24,7 +24,7 @@ pub struct FeatureBlockBindings<'r> {
     physical_properties: Option<[BoundBlockProperty; 4]>,
     pub(crate) occlusion_faces: Option<crate::block_properties::BoundOcclusionFaces>,
     biomes: Option<Arc<super::biome_predicate::BiomePredicateBindings>>,
-    fluids: super::fluid_predicate::FluidPredicateBindings,
+    pub(crate) fluids: super::fluid_predicate::FluidPredicateBindings,
     pub(crate) codec: BlockStateJsonCodec<'r>,
     pub(crate) blocks: BTreeMap<String, Arc<BTreeSet<BlockStateId>>>,
     pub(crate) tags: BTreeMap<String, Arc<BTreeSet<BlockStateId>>>,

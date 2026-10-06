@@ -78,6 +78,8 @@ fn fixture(
     f: &Value,
     registry: &BlockRegistry,
     states: &[State],
+    bindings: &FeatureBlockBindings<'_>,
+    tags: &[String],
     out: &mut impl Write,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let seed = f["seed"].as_i64().unwrap();
@@ -85,19 +87,39 @@ fn fixture(
         f["legacy"].as_bool().unwrap(),
         f["worldgen"].as_bool().unwrap(),
     ) {
-        (true, false) => run(f, registry, states, out, LegacyRandom::new(seed)),
+        (true, false) => run(
+            f,
+            registry,
+            states,
+            bindings,
+            tags,
+            out,
+            LegacyRandom::new(seed),
+        ),
         (true, true) => run(
             f,
             registry,
             states,
+            bindings,
+            tags,
             out,
             WorldgenRandom::new(LegacyRandom::new(seed)),
         ),
-        (false, false) => run(f, registry, states, out, XoroshiroRandom::new(seed)),
+        (false, false) => run(
+            f,
+            registry,
+            states,
+            bindings,
+            tags,
+            out,
+            XoroshiroRandom::new(seed),
+        ),
         (false, true) => run(
             f,
             registry,
             states,
+            bindings,
+            tags,
             out,
             WorldgenRandom::new(XoroshiroRandom::new(seed)),
         ),
@@ -107,6 +129,8 @@ fn run(
     f: &Value,
     registry: &BlockRegistry,
     states: &[State],
+    bindings: &FeatureBlockBindings<'_>,
+    tags: &[String],
     out: &mut impl Write,
     mut random: impl RandomSource,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -145,16 +169,14 @@ fn run(
         .with_tick_clock(
             f["game_time"].as_i64().unwrap(),
             f["tick_order"].as_i64().unwrap(),
-        );
+        )
+        .with_block_bindings(bindings)?;
     let blocks = FeatureBlocks::from_registry(registry)?;
-    // These configured fixture states use compact names and an enum property;
-    // no integer-property parsing is requested by this region corpus.
-    let bindings = FeatureBlockBindings::new(registry, BTreeSet::new())?;
     let features = f["features"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| FeatureDefinition::from_json_with_blocks(&v.to_string(), &bindings))
+        .map(|v| FeatureDefinition::from_json_with_blocks(&v.to_string(), bindings))
         .collect::<Result<Vec<_>, _>>()?;
     let modifiers = f["placement"]
         .as_array()
@@ -236,6 +258,30 @@ fn run(
         )?;
         writeln!(out, "tickorder {}", region.tick_clock().1)?;
     }
+    for id in f["probe_states"].as_array().unwrap() {
+        let id = n(id) as u32;
+        let p = [[0, -64, 0], [-1, -49, -1], [16, -1, 16], [31, -32, 31]][id as usize % 4];
+        writeln!(out, "probe {id}")?;
+        for state in [
+            BlockStateId(id),
+            registry.default_state("minecraft:air").unwrap(),
+        ] {
+            region.set_block_worldgen(p, state)?;
+            let mut world = TerrainFeatureAccess::new(&mut region, ());
+            query_state(&mut world, p, tags, out)?;
+        }
+    }
+    for p in [
+        [0, -65, 0],
+        [31, 0, 31],
+        [-1, i32::MIN, -1],
+        [16, i32::MAX, 16],
+        [-17, -40, 0],
+        [32, -40, 0],
+        [i32::MAX, i32::MIN, 0],
+    ] {
+        query_state(&mut region, p, tags, out)?;
+    }
     for chunk in region.chunks() {
         let p = chunk.position();
         writeln!(out, "chunk {} {}", p.x, p.z)?;
@@ -279,6 +325,39 @@ fn run(
     }
     writeln!(out, "tail {}", random.next_long())?;
     Ok(())
+}
+fn query_state(
+    world: &mut impl PlacementContext,
+    p: [i32; 3],
+    tags: &[String],
+    out: &mut impl Write,
+) -> io::Result<()> {
+    writeln!(out, "query {} {} {}", p[0], p[1], p[2])?;
+    match world.fluid_state(p) {
+        Ok(fluid) => writeln!(
+            out,
+            "fluid {} {} {} {} {}",
+            fluid.kind().name(),
+            fluid.amount(),
+            fluid.falling(),
+            fluid.is_full(),
+            fluid.is_source()
+        )?,
+        Err(_) => writeln!(out, "fluid error")?,
+    }
+    match world.water_at(p) {
+        Ok(water) => writeln!(out, "water {water}")?,
+        Err(_) => writeln!(out, "water error")?,
+    }
+    let mut bits = String::new();
+    for tag in tags {
+        bits.push(match world.block_matches_tag(p, tag) {
+            Ok(true) => '1',
+            Ok(false) => '0',
+            Err(_) => 'E',
+        });
+    }
+    writeln!(out, "tags {bits}")
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = std::env::args().nth(1).expect("private fixture directory");
@@ -329,9 +408,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .collect();
+    let fluid_resources: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&fs::read_to_string(dir.join("fluid-tags.json"))?)?;
+    let mut fluid_defs = TagDefinitions::default();
+    for (name, text) in fluid_resources {
+        fluid_defs.apply_json(&name, "vanilla", &text)?;
+    }
+    let fluid_tags =
+        fluid_defs.build(|name, _| FluidKind::from_name(name).map(|_| name.to_owned()))?;
+    assert!(fluid_tags.missing.is_empty());
+    let bindings = FeatureBlockBindings::with_tags(&registry, BTreeSet::new(), &built.tags)?
+        .with_fluid_tags(&fluid_tags.tags)?;
+    let tags: Vec<_> = built
+        .tags
+        .keys()
+        .cloned()
+        .chain(std::iter::once("horizon:absent".into()))
+        .collect();
     let mut out = io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
     for line in fs::read_to_string(dir.join("inputs.txt"))?.lines() {
-        fixture(&serde_json::from_str(line)?, &registry, &states, &mut out)?;
+        fixture(
+            &serde_json::from_str(line)?,
+            &registry,
+            &states,
+            &bindings,
+            &tags,
+            &mut out,
+        )?;
     }
     out.flush()?;
     Ok(())

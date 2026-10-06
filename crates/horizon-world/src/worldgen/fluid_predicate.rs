@@ -5,6 +5,7 @@ use crate::{
     registry::{BlockRegistry, BlockStateId},
 };
 use std::{collections::BTreeMap, sync::Arc};
+#[derive(Clone)]
 pub struct FluidPredicateBindings {
     table: Arc<FluidStateTable>,
     tags: BTreeMap<String, u8>,
@@ -43,6 +44,17 @@ impl FluidPredicateBindings {
         }
         self.tags = resolved;
         Ok(self)
+    }
+    pub fn state(&self, block: BlockStateId) -> Option<crate::fluid::FluidState> {
+        self.table.get(block)
+    }
+    /// Missing tags have no members, as for a native tag-key membership query.
+    pub fn state_matches_tag(&self, block: BlockStateId, tag: &str) -> bool {
+        self.table.get(block).is_some_and(|state| {
+            self.tags
+                .get(tag)
+                .is_some_and(|mask| state.kind().mask() & mask != 0)
+        })
     }
     pub fn resolve(&self, json: &str) -> Result<BoundFluidSet, DecodeError> {
         let mask = if let Ok(name) = serde_json::from_str::<String>(json) {

@@ -47,6 +47,7 @@ fn registry() -> BlockRegistry {
         "minecraft:grass_block",
         "minecraft:mycelium",
         "minecraft:dirt",
+        "minecraft:cave_air",
     ];
     BlockRegistry::from_nbt(&Tag::compound([
         ("DataVersion", Tag::Int(DATA_VERSION)),
@@ -55,7 +56,18 @@ fn registry() -> BlockRegistry {
             Tag::List(
                 names
                     .iter()
-                    .map(|name| Tag::compound([("id", Tag::String((*name).into()))]))
+                    .map(|name| {
+                        let mut tag = Tag::compound([("id", Tag::String((*name).into()))]);
+                        if *name == "minecraft:water" {
+                            if let Tag::Compound(entries) = &mut tag {
+                                entries.insert(
+                                    "properties".into(),
+                                    Tag::compound([("level", Tag::String("0".into()))]),
+                                );
+                            }
+                        }
+                        tag
+                    })
                     .collect(),
             ),
         ),
@@ -171,4 +183,63 @@ fn postprocessing_routes_to_resident_chunks_and_preserves_partial_marks() {
         region.chunk(-1, 1).unwrap().postprocessing(),
         &[vec![255, 255], vec![3840]]
     );
+}
+
+#[test]
+fn query_bindings_reject_foreign_registries_and_preserve_resolved_tag_snapshot() {
+    use horizon_world::{
+        fluid::FluidKind,
+        worldgen::{block_feature::FeatureBlockBindings, placement::PlacementQueryError},
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+    let foreign = registry();
+    let registry = registry();
+    let chunk = || TerrainChunk::new(ChunkPos::new(-1, 0), 0, 16, &registry, Properties).unwrap();
+    let context = WorldGenerationContext::new(0, 16, 8);
+    let bindings = FeatureBlockBindings::new(&foreign, BTreeSet::new()).unwrap();
+    assert!(matches!(
+        TerrainRegion::new(vec![chunk()], context)
+            .unwrap()
+            .with_block_bindings(&bindings),
+        Err(RegionError::InvalidBindings)
+    ));
+    let mut region = TerrainRegion::new(vec![chunk()], context).unwrap();
+    assert_eq!(
+        region.fluid_state([-1, 0, 0]),
+        Err(PlacementQueryError::Unavailable)
+    );
+    let tags = BTreeMap::from([("horizon:ground".into(), vec!["minecraft:stone".into()])]);
+    // Deliberately make the water tag contain EMPTY, not water, to catch a
+    // hard-coded water-family check instead of resolved tag membership.
+    let fluids = BTreeMap::from([("minecraft:water".into(), vec!["minecraft:empty".into()])]);
+    let bindings = FeatureBlockBindings::with_tags(&registry, BTreeSet::new(), &tags)
+        .unwrap()
+        .with_fluid_tags(&fluids)
+        .unwrap();
+    region = region.with_block_bindings(&bindings).unwrap();
+    drop(bindings);
+    region
+        .set_block_worldgen([-1, 0, 0], BlockStateId(3))
+        .unwrap();
+    assert_eq!(
+        region.fluid_state([-1, 0, 0]).unwrap().kind(),
+        FluidKind::Water
+    );
+    assert!(!region.water_at([-1, 0, 0]).unwrap());
+    region
+        .set_block_worldgen([-1, 0, 0], BlockStateId(2))
+        .unwrap();
+    assert!(
+        region
+            .block_matches_tag([-1, 0, 0], "horizon:ground")
+            .unwrap()
+    );
+    assert!(
+        !region
+            .block_matches_tag([-1, 0, 0], "horizon:missing")
+            .unwrap()
+    );
+    assert!(region.water_at([-1, 0, 0]).unwrap());
+    assert!(region.water_at([-1, 16, 0]).unwrap());
+    assert!(region.fluid_state([0, 0, 0]).is_err());
 }
