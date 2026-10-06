@@ -654,3 +654,18 @@ The shared fixture now supports player probes alongside direct movement and
 collision checks; workspace Clippy passes. Entity lists, border applicability and
 collision contexts remain controlled snapshots. A complete player movement/travel
 loop and playable client remain pending.
+
+
+`check_fall_damage` now implements base-entity fall-distance accumulation and
+landing order. Downward displacement narrows to float before being subtracted
+from the double fall distance. Grounded landings call the block, read the
+possibly changed position/support, emit the ground event and reset fall distance.
+Errors preserve completed field writes and callback effects.
+
+`python3 tools/test_fall_damage_parity.py` runs actual `Entity.checkFallDamage`
+with controlled water, landing and event providers. The
+[base fall report](../benchmarks/rust-fall-damage-2026-10-07/scoped-parity.json)
+records **44,566 matching lines per JAR**, including nonfinite arithmetic, float
+underflow, callback mutations and failures at every boundary. Workspace Clippy
+passes. Living-entity fluid/particle behavior, registered block landing effects,
+health/damage and full movement remain pending.
