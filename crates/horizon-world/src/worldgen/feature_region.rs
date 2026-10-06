@@ -9,15 +9,24 @@ use super::{
     terrain::{PreLightChunkStage, TerrainBlockStates, TerrainChunk, TerrainError},
 };
 use crate::{
+    fluid::FluidKind,
     heightmap::{HeightmapState, HeightmapType},
     registry::BlockStateId,
+    tick_data::TickKind,
 };
-use horizon_core::position::BlockPos;
+use horizon_core::{
+    position::BlockPos,
+    ticks::{
+        ProtoChunkTicks, ScheduledTick, TickPriority, TickTypeId, WorldGenTickAccess,
+        WorldGenTickContainers,
+    },
+};
 use std::collections::BTreeMap;
 
 #[derive(Debug)]
 pub enum RegionError {
     InvalidChunks,
+    InvalidTickState(BlockStateId),
     MissingChunk([i32; 2]),
     Terrain(TerrainError),
     Biome(BiomeRegionError),
@@ -45,6 +54,8 @@ pub struct TerrainRegion<'r, B: TerrainBlockStates> {
     height: i32,
     generation: WorldGenerationContext,
     sea_level: i32,
+    game_time: i64,
+    next_tick_order: i64,
 }
 impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn new(
@@ -71,6 +82,8 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         Ok(Self {
             chunks: stored,
             sea_level: generator.sea_level,
+            game_time: 0,
+            next_tick_order: 0,
             min_y,
             height,
             generation: WorldGenerationContext::with_generator(
@@ -81,6 +94,52 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
                 generator.sea_level,
             ),
         })
+    }
+    /// Supply the owning world's current time and region-local next tick order.
+    pub fn with_tick_clock(mut self, game_time: i64, next_tick_order: i64) -> Self {
+        self.game_time = game_time;
+        self.next_tick_order = next_tick_order;
+        self
+    }
+    pub fn tick_clock(&self) -> (i64, i64) {
+        (self.game_time, self.next_tick_order)
+    }
+    pub fn set_game_time(&mut self, game_time: i64) {
+        self.game_time = game_time;
+    }
+    pub fn schedule_tick(
+        &mut self,
+        kind: TickKind,
+        tick: ScheduledTick,
+    ) -> Result<bool, RegionError> {
+        WorldGenTickAccess::new(RegionTickContainers { region: self, kind }).schedule(tick)
+    }
+    pub fn has_scheduled_tick(
+        &mut self,
+        kind: TickKind,
+        position: BlockPos,
+        tick_type: TickTypeId,
+    ) -> Result<bool, RegionError> {
+        WorldGenTickAccess::new(RegionTickContainers { region: self, kind })
+            .has_scheduled(position, tick_type)
+    }
+    fn request_tick(
+        &mut self,
+        kind: TickKind,
+        position: [i32; 3],
+        tick_type: TickTypeId,
+        delay: i32,
+    ) -> Result<(), RegionError> {
+        let tick = ScheduledTick {
+            kind: tick_type,
+            pos: BlockPos::new(position[0], position[1], position[2]),
+            trigger_tick: self.game_time.wrapping_add(i64::from(delay)),
+            priority: TickPriority::Normal,
+            sub_tick_order: self.next_tick_order,
+        };
+        self.next_tick_order = self.next_tick_order.wrapping_add(1);
+        self.schedule_tick(kind, tick)?;
+        Ok(())
     }
     /// Override world sea level without changing generator placement anchors.
     pub fn with_world_sea_level(mut self, sea_level: i32) -> Self {
@@ -142,7 +201,54 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
             .set_block_worldgen(x, y, z, state)?)
     }
 }
+struct RegionTickContainers<'a, 'r, B: TerrainBlockStates> {
+    region: &'a mut TerrainRegion<'r, B>,
+    kind: TickKind,
+}
+impl<B: TerrainBlockStates> WorldGenTickContainers for RegionTickContainers<'_, '_, B> {
+    type Container = ProtoChunkTicks;
+    type Error = RegionError;
+    fn container_at(&mut self, p: BlockPos) -> Result<&mut ProtoChunkTicks, RegionError> {
+        let chunk = self.region.chunk_mut(p.x >> 4, p.z >> 4)?;
+        Ok(match self.kind {
+            TickKind::Block => chunk.block_ticks_mut(),
+            TickKind::Fluid => chunk.fluid_ticks_mut(),
+        })
+    }
+}
 impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
+    fn schedule_block_tick(
+        &mut self,
+        position: [i32; 3],
+        block: BlockStateId,
+        delay: i32,
+    ) -> Result<(), PlacementQueryError> {
+        let registry = self
+            .chunks
+            .first_key_value()
+            .expect("nonempty region")
+            .1
+            .registry();
+        let state = registry
+            .state(block)
+            .ok_or(RegionError::InvalidTickState(block))?;
+        // Default state IDs provide one identity per block, separate from fluids.
+        let block = registry
+            .default_state(&state.name)
+            .ok_or(RegionError::InvalidTickState(block))?;
+        self.request_tick(TickKind::Block, position, TickTypeId(block.0), delay)
+            .map_err(Into::into)
+    }
+    fn schedule_fluid_tick(
+        &mut self,
+        position: [i32; 3],
+        fluid: FluidKind,
+        delay: i32,
+    ) -> Result<(), PlacementQueryError> {
+        self.request_tick(TickKind::Fluid, position, TickTypeId(fluid as u32), delay)
+            .map_err(Into::into)
+    }
+
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
         Ok(self.sea_level)
     }
@@ -208,6 +314,23 @@ impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
     }
 }
 impl<B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, '_, B, F> {
+    fn schedule_block_tick(
+        &mut self,
+        position: [i32; 3],
+        block: BlockStateId,
+        delay: i32,
+    ) -> Result<(), PlacementQueryError> {
+        self.region.schedule_block_tick(position, block, delay)
+    }
+    fn schedule_fluid_tick(
+        &mut self,
+        position: [i32; 3],
+        fluid: FluidKind,
+        delay: i32,
+    ) -> Result<(), PlacementQueryError> {
+        self.region.schedule_fluid_tick(position, fluid, delay)
+    }
+
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
         self.region.sea_level()
     }

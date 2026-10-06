@@ -7,6 +7,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import net.minecraft.core.*;
+import net.minecraft.core.registries.*;
+import net.minecraft.resources.*;
+import net.minecraft.world.ticks.*;
+import net.minecraft.world.level.material.*;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.*;
 import net.minecraft.world.level.biome.*;
@@ -23,6 +27,7 @@ public final class VanillaFeatureRegionOracle {
     private static ProtoChunk chunk(Map<ChunkPos,ProtoChunk> chunks,int x,int z) {
         var chunk=chunks.get(new ChunkPos(x>>4,z>>4));if(chunk==null)throw new IllegalArgumentException("missing region chunk");return chunk;
     }
+    @SuppressWarnings("unchecked")
     public static void main(String[] args) throws Exception {
         if(args[0].equals("export")){VanillaHeightmapOracle.main(args);return;}
         net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();
@@ -34,11 +39,17 @@ public final class VanillaFeatureRegionOracle {
         var contextMethod=VanillaPlacementOracle.class.getDeclaredMethod("context",JsonObject.class);contextMethod.setAccessible(true);
         var bounds=new JsonObject();bounds.add("context",JsonParser.parseString("[-64,64,0]"));
         var generator=((PlacementContext)contextMethod.invoke(null,bounds)).generator();
+        var ops=RegistryOps.create(JsonOps.INSTANCE,new RegistryOps.RegistryInfoLookup(){public <T> Optional<HolderGetter<T>> lookup(ResourceKey<? extends Registry<? extends T>> key){
+            if(key.equals(Registries.BLOCK))return (Optional<HolderGetter<T>>)(Optional<?>)Optional.of(BuiltInRegistries.BLOCK);
+            if(key.equals(Registries.FLUID))return (Optional<HolderGetter<T>>)(Optional<?>)Optional.of(BuiltInRegistries.FLUID);
+            return Optional.empty();
+        }});
+        var fluids=new Fluid[]{Fluids.EMPTY,Fluids.FLOWING_WATER,Fluids.WATER,Fluids.FLOWING_LAVA,Fluids.LAVA};
         try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt"),StandardCharsets.UTF_8))) {
             for(var line:Files.readAllLines(dir.resolve("inputs.txt"))) {
                 var f=JsonParser.parseString(line).getAsJsonObject();long seed=f.get("seed").getAsLong();
                 var features=new ArrayList<Feature>();
-                for(var value:f.getAsJsonArray("features"))features.add(Feature.DIRECT_CODEC.parse(JsonOps.INSTANCE,value).getOrThrow());
+                for(var value:f.getAsJsonArray("features"))features.add(Feature.DIRECT_CODEC.parse(ops,value).getOrThrow());
                 RandomSource random=f.get("legacy").getAsBoolean()?new LegacyRandomSource(seed):new XoroshiroRandomSource(seed);
                 if(f.get("worldgen").getAsBoolean())random=new WorldgenRandom(random);
                 var chunks=new TreeMap<ChunkPos,ProtoChunk>(Comparator.<ChunkPos>comparingInt(p->p.x()).thenComparingInt(p->p.z()));
@@ -51,8 +62,16 @@ public final class VanillaFeatureRegionOracle {
                     }
                     chunks.put(cp,chunk);
                 }
+                var blockTicks=new WorldGenTickAccess<Block>(p->chunk(chunks,p.getX(),p.getZ()).getBlockTicks());
+                var fluidTicks=new WorldGenTickAccess<Fluid>(p->chunk(chunks,p.getX(),p.getZ()).getFluidTicks());
+                long[] tickOrder={f.get("tick_order").getAsLong()};
                 int[] calls={0};int fail=f.get("fail").getAsInt(),reject=f.get("reject").getAsInt();
                 var world=(WorldGenLevel)Proxy.newProxyInstance(WorldGenLevel.class.getClassLoader(),new Class<?>[]{WorldGenLevel.class},(proxy,method,values)->switch(method.getName()) {
+                    case "getBlockTicks"->blockTicks;
+                    case "getFluidTicks"->fluidTicks;
+                    case "getGameTime"->f.get("game_time").getAsLong();
+                    case "nextSubTickCount"->tickOrder[0]++;
+                    case "scheduleTick","createTick","isEmptyBlock"->InvocationHandler.invokeDefault(proxy,method,values);
                     case "getMinY"->-64;
                     case "getSeaLevel"->0;
                     case "getHeight"->{
@@ -82,8 +101,18 @@ public final class VanillaFeatureRegionOracle {
                     }
                     out.println("repeat "+repeat);
                 }
+                for(var raw:f.getAsJsonArray("tick_commands")){
+                    var command=raw.getAsJsonArray();String kind=command.get(0).getAsString();int id=command.get(1).getAsInt();var xyz=command.get(2).getAsJsonArray();var p=new BlockPos(xyz.get(0).getAsInt(),xyz.get(1).getAsInt(),xyz.get(2).getAsInt());int delay=command.get(3).getAsInt();
+                    out.println("tickrequest "+kind+" "+id);
+                    try{if(kind.equals("block"))world.scheduleTick(p,Block.stateById(id).getBlock(),delay);else world.scheduleTick(p,fluids[id],delay);out.println("tickresult ok");}catch(RuntimeException error){out.println("tickresult error");}
+                    out.println("tickorder "+tickOrder[0]);
+                }
                 for(var entry:chunks.entrySet()) {
                     var cp=entry.getKey();var chunk=entry.getValue();out.println("chunk "+cp.x()+" "+cp.z());
+                    out.println("blockticks "+chunk.getBlockTicks().count());
+                    for(var tick:((SerializableTickContainer<Block>)chunk.getBlockTicks()).pack(f.get("game_time").getAsLong()))out.println("bt "+Block.getId(tick.type().defaultBlockState())+" "+tick.pos().getX()+" "+tick.pos().getY()+" "+tick.pos().getZ()+" "+tick.delay()+" "+tick.priority().getValue());
+                    out.println("fluidticks "+chunk.getFluidTicks().count());
+                    for(var tick:((SerializableTickContainer<Fluid>)chunk.getFluidTicks()).pack(f.get("game_time").getAsLong()))out.println("ft "+BuiltInRegistries.FLUID.getKey(tick.type())+" "+tick.pos().getX()+" "+tick.pos().getY()+" "+tick.pos().getZ()+" "+tick.delay()+" "+tick.priority().getValue());
                     for(var kind:Heightmap.Types.values()) {
                         if(chunk.hasPrimedHeightmap(kind)){out.println("map "+kind.name());for(long word:chunk.getOrCreateHeightmapUnprimed(kind).getRawData())out.println(Long.toUnsignedString(word,16));}
                         else out.println("missing "+kind.name());

@@ -677,3 +677,20 @@ priority boundaries and integer/time extremes. Workspace tests, all-target Clipp
 and all 149 Python tests pass. Rust exposes packed entries as an immutable
 borrowed slice; mutating Java's returned list is outside this API. Feature-world
 scheduling integration and block/fluid tick execution remain pending.
+
+## Resident generation tick queues
+
+Resident terrain chunks now own separate block and fluid proto-tick queues.
+Feature-world scheduling normalizes block states to block identity, routes to the
+chunk containing the original position and advances the region's tick order even
+for duplicate requests or missing chunks. Time and order use Java wrapping rules.
+
+The [resident queue comparison](../benchmarks/rust-feature-region-ticks-2026-10-06/scoped-parity.json)
+matches **28,985,883 lines per reference JAR** across **192 fixtures**, with nine
+resident chunks each, **2,688 requested feature placements** and **14,784 direct
+tick requests**. Both references agree on final sections, heightmaps and saved
+ticks. Coverage includes spring scheduling, duplicate block identities, separate
+fluid identities, missing chunks, out-of-height positions and time/order overflow.
+Workspace tests and all-target Clippy pass. This connects generation-stage queues;
+block/fluid tick execution, complete chunk persistence and full world-generation
+effects remain pending.

@@ -13,6 +13,7 @@ use horizon_core::{
     noise::DensityVolume,
     position::ChunkPos,
     random::PositionalRandom,
+    ticks::ProtoChunkTicks,
 };
 use std::io;
 
@@ -106,6 +107,8 @@ pub struct TerrainChunk<'r, B: TerrainBlockStates> {
     blocks: TerrainBlocks<'r, B>,
     heightmaps: [Option<Heightmap>; 6],
     postprocessing: Vec<Vec<u16>>,
+    block_ticks: ProtoChunkTicks,
+    fluid_ticks: ProtoChunkTicks,
 }
 /// The persisted generation statuses before lighting initialization. This models
 /// their block-write heightmap selection, not scheduling or persisted metadata.
@@ -235,6 +238,8 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
             },
             heightmaps: std::array::from_fn(|_| None),
             postprocessing: vec![Vec::new(); section_count],
+            block_ticks: ProtoChunkTicks::default(),
+            fluid_ticks: ProtoChunkTicks::default(),
         })
     }
     pub(crate) fn registry(&self) -> &BlockRegistry {
@@ -311,6 +316,18 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
     }
     pub fn heightmap(&self, kind: HeightmapType) -> Option<&Heightmap> {
         self.heightmaps[kind as usize].as_ref()
+    }
+    pub fn block_ticks(&self) -> &ProtoChunkTicks {
+        &self.block_ticks
+    }
+    pub fn block_ticks_mut(&mut self) -> &mut ProtoChunkTicks {
+        &mut self.block_ticks
+    }
+    pub fn fluid_ticks(&self) -> &ProtoChunkTicks {
+        &self.fluid_ticks
+    }
+    pub fn fluid_ticks_mut(&mut self) -> &mut ProtoChunkTicks {
+        &mut self.fluid_ticks
     }
     pub fn postprocessing(&self) -> &[Vec<u16>] {
         &self.postprocessing

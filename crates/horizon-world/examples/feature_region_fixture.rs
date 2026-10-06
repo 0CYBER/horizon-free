@@ -12,6 +12,7 @@ use horizon_world::worldgen::{
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     DATA_VERSION,
+    fluid::FluidKind,
     heightmap::{HeightmapState, HeightmapType},
     nbt::Tag,
     registry::{BlockRegistry, BlockStateId},
@@ -140,7 +141,11 @@ fn run(
             chunks.push(chunk);
         }
     }
-    let mut region = TerrainRegion::new(chunks, WorldGenerationContext::new(-64, 64, 0))?;
+    let mut region = TerrainRegion::new(chunks, WorldGenerationContext::new(-64, 64, 0))?
+        .with_tick_clock(
+            f["game_time"].as_i64().unwrap(),
+            f["tick_order"].as_i64().unwrap(),
+        );
     let blocks = FeatureBlocks::from_registry(registry)?;
     // These configured fixture states use compact names and an enum property;
     // no integer-property parsing is requested by this region corpus.
@@ -213,9 +218,48 @@ fn run(
         }
         writeln!(out, "repeat {repeat}")?;
     }
+    for command in f["tick_commands"].as_array().unwrap() {
+        let kind = command[0].as_str().unwrap();
+        let id = n(&command[1]) as u32;
+        let p = std::array::from_fn(|i| n(&command[2][i]));
+        let delay = n(&command[3]);
+        writeln!(out, "tickrequest {kind} {id}")?;
+        let result = if kind == "block" {
+            region.schedule_block_tick(p, BlockStateId(id), delay)
+        } else {
+            region.schedule_fluid_tick(p, FluidKind::ALL[id as usize], delay)
+        };
+        writeln!(
+            out,
+            "tickresult {}",
+            if result.is_ok() { "ok" } else { "error" }
+        )?;
+        writeln!(out, "tickorder {}", region.tick_clock().1)?;
+    }
     for chunk in region.chunks() {
         let p = chunk.position();
         writeln!(out, "chunk {} {}", p.x, p.z)?;
+        writeln!(out, "blockticks {}", chunk.block_ticks().count())?;
+        for tick in chunk.block_ticks().pack(region.tick_clock().0) {
+            writeln!(
+                out,
+                "bt {} {} {} {} {} {}",
+                tick.kind.0, tick.pos.x, tick.pos.y, tick.pos.z, tick.delay, tick.priority as i8
+            )?;
+        }
+        writeln!(out, "fluidticks {}", chunk.fluid_ticks().count())?;
+        for tick in chunk.fluid_ticks().pack(region.tick_clock().0) {
+            writeln!(
+                out,
+                "ft {} {} {} {} {} {}",
+                FluidKind::ALL[tick.kind.0 as usize].name(),
+                tick.pos.x,
+                tick.pos.y,
+                tick.pos.z,
+                tick.delay,
+                tick.priority as i8
+            )?;
+        }
         for kind in HeightmapType::ALL {
             if let Some(map) = chunk.heightmap(kind) {
                 writeln!(out, "map {}", kind.name())?;

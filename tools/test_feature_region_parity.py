@@ -22,6 +22,14 @@ def corpus(facts):
     layers=[{'feature':{'type':'fill_layer','height':height,'state':state},'placement':[]} for height,state in [(32,'water'),(16,{'id':'oak_log','properties':{'axis':'x'}}),(8,'air'),(4064,'stone')]]
     targets=[{'target':{'predicate_type':'block_match','block':'stone'},'state':'iron_ore'},{'target':{'predicate_type':'block_match','block':'oak_log'},'state':'copper_ore'}]
     features=leaves+[{'type':'sequence','features':layers},{'type':'replace_single_block','targets':targets},{'type':'scattered_ore','targets':targets,'size':16,'discard_chance_on_air_exposure':0.5}]
+    features.append({'type':'spring_feature','state':{'id':'water','properties':{'falling':'false'}},'requires_block_below':False,'rock_count':5,'hole_count':5,'valid_blocks':['air','stone','dirt']})
+    get=lambda name:facts['defaults']['minecraft:'+name]
+    log_x=next(i for i,state in enumerate(facts['states']) if state[4]['id']=='minecraft:oak_log' and state[4].get('properties',{}).get('axis')=='x')
+    ticks=[]
+    for p in [[0,-40,0],[-1,-64,-1],[16,100,16],[32,0,0],[-17,0,0],[2147483647,-2147483648,0]]:
+        for kind,value in [('block',get('water')),('fluid',2),('block',log_x),('block',get('oak_log'))]:
+            for delay in [-2147483648,0,2147483647]:ticks.append([kind,value,p,delay])
+    for kind in range(5):ticks.append(['fluid',kind,[0,-40,0],-1])
     chains=[
         [{'type':'count','count':2},{'type':'in_square'},{'type':'heightmap','heightmap':'MOTION_BLOCKING'}],
         [{'type':'count_on_every_layer','count':1},{'type':'offset','x':0,'y':1,'z':0}],
@@ -34,7 +42,7 @@ def corpus(facts):
                     for reject in [0,3]:
                         for placement in chains:
                             for worldgen in [False,True]:
-                                yield {'worldgen':worldgen,'legacy':legacy,'seed':seed,'stage':stage,'fail':fail,'reject':reject,'placement':placement,'features':features}
+                                yield {'worldgen':worldgen,'legacy':legacy,'seed':seed,'stage':stage,'fail':fail,'reject':reject,'placement':placement,'features':features,'tick_commands':ticks,'game_time':9223372036854775807 if worldgen else -9223372036854775808,'tick_order':9223372036854775803 if legacy else -9223372036854775808}
 
 
 def main():
@@ -83,9 +91,9 @@ def main():
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixture_paths,tested_fixtures)
     report={"schema":1,"minecraft":lock["minecraft"]["version"],"manifest_sha1":lock["minecraft"]["manifest_sha1"],"platform":platform.platform(),
             "java":subprocess.check_output(["java","--version"],text=True).splitlines()[0],"rustc":subprocess.check_output(["rustc","--version"],text=True).strip(),
-            "block_states":len(facts["states"]),"block_tag_files":len(tags),"fixtures":len(fixtures),"worldgen_random_modes":[False,True],"resident_chunks_per_fixture":9,"requested_placements":sum(len(f["features"])*2 for f in fixtures),
+            "block_states":len(facts["states"]),"block_tag_files":len(tags),"fixtures":len(fixtures),"worldgen_random_modes":[False,True],"resident_chunks_per_fixture":9,"requested_placements":sum(len(f["features"])*2 for f in fixtures),"direct_tick_requests":sum(len(f["tick_commands"]) for f in fixtures),
             "sources_sha256":tested_sources,"fixtures_sha256":tested_fixtures,"rust_output_sha256":lab.digest(build/"rust.txt","sha256"),"references":references,
-            "scope":"Native FeaturePlacer and three basic block-writing features, a composed sequence of four configured fill layers, single-block replacements and scattered ore share a world proxy backed by nine actual ProtoChunks. Configured water, horizontal logs, air, out-of-height fills and ore/replacement rules test graph-to-region binding. Initial two-layer stone/dirt terrain, both pre-light heightmap groups, count/square/heightmap/layered modifier chains, repeated placements, direct and WorldgenRandom-wrapped random streams, missing-neighbor errors, rejected writes and injected partial failures are compared. Final complete raw sections, heightmap presence and packed words are compared alongside ordered feature writes, update flags, explicit height queries and subsequent random draws. Rust uses resident registry-backed chunks, lazy heightmap priming and a caller-supplied write callback; imported air/fluid facts and bundled block tags bind independently across authenticated JARs. The proxy supplies storage mutation only. Actual WorldGenRegion construction, write-zone policy, POIs, block entities, postprocessing effects, lighting, complete feature registries and complete world generation remain outside this comparison."}
+            "scope":"Native FeaturePlacer and three basic block-writing features, a composed sequence of four configured fill layers, single-block replacements, scattered ore and water springs share a world proxy backed by nine actual ProtoChunks. Configured water, horizontal logs, air, out-of-height fills and ore/replacement rules test graph-to-region binding. Initial two-layer stone/dirt terrain, both pre-light heightmap groups, count/square/heightmap/layered modifier chains, repeated placements, direct and WorldgenRandom-wrapped random streams, missing-neighbor errors, rejected writes and injected partial failures are compared. Final complete raw sections, heightmap presence and packed words are compared alongside ordered feature writes, update flags, explicit height queries and subsequent random draws. Rust uses resident registry-backed chunks, lazy heightmap priming and a caller-supplied write callback; imported air/fluid facts and bundled block tags bind independently across authenticated JARs. The proxy supplies storage mutation and actual native default scheduleTick/createTick methods routed through WorldGenTickAccess into each ProtoChunk. Separate block/fluid queues, first-request deduplication, nondefault-state block identity, shared tick-order advancement on duplicates and missing-chunk errors, out-of-height requests and wrapped clock values are compared, including saved queue order and priorities. Actual WorldGenRegion construction, write-zone policy, POIs, block entities, postprocessing execution, lighting, block/fluid tick execution, complete feature registries and complete world generation remain outside this comparison."}
 
     lab.write_json(report_path,report);print(f"Scoped feature-region parity passed: {report_path}")
 
