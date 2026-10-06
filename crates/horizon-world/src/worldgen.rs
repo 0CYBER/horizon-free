@@ -34,6 +34,7 @@ pub mod material_stage;
 pub mod material_surface;
 pub mod ore_feature;
 pub mod placement;
+pub mod replace_blobs;
 pub mod router;
 pub mod rule_test;
 pub mod settings;

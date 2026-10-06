@@ -577,3 +577,18 @@ nonoverflow extreme coordinates. Workspace tests, all-target Clippy and all
 149 Python tests pass. The fixture controls destruction success and air
 replacement; loot, block entities, updates, portal travel and dragon gameplay
 remain pending. Pathological overflow-box work is bounded to 2^20 visits.
+
+## Replacement blobs
+
+The `netherrack_replace_blobs` feature now clamps the search origin to world
+height, descends to a matching block, samples three independent radii and visits
+clipped Manhattan shells in native order. Target matching uses block identity
+regardless of state properties; rejected writes still produce success.
+
+The [replacement-blob comparison](../benchmarks/rust-replace-blobs-2026-10-06/scoped-parity.json)
+matches **5,538,034 lines per reference JAR** over **109,003 fixtures**, including
+every target/output state, all candidate states through failure-terminated
+prefixes, every constant radius, six provider families, both RNGs, height
+boundaries, wrapped X/Z coordinates, partial failures and composition. Workspace
+tests and all-target Clippy pass. World updates and full generation remain
+pending; pathological descent is bounded to 2^20 visits.

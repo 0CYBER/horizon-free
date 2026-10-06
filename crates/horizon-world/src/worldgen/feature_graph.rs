@@ -49,6 +49,7 @@ pub enum FeatureDefinition {
     Disk(super::disk::DiskFeature),
     Spring(super::spring::SpringFeature),
     Vines(super::vines::VinesFeature),
+    ReplaceBlobs(super::replace_blobs::ReplaceBlobsFeature),
     EndPodium(super::end_podium::EndPodiumFeature),
     Spike(super::spike::SpikeFeature),
     BlueIce(super::blue_ice::BlueIceFeature),
@@ -77,6 +78,7 @@ pub enum FeatureExecutionError<E> {
     BlockPile(super::block_pile::BlockPileError<E>),
     Disk(super::disk::DiskError<E>),
     BlockBlob(super::block_blob::BlockBlobError<E>),
+    ReplaceBlobs(super::replace_blobs::ReplaceBlobsError<E>),
     EndPodium(super::end_podium::EndPodiumError<E>),
     Spike(super::spike::SpikeError<E>),
     BlueIce(super::blue_ice::BlueIceError<E>),
@@ -96,6 +98,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::BlockPile(e) => e.fmt(f),
             Self::Disk(e) => e.fmt(f),
             Self::BlockBlob(e) => e.fmt(f),
+            Self::ReplaceBlobs(e) => e.fmt(f),
             Self::EndPodium(e) => e.fmt(f),
             Self::Spike(e) => e.fmt(f),
             Self::BlueIce(e) => e.fmt(f),
@@ -266,6 +269,15 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:netherrack_replace_blobs" => {
+                super::replace_blobs::ReplaceBlobsFeature::decode(
+                    json,
+                    blocks.ok_or(DecodeError::Field("replace blobs bindings"))?,
+                    depth + 1,
+                    remaining,
+                )
+                .map(Self::ReplaceBlobs)
+            }
             "minecraft:end_podium" => super::end_podium::EndPodiumFeature::from_json(
                 json,
                 blocks.ok_or(DecodeError::Field("end podium bindings"))?,
@@ -617,6 +629,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::ReplaceBlobs(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::ReplaceBlobs),
             Self::EndPodium(feature) => feature
                 .place(world, origin)
                 .map_err(FeatureExecutionError::EndPodium),

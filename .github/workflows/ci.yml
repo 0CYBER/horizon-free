@@ -147,6 +147,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_end_podium_parity.py
+      - name: Compare replacement blob search and Manhattan shells
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_replace_blobs_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable
