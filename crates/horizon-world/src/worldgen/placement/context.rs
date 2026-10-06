@@ -26,6 +26,32 @@ pub enum LayerBlock {
     Ground,
 }
 pub trait PlacementContext {
+    /// Test the current fluid at this position against the world's water tag.
+    fn water_at(&mut self, _position: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    /// Multiface attachment: neighbor support, then empty-context collision.
+    fn attachment_at(
+        &mut self,
+        _position: [i32; 3],
+        _direction: horizon_core::geometry::Direction,
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    /// Draw from the world's random stream, independently of the feature RNG.
+    fn next_world_boolean(&mut self) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    /// Schedule the block type identified by its registry default state.
+    fn schedule_block_tick(
+        &mut self,
+        _position: [i32; 3],
+        _block: crate::registry::BlockStateId,
+        _delay: i32,
+    ) -> Result<(), PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+
     /// Evaluate this candidate state's survival without placing it.
     fn block_survives(
         &mut self,

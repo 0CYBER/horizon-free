@@ -36,6 +36,15 @@ impl StateProviderCatalog {
     ) -> Result<BlockStateProvider, DecodeError> {
         BlockStateProvider::decode_holder(json, bindings, 0, &mut 65536, Some(self))
     }
+    pub(crate) fn provider_with_budget(
+        &self,
+        json: &str,
+        bindings: &StateProviderBindings<'_>,
+        depth: usize,
+        remaining: &mut usize,
+    ) -> Result<BlockStateProvider, DecodeError> {
+        BlockStateProvider::decode_holder(json, bindings, depth, remaining, Some(self))
+    }
     /// Decode DIRECT_CODEC while allowing nested named holder references.
     pub fn direct_provider(
         &self,

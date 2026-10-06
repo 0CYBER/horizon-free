@@ -16,6 +16,11 @@ use std::{
 
 pub struct FeatureBlockBindings<'r> {
     registry: &'r BlockRegistry,
+    pub(crate) simple_blocks: Option<(
+        super::state_provider::StateProviderBindings<'r>,
+        super::state_provider::StateProviderCatalog,
+        crate::block_placement::BlockPlacementBindings<'r>,
+    )>,
     physical_properties: Option<[BoundBlockProperty; 4]>,
     biomes: Option<Arc<super::biome_predicate::BiomePredicateBindings>>,
     fluids: super::fluid_predicate::FluidPredicateBindings,
@@ -25,6 +30,24 @@ pub struct FeatureBlockBindings<'r> {
     pub(crate) air: [BlockStateId; 3],
 }
 impl<'r> FeatureBlockBindings<'r> {
+    /// Bind provider resources and precompiled placement operations to this registry.
+    pub fn with_state_providers(
+        mut self,
+        providers: super::state_provider::StateProviderBindings<'r>,
+        catalog: super::state_provider::StateProviderCatalog,
+        placement: crate::block_placement::BlockPlacementBindings<'r>,
+    ) -> Result<Self, DecodeError> {
+        if !std::ptr::eq(self.registry, providers.registry())
+            || !std::ptr::eq(self.registry, placement.registry())
+        {
+            return Err(DecodeError::Field(
+                "feature provider/placement registry identity",
+            ));
+        }
+        self.simple_blocks = Some((providers, catalog, placement));
+        Ok(self)
+    }
+
     pub fn with_block_properties(
         mut self,
         properties: &BlockPropertiesRegistry<'r>,
@@ -103,6 +126,7 @@ impl<'r> FeatureBlockBindings<'r> {
         };
         Ok(Self {
             registry,
+            simple_blocks: None,
             codec,
             biomes: None,
             physical_properties: None,

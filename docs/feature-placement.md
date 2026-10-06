@@ -544,3 +544,30 @@ and active-piston snapshots have separate geometry comparisons. This establishes
 the recorded provider/predicate integration, while full block placement, updates
 and gameplay remain pending. Workspace tests, warning-free Clippy and the
 **147-test Python suite** passed.
+
+
+## Simple-block placement
+
+`SimpleBlockFeature` combines holder-aware state providers, candidate survival,
+precompiled placement transitions and optional scheduled ticks. Ordinary writes
+retain native flags and ignore a rejected write's boolean result. Double plants
+first check the block above for air or matching replaceable fluid, then copy
+waterlogging independently into each half. Pale moss carpet derives side states
+from support/collision queries, consumes the world's separate random stream for
+its topper and recomputes lower sides after the upper write. Scheduled ticks use
+the block actually stored after placement, including rejected writes.
+
+`FeatureBlockBindings::with_state_providers` binds these operations and provider
+resources to the same registry. `FeatureDefinition` and `FeatureCatalog` compose
+simple blocks with named holders, selectors, sequences and placement modifiers.
+Provider decoding shares the enclosing graph's bounded work/depth budget; compiled
+placement tables are shared by immutable reference-counted handles.
+
+Run `python3 tools/test_simple_block_parity.py` against the pinned JARs. The
+[simple-block report](../benchmarks/rust-simple-block-2026-10-06/scoped-parity.json)
+records **9,613,872 matching output lines per JAR** across **492,554 fixtures**.
+It covers every candidate state, double-plant obstructions, waterlogging, moss
+attachment/topper combinations, ordered reads/writes, both random streams,
+rejected writes, partial failures, wrapped coordinates and nested composition.
+Workspace tests and all-target Clippy passed. Native chunk updates, scheduled tick
+execution and complete playable integration remain pending.

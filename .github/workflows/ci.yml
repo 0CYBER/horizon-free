@@ -95,6 +95,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_rule_test_parity.py
+      - name: Compare simple-block placement and feature composition
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_simple_block_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable

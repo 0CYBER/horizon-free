@@ -41,6 +41,9 @@ pub struct StateProviderBindings<'r> {
     predicate_states: OnceLock<BTreeMap<BlockStateId, Arc<BTreeSet<BlockStateId>>>>,
 }
 impl<'r> StateProviderBindings<'r> {
+    pub fn registry(&self) -> &'r BlockRegistry {
+        self.registry
+    }
     pub fn with_block_properties(
         mut self,
         properties: &BlockPropertiesRegistry<'r>,

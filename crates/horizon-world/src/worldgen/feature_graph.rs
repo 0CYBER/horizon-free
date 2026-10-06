@@ -28,6 +28,7 @@ pub struct PlacedFeatureDefinition {
 #[derive(Clone, Debug)]
 pub enum FeatureDefinition {
     Basic(BasicFeature),
+    SimpleBlock(super::simple_block::SimpleBlockFeature),
     FillLayer(FillLayerFeature),
     ReplaceBlock(ReplaceBlockFeature),
     ScatteredOre(ScatteredOreFeature),
@@ -44,6 +45,7 @@ pub enum FeatureDefinition {
 #[derive(Debug)]
 pub enum FeatureExecutionError<E> {
     Basic(FeatureError<E>),
+    SimpleBlock(super::simple_block::SimpleBlockError<E>),
     Random(InvalidBound),
     Query(PlacementQueryError),
     WorkLimit,
@@ -53,6 +55,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Basic(e) => e.fmt(f),
+            Self::SimpleBlock(e) => e.fmt(f),
             Self::Random(e) => e.fmt(f),
             Self::Query(e) => e.fmt(f),
             Self::WorkLimit => f.write_str("feature graph work limit exceeded"),
@@ -218,6 +221,15 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:simple_block" => {
+                let (providers, catalog, placement) = blocks
+                    .and_then(|blocks| blocks.simple_blocks.as_ref())
+                    .ok_or(DecodeError::Field("simple block bindings unavailable"))?;
+                super::simple_block::SimpleBlockFeature::decode(
+                    json, providers, catalog, placement, depth, remaining,
+                )
+                .map(Self::SimpleBlock)
+            }
             "minecraft:fill_layer" => FillLayerFeature::from_json(
                 json,
                 blocks.ok_or_else(|| {
@@ -393,6 +405,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::SimpleBlock(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::SimpleBlock),
             Self::ScatteredOre(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::Basic),

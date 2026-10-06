@@ -578,6 +578,19 @@ impl<'r> BlockSurvivalRegistry<'r> {
             .get(direction_name(direction))
             .is_some_and(|value| value == "true")
     }
+    /// Native multiface attachment at a candidate position, testing support
+    /// first and then empty-context collision on the neighbor's opposite face.
+    pub fn can_attach_to<W: SurvivalWorld>(
+        &self,
+        world: &mut W,
+        position: [i32; 3],
+        direction: Direction,
+    ) -> Result<bool, SurvivalError<W::Error>> {
+        let step = direction.normal();
+        let at = std::array::from_fn(|i| position[i].wrapping_add(step[i]));
+        let neighbor = self.read(world, at)?;
+        self.can_attach(world, neighbor, at, direction)
+    }
     fn can_attach<W: SurvivalWorld>(
         &self,
         world: &mut W,
