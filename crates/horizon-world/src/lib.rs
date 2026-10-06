@@ -8,6 +8,7 @@ pub mod block_properties;
 pub mod block_support;
 pub mod block_survival;
 pub mod chunk;
+pub mod chunk_status;
 pub mod collision;
 pub mod compression;
 pub mod dynamic_support;

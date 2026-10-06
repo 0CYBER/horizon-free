@@ -851,3 +851,19 @@ heights, ordinary/upgrading modes and horizontal rejection. Five focused Rust
 region tests, all-target Clippy and both Python fixture tests pass. Upgrade
 activation, target-status cleanup, old-bedrock replacement, hole masking, biome
 retention and the complete generation lifecycle remain pending.
+
+## Chunk-status identities and metadata
+
+Rust now represents all ten pinned chunk statuses, their ordering and parents,
+proto/level chunk classification, structure-distance constant, and selected
+heightmaps. Existing pre-light chunks use these definitions for their names and
+heightmap groups. Direct name lookup retains vanilla's `empty` fallback; NBT
+codec lookup rejects unknown names and writes canonical namespaced identifiers.
+
+The [chunk-status comparison](../benchmarks/rust-chunk-status-2026-10-06/scoped-parity.json)
+matches **4,232 lines per reference JAR** across all 100 ordered status pairs and
+**2,065 codec inputs**. Inputs include qualified/unqualified names, empty
+namespaces, obsolete and malformed names, random strings and nonstring NBT.
+World-crate tests and all-target Clippy pass. Codec error text is normalized.
+Status identities do not execute generation tasks: scheduling, lighting,
+post-light lifecycle transitions and the complete gameplay runtime remain pending.

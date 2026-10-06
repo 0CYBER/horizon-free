@@ -131,27 +131,14 @@ impl PreLightChunkStage {
         Self::Terrain,
         Self::Features,
     ];
+    pub fn status(self) -> crate::chunk_status::ChunkStatus {
+        crate::chunk_status::ChunkStatus::ALL[self as usize]
+    }
     pub fn name(self) -> &'static str {
-        match self {
-            Self::Empty => "empty",
-            Self::StructureStarts => "structure_starts",
-            Self::StructureReferences => "structure_references",
-            Self::Biomes => "biomes",
-            Self::Terrain => "terrain",
-            Self::Features => "features",
-        }
+        self.status().name().strip_prefix("minecraft:").unwrap()
     }
     pub fn heightmaps(self) -> &'static [HeightmapType] {
-        if matches!(self, Self::Terrain | Self::Features) {
-            &[
-                HeightmapType::WorldSurface,
-                HeightmapType::OceanFloor,
-                HeightmapType::MotionBlocking,
-                HeightmapType::MotionBlockingNoLeaves,
-            ]
-        } else {
-            &[HeightmapType::WorldSurfaceWg, HeightmapType::OceanFloorWg]
-        }
+        self.status().heightmaps()
     }
 }
 struct TerrainBlocks<'r, B: TerrainBlockStates> {
