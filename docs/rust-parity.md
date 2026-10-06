@@ -645,3 +645,19 @@ are removed after each independent case to avoid retaining hundreds of thousands
 of biomes; repeated queries within a case keep their cache. Dynamic block entities
 are absent. Actual weather ticks, lighting propagation and world updates remain
 pending.
+
+## Frozen top layers and snowy ground
+
+The `freeze_top_layer` feature now visits its 16×16 footprint in native column
+order, queries motion-blocking height and retains the selected biome for both
+weather checks. Ice is attempted before snow eligibility. Snow attempts are
+followed by snowy ground-property updates even if the snow write was rejected.
+
+The [snow/freezing feature comparison](../benchmarks/rust-snow-freeze-2026-10-06/scoped-parity.json)
+matches **7,764,082 lines per reference JAR** over **108,339 fixtures**. Every
+ground/candidate/fluid state has a failure-terminated prefix; full runs cover
+climate thresholds and NaN, both modifiers, precipitation, light gates, repeated
+mutations, rejected writes, partial failures, extreme heights/sea levels, wrapped
+coordinates and composition. Workspace tests and all-target Clippy pass. The
+fixture uses controlled heights and one biome; lighting propagation, dynamic
+biome selection, world updates and full generation remain pending.

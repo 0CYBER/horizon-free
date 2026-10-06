@@ -26,6 +26,23 @@ pub enum LayerBlock {
     Ground,
 }
 pub trait PlacementContext {
+    /// Use the previously resolved biome, retaining its temperature cache.
+    fn biome_should_freeze(
+        &mut self,
+        _biome: crate::worldgen::biome::BiomeId,
+        _position: [i32; 3],
+        _require_edge: bool,
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    fn biome_should_snow(
+        &mut self,
+        _biome: crate::worldgen::biome::BiomeId,
+        _position: [i32; 3],
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+
     /// Block light only, independently of sky light and sky darkening.
     fn block_brightness(&mut self, _position: [i32; 3]) -> Result<i32, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)

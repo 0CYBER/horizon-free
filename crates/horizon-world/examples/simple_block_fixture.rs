@@ -17,6 +17,7 @@ use horizon_world::{
     registry::{BlockRegistry, BlockStateId},
     worldgen::{
         anchor::WorldGenerationContext,
+        biome::BiomeId,
         biome_temperature::{BiomeTemperature, BiomeTemperatureSettings, TemperatureModifier},
         biome_weather::BiomeWeatherBindings,
         block_feature::FeatureBlockBindings,
@@ -54,6 +55,7 @@ struct World<'a, 'r, W, R> {
     sea_level: i32,
     surface_height: i32,
     air_above: Option<i32>,
+    biome: Option<(BiomeWeatherBindings, BiomeTemperature)>,
     air: BlockStateId,
     destroy_success: bool,
 }
@@ -146,7 +148,52 @@ impl<W: Write, R> FeatureWorld for World<'_, '_, W, R> {
 fn query(error: impl std::fmt::Display) -> PlacementQueryError {
     PlacementQueryError::Failed(error.to_string())
 }
+impl<W: Write, R: RandomSource> World<'_, '_, W, R> {
+    fn weather(
+        &mut self,
+        biome: BiomeId,
+        p: [i32; 3],
+        snow: bool,
+        edge: bool,
+    ) -> Result<bool, PlacementQueryError> {
+        if biome != BiomeId(0) {
+            return Err(PlacementQueryError::Unavailable);
+        }
+        let (bindings, mut temperature) =
+            self.biome.take().ok_or(PlacementQueryError::Unavailable)?;
+        let result = if snow {
+            bindings.should_snow(self, &mut temperature, p)
+        } else {
+            bindings.should_freeze(self, &mut temperature, p, edge)
+        };
+        self.biome = Some((bindings, temperature));
+        result
+    }
+}
 impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
+    fn biome_identity(&mut self, p: [i32; 3]) -> Result<BiomeId, PlacementQueryError> {
+        self.event(format_args!("biome {} {} {}", p[0], p[1], p[2]))
+            .map_err(query)?;
+        if self.biome.is_none() {
+            return Err(PlacementQueryError::Unavailable);
+        }
+        Ok(BiomeId(0))
+    }
+    fn biome_should_freeze(
+        &mut self,
+        biome: BiomeId,
+        p: [i32; 3],
+        edge: bool,
+    ) -> Result<bool, PlacementQueryError> {
+        self.weather(biome, p, false, edge)
+    }
+    fn biome_should_snow(
+        &mut self,
+        biome: BiomeId,
+        p: [i32; 3],
+    ) -> Result<bool, PlacementQueryError> {
+        self.weather(biome, p, true, false)
+    }
     fn destroy_block_without_entity(
         &mut self,
         p: [i32; 3],
@@ -332,7 +379,29 @@ fn fixture<R: RandomSource>(
             .placed_feature_with_blocks(json, feature_bindings)
             .map(|v| Feature::Placed(Box::new(v))),
     };
+    let biome = f
+        .get("biome")
+        .map(|value| -> Result<_, Box<dyn std::error::Error>> {
+            Ok((
+                BiomeWeatherBindings::new(feature_bindings)?,
+                BiomeTemperature::new(BiomeTemperatureSettings {
+                    base_temperature: f32::from_bits(u32::from_str_radix(
+                        value["base"].as_str().unwrap(),
+                        16,
+                    )?),
+                    modifier: if value["modifier"].as_str() == Some("FROZEN") {
+                        TemperatureModifier::Frozen
+                    } else {
+                        TemperatureModifier::None
+                    },
+                    has_precipitation: value["precipitation"].as_bool().unwrap(),
+                    downfall: 0.0,
+                }),
+            ))
+        })
+        .transpose()?;
     let mut world = World {
+        biome,
         out,
         random: world_random,
         states: f["states"]

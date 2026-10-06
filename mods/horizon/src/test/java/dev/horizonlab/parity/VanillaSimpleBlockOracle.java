@@ -31,13 +31,7 @@ public final class VanillaSimpleBlockOracle {
   var json=JsonParser.parseString(f.get("definition").getAsString());
   String mode=f.has("mode")?f.get("mode").getAsString():"map";
   if(mode.equals("weather")){
-   final Biome biome;
-   try{
-    var type=Class.forName("net.minecraft.world.level.biome.Biome$ClimateSettings");
-    var climate=type.getDeclaredConstructor(boolean.class,float.class,Biome.TemperatureModifier.class,float.class);climate.setAccessible(true);
-    var settings=climate.newInstance(f.get("precipitation").getAsBoolean(),Float.intBitsToFloat(Integer.parseUnsignedInt(f.get("base").getAsString(),16)),Biome.TemperatureModifier.valueOf(f.get("modifier").getAsString()),0f);
-    var constructor=Biome.class.getDeclaredConstructors()[0];constructor.setAccessible(true);biome=trackBiome((Biome)constructor.newInstance(settings,null,null,null));
-   }catch(ReflectiveOperationException error){throw new IllegalStateException(error);}
+   final Biome biome=makeBiome(f);
    return Optional.of(new Feature(){
     public com.mojang.serialization.MapCodec<? extends Feature> codec(){return com.mojang.serialization.MapCodec.unit(this);}
     public boolean place(WorldGenLevel world,ChunkGenerator generator,RandomSource random,BlockPos p){return f.get("operation").getAsString().equals("snow")?biome.shouldSnow(world,p):biome.shouldFreeze(world,p,f.get("edge").getAsBoolean());}
@@ -50,6 +44,14 @@ public final class VanillaSimpleBlockOracle {
    public boolean place(WorldGenLevel world,ChunkGenerator generator,RandomSource random,BlockPos p){return holder.value().place(world,generator,random,p);}
   });
  }
+ private static Biome makeBiome(JsonObject f){
+   try{
+    var type=Class.forName("net.minecraft.world.level.biome.Biome$ClimateSettings");
+    var climate=type.getDeclaredConstructor(boolean.class,float.class,Biome.TemperatureModifier.class,float.class);climate.setAccessible(true);
+    var settings=climate.newInstance(f.get("precipitation").getAsBoolean(),Float.intBitsToFloat(Integer.parseUnsignedInt(f.get("base").getAsString(),16)),Biome.TemperatureModifier.valueOf(f.get("modifier").getAsString()),0f);
+    var constructor=Biome.class.getDeclaredConstructors()[0];constructor.setAccessible(true);return trackBiome((Biome)constructor.newInstance(settings,null,null,null));
+   }catch(ReflectiveOperationException error){throw new IllegalStateException(error);}
+ }
  private static BlockPos pos(JsonArray a){return new BlockPos(a.get(0).getAsInt(),a.get(1).getAsInt(),a.get(2).getAsInt());}
  private static String xyz(BlockPos p){return p.getX()+" "+p.getY()+" "+p.getZ();}
  private static final class Chunks {
@@ -61,9 +63,9 @@ public final class VanillaSimpleBlockOracle {
   }
  }
  private static final class World implements InvocationHandler {
-  final JsonObject f;final PrintWriter out;final RandomSource random;int calls;
+  final JsonObject f;final PrintWriter out;final RandomSource random;final Holder<Biome> biome;int calls;
   final TreeMap<BlockPos,BlockState> states=new TreeMap<>(Comparator.<BlockPos>comparingInt(BlockPos::getX).thenComparingInt(BlockPos::getY).thenComparingInt(BlockPos::getZ));
-  World(JsonObject f,PrintWriter out,RandomSource random){this.f=f;this.out=out;this.random=random;for(var raw:f.getAsJsonArray("states")){var v=raw.getAsJsonArray();states.put(pos(v),Block.stateById(v.get(3).getAsInt()));}}
+  World(JsonObject f,PrintWriter out,RandomSource random){this.f=f;this.out=out;this.random=random;this.biome=f.has("biome")?Holder.direct(makeBiome(f.getAsJsonObject("biome"))):null;for(var raw:f.getAsJsonArray("states")){var v=raw.getAsJsonArray();states.put(pos(v),Block.stateById(v.get(3).getAsInt()));}}
   final Map<ChunkPos,ProtoChunk> chunks=new HashMap<>();
   ProtoChunk chunk(BlockPos p) {
    event("chunk "+xyz(p));var key=new ChunkPos(p.getX()>>4,p.getZ()>>4);
@@ -75,6 +77,7 @@ public final class VanillaSimpleBlockOracle {
   BlockState at(BlockPos p){return states.getOrDefault(p,f.has("air_above")&&p.getY()>f.get("air_above").getAsInt()?Blocks.AIR.defaultBlockState():Block.stateById(f.get("fallback").getAsInt()));}
   public Object invoke(Object proxy,Method method,Object[] args)throws Throwable {
    String name=method.getName();
+   if(name.equals("getBiome")){event("biome "+xyz((BlockPos)args[0]));if(biome==null)throw new IllegalStateException("missing fixture biome");return biome;}
    if(name.equals("getRandom"))return random;
    if(name.equals("isStateAtPosition")){var p=(BlockPos)args[0];event("get "+xyz(p));var state=at(p);out.println("state "+Block.getId(state));return ((java.util.function.Predicate<BlockState>)args[1]).test(state);}
    if(name.equals("getChunk")&&args.length==1&&args[0] instanceof BlockPos)return chunk((BlockPos)args[0]);

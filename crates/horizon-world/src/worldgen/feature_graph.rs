@@ -49,6 +49,7 @@ pub enum FeatureDefinition {
     Disk(super::disk::DiskFeature),
     Spring(super::spring::SpringFeature),
     Vines(super::vines::VinesFeature),
+    SnowAndFreeze(super::snow_freeze::SnowAndFreezeFeature),
     Delta(super::delta::DeltaFeature),
     Bamboo(super::bamboo::BambooFeature),
     ReplaceBlobs(super::replace_blobs::ReplaceBlobsFeature),
@@ -80,6 +81,7 @@ pub enum FeatureExecutionError<E> {
     BlockPile(super::block_pile::BlockPileError<E>),
     Disk(super::disk::DiskError<E>),
     BlockBlob(super::block_blob::BlockBlobError<E>),
+    SnowAndFreeze(super::snow_freeze::SnowAndFreezeError<E>),
     Delta(super::delta::DeltaError<E>),
     Bamboo(super::bamboo::BambooError<E>),
     ReplaceBlobs(super::replace_blobs::ReplaceBlobsError<E>),
@@ -102,6 +104,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::BlockPile(e) => e.fmt(f),
             Self::Disk(e) => e.fmt(f),
             Self::BlockBlob(e) => e.fmt(f),
+            Self::SnowAndFreeze(e) => e.fmt(f),
             Self::Delta(e) => e.fmt(f),
             Self::Bamboo(e) => e.fmt(f),
             Self::ReplaceBlobs(e) => e.fmt(f),
@@ -275,6 +278,10 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:freeze_top_layer" => super::snow_freeze::SnowAndFreezeFeature::new(
+                blocks.ok_or(DecodeError::Field("snow and freeze bindings"))?,
+            )
+            .map(Self::SnowAndFreeze),
             "minecraft:delta_feature" => super::delta::DeltaFeature::decode(
                 json,
                 blocks.ok_or(DecodeError::Field("delta bindings"))?,
@@ -647,6 +654,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::SnowAndFreeze(feature) => feature
+                .place(world, origin)
+                .map_err(FeatureExecutionError::SnowAndFreeze),
             Self::Delta(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::Delta),
