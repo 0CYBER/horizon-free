@@ -103,15 +103,28 @@ def verify_artifacts():
 
 
 def compare(reference, candidate):
+    # Text mode retains cross-platform universal-newline behavior. Equal chunks
+    # avoid a Python loop for every line in multi-gigabyte differential traces.
     count = 0
-    with reference.open(encoding="utf-8") as expected, candidate.open(encoding="utf-8") as actual:
-        for count, (left, right) in enumerate(itertools.zip_longest(expected, actual), 1):
+    last = ''
+    with reference.open(encoding='utf-8') as expected, candidate.open(encoding='utf-8') as actual:
+        while True:
+            left, right = expected.read(1024 * 1024), actual.read(1024 * 1024)
             if left != right:
-                raise AssertionError(f"Parity mismatch at output line {count}: vanilla={left!r}, Rust={right!r}")
-    if count == 0:
-        raise AssertionError("Empty output cannot establish parity")
-    return count
-
+                break
+            if not left:
+                if not last:
+                    raise AssertionError('Empty output cannot establish parity')
+                return count + (last != '\n')
+            count += left.count('\n')
+            last = left[-1]
+    # Preserve the existing exact first-line mismatch diagnostic. Mismatches are
+    # exceptional; successful runs use only the bounded chunk buffers above.
+    with reference.open(encoding='utf-8') as expected, candidate.open(encoding='utf-8') as actual:
+        for line, (left, right) in enumerate(itertools.zip_longest(expected, actual), 1):
+            if left != right:
+                raise AssertionError(f'Parity mismatch at output line {line}: vanilla={left!r}, Rust={right!r}')
+    raise AssertionError('Parity outputs changed during comparison')
 
 def run(command, **kwargs):
     subprocess.run(command, cwd=lab.ROOT, check=True, timeout=300, **kwargs)

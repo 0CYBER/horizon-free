@@ -37,6 +37,36 @@ class ParityRunnerTests(unittest.TestCase):
             right.write_text(left.read_text())
             self.assertEqual(parity.compare(left, right), 2)
 
+    def test_chunk_comparison_preserves_newlines_unicode_and_unterminated_lines(self):
+        cases = [
+            ("one", "one", 1),
+            ("\n\n", "\n\n", 2),
+            ("one\r\ntwo\r", "one\ntwo\n", 2),
+            ("α" * (1024 * 1024 + 1) + "\r\nlast", "α" * (1024 * 1024 + 1) + "\nlast", 2),
+            ("same\n" * 220000 + "tail", "same\n" * 220000 + "tail", 220001),
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            left, right = Path(temp) / "reference", Path(temp) / "candidate"
+            for reference, candidate, count in cases:
+                left.write_bytes(reference.encode("utf-8"))
+                right.write_bytes(candidate.encode("utf-8"))
+                self.assertEqual(parity.compare(left, right), count)
+
+    def test_chunk_mismatch_retains_exact_first_line_diagnostic(self):
+        prefix = "same\n" * 220000
+        cases = [("expected\n", "actual\n", "'expected\\n'", "'actual\\n'"),
+                 ("tail", "tail\n", "'tail'", "'tail\\n'"),
+                 ("extra\n", "", "'extra\\n'", "None")]
+        with tempfile.TemporaryDirectory() as temp:
+            left, right = Path(temp) / "reference", Path(temp) / "candidate"
+            for reference, candidate, expected, actual in cases:
+                left.write_text(prefix + reference)
+                right.write_text(prefix + candidate)
+                with self.assertRaises(AssertionError) as caught:
+                    parity.compare(left, right)
+                self.assertEqual(str(caught.exception),
+                                 f"Parity mismatch at output line 220001: vanilla={expected}, Rust={actual}")
+
     def test_failed_artifact_verification_removes_previous_success(self):
         with tempfile.TemporaryDirectory() as temp:
             local = Path(temp)
