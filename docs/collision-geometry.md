@@ -606,3 +606,20 @@ Workspace Clippy passes. Piston block events, entity pushing and the surrounding
 `Entity.move` lifecycle remain pending.
 The [registered movement regression](../benchmarks/rust-piston-movement-2026-10-07/movement-registry-regression.json)
 passes again with **2,300,888 lines per JAR** on the integrated sources.
+
+
+`no_world_collision` implements the entity-bearing collision-free query over the
+registry-bound world. It consumes block collisions lazily, then checks whether
+the selected entity list is empty, then tests applicable border geometry. Each
+stage short-circuits the later providers; a nonempty entity list blocks the query
+even if its supplied shape is empty. Collision contexts are supplied explicitly.
+
+`python3 tools/test_world_collision_check_parity.py` executes native
+`CollisionGetter.noCollision` over registered blocks and resident Java sections.
+The [world collision-check report](../benchmarks/rust-world-collision-check-2026-10-07/scoped-parity.json)
+records **4,793,095 matching lines per JAR**. All states, context variants, empty
+and disjoint controlled entity/border shapes, missing chunks, boundaries and
+provider failures are covered. Workspace Clippy passes. Null-entity overloads,
+actual entity-list/border providers and live player ledge behavior remain pending.
+The [shared movement regression](../benchmarks/rust-world-collision-check-2026-10-07/movement-regression.json)
+also passes with **7,062,798 matching lines per JAR**.

@@ -85,6 +85,7 @@ public final class VanillaRegistryCollisionScanOracle {
                     level.entities=new ArrayList<>();for(var shape:m.getAsJsonArray("entities"))level.entities.add(boxShape(shape));
                     level.border=new StepBorder();level.border.trace=trace;level.border.shape=m.get("border").isJsonNull()?null:boxShape(m.get("border"));
                     var entity=(StepEntity)allocate.invoke(unsafe,StepEntity.class);entity.configure(level,bounds,(float)number(m.get("step")),m.get("grounded").getAsBoolean());var delta=m.getAsJsonArray("delta");
+                    if(m.has("check")&&m.get("check").getAsBoolean()){try{out.println("clear "+level.noCollision(entity,bounds));}catch(Stop error){out.println("error");}out.println("done check "+trace.calls);continue;}
                     try{var result=(Vec3)collide.invoke(entity,new Vec3(number(delta.get(0)),number(delta.get(1)),number(delta.get(2))));out.printf("movement %016x %016x %016x%n",Double.doubleToLongBits(result.x),Double.doubleToLongBits(result.y),Double.doubleToLongBits(result.z));}
                     catch(InvocationTargetException error){if(error.getCause() instanceof Stop)out.println("error");else throw error;}
                     out.println("done movement "+trace.calls);continue;

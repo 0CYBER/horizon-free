@@ -79,3 +79,50 @@ where
         },
     )
 }
+
+/// Entity-bearing CollisionGetter.noCollision, with block/context selection
+/// supplied by the caller (including an always-fluid context when requested).
+/// Native short-circuits blocks, then entity selection, then border geometry.
+pub struct CollisionCheckRequest<'a> {
+    pub entity: EntityIdentity,
+    pub context: CollisionContext<'a>,
+    pub bounds: Aabb,
+    pub candidate_budget: usize,
+}
+pub fn no_world_collision<W, E>(
+    world: &mut W,
+    request: CollisionCheckRequest<'_>,
+) -> Result<bool, CollisionScanError<E>>
+where
+    W: BlockCollisionWorld<Error = E> + EntityMovementWorld<Error = E>,
+{
+    for hit in BlockCollisionScan::new(
+        world,
+        request.context,
+        request.bounds,
+        false,
+        request.candidate_budget,
+    )? {
+        if !hit?.shape.is_empty() {
+            return Ok(false);
+        }
+    }
+    if !world
+        .entity_collisions(request.entity, request.bounds)
+        .map_err(CollisionScanError::World)?
+        .is_empty()
+    {
+        return Ok(false);
+    }
+    if let Some(border) = world
+        .movement_border(request.entity, request.bounds)
+        .map_err(CollisionScanError::World)?
+    {
+        let entity = VoxelShape::from_box(request.bounds).map_err(CollisionScanError::Shape)?;
+        return border
+            .join_is_not_empty(&entity, horizon_core::geometry::ShapeOp::AND)
+            .map(|overlap| !overlap)
+            .map_err(CollisionScanError::Shape);
+    }
+    Ok(true)
+}

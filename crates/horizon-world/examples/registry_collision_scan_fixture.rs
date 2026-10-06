@@ -18,7 +18,10 @@ use horizon_world::{
     registry::{BlockRegistry, BlockStateId},
     registry_collision_scan::{CollisionChunks, RegistryCollisionWorld},
     suffocation::{SuffocationDefinition, SuffocationRegistry},
-    world_movement::{EntityMovementWorld, MovementRequest, resolve_world_movement},
+    world_movement::{
+        CollisionCheckRequest, EntityMovementWorld, MovementRequest, no_world_collision,
+        resolve_world_movement,
+    },
     worldgen::{
         tags::TagDefinitions,
         terrain::{TerrainBlockStates, TerrainChunk},
@@ -446,6 +449,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         if let Some(m) = f.get("movement") {
             let v = &m["delta"];
+            if m.get("check").and_then(Value::as_bool) == Some(true) {
+                let result = no_world_collision(
+                    &mut bound,
+                    CollisionCheckRequest {
+                        entity: EntityIdentity(1),
+                        context,
+                        bounds,
+                        candidate_budget: 1_000_000,
+                    },
+                );
+                let mut t = trace.borrow_mut();
+                match result {
+                    Ok(value) => writeln!(t.out, "clear {value}")?,
+                    Err(_) => writeln!(t.out, "error")?,
+                };
+                let calls = t.calls;
+                writeln!(t.out, "done check {calls}")?;
+                continue;
+            }
             let result = resolve_world_movement(
                 &mut bound,
                 MovementRequest {
