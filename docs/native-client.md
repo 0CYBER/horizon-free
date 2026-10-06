@@ -21,9 +21,10 @@ an anvil, a torch, a lantern, fence parts, iron bars, a cobweb, a grindstone, a
 ladder and an amethyst cluster. These are explicit model selections for geometry
 inspection, not simulated block placements. Binary-alpha cutouts are rendered;
 the lantern's three frames advance every eight inspection ticks at 20 ticks/s.
-General animation metadata compatibility, interpolation and synchronization with
-the eventual game loop still need validation. Sprites currently require matching
-square frame dimensions.
+The animation metadata codec and frame selection now use the shared
+`horizon-assets` implementation checked against the pinned client. GPU
+interpolation and synchronization with the eventual game loop remain unfinished.
+Sprites currently require matching square frame dimensions.
 
 ## Run from a checkout
 
@@ -120,6 +121,28 @@ This comparison uses the identity blockstate transform. Atlas packing,
 transparency classification, actual tint/light evaluation and GPU rendering
 remain separate from the geometry result. Other operating systems still need
 their native validation runs.
+
+The sprite animation module reproduces the pinned metadata codec's integer
+conversion, strict primitive types, optional null fields and frame dimensions.
+It preserves repeated frames, filters out-of-image frame indices, and treats
+sequences with fewer than two valid entries as static physical frame zero.
+Frame lookup uses cumulative durations and binary search, so skipped rendering
+frames do not require replaying all elapsed animation ticks. The native oracle
+also checks dirty flags, draw requirements and interpolation timing, including
+transitions near the maximum Java integer duration. Interpolation pixel output
+and resource-loader failure recovery are outside this comparison.
+
+```sh
+python3 tools/test_sprite_animation_parity.py
+```
+
+The [animation comparison](../benchmarks/rust-sprite-animation-2026-10-06/scoped-parity.json)
+records 907 fixtures and 258,996 native tick states from the actual client codec
+and `SpriteContents.AnimationState.tick`, including all 63 bundled animated
+texture metadata sections and synthetic boundary cases. The associated
+[startup report](../benchmarks/rust-sprite-animation-2026-10-06/startup-smoke.json)
+checks the renderer using this shared implementation. Images, input
+fixtures and native traces stay private under `.local/`.
 
 ```sh
 cargo +stable test -p horizon-client

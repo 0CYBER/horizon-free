@@ -1,5 +1,6 @@
 //! Shared nearest-sampled sprite array for the controlled scene.
 use crate::Result;
+use horizon_assets::animation::{AnimationClip, AnimationMetadata};
 use std::{
     collections::BTreeMap,
     fs::{self, File},
@@ -12,19 +13,11 @@ use std::{
 pub struct SpriteAnimation {
     pub layer: u32,
     frames: Arc<Vec<Vec<u8>>>,
-    sequence: Arc<Vec<(usize, u32)>>,
-    duration: u64,
+    clip: Arc<AnimationClip>,
 }
 impl SpriteAnimation {
     pub fn frame(&self, tick: u64) -> usize {
-        let mut time = tick % self.duration;
-        for &(index, duration) in self.sequence.iter() {
-            if time < u64::from(duration) {
-                return index;
-            }
-            time -= u64::from(duration);
-        }
-        unreachable!("validated animation duration")
+        self.clip.sample(tick).frame as usize
     }
     pub fn pixels(&self, frame: usize) -> &[u8] {
         &self.frames[frame]
@@ -46,11 +39,17 @@ impl Sprites {
         let (namespace, path) = name.split_once(':').ok_or("invalid sprite identifier")?;
         let path = root.join(format!("assets/{namespace}/textures/{path}.png"));
         let metadata = match fs::read_to_string(path.with_extension("png.mcmeta")) {
-            Ok(text) => Some(serde_json::from_str::<serde_json::Value>(&text)?),
+            Ok(text) => Some(serde_json::from_str::<
+                BTreeMap<String, Box<serde_json::value::RawValue>>,
+            >(&text)?),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
-        let animation = metadata.as_ref().and_then(|v| v.get("animation"));
+        let animation = metadata
+            .as_ref()
+            .and_then(|v| v.get("animation"))
+            .map(|v| AnimationMetadata::from_json(v.get()))
+            .transpose()?;
         let mut decoder = png::Decoder::new(BufReader::new(File::open(path)?));
         decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
         let mut reader = decoder.read_info()?;
@@ -61,38 +60,15 @@ impl Sprites {
                 .ok_or("sprite exceeds decoder limits")?
         ];
         let info = reader.next_frame(&mut bytes)?;
-        let positive = |value: &serde_json::Value| -> Result<u32> {
-            let value = value
-                .as_u64()
-                .filter(|v| *v > 0 && *v <= i32::MAX as u64)
-                .ok_or("invalid positive animation integer")?;
-            Ok(value as u32)
-        };
-        let (width, height) = if let Some(animation) = animation {
-            if !animation.is_object() {
-                return Err("invalid animation metadata".into());
-            }
-            if animation
-                .get("interpolate")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
+        let (width, height) = if let Some(animation) = &animation {
+            if animation.interpolate {
                 return Err(
                     "interpolated animation is not yet supported by the inspection renderer".into(),
                 );
             }
-            match (
-                animation.get("width").map(positive).transpose()?,
-                animation.get("height").map(positive).transpose()?,
-            ) {
-                (Some(w), Some(h)) => (w, h),
-                (Some(w), None) => (w, info.height),
-                (None, Some(h)) => (info.width, h),
-                (None, None) => {
-                    let size = info.width.min(info.height);
-                    (size, size)
-                }
-            }
+            let [width, height] =
+                animation.frame_size(i32::try_from(info.width)?, i32::try_from(info.height)?);
+            (u32::try_from(width)?, u32::try_from(height)?)
         } else {
             (info.width, info.height)
         };
@@ -141,45 +117,18 @@ impl Sprites {
         }
         let frames = Arc::new(frames);
         let mut initial = 0;
-        if let Some(metadata) = animation {
-            let default_time = metadata
-                .get("frametime")
-                .map(positive)
-                .transpose()?
-                .unwrap_or(1);
-            let sequence = if let Some(values) = metadata.get("frames") {
-                let mut sequence = Vec::new();
-                for value in values.as_array().ok_or("invalid animation frame list")? {
-                    let (index, time) = if value.is_object() {
-                        (
-                            value.get("index").and_then(serde_json::Value::as_u64),
-                            value
-                                .get("time")
-                                .map(positive)
-                                .transpose()?
-                                .unwrap_or(default_time),
-                        )
-                    } else {
-                        (value.as_u64(), default_time)
-                    };
-                    if let Some(index) = index.filter(|i| *i < u64::from(count)) {
-                        sequence.push((index as usize, time));
-                    }
-                }
-                sequence
-            } else {
-                (0..count).map(|i| (i as usize, default_time)).collect()
-            };
-            if sequence.len() > 1 {
-                initial = sequence[0].0;
-                let duration = sequence.iter().map(|(_, time)| u64::from(*time)).sum();
-                self.animations.push(SpriteAnimation {
-                    layer,
-                    frames: frames.clone(),
-                    sequence: Arc::new(sequence),
-                    duration,
-                });
-            }
+        if let Some(clip) = animation
+            .as_ref()
+            .map(|m| m.clip(count))
+            .transpose()?
+            .flatten()
+        {
+            initial = clip.sample(0).frame as usize;
+            self.animations.push(SpriteAnimation {
+                layer,
+                frames: frames.clone(),
+                clip: Arc::new(clip),
+            });
         }
         self.layers.insert(name.to_owned(), layer);
         self.size = width;
@@ -196,8 +145,7 @@ mod tests {
         let animation = SpriteAnimation {
             layer: 0,
             frames: Arc::new(vec![vec![], vec![], vec![]]),
-            sequence: Arc::new(vec![(2, 8), (1, 3), (1, 2), (0, 1)]),
-            duration: 14,
+            clip: Arc::new(AnimationMetadata::from_json(r#"{"frames":[{"index":2,"time":8},{"index":1,"time":3},{"index":1,"time":2},0]}"#).unwrap().clip(3).unwrap().unwrap()),
         };
         for (tick, frame) in [
             (0, 2),
