@@ -590,3 +590,19 @@ Mixed-block scenes and failing providers check query order. The
 records **2,300,888 matching lines per JAR**. Three import/binding tests and
 workspace Clippy pass. This provisions movement data; full player travel, live
 entity state and block bounce effects remain separate integration work.
+
+
+`PistonMovement` now accumulates displacement per axis and resets it when the
+game tick changes. It preserves the initial squared-length short circuit, lazy
+time lookup, first nonzero axis, the +/-0.51 cumulative clamp and float-derived
+small-displacement threshold. A failed time lookup leaves the accumulator intact.
+
+`python3 tools/test_piston_movement_parity.py` runs actual
+`Entity.limitPistonMovement` across sequential tick/push inputs. The
+[piston movement report](../benchmarks/rust-piston-movement-2026-10-07/scoped-parity.json)
+records **325,197 matching lines per JAR**, including repeated/opposing pushes,
+threshold neighbors, signed zero, nonfinite inputs and injected failures.
+Workspace Clippy passes. Piston block events, entity pushing and the surrounding
+`Entity.move` lifecycle remain pending.
+The [registered movement regression](../benchmarks/rust-piston-movement-2026-10-07/movement-registry-regression.json)
+passes again with **2,300,888 lines per JAR** on the integrated sources.

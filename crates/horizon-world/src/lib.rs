@@ -25,6 +25,7 @@ pub mod movement_properties;
 pub mod movement_restitution;
 pub mod movement_support;
 pub mod nbt;
+pub mod piston_movement;
 pub mod piston_shape;
 pub mod powder_snow_collision;
 pub mod region;

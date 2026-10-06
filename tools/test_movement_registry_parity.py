@@ -78,7 +78,7 @@ def main():
         matched = base.compare(build/(side+'.txt'), build/'rust.txt')
         references.append({'side':side, 'jar_sha256':lab.digest(jar, 'sha256'),
                            'output_sha256':lab.digest(build/(side+'.txt'), 'sha256'), 'matched_output_lines':matched})
-        print(f'{side}: {matched:,} suffocation and collision-metadata lines match', flush=True)
+        print(f'{side}: {matched:,} registered movement lines match', flush=True)
     base.ensure_sources_unchanged(sources, tested);base.ensure_sources_unchanged(fixture_paths, fixtures)
     report = dict(schema=1,minecraft=lock['minecraft']['version'],manifest_sha1=lock['minecraft']['manifest_sha1'],platform=platform.platform(),java=subprocess.check_output(['java','--version'],text=True).splitlines()[0],rustc=subprocess.check_output(['rustc','--version'],text=True).strip(),registry_states=facts['states'],registry_blocks=len(facts['defaults']),fixtures=count,sources_sha256=tested,fixtures_sha256=fixtures,rust_output_sha256=lab.digest(build/'rust.txt','sha256'),references=references,scope='Imports raw registered friction/speed/jump/bounce/fall-distance coefficients and fence-gate type; binds resolved fence/wall/bounce-suppression tags. Actual native getters independently verify every state. Entity support positions and jump/speed factors run every registered state with natural, empty and universal tags; additional mixed-block queries, null support and failures exercise lazy behavior. Does not establish live player travel, bounce effects or full gameplay.')
     lab.write_json(report_path,report);print(f'Scoped movement registry parity passed: {report_path}',flush=True)
