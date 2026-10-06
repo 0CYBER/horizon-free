@@ -28,6 +28,7 @@ pub struct PlacedFeatureDefinition {
 #[derive(Clone, Debug)]
 pub enum FeatureDefinition {
     Basic(BasicFeature),
+    BlockColumn(super::block_column::BlockColumnFeature),
     SimpleBlock(super::simple_block::SimpleBlockFeature),
     FillLayer(FillLayerFeature),
     ReplaceBlock(ReplaceBlockFeature),
@@ -45,6 +46,7 @@ pub enum FeatureDefinition {
 #[derive(Debug)]
 pub enum FeatureExecutionError<E> {
     Basic(FeatureError<E>),
+    BlockColumn(super::block_column::BlockColumnError<E>),
     SimpleBlock(super::simple_block::SimpleBlockError<E>),
     Random(InvalidBound),
     Query(PlacementQueryError),
@@ -55,6 +57,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Basic(e) => e.fmt(f),
+            Self::BlockColumn(e) => e.fmt(f),
             Self::SimpleBlock(e) => e.fmt(f),
             Self::Random(e) => e.fmt(f),
             Self::Query(e) => e.fmt(f),
@@ -221,6 +224,13 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:block_column" => super::block_column::BlockColumnFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("block column bindings unavailable"))?,
+                depth,
+                remaining,
+            )
+            .map(Self::BlockColumn),
             "minecraft:simple_block" => {
                 let (providers, catalog, placement) = blocks
                     .and_then(|blocks| blocks.simple_blocks.as_ref())
@@ -405,6 +415,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::BlockColumn(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::BlockColumn),
             Self::SimpleBlock(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::SimpleBlock),

@@ -571,3 +571,23 @@ attachment/topper combinations, ordered reads/writes, both random streams,
 rejected writes, partial failures, wrapped coordinates and nested composition.
 Workspace tests and all-target Clippy passed. Native chunk updates, scheduled tick
 execution and complete playable integration remain pending.
+
+
+## Block columns
+
+`BlockColumnFeature` samples all layer heights before checking space. Its first
+obstruction query is one step beyond the origin. It removes excess height from
+the base or tip in native order, then evaluates providers while writing the
+remaining layers from the original position. Empty optional providers use their
+ordinary fallback read; rejected writes still advance the position. A completely
+zero-height sample returns false, while obstruction that trims every layer to
+zero still returns true.
+
+The [block-column report](../benchmarks/rust-block-column-2026-10-06/scoped-parity.json)
+records **1,204,081 matching lines per JAR** over **64,120 fixtures**. Run
+`python3 tools/test_block_column_parity.py` to compare all candidate descriptors,
+six directions, both truncation priorities, provider and predicate composition,
+wrapped coordinates, codec bounds and partial mutations. This uses the same
+feature/catalog integration and mutable-world harness as simple-block placement.
+Layer/decode limits and a million-operation runtime budget reject pathological
+workloads explicitly; complete resident-world integration remains pending.

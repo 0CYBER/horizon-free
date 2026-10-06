@@ -86,13 +86,13 @@ def corpus(facts, placement):
         yield case(definition=encode(name),mode='placed')
 
 
-def main():
+def run(corpus, build_name, source_file, scope):
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--prepare',action='store_true');args=parser.parse_args()
-    build=lab.LOCAL/'rust-simple-block-parity';build.mkdir(parents=True,exist_ok=True);report_path=build/'report.json';report_path.unlink(missing_ok=True)
+    build=lab.LOCAL/build_name;build.mkdir(parents=True,exist_ok=True);report_path=build/'report.json';report_path.unlink(missing_ok=True)
     if args.prepare:lab.prepare()
     lock,jars,libraries=base.verify_artifacts();oracle=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSimpleBlockOracle.java'
     helpers=[oracle.with_name(name+'.java') for name in ['VanillaPlacementOracle','VanillaBlockSurvivalOracle','VanillaBlockPropertiesOracle','VanillaBlockSupportOracle','VanillaBlockStateCodecOracle','VanillaCollisionOracle','VanillaHeightmapOracle']]
-    sources=[oracle,*helpers,Path(__file__),*[lab.ROOT/'tools'/name for name in ['test_block_survival_parity.py','test_worldgen_parity.py','test_rust_parity.py','lab.py']],lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/simple_block_fixture.rs']
+    sources=[oracle,*helpers,Path(__file__),Path(source_file),*[lab.ROOT/'tools'/name for name in ['test_block_survival_parity.py','test_worldgen_parity.py','test_rust_parity.py','lab.py']],lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/simple_block_fixture.rs']
     tested_sources=base.source_hashes(sources);classes=build/'classes';classes.mkdir(exist_ok=True)
     def run(command,name):
         with (build/(name+'.log')).open('w',encoding='utf-8') as log:subprocess.run(list(map(str,command)),cwd=lab.ROOT,check=True,timeout=3600,stdout=log,stderr=subprocess.STDOUT)
@@ -122,8 +122,12 @@ def main():
         java(side,side,build);matched=base.compare(build/(side+'.txt'),build/'rust.txt');print(f'{side}: {matched:,} simple-block output lines match Rust',flush=True)
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(build/(side+'.txt'),'sha256'),'matched_output_lines':matched})
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixtures,tested_fixtures)
-    report={'schema':1,'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'fixtures':fixture_count,'candidate_states':len(facts['states']),'double_plant_blocks':len(placement['double_plants']),'mossy_carpet_blocks':len(placement['mossy_carpets']),'sources_sha256':tested_sources,'fixtures_sha256':tested_fixtures,'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,'scope':'Native SimpleBlockFeature map codec, provider selection, actual state survival and single/double-plant/moss placement. Named feature/placed-feature/provider holders, selectors, sequences and placement modifier chains compose the same operations. Mutable world logs ordered reads, fluid/light/entity queries, writes and flags, rejected writes, thrown failures, scheduled block identities, repeated placements and both feature/world random tails. All candidate states and every above-state obstruction for representative double-plant definitions, waterlogging, moss attachment combinations and topper identities are exercised. Registry definition classes and immutable geometry are independently checked in both authenticated JARs. Actual chunks, neighbor updates, scheduled tick execution, entity lifecycle, complete feature registries and playable worlds remain pending.'}
+    report={'schema':1,'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'fixtures':fixture_count,'candidate_states':len(facts['states']),'double_plant_blocks':len(placement['double_plants']),'mossy_carpet_blocks':len(placement['mossy_carpets']),'sources_sha256':tested_sources,'fixtures_sha256':tested_fixtures,'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,'scope':scope}
     lab.write_json(report_path,report);print(f'Scoped simple-block parity passed: {report_path}',flush=True)
+
+
+def main():
+    run(corpus,'rust-simple-block-parity',__file__,'Native SimpleBlockFeature map codec, provider selection, actual state survival and single/double-plant/moss placement. Named feature/placed-feature/provider holders, selectors, sequences and placement modifier chains compose the same operations. Mutable world logs ordered reads, fluid/light/entity queries, writes and flags, rejected writes, thrown failures, scheduled block identities, repeated placements and both feature/world random tails. All candidate states and every above-state obstruction for representative double-plant definitions, waterlogging, moss attachment combinations and topper identities are exercised. Registry definition classes and immutable geometry are independently checked in both authenticated JARs. Actual chunks, neighbor updates, scheduled tick execution, entity lifecycle, complete feature registries and playable worlds remain pending.')
 
 
 if __name__=='__main__':main()

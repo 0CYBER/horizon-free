@@ -99,6 +99,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_simple_block_parity.py
+      - name: Compare block-column sampling and obstruction
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_block_column_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable
