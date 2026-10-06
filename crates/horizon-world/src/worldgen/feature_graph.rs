@@ -47,6 +47,7 @@ pub enum FeatureDefinition {
     BlockColumn(super::block_column::BlockColumnFeature),
     BlockPile(super::block_pile::BlockPileFeature),
     Disk(super::disk::DiskFeature),
+    BlockBlob(super::block_blob::BlockBlobFeature),
     SimpleBlock(super::simple_block::SimpleBlockFeature),
     FillLayer(FillLayerFeature),
     ReplaceBlock(ReplaceBlockFeature),
@@ -69,6 +70,7 @@ pub enum FeatureExecutionError<E> {
     BlockColumn(super::block_column::BlockColumnError<E>),
     BlockPile(super::block_pile::BlockPileError<E>),
     Disk(super::disk::DiskError<E>),
+    BlockBlob(super::block_blob::BlockBlobError<E>),
     SimpleBlock(super::simple_block::SimpleBlockError<E>),
     Random(InvalidBound),
     Query(PlacementQueryError),
@@ -83,6 +85,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::BlockColumn(e) => e.fmt(f),
             Self::BlockPile(e) => e.fmt(f),
             Self::Disk(e) => e.fmt(f),
+            Self::BlockBlob(e) => e.fmt(f),
             Self::SimpleBlock(e) => e.fmt(f),
             Self::Random(e) => e.fmt(f),
             Self::Query(e) => e.fmt(f),
@@ -249,6 +252,13 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:block_blob" => super::block_blob::BlockBlobFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("block blob bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(Self::BlockBlob),
             "minecraft:disk" => super::disk::DiskFeature::decode(
                 json,
                 blocks.ok_or(DecodeError::Field("disk bindings"))?,
@@ -561,6 +571,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::BlockBlob(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::BlockBlob),
             Self::Disk(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::Disk),

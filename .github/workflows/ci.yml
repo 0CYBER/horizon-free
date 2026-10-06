@@ -119,6 +119,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_disk_parity.py
+      - name: Compare block-blob support search and geometry
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_block_blob_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable

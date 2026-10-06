@@ -444,3 +444,17 @@ random providers, rejected writes, partial failures, wrapped coordinates and
 composed placement. Chunk-resolution and native ProtoChunk mark calls are
 traced; later chunk postprocessing execution is outside this comparison.
 Workspace tests, all-target Clippy and all 149 Python tests pass.
+
+## Block-blob placement
+
+Block blobs descend until their support predicate accepts the block below, then
+write three overlapping randomized shapes with flags 3. Radius calculations
+retain native float precision while position distances use double precision;
+even the last shape consumes its three origin-offset draws.
+
+The [block-blob comparison](../benchmarks/rust-block-blob-2026-10-06/scoped-parity.json)
+matches **2,387,914 lines per reference JAR** over **77,686 fixtures**, including
+every candidate/supporting state, repeated calls, early returns, failed queries,
+rejected writes, partial failures and overlay/modifier composition. Workspace
+tests and all-target Clippy pass. Rust bounds pathological traversal work;
+resident-world update callbacks and full gameplay remain pending.

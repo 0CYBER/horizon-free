@@ -7,6 +7,7 @@ pub mod biome_chunk;
 pub mod biome_predicate;
 pub mod biome_source;
 pub mod biome_temperature;
+pub mod block_blob;
 pub mod block_column;
 pub mod block_feature;
 pub mod block_pile;
