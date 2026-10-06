@@ -721,3 +721,19 @@ NaN/infinity, failed writes, callback failures, egg hatch preservation and
 farmland collision pushes. Targeted Clippy passes. Actual health, live entity
 selection/storage, teleport/network behavior, audio playback and full movement
 lifecycle integration remain separate work.
+
+
+`movement_emission` accumulates native movement/flight distances, evaluates
+climbable and powder-snow states, and dispatches step/swim/flap effects. Legacy
+and current support blocks retain their separate sound/event rules. Threshold
+updates use Java float-to-int saturation and wrapping integer addition, and
+sound/event callbacks can change fields observed by subsequent operations.
+
+`python3 tools/test_movement_emission_parity.py` compares actual native movement
+emission, block vibration dispatch, flapping and next-step arithmetic. The
+[movement emission report](../benchmarks/rust-movement-emission-2026-10-07/scoped-parity.json)
+records **598,611 matching lines per JAR** across **53,036 fixtures**, including
+predicate combinations, sound/event modes, differing support blocks, nonfinite
+numbers, mutations and provider failures. Targeted Clippy passes. Sound callbacks
+are controlled and the crystal-sound predicate is false in this gate; registered
+sound selection, audio playback and full movement integration remain pending.
