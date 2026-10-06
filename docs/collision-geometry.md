@@ -623,3 +623,19 @@ provider failures are covered. Workspace Clippy passes. Null-entity overloads,
 actual entity-list/border providers and live player ledge behavior remain pending.
 The [shared movement regression](../benchmarks/rust-world-collision-check-2026-10-07/movement-regression.json)
 also passes with **7,062,798 matching lines per JAR**.
+
+
+`back_off_from_edge` implements the player ledge guards, above-ground test and
+X/Z/diagonal displacement reductions. It retains lazy step/staying/grounded
+queries, float step widening, signed-zero behavior and the exact thin collision
+probe arithmetic. A caller-supplied query budget bounds nonconverging inputs and
+returns an error without fabricating a successful displacement.
+
+`python3 tools/test_edge_backoff_parity.py` executes actual player methods with
+controlled collision-free query results. The
+[edge backoff report](../benchmarks/rust-edge-backoff-2026-10-07/scoped-parity.json)
+records **46,578 matching lines per JAR**, covering all mover types, flight/crouch
+guards, fall/step and 0.05 thresholds, nonfinite values and query failures. Two
+query-budget unit tests and workspace Clippy pass. Registered-world ledge probes,
+live crouching/attribute state and the complete player movement loop are separate
+integration work.
