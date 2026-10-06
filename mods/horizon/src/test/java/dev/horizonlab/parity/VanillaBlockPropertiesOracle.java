@@ -4,6 +4,7 @@ import java.io.*;
 import java.lang.reflect.*;
 import java.nio.file.*;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.Direction;
 import net.minecraft.nbt.*;
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.state.*;
@@ -37,6 +38,7 @@ public final class VanillaBlockPropertiesOracle {
                 var p=properties.get(state.getBlock());
                 out.printf("state %d %s %s %s %s%n",Block.getId(state),on.getBoolean(p),off.getBoolean(p),state.canBeReplaced(),state.isSolid());
                 out.printf("render %s %s %s%n",state.liquid(),state.canOcclude(),state.isSolidRender());
+                int mask=0;for(var direction:Direction.values())if(Block.isShapeFullBlock(state.getFaceOcclusionShape(direction)))mask|=1<<direction.ordinal();out.println("occlusion "+mask);
                 var c=cache.get(state);var s=c==null?null:(VoxelShape)collision.get(c);
                 if(s==null)out.println("cache none");else if(s.isEmpty())out.println("cache empty");else {
                     var b=s.bounds();out.printf("cache %016x %016x %016x %016x %016x %016x%n",Double.doubleToRawLongBits(b.minX),Double.doubleToRawLongBits(b.minY),Double.doubleToRawLongBits(b.minZ),Double.doubleToRawLongBits(b.maxX),Double.doubleToRawLongBits(b.maxY),Double.doubleToRawLongBits(b.maxZ));
@@ -49,6 +51,7 @@ public final class VanillaBlockPropertiesOracle {
                     on.setBoolean(p,f.get("on").getAsBoolean());off.setBoolean(p,f.get("off").getAsBoolean());cache.set(state,f.get("cached").getAsBoolean()?savedCache:null);collision.set(savedCache,s);
                     out.println("solid "+calculate.invoke(state));
                     out.println("render "+Block.isShapeFullBlock(f.get("occludes").getAsBoolean()?s:Shapes.empty()));
+                    int mask=0;if(f.get("occludes").getAsBoolean())for(var direction:Direction.values())if(Block.isShapeFullBlock(s.getFaceShape(direction)))mask|=1<<direction.ordinal();out.println("occlusion "+mask);
                 }
             } finally {cache.set(state,savedCache);collision.set(savedCache,savedShape);on.setBoolean(p,savedOn);off.setBoolean(p,savedOff);}
         }

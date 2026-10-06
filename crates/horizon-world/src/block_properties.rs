@@ -8,8 +8,12 @@ use crate::{
     nbt::Tag,
     registry::{BlockRegistry, BlockStateId},
 };
-use horizon_core::geometry::{ShapeError, ShapeOp, VoxelShape};
-use std::{collections::BTreeMap, io, sync::Arc};
+use horizon_core::geometry::{Direction, ShapeError, ShapeOp, VoxelShape};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io,
+    sync::Arc,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct BlockDefinitionProperties {
@@ -20,6 +24,20 @@ pub struct BlockDefinitionProperties {
     pub can_occlude: bool,
 }
 impl BlockDefinitionProperties {
+    pub fn calculate_full_occlusion_faces(self, occlusion: &VoxelShape) -> Result<u8, ShapeError> {
+        let mut mask = 0;
+        if self.can_occlude {
+            for direction in Direction::ALL {
+                if !occlusion
+                    .face_shape(direction)?
+                    .join_is_not_empty(&VoxelShape::block(), ShapeOp::XOR)?
+                {
+                    mask |= 1 << direction as u8;
+                }
+            }
+        }
+        Ok(mask)
+    }
     pub fn calculate_solid_render(self, occlusion: &VoxelShape) -> Result<bool, ShapeError> {
         Ok(self.can_occlude && !occlusion.join_is_not_empty(&VoxelShape::block(), ShapeOp::XOR)?)
     }
@@ -72,10 +90,25 @@ impl BoundBlockProperty {
     }
 }
 
+/// Immutable FULL face-occlusion results, independent of support/collision.
+#[derive(Clone, Debug)]
+pub struct BoundOcclusionFaces {
+    states: Arc<[u8]>,
+}
+impl BoundOcclusionFaces {
+    pub fn is_full(&self, state: BlockStateId, direction: Direction) -> io::Result<bool> {
+        self.states
+            .get(state.0 as usize)
+            .map(|mask| mask & (1 << direction as u8) != 0)
+            .ok_or_else(|| invalid("unknown occlusion state ID"))
+    }
+}
+
 pub struct BlockPropertiesRegistry<'r> {
     registry: &'r BlockRegistry,
     definitions: BTreeMap<String, BlockDefinitionProperties>,
     states: Arc<[u8]>,
+    occlusion_faces: BoundOcclusionFaces,
 }
 impl<'r> BlockPropertiesRegistry<'r> {
     pub fn from_nbt(tag: &Tag, collisions: &CachedCollisionRegistry<'r>) -> io::Result<Self> {
@@ -123,12 +156,32 @@ impl<'r> BlockPropertiesRegistry<'r> {
             registry,
         )?;
         let mut result = Vec::with_capacity(registry.len());
+        let mut faces = Vec::with_capacity(registry.len());
+        let mut face_cache = HashMap::new();
         for id in 0..registry.len() {
             let id = BlockStateId(id as u32);
             let state = registry.state(id).unwrap();
             let properties = definitions
                 .get(&state.name)
                 .ok_or_else(|| invalid("missing block definition properties"))?;
+            let shape = occlusion
+                .cached_shape(id)?
+                .ok_or_else(|| invalid("missing block occlusion shape"))?;
+            let mask = if properties.can_occlude {
+                let key = std::ptr::from_ref(shape);
+                if let Some(mask) = face_cache.get(&key) {
+                    *mask
+                } else {
+                    let mask = properties
+                        .calculate_full_occlusion_faces(shape)
+                        .map_err(|e| invalid(e.to_string()))?;
+                    face_cache.insert(key, mask);
+                    mask
+                }
+            } else {
+                0
+            };
+            faces.push(mask);
             result.push(
                 u8::from(properties.calculate_solid(collisions.cached_shape(id)?))
                     | (u8::from(properties.replaceable) << 1)
@@ -148,7 +201,13 @@ impl<'r> BlockPropertiesRegistry<'r> {
             registry,
             definitions,
             states: result.into(),
+            occlusion_faces: BoundOcclusionFaces {
+                states: faces.into(),
+            },
         })
+    }
+    pub fn bind_occlusion_faces(&self) -> BoundOcclusionFaces {
+        self.occlusion_faces.clone()
     }
     pub fn registry(&self) -> &'r BlockRegistry {
         self.registry

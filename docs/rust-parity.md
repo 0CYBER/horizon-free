@@ -499,3 +499,15 @@ every origin state and every state on each candidate face, support combinations,
 wrapped positions, partial failures and composed placement. Workspace tests and
 all-target Clippy pass. Vine growth, block updates and complete gameplay remain
 pending; this fixture uses absent dynamic block entities.
+
+## Full-face occlusion
+
+Block property bindings now cache six full-face occlusion results per state,
+sharing calculations for identical imported shapes. These results use native
+occlusion rules independently of collision or support geometry. Unknown state
+IDs produce an error.
+
+The expanded [block-property comparison](../benchmarks/rust-block-properties-2026-10-06/scoped-parity.json)
+matches **197,180 lines per reference JAR**, including all 35,723 states and
+18,096 synthetic shape/flag combinations. Workspace tests and all-target Clippy
+pass. Lighting and renderer integration remain separate work.

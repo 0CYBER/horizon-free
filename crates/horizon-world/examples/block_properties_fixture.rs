@@ -1,4 +1,4 @@
-use horizon_core::geometry::{Aabb, Axis, ShapeOp, Vec3, VoxelShape};
+use horizon_core::geometry::{Aabb, Axis, Direction, ShapeOp, Vec3, VoxelShape};
 use horizon_world::{
     block_properties::{BlockDefinitionProperties, BlockPropertiesRegistry, BlockProperty},
     collision::CachedCollisionRegistry,
@@ -37,6 +37,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut out = io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
     let solid = properties.bind(BlockProperty::Solid);
     let replaceable = properties.bind(BlockProperty::Replaceable);
+    let faces = properties.bind_occlusion_faces();
+    assert!(
+        faces
+            .is_full(BlockStateId(registry.len() as u32), Direction::Up)
+            .is_err()
+    );
     for id in 0..registry.len() {
         let state = BlockStateId(id as u32);
         let definition = properties
@@ -66,6 +72,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             properties.property(state, BlockProperty::SolidRender)?,
             properties.bind(BlockProperty::SolidRender).contains(state)
         );
+        let mut mask = 0;
+        for direction in Direction::ALL {
+            if faces.is_full(state, direction)? {
+                mask |= 1 << direction as u8;
+            }
+        }
+        writeln!(out, "occlusion {mask}")?;
         match collisions.cached_shape(state)? {
             None => writeln!(out, "cache none")?,
             Some(shape) => match shape.bounds() {
@@ -137,6 +150,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             properties.calculate_solid(f["cached"].as_bool().unwrap().then_some(&shape))
         )?;
         writeln!(out, "render {}", properties.calculate_solid_render(&shape)?)?;
+        writeln!(
+            out,
+            "occlusion {}",
+            properties.calculate_full_occlusion_faces(&shape)?
+        )?;
     }
     Ok(())
 }

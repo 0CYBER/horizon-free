@@ -22,6 +22,7 @@ pub struct FeatureBlockBindings<'r> {
         crate::block_placement::BlockPlacementBindings<'r>,
     )>,
     physical_properties: Option<[BoundBlockProperty; 4]>,
+    pub(crate) occlusion_faces: Option<crate::block_properties::BoundOcclusionFaces>,
     biomes: Option<Arc<super::biome_predicate::BiomePredicateBindings>>,
     fluids: super::fluid_predicate::FluidPredicateBindings,
     pub(crate) codec: BlockStateJsonCodec<'r>,
@@ -67,6 +68,7 @@ impl<'r> FeatureBlockBindings<'r> {
             properties.bind(BlockProperty::Liquid),
             properties.bind(BlockProperty::SolidRender),
         ]);
+        self.occlusion_faces = Some(properties.bind_occlusion_faces());
         Ok(self)
     }
     pub fn with_biomes(
@@ -134,6 +136,7 @@ impl<'r> FeatureBlockBindings<'r> {
             codec,
             biomes: None,
             physical_properties: None,
+            occlusion_faces: None,
             fluids: super::fluid_predicate::FluidPredicateBindings::new(registry)?,
             blocks: blocks
                 .into_iter()
