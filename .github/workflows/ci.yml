@@ -103,6 +103,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_block_column_parity.py
+      - name: Compare vertical pillars and cap feature placement
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_pillar_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable

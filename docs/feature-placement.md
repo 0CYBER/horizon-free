@@ -591,3 +591,21 @@ wrapped coordinates, codec bounds and partial mutations. This uses the same
 feature/catalog integration and mutable-world harness as simple-block placement.
 Layer/decode limits and a million-operation runtime budget reject pathological
 workloads explicitly; complete resident-world integration remains pending.
+
+
+## Vertical pillars
+
+The single-block pillar feature checks its replacement predicate, consumes its
+continuation draw, and then checks build height before evaluating and writing
+each provider state. Its cap runs one step opposite the stopping position,
+including when no pillar block was written. Rejected writes still advance the
+pillar, and a cap's false result does not make the pillar return false. Named caps
+and nested pillars use the same feature catalog and graph work budget.
+
+Run `python3 tools/test_pillar_parity.py`. The
+[pillar report](../benchmarks/rust-pillar-2026-10-06/scoped-parity.json) records
+**921,075 matching lines per JAR** across **41,742 fixtures**, including every
+candidate descriptor, both vertical directions, continuation boundaries,
+replacement conditions, cap composition, failures, rejected writes and random
+stream tails. Workspace tests and all-target Clippy passed. Resident world
+updates and complete generation/gameplay remain unfinished.

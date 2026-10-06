@@ -28,6 +28,13 @@ pub struct PlacedFeatureDefinition {
 #[derive(Clone, Debug)]
 pub enum FeatureDefinition {
     Basic(BasicFeature),
+    Pillar {
+        provider: super::state_provider::BlockStateProvider,
+        can_replace: super::block_predicate::BlockPredicate,
+        direction: horizon_core::geometry::Direction,
+        chance: f32,
+        cap: Option<Box<PlacedFeatureDefinition>>,
+    },
     BlockColumn(super::block_column::BlockColumnFeature),
     SimpleBlock(super::simple_block::SimpleBlockFeature),
     FillLayer(FillLayerFeature),
@@ -46,6 +53,7 @@ pub enum FeatureDefinition {
 #[derive(Debug)]
 pub enum FeatureExecutionError<E> {
     Basic(FeatureError<E>),
+    Provider(super::state_provider::StateProviderError<E>),
     BlockColumn(super::block_column::BlockColumnError<E>),
     SimpleBlock(super::simple_block::SimpleBlockError<E>),
     Random(InvalidBound),
@@ -57,6 +65,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Basic(e) => e.fmt(f),
+            Self::Provider(e) => e.fmt(f),
             Self::BlockColumn(e) => e.fmt(f),
             Self::SimpleBlock(e) => e.fmt(f),
             Self::Random(e) => e.fmt(f),
@@ -224,6 +233,68 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:single_block_pillar" => {
+                let bindings =
+                    blocks.ok_or(DecodeError::Field("pillar block bindings unavailable"))?;
+                let (providers, catalog, _) = bindings
+                    .simple_blocks
+                    .as_ref()
+                    .ok_or(DecodeError::Field("pillar provider bindings unavailable"))?;
+                let provider = catalog.provider_with_budget(
+                    required(&object, "block")?.get(),
+                    providers,
+                    depth + 1,
+                    remaining,
+                )?;
+                let can_replace = match super::optional(&object, "can_replace") {
+                    Some(raw) => super::block_predicate::BlockPredicate::decode_with_blocks(
+                        raw.get(),
+                        depth + 1,
+                        remaining,
+                        Some(bindings),
+                    )?,
+                    None => {
+                        super::block_predicate::BlockPredicate::from_json(r#"{"type":"true"}"#)?
+                    }
+                };
+                let direction =
+                    match serde_json::from_str::<String>(required(&object, "direction")?.get())?
+                        .as_str()
+                    {
+                        "up" => horizon_core::geometry::Direction::Up,
+                        "down" => horizon_core::geometry::Direction::Down,
+                        _ => return Err(DecodeError::Field("pillar vertical direction")),
+                    };
+                let chance = match super::optional(&object, "chance_to_continue") {
+                    Some(raw) => number_text(raw)?
+                        .parse::<f64>()
+                        .map_err(|_| DecodeError::Field("pillar chance"))?
+                        as f32,
+                    None => 1.0,
+                };
+                if !(0.0..=1.0).contains(&chance) {
+                    return Err(DecodeError::Field("pillar chance"));
+                }
+                let cap = super::optional(&object, "cap_feature")
+                    .map(|raw| {
+                        PlacedFeatureDefinition::decode(
+                            raw.get(),
+                            depth + 1,
+                            remaining,
+                            empty_tags,
+                            blocks,
+                        )
+                        .map(Box::new)
+                    })
+                    .transpose()?;
+                Ok(Self::Pillar {
+                    provider,
+                    can_replace,
+                    direction,
+                    chance,
+                    cap,
+                })
+            }
             "minecraft:block_column" => super::block_column::BlockColumnFeature::decode(
                 json,
                 blocks.ok_or(DecodeError::Field("block column bindings unavailable"))?,
@@ -415,6 +486,49 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::Pillar {
+                provider,
+                can_replace,
+                direction,
+                chance,
+                cap,
+            } => {
+                let mut position = origin;
+                let step = direction.normal();
+                loop {
+                    if run.remaining.get() == 0 {
+                        return Err(FeatureExecutionError::WorkLimit);
+                    }
+                    run.remaining.set(run.remaining.get() - 1);
+                    if !can_replace
+                        .test(world, position)
+                        .map_err(FeatureExecutionError::Query)?
+                    {
+                        break;
+                    }
+                    if random.next_float() >= *chance {
+                        break;
+                    }
+                    if world
+                        .outside_build_height(position[1])
+                        .map_err(FeatureExecutionError::Query)?
+                    {
+                        break;
+                    }
+                    let state = provider
+                        .get_state(world, random, position)
+                        .map_err(FeatureExecutionError::Provider)?;
+                    world
+                        .set_block(position, state, 2)
+                        .map_err(|e| FeatureExecutionError::Basic(FeatureError::World(e)))?;
+                    position = std::array::from_fn(|i| position[i].wrapping_add(step[i]));
+                }
+                position = std::array::from_fn(|i| position[i].wrapping_sub(step[i]));
+                if let Some(cap) = cap {
+                    cap.place_in(&mut placer, world, random, position, run)?;
+                }
+                Ok(true)
+            }
             Self::BlockColumn(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::BlockColumn),

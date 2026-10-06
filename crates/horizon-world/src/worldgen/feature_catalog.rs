@@ -228,6 +228,12 @@ impl FeatureCatalog {
             required(&object, "type")?.get(),
         )?)?;
         match kind.as_str() {
+            "minecraft:single_block_pillar" => {
+                if let Some(value) = super::optional(&object, "cap_feature") {
+                    let expanded = self.expand_placed(value, depth + 1, work)?;
+                    object.insert("cap_feature".into(), raw(expanded)?);
+                }
+            }
             "minecraft:sequence" | "minecraft:simple_random_selector" => {
                 let expanded = self.expand_set(required(&object, "features")?, depth + 1, work)?;
                 object.insert("features".into(), raw(expanded)?);
