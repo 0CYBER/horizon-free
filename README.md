@@ -4,6 +4,8 @@ Horizon is a Rust rewrite effort targeting one-to-one vanilla gameplay parity wi
 
 **First playable release:** pinned Java performance packs, distant terrain, an original frame/tick recorder, and Mac/client/server starter downloads. The M2 Pro/16 GB Mac is the first testing target. A Rust rewrite or custom renderer has not been completed; no M2 FPS improvement has been measured yet.
 
+The Rust rewrite’s final deliverables include **playable native builds for macOS, Linux and Windows**, with launch instructions and platform gameplay validation. Track implementation and acceptance criteria in [Rust rewrite status](docs/rust-parity.md).
+
 ## Play on your Mac
 
 Download **horizon-mac-starter-0.21.0.zip** from [Releases](https://github.com/ludovic111/Horizon/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.

@@ -16,6 +16,27 @@ nested splines and seeded noise;
 complete graph coverage, serialized graphs and generated terrain remain absent.
 The playable Java performance packs remain available during development.
 
+## Completion criteria and playable builds
+
+The final deliverable is the complete Horizon Rust game with one-to-one parity
+with pinned Java Edition 26.3, plus playable builds for **macOS, Linux and
+Windows** that the user can download and test. Each platform must include a
+packaged native executable, required runtime resources, launch instructions,
+artifact checksums, and the tested OS/CPU/GPU configuration. The existing M2 Pro
+Mac is the first physical macOS target.
+
+A platform is complete only after its packaged Rust game is launched and tested:
+create/load a world, render terrain, use keyboard/mouse controls, move and interact,
+break/place blocks, use inventory/crafting, save, quit and reload. These launch
+checks accompany the full gameplay-parity suite; they do not replace it. Record
+platform-specific failures and test limits. Compiler success, library comparisons
+and the existing Java packs do not establish a playable Rust build.
+
+Optimize FPS, frame pacing, memory use and render distance using matched scenes,
+worlds, settings and hardware after behavior is validated. Package and test each
+supported platform before declaring the rewrite complete. Commit and push
+verified development checkpoints regularly.
+
 ## Implemented foundation
 
 `crates/horizon-core` is a dependency-free Rust library with no unsafe code.
