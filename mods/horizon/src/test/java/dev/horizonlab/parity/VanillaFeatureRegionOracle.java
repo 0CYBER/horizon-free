@@ -73,6 +73,37 @@ public final class VanillaFeatureRegionOracle {
         for(var tag:tags){try{bits.append(world.getBlockState(p).is(TagKey.create(Registries.BLOCK,Identifier.parse(tag)))?'1':'0');}catch(RuntimeException error){bits.append('E');}}
         out.println("tags "+bits);
     }
+    private static void upgradeLifecycle(PalettedContainerFactory factory, PrintWriter out)throws ReflectiveOperationException {
+        var stages=new ChunkStatus[]{ChunkStatus.EMPTY,ChunkStatus.STRUCTURE_STARTS,ChunkStatus.STRUCTURE_REFERENCES,ChunkStatus.BIOMES,ChunkStatus.TERRAIN,ChunkStatus.FEATURES};
+        var targets=new ChunkStatus[]{ChunkStatus.STRUCTURE_STARTS,ChunkStatus.STRUCTURE_REFERENCES,ChunkStatus.BIOMES,ChunkStatus.TERRAIN,ChunkStatus.FEATURES,ChunkStatus.INITIALIZE_LIGHT,ChunkStatus.LIGHT,ChunkStatus.SPAWN,ChunkStatus.FULL};
+        for(var stage:stages)for(var target:targets) {
+            out.println("lifecycle "+stage.getName()+" "+target.getName());
+            var data=BelowZeroRetrogen.CODEC.parse(JsonOps.INSTANCE,JsonParser.parseString("{\"target_status\":\""+target.getName()+"\"}")).getOrThrow();
+            var chunks=new ProtoChunk[2];
+            for(int x=0;x<2;x++) {
+                var chunk=new ProtoChunk(new ChunkPos(x,0),UpgradeData.EMPTY,LevelHeightAccessor.create(-64,128),factory,null);
+                chunk.setPersistedStatus(stage);chunk.setBelowZeroRetrogen(data);chunks[x]=chunk;
+            }
+            var world=destruction(null);center(world,chunks[0]);setWriteZone(world,0,0,1);
+            for(int pass=0;pass<2;pass++) {
+                for(int x=0;x<2;x++) {
+                    boolean readable;try{chunks[x].getNoiseBiome(x*4,Integer.MAX_VALUE,0);readable=true;}catch(IllegalStateException error){readable=false;}
+                    out.println("lifecycle_status "+pass+" "+x+" "+chunks[x].getHighestGeneratedStatus().getName()+" "+readable);
+                }
+                if(pass!=0)break;
+                for(int[] step:new int[][]{{16,0,0},{16,-1,1},{16,0,0},{0,-64,3},{16,0,2},{16,0,0},{0,-1,4},{16,0,0},{0,-65,0},{0,-1,3},{16,Integer.MAX_VALUE,0}}) {
+                    boolean accepted=world.ensureCanWrite(new BlockPos(step[0],step[1],0));
+                    if(accepted)switch(step[2]) {
+                        case 1->chunks[0].setPersistedStatus(ChunkStatus.FEATURES);
+                        case 2->chunks[0].setBelowZeroRetrogen(data);
+                        case 3->chunks[0].setBelowZeroRetrogen(null);
+                        case 4->chunks[0].setPersistedStatus(stage);
+                    }
+                    out.println("lifecycle_write "+step[0]+" "+step[1]+" "+step[2]+" "+accepted);
+                }
+            }
+        }
+    }
     @SuppressWarnings("unchecked")
     public static void main(String[] args) throws Exception {
         if(args[0].equals("export")){VanillaHeightmapOracle.main(args);return;}
@@ -110,6 +141,7 @@ public final class VanillaFeatureRegionOracle {
                 heightChunk.setBelowZeroRetrogen(upgrade);boolean upgrading=zoneWorld.ensureCanWrite(p);
                 out.println("heightgate "+interval+" "+normal+" "+upgrading);
             }
+            upgradeLifecycle(factory,out);
             for(var line:Files.readAllLines(dir.resolve("inputs.txt"))) {
                 var f=JsonParser.parseString(line).getAsJsonObject();long seed=f.get("seed").getAsLong();
                 var features=new ArrayList<Feature>();

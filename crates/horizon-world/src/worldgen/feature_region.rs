@@ -6,7 +6,7 @@ use super::{
     biome_chunk::{BiomeRegion, BiomeRegionError},
     feature::FeatureWorld,
     placement::{LayerBlock, PlacementContext, PlacementQueryError},
-    terrain::{PreLightChunkStage, TerrainBlockStates, TerrainChunk, TerrainError},
+    terrain::{TerrainBlockStates, TerrainChunk, TerrainError},
 };
 use crate::{
     fluid::FluidKind,
@@ -195,7 +195,8 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     }
     /// Level-style biome lookup checks the selected chunk's generation status
     /// before reading its palette. Raw biome storage remains independently
-    /// accessible for generation itself. Below-zero retrogen is not modeled.
+    /// accessible for generation itself. Retained upgrade status permits reading
+    /// old biomes before the new generation reaches the biome stage.
     pub fn biome_at<'b, T: Clone>(
         &self,
         biomes: &'b BiomeRegion<T>,
@@ -209,10 +210,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         quart: [i32; 3],
     ) -> Result<&'b T, RegionError> {
         let chunk = self.chunk(quart[0] >> 2, quart[2] >> 2)?;
-        if !matches!(
-            chunk.generation_stage(),
-            PreLightChunkStage::Biomes | PreLightChunkStage::Terrain | PreLightChunkStage::Features
-        ) {
+        if chunk.highest_generated_status() < crate::chunk_status::ChunkStatus::Biomes {
             return Err(RegionError::BiomesNotGenerated([
                 quart[0] >> 2,
                 quart[2] >> 2,
@@ -378,7 +376,12 @@ pub struct TerrainFeatureAccess<'a, 'r, B: TerrainBlockStates, F> {
     region: &'a mut TerrainRegion<'r, B>,
     write: F,
     write_zone: Option<super::write_zone::GenerationWriteZone>,
-    upgrade_height: Option<super::write_zone::UpgradeWriteHeight>,
+    upgrade_height: UpgradeHeightPolicy,
+}
+enum UpgradeHeightPolicy {
+    Unrestricted,
+    Fixed(super::write_zone::UpgradeWriteHeight),
+    Center(horizon_core::position::ChunkPos),
 }
 impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
     pub fn new(region: &'a mut TerrainRegion<'r, B>, write: F) -> Self {
@@ -386,7 +389,7 @@ impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
             region,
             write,
             write_zone: None,
-            upgrade_height: None,
+            upgrade_height: UpgradeHeightPolicy::Unrestricted,
         }
     }
     /// Apply the horizontal write radius before invoking mutation policy/effects.
@@ -394,11 +397,22 @@ impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
         self.write_zone = Some(zone);
         self
     }
-    /// Restrict writes to the upgrading center chunk's generation height.
-    /// The owning lifecycle supplies this only while an upgrade is active.
+    /// Use an explicit height interval. For live generation lifecycle state,
+    /// prefer `with_upgrade_center`, which observes changes made by callbacks.
     pub fn with_upgrade_height(mut self, height: super::write_zone::UpgradeWriteHeight) -> Self {
-        self.upgrade_height = Some(height);
+        self.upgrade_height = UpgradeHeightPolicy::Fixed(height);
         self
+    }
+    /// Read the resident center chunk's upgrade state before each write. The
+    /// target chunk's upgrade state does not select the region's write height.
+    /// Horizontal write radius is configured independently with `with_write_zone`.
+    pub fn with_upgrade_center(
+        mut self,
+        center: horizon_core::position::ChunkPos,
+    ) -> Result<Self, RegionError> {
+        self.region.chunk(center.x, center.z)?;
+        self.upgrade_height = UpgradeHeightPolicy::Center(center);
+        Ok(self)
     }
 }
 impl<'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'_, 'r, B, F>
@@ -416,10 +430,18 @@ where
         }) {
             return Ok(false);
         }
-        if self
-            .upgrade_height
-            .is_some_and(|height| !height.contains(position[1]))
-        {
+        let height = match self.upgrade_height {
+            UpgradeHeightPolicy::Unrestricted => None,
+            UpgradeHeightPolicy::Fixed(height) => Some(height),
+            UpgradeHeightPolicy::Center(center) => {
+                let chunk = self.region.chunk(center.x, center.z)?;
+                chunk.is_upgrading().then(|| {
+                    let (min_y, height) = chunk.height_for_generation();
+                    super::write_zone::UpgradeWriteHeight::new(min_y, height)
+                })
+            }
+        };
+        if height.is_some_and(|height| !height.contains(position[1])) {
             return Ok(false);
         }
         (self.write)(self.region, position, state, flags)

@@ -13,10 +13,12 @@ use horizon_world::worldgen::{
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     DATA_VERSION,
+    chunk_status::ChunkStatus,
     fluid::FluidKind,
     heightmap::{HeightmapState, HeightmapType},
     nbt::Tag,
     registry::{BlockRegistry, BlockStateId},
+    retrogen::BelowZeroRetrogen,
     worldgen::{
         tags::TagDefinitions,
         terrain::{PreLightChunkStage, TerrainBlockStates, TerrainChunk},
@@ -126,6 +128,88 @@ fn fixture(
         ),
     }
 }
+// Reuse one feature access object while successful callbacks change the center.
+fn upgrade_lifecycle(
+    registry: &BlockRegistry,
+    states: &[State],
+    out: &mut impl Write,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use horizon_world::worldgen::biome_chunk::{BiomeChunk, BiomeRegion};
+    let biomes = BiomeRegion::new(
+        (0..2)
+            .map(|x| BiomeChunk::new(ChunkPos::new(x, 0), -64, 128, ()).unwrap())
+            .collect(),
+        0,
+    )?;
+    let stone = registry.default_state("minecraft:stone").unwrap();
+    for stage in PreLightChunkStage::ALL {
+        for target in ChunkStatus::ALL.into_iter().skip(1) {
+            writeln!(out, "lifecycle {} {}", stage.status().name(), target.name())?;
+            let mut chunks = Vec::new();
+            for x in 0..2 {
+                let mut chunk =
+                    TerrainChunk::new(ChunkPos::new(x, 0), -64, 128, registry, Properties(states))?;
+                chunk.set_generation_stage(stage);
+                chunk.set_below_zero_retrogen(Some(BelowZeroRetrogen::new(target, vec![])?));
+                chunks.push(chunk);
+            }
+            let mut region = TerrainRegion::new(chunks, WorldGenerationContext::new(-64, 128, 0))?;
+            for pass in 0..2 {
+                for x in 0..2 {
+                    writeln!(
+                        out,
+                        "lifecycle_status {pass} {x} {} {}",
+                        region.chunk(x, 0)?.highest_generated_status().name(),
+                        region.noise_biome(&biomes, [x * 4, i32::MAX, 0]).is_ok()
+                    )?;
+                }
+                if pass != 0 {
+                    break;
+                }
+                let write = |region: &mut TerrainRegion<'_, Properties<'_>>,
+                             _: [i32; 3],
+                             _: BlockStateId,
+                             flags: i32|
+                 -> Result<bool, RegionError> {
+                    let chunk = region.chunk_mut(0, 0)?;
+                    match flags {
+                        1 => chunk.set_generation_stage(PreLightChunkStage::Features),
+                        2 => chunk.set_below_zero_retrogen(Some(
+                            BelowZeroRetrogen::new(target, vec![]).unwrap(),
+                        )),
+                        3 => chunk.set_below_zero_retrogen(None),
+                        4 => chunk.set_generation_stage(stage),
+                        _ => {}
+                    }
+                    Ok(true)
+                };
+                let mut world = TerrainFeatureAccess::new(&mut region, write)
+                    .with_write_zone(GenerationWriteZone::new(ChunkPos::new(0, 0), 1))
+                    .with_upgrade_center(ChunkPos::new(0, 0))?;
+                for (x, y, flags) in [
+                    (16, 0, 0),
+                    (16, -1, 1),
+                    (16, 0, 0),
+                    (0, -64, 3),
+                    (16, 0, 2),
+                    (16, 0, 0),
+                    (0, -1, 4),
+                    (16, 0, 0),
+                    (0, -65, 0),
+                    (0, -1, 3),
+                    (16, i32::MAX, 0),
+                ] {
+                    writeln!(
+                        out,
+                        "lifecycle_write {x} {y} {flags} {}",
+                        world.set_block([x, y, 0], stone, flags)?
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
 fn run(
     f: &Value,
     registry: &BlockRegistry,
@@ -172,6 +256,11 @@ fn run(
             f["tick_order"].as_i64().unwrap(),
         )
         .with_block_bindings(bindings)?;
+    if f["upgrading"].as_bool().unwrap() {
+        region
+            .chunk_mut(0, 0)?
+            .set_below_zero_retrogen(Some(BelowZeroRetrogen::new(ChunkStatus::Features, vec![])?));
+    }
     let blocks = FeatureBlocks::from_registry(registry)?;
     let features = f["features"]
         .as_array()
@@ -214,15 +303,13 @@ fn run(
                     writeln!(out, "written {result}").map_err(TerrainError::from)?;
                     Ok(result)
                 };
-                let mut world = TerrainFeatureAccess::new(&mut region, write);
+                let mut world = TerrainFeatureAccess::new(&mut region, write)
+                    .with_upgrade_center(ChunkPos::new(0, 0))?;
                 if let Some(zone) = f["write_zone"].as_array() {
                     world = world.with_write_zone(GenerationWriteZone::new(
                         ChunkPos::new(n(&zone[0]), n(&zone[1])),
                         n(&zone[2]),
                     ));
-                }
-                if f["upgrading"].as_bool().unwrap() {
-                    world = world.with_upgrade_height(UpgradeWriteHeight::BELOW_ZERO);
                 }
                 placer.place_with_context(
                     &modifiers,
@@ -267,15 +354,13 @@ fn run(
                     writeln!(out, "written {result}").map_err(TerrainError::from)?;
                     Ok(result)
                 };
-                let mut world = TerrainFeatureAccess::new(&mut region, write);
+                let mut world = TerrainFeatureAccess::new(&mut region, write)
+                    .with_upgrade_center(ChunkPos::new(0, 0))?;
                 if let Some(zone) = f["write_zone"].as_array() {
                     world = world.with_write_zone(GenerationWriteZone::new(
                         ChunkPos::new(n(&zone[0]), n(&zone[1])),
                         n(&zone[2]),
                     ));
-                }
-                if f["upgrading"].as_bool().unwrap() {
-                    world = world.with_upgrade_height(UpgradeWriteHeight::BELOW_ZERO);
                 }
                 world.set_block(
                     [x, y, 0],
@@ -499,6 +584,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             UpgradeWriteHeight::BELOW_ZERO.contains(y)
         )?;
     }
+    upgrade_lifecycle(&registry, &states, &mut out)?;
     for line in fs::read_to_string(dir.join("inputs.txt"))?.lines() {
         fixture(
             &serde_json::from_str(line)?,

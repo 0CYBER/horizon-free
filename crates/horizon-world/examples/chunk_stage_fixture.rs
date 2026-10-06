@@ -117,11 +117,12 @@ fn fixture(
                 let (min_y, height) = chunk.height_for_generation();
                 writeln!(
                     out,
-                    "upgrade_info {} {} {min_y} {height}",
+                    "upgrade_info {} {} {min_y} {height} {}",
                     chunk.is_upgrading(),
                     chunk
                         .below_zero_retrogen()
-                        .map_or("none", |data| data.target_status().name())
+                        .map_or("none", |data| data.target_status().name()),
+                    chunk.highest_generated_status().name()
                 )?;
             }
             "replace_bedrock" => {

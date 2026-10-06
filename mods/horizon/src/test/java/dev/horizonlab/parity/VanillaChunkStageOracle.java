@@ -40,7 +40,7 @@ public final class VanillaChunkStageOracle {
                     switch(op) {
                         case "stage"->{String name=a.get(1).getAsString();chunk.setPersistedStatus(STAGES.get(name));out.println("stage "+name);}
                         case "upgrade"->{chunk.setBelowZeroRetrogen(a.get(1).isJsonNull()?null:upgrade(a.get(1).getAsString(),a.get(2).getAsJsonArray()));out.println("upgrade");}
-                        case "upgrade_info"->{var data=chunk.getBelowZeroRetrogen();var bounds=chunk.getHeightAccessorForGeneration();out.println("upgrade_info "+chunk.isUpgrading()+" "+(data==null?"none":data.targetStatus().getName())+" "+bounds.getMinY()+" "+bounds.getHeight());}
+                        case "upgrade_info"->{var data=chunk.getBelowZeroRetrogen();var bounds=chunk.getHeightAccessorForGeneration();out.println("upgrade_info "+chunk.isUpgrading()+" "+(data==null?"none":data.targetStatus().getName())+" "+bounds.getMinY()+" "+bounds.getHeight()+" "+chunk.getHighestGeneratedStatus().getName());}
                         case "replace_bedrock"->{BelowZeroRetrogen.replaceOldBedrock(chunk);out.println("replace_bedrock");}
                         case "mask"->{upgrade("full",a.get(1).getAsJsonArray()).applyBedrockMask(chunk);out.println("mask");}
                         case "fill"->{var states=a.get(1).getAsJsonArray();int salt=a.get(2).getAsInt();for(int y=0;y<height;y++)for(int z=0;z<16;z++)for(int x=0;x<16;x++)chunk.setBlockState(new BlockPos((cx<<4)+x,min+y,(cz<<4)+z),Block.stateById(states.get((x+3*y+5*z+salt)%states.size()).getAsInt()),3);out.println("fill");}

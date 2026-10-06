@@ -251,6 +251,15 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
     pub fn generation_stage(&self) -> PreLightChunkStage {
         self.stage
     }
+    /// Retained old terrain may already have completed stages that the new
+    /// below-zero generation has not reached. Biome reads use this status.
+    pub fn highest_generated_status(&self) -> crate::chunk_status::ChunkStatus {
+        self.below_zero_retrogen
+            .as_ref()
+            .map_or(self.stage.status(), |data| {
+                self.stage.status().max(data.target_status())
+            })
+    }
     /// Changing status alone does not prime or clear any heightmaps. Native
     /// persisted-status assignment also permits earlier statuses. Reaching an
     /// installed upgrade target clears its metadata; save-dirty tracking is separate.

@@ -290,3 +290,98 @@ fn upgrade_height_rejects_mutations_before_callbacks_but_preserves_reads_and_tic
     assert!(world.set_block([0, i32::MAX, 0], stone, 2).unwrap());
     assert_eq!(calls.get(), 3);
 }
+
+#[test]
+fn live_center_upgrade_policy_observes_callback_transitions() {
+    use horizon_world::{chunk_status::ChunkStatus, retrogen::BelowZeroRetrogen};
+    let registry = registry();
+    let mut chunks = Vec::new();
+    for x in 0..2 {
+        let mut chunk =
+            TerrainChunk::new(ChunkPos::new(x, 0), -64, 128, &registry, Properties).unwrap();
+        chunk.set_below_zero_retrogen(Some(
+            BelowZeroRetrogen::new(ChunkStatus::Features, vec![]).unwrap(),
+        ));
+        chunks.push(chunk);
+    }
+    let mut region = TerrainRegion::new(chunks, WorldGenerationContext::new(-64, 128, 0)).unwrap();
+    let mut calls = Vec::new();
+    {
+        let write = |region: &mut TerrainRegion<'_, Properties>, p, _, flags| {
+            calls.push((p, flags));
+            let center = region.chunk_mut(0, 0)?;
+            match flags {
+                1 => center.set_generation_stage(PreLightChunkStage::Features),
+                2 => center.set_below_zero_retrogen(Some(
+                    BelowZeroRetrogen::new(ChunkStatus::Full, vec![]).unwrap(),
+                )),
+                3 => center.set_below_zero_retrogen(None),
+                _ => {}
+            }
+            Ok(true)
+        };
+        let mut world = TerrainFeatureAccess::new(&mut region, write)
+            .with_upgrade_center(ChunkPos::new(0, 0))
+            .unwrap();
+        assert!(!world.set_block([16, 0, 0], BlockStateId(2), 1).unwrap());
+        assert!(world.set_block([16, -1, 0], BlockStateId(2), 1).unwrap());
+        // The neighbor remains upgrading, but only the center selects the gate.
+        assert!(world.set_block([16, 0, 0], BlockStateId(2), 2).unwrap());
+        assert!(!world.set_block([16, 0, 0], BlockStateId(2), 3).unwrap());
+        assert!(world.set_block([16, -64, 0], BlockStateId(2), 3).unwrap());
+        assert!(
+            world
+                .set_block([16, i32::MAX, 0], BlockStateId(2), 0)
+                .unwrap()
+        );
+    }
+    assert_eq!(calls.len(), 4);
+    assert!(!region.chunk(0, 0).unwrap().is_upgrading());
+    assert!(region.chunk(1, 0).unwrap().is_upgrading());
+    assert!(
+        TerrainFeatureAccess::new(&mut region, ())
+            .with_upgrade_center(ChunkPos::new(2, 0))
+            .is_err()
+    );
+}
+
+#[test]
+fn retained_upgrade_status_allows_old_biome_reads() {
+    use horizon_world::{
+        chunk_status::ChunkStatus,
+        retrogen::BelowZeroRetrogen,
+        worldgen::biome_chunk::{BiomeChunk, BiomeRegion},
+    };
+    let registry = registry();
+    let position = ChunkPos::new(-1, 1);
+    let biomes =
+        BiomeRegion::new(vec![BiomeChunk::new(position, -64, 128, 7).unwrap()], 0).unwrap();
+    for stage in PreLightChunkStage::ALL {
+        for target in ChunkStatus::ALL.into_iter().skip(1) {
+            let mut chunk = TerrainChunk::new(position, -64, 128, &registry, Properties).unwrap();
+            chunk.set_generation_stage(stage);
+            chunk.set_below_zero_retrogen(Some(BelowZeroRetrogen::new(target, vec![]).unwrap()));
+            let mut region =
+                TerrainRegion::new(vec![chunk], WorldGenerationContext::new(-64, 128, 0)).unwrap();
+            for y in [i32::MIN, -16, 0, 15, i32::MAX] {
+                let result = region.noise_biome(&biomes, [-1, y, 4]);
+                if stage.status() >= ChunkStatus::Biomes || target >= ChunkStatus::Biomes {
+                    assert_eq!(*result.unwrap(), 7);
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(RegionError::BiomesNotGenerated([-1, 1]))
+                    ));
+                }
+            }
+            region
+                .chunk_mut(-1, 1)
+                .unwrap()
+                .set_below_zero_retrogen(None);
+            assert_eq!(
+                region.noise_biome(&biomes, [-1, 0, 4]).is_ok(),
+                stage.status() >= ChunkStatus::Biomes
+            );
+        }
+    }
+}

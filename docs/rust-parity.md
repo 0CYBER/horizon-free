@@ -852,9 +852,10 @@ matches **29,247,433 lines per reference JAR**, including **10,098 height cases*
 actual `WorldGenRegion.ensureCanWrite` with a native ProtoChunk before and after
 installing below-zero upgrade data. Direct write probes cover boundary and extreme
 heights, ordinary/upgrading modes and horizontal rejection. Five focused Rust
-region tests, all-target Clippy and both Python fixture tests pass. Upgrade
-activation, target-status cleanup, old-bedrock replacement, hole masking, biome
-retention and the complete generation lifecycle remain pending.
+region tests, all-target Clippy and both Python fixture tests passed for that
+checkpoint. Subsequent work below adds resident upgrade metadata, cleanup,
+bedrock transformations and live center-chunk write policy. Automatic upgrade
+activation, biome retention and the complete generation lifecycle remain pending.
 
 ## Chunk-status identities and metadata
 
@@ -897,3 +898,26 @@ masking, partial vertical overlap, empty sections and changed generation bounds.
 World-crate tests and all-target Clippy pass. Save-dirty notifications, post-light
 transitions, biome retention, structure restrictions, automatic generation
 scheduling and full saved-world/gameplay integration remain pending.
+
+## Live upgrade permissions and retained biome status
+
+Feature access can bind a resident center chunk and read its upgrade state before
+every write. Successful callbacks that complete, remove or reinstall an upgrade
+affect the next write through the same access object. The destination chunk's
+upgrade state does not select this region-wide height gate. Explicit fixed-height
+policies remain available for callers that need a supplied interval.
+
+Resident chunks also expose vanilla's highest generated status: the later of
+their current persisted stage and retained upgrade target. Region biome reads use
+this status, allowing access to old biomes while below-zero regeneration is still
+at an earlier stage. Removing upgrade metadata restores the persisted-stage gate.
+
+The [live region comparison](../benchmarks/rust-live-upgrade-region-2026-10-06/scoped-parity.json)
+matches **29,248,297 lines per reference JAR**, extending the 192 resident fixtures
+with **54 lifecycle cases**. It compares native write permission, highest status
+and actual ProtoChunk biome-read availability across all six pre-light stages and
+nine nonempty upgrade targets. The [retained-status comparison](../benchmarks/rust-retained-upgrade-status-2026-10-06/scoped-parity.json)
+also matches **3,028,057 lines per JAR** across 138 upgrade fixtures. Seven focused
+region tests, all-target Clippy and the region corpus test pass. These checks do
+not yet cover the biome resolver's cave-biome retention, structure restrictions,
+automatic scheduling or complete saved-world integration.
