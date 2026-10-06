@@ -339,3 +339,19 @@ data and ordered callback traces, including failures at each query. The
 records **571,179 matching lines per JAR**. Standing shapes and fluid abilities are
 controlled inputs in this suite; each entity type still needs its implementation.
 Fluid spreading, swimming, drowning and live movement remain pending.
+
+
+Powder snow now selects the native `0.9f`-high falling shape when fall distance
+exceeds 2.5, a full cube for falling-block entities, and a full cube for entities
+that can walk on it, are above it and are not descending. Placement and absent
+entity contexts are empty. Walkability checks the entity-type tag first, then
+leather boots only for living entities; successful tags skip equipment queries.
+The API takes current entity metadata and lazy tag/equipment providers.
+
+`python3 tools/test_powder_snow_collision_parity.py` compares **63,336 fixtures**
+and **599,180 matching lines per JAR** in the
+[powder-snow report](../benchmarks/rust-powder-snow-collision-2026-10-06/scoped-parity.json).
+The native block method and walkability predicate execute over controlled entity
+snapshots. The corpus covers fall-distance and top-height boundaries, nonfinite
+values, falling-block instances, item counts, query failures and skipped queries.
+Entity tag loading, freezing, sinking and live movement remain separate work.

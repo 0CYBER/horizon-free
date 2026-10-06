@@ -5,6 +5,8 @@ import java.nio.file.*;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.*;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.item.FallingBlockEntity;
+import net.minecraft.tags.*;
 import net.minecraft.world.item.*;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.CollisionGetter;
@@ -24,7 +26,10 @@ public final class VanillaCollisionContextOracle {
         void query(String value){out.println(value);if(calls++==fail)throw new Stop();}
     }
     public static class PlayerSnapshot extends Player {
-        Trace trace;VoxelShape liquidShape;
+        Trace trace;VoxelShape liquidShape;boolean powderTag;ItemStack feet;
+        @Override public boolean is(TagKey<EntityType<?>> tag){if(tag!=EntityTypeTags.POWDER_SNOW_WALKABLE_MOBS)throw new AssertionError(tag);trace.query("walkable_tag 1");return powderTag;}
+        @Override public ItemStack getItemBySlot(EquipmentSlot slot){if(slot!=EquipmentSlot.FEET)throw new AssertionError(slot);trace.query("feet 1");return feet;}
+
         @Override public VoxelShape getLiquidCollisionShape(){trace.query("liquid_shape 1");return liquidShape;}
 
         boolean descending,stand,fail;
@@ -41,8 +46,14 @@ public final class VanillaCollisionContextOracle {
         }
     }
     public static class MarkerSnapshot extends Marker {
-        boolean descending;
+        boolean descending,powderTag;Trace trace;
+        @Override public boolean is(TagKey<EntityType<?>> tag){if(tag!=EntityTypeTags.POWDER_SNOW_WALKABLE_MOBS)throw new AssertionError(tag);trace.query("walkable_tag 2");return powderTag;}
         public MarkerSnapshot(){super(null,null);}
+        @Override public boolean isDescending(){return descending;}
+    }
+    public static class FallingSnapshot extends FallingBlockEntity {
+        boolean descending;
+        public FallingSnapshot(){super(null,null);}
         @Override public boolean isDescending(){return descending;}
     }
     private static int fluidIndex(FluidState state){for(int i=0;i<FLUIDS.length;i++)if(FLUIDS[i]==state.getType())return i;throw new AssertionError();}
@@ -61,20 +72,23 @@ public final class VanillaCollisionContextOracle {
                 var f=JsonParser.parseString(line).getAsJsonObject();
                 var player=(PlayerSnapshot)allocate.invoke(unsafe,PlayerSnapshot.class);
                 var marker=(MarkerSnapshot)allocate.invoke(unsafe,MarkerSnapshot.class);
-                player.descending=marker.descending=f.get("descending").getAsBoolean();
+                var falling=(FallingSnapshot)allocate.invoke(unsafe,FallingSnapshot.class);
+                player.descending=marker.descending=falling.descending=f.get("descending").getAsBoolean();
                 // Query only item identity/count; component loading and inventory lifecycle are outside this fixture.
                 player.held=(ItemStack)allocate.invoke(unsafe,ItemStack.class);
                 stackItem.set(player.held,ITEMS[f.get("item").getAsInt()].builtInRegistryHolder());
                 stackCount.setInt(player.held,f.get("count").getAsInt());
                 player.stand=f.get("stand").getAsBoolean();player.fail=f.get("fail").getAsBoolean();
                 double y=number(f.get("y")),other=number(f.get("other"));
-                position.set(player,new Vec3(0,y,0));position.set(marker,new Vec3(0,y,0));
+                position.set(player,new Vec3(0,y,0));position.set(marker,new Vec3(0,y,0));position.set(falling,new Vec3(0,y,0));
                 boolean always=f.get("always").getAsBoolean();
                 var context=switch(f.get("mode").getAsString()){
                     case "empty"->always?CollisionContext.emptyWithFluidCollisions():CollisionContext.empty();
                     case "position"->CollisionContext.positionContext(y);
                     case "player"->CollisionContext.of(player,always);
                     case "marker"->CollisionContext.of(marker,always);
+                    case "falling"->CollisionContext.of(falling,always);
+                    case "with_falling"->CollisionContext.withPosition(falling,other);
                     case "factory_player"->CollisionContext.of(player);
                     case "factory_marker"->CollisionContext.of(marker);
                     case "placement"->CollisionContext.placementContext(player);
@@ -84,9 +98,22 @@ public final class VanillaCollisionContextOracle {
                     case "with_null"->CollisionContext.withPosition(null,other);
                     default->throw new AssertionError();
                 };
-                int entity=context instanceof EntityCollisionContext ec?(ec.getEntity()==player?1:ec.getEntity()==marker?2:0):0;
+                int entity=context instanceof EntityCollisionContext ec?(ec.getEntity()==player?1:ec.getEntity()==marker?2:ec.getEntity()==falling?3:0):0;
                 int held=0;for(int i=0;i<ITEMS.length;i++)if(context.isHoldingItem(ITEMS[i]))held|=1<<i;
                 out.printf("context %b %b %b %d %d%n",context.isDescending(),context.isPlacement(),context.alwaysCollideWithFluid(),entity,held);
+                if(f.has("powder")) {
+                    var config=f.getAsJsonArray("powder");
+                    var pos=new BlockPos(17,config.get(0).getAsInt(),-33);
+                    var trace=new Trace();trace.out=out;trace.fail=config.get(5).getAsInt();player.trace=marker.trace=trace;
+                    player.fallDistance=marker.fallDistance=falling.fallDistance=number(config.get(1));
+                    player.powderTag=marker.powderTag=config.get(2).getAsBoolean();
+                    player.feet=(ItemStack)allocate.invoke(unsafe,ItemStack.class);stackItem.set(player.feet,ITEMS[config.get(3).getAsInt()].builtInRegistryHolder());stackCount.setInt(player.feet,config.get(4).getAsInt());
+                    var world=(CollisionGetter)Proxy.newProxyInstance(CollisionGetter.class.getClassLoader(),new Class<?>[]{CollisionGetter.class},(proxy,method,values)->{throw new AssertionError("unexpected powder world query: "+method);});
+                    var emit=VanillaFaceSupportOracle.class.getDeclaredMethod("emit",PrintWriter.class,VoxelShape.class);emit.setAccessible(true);
+                    try{emit.invoke(null,out,context.getCollisionShape(Blocks.POWDER_SNOW.defaultBlockState(),world,pos));}catch(Stop error){out.println("shape error");}
+                    out.println("queries "+trace.calls);
+                    continue;
+                }
                 if(f.has("liquid")) {
                     var config=f.getAsJsonArray("liquid");
                     var state=(config.get(1).getAsBoolean()?Blocks.LAVA:Blocks.WATER).defaultBlockState().setValue(LiquidBlock.LEVEL,config.get(0).getAsInt());

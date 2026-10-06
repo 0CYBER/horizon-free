@@ -8,6 +8,7 @@ use horizon_world::{
     entity_obstruction::EntityIdentity,
     fluid::{FluidKind, FluidState},
     liquid_collision::{LiquidCollision, LiquidCollisionWorld},
+    powder_snow_collision::{PowderSnowEntity, PowderSnowWorld, powder_snow_collision_shape},
 };
 use serde_json::Value;
 use std::{
@@ -150,6 +151,39 @@ fn liquid_shape(index: i64) -> VoxelShape {
     };
     VoxelShape::from_box(Aabb::new(min, max)).unwrap()
 }
+struct PowderWorld<'a, W> {
+    out: &'a mut W,
+    calls: i32,
+    fail: i32,
+    snapshot: PowderSnowEntity,
+    tag: bool,
+    feet: CollisionItem<'a>,
+}
+impl<W: Write> PowderWorld<'_, W> {
+    fn query(&mut self, value: &str) -> io::Result<()> {
+        writeln!(self.out, "{value}")?;
+        let index = self.calls;
+        self.calls += 1;
+        if index == self.fail {
+            return Err(io::Error::other("injected powder query failure"));
+        }
+        Ok(())
+    }
+}
+impl<W: Write> PowderSnowWorld for PowderWorld<'_, W> {
+    type Error = io::Error;
+    fn powder_snow_entity(&mut self, _: EntityIdentity) -> io::Result<PowderSnowEntity> {
+        Ok(self.snapshot)
+    }
+    fn powder_snow_walkable_tag(&mut self, entity: EntityIdentity) -> io::Result<bool> {
+        self.query(&format!("walkable_tag {}", entity.0))?;
+        Ok(self.tag)
+    }
+    fn feet_are_leather_boots(&mut self, entity: EntityIdentity) -> io::Result<bool> {
+        self.query(&format!("feet {}", entity.0))?;
+        Ok(self.feet.is_item("minecraft:leather_boots"))
+    }
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = std::env::args().nth(1).expect("private fixture directory");
     let dir = Path::new(&arg);
@@ -172,6 +206,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             main_hand: None,
             ..player
         };
+        let falling = CollisionEntity {
+            identity: EntityIdentity(3),
+            ..marker
+        };
         let always = f["always"].as_bool().unwrap();
         let other = number(&f["other"]);
         let context = match f["mode"].as_str().unwrap() {
@@ -179,6 +217,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "position" => CollisionContext::position(player.y),
             "player" => CollisionContext::for_entity(player, always),
             "marker" => CollisionContext::for_entity(marker, always),
+            "falling" => CollisionContext::for_entity(falling, always),
+            "with_falling" => CollisionContext::with_position(Some(falling), other),
             "factory_player" => CollisionContext::for_entity(player, false),
             "factory_marker" => CollisionContext::for_entity(marker, false),
             "placement" => CollisionContext::placement(Some(player)),
@@ -200,6 +240,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             context.entity().map_or(0, |id| id.0),
             held
         )?;
+        if let Some(config) = f.get("powder") {
+            let p = BlockPos::new(17, config[0].as_i64().unwrap() as i32, -33);
+            let mut world = PowderWorld {
+                out: &mut out,
+                calls: 0,
+                fail: config[5].as_i64().unwrap() as i32,
+                snapshot: PowderSnowEntity {
+                    fall_distance: number(&config[1]),
+                    falling_block: context.entity() == Some(falling.identity),
+                },
+                tag: config[2].as_bool().unwrap(),
+                feet: CollisionItem {
+                    item: ITEMS[config[3].as_u64().unwrap() as usize],
+                    count: config[4].as_i64().unwrap() as i32,
+                },
+            };
+            match powder_snow_collision_shape(&mut world, p, &context) {
+                Ok(shape) => emit(world.out, &shape)?,
+                Err(_) => writeln!(world.out, "shape error")?,
+            }
+            writeln!(world.out, "queries {}", world.calls)?;
+            continue;
+        }
         if let Some(config) = f.get("liquid") {
             let state = liquid_state(config[1].as_bool().unwrap(), config[0].as_i64().unwrap());
             let above = config[3].as_i64().unwrap();

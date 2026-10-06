@@ -20,6 +20,7 @@ pub mod heightmap;
 pub mod liquid_collision;
 pub mod nbt;
 pub mod piston_shape;
+pub mod powder_snow_collision;
 pub mod region;
 pub mod registry;
 pub mod retrogen;
