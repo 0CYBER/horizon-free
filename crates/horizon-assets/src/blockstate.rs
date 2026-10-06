@@ -1,5 +1,6 @@
 //! Pinned blockstate resource definitions, before registry binding and baking.
 pub mod bind;
+pub mod choice;
 use crate::json::*;
 use serde::{
     Deserializer,

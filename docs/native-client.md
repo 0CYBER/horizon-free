@@ -136,8 +136,7 @@ covers all 1,288 bundled definitions and 1,351 synthetic cases (2,639 total,
 `BlockStateModelDispatcher.CODEC` as the pinned loader. The Rust representation
 preserves single versus weighted variants, all three quarter-turn axes, UV-lock
 flags, positive weights and total-weight limits, ordered selectors, nested
-AND/OR conditions and per-term negation. Random draw consumption and transformed
-baking remain separate work.
+AND/OR conditions and per-term negation. Transformed baking remains separate work.
 
 ```sh
 python3 tools/test_blockstate_model_parity.py
@@ -159,6 +158,21 @@ matches 221,261 output lines against each authenticated client/server JAR.
 
 ```sh
 python3 tools/test_blockstate_binding_parity.py
+```
+
+`CompiledChoices` prepares cumulative weights once per definition and shares
+those choices across bound states. Selecting an ordinary single variant consumes
+no random draw; a weighted singleton still does. Multipart collection draws a
+seed even for an empty subset and resets the same stream before each chosen
+part. The [native choice comparison](../benchmarks/rust-blockstate-model-choice-2026-10-06/scoped-parity.json)
+uses actual `WeightedVariants.collectParts` and `MultiPartModel.collectParts`
+with inert observable leaves. All seven distinct bundled weight patterns,
+synthetic large weights and random multipart graphs produce matching selections
+and subsequent random values: 6,960 fixtures, 111,360 collections, both legacy
+and xoroshiro streams. This does not yet bake or render the selected models.
+
+```sh
+python3 tools/test_model_choice_parity.py
 ```
 
 The sprite animation module reproduces the pinned metadata codec's integer
