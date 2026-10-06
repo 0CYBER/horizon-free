@@ -42,6 +42,7 @@ pub mod retrogen;
 pub mod suffocation;
 pub mod tick_data;
 pub mod world_movement;
+pub mod world_ray;
 pub mod worldgen;
 
 pub const DATA_VERSION: i32 = 5023;

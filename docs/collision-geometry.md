@@ -755,3 +755,20 @@ mutations/removal and failures after partial writes. Targeted Clippy passes.
 This gate controls piston/edge decisions, ground support, ray hits and landing
 callbacks; step height is zero and non-passenger emission is tested separately.
 Binding all phases to a live entity/world and player travel remains pending.
+
+
+`world_ray` implements ordered block/fluid ray clipping, nearest-hit selection
+with block precedence on ties, and interaction-shape overrides that replace only
+the hit face. It also implements native fluid pick modes and fall-reset shape
+selection, including player type identity, end portals/gateways and server-side
+zero-delay Nether portals. Traversal limits and invalid geometry return errors.
+
+`python3 tools/test_world_ray_parity.py` compares actual `BlockGetter.clip` and
+native `ClipContext` modes. The
+[world ray report](../benchmarks/rust-world-ray-2026-10-07/scoped-parity.json)
+records **248,725 matching lines per JAR**, including inside hits, ties, misses,
+interaction geometry, short/signed-zero rays, lazy predicates/rules and provider
+failures. Targeted Clippy passes. Separate limit tests distinguish a miss from
+nonfinite geometry, exhausted traversal budget and failed world reads. Shapes
+and state predicates are controlled; registered shape binding, actual fluid
+shape caching and full entity/world integration remain pending.
