@@ -7,7 +7,7 @@ class FeatureGraphCorpusTests(unittest.TestCase):
     def test_composition_decoding_failure_and_shared_randomness(self):
         definitions = list(graphs.definitions())
         self.assertEqual(definitions, list(graphs.definitions()))
-        self.assertEqual({d['type'] for d in definitions}, {'no_op', 'sequence', 'random_boolean_selector', 'simple_random_selector', 'random_selector', 'weighted_random_selector'})
+        self.assertEqual({d['type'] for d in definitions}, {'no_op', 'overlay', 'sequence', 'random_boolean_selector', 'simple_random_selector', 'random_selector', 'weighted_random_selector'})
         self.assertTrue(any(d.get('features') == [] for d in definitions))
         fixtures = list(graphs.corpus())
         self.assertEqual({f['legacy'] for f in fixtures}, {False, True})

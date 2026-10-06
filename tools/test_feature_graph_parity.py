@@ -19,8 +19,8 @@ def definitions():
     noop=placed('no_op');false=placed('no_op',[{'type':'count','count':0}]);island=placed('end_island')
     platform=placed('end_platform',[{'type':'offset','x':1,'y':2,'z':-1}])
     yield {'type':'no_op'}
-    for kind in ['sequence','simple_random_selector']:
-        for features in [[],[noop],[false],[island],[false,island],[island,false],[noop,island,platform],None,noop]:
+    for kind in ['sequence','overlay','simple_random_selector']:
+        for features in [[],[noop],[false],[island],[false,island],[island,false],[false,false],[noop,false,island,platform],[noop,island,platform],None,noop]:
             yield {'type':kind,'features':features}
     for yes,no in [(noop,false),(false,island),(island,platform),(false,false)]:
         yield {'type':'random_boolean_selector','feature_true':yes,'feature_false':no}
@@ -32,9 +32,13 @@ def definitions():
     nested={'feature':inner,'placement':[{'type':'count','count':2},{'type':'in_square'}]}
     yield {'type':'sequence','features':[noop,nested,platform]}
     yield {'type':'simple_random_selector','features':[nested,platform,false]}
+    overlay={'feature':{'type':'overlay','features':[false,nested,false,platform]},'placement':[{'type':'count','count':2},{'type':'in_square'}]}
+    yield {'type':'overlay','features':[false,overlay,nested,platform]}
+    yield {'type':'sequence','features':[overlay,nested]}
     yield {'type':'random_selector','features':[{'feature':nested,'chance':0},{'feature':false,'chance':1}],'default':island}
     for malformed in [None,False,{},'missing',{'feature':{'type':'no_op'}},{'feature':{'type':'no_op'},'placement':None}]:
         yield {'type':'sequence','features':[malformed]}
+        yield {'type':'overlay','features':[noop,malformed]}
         yield {'type':'random_boolean_selector','feature_true':noop,'feature_false':malformed}
 
     for weights in [[],[0],[1],[63],[64],[65],[2147483647],[0,0],[0,1],[1,0],[1,3],[31,32],[31,33],[31,34],[2147483647,1],[-1,2],[0.9,1],[False,1],['1',2],[4294967297,1]]:
@@ -93,9 +97,9 @@ def main():
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixture_paths,tested_fixtures)
     report={"schema":1,"minecraft":lock["minecraft"]["version"],"manifest_sha1":lock["minecraft"]["manifest_sha1"],"platform":platform.platform(),
             "java":subprocess.check_output(["java","--version"],text=True).splitlines()[0],"rustc":subprocess.check_output(["rustc","--version"],text=True).strip(),
-            "fixtures":len(fixtures),"basic_features":3,"composition_features":6,"definitions":len(list(definitions())),"block_states":5,"composed_fixtures":sum("placement" in f for f in fixtures),"requested_placements":sum(f["repeats"] for f in fixtures),
+            "fixtures":len(fixtures),"basic_features":3,"composition_features":7,"definitions":len(list(definitions())),"block_states":5,"composed_fixtures":sum("placement" in f for f in fixtures),"requested_placements":sum(f["repeats"] for f in fixtures),
             "sources_sha256":tested_sources,"fixtures_sha256":tested_fixtures,"rust_output_sha256":lab.digest(build/"rust.txt","sha256"),"references":references,
-            "scope":"Actual Feature.DIRECT_CODEC and native no-op, sequence, random-boolean-selector, simple-random-selector and chance-based random-selector and weighted-random-selector features compose three native block-writing features through inline PlacedFeature holders and actual nested FeaturePlacer calls. Ordered writes, reads, flags, accumulated states, boolean results, rejected writes, partial failures, shared randomness and top-level modifier chains are compared. Sequence short-circuiting, selector return propagation and empty/all-zero weighted choices without random draws are included. Named registry holders/tags, encoders, full feature registries and complete generated worlds remain pending. Rust bounds decode depth/nodes/lists, nested execution depth and feature/placed-feature visits; nested modifier-chain execution shares the feature work budget."}
+            "scope":"Actual Feature.DIRECT_CODEC and native no-op, sequence, overlay, random-boolean-selector, simple-random-selector and chance-based random-selector and weighted-random-selector features compose three native block-writing features through inline PlacedFeature holders and actual nested FeaturePlacer calls. Ordered writes, reads, flags, accumulated states, boolean results, rejected writes, partial failures, shared randomness and top-level modifier chains are compared. Overlay exhaustive ordered execution with accumulated success, sequence short-circuiting, selector return propagation and empty/all-zero weighted choices without random draws are included. Named registry holders/tags, encoders, full feature registries and complete generated worlds remain pending. Rust bounds decode depth/nodes/lists, nested execution depth and feature/placed-feature visits; nested modifier-chain execution shares the feature work budget."}
 
 
     lab.write_json(report_path,report);print(f"Scoped feature-graph parity passed: {report_path}")

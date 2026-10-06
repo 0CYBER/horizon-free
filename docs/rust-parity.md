@@ -397,3 +397,19 @@ The [contained-fluid comparison](world-data.md#contained-fluid-states) adds
 **239,190 matching lines per JAR** for fluid-state mapping, liquid-block conversion
 and surface/camera height queries. It covers every pinned block state and query
 failures; fluid spreading, entity interactions and rendering remain pending.
+
+## Overlay feature composition
+
+The Rust overlay feature executes every child placed feature in order and
+accumulates success, sharing the placer and random stream across siblings.
+Named holders and placed-feature tags use the same catalog resolution as other
+compositions. Empty named tags produce false; empty direct lists fail decoding.
+
+The expanded [inline graph comparison](../benchmarks/rust-feature-graph-2026-10-06/scoped-parity.json)
+matches **1,146,057 output lines per reference JAR**, and the expanded
+[named catalog comparison](../benchmarks/rust-feature-catalog-2026-10-06/scoped-parity.json)
+matches **2,528,704 lines per reference JAR**. These include partial failures,
+rejected writes, nested modifiers, repeated calls, random-stream tails and both
+Java random modes. This verifies scoped composition behavior; complete chunk
+generation and gameplay remain pending. Workspace tests and all-target Clippy
+also pass for this implementation.

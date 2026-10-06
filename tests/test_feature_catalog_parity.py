@@ -6,8 +6,8 @@ class FeatureCatalogCorpusTests(unittest.TestCase):
     def test_named_roots_tag_shapes_and_mutation_failures(self):
         resources = catalog.catalog()
         self.assertEqual(resources, catalog.catalog())
-        self.assertEqual(len(resources['features']), 9)
-        self.assertEqual(len(resources['placed']), 14)
+        self.assertEqual(len(resources['features']), 10)
+        self.assertEqual(len(resources['placed']), 15)
         self.assertEqual(len(resources['tags']), 5)
         fixtures = list(catalog.corpus())
         self.assertEqual({f['placed_root'] for f in fixtures}, {False, True})

@@ -234,7 +234,7 @@ impl FeatureCatalog {
                     object.insert("cap_feature".into(), raw(expanded)?);
                 }
             }
-            "minecraft:sequence" | "minecraft:simple_random_selector" => {
+            "minecraft:sequence" | "minecraft:overlay" | "minecraft:simple_random_selector" => {
                 let expanded = self.expand_set(required(&object, "features")?, depth + 1, work)?;
                 object.insert("features".into(), raw(expanded)?);
             }

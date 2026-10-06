@@ -52,6 +52,7 @@ pub enum FeatureDefinition {
     NoOp,
     WeightedChoice(OptionalWeightedList<PlacedFeatureDefinition>),
     Sequence(Vec<PlacedFeatureDefinition>),
+    Overlay(Vec<PlacedFeatureDefinition>),
     BooleanChoice(Box<[PlacedFeatureDefinition; 2]>),
     RandomChoice(Vec<PlacedFeatureDefinition>),
     ChanceChoice {
@@ -401,7 +402,7 @@ impl FeatureDefinition {
                     )
                 })?,
             )),
-            "minecraft:sequence" | "minecraft:simple_random_selector" => {
+            "minecraft:sequence" | "minecraft:overlay" | "minecraft:simple_random_selector" => {
                 let raw = required(&object, "features")?;
                 let name = serde_json::from_str::<String>(raw.get()).ok();
                 let named_empty = name
@@ -411,10 +412,10 @@ impl FeatureDefinition {
                     .transpose()?
                     .is_some_and(|name| empty_tags.contains(&name));
                 if named_empty {
-                    return Ok(if kind == "minecraft:sequence" {
-                        Self::Sequence(vec![])
-                    } else {
-                        Self::RandomChoice(vec![])
+                    return Ok(match kind.as_str() {
+                        "minecraft:sequence" => Self::Sequence(vec![]),
+                        "minecraft:overlay" => Self::Overlay(vec![]),
+                        _ => Self::RandomChoice(vec![]),
                     });
                 }
                 let values = if raw.get().trim_start().starts_with('[') {
@@ -437,10 +438,10 @@ impl FeatureDefinition {
                         )
                     })
                     .collect::<Result<_, _>>()?;
-                Ok(if kind == "minecraft:sequence" {
-                    Self::Sequence(features)
-                } else {
-                    Self::RandomChoice(features)
+                Ok(match kind.as_str() {
+                    "minecraft:sequence" => Self::Sequence(features),
+                    "minecraft:overlay" => Self::Overlay(features),
+                    _ => Self::RandomChoice(features),
                 })
             }
             "minecraft:random_boolean_selector" => Ok(Self::BooleanChoice(Box::new([
@@ -672,6 +673,13 @@ impl FeatureDefinition {
                     }
                 }
                 Ok(true)
+            }
+            Self::Overlay(features) => {
+                let mut any = false;
+                for feature in features {
+                    any |= feature.place_in(&mut placer, world, random, origin, run)?;
+                }
+                Ok(any)
             }
             Self::BooleanChoice(features) => {
                 let index = if random.next_boolean() { 0 } else { 1 };
