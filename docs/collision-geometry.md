@@ -574,3 +574,19 @@ records **51,572 matching lines per JAR**, including float boundaries, nonfinite
 positions/offsets/factors, tag/type short circuits and errors at every query.
 Workspace Clippy passes. Registered movement-property provisioning, living-entity
 efficiency and the full movement lifecycle remain pending.
+
+
+`MovementProperties` imports version-bound raw friction, speed, jump, bounce and
+fall-distance-reduction fields plus fence-gate type. `BoundMovementProperties`
+binds resolved fence/wall/bounce-suppression tags; rebinding leaves previous
+snapshots unchanged. `RegistryMovementWorld` connects real state IDs from a block
+provider to the support-position and factor calculations, rejecting unknown IDs.
+
+`python3 tools/test_movement_registry_parity.py` independently checks native
+property getters for every state, then runs actual entity support/factor queries
+over all **35,723 states / 1,286 blocks** under normal, empty and universal tags.
+Mixed-block scenes and failing providers check query order. The
+[registered movement report](../benchmarks/rust-movement-registry-2026-10-07/scoped-parity.json)
+records **2,300,888 matching lines per JAR**. Three import/binding tests and
+workspace Clippy pass. This provisions movement data; full player travel, live
+entity state and block bounce effects remain separate integration work.

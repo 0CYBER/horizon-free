@@ -21,6 +21,7 @@ pub mod fluid;
 pub mod ground_support;
 pub mod heightmap;
 pub mod liquid_collision;
+pub mod movement_properties;
 pub mod movement_restitution;
 pub mod movement_support;
 pub mod nbt;
