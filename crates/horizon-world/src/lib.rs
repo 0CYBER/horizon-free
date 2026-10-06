@@ -11,6 +11,7 @@ pub mod block_survival;
 pub mod chunk;
 pub mod chunk_status;
 pub mod collision;
+pub mod collision_context;
 pub mod compression;
 pub mod dynamic_support;
 pub mod entity_obstruction;

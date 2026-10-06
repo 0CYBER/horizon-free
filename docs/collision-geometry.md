@@ -1,7 +1,8 @@
 # Horizon collision geometry
 
 The version target is Minecraft Java Edition **26.3**. Geometry is a simulation
-foundation; Horizon still has no Rust client, live world, or entity simulation.
+foundation; Horizon has a native client for inspecting a controlled block scene.
+Live gameplay and entity simulation remain unfinished.
 
 `horizon-core::geometry` provides `Vec3`, `Aabb`, `Axis`, `Direction`, `BlockHit`,
 and immutable `VoxelShape` values. Coordinates are doubles. Arithmetic keeps
@@ -38,7 +39,7 @@ disjoint and epsilon-merger behavior. Shape operations reject truth tables that
 fill two empty cells, as vanilla does. Per-axis cube-coordinate metadata survives
 partial merges and is checked when importing cached shapes. Box construction
 preserves thin-box rejection and up to 1/8 cube quantization. Optimized joins
-reconstruct greedy boxes in vanilla order. Face/edge extraction and shape rotations remain absent.
+reconstruct greedy boxes in vanilla order. Face extraction is implemented; edge extraction and shape rotations remain absent.
 
 Discrete axis extrema are retained separately from occupied cells. A box can
 quantize to no occupied cells while retaining a finite minimum/maximum on other
@@ -107,9 +108,9 @@ must select it, while a cached empty shape is a valid `Some` value.
 
 This covers the cached branch of the **no-context** `BlockState.getCollisionShape`
 method. Vanilla's overload taking `CollisionContext` always calls block behavior;
-the cache cannot establish entity collision parity. Dynamic and entity-dependent
-selection, neighboring blocks, world borders, movement integration, fluids, block
-effects, and live collision broad-phase queries still need implementation.
+the cache cannot establish entity collision parity. Dynamic no-context selection is implemented as described below. Entity-dependent
+block selection, world borders, movement integration, fluids, block effects and
+live collision broad-phase queries still need implementation.
 
 Run the comparisons after preparing the pinned artifacts:
 
@@ -284,3 +285,25 @@ definition metadata; survival results are calculated in Rust. Workspace tests,
 Clippy and the **147-test Python suite** passed. This establishes the recorded
 survival scope; full placement, neighbor updates, scheduled behavior and complete
 block gameplay remain pending.
+
+
+Collision contexts now preserve empty-context fallback heights, position-only
+queries, and captured entity position, descending, main-hand and placement flags.
+Height comparisons retain the native float epsilon widened to double. Null
+placement factories use `-Double.MAX_VALUE`; `withPosition` sets the placement
+flag and ignores the supplied height when the entity is absent. Empty item stacks
+match AIR in entity/empty contexts, while position-only contexts never report a
+held item. Living-entity fluid callbacks run before the same-family exclusion,
+with the second fluid as their argument, and propagate failures.
+
+`python3 tools/test_collision_context_parity.py` exercises actual native factories
+and queries over **8,338 context snapshots**, comparing **225,126 output lines per
+JAR**. The [context report](../benchmarks/rust-collision-context-2026-10-06/scoped-parity.json)
+records the pinned artifacts and exact source/input/output hashes. The corpus
+includes adjacent representable values around height thresholds, empty shapes,
+integer-coordinate extremes, NaN/infinity, null entities, item count boundaries,
+all five fluid types and callback failures. Native entity and stack snapshots are
+allocated privately without their constructors; this checks query behavior, not
+entity construction or inventory lifecycle. Inventory changes after context
+capture, experimental minecart contexts, contextual block-shape dispatch and live
+movement integration remain pending.
