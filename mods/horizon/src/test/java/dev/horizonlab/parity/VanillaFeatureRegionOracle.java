@@ -25,6 +25,19 @@ import net.minecraft.world.level.levelgen.placement.*;
 
 /** Native feature placement into resident ProtoChunks through a world transport. */
 public final class VanillaFeatureRegionOracle {
+    // Execute the actual native destruction method with resident storage as its
+    // world transport; no ServerLevel constructor or copied destruction body.
+    private static final class NativeDestruction extends net.minecraft.server.level.WorldGenRegion {
+        WorldGenLevel world;
+        private NativeDestruction(){super(null,null,null,null);}
+        @Override public BlockState getBlockState(BlockPos p){return world.getBlockState(p);}
+        @Override public boolean setBlock(BlockPos p,BlockState state,int flags,int recursion){return world.setBlock(p,state,flags,recursion);}
+    }
+    private static NativeDestruction destruction(WorldGenLevel world)throws ReflectiveOperationException {
+        var field=sun.misc.Unsafe.class.getDeclaredField("theUnsafe");field.setAccessible(true);
+        var value=(NativeDestruction)((sun.misc.Unsafe)field.get(null)).allocateInstance(NativeDestruction.class);value.world=world;return value;
+    }
+
     private static ProtoChunk chunk(Map<ChunkPos,ProtoChunk> chunks,int x,int z) {
         var chunk=chunks.get(new ChunkPos(x>>4,z>>4));if(chunk==null)throw new IllegalArgumentException("missing region chunk");return chunk;
     }
@@ -93,7 +106,12 @@ public final class VanillaFeatureRegionOracle {
                 var fluidTicks=new WorldGenTickAccess<Fluid>(p->chunk(chunks,p.getX(),p.getZ()).getFluidTicks());
                 long[] tickOrder={f.get("tick_order").getAsLong()};
                 int[] calls={0};int fail=f.get("fail").getAsInt(),reject=f.get("reject").getAsInt();
+                NativeDestruction[] destroyer={null};
                 var world=(WorldGenLevel)Proxy.newProxyInstance(WorldGenLevel.class.getClassLoader(),new Class<?>[]{WorldGenLevel.class},(proxy,method,values)->switch(method.getName()) {
+                    case "destroyBlock"->{
+                        if(method.isDefault())yield InvocationHandler.invokeDefault(proxy,method,values);
+                        yield destroyer[0].destroyBlock((BlockPos)values[0],(Boolean)values[1],(net.minecraft.world.entity.Entity)values[2],(Integer)values[3]);
+                    }
                     case "getBlockTicks"->blockTicks;
                     case "getFluidTicks"->fluidTicks;
                     case "getGameTime"->f.get("game_time").getAsLong();
@@ -118,6 +136,7 @@ public final class VanillaFeatureRegionOracle {
                     }
                     default->throw new AssertionError("unexpected world method "+method);
                 });
+                destroyer[0]=destruction(world);
                 var modifiers=new ArrayList<PlacementModifier>();for(var value:f.getAsJsonArray("placement"))modifiers.add(PlacementModifier.CODEC.parse(JsonOps.INSTANCE,value).getOrThrow());
                 var placer=new FeaturePlacer(world,generator);
                 for(int repeat=0;repeat<2;repeat++) {

@@ -267,7 +267,13 @@ fn run(
             registry.default_state("minecraft:air").unwrap(),
         ] {
             region.set_block_worldgen(p, state)?;
-            let mut world = TerrainFeatureAccess::new(&mut region, ());
+            let mut world = TerrainFeatureAccess::new(
+                &mut region,
+                |_: &mut TerrainRegion<'_, Properties<'_>>,
+                 _: [i32; 3],
+                 _: BlockStateId,
+                 _: i32| Ok::<_, RegionError>(false),
+            );
             query_state(&mut world, p, tags, out)?;
         }
     }

@@ -383,7 +383,29 @@ impl<'a, 'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'a, 'r, B, F> {
         Self { region, write }
     }
 }
-impl<B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, '_, B, F> {
+impl<'r, B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, 'r, B, F>
+where
+    F: FnMut(&mut TerrainRegion<'r, B>, [i32; 3], BlockStateId, i32) -> Result<bool, RegionError>,
+{
+    fn destroy_block_without_entity(
+        &mut self,
+        position: [i32; 3],
+        _drop_resources: bool,
+    ) -> Result<bool, PlacementQueryError> {
+        // WorldGenRegion destruction is an air replacement through its write
+        // policy. It does not evaluate drops, unlike live-level destruction.
+        let chunk = self.region.chunk(position[0] >> 4, position[2] >> 4)?;
+        let state = chunk.block(position[0], position[1], position[2]);
+        if chunk.block_properties(state).is_air() {
+            return Ok(false);
+        }
+        let air = chunk
+            .registry()
+            .default_state("minecraft:air")
+            .expect("validated air state");
+        (self.write)(self.region, position, air, 3).map_err(Into::into)
+    }
+
     fn fluid_state(
         &mut self,
         position: [i32; 3],

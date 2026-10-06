@@ -781,3 +781,19 @@ defaults and boundaries; both random streams; rejected writes; partial failures;
 repeated mutation; wrapped positions; and composition. Workspace tests and
 all-target Clippy pass. Neighbor updates, falling behavior, fluid simulation,
 larger clusters and complete cave generation remain pending.
+
+## Generation-time destruction on resident chunks
+
+Feature access now routes destruction through its supplied write callback using
+air and update flags `3`. Air is an immediate false result. This follows
+`WorldGenRegion.destroyBlock`, whose generation-time path does not evaluate drops;
+live-level destruction remains separate work.
+
+The [resident destruction comparison](../benchmarks/rust-feature-region-destroy-2026-10-06/scoped-parity.json)
+matches **29,502,523 lines per reference JAR** across **192 fixtures**, adding
+active/inactive End podiums to the resident feature corpus. The reference invokes
+the actual WorldGenRegion method through a subclass that transports reads/writes
+to the existing chunk fixture. Final sections, heightmaps, ticks, tag/fluid probes,
+rejected writes and partial failures still agree. Workspace tests, all-target
+Clippy and all 149 Python tests pass. Write-zone policy, POIs, block entities,
+postprocessing execution, lighting and live-world effects remain pending.
