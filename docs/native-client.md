@@ -136,11 +136,29 @@ covers all 1,288 bundled definitions and 1,351 synthetic cases (2,639 total,
 `BlockStateModelDispatcher.CODEC` as the pinned loader. The Rust representation
 preserves single versus weighted variants, all three quarter-turn axes, UV-lock
 flags, positive weights and total-weight limits, ordered selectors, nested
-AND/OR conditions and per-term negation. Registry binding, property selection,
-random draw consumption and transformed baking remain separate work.
+AND/OR conditions and per-term negation. Random draw consumption and transformed
+baking remain separate work.
 
 ```sh
 python3 tools/test_blockstate_model_parity.py
+```
+
+Property binding now selects variant roots or multipart part indices for an
+ordered native state list. The [binding comparison](../benchmarks/rust-blockstate-model-binding-2026-10-06/scoped-parity.json)
+covers all 1,288 bundled definitions against 35,723 registered block states plus
+the four special item-frame states, followed by synthetic overlap, malformed
+selector and predicate cases: 3,802 definitions and 687,466 state results match,
+with 220 expected binding errors. It checks the native replacement-before-abort
+behavior for overlapping variants, eager multipart validation even when variants
+cover every state, integer-property aliases, nested conditions and empty part
+selections. The actual renderer has not yet adopted these selections.
+
+The Java integer-property parser is shared by `horizon-core`, client binding and
+world-state decoding. Its [codec regression](../benchmarks/rust-blockstate-model-binding-2026-10-06/shared-integer-codec.json)
+matches 221,261 output lines against each authenticated client/server JAR.
+
+```sh
+python3 tools/test_blockstate_binding_parity.py
 ```
 
 The sprite animation module reproduces the pinned metadata codec's integer

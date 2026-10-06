@@ -12,6 +12,7 @@ pub mod noise;
 pub mod position;
 pub mod random;
 pub mod storage;
+pub mod text;
 pub mod ticks;
 
 pub const VANILLA_VERSION: &str = "26.3";

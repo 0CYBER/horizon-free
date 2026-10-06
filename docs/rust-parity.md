@@ -21,7 +21,9 @@ also include parent/texture resolution over 5,648 roots and cuboid baking over
 7,100 roots with identity blockstate transforms. Blockstate selection, transformed
 models and UV locking remain unfinished. Blockstate resource decoding now
 matches all 1,288 bundled definitions and 1,351 synthetic cases; registry
-binding and model selection are not yet connected to the renderer. The native renderer now draws an
+binding now also matches native selection across registered and special
+item-frame states. Weighted random selection, transformed baking and renderer
+integration remain unfinished. The native renderer now draws an
 inspection gallery from the decoded/resolved/baked models, including binary
 cutouts and stepped lantern animation; these are not yet gameplay blocks.
 Animation metadata, frame sequences and tick-state selection now have native
