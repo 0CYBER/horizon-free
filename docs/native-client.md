@@ -129,6 +129,20 @@ transparency classification, actual tint/light evaluation and GPU rendering
 remain separate from the geometry result. Other operating systems still need
 their native validation runs.
 
+Blockstate resources now decode into ordered variant selectors and multipart
+conditions. The [native blockstate comparison](../benchmarks/rust-blockstate-model-decoding-2026-10-06/scoped-parity.json)
+covers all 1,288 bundled definitions and 1,351 synthetic cases (2,639 total,
+468 expected rejections). It uses the same `StrictJsonParser` and
+`BlockStateModelDispatcher.CODEC` as the pinned loader. The Rust representation
+preserves single versus weighted variants, all three quarter-turn axes, UV-lock
+flags, positive weights and total-weight limits, ordered selectors, nested
+AND/OR conditions and per-term negation. Registry binding, property selection,
+random draw consumption and transformed baking remain separate work.
+
+```sh
+python3 tools/test_blockstate_model_parity.py
+```
+
 The sprite animation module reproduces the pinned metadata codec's integer
 conversion, strict primitive types, optional null fields and frame dimensions.
 It preserves repeated frames, filters out-of-image frame indices, and treats

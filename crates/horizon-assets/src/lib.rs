@@ -3,6 +3,7 @@
 
 pub mod animation;
 pub mod bake;
+pub mod blockstate;
 mod json;
 pub mod model;
 pub mod resolve;

@@ -19,7 +19,9 @@ block-model JSON files and 2,457 synthetic cases compared against the actual
 client parser. [Decoder scope and validation](native-client.md#validation)
 also include parent/texture resolution over 5,648 roots and cuboid baking over
 7,100 roots with identity blockstate transforms. Blockstate selection, transformed
-models and UV locking remain unfinished. The native renderer now draws an
+models and UV locking remain unfinished. Blockstate resource decoding now
+matches all 1,288 bundled definitions and 1,351 synthetic cases; registry
+binding and model selection are not yet connected to the renderer. The native renderer now draws an
 inspection gallery from the decoded/resolved/baked models, including binary
 cutouts and stepped lantern animation; these are not yet gameplay blocks.
 Animation metadata, frame sequences and tick-state selection now have native
