@@ -233,3 +233,37 @@ fn canonical_identity_claims_require_exact_geometry_and_unique_exports() {
     coords[0] = (-0.0f64).to_bits() as i64;
     assert!(CachedCollisionRegistry::from_nbt(&noncanonical_zero, &registry).is_err());
 }
+
+#[test]
+fn registry_scan_binding_requires_complete_canonical_metadata() {
+    use horizon_world::{
+        block_collision::BlockCollisionRegistry,
+        registry_collision_scan::RegistryCollisionWorld,
+        suffocation::{SuffocationDefinition, SuffocationRegistry},
+    };
+    use std::{collections::BTreeSet, sync::Arc};
+    let (registry_tag, mut collision_tag) = fixture();
+    let registry = BlockRegistry::from_nbt(&registry_tag).unwrap();
+    let definitions = ["minecraft:air", "minecraft:stone", "minecraft:context"]
+        .map(|name| (name.to_owned(), SuffocationDefinition::Never))
+        .into_iter()
+        .collect();
+    for marked in [false, true] {
+        if marked {
+            let Some(Tag::List(shapes)) = collision_tag.get_mut("shapes") else {
+                unreachable!()
+            };
+            canonical_marker(&mut shapes[0], Tag::Byte(1));
+            canonical_marker(&mut shapes[1], Tag::Byte(2));
+        }
+        let cached =
+            Arc::new(CachedCollisionRegistry::from_nbt(&collision_tag, &registry).unwrap());
+        let collisions = Arc::new(BlockCollisionRegistry::new(cached).unwrap());
+        assert!(collisions.collision_block(BlockStateId(3)).is_err());
+        let binding = SuffocationRegistry::new(collisions, &definitions, &BTreeSet::new()).unwrap();
+        assert_eq!(
+            RegistryCollisionWorld::new(&binding, &mut ()).is_ok(),
+            marked
+        );
+    }
+}

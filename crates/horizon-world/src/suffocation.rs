@@ -31,6 +31,10 @@ pub struct SuffocationRegistry<'r> {
     rules: Vec<Rule>,
 }
 impl<'r> SuffocationRegistry<'r> {
+    pub fn collisions(&self) -> &BlockCollisionRegistry<'r> {
+        &self.collisions
+    }
+
     /// Rebind after the causes_suffocation tag changes. Definition keys and tag
     /// members are canonical block identifiers from the same pinned registry.
     pub fn new(

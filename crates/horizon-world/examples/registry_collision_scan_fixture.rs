@@ -1,0 +1,408 @@
+//! Integrated registry/cursor differential transport using resident TerrainChunk storage.
+use horizon_core::{
+    geometry::{Aabb, Axis, Vec3, VoxelShape},
+    position::{BlockPos, ChunkPos},
+};
+use horizon_world::{
+    block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
+    block_collision_scan::BlockCollisionScan,
+    collision::CachedCollisionRegistry,
+    collision_context::CollisionContext,
+    dynamic_support::DynamicSupportWorld,
+    entity_obstruction::EntityIdentity,
+    fluid::FluidState,
+    heightmap::HeightmapState,
+    liquid_collision::LiquidCollisionWorld,
+    nbt::{self, Limits},
+    powder_snow_collision::{PowderSnowEntity, PowderSnowWorld},
+    registry::{BlockRegistry, BlockStateId},
+    registry_collision_scan::{CollisionChunks, RegistryCollisionWorld},
+    suffocation::{SuffocationDefinition, SuffocationRegistry},
+    worldgen::{
+        tags::TagDefinitions,
+        terrain::{TerrainBlockStates, TerrainChunk},
+    },
+};
+use serde_json::Value;
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::{self, Write},
+    path::Path,
+    rc::Rc,
+    sync::Arc,
+};
+fn number(v: &Value) -> f64 {
+    f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
+}
+fn values(
+    out: &mut impl Write,
+    label: &str,
+    values: impl IntoIterator<Item = f64>,
+) -> io::Result<()> {
+    write!(out, "{label}")?;
+    for v in values {
+        let bits = if v.is_nan() {
+            0x7ff8_0000_0000_0000
+        } else {
+            v.to_bits()
+        };
+        write!(out, " {bits:016x}")?;
+    }
+    writeln!(out)
+}
+fn box_values(out: &mut impl Write, label: &str, b: Aabb) -> io::Result<()> {
+    values(
+        out,
+        label,
+        [
+            b.min(Axis::X),
+            b.min(Axis::Y),
+            b.min(Axis::Z),
+            b.max(Axis::X),
+            b.max(Axis::Y),
+            b.max(Axis::Z),
+        ],
+    )
+}
+fn emit(out: &mut impl Write, shape: &VoxelShape) -> io::Result<()> {
+    writeln!(
+        out,
+        "shape {} {} {}",
+        shape.is_empty(),
+        shape.boxes().len(),
+        shape.is_cube()
+    )?;
+    for (axis, name) in Axis::ALL.into_iter().zip(["x", "y", "z"]) {
+        values(out, name, shape.coordinates(axis).iter().copied())?;
+    }
+    let axes = shape.cube_coordinate_axes();
+    writeln!(
+        out,
+        "axes {}",
+        u8::from(axes[0]) + 2 * u8::from(axes[1]) + 4 * u8::from(axes[2])
+    )?;
+    values(
+        out,
+        "extrema",
+        Axis::ALL
+            .map(|a| shape.min(a))
+            .into_iter()
+            .chain(Axis::ALL.map(|a| shape.max(a))),
+    )?;
+    match shape.bounds() {
+        Some(b) => box_values(out, "bounds", b)?,
+        None => writeln!(out, "bounds none")?,
+    }
+    for b in shape.boxes() {
+        box_values(out, "box", *b)?;
+    }
+    Ok(())
+}
+struct Trace {
+    out: io::BufWriter<fs::File>,
+    calls: i32,
+    fail: i32,
+}
+impl Trace {
+    fn query(&mut self, text: String) -> io::Result<()> {
+        writeln!(self.out, "{text}")?;
+        let call = self.calls;
+        self.calls += 1;
+        if call == self.fail {
+            Err(io::Error::other("injected resident world failure"))
+        } else {
+            Ok(())
+        }
+    }
+}
+type SharedTrace = Rc<RefCell<Trace>>;
+struct Entities {
+    mode: u64,
+    scope: &'static str,
+    trace: SharedTrace,
+}
+impl Entities {
+    fn query(&mut self, p: [i32; 3]) -> io::Result<()> {
+        self.trace
+            .borrow_mut()
+            .query(format!("entity {} {} {} {}", self.scope, p[0], p[1], p[2]))
+    }
+}
+impl DynamicSupportWorld for Entities {
+    type Error = io::Error;
+    fn shulker_is_closed(&mut self, p: [i32; 3]) -> io::Result<Option<bool>> {
+        self.query(p)?;
+        Ok(if self.mode == 0 {
+            None
+        } else {
+            Some(self.mode == 1)
+        })
+    }
+    fn moving_piston_shape(&mut self, p: [i32; 3]) -> io::Result<Option<VoxelShape>> {
+        self.query(p)?;
+        Ok(None)
+    }
+}
+impl DynamicCollisionWorld for Entities {
+    fn shulker_collision_state(
+        &mut self,
+        p: [i32; 3],
+    ) -> io::Result<Option<ShulkerCollisionState>> {
+        self.query(p)?;
+        let progress = if self.mode == 1 { 0.0 } else { 0.5 };
+        Ok((self.mode != 0).then_some(ShulkerCollisionState {
+            previous_progress: progress,
+            progress,
+        }))
+    }
+}
+#[derive(Clone, Copy)]
+struct Air(bool);
+impl HeightmapState for Air {
+    fn is_air(self) -> bool {
+        self.0
+    }
+    fn is_air_block(self) -> bool {
+        self.0
+    }
+    fn has_fluid(self) -> bool {
+        false
+    }
+    fn blocks_motion_in_heightmap(self) -> bool {
+        false
+    }
+    fn blocks_motion_in_heightmap_no_leaves(self) -> bool {
+        false
+    }
+}
+#[derive(Clone)]
+struct Properties(Arc<Vec<bool>>);
+impl TerrainBlockStates for Properties {
+    type State = Air;
+    fn heightmap_state(&self, id: BlockStateId) -> Air {
+        Air(self.0[id.0 as usize])
+    }
+}
+struct World<'r> {
+    chunks: BTreeMap<(i32, i32), (TerrainChunk<'r, Properties>, Entities)>,
+    global: Entities,
+    trace: SharedTrace,
+}
+impl DynamicSupportWorld for World<'_> {
+    type Error = io::Error;
+    fn shulker_is_closed(&mut self, p: [i32; 3]) -> io::Result<Option<bool>> {
+        self.global.shulker_is_closed(p)
+    }
+    fn moving_piston_shape(&mut self, p: [i32; 3]) -> io::Result<Option<VoxelShape>> {
+        self.global.moving_piston_shape(p)
+    }
+}
+impl DynamicCollisionWorld for World<'_> {
+    fn shulker_collision_state(
+        &mut self,
+        p: [i32; 3],
+    ) -> io::Result<Option<ShulkerCollisionState>> {
+        self.global.shulker_collision_state(p)
+    }
+}
+impl LiquidCollisionWorld for World<'_> {
+    type Error = io::Error;
+    fn entity_liquid_shape(&mut self, _: EntityIdentity) -> io::Result<VoxelShape> {
+        panic!("unexpected entity query")
+    }
+    fn fluid(&mut self, _: BlockPos) -> io::Result<FluidState> {
+        panic!("unexpected fluid query")
+    }
+    fn entity_can_stand(&mut self, _: EntityIdentity, _: FluidState) -> io::Result<bool> {
+        panic!("unexpected entity query")
+    }
+}
+impl PowderSnowWorld for World<'_> {
+    type Error = io::Error;
+    fn powder_snow_entity(&mut self, _: EntityIdentity) -> io::Result<PowderSnowEntity> {
+        panic!("unexpected entity query")
+    }
+    fn powder_snow_walkable_tag(&mut self, _: EntityIdentity) -> io::Result<bool> {
+        panic!("unexpected entity query")
+    }
+    fn feet_are_leather_boots(&mut self, _: EntityIdentity) -> io::Result<bool> {
+        panic!("unexpected entity query")
+    }
+}
+impl CollisionChunks for World<'_> {
+    type Chunk = ChunkPos;
+    type ChunkWorld = Entities;
+    fn collision_chunk(&mut self, p: ChunkPos) -> io::Result<Option<ChunkPos>> {
+        self.trace
+            .borrow_mut()
+            .query(format!("chunk {} {}", p.x, p.z))?;
+        Ok(self.chunks.contains_key(&(p.x, p.z)).then_some(p))
+    }
+    fn block_state(&mut self, chunk: ChunkPos, p: BlockPos) -> io::Result<BlockStateId> {
+        assert_eq!(chunk, p.chunk());
+        self.trace
+            .borrow_mut()
+            .query(format!("block {} {} {}", p.x, p.y, p.z))?;
+        Ok(self.chunks[&(chunk.x, chunk.z)].0.block(p.x, p.y, p.z))
+    }
+    fn chunk_world(&mut self, p: ChunkPos) -> &mut Entities {
+        &mut self.chunks.get_mut(&(p.x, p.z)).unwrap().1
+    }
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let arg = std::env::args().nth(1).expect("private fixture directory");
+    let dir = Path::new(&arg);
+    let read = |name| -> Result<_, Box<dyn std::error::Error>> {
+        Ok(
+            nbt::read_named(&fs::read(dir.join(name))?, Limits::default())?
+                .0
+                .tag,
+        )
+    };
+    let registry = BlockRegistry::from_nbt(&read("block-registry.nbt")?)?;
+    let cached = Arc::new(CachedCollisionRegistry::from_nbt(
+        &read("cached-collision.nbt")?,
+        &registry,
+    )?);
+    let collisions = Arc::new(BlockCollisionRegistry::new(cached)?);
+    let definitions: BTreeMap<String, String> =
+        serde_json::from_str(&fs::read_to_string(dir.join("definitions.json"))?)?;
+    let definitions = definitions
+        .into_iter()
+        .map(|(name, kind)| {
+            Ok((
+                name,
+                match kind.as_str() {
+                    "tagged_full" => SuffocationDefinition::TaggedFullCollision,
+                    "always" => SuffocationDefinition::Always,
+                    "never" => SuffocationDefinition::Never,
+                    "not_extended" => SuffocationDefinition::NotExtendedPiston,
+                    "closed_shulker" => SuffocationDefinition::ClosedShulker,
+                    _ => return Err(io::Error::other("unknown suffocation rule")),
+                },
+            ))
+        })
+        .collect::<io::Result<BTreeMap<_, _>>>()?;
+    let resources: BTreeMap<String, String> =
+        serde_json::from_str(&fs::read_to_string(dir.join("tags.json"))?)?;
+    let mut tags = TagDefinitions::default();
+    for (name, json) in resources {
+        tags.apply_json(&name, "vanilla", &json)?;
+    }
+    let built = tags.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+    if !built.missing.is_empty() {
+        return Err("unresolved native block tags".into());
+    }
+    let natural = built
+        .tags
+        .get("minecraft:causes_suffocation")
+        .ok_or("missing suffocation tag")?
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let binding = SuffocationRegistry::new(collisions, &definitions, &natural)?;
+    let properties = Properties(Arc::new(
+        (0..registry.len())
+            .map(|id| {
+                matches!(
+                    registry
+                        .state(BlockStateId(id as u32))
+                        .unwrap()
+                        .name
+                        .as_str(),
+                    "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+                )
+            })
+            .collect(),
+    ));
+    let trace = Rc::new(RefCell::new(Trace {
+        out: io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?),
+        calls: 0,
+        fail: -1,
+    }));
+    for line in fs::read_to_string(dir.join("inputs.txt"))?.lines() {
+        let f: Value = serde_json::from_str(line)?;
+        {
+            let mut t = trace.borrow_mut();
+            t.calls = 0;
+            t.fail = f["fail"].as_i64().unwrap() as i32;
+        }
+        let mut chunks = BTreeMap::new();
+        for c in f["chunks"].as_array().unwrap() {
+            let x = c[0].as_i64().unwrap() as i32;
+            let z = c[1].as_i64().unwrap() as i32;
+            chunks.insert(
+                (x, z),
+                (
+                    TerrainChunk::new(ChunkPos::new(x, z), -16, 48, &registry, properties.clone())?,
+                    Entities {
+                        mode: f["entities"][1].as_u64().unwrap(),
+                        scope: "chunk",
+                        trace: trace.clone(),
+                    },
+                ),
+            );
+        }
+        for b in f["blocks"].as_array().unwrap() {
+            let x = b[0].as_i64().unwrap() as i32;
+            let y = b[1].as_i64().unwrap() as i32;
+            let z = b[2].as_i64().unwrap() as i32;
+            chunks
+                .get_mut(&(x >> 4, z >> 4))
+                .unwrap()
+                .0
+                .set_block_worldgen(x, y, z, BlockStateId(b[3].as_u64().unwrap() as u32))?;
+        }
+        let mut world = World {
+            chunks,
+            global: Entities {
+                mode: f["entities"][0].as_u64().unwrap(),
+                scope: "global",
+                trace: trace.clone(),
+            },
+            trace: trace.clone(),
+        };
+        let mut bound = RegistryCollisionWorld::new(&binding, &mut world)?;
+        let context = match f["context"].as_u64().unwrap() {
+            0 => CollisionContext::empty(false),
+            1 => CollisionContext::empty(true),
+            2 => CollisionContext::position(number(&f["y"])),
+            _ => CollisionContext::placement(None),
+        };
+        let v = &f["box"];
+        let bounds = Aabb::new(
+            Vec3::new(number(&v[0]), number(&v[1]), number(&v[2])),
+            Vec3::new(number(&v[3]), number(&v[4]), number(&v[5])),
+        );
+        let mut scan = BlockCollisionScan::new(
+            &mut bound,
+            context,
+            bounds,
+            f["suffocating"].as_bool().unwrap(),
+            1_000_000,
+        )?;
+        let mut hits = 0;
+        for _ in 0..f["limit"].as_u64().unwrap() {
+            match scan.next() {
+                None => break,
+                Some(Ok(hit)) => {
+                    let mut t = trace.borrow_mut();
+                    let p = hit.position;
+                    writeln!(t.out, "hit {} {} {}", p.x, p.y, p.z)?;
+                    emit(&mut t.out, &hit.shape)?;
+                    hits += 1;
+                }
+                Some(Err(_)) => {
+                    writeln!(trace.borrow_mut().out, "error")?;
+                    break;
+                }
+            }
+        }
+        let mut t = trace.borrow_mut();
+        let calls = t.calls;
+        writeln!(t.out, "done {hits} {calls}")?;
+    }
+    Ok(())
+}

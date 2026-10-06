@@ -434,3 +434,22 @@ suffocation damage remain separate integration work.
 The [contextual regression](../benchmarks/rust-suffocation-2026-10-06/contextual-regression.json)
 also passes again with **2,391,334 lines per JAR**, and its all-state native audit
 now compares large-shape and moving-piston flags. Workspace Clippy passes.
+
+
+`RegistryCollisionWorld` now binds `BlockCollisionScan` directly to registered
+metadata, contextual shapes and suffocation rules. Chunk providers return current
+state IDs and a chunk-local block-entity provider; contextual collision uses the
+global world. Construction rejects legacy collision exports without complete
+canonical identity metadata, because their unit-block fast paths can differ.
+
+`python3 tools/test_registry_collision_scan_parity.py` compares native
+`BlockCollisions` over resident `ProtoChunk` sections with the Rust binding over
+`TerrainChunk` sections. All registered states cover ordinary and suffocating-only
+selection. Additional scenes cover partial/dynamic blocks, chunk and build-height
+boundaries, missing chunks, replacements, early termination and query failures.
+Shulker fixtures deliberately give the chunk and global providers different
+entities to check routing. The [resident collision report](../benchmarks/rust-resident-collision-scan-2026-10-06/scoped-parity.json)
+records **3,046,929 matching output lines per JAR**. Six collision import/binding
+tests pass, including legacy-metadata rejection; workspace Clippy passes.
+Live chunk loading, entity lifecycle, movement and the playable client remain
+separate integration work.
