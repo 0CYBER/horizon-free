@@ -103,7 +103,7 @@ impl<'a> BlockStateJsonCodec<'a> {
     }
 }
 
-fn java_integer(text: &str) -> Option<i32> {
+pub(crate) fn java_integer(text: &str) -> Option<i32> {
     let (negative, text) = if let Some(text) = text.strip_prefix('-') {
         (true, text)
     } else {

@@ -458,3 +458,16 @@ every candidate/supporting state, repeated calls, early returns, failed queries,
 rejected writes, partial failures and overlay/modifier composition. Workspace
 tests and all-target Clippy pass. Rust bounds pathological traversal work;
 resident-world update callbacks and full gameplay remain pending.
+
+## Fluid-state JSON codecs
+
+Fluid states now decode and encode native object-form identifiers and properties.
+Missing properties retain the pinned defaults (`falling=true`, flowing level 1);
+invalid property values are ignored, while unknown fluid identifiers fail.
+Integer levels share the Java-compatible decimal parser with block properties.
+
+The expanded [fluid comparison](../benchmarks/rust-fluid-2026-10-06/scoped-parity.json)
+matches **243,331 lines per reference JAR**, including all 37 fluid states,
+2,432 codec fixtures, encoding, legacy block conversion, and the existing
+contained-fluid/height tests. Workspace tests and all-target Clippy pass.
+Fluid spreading, tick execution and entity interaction remain pending.

@@ -3,6 +3,7 @@
 mod json;
 use crate::{DATA_VERSION, chunk::BlockState, compression::invalid, nbt::Tag};
 pub use json::BlockStateJsonCodec;
+pub(crate) use json::java_integer;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,

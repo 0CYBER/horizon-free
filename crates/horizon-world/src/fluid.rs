@@ -61,6 +61,72 @@ pub struct FluidState {
     falling: bool,
 }
 impl FluidState {
+    /// Native fluid states require an object; properties decode leniently.
+    pub fn from_json(json: &str) -> io::Result<Self> {
+        let value: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| invalid(e.to_string()))?;
+        let name = value
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| invalid("missing fluid identifier"))?;
+        let (namespace, path) = name.split_once(':').unwrap_or(("minecraft", name));
+        let name = format!(
+            "{}:{path}",
+            if namespace.is_empty() {
+                "minecraft"
+            } else {
+                namespace
+            }
+        );
+        let kind =
+            FluidKind::from_name(&name).ok_or_else(|| invalid("unknown fluid identifier"))?;
+        if kind == FluidKind::Empty {
+            return Ok(Self::EMPTY);
+        }
+        let flowing = matches!(kind, FluidKind::FlowingWater | FluidKind::FlowingLava);
+        let mut state = Self {
+            kind,
+            amount: if flowing { 1 } else { 8 },
+            falling: true,
+        };
+        if let Some(properties) = value
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+        {
+            if let Some(value) = properties
+                .get("falling")
+                .and_then(serde_json::Value::as_str)
+            {
+                match value {
+                    "true" => state.falling = true,
+                    "false" => state.falling = false,
+                    _ => {}
+                }
+            }
+            if flowing {
+                if let Some(value) = properties
+                    .get("level")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(crate::registry::java_integer)
+                    .filter(|v| (1..=8).contains(v))
+                {
+                    state.amount = value as u8;
+                }
+            }
+        }
+        Ok(state)
+    }
+    pub fn to_json(self) -> io::Result<String> {
+        let mut value = serde_json::json!({"id": self.kind.name()});
+        if self.kind != FluidKind::Empty {
+            let mut properties = serde_json::json!({"falling": self.falling.to_string()});
+            if !self.is_source() {
+                properties["level"] = self.amount.to_string().into();
+            }
+            value["properties"] = properties;
+        }
+        serde_json::to_string(&value).map_err(|e| invalid(e.to_string()))
+    }
     pub const EMPTY: Self = Self {
         kind: FluidKind::Empty,
         amount: 0,

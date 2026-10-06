@@ -88,6 +88,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             blocks.block(fluid).0
         )?;
     }
+    for line in fs::read_to_string(dir.join("codec-inputs.txt"))?.lines() {
+        match FluidState::from_json(line) {
+            Err(_) => writeln!(out, "codec error")?,
+            Ok(state) => {
+                writeln!(
+                    out,
+                    "codec {} {} {} {} {}",
+                    state.kind().name(),
+                    state.amount(),
+                    state.falling(),
+                    state.is_source(),
+                    blocks.block(state).0
+                )?;
+                writeln!(out, "encoded {}", state.to_json()?)?;
+            }
+        }
+    }
     for line in fs::read_to_string(dir.join("inputs.txt"))?.lines() {
         let f: Value = serde_json::from_str(line)?;
         let fluid = fluids
