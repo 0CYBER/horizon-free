@@ -78,11 +78,19 @@ def corpus():
                '1e2147483647', '1e2147483648', '1e-2147483648',
                '1.00000005960464477539062500000001', '1e-46', '-1e-46', '3.5e38',
                '1e9999', '1e10000', '1e-9999', '1e-10000', '1.0e10000', '1.0e10001',
-               '1' * 1023, '1' * 1024, '1' * 10000, '1' * 10001]
+               '1' * 1023, '1' * 1024, '1' * 10000, '1' * 10001,
+               *('1' + '0' * (n - 2) + '1' for n in [20, 64, 65, 66, 100, 1023, 1024]),
+               '1844674407370955161601', '-1844674407370955161601',
+               '18446744073709551616.1', '18446744073709551616e-18']
     for number in numbers:
         for field in ['tintindex', 'rotation', 'texture']:
             yield '{"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all","' + field + '":' + number + '}}}]}'
         yield '{"display":{"gui":{"rotation":[' + number + ',0,0],"translation":[' + number + ',0,0],"scale":[' + number + ',0,0]}}}'
+    # Strict stream parsing rejects scanner failures even in ignored fields;
+    # quoted copies remain ordinary strings.
+    for number in numbers:
+        yield '{"unknown":' + number + '}'
+        yield '{"unknown":"' + number + '"}'
     rng = random.Random(0x4355424f4944)
     for _ in range(1200):
         modified = copy.deepcopy(element)

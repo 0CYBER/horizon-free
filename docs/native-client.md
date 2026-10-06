@@ -69,18 +69,25 @@ physical key positions; typing the character W can report physical Escape.
 
 The separate `horizon-assets` crate decodes the pinned 26.3 cuboid model format.
 Its native comparison covers all **2,883 block-model JSON files** in the client
-JAR plus **2,337 synthetic cases**: element bounds, optional geometry, nullable
+JAR plus **2,457 synthetic cases**: element bounds, optional geometry, nullable
 children, face UVs and quarter turns, single-axis/Euler rotations, texture
 references and translucency materials, light emission, display transforms and
 inheritance markers. Floating-point fields compare by their exact bits. The
 comparison also covers primitive coercion, integer truncation/wraparound and
-selected strict-reader numeric/syntax limits.
+selected strict-reader numeric/syntax limits. The numeric scanner also preserves
+vanilla's rejection when its wrapping integer accumulator hits zero before
+another digit, including in ignored fields. Twenty newly exposed acceptance
+mismatches were corrected; the complete comparison now covers 5,340 models.
+The [resolution](../benchmarks/rust-resource-number-scanner-2026-10-06/model-resolution.json),
+[baking](../benchmarks/rust-resource-number-scanner-2026-10-06/model-baking.json) and
+[animation](../benchmarks/rust-resource-number-scanner-2026-10-06/sprite-animation.json)
+comparisons also pass with the shared scanner correction.
 
 ```sh
 python3 tools/test_cuboid_model_parity.py
 ```
 
-The [archived decoder result](../benchmarks/rust-cuboid-model-decoding-2026-10-06/scoped-parity.json)
+The [archived decoder result](../benchmarks/rust-resource-number-scanner-2026-10-06/model-decoding.json)
 records source, fixture and reference hashes. The oracle uses actual client
 classes; those rendering APIs are absent from the server. The decoder, parent
 resolver and baker now feed the development gallery. Blockstate selection, transformed

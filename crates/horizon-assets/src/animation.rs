@@ -21,30 +21,13 @@ fn optional<'a>(object: &Object<'a>, name: &str) -> Option<&'a RawValue> {
     object.get(name).copied().filter(|v| v.get() != "null")
 }
 fn bounded_integer(value: &RawValue, minimum: i32) -> Result<i32> {
-    // JsonReader stops recognizing a number at its buffer limit. Its integer
-    // scanner also keeps wrapping a negative i64 accumulator after overflow:
-    // if that accumulator becomes zero, a following digit triggers the same
-    // rejection as a leading zero. JsonParser then exposes a string, which the
-    // uncompressed integer codec rejects.
-    let token = value.get();
-    if token.len() >= 1024 {
-        return Err(error("animation number exceeds native reader buffer"));
-    }
-    let mut accumulator = 0i64;
-    for (index, digit) in token
-        .trim_start_matches('-')
-        .bytes()
-        .take_while(u8::is_ascii_digit)
-        .enumerate()
-    {
-        if index > 0 && accumulator == 0 {
-            return Err(error(
-                "native reader classifies animation number as a string",
-            ));
-        }
-        accumulator = accumulator
-            .wrapping_mul(10)
-            .wrapping_sub(i64::from(digit - b'0'));
+    // A lenient JsonParser exposes scanner failures as strings, which the
+    // uncompressed numeric codec rejects. Model streams instead reject them
+    // globally, even inside ignored fields.
+    if !native_number_token(value.get()) {
+        return Err(error(
+            "native reader classifies animation number as a string",
+        ));
     }
     let value = integer(value)?;
     if value < minimum {

@@ -20,13 +20,37 @@ pub(crate) type Object<'a> = BTreeMap<String, &'a RawValue>;
 pub(crate) fn error(message: &str) -> DecodeError {
     DecodeError(message.to_owned())
 }
-/// The native reader recognizes numeric tokens only while they fit its 1024
-/// character lookahead buffer. This applies even in fields the model ignores.
+/// Whether a syntactically valid JSON number is classified as numeric by the
+/// native reader. Its wrapping i64 scanner can hit zero after overflow, causing
+/// the next integer digit to be rejected as if it followed a leading zero.
+pub(crate) fn native_number_token(token: &str) -> bool {
+    if token.len() >= 1024 {
+        return false;
+    }
+    let mut accumulator = 0i64;
+    for (index, digit) in token
+        .trim_start_matches('-')
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .enumerate()
+    {
+        if index > 0 && accumulator == 0 {
+            return false;
+        }
+        accumulator = accumulator
+            .wrapping_mul(10)
+            .wrapping_sub(i64::from(digit - b'0'));
+    }
+    true
+}
+/// Strict stream parsing rejects numeric scanner failures everywhere, including
+/// ignored fields. Quoted copies of those tokens remain ordinary strings.
 pub(crate) fn validate_number_tokens(raw: &RawValue) -> Result<()> {
+    let text = raw.get();
     let mut quoted = false;
     let mut escaped = false;
-    let mut length = 0;
-    for byte in raw.get().bytes() {
+    let mut start = None;
+    for (index, byte) in text.bytes().enumerate() {
         if quoted {
             if escaped {
                 escaped = false;
@@ -35,17 +59,25 @@ pub(crate) fn validate_number_tokens(raw: &RawValue) -> Result<()> {
             } else if byte == b'"' {
                 quoted = false;
             }
-        } else if byte == b'"' {
-            quoted = true;
-            length = 0;
-        } else if byte.is_ascii_digit() || b"-.eE+".contains(&byte) {
-            length += 1;
-            if length >= 1024 {
-                return Err(error("numeric token exceeds native reader buffer"));
-            }
-        } else {
-            length = 0;
+            continue;
         }
+        if let Some(begin) = start {
+            if byte.is_ascii_digit() || b"-.eE+".contains(&byte) {
+                continue;
+            }
+            if !native_number_token(&text[begin..index]) {
+                return Err(error("native reader rejects numeric token"));
+            }
+            start = None;
+        }
+        if byte == b'"' {
+            quoted = true;
+        } else if byte.is_ascii_digit() || byte == b'-' {
+            start = Some(index);
+        }
+    }
+    if start.is_some_and(|begin| !native_number_token(&text[begin..])) {
+        return Err(error("native reader rejects numeric token"));
     }
     Ok(())
 }
