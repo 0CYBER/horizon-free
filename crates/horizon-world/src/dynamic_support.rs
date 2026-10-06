@@ -136,21 +136,7 @@ impl DynamicSupport {
                 })[index]
                     .moved(self.offset(position))
             }
-            Kind::Scaffolding => {
-                static SHAPE: OnceLock<VoxelShape> = OnceLock::new();
-                SHAPE
-                    .get_or_init(|| {
-                        let mut legs = VoxelShape::empty();
-                        for [x, z] in [[0.0, 0.0], [0.875, 0.0], [0.875, 0.875], [0.0, 0.875]] {
-                            let leg = box_shape([x, 0.0, z], [x + 0.125, 1.0, z + 0.125]);
-                            legs = legs.join(&leg, ShapeOp::OR).expect("bounded scaffold legs");
-                        }
-                        column(16.0, 14.0, 16.0)
-                            .join(&legs, ShapeOp::OR)
-                            .expect("bounded scaffold support")
-                    })
-                    .clone()
-            }
+            Kind::Scaffolding => scaffolding_stable_shape(),
             Kind::PowderSnow => VoxelShape::empty(),
             Kind::Shulker(facing) => {
                 if world
@@ -215,6 +201,23 @@ impl DynamicSupport {
             .map_err(DynamicSupportError::Shape)
     }
 }
+/// Shared no-context support and context-selected stable scaffold geometry.
+pub(crate) fn scaffolding_stable_shape() -> VoxelShape {
+    static SHAPE: OnceLock<VoxelShape> = OnceLock::new();
+    SHAPE
+        .get_or_init(|| {
+            let mut legs = VoxelShape::empty();
+            for [x, z] in [[0.0, 0.0], [0.875, 0.0], [0.875, 0.875], [0.0, 0.875]] {
+                let leg = box_shape([x, 0.0, z], [x + 0.125, 1.0, z + 0.125]);
+                legs = legs.join(&leg, ShapeOp::OR).expect("bounded scaffold legs");
+            }
+            column(16.0, 14.0, 16.0)
+                .join(&legs, ShapeOp::OR)
+                .expect("bounded scaffold support")
+        })
+        .clone()
+}
+
 fn box_shape(min: [f64; 3], max: [f64; 3]) -> VoxelShape {
     VoxelShape::from_box(Aabb::new(
         Vec3::new(min[0], min[1], min[2]),

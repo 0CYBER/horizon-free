@@ -305,5 +305,21 @@ integer-coordinate extremes, NaN/infinity, null entities, item count boundaries,
 all five fluid types and callback failures. Native entity and stack snapshots are
 allocated privately without their constructors; this checks query behavior, not
 entity construction or inventory lifecycle. Inventory changes after context
-capture, experimental minecart contexts, contextual block-shape dispatch and live
-movement integration remain pending.
+capture, experimental minecart contexts and live movement integration remain
+pending. Contextual block-shape selection is being added separately.
+
+
+`ScaffoldingCollision` now selects stable scaffold geometry, the unstable bottom
+platform, or an empty shape using the collision context. Placement contexts are
+always empty. Descending affects the top surface check; the bottom platform also
+requires nonzero support distance, the bottom flag and the lower height check.
+No-context support and contextual collision share the same immutable stable shape.
+
+`python3 tools/test_scaffolding_collision_parity.py` compares all **32 states**
+across **56,448 fixtures**, producing **524,300 matching lines per JAR** in the
+[scaffolding report](../benchmarks/rust-scaffolding-collision-2026-10-06/scoped-parity.json).
+The native context dispatch executes against a world proxy that rejects all
+queries. Full shape coordinates, bounds, ordered boxes and cube metadata match
+for empty, position, entity and placement contexts, including adjacent doubles
+at both height thresholds. Block placement, distance updates, collapse and live
+entity motion through scaffolding are separate work.

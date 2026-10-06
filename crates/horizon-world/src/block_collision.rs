@@ -1,5 +1,5 @@
-//! No-entity-context block collision queries over cached and dynamic definitions.
-//! Entity movement contexts select different shapes and are separate queries.
+//! Cached/dynamic no-context collision queries and explicit contextual block rules.
+//! Contextual selection must not fall back to the no-context cache.
 use crate::{
     collision::CachedCollisionRegistry,
     dynamic_support::{DynamicSupport, DynamicSupportError, DynamicSupportWorld},
@@ -108,5 +108,68 @@ impl<'r> BlockCollisionRegistry<'r> {
             .ok_or(CollisionQueryError::Unsupported(state))?
             .collision_shape(world, position)
             .map_err(CollisionQueryError::Dynamic)
+    }
+}
+
+/// Entity-context scaffold selection, independent of world queries. Construction
+/// validates the descriptor so missing properties cannot silently change behavior.
+#[derive(Clone, Copy, Debug)]
+pub struct ScaffoldingCollision {
+    supported: bool,
+    bottom: bool,
+}
+impl ScaffoldingCollision {
+    pub fn from_state(state: &crate::chunk::BlockState) -> io::Result<Option<Self>> {
+        if state.name != "minecraft:scaffolding" {
+            return Ok(None);
+        }
+        let distance = state
+            .properties
+            .get("distance")
+            .and_then(|v| crate::registry::java_integer(v))
+            .filter(|v| (0..=7).contains(v))
+            .ok_or_else(|| crate::compression::invalid("invalid scaffold distance"))?;
+        let bottom = match state.properties.get("bottom").map(String::as_str) {
+            Some("true") => true,
+            Some("false") => false,
+            _ => return Err(crate::compression::invalid("invalid scaffold bottom")),
+        };
+        Ok(Some(Self {
+            supported: distance == 0,
+            bottom,
+        }))
+    }
+
+    pub fn shape(
+        &self,
+        context: &crate::collision_context::CollisionContext<'_>,
+        position: horizon_core::position::BlockPos,
+    ) -> VoxelShape {
+        use std::sync::OnceLock;
+        if context.is_placement() {
+            return VoxelShape::empty();
+        }
+        if context.is_above(&VoxelShape::block(), position, true) && !context.is_descending() {
+            return crate::dynamic_support::scaffolding_stable_shape();
+        }
+        if !self.supported && self.bottom {
+            static BELOW: OnceLock<VoxelShape> = OnceLock::new();
+            let below = BELOW.get_or_init(|| {
+                VoxelShape::block()
+                    .moved(Vec3::new(0.0, -1.0, 0.0))
+                    .optimized()
+                    .expect("bounded scaffold below shape")
+            });
+            if context.is_above(below, position, true) {
+                static BOTTOM: OnceLock<VoxelShape> = OnceLock::new();
+                return BOTTOM
+                    .get_or_init(|| {
+                        VoxelShape::from_box(Aabb::new(Vec3::ZERO, Vec3::new(1.0, 0.125, 1.0)))
+                            .expect("bounded scaffold bottom")
+                    })
+                    .clone();
+            }
+        }
+        VoxelShape::empty()
     }
 }

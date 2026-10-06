@@ -7,6 +7,9 @@ import net.minecraft.world.entity.*;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.*;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.CollisionGetter;
+import net.minecraft.world.level.block.*;
+import java.lang.reflect.Proxy;
 import net.minecraft.world.level.material.*;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.*;
@@ -73,6 +76,15 @@ public final class VanillaCollisionContextOracle {
                 int entity=context instanceof EntityCollisionContext ec?(ec.getEntity()==player?1:ec.getEntity()==marker?2:0):0;
                 int held=0;for(int i=0;i<ITEMS.length;i++)if(context.isHoldingItem(ITEMS[i]))held|=1<<i;
                 out.printf("context %b %b %b %d %d%n",context.isDescending(),context.isPlacement(),context.alwaysCollideWithFluid(),entity,held);
+                if(f.has("scaffolding")) {
+                    var config=f.getAsJsonArray("scaffolding");
+                    var state=Blocks.SCAFFOLDING.defaultBlockState().setValue(ScaffoldingBlock.DISTANCE,config.get(0).getAsInt()).setValue(ScaffoldingBlock.BOTTOM,config.get(1).getAsBoolean()).setValue(ScaffoldingBlock.WATERLOGGED,config.get(2).getAsBoolean());
+                    var pos=new BlockPos(17,config.get(3).getAsInt(),-33);
+                    var world=(CollisionGetter)Proxy.newProxyInstance(CollisionGetter.class.getClassLoader(),new Class<?>[]{CollisionGetter.class},(proxy,method,values)->{throw new AssertionError("unexpected world query: "+method);});
+                    var emit=VanillaFaceSupportOracle.class.getDeclaredMethod("emit",PrintWriter.class,VoxelShape.class);emit.setAccessible(true);
+                    emit.invoke(null,out,context.getCollisionShape(state,world,pos));
+                    continue;
+                }
                 var above=new StringBuilder();
                 for(var query:f.getAsJsonArray("above")){
                     var q=query.getAsJsonArray();int blockY=q.get(0).getAsInt();double top=number(q.get(1));
