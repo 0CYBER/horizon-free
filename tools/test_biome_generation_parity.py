@@ -31,6 +31,18 @@ def corpus(bundle):
                     queries=[[cx*16+x,y,cz*16+z] for x in [-1,0,7,15,16] for z in [-1,0,7,15,16] for y in [minimum-1,minimum+17,minimum+height]]
                     yield {'setting':setting,'preset':'minecraft:overworld','source':source,'scale':scale,'seed':seed,'legacy':legacy,'cx':cx,'cz':cz,'min':minimum,'height':height,'write_min':minimum,'write_max':minimum+height-1,'queries':queries,'repeats':2 if seed==0 else 1}
 
+    for setting,raw in sorted(bundle['settings'].items()):
+        value=json.loads(raw);minimum=value['noise']['min_y'];height=value['noise']['height']
+        if minimum != -64: continue
+        for legacy in [False,True]:
+            for mode in ['multi_overworld','multi_nether','fixed','cave_fixed','checkerboard','end']:
+                for sample,(seed,cx,cz) in enumerate([(0,0,0),(-1,-2,3),(0x123456789abcdef,1875000,-1875000)]):
+                    queries=[[cx*16+x,y,cz*16+z] for x in [-1,0,7,15,16] for z in [-1,0,7,15,16] for y in [-65,-64,-17,-1,0,1,minimum+height-1,minimum+height]]
+                    fixture={'setting':setting,'preset':'minecraft:nether' if mode=='multi_nether' else 'minecraft:overworld','seed':seed,'legacy':legacy,'cx':cx,'cz':cz,'min':minimum,'height':height,'write_min':-64,'write_max':-1,'retrogen':True,'queries':queries,'repeats':2,'scale':2}
+                    if not mode.startswith('multi_'):fixture['source']='fixed' if mode=='cave_fixed' else mode
+                    if mode=='cave_fixed':fixture['fixed_biome']=['minecraft:lush_caves','minecraft:dripstone_caves','minecraft:deep_dark'][sample]
+                    yield fixture
+
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument("--prepare",action="store_true");args=parser.parse_args()
@@ -45,7 +57,7 @@ def main():
     tested_sources=base.source_hashes(sources)
     classes=build/"classes";classes.mkdir(exist_ok=True)
     def run(command,name):
-        with (build/(name+".log")).open("w",encoding="utf-8") as log:base.run(list(map(str,command)),stdout=log,stderr=subprocess.STDOUT)
+        with (build/(name+".log")).open("w",encoding="utf-8") as log:subprocess.run(list(map(str,command)),cwd=lab.ROOT,check=True,timeout=3600,stdout=log,stderr=subprocess.STDOUT)
     dependency_path=os.pathsep.join(map(str,libraries))
     run(["javac","--release",lock["minecraft"]["java_major"],"-proc:none","-cp",str(jars["server"])+os.pathsep+dependency_path,"-d",classes,oracle,exporter],"compile-java")
     bundle={}
@@ -78,9 +90,9 @@ def main():
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixture_paths,tested_fixtures)
     report={"schema":1,"minecraft":lock["minecraft"]["version"],"manifest_sha1":lock["minecraft"]["manifest_sha1"],"platform":platform.platform(),
             "java":subprocess.check_output(["java","--version"],text=True).splitlines()[0],"rustc":subprocess.check_output(["rustc","--version"],text=True).strip(),
-            "fixtures":len(fixtures),"fills":sum(f["repeats"] for f in fixtures),"biome_values":sum(f["repeats"]*f["height"]*4 for f in fixtures),"block_queries":sum(f["repeats"]*len(f["queries"]) for f in fixtures),"preset_entries":{name:len(json.loads(raw)) for name,raw in bundle["presets"].items()},"source_fixtures":{name:sum(f.get("source","multi")==name for f in fixtures) for name in ["multi","fixed","checkerboard","end"]},
+            "fixtures":len(fixtures),"retrogen_fixtures":sum(f.get("retrogen",False) for f in fixtures),"fills":sum(f["repeats"] for f in fixtures),"biome_values":sum(f["repeats"]*f["height"]*4 for f in fixtures),"block_queries":sum(f["repeats"]*len(f["queries"]) for f in fixtures),"preset_entries":{name:len(json.loads(raw)) for name,raw in bundle["presets"].items()},"source_fixtures":{name:sum(f.get("source","multi")==name for f in fixtures) for name in ["multi","fixed","checkerboard","end"]},
             "sources_sha256":tested_sources,"fixtures_sha256":tested_fixtures,"rust_output_sha256":lab.digest(build/"rust.txt","sha256"),"references":references,
-            "scope":"Actual ChunkGenerator.doCreateBiomes through NoiseBasedChunkGenerator with empty Blender and no retrogen. Both bundled Overworld/Nether multi-noise preset tables are independently exported from authenticated JARs; Rust imports quantized tables and compiles climate routers itself. All seven bundled routers, both random modes, multiple seeds and distant positive/negative chunks are tested. Complete section biome values and subsequent BiomeManager block lookups are compared, including repeated generation with fresh density contexts and persistent previous-leaf search state, and generation bounds excluding top/bottom sections. Holders are identity placeholders; no biome properties are evaluated. Fixed, checkerboard and End source fixtures also run actual chunk generation through every bundled router, including real seeded End erosion, the central-island shortcut, distant coordinates and wrapped checkerboard shifts. Preset builders, complete biome-source codecs, blending, retrogen, terrain-stage linkage and complete generated worlds remain pending."}
+            "scope":"Actual ChunkGenerator.doCreateBiomes through NoiseBasedChunkGenerator with empty Blender, in ordinary and below-zero upgrade modes. Both bundled Overworld/Nether multi-noise preset tables are independently exported from authenticated JARs; Rust imports quantized tables and compiles climate routers itself. All seven bundled routers, both random modes, multiple seeds and distant positive/negative chunks are tested. Complete section biome values and subsequent BiomeManager block lookups are compared, including repeated generation with fresh density contexts and persistent previous-leaf search state, and generation bounds excluding top/bottom sections. Holders are identity placeholders; no biome properties are evaluated. Fixed, checkerboard and End source fixtures also run actual chunk generation through every bundled router, including real seeded End erosion, the central-island shortcut, distant coordinates and wrapped checkerboard shifts. Retrogen cases initialize patterned old biome columns, install actual below-zero metadata with a full target on an empty persisted-stage ProtoChunk, and use its native generation height. Four below-zero noise settings, all source kinds, fixed candidates for each of the three retained cave biomes, both random modes, signed/distant seeds and repeated fills are compared. Above-zero stored biomes remain checked alongside regenerated sections and block-level biome zoom. Rust composes seeded candidate resolvers with the independently tested retention fill. Preset builders, complete biome-source codecs, nonempty blending, complete terrain-stage scheduling and complete generated worlds remain pending."}
 
     lab.write_json(report_path,report);print(f"Scoped biome-generation parity passed: {report_path}")
 

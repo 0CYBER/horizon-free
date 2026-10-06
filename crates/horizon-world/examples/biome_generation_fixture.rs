@@ -46,7 +46,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let climate = router.compile_climate(&mut compiler)?;
         let definition = match f["source"].as_str().unwrap_or("multi") {
-            "fixed" => BiomeSourceDefinition::Fixed("minecraft:plains".into()),
+            "fixed" => BiomeSourceDefinition::Fixed(
+                f["fixed_biome"]
+                    .as_str()
+                    .unwrap_or("minecraft:plains")
+                    .into(),
+            ),
             "checkerboard" => BiomeSourceDefinition::Checkerboard {
                 biomes: BiomeSet::Direct(vec![
                     "minecraft:plains".into(),
@@ -72,6 +77,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             height,
             "minecraft:plains".to_owned(),
         )?;
+        let retrogen = f["retrogen"].as_bool().unwrap_or(false);
+        if retrogen {
+            chunk.fill(min, min + height - 1, |[x, y, z]| {
+                Ok::<_, std::convert::Infallible>(format!(
+                    "horizon:old_{}",
+                    x.wrapping_mul(31)
+                        .wrapping_add(y.wrapping_mul(7))
+                        .wrapping_add(z.wrapping_mul(17))
+                        .rem_euclid(3)
+                ))
+            })?;
+        }
         for repeat in 0..n(&f["repeats"]) {
             let mut context = SamplerContext::cached();
             let volume = resolver.prepare_volume(
@@ -79,11 +96,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 [cx.wrapping_shl(4) >> 2, min >> 2, cz.wrapping_shl(4) >> 2],
                 [4, height >> 2, 4],
             )?;
-            chunk.fill(n(&f["write_min"]), n(&f["write_max"]), |quart| {
-                resolver
-                    .sample_prepared(&mut context, volume.as_ref(), quart)
-                    .map(str::to_owned)
-            })?;
+            chunk.fill_with_retrogen(
+                n(&f["write_min"]),
+                n(&f["write_max"]),
+                retrogen,
+                |quart| {
+                    resolver
+                        .sample_prepared(&mut context, volume.as_ref(), quart)
+                        .map(str::to_owned)
+                },
+                |name| Some(name),
+            )?;
             writeln!(out, "fill {repeat}")?;
             for section in 0..height as usize / 16 {
                 writeln!(out, "section {section}")?;

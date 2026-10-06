@@ -67,6 +67,30 @@ impl<T: Clone> BiomeChunk<T> {
         max_y: i32,
         mut resolve: impl FnMut([i32; 3]) -> Result<T, E>,
     ) -> Result<(), BiomeFillError<E>> {
+        self.fill_using_chunk(min_y, max_y, |quart, _| resolve(quart))
+    }
+    /// Decorate candidate sampling with the pinned below-zero biome policy.
+    /// `upgrading` is captured once for this fill, as at native resolver creation.
+    /// Keys describe holder identity; unkeyed/direct values must return `None`.
+    pub fn fill_with_retrogen<E>(
+        &mut self,
+        min_y: i32,
+        max_y: i32,
+        upgrading: bool,
+        resolve: impl FnMut([i32; 3]) -> Result<T, E>,
+        biome_key: impl Fn(&T) -> Option<&str>,
+    ) -> Result<(), BiomeFillError<E>> {
+        let mut resolver = crate::retrogen::RetrogenBiomeResolver::new(upgrading, resolve);
+        self.fill_using_chunk(min_y, max_y, |quart, chunk| {
+            resolver.sample(quart, &biome_key, |old| Ok(chunk.noise_biome(old).clone()))
+        })
+    }
+    fn fill_using_chunk<E>(
+        &mut self,
+        min_y: i32,
+        max_y: i32,
+        mut resolve: impl FnMut([i32; 3], &Self) -> Result<T, E>,
+    ) -> Result<(), BiomeFillError<E>> {
         if min_y < self.min_y || max_y >= self.min_y + self.height || min_y > max_y {
             return Err(BiomeFillError::InvalidBounds);
         }
@@ -84,7 +108,7 @@ impl<T: Clone> BiomeChunk<T> {
                             z.wrapping_add(dz),
                         ];
                         values[index(dx, dy, dz)] =
-                            resolve(quart).map_err(BiomeFillError::Resolve)?;
+                            resolve(quart, self).map_err(BiomeFillError::Resolve)?;
                     }
                 }
             }

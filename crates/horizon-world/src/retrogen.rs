@@ -1,5 +1,5 @@
 //! Below-zero upgrade metadata and resident block transformations.
-//! Generation scheduling and biome resolution remain separate.
+//! Generation scheduling remains owned by the caller.
 use crate::{chunk_status::ChunkStatus, compression::invalid, nbt::Tag};
 use std::io;
 
@@ -139,5 +139,42 @@ impl BelowZeroRetrogen {
             }
         }
         Ok(())
+    }
+}
+
+/// The native decoration decision is captured when the resolver is created.
+/// Removing upgrade metadata afterwards does not unwrap an existing resolver.
+/// Candidate sampling runs before deciding whether to read an old column biome.
+pub struct RetrogenBiomeResolver<F> {
+    upgrading: bool,
+    resolve: F,
+}
+impl<F> RetrogenBiomeResolver<F> {
+    pub fn new<T, E>(upgrading: bool, resolve: F) -> Self
+    where
+        F: FnMut([i32; 3]) -> Result<T, E>,
+    {
+        Self { upgrading, resolve }
+    }
+    pub fn sample<T, E>(
+        &mut self,
+        quart: [i32; 3],
+        biome_key: impl FnOnce(&T) -> Option<&str>,
+        old_biome: impl FnOnce([i32; 3]) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        F: FnMut([i32; 3]) -> Result<T, E>,
+    {
+        let candidate = (self.resolve)(quart)?;
+        if !self.upgrading
+            || matches!(
+                biome_key(&candidate),
+                Some("minecraft:lush_caves" | "minecraft:dripstone_caves" | "minecraft:deep_dark")
+            )
+        {
+            Ok(candidate)
+        } else {
+            old_biome([quart[0], 0, quart[2]])
+        }
     }
 }

@@ -71,7 +71,7 @@ block lookups use seeded fuzzy selection and clamped chunk reads.
 Both JARs independently export the preset tables and must agree: **7,594 Overworld
 entries** and **5 Nether entries**. Rust imports those quantized tables; preset
 builders remain unported. Registry-bound source codecs are described below. Reference holders
-supply identities without evaluating biome properties. The comparison uses empty
+supply identities without evaluating biome properties. That baseline uses empty
 blending and no below-zero retrogen. An additional 168 fixtures generate chunks through fixed, checkerboard and End
 sources using every bundled terrain router. They cover real seeded End erosion,
 the central-island boundary and wrapped checkerboard shifts. The [surface-stage integration](material-surfaces.md#chunk-surface-stage) now
@@ -79,6 +79,34 @@ links a 3×3 biome neighborhood to terrain filling and surface application, usin
 stored neighbor biome lookups. Saved biome palettes and complete world generation
 remain pending.
 
+
+### Below-zero biome retention
+
+`RetrogenBiomeResolver` captures whether an upgrade is active when the resolver
+is created. Later metadata changes do not add or remove its retention policy.
+It always samples the candidate first. Keyed `lush_caves`, `dripstone_caves` and
+`deep_dark` in the `minecraft` namespace are retained; other candidates read the
+old biome at the same quart X/Z and quart Y = 0. Unkeyed holders do not qualify.
+
+`BiomeChunk::fill_with_retrogen` reads committed old sections while staging the
+current section separately. A failure preserves that section's old values;
+later sections can observe earlier completed writes. This matters when supplied
+generation bounds overlap the section selected by the clamped old-column read.
+
+The [retention/fill report](../benchmarks/rust-retrogen-biome-fill-2026-10-06/scoped-parity.json)
+records **593,152 matching lines per reference JAR**, with 40 fixtures, 740 fills
+(560 decorated), and 2,800 direct resolver queries. It includes all activation
+timings, keyed and direct holders, foreign namespace lookalikes, callback failures,
+boundary sections and extreme coordinates.
+
+The expanded [generation report](../benchmarks/rust-retrogen-biome-generation-2026-10-06/scoped-parity.json)
+records **834,080 matching lines per JAR** across **396 fixtures and 610 fills**.
+Its 144 added upgrade fixtures use actual native below-zero metadata and generation
+heights, patterned old biome columns, all source kinds, each retained cave biome,
+four settings with below-zero storage, both random modes and repeated fills.
+Every stored section and subsequent block-biome lookup is compared, including
+unchanged data above Y = 0. Nonempty blending, preset builders, full terrain-stage
+scheduling and complete saved-world integration remain pending.
 
 ## Fixed, checkerboard and End sources
 

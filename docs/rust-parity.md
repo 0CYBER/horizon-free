@@ -921,3 +921,22 @@ also matches **3,028,057 lines per JAR** across 138 upgrade fixtures. Seven focu
 region tests, all-target Clippy and the region corpus test pass. These checks do
 not yet cover the biome resolver's cave-biome retention, structure restrictions,
 automatic scheduling or complete saved-world integration.
+
+## Retained biomes during below-zero generation
+
+The [biome-retention implementation](biome-lookup.md#below-zero-biome-retention)
+now preserves the pinned three cave-biome candidates and otherwise reads the old
+column at quart Y = 0. The resolver captures upgrade activation at construction;
+candidate failures precede fallback reads. Section fills preserve native commit
+ordering and partial-failure behavior while allowing access to old biome storage.
+
+The [retention/fill comparison](../benchmarks/rust-retrogen-biome-fill-2026-10-06/scoped-parity.json)
+matches **593,152 lines per JAR** across 740 fills and 2,800 direct queries. The
+[generation integration](../benchmarks/rust-retrogen-biome-generation-2026-10-06/scoped-parity.json)
+matches **834,080 lines per JAR** across 396 fixtures and 610 fills, including 144
+upgrading chunks alongside the ordinary-generation cases. It executes actual
+native `ChunkGenerator.doCreateBiomes`, including retained-status old biome reads,
+native below-zero generation bounds, repeated fills and all biome-source kinds.
+This closes the resolver gap described in the preceding checkpoint. Nonempty
+blending, structure restrictions, automatic generation scheduling and complete
+saved-world/gameplay integration remain pending.
