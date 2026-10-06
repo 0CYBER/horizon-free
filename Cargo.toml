@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/horizon-core", "crates/horizon-world", "crates/voxel-kernels", "crates/horizon-client"]
+members = ["crates/horizon-core", "crates/horizon-world", "crates/voxel-kernels", "crates/horizon-client", "crates/horizon-assets"]
 resolver = "2"
 
 [workspace.package]

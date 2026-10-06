@@ -53,6 +53,25 @@ physical key positions; typing the character W can report physical Escape.
 
 ## Validation
 
+The separate `horizon-assets` crate decodes the pinned 26.3 cuboid model format.
+Its native comparison covers all **2,883 block-model JSON files** in the client
+JAR plus **2,337 synthetic cases**: element bounds, optional geometry, nullable
+children, face UVs and quarter turns, single-axis/Euler rotations, texture
+references and translucency materials, light emission, display transforms and
+inheritance markers. Floating-point fields compare by their exact bits. The
+comparison also covers primitive coercion, integer truncation/wraparound and
+selected strict-reader numeric/syntax limits.
+
+```sh
+python3 tools/test_cuboid_model_parity.py
+```
+
+The [archived decoder result](../benchmarks/rust-cuboid-model-decoding-2026-10-06/scoped-parity.json)
+records source, fixture and reference hashes. The oracle uses actual client
+classes; those rendering APIs are absent from the server. This decoder is not
+yet connected to the development renderer. Parent resolution, rotation matrices,
+quad baking, blockstate selection and rendered appearance need their own checks.
+
 ```sh
 cargo +stable test -p horizon-client
 cargo +stable clippy --workspace --all-targets -- -D warnings

@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "minecraft": "26.3",
+  "manifest_sha1": "4fe1aa1ef8da1cb95c5bad1fb98890ca56dd8ca3",
+  "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+  "java": "openjdk 25.0.4.1 2026-08-18",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "resource_models": 2883,
+  "synthetic_models": 2337,
+  "rejected_models": 1034,
+  "sources_sha256": {
+    "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaCuboidModelOracle.java": "f6618f16614a47eb62b1cab40ebd514f075aa8590466a884f7e24e9f1844b065",
+    "tools/test_cuboid_model_parity.py": "3b7c018570b0f609aae43cef60ff3139c543d5d629be804a5aa257e3ab2dd67c",
+    "tools/lab.py": "d00bf107fa01b6c579734a082c3ca4ade3018f0d6851d46844acf17574f66e64",
+    "tools/test_rust_parity.py": "29d3db08005873528894b45ca10dcd6278753650473b3eb574e53e06ede40ec6",
+    "Cargo.toml": "3f93319c1eb70dbd7ba25cd74ef343fbf35c52c7c4752f955605c58699cbff9d",
+    "Cargo.lock": "7b4ab0ffa35af7ea8b6e38525f18ff6c3e94768198915f5ffe560d84263423f8",
+    "crates/horizon-assets/Cargo.toml": "fadb78cf819e026500606c45d27138ed67fcbbc967ae8cee6c1e7c82c9046b36",
+    "crates/horizon-assets/examples/cuboid_model_fixture.rs": "03e44a7040326660b9681e17a78de86d6f5ff295f1cbef69b6fcb64ab4282e8b",
+    "crates/horizon-assets/src/json.rs": "e7b89bf4852f561a0e5bf1a984857c61e755961dfd86fcc326b6d55558615f39",
+    "crates/horizon-assets/src/lib.rs": "3dbc77b4438dbc1d77e6fb9c61fccbc29fd14ac90a54d35c1518385765cbe13e",
+    "crates/horizon-assets/src/model.rs": "57ddb3d65e88e7a8aa22c62bc298a2dae7f4e994326a873a31f06c0f36ed051b"
+  },
+  "fixtures_sha256": {
+    ".local/rust-cuboid-model-parity/inputs.jsonl": "9c1822180e1d6869e65eea81a38cbcf3786b9286d4c839e31ba686501694d171"
+  },
+  "rust_output_sha256": "80c4b305084658ab968ed466fb1609bfa78d60738d09790c6243b4de27dfb8fc",
+  "references": [
+    {
+      "side": "client",
+      "jar_sha256": "4508d006323f24fa02876310c192d739af56516eb259000ac50f0909a68c9a2d",
+      "output_sha256": "80c4b305084658ab968ed466fb1609bfa78d60738d09790c6243b4de27dfb8fc",
+      "matched_output_lines": 5220
+    }
+  ],
+  "scope": "Actual pinned CuboidModel.fromStream parser compared over every bundled block model and synthetic JSON/numeric/syntax cases. Decoded geometry, texture materials/references, nullable children, inheritance markers, face quadrants, light emission and display transforms; floats compare by IEEE-754 bits. Rejections normalize exception text. This client-only API is absent from the server. Does not yet validate parent resolution, rotation matrices, quad baking, blockstate dispatch, rendered pixels or gameplay."
+}
