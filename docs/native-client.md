@@ -1,7 +1,7 @@
 # Horizon native development client
 
 `horizon-client` opens a native Rust window and renders a controlled block scene
-stored in Horizon's resident chunks, alongside twelve real resource models. It
+stored in Horizon's resident chunks, alongside sixteen blockstate-driven model placements. It
 loads the block registry, models and sprites from pinned Java Edition 26.3
 resources. A padded chunk mesh
 culls hidden faces across chunk boundaries and merges adjacent matching faces;
@@ -12,14 +12,17 @@ is a free inspection tool.
 This checkpoint has no player simulation, vanilla world generation, block
 interaction, inventory, sound, networking or world save/load. It does not meet
 the [playable-build acceptance criteria](rust-parity.md#completion-criteria-and-playable-builds).
-Blockstate dispatch, weighted variants, model transforms/UV locking, fractional
+The model gallery now uses blockstate dispatch, weighted variants, multipart
+conditions and transformed baking. Chunk-wide model rendering, fractional
 transparency, tinting, lighting, resource packs, chunk streaming and full visual
 parity remain unfinished.
 
 The resource gallery sits beside the pyramid and includes oak stairs, a slab,
-an anvil, a torch, a lantern, fence parts, iron bars, a cobweb, a grindstone, a
-ladder and an amethyst cluster. These are explicit model selections for geometry
-inspection, not simulated block placements. Binary-alpha cutouts are rendered;
+an anvil, a torch, a lantern, connected fences and iron bars, a cobweb, a wall
+grindstone, a ladder, a sideways amethyst cluster and four weighted stone
+placements. Registry state properties select the models: the stairs are an
+upside-down inner corner, the slab is a top slab and the fence gate is open.
+These remain static inspection placements without simulation callbacks. Binary-alpha cutouts are rendered;
 the lantern's three frames advance every eight inspection ticks at 20 ticks/s.
 The animation metadata codec and frame selection now use the shared
 `horizon-assets` implementation checked against the pinned client. GPU
@@ -31,7 +34,8 @@ Sprites currently require matching square frame dimensions.
 Use current stable Rust (the locked client dependencies require Rust 1.90 or
 newer), Python 3.10+ and JDK 25. A native desktop display and compatible graphics
 driver are required. Resource preparation verifies the pinned game artifacts,
-exports the registry using the reference server, and extracts selected client
+exports the registry using the reference server and property schemas using the
+reference client, and extracts selected client
 resources into ignored `.local/horizon-client/26.3/`.
 
 ```sh
@@ -91,7 +95,7 @@ The [archived decoder result](../benchmarks/rust-resource-number-scanner-2026-10
 records source, fixture and reference hashes. The oracle uses actual client
 classes; those rendering APIs are absent from the server. The decoder, parent
 resolver and baker now feed the development gallery. Blockstate selection, transformed
-models and UV locking have the separate geometry checks described below. Rendered
+models and UV locking have the separate checks described below. Rendered
 appearance still needs its own checks.
 
 `ModelLibrary` resolves parent geometry, ambient occlusion, GUI lighting and
@@ -139,8 +143,7 @@ all 128 rotation/lock combinations on 81 synthetic models, plus further arbitrar
 element rotations. Positions, UVs and every orientation/inverse-face matrix
 compare by exact float bits: 19,704 roots and 148,439 quads match, including
 7,884 bundled model/transform tuples. Quaternion basis rounding and numeric identity
-rechecking are retained. This remains geometry validation; renderer integration,
-atlas packing and pixel parity are separate work.
+rechecking are retained. This remains geometry validation; atlas packing and pixel parity are separate work.
 
 ```sh
 python3 tools/test_blockstate_transform_parity.py
@@ -167,7 +170,8 @@ selector and predicate cases: 3,802 definitions and 687,466 state results match,
 with 220 expected binding errors. It checks the native replacement-before-abort
 behavior for overlapping variants, eager multipart validation even when variants
 cover every state, integer-property aliases, nested conditions and empty part
-selections. The actual renderer has not yet adopted these selections.
+selections. The development gallery now uses this binder; general chunk model
+rendering remains unfinished.
 
 The Java integer-property parser is shared by `horizon-core`, client binding and
 world-state decoding. Its [codec regression](../benchmarks/rust-blockstate-model-binding-2026-10-06/shared-integer-codec.json)
@@ -186,7 +190,9 @@ uses actual `WeightedVariants.collectParts` and `MultiPartModel.collectParts`
 with inert observable leaves. All seven distinct bundled weight patterns,
 synthetic large weights and random multipart graphs produce matching selections
 and subsequent random values: 6,960 fixtures, 111,360 collections, both legacy
-and xoroshiro streams. This does not yet bake or render the selected models.
+and xoroshiro streams. The development gallery now bakes and renders selected
+models using the legacy stream and the default block position seed. Specialized
+block seed callbacks remain separate work.
 
 ```sh
 python3 tools/test_model_choice_parity.py
@@ -225,7 +231,7 @@ python3 tools/test_native_client.py --vscreen
 The mesh tests compare expanded rectangles against independently enumerated
 exposed voxel faces, including solid neighbors, cavities, material boundaries,
 negative chunk origins and random surroundings. The startup runner launches a
-nine-chunk scene, requires 30 presented frames and a clean exit, verifies 145
+nine-chunk scene, requires 30 presented frames and a clean exit, verifies 209
 baked gallery faces across 18 sprite layers, and writes GPU,
 platform, binary and source information to ignored
 `.local/horizon-client/startup-smoke.json`. It has an external timeout as well as
@@ -246,3 +252,13 @@ The model gallery was also inspected at close range on Linux/Vulkan llvmpipe.
 With the camera stationary, screenshot differences were confined to the lantern
 as its frames changed. The [model-client startup report](../benchmarks/rust-native-model-client-2026-10-06/startup-smoke.json)
 records the bounded presentation check and the scope of this visual inspection.
+
+The [blockstate-client report](../benchmarks/rust-native-blockstate-client-2026-10-06/startup-smoke.json)
+also checks all 16 gallery placements against actual Java registry binding, root
+baking and model collection using `state.getSeed(position)`. A tagged empty
+geometry adapter identifies the 20 selected model parts and their transforms;
+the separate baking gate covers actual quad geometry. Preparation exports typed
+property domains and canonical state order, which the Rust loader checks against
+its imported registry before binding. Each distinct transformed model is baked
+once during gallery preparation and reused across positions. The selected state
+IDs, properties, positions and models are recorded in the startup report.

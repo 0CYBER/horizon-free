@@ -169,7 +169,7 @@ impl App<'_> {
             "resident_chunks": self.world.chunks.len(),
             "merged_quads": self.mesh.len(),
             "model_quads": self.assets.model_quads.len(),
-            "model_gallery": models::GALLERY,
+            "model_gallery": self.assets.model_gallery,
             "sprite_layers": self.assets.texture_layers,
             "animated_sprites": self.assets.animations.len(),
             "animation_uploads": self.renderer.as_ref().map_or(0, |r| r.animation_uploads),

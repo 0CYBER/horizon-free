@@ -7,11 +7,12 @@ from pathlib import Path
 import subprocess
 import zipfile
 try:
-    from . import lab, test_rust_parity as base, test_worldgen_parity as worldgen
+    from . import lab, test_rust_parity as base, test_worldgen_parity as worldgen, test_model_baking_parity as baking
 except ImportError:
     import lab
     import test_rust_parity as base
     import test_worldgen_parity as worldgen
+    import test_model_baking_parity as baking
 
 
 def main():
@@ -43,6 +44,23 @@ def main():
             subprocess.run(['java', '-Xmx512M', '-cp', str(classes) + os.pathsep + dependencies,
                             'dev.horizonlab.parity.VanillaHeightmapOracle', 'export', str(facts)],
                            check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+    binding = oracle.with_name('VanillaBlockStateBindingOracle.java')
+    helper = oracle.with_name('VanillaCuboidModelOracle.java')
+    binding_sources = base.source_hashes([binding, helper])
+    model_states = root / 'model-states.json'
+    if not (previous.get('model_state_exporters_sha256') == binding_sources
+            and previous.get('client_sha256') == origin['client_sha256']
+            and model_states.exists()
+            and previous.get('model_states_sha256') == lab.digest(model_states, 'sha256')):
+        classes = root / 'client-classes'; classes.mkdir(exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['client'], *baking.client_libraries()]))
+        with (root / 'model-state-export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(binding), str(helper)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx512M', '-cp', str(classes) + os.pathsep + dependencies,
+                            'dev.horizonlab.parity.VanillaBlockStateBindingOracle', 'export', str(model_states)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
     tags = worldgen.tag_resources(jars['server'])
     if tags != worldgen.tag_resources(jars['client']):
         raise ValueError('Reference block tags disagree')
@@ -64,7 +82,9 @@ def main():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
             count += 1
-    lab.write_json(manifest, {'schema': 1, **origin, 'data_version': version['world_version'],
+    lab.write_json(manifest, {'schema': 2, **origin,
+                             'model_state_exporters_sha256': binding_sources,
+                             'model_states_sha256': lab.digest(model_states, 'sha256'), 'data_version': version['world_version'],
                              'facts_sha256': lab.digest(facts, 'sha256'),
                              'block_tags_sha256': lab.digest(root / 'block-tags.json', 'sha256'), 'resource_files': count})
     print(f'Prepared Horizon native-client resources: {root}')

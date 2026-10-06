@@ -3,7 +3,7 @@
 The behavior target is the repository's pinned **Minecraft Java Edition 26.3**.
 One-to-one vanilla gameplay parity is the acceptance criterion. It has **not**
 been reached. Horizon now has a [native development client](native-client.md)
-that renders a controlled block scene and twelve baked resource models with a
+that renders a controlled block scene and sixteen blockstate-driven model placements with a
 free camera. It does not run a
 complete game server or gameplay simulation.
 The Rust workspace implements core arithmetic/random streams, world data and
@@ -24,9 +24,11 @@ binding now also matches native selection across registered and special
 item-frame states. Weighted selection and multipart random draw consumption
 also match native traces. Transformed baking now checks every bundled
 model/rotation/UV-lock tuple and all XYZ quarter-turn combinations against native
-geometry by exact float bits. Renderer integration remains unfinished. The native renderer now draws an
-inspection gallery from the decoded/resolved/baked models, including binary
-cutouts and stepped lantern animation; these are not yet gameplay blocks.
+geometry by exact float bits. The native renderer now draws an
+inspection gallery from registry-bound, selected and transformed models, including binary
+cutouts, multipart connections, weighted stone variants and stepped lantern
+animation. All 16 scene selections match native model collection. These are not
+yet gameplay blocks; general chunk model rendering remains unfinished.
 Animation metadata, frame sequences and tick-state selection now have native
 differential coverage, including all bundled animated texture metadata. GPU
 interpolation and game-loop synchronization remain unfinished.

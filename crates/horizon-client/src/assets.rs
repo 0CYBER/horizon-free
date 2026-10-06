@@ -58,6 +58,7 @@ pub struct Assets {
     pub pixels: Vec<u8>,
     pub texture_layers: u32,
     pub model_quads: Vec<crate::models::ModelInstance>,
+    pub model_gallery: Vec<Value>,
     pub animations: Vec<crate::sprites::SpriteAnimation>,
 }
 fn invalid(message: &str) -> io::Error {
@@ -181,7 +182,7 @@ impl Assets {
             let sprite = sprites.insert(root, &format!("minecraft:block/{name}"))?;
             layers[state.0 as usize] = sprite as i32;
         }
-        let model_quads = crate::models::gallery(root, &mut sprites)?;
+        let gallery = crate::models::gallery(root, &registry, &mut sprites)?;
         Ok(Self {
             registry,
             properties,
@@ -190,7 +191,8 @@ impl Assets {
             sprite_size: sprites.size,
             texture_layers: u32::try_from(sprites.layers.len())?,
             pixels: sprites.pixels,
-            model_quads,
+            model_quads: gallery.quads,
+            model_gallery: gallery.states,
             animations: sprites.animations,
         })
     }
