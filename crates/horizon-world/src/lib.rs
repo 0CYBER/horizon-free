@@ -20,6 +20,7 @@ pub mod entity_obstruction;
 pub mod fluid;
 pub mod heightmap;
 pub mod liquid_collision;
+pub mod movement_restitution;
 pub mod nbt;
 pub mod piston_shape;
 pub mod powder_snow_collision;

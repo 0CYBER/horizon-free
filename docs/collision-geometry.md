@@ -519,3 +519,21 @@ nonnegative absolute limits/durations. A unit test verifies invalid parameters
 leave the existing extent unchanged; workspace Clippy passes. Saved-data codecs,
 listeners, dirty-state events, damage, synchronization and live movement binding
 remain separate work.
+
+
+`restitute_movement` now implements the pinned post-collision velocity calculation
+with lazy entity/block bounce queries, gravity thresholds, nonliving float
+scaling and air-drag interpolation. It preserves horizontal/vertical collision
+branches, callback ordering, the position-sync field write and final velocity
+assignment. Errors retain already performed effects instead of rolling back the
+world or returning a fabricated successful velocity.
+
+`python3 tools/test_restitution_parity.py` executes actual
+`Entity.restituteMovementAfterCollisions` on living and nonliving snapshots with
+controlled block restitution and suppression tags. The
+[restitution report](../benchmarks/rust-restitution-2026-10-07/scoped-parity.json)
+records **177,090 matching lines per JAR**. Fixtures cover changing lazy getter
+values, signed zero/nonfinite arithmetic, bounce callbacks that alter velocity,
+and failures before/after each side effect. Workspace Clippy passes. Registered
+block property/tag provisioning, actual bounce sounds/events, `Entity.move`
+guards, fall damage, grounding and full player simulation remain pending.
