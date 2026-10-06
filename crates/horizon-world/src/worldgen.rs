@@ -20,6 +20,7 @@ pub mod climate;
 pub mod decoration;
 pub mod density;
 pub mod disk;
+pub mod end_podium;
 pub mod feature;
 pub mod feature_catalog;
 pub mod feature_graph;

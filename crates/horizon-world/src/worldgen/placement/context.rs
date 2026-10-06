@@ -26,6 +26,16 @@ pub enum LayerBlock {
     Ground,
 }
 pub trait PlacementContext {
+    /// Request destruction with no responsible entity. The world adapter owns
+    /// replacement, drops, block entities and updates; false is a rejected request.
+    fn destroy_block_without_entity(
+        &mut self,
+        _position: [i32; 3],
+        _drop_resources: bool,
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+
     /// World sea level, independently of the generator's placement context.
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)

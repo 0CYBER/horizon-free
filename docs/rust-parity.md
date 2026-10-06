@@ -560,3 +560,20 @@ runs include 1,024 seeds per RNG, replacement and support predicates, repeated
 mutations, rejected writes, partial failures and composition. Workspace tests
 and all-target Clippy pass. Complete world generation and block updates remain
 pending. Pathological descent/root work is bounded to 2^20 visits.
+
+## End exit podium construction
+
+End podium features reproduce active/inactive construction, the native distance
+cutoffs and box traversal, central bedrock pillar and ordered wall-torch facing.
+Active replacement reads block identity, requests destruction with drops and no
+responsible entity, then writes the replacement even if destruction was rejected.
+Matching blocks skip both requests.
+
+The [End podium comparison](../benchmarks/rust-end-podium-2026-10-06/scoped-parity.json)
+matches **3,309,219 lines per reference JAR** over **38,207 fixtures**. All states
+reach active replacement prefixes; full runs cover representative blocks, repeated
+construction, rejected destruction/writes, partial failures, composition and
+nonoverflow extreme coordinates. Workspace tests, all-target Clippy and all
+149 Python tests pass. The fixture controls destruction success and air
+replacement; loot, block entities, updates, portal travel and dragon gameplay
+remain pending. Pathological overflow-box work is bounded to 2^20 visits.

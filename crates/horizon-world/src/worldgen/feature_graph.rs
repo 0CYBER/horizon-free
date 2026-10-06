@@ -49,6 +49,7 @@ pub enum FeatureDefinition {
     Disk(super::disk::DiskFeature),
     Spring(super::spring::SpringFeature),
     Vines(super::vines::VinesFeature),
+    EndPodium(super::end_podium::EndPodiumFeature),
     Spike(super::spike::SpikeFeature),
     BlueIce(super::blue_ice::BlueIceFeature),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaFeature),
@@ -76,6 +77,7 @@ pub enum FeatureExecutionError<E> {
     BlockPile(super::block_pile::BlockPileError<E>),
     Disk(super::disk::DiskError<E>),
     BlockBlob(super::block_blob::BlockBlobError<E>),
+    EndPodium(super::end_podium::EndPodiumError<E>),
     Spike(super::spike::SpikeError<E>),
     BlueIce(super::blue_ice::BlueIceError<E>),
     UnderwaterMagma(super::underwater_magma::UnderwaterMagmaError<E>),
@@ -94,6 +96,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::BlockPile(e) => e.fmt(f),
             Self::Disk(e) => e.fmt(f),
             Self::BlockBlob(e) => e.fmt(f),
+            Self::EndPodium(e) => e.fmt(f),
             Self::Spike(e) => e.fmt(f),
             Self::BlueIce(e) => e.fmt(f),
             Self::UnderwaterMagma(e) => e.fmt(f),
@@ -263,6 +266,11 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:end_podium" => super::end_podium::EndPodiumFeature::from_json(
+                json,
+                blocks.ok_or(DecodeError::Field("end podium bindings"))?,
+            )
+            .map(Self::EndPodium),
             "minecraft:spike" => super::spike::SpikeFeature::decode(
                 json,
                 blocks.ok_or(DecodeError::Field("spike bindings"))?,
@@ -609,6 +617,9 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::EndPodium(feature) => feature
+                .place(world, origin)
+                .map_err(FeatureExecutionError::EndPodium),
             Self::Spike(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::Spike),

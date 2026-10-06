@@ -68,6 +68,11 @@ public final class VanillaSimpleBlockOracle {
    if(name.equals("getFluidState")){var p=(BlockPos)args[0];event("fluid "+xyz(p));return (f.has("fluid")?Block.stateById(f.get("fluid").getAsInt()):at(p)).getFluidState();}
    if(name.equals("getRawBrightness")){var p=(BlockPos)args[0];event("light "+xyz(p)+" "+args[1]);return f.get("brightness").getAsInt();}
    if(name.equals("getBlockEntity")){event("entity "+xyz((BlockPos)args[0]));return null;}
+   if(name.equals("destroyBlock")){
+    if(args.length!=3||args[2]!=null)throw new UnsupportedOperationException("only no-entity destruction is defined in this fixture");
+    var p=((BlockPos)args[0]).immutable();event("destroy "+xyz(p)+" "+args[1]);boolean result=!f.has("destroy_success")||f.get("destroy_success").getAsBoolean();
+    if(result)states.put(p,Blocks.AIR.defaultBlockState());out.println("destroyed "+result);return result;
+   }
    if(name.equals("setBlock")){
     var p=((BlockPos)args[0]).immutable();var state=(BlockState)args[1];int call=calls;event("set "+xyz(p)+" "+Block.getId(state)+" "+args[2]);
     int reject=f.get("reject").getAsInt();boolean result=reject==0||call%reject!=0;if(result)states.put(p,state);out.println("written "+result);return result;

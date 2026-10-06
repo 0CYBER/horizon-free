@@ -143,6 +143,10 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_spike_parity.py
+      - name: Compare End podium construction and destruction requests
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/test_end_podium_parity.py
       - name: Compare ordered single-block replacement features
         env:
           RUSTUP_TOOLCHAIN: stable

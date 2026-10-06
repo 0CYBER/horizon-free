@@ -50,6 +50,8 @@ struct World<'a, 'r, W, R> {
     reject: i32,
     brightness: i32,
     sea_level: i32,
+    air: BlockStateId,
+    destroy_success: bool,
 }
 impl<W: Write, R> World<'_, '_, W, R> {
     fn event(&mut self, text: std::fmt::Arguments<'_>) -> io::Result<i32> {
@@ -135,6 +137,19 @@ fn query(error: impl std::fmt::Display) -> PlacementQueryError {
     PlacementQueryError::Failed(error.to_string())
 }
 impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
+    fn destroy_block_without_entity(
+        &mut self,
+        p: [i32; 3],
+        drops: bool,
+    ) -> Result<bool, PlacementQueryError> {
+        self.event(format_args!("destroy {} {} {} {drops}", p[0], p[1], p[2]))
+            .map_err(query)?;
+        if self.destroy_success {
+            self.states.insert(p, self.air);
+        }
+        writeln!(self.out, "destroyed {}", self.destroy_success).map_err(query)?;
+        Ok(self.destroy_success)
+    }
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
         Ok(self.sea_level)
     }
@@ -293,6 +308,11 @@ fn fixture<R: RandomSource>(
         reject: f["reject"].as_i64().unwrap() as i32,
         brightness: f["brightness"].as_i64().unwrap() as i32,
         sea_level: f.get("sea").and_then(Value::as_i64).unwrap_or(63) as i32,
+        air: blocks.air,
+        destroy_success: f
+            .get("destroy_success")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
     };
     match feature {
         Err(_) => writeln!(world.out, "decode error")?,
