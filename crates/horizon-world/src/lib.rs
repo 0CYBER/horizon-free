@@ -18,6 +18,7 @@ pub mod dynamic_support;
 pub mod entity_collision;
 pub mod entity_obstruction;
 pub mod fluid;
+pub mod ground_support;
 pub mod heightmap;
 pub mod liquid_collision;
 pub mod movement_restitution;

@@ -4,7 +4,9 @@ use horizon_core::{
 };
 use horizon_world::{
     block_collision_scan::{BlockCollisionScan, BlockCollisionWorld, CollisionBlock},
-    collision_context::CollisionContext,
+    collision_context::{CollisionContext, CollisionEntity},
+    entity_obstruction::EntityIdentity,
+    ground_support::find_supporting_block,
     registry::BlockStateId,
 };
 use serde_json::Value;
@@ -208,6 +210,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Vec3::new(number(&v[0]), number(&v[1]), number(&v[2])),
             Vec3::new(number(&v[3]), number(&v[4]), number(&v[5])),
         );
+        if let Some(p) = f.get("support_position") {
+            let position = Vec3::new(number(&p[0]), number(&p[1]), number(&p[2]));
+            let context = CollisionContext::for_entity(
+                CollisionEntity {
+                    identity: EntityIdentity(1),
+                    y: position.y,
+                    descending: false,
+                    main_hand: None,
+                },
+                false,
+            );
+            match find_supporting_block(&mut world, context, position, bounds, 1_000_000) {
+                Ok(Some(p)) => writeln!(out.borrow_mut(), "support {} {} {}", p.x, p.y, p.z)?,
+                Ok(None) => writeln!(out.borrow_mut(), "support none")?,
+                Err(_) => writeln!(out.borrow_mut(), "support error")?,
+            }
+            writeln!(out.borrow_mut(), "done support {}", world.calls)?;
+            continue;
+        }
         let mut hits = 0;
         {
             let mut scan = BlockCollisionScan::new(

@@ -537,3 +537,24 @@ values, signed zero/nonfinite arithmetic, bounce callbacks that alter velocity,
 and failures before/after each side effect. Workspace Clippy passes. Registered
 block property/tag provisioning, actual bounce sounds/events, `Entity.move`
 guards, fall damage, grounding and full player simulation remain pending.
+
+
+`find_supporting_block` now selects the nearest colliding block center using the
+native distance arithmetic and wrapping Y/Z/X position tie-break. `GroundState`
+implements the thin foot query, previous-horizontal-footprint fallback and both
+ground/collision flag updates. Null movement preserves the prior support in the
+native branch where no fallback query can run; query failures retain preceding
+flag writes.
+
+`python3 tools/test_ground_support_parity.py` compares actual
+`CollisionGetter.findSupportingBlock`, `Entity.checkSupportingBlock` and both
+`setOnGroundWithMovement` overloads. The
+[ground support report](../benchmarks/rust-ground-support-2026-10-07/scoped-parity.json)
+records **342,709 selection lines and 151,444 state-transition lines per JAR**,
+covering ties, nonfinite entity positions, missing chunks, query errors, nullable
+movement and sequential changes of support. Shape/context snapshots are controlled;
+registry-backed scanning has separate integration coverage. Workspace Clippy
+passes. Full live entity movement, support-dependent effects and gameplay remain
+pending.
+The [shared scanner regression](../benchmarks/rust-ground-support-2026-10-07/scan-regression.json)
+also passes with **517,820 matching lines per JAR** after extending its fixtures.
