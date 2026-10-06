@@ -18,12 +18,17 @@ except ImportError:
     import test_worldgen_parity as worldgen
 
 
-def corpus(facts):
+def configured_features(*, include_springs=True):
     leaves=[{'type':name} for name in ['end_island','void_start_platform','end_platform']]
     layers=[{'feature':{'type':'fill_layer','height':height,'state':state},'placement':[]} for height,state in [(32,'water'),(16,{'id':'oak_log','properties':{'axis':'x'}}),(8,'air'),(4064,'stone')]]
     targets=[{'target':{'predicate_type':'block_match','block':'stone'},'state':'iron_ore'},{'target':{'predicate_type':'block_match','block':'oak_log'},'state':'copper_ore'}]
     features=leaves+[{'type':'sequence','features':layers},{'type':'replace_single_block','targets':targets},{'type':'scattered_ore','targets':targets,'size':16,'discard_chance_on_air_exposure':0.5}]
-    features.append({'type':'spring_feature','state':{'id':'water','properties':{'falling':'false'}},'requires_block_below':False,'rock_count':5,'hole_count':5,'valid_blocks':['air','stone','dirt']})
+    if include_springs:features.append({'type':'spring_feature','state':{'id':'water','properties':{'falling':'false'}},'requires_block_below':False,'rock_count':5,'hole_count':5,'valid_blocks':['air','stone','dirt']})
+    return features
+
+
+def corpus(facts):
+    features=configured_features()
     get=lambda name:facts['defaults']['minecraft:'+name]
     log_x=next(i for i,state in enumerate(facts['states']) if state[4]['id']=='minecraft:oak_log' and state[4].get('properties',{}).get('axis')=='x')
     ticks=[]

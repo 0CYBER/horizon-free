@@ -4,8 +4,15 @@ from tools import test_feature_region_parity as regions
 
 class FeatureRegionCorpusTests(unittest.TestCase):
     def test_resident_mutation_contexts_and_failures(self):
-        fixtures = list(regions.corpus({}))
-        self.assertEqual(fixtures, list(regions.corpus({})))
+        facts = {'defaults': {'minecraft:water': 0, 'minecraft:oak_log': 1},
+                 'states': [[None, None, None, None, {'id': 'minecraft:water'}],
+                            [None, None, None, None, {'id': 'minecraft:oak_log', 'properties': {'axis': 'y'}}],
+                            [None, None, None, None, {'id': 'minecraft:oak_log', 'properties': {'axis': 'x'}}]]}
+        fixtures = list(regions.corpus(facts))
+        self.assertEqual(fixtures, list(regions.corpus(facts)))
+        self.assertEqual(sorted(i for f in fixtures for i in f['probe_states']), list(range(len(facts['states']))))
+        self.assertTrue(all(len(f['tick_commands']) == 77 for f in fixtures))
+        self.assertTrue(all(f['features'][-1]['type'] == 'spring_feature' for f in fixtures))
         self.assertEqual({f['worldgen'] for f in fixtures}, {False, True})
         self.assertEqual({f['legacy'] for f in fixtures}, {False, True})
         self.assertEqual({f['stage'] for f in fixtures}, {'empty', 'terrain'})

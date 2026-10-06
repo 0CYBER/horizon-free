@@ -20,7 +20,7 @@ except ImportError:
 
 
 def corpus(facts):
-    template=next(region.corpus(facts))
+    features=region.configured_features(include_springs=False)
     biomes=[[[0],[1,2],[3,4,5]],[[0],[2],[3,5]],[[1],[2],[4,5]]]
     chains=[
         [{'type':'count','count':2},{'type':'in_square'},{'type':'heightmap','heightmap':'MOTION_BLOCKING'},{'type':'biome'}],
@@ -36,7 +36,7 @@ def corpus(facts):
                     for placement in chains:
                         for mixed in [False,True]:
                             f=decoration.fixture(biomes,seed,present=[0,1,2,3] if mixed else [0])
-                            f.update(features=template['features'],placements=[placement]*len(template['features']),min=-64,height=64,stage=stage,write_fail=fail,reject=reject)
+                            f.update(features=features,placements=[placement]*len(features),min=-64,height=64,stage=stage,write_fail=fail,reject=reject)
                             yield f
 
 
