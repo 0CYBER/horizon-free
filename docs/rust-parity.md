@@ -626,3 +626,22 @@ rejected writes, partial failures, wrapped positions and composition. Workspace
 tests, all-target Clippy and all 149 Python tests pass. The fixture supplies a
 flat ground/air boundary with mutable overrides; fluid behavior, world updates
 and complete generation remain pending.
+
+## Biome freezing and snow eligibility
+
+Registry-bound weather predicates now use the native biome temperature cache,
+precipitation selection, build-height and block-light gates. Freezing distinguishes
+source water from flowing water, requires a liquid block and optionally checks
+water neighbors in west/east/north/south order. Snow accepts air or existing snow
+and evaluates the default snow state's actual survival rules.
+
+The [biome-weather comparison](../benchmarks/rust-biome-weather-2026-10-06/scoped-parity.json)
+matches **4,071,594 lines per reference JAR** across **326,057 fixtures**,
+covering all states in block/fluid/snow/support/neighbor roles, neighbor masks,
+float thresholds and nonfinite temperatures, both temperature modifiers, light
+and height boundaries, precipitation flags, repeated queries and partial failures.
+Workspace tests and all-target Clippy pass. Native fixture temperature caches
+are removed after each independent case to avoid retaining hundreds of thousands
+of biomes; repeated queries within a case keep their cache. Dynamic block entities
+are absent. Actual weather ticks, lighting propagation and world updates remain
+pending.

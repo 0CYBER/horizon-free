@@ -26,6 +26,17 @@ pub enum LayerBlock {
     Ground,
 }
 pub trait PlacementContext {
+    /// Block light only, independently of sky light and sky darkening.
+    fn block_brightness(&mut self, _position: [i32; 3]) -> Result<i32, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    fn fluid_state(
+        &mut self,
+        _position: [i32; 3],
+    ) -> Result<crate::fluid::FluidState, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+
     /// Request destruction with no responsible entity. The world adapter owns
     /// replacement, drops, block entities and updates; false is a rejected request.
     fn destroy_block_without_entity(

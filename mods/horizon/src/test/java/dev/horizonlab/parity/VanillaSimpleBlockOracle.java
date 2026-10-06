@@ -23,9 +23,26 @@ import net.minecraft.world.level.levelgen.feature.stateproviders.BlockStateProvi
 /** Actual native simple-block map codec and mutable world placement. */
 public final class VanillaSimpleBlockOracle {
  private static final class Stop extends RuntimeException {}
+ private static final List<ThreadLocal<?>> fixtureCaches=new ArrayList<>();
+ private static Biome trackBiome(Biome biome)throws ReflectiveOperationException{
+  var field=Biome.class.getDeclaredField("temperatureCache");field.setAccessible(true);fixtureCaches.add((ThreadLocal<?>)field.get(biome));return biome;
+ }
  private static Optional<Feature> decode(RegistryOps<JsonElement> ops,JsonObject f) {
   var json=JsonParser.parseString(f.get("definition").getAsString());
   String mode=f.has("mode")?f.get("mode").getAsString():"map";
+  if(mode.equals("weather")){
+   final Biome biome;
+   try{
+    var type=Class.forName("net.minecraft.world.level.biome.Biome$ClimateSettings");
+    var climate=type.getDeclaredConstructor(boolean.class,float.class,Biome.TemperatureModifier.class,float.class);climate.setAccessible(true);
+    var settings=climate.newInstance(f.get("precipitation").getAsBoolean(),Float.intBitsToFloat(Integer.parseUnsignedInt(f.get("base").getAsString(),16)),Biome.TemperatureModifier.valueOf(f.get("modifier").getAsString()),0f);
+    var constructor=Biome.class.getDeclaredConstructors()[0];constructor.setAccessible(true);biome=trackBiome((Biome)constructor.newInstance(settings,null,null,null));
+   }catch(ReflectiveOperationException error){throw new IllegalStateException(error);}
+   return Optional.of(new Feature(){
+    public com.mojang.serialization.MapCodec<? extends Feature> codec(){return com.mojang.serialization.MapCodec.unit(this);}
+    public boolean place(WorldGenLevel world,ChunkGenerator generator,RandomSource random,BlockPos p){return f.get("operation").getAsString().equals("snow")?biome.shouldSnow(world,p):biome.shouldFreeze(world,p,f.get("edge").getAsBoolean());}
+   });
+  }
   if(mode.equals("map"))return SimpleBlockFeature.CODEC.codec().parse(ops,json).result().map(value->value);
   if(mode.equals("feature"))return Feature.CODEC.parse(ops,json).result().map(Holder::value);
   return PlacedFeature.CODEC.parse(ops,json).result().map(holder->new Feature(){
@@ -67,6 +84,7 @@ public final class VanillaSimpleBlockOracle {
    if(name.equals("getSeaLevel"))return f.has("sea")?f.get("sea").getAsInt():63;
    if(name.equals("getBlockState")){var p=(BlockPos)args[0];event("get "+xyz(p));var state=at(p);out.println("state "+Block.getId(state));return state;}
    if(name.equals("getFluidState")){var p=(BlockPos)args[0];event("fluid "+xyz(p));return (f.has("fluid")?Block.stateById(f.get("fluid").getAsInt()):at(p)).getFluidState();}
+   if(name.equals("getBrightness")&&args[0]==LightLayer.BLOCK){event("blocklight "+xyz((BlockPos)args[1]));return f.get("brightness").getAsInt();}
    if(name.equals("getRawBrightness")){var p=(BlockPos)args[0];event("light "+xyz(p)+" "+args[1]);return f.get("brightness").getAsInt();}
    if(name.equals("getBlockEntity")){event("entity "+xyz((BlockPos)args[0]));return null;}
    if(name.equals("destroyBlock")){
@@ -130,6 +148,7 @@ public final class VanillaSimpleBlockOracle {
       for(var entry:handler.states.entrySet())out.println("stored "+xyz(entry.getKey())+" "+Block.getId(entry.getValue()));out.println("end");
      }
     }out.println("tail "+random.nextLong()+" "+worldRandom.nextLong());
+    for(var cache:fixtureCaches)cache.remove();fixtureCaches.clear();
    }
   }
  }

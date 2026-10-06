@@ -17,6 +17,8 @@ use horizon_world::{
     registry::{BlockRegistry, BlockStateId},
     worldgen::{
         anchor::WorldGenerationContext,
+        biome_temperature::{BiomeTemperature, BiomeTemperatureSettings, TemperatureModifier},
+        biome_weather::BiomeWeatherBindings,
         block_feature::FeatureBlockBindings,
         feature::{FeatureBlocks, FeatureWorld},
         feature_catalog::FeatureCatalog,
@@ -158,6 +160,14 @@ impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
         writeln!(self.out, "destroyed {}", self.destroy_success).map_err(query)?;
         Ok(self.destroy_success)
     }
+    fn block_brightness(&mut self, p: [i32; 3]) -> Result<i32, PlacementQueryError> {
+        self.event(format_args!("blocklight {} {} {}", p[0], p[1], p[2]))
+            .map_err(query)?;
+        Ok(self.brightness)
+    }
+    fn fluid_state(&mut self, p: [i32; 3]) -> Result<FluidState, PlacementQueryError> {
+        SurvivalWorld::fluid_state(self, p).map_err(query)
+    }
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
         Ok(self.sea_level)
     }
@@ -186,7 +196,12 @@ impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
         Ok(())
     }
     fn water_at(&mut self, p: [i32; 3]) -> Result<bool, PlacementQueryError> {
-        Ok(self.fluid_state(p).map_err(query)?.kind().mask() & self.water_mask != 0)
+        Ok(SurvivalWorld::fluid_state(self, p)
+            .map_err(query)?
+            .kind()
+            .mask()
+            & self.water_mask
+            != 0)
     }
     fn attachment_at(
         &mut self,
@@ -257,7 +272,14 @@ impl<W: Write, R: RandomSource> PlacementContext for World<'_, '_, W, R> {
             .map_err(query)
     }
 }
+struct WeatherProbe {
+    bindings: BiomeWeatherBindings,
+    temperature: BiomeTemperature,
+    snow: bool,
+    require_edge: bool,
+}
 enum Feature {
+    Weather(Box<WeatherProbe>),
     Map(SimpleBlockFeature),
     Graph(Box<FeatureDefinition>),
     Placed(Box<PlacedFeatureDefinition>),
@@ -281,6 +303,25 @@ fn fixture<R: RandomSource>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let json = f["definition"].as_str().unwrap();
     let feature = match f["mode"].as_str().unwrap_or("map") {
+        "weather" => BiomeWeatherBindings::new(feature_bindings).map(|bindings| {
+            Feature::Weather(Box::new(WeatherProbe {
+                bindings,
+                temperature: BiomeTemperature::new(BiomeTemperatureSettings {
+                    base_temperature: f32::from_bits(
+                        u32::from_str_radix(f["base"].as_str().unwrap(), 16).unwrap(),
+                    ),
+                    modifier: if f["modifier"].as_str() == Some("FROZEN") {
+                        TemperatureModifier::Frozen
+                    } else {
+                        TemperatureModifier::None
+                    },
+                    has_precipitation: f["precipitation"].as_bool().unwrap(),
+                    downfall: 0.0,
+                }),
+                snow: f["operation"].as_str() == Some("snow"),
+                require_edge: f["edge"].as_bool().unwrap(),
+            }))
+        }),
         "map" => {
             SimpleBlockFeature::from_json(json, providers, catalog, placement).map(Feature::Map)
         }
@@ -328,12 +369,25 @@ fn fixture<R: RandomSource>(
     };
     match feature {
         Err(_) => writeln!(world.out, "decode error")?,
-        Ok(feature) => {
+        Ok(mut feature) => {
             writeln!(world.out, "decode ok")?;
             let origin = std::array::from_fn(|i| f["origin"][i].as_i64().unwrap() as i32);
             for _ in 0..f["repeats"].as_u64().unwrap() {
                 world.calls = 0;
-                let result = match &feature {
+                let result = match &mut feature {
+                    Feature::Weather(probe) => if probe.snow {
+                        probe
+                            .bindings
+                            .should_snow(&mut world, &mut probe.temperature, origin)
+                    } else {
+                        probe.bindings.should_freeze(
+                            &mut world,
+                            &mut probe.temperature,
+                            origin,
+                            probe.require_edge,
+                        )
+                    }
+                    .map_err(|_| ()),
                     Feature::Map(feature) => feature
                         .place(&mut world, &mut random, origin)
                         .map_err(|_| ()),
