@@ -737,3 +737,21 @@ predicate combinations, sound/event modes, differing support blocks, nonfinite
 numbers, mutations and provider failures. Targeted Clippy passes. Sound callbacks
 are controlled and the crystal-sound predicate is false in this gate; registered
 sound selection, audio playback and full movement integration remain pending.
+
+
+`entity_move` sequences native movement phases: no-physics/piston early exits,
+stuck multiplier reset, edge backoff, collision resolution, fall-reset clipping,
+position/recording writes, collision/ground flags, landing, removal, restitution,
+movement emission and block speed multiplication. `MovementHistory` retains at
+most 100 records by merging the oldest pair and dropping their original-axis
+movement metadata. Callbacks can change fields read by later phases.
+
+`python3 tools/test_entity_move_parity.py` invokes actual `Entity.move` with native
+shape resolution and zero restitution. The
+[movement lifecycle report](../benchmarks/rust-entity-move-2026-10-07/scoped-parity.json)
+records **543,653 matching lines per JAR**, covering signed zero, tiny/nonfinite
+movement, collisions, early exits, recording cap, authority guards, landing
+mutations/removal and failures after partial writes. Targeted Clippy passes.
+This gate controls piston/edge decisions, ground support, ray hits and landing
+callbacks; step height is zero and non-passenger emission is tested separately.
+Binding all phases to a live entity/world and player travel remains pending.

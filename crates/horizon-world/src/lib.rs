@@ -19,6 +19,7 @@ pub mod compression;
 pub mod dynamic_support;
 pub mod edge_backoff;
 pub mod entity_collision;
+pub mod entity_move;
 pub mod entity_obstruction;
 pub mod fall_damage;
 pub mod fluid;
