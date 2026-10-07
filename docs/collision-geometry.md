@@ -1799,3 +1799,18 @@ selection/count mutations and failures before dirty marking. Ordinary lifecycle
 operations are also exercised with the real observer reaction. Targeted Clippy
 passes. Other synchronized keys, start-use packet flow, full item/equip effects
 and complete gameplay integration remain pending.
+
+
+`inventory_use` now binds start-use to stored inventory, shared active stacks
+and synchronized flag reactions. Server equipment synchronization precedes flag
+writes, followed by start vibration and the kinetic-enemy reset service. Captured
+stack/hand arguments and live state reads retain native callback ordering.
+
+`python3 tools/test_inventory_use_start_parity.py` exercises inherited native
+start-use with actual Inventory, PlayerEquipment and synchronized storage. The
+[start report](../benchmarks/rust-inventory-use-start-2026-10-07/scoped-parity.json)
+records **9,506 fixtures and 223,004 matching lines per JAR**, including native
+equipment packet construction, observer reactions, callback mutations/failures
+and clearing a populated kinetic-enemy map. Targeted Clippy passes. Packet
+encoding/delivery, the full kinetic-enemy map and combat, complete item/equip
+effects and full gameplay integration remain pending.

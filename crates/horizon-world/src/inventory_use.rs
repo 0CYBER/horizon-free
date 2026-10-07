@@ -383,3 +383,103 @@ impl<I: Copy + Eq, K: Clone + Eq, V: Clone + PartialEq, S: UseServices<I, K, V>>
         living_use_flags::set_flag(&mut self.flags, mask, value, &mut observer)
     }
 }
+
+/// Services needed by startUsingItem in addition to the stored lifecycle.
+pub trait StartServices<I, K, V>: DurationServices<I, K, V> {
+    fn synchronize_equipment(
+        &mut self,
+        view: UseView<'_, I, K, V>,
+        state: &mut ActiveStack<I, K, V>,
+        level: Self::Level,
+        hand: InteractionHand,
+        item: StackRef<I, K, V>,
+    ) -> Result<(), Self::Error>;
+    fn start_vibration(
+        &mut self,
+        view: UseView<'_, I, K, V>,
+        state: &mut ActiveStack<I, K, V>,
+        item: StackRef<I, K, V>,
+    ) -> Result<(), Self::Error>;
+    fn has_kinetic_weapon(&self, item: &StackRef<I, K, V>) -> bool;
+    /// The caller owns the actual enemy map. Reset it at this native point.
+    fn reset_recent_kinetic_enemies(
+        &mut self,
+        view: UseView<'_, I, K, V>,
+        state: &mut ActiveStack<I, K, V>,
+    );
+}
+impl<I: Copy + Eq, K: Clone + Eq, V: Clone + PartialEq, S: StartServices<I, K, V>>
+    crate::item_use_start::StartUseWorld for InventoryUse<I, K, V, S>
+{
+    fn duration(
+        &mut self,
+        state: &mut ActiveStack<I, K, V>,
+        item: StackRef<I, K, V>,
+    ) -> Result<i32, Self::Error> {
+        self.services.duration(
+            UseView {
+                inventory: &mut self.inventory,
+                flags: &mut self.flags,
+            },
+            state,
+            item,
+        )
+    }
+    fn synchronize_equipment(
+        &mut self,
+        state: &mut ActiveStack<I, K, V>,
+        level: Self::Level,
+        hand: InteractionHand,
+        item: StackRef<I, K, V>,
+    ) -> Result<(), Self::Error> {
+        self.services.synchronize_equipment(
+            UseView {
+                inventory: &mut self.inventory,
+                flags: &mut self.flags,
+            },
+            state,
+            level,
+            hand,
+            item,
+        )
+    }
+    fn is_off_hand(&self, hand: InteractionHand) -> bool {
+        hand == InteractionHand::Off
+    }
+    fn set_off_hand_flag(
+        &mut self,
+        state: &mut ActiveStack<I, K, V>,
+        off: bool,
+    ) -> Result<(), Self::Error> {
+        self.set_flag(state, 2, off).map_err(|error| match error {
+            DataError::Observer(e) => e,
+            DataError::UnknownId(_) => unreachable!("validated flags"),
+        })
+    }
+    fn start_vibration(
+        &mut self,
+        state: &mut ActiveStack<I, K, V>,
+        item: StackRef<I, K, V>,
+    ) -> Result<(), Self::Error> {
+        self.services.start_vibration(
+            UseView {
+                inventory: &mut self.inventory,
+                flags: &mut self.flags,
+            },
+            state,
+            item,
+        )
+    }
+    fn has_kinetic_weapon(&self, item: StackRef<I, K, V>) -> bool {
+        self.services.has_kinetic_weapon(&item)
+    }
+    fn reset_recent_kinetic_enemies(&mut self, state: &mut ActiveStack<I, K, V>) {
+        self.services.reset_recent_kinetic_enemies(
+            UseView {
+                inventory: &mut self.inventory,
+                flags: &mut self.flags,
+            },
+            state,
+        )
+    }
+}
