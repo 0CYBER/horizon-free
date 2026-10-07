@@ -1,6 +1,7 @@
 //! Vanilla-compatible world data for Horizon. This crate does not run gameplay.
 #![forbid(unsafe_code)]
 
+pub mod object_open_map;
 pub mod object_open_set;
 pub mod effect_notifications;
 pub mod active_effects;
