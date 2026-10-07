@@ -978,3 +978,21 @@ native below-zero generation bounds, repeated fills and all biome-source kinds.
 This closes the resolver gap described in the preceding checkpoint. Nonempty
 blending, structure restrictions, automatic generation scheduling and complete
 saved-world/gameplay integration remain pending.
+
+## Active status-effect storage and notifications
+
+Rust now composes shared status instances with native-order map storage for
+entity effect addition, forced replacement, removal, clearing and blend lookup.
+It preserves eligibility checks, source identity, hidden-chain updates, blend
+transfer, callback order, and mutations made while callbacks are running. Clearing
+copies the map before removing live entries and reports effects in the copied
+map's iteration order.
+
+The [active-effect comparison](../benchmarks/rust-active-effects-2026-10-07/scoped-parity.json)
+matches **535,063 lines per reference JAR** across **1,266 fixtures**, using actual
+vanilla entity storage methods, status instances and JDK maps. Native holder hash
+and identity-hash values are captured separately for each reference process.
+World-library and fixture Clippy checks pass. Eligibility policy, attribute and
+packet notifications, and registered effect behavior remain controlled in these
+checks. Consumable integration, the entity effect tick loop and complete gameplay
+remain pending; this is scoped evidence, not full-game parity.
