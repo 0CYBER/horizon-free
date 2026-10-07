@@ -1952,3 +1952,20 @@ sound arguments, subsequent random state, changed food stores and positions,
 and callback mutation/failure prefixes. Targeted Clippy passes. Sound playback,
 complete consumable dispatch, particles/effects and full gameplay integration
 remain pending.
+
+
+`item_particles` emits eating particles from one retained ItemStackTemplate.
+Each iteration reads the actor's direct random field and current rotations;
+eye-height and level callbacks preserve native evaluation order. Component
+mutations after capture do not alter the particle template.
+
+`python3 tools/test_item_particles_parity.py` compares inherited
+LivingEntity.spawnItemParticles with real templates and both native random
+generators. The
+[particle report](../benchmarks/rust-item-particles-2026-10-07/scoped-parity.json)
+records **143,167 matching lines per JAR**, including exact position/velocity
+bits, empty stacks, negative particle counts, snapshot identity, float edge
+cases, random-source replacement and callback mutation/failure prefixes.
+Targeted Clippy passes. The fixture uses scalar damage component patches and
+controlled particle delivery; renderer enqueue, full consumable dispatch and
+complete gameplay remain pending.
