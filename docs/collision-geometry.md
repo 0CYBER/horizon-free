@@ -1332,3 +1332,22 @@ resistance, numeric edges, armor attribute mutation, dirty packet drains and
 callback failures. Targeted Clippy passes. Empty equipment and controlled
 source/effect, durability, combat/stat/event services bound this scope; outer
 hurt gates, enchanted equipment and the complete player lifecycle remain pending.
+
+
+`living_hurt` implements the outer living hurt sequence: early rejection,
+blocking/freezing/helmet dispatch, non-finite damage sanitization, repeated-hit
+cooldowns, hurt-animation writes, attribution, impact/knockback, death/sound
+branches, last-source timestamps, effect notifications and criterion dispatch.
+Services receive live hurt state, including the distinct field writes before and
+after the inner hit in fresh-hit and cooldown-difference branches.
+
+`python3 tools/test_living_hurt_parity.py` invokes the native LivingEntity method
+directly on base and ServerPlayer receivers. The
+[living hurt report](../benchmarks/rust-living-hurt-2026-10-07/scoped-parity.json)
+records **441,413 matching lines per JAR**, including numeric edges, repeated
+hits, callback mutations/failures, empty-hand death-protection lookup, native
+soundless blocking components and victim criteria with no listeners. Targeted
+Clippy passes. Inner damage, blocking amounts, sounds, knockback, death and
+attribution/effect services are controlled. Successful totems, attacker-player
+criteria, actual blocking reduction, full service bindings and player-specific
+outer gates remain pending.
