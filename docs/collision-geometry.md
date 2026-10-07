@@ -772,3 +772,19 @@ failures. Targeted Clippy passes. Separate limit tests distinguish a miss from
 nonfinite geometry, exhausted traversal budget and failed world reads. Shapes
 and state predicates are controlled; registered shape binding, actual fluid
 shape caching and full entity/world integration remain pending.
+
+
+`FluidShapeCache` matches native registered-fluid shape caching. The first
+successful lookup of a nonempty fluid state samples the fluid above and retains
+its resulting shape across later positions/world views. Failed reads leave the
+state uncached. Empty and full cube shapes preserve canonical identity; distinct
+noncanonical cached shapes retain their own identities.
+
+`python3 tools/test_fluid_shape_parity.py` runs every registered native fluid state
+in changing query sequences. The
+[fluid shape report](../benchmarks/rust-fluid-shape-2026-10-07/scoped-parity.json)
+records **387,950 matching lines per JAR** across **5,181 sequences**, comparing
+geometry, cache population, canonical/alias identities, query suppression and
+failures. Targeted Clippy passes. The pinned registry has no amount-nine state;
+unsupported custom fluid definitions are outside this module. Fluid propagation,
+entity immersion and live world/ray integration remain pending.
