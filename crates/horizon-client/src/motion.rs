@@ -134,6 +134,7 @@ pub struct PlayerMotion {
     pub no_jump_delay: i32,
     pub jump_trigger_time: i32,
     pub sprinting: bool,
+    pub sprint_input: crate::sprint::SprintState,
     pub speed: f32,
     pub last_climbable: Option<BlockPos>,
     pub needs_sync: bool,
@@ -184,6 +185,7 @@ impl PlayerMotion {
             no_jump_delay: 0,
             jump_trigger_time: 0,
             sprinting: false,
+            sprint_input: crate::sprint::SprintState::default(),
             speed: 0.0,
             last_climbable: None,
             needs_sync: false,
@@ -243,6 +245,25 @@ impl PlayerMotion {
             })
             .map_err(attribute_error)?;
         Ok(())
+    }
+    /// Local input sprint phase for the resident dry, standing, empty-equipment
+    /// player. Fluid, pose, vehicle, ability-flight and effect bindings remain
+    /// separate; hunger and collision conditions use this actor's actual state.
+    pub fn sprint_input_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
+        let conditions = crate::sprint::Conditions {
+            sprinting: self.sprinting,
+            enough_food: self.health.food.has_enough_food(),
+            on_ground: self.ground.on_ground,
+            horizontal_collision: self.collision.horizontal,
+            minor_horizontal_collision: self.collision.minor,
+            ..Default::default()
+        };
+        // The sprint setter edits attributes and flags, independent of local
+        // keyboard history. Retain the input prefix even if that setter fails.
+        let mut state = self.sprint_input;
+        let result = state.tick(keys, conditions, 7, |value| self.set_sprinting(value));
+        self.sprint_input = state;
+        result
     }
     fn remove_frost(&mut self) -> Result<()> {
         let key = self
@@ -367,6 +388,13 @@ impl MotionWorld<'_, '_, '_> {
         self.check_movement_statistics(previous.vector_to(self.player.position))?;
         self.player
             .food_tick(&self.resources.health, self.scene.health_rules)
+    }
+    pub fn controlled_simulation_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
+        self.player.sprint_input_tick(keys)?;
+        self.simulation_tick(
+            crate::input::modify_input(keys.direction(), None, None),
+            keys.jump,
+        )
     }
     pub fn check_movement_statistics(&mut self, delta: Vec3) -> Result<()> {
         movement_statistics::check(self, delta)

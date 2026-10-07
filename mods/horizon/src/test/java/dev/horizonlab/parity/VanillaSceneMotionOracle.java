@@ -111,6 +111,7 @@ public final class VanillaSceneMotionOracle {
         // Query overrides only while directly exercising the complete statistics
         // method; regular resident movement keeps its actual standing/dry state.
         Integer statisticsFlags;
+        Object sprintController;
         boolean statFlag(int bit){return (statisticsFlags&(1<<bit))!=0;}
         SynchedEntityData.DataItem<Float> healthItem,absorptionItem;Level sceneLevel;Tracker tracker;net.minecraft.server.PlayerAdvancements advancements;
         Actor(){super(null,null,null,null);}
@@ -224,6 +225,7 @@ public final class VanillaSceneMotionOracle {
             noAction.getInt(p),cooldown.getInt(p),Float.floatToIntBits(lastHurt.getFloat(p)),p.hurtDuration,p.hurtTime,sourceName((DamageSource)lastDamage.get(p)),lastStamp.getLong(p),healthDead.getBoolean(p),p.syncVelocity,
             p.getEntityData().isDirty(),p.healthItem.isDirty(),p.absorptionItem.isDirty(),p.sceneLevel.time);
         var food=p.getFoodData();out.printf("food %d %08x %d %d %d %s%n",food.getFoodLevel(),Float.floatToIntBits(food.getSaturationLevel()),foodTimer.getInt(food),p.tickCount,p.sceneLevel.difficulty.ordinal(),p.sceneLevel.rules.regenerate);
+        out.println("input "+p.isSprinting()+" "+(p.sprintController==null?"0 false false":p.sprintController.getClass().getMethod("state").invoke(p.sprintController)));
     }
     @SuppressWarnings("unchecked") public static void main(String[] args)throws Exception{
         net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();Path dir=Path.of(args[1]);
@@ -272,6 +274,11 @@ public final class VanillaSceneMotionOracle {
                 p.setDeltaMovement(Vec3.ZERO);p.setPos(VanillaSceneCollisionOracle.vector(row.get("position")));
                 for(var value:row.getAsJsonArray("ops")){
                     var op=value.getAsJsonObject();switch(op.get("mode").getAsString()){
+                        case "controlled_tick"->{
+                            if(p.sprintController==null)p.sprintController=Class.forName("dev.horizonlab.parity.VanillaSprintInputOracle$Controller").getConstructor(ServerPlayer.class).newInstance(p);
+                            int mask=op.get("value").getAsInt();var direction=(net.minecraft.world.phys.Vec2)p.sprintController.getClass().getMethod("step",int.class).invoke(p.sprintController,mask);
+                            p.clock();var before=p.position();p.playerMovementTick(new Vec3(direction.x,0,direction.y),(mask&16)!=0);p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);
+                        }
                         case "health"->p.setHealth(single(op.get("value")));
                         case "absorption"->p.setAbsorptionAmount(single(op.get("value")));
                         case "hurt"->p.hurtServer(level,damageSources.get(op.get("name").getAsString()),single(op.get("value")));

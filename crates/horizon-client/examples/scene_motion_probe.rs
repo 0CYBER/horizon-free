@@ -202,6 +202,18 @@ fn main() -> Result<()> {
                 resources: &resources,
             };
             match op["mode"].as_str().unwrap() {
+                "controlled_tick" => {
+                    let mask = op["value"].as_u64().unwrap();
+                    world.controlled_simulation_tick(horizon_client::sprint::Keys {
+                        forward: mask & 1 != 0,
+                        backward: mask & 2 != 0,
+                        left: mask & 4 != 0,
+                        right: mask & 8 != 0,
+                        jump: mask & 16 != 0,
+                        shift: mask & 32 != 0,
+                        sprint: mask & 64 != 0,
+                    })?;
+                }
                 "movement_statistics" => world.check_movement_statistics(vector(&op["value"]))?,
                 "statistics_context" => movement_statistics::check(
                     &mut StatisticsContext {
@@ -463,6 +475,14 @@ fn main() -> Result<()> {
                 scene.health_rules.natural_regeneration
             )?;
             player.events.clear();
+            writeln!(
+                out,
+                "input {} {} {} {}",
+                player.sprinting,
+                player.sprint_input.trigger_time,
+                player.sprint_input.previous_forward,
+                player.sprint_input.previous_shift
+            )?;
         }
         writeln!(out, "end")?;
     }

@@ -9,8 +9,8 @@ use camera::Camera;
 use horizon_client::{assets, collisions, models, sprites, world};
 use horizon_client::{
     clock::FixedStep,
-    input,
     motion::{MotionResources, MotionWorld, PlayerMotion},
+    sprint::Keys,
 };
 use horizon_core::geometry::Vec3;
 use mesh::Mesh;
@@ -65,7 +65,7 @@ impl Options {
             }
             if argument == "--help" || argument == "-h" {
                 println!(
-                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions; F5 toggles walking test.\nWalking test: WASD move; Space jumps; gravity and collisions at 20 ticks/s.\n\nThis is a controlled development scene. Walking includes landing damage, stored health, hunger and regeneration. Sprint/crouch, full death/respawn, interaction, saving and complete gameplay remain unfinished."
+                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions; F5 toggles walking test.\nWalking test: WASD move; Space jumps; Left Ctrl or double-tap W starts sprinting; gravity and collisions at 20 ticks/s.\n\nThis is a controlled development scene. Walking includes landing damage, stored health, hunger and regeneration. Crouching, full death/respawn, interaction, saving and complete gameplay remain unfinished."
                 );
                 return Ok(None);
             }
@@ -111,6 +111,9 @@ struct App<'a> {
     motion_clock: FixedStep,
     previous_player_position: Vec3,
     movement_ticks: u64,
+    sprint_ticks: u64,
+    sprint_distance_cm: u64,
+    walk_distance_cm: u64,
     fall_damage_requests: u64,
     last_requested_fall_damage: Option<f32>,
     visibility: horizon_world::block_render::FaceVisibility,
@@ -160,16 +163,15 @@ impl App<'_> {
     }
     fn move_player(&mut self, elapsed: Duration) -> Result<()> {
         let player = self.player.as_mut().ok_or("missing movement actor")?;
-        let direction = input::modify_input(
-            input::keyboard_direction(
-                self.keys.contains(&KeyCode::KeyW),
-                self.keys.contains(&KeyCode::KeyS),
-                self.keys.contains(&KeyCode::KeyA),
-                self.keys.contains(&KeyCode::KeyD),
-            ),
-            None,
-            None,
-        );
+        let keys = Keys {
+            forward: self.keys.contains(&KeyCode::KeyW),
+            backward: self.keys.contains(&KeyCode::KeyS),
+            left: self.keys.contains(&KeyCode::KeyA),
+            right: self.keys.contains(&KeyCode::KeyD),
+            jump: self.keys.contains(&KeyCode::Space),
+            shift: self.keys.contains(&KeyCode::ShiftLeft),
+            sprint: self.keys.contains(&KeyCode::ControlLeft),
+        };
         for _ in 0..self.motion_clock.advance(elapsed) {
             self.previous_player_position = player.position;
             player.yaw = (-self.camera.yaw.to_degrees()) as f32;
@@ -180,19 +182,29 @@ impl App<'_> {
                 collision_binding: self.collision_binding,
                 resources: self.motion_resources,
             }
-            .simulation_tick(direction, self.keys.contains(&KeyCode::Space))?;
+            .controlled_simulation_tick(keys)?;
             // Health is already updated synchronously during landing. These
             // counters expose incoming requests; delivery consumers remain pending.
             for event in player.events.drain(..) {
-                if let horizon_client::motion::MotionEvent::Fall(
-                    horizon_client::landing::FallEvent::Damage { amount, .. },
-                ) = event
-                {
-                    self.fall_damage_requests += 1;
-                    self.last_requested_fall_damage = Some(amount);
+                match event {
+                    horizon_client::motion::MotionEvent::Fall(
+                        horizon_client::landing::FallEvent::Damage { amount, .. },
+                    ) => {
+                        self.fall_damage_requests += 1;
+                        self.last_requested_fall_damage = Some(amount);
+                    }
+                    horizon_client::motion::MotionEvent::Health(
+                        horizon_client::health::HealthEvent::Statistic { name, amount },
+                    ) => match name {
+                        "sprint_one_cm" => self.sprint_distance_cm += amount as u64,
+                        "walk_one_cm" => self.walk_distance_cm += amount as u64,
+                        _ => {}
+                    },
+                    _ => {}
                 }
             }
             self.movement_ticks += 1;
+            self.sprint_ticks += u64::from(player.sprinting);
         }
         let from = self.previous_player_position;
         let to = player.position;
@@ -300,6 +312,12 @@ impl App<'_> {
             serde_json::json!(self.player.as_ref().map(|p| p.health.food.exhaustion));
         report["player_food_timer"] =
             serde_json::json!(self.player.as_ref().map(|p| p.health.food.timer));
+        report["player_sprinting"] = serde_json::json!(self.player.as_ref().map(|p| p.sprinting));
+        report["player_sprint_trigger"] =
+            serde_json::json!(self.player.as_ref().map(|p| p.sprint_input.trigger_time));
+        report["sprint_ticks"] = serde_json::json!(self.sprint_ticks);
+        report["sprint_distance_cm"] = serde_json::json!(self.sprint_distance_cm);
+        report["walk_distance_cm"] = serde_json::json!(self.walk_distance_cm);
         fs::write(path, serde_json::to_vec_pretty(&report)?)?;
         Ok(())
     }
@@ -480,9 +498,10 @@ impl ApplicationHandler for App<'_> {
                                 / self.title_at.elapsed().as_secs_f64();
                             let health = self.player.as_ref().map_or_else(String::new, |p| {
                                 format!(
-                                    " | Health {} | Food {}{}",
+                                    " | Health {} | Food {} | Sprint {}{}",
                                     p.health.health(),
                                     p.health.food.food,
+                                    p.sprinting,
                                     if p.health.dead_or_dying() {
                                         " (dead)"
                                     } else {
@@ -562,6 +581,9 @@ fn run() -> Result<()> {
         motion_clock: FixedStep::default(),
         previous_player_position: Vec3::ZERO,
         movement_ticks: 0,
+        sprint_ticks: 0,
+        sprint_distance_cm: 0,
+        walk_distance_cm: 0,
         fall_damage_requests: 0,
         last_requested_fall_damage: None,
         visibility,

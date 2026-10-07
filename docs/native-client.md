@@ -70,17 +70,20 @@ not a render-distance or world-streaming implementation.
 | WASD | Move horizontally |
 | Space / either Shift | Rise / descend in inspection mode; Space jumps in walking mode |
 | Either Ctrl | Boost inspection speed |
+| Left Ctrl while moving forward, or double-tap W | Start sprinting in walking mode when eligible |
 | Arrow keys | Rotate camera |
 | Left click | Capture mouse for camera rotation |
 | Escape | Release mouse |
-| F3 | Toggle FPS/chunk/mesh/health/food diagnostics in the window title |
+| F3 | Toggle FPS/chunk/mesh/health/food/sprint diagnostics in the window title |
 | F4 | Toggle inspection camera collisions; enabling requires an unobstructed position |
 | F5 | Toggle walking test at the current camera position; enabling requires an unobstructed position |
 | Ctrl+Q or window close | Exit |
 
 Controls bind physical keyboard positions. Losing focus clears held keys and
 releases the mouse. Walking pauses while unfocused and resets partial tick time
-on focus changes. Walking currently has no sprint, crouch, flight, item use or
+on focus changes. Sprinting continues after releasing Left Ctrl while forward
+input remains held; hunger and collisions can stop it. Walking currently has no
+crouch, flight, item use or
 block interaction. F5 returns to inspection mode; the finite scene has no
 streaming or boundary wall. `--trace-input` logs keyboard, mouse-button and focus events
 for diagnosis. On headless Linux use `vscreen run ./target/debug/horizon-client`,
@@ -496,7 +499,7 @@ invulnerable abilities, float-versus-double centimeter rounding, integer overflo
 zero and nonfinite deltas. Those query overrides are restricted to statistics
 fixtures; the resident physics remain dry and standing. Combined scenes exercise
 repeated movement, sprint-state changes, jumps, hunger consumption and healing.
-Native local sprint-key eligibility and double-tap controls remain to be connected.
+That checkpoint preceded the local sprint controls described below.
 
 The [Linux window check](../benchmarks/rust-native-movement-statistics-2026-10-07/interactive-smoke.json)
 enabled walking, showed diagnostics and held W for 650 ms. The player moved from
@@ -505,3 +508,48 @@ and alive, and exited without an error after 82 movement ticks. Health recovered
 to 14 after the initial fall. The ground view was visually inspected; this is a
 client smoke check, while statistic amounts and exhaustion are checked by the
 native comparisons above.
+
+The [sprint input comparison](../benchmarks/rust-native-sprint-2026-10-07/sprint-input.json)
+checks 502,112 evolving steps in 146,648 scenarios. It executes the actual
+`LocalPlayer.aiStep` prefix, including `KeyboardInput.tick` and the private
+sprint eligibility and stop methods. A sentinel ends execution at the riding
+boundary before parent movement. The fixtures supply environmental, effect,
+vehicle and UI queries; actual food/ability storage and item `USE_EFFECTS`
+components supply the remaining conditions. The comparison covers all combinations
+of 17 condition flags, keyboard states and previous input, food thresholds,
+timer boundaries, sprint windows from 0 to 10, and double-tap sequences. It
+checks each ordered sprint setter request, including repeated requests.
+
+The [combined sprint scene](../benchmarks/rust-native-sprint-2026-10-07/sprint-scene.json)
+then checks 13,387 operations in 419 scenarios. Its Java input actor shares the
+native scene actor's food and collision state, and its sprint setters update
+that actor's real attributes. Actual input preparation, movement, distance
+exhaustion, hunger and healing follow. Snapshots compare the sprint timer and
+previous input alongside position, velocity, modifiers and health/food fields.
+Cases include collisions, releasing the sprint key while moving, double taps,
+jumps, and hunger crossing the sprint threshold. The
+[common scene check](../benchmarks/rust-native-sprint-2026-10-07/scene-motion.json)
+also passes against both pinned references.
+
+The walking client now samples sprint input on each simulation tick and uses
+the default seven-tick double-tap window. The live food and collision fields
+control eligibility; sprint changes update the existing movement-speed
+attribute. The F3 title shows sprint state, and exit reports include sprint
+ticks and movement-distance counters. These counters are diagnostics, not saved
+statistics. Crouching, fluid movement, vehicles, effects, item use, input
+remapping and the complete client/server tick remain unfinished. The input
+comparison tests those eligibility queries in isolation; the current resident
+binding is dry, standing and uses empty equipment.
+
+```sh
+python3 tools/test_sprint_input_parity.py
+python3 tools/test_native_scene_motion.py --sprint-input
+```
+
+Linux window checks exercised both [Left Ctrl](../benchmarks/rust-native-sprint-2026-10-07/sprint-key-smoke.json)
+and [double-tap W](../benchmarks/rust-native-sprint-2026-10-07/double-tap-smoke.json).
+The Ctrl run recorded 71 sprint ticks and 1,948 sprint centimeters. The double-tap
+run visibly showed `Sprint true` during the second press and `Sprint false`
+after releasing W. Both runs ended grounded and alive without an error, and
+their views were visually inspected. These are development client checks;
+macOS/Windows runtime acceptance and complete gameplay remain pending.

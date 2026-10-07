@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Compare composed stored player movement over the native client's resident scene."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -222,9 +223,41 @@ def corpus():
     # Long histories exercise the native bounded movement-record retention.
     yield dict(position=vec((25,4,25)),ops=[op('speed',single(.1))]+[op('travel',vec((0,0,0))) for _ in range(400)])
 
+def sprint_corpus():
+    for level in [0,6,7,8,20]:
+        for health in [10,20]:
+            for start in [(12,4,0),(25,18,25)]:
+                ops=[op('food',food=level,saturation=single(0),exhaustion=single(0),timer=0),op('health',single(health))]
+                for i in range(400):
+                    if i%20==0:ops.append(op('yaw',single(0 if i//20%2==0 else 180)))
+                    keys=65 if i<20 or i>=160 else 0 if i in [80,81,83,120,121,122] else 1
+                    if 200<=i<250:keys|=16
+                    ops.append(op('controlled_tick',keys))
+                yield dict(position=vec(start),ops=ops)
+    for keys in range(128):
+        for level in [6,7,20]:
+            ops=[op('food',food=level,saturation=single(0),exhaustion=single(3.99),timer=0)]
+            ops += [op('controlled_tick',k) for k in [keys,keys,0,1,0,1,65,1,0]]
+            yield dict(position=vec((12,4,0)),ops=ops)
+    for wall in ['stone','slime_block','honey_block']:
+        ops=[op('block',name='minecraft:'+wall,position=[12,4,3])]
+        for i in range(140):
+            if i==70:ops.append(op('yaw',single(180)))
+            ops.append(op('controlled_tick',65))
+        ops.append(op('block',name='minecraft:air',position=[12,4,3]))
+        yield dict(position=vec((12.5,4,0)),ops=ops)
+    for gap in range(12):
+        seq=[0,1,0]+[0]*gap+[1]*12+[0]*3+[65]*20+[1]*12+[0]
+        yield dict(position=vec((12,4,0)),ops=[op('controlled_tick',k) for k in seq])
+
 def main():
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--sprint-input',action='store_true');args=parser.parse_args()
     lock,jars,libraries=base.verify_artifacts()
-    build=lab.LOCAL/'rust-native-scene-motion';build.mkdir(exist_ok=True)
+    if args.sprint_input:
+        try:from . import test_model_baking_parity as baking
+        except ImportError:import test_model_baking_parity as baking
+        libraries=baking.client_libraries();jars={'client':jars['client']}
+    build=lab.LOCAL/('rust-native-sprint-scene' if args.sprint_input else 'rust-native-scene-motion');build.mkdir(exist_ok=True)
     report=build/'report.json';report.unlink(missing_ok=True)
     resources=lab.LOCAL/'horizon-client'/lock['minecraft']['version']
     resource_hash=client.resource_fingerprint(resources)
@@ -232,20 +265,22 @@ def main():
     helpers=[oracle.with_name(name+'.java') for name in ['VanillaSceneCollisionOracle','VanillaRegistryCollisionScanOracle',
         'VanillaHeightmapOracle','VanillaCollisionOracle','VanillaBlockStateCodecOracle','VanillaSuffocationOracle',
         'VanillaFaceSupportOracle','VanillaEntityAttributeOracle','VanillaBlockLandingOracle','VanillaMovementRegistryOracle','VanillaDamageSourceOracle']]
+    if args.sprint_input:helpers.append(oracle.with_name('VanillaSprintInputOracle.java'))
     sources=[Path(__file__),lab.ROOT/'tools/test_native_client.py',lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',
              lab.ROOT/'tools/prepare_native_client.py',oracle,*helpers,lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',
              lab.ROOT/'crates/horizon-client/examples/scene_motion_probe.rs']
     for crate in ['horizon-core','horizon-world','horizon-assets','horizon-client']:
         sources += [lab.ROOT/'crates'/crate/'Cargo.toml',*sorted((lab.ROOT/'crates'/crate/'src').rglob('*.rs'))]
+    if args.sprint_input:sources.append(lab.ROOT/'tools/test_model_baking_parity.py')
     tested=base.source_hashes(sources)
     def run(command,name):
         with (build/(name+'.log')).open('w') as log:
             subprocess.run(list(map(str,command)),cwd=lab.ROOT,check=True,timeout=3600,stdout=log,stderr=subprocess.STDOUT)
     classes=build/'classes';classes.mkdir(exist_ok=True)
     dependencies=os.pathsep.join(map(str,libraries))
-    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',str(jars['server'])+os.pathsep+dependencies,
+    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',str(jars.get('server',jars['client']))+os.pathsep+dependencies,
          '-d',classes,oracle,*helpers],'compile-java')
-    fixtures=list(corpus());operations=sum(len(f['ops']) for f in fixtures);expected_lines=5*operations+len(fixtures)
+    fixtures=list(sprint_corpus() if args.sprint_input else corpus());operations=sum(len(f['ops']) for f in fixtures);expected_lines=6*operations+len(fixtures)
     (build/'inputs.txt').write_text(''.join(json.dumps(f,separators=(',',':'))+'\n' for f in fixtures))
     input_hash=lab.digest(build/'inputs.txt','sha256')
     damage_dir=build/'damage';damage_dir.mkdir(exist_ok=True)
@@ -271,7 +306,7 @@ def main():
         'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'fixtures':len(fixtures),
         'operations':operations,'sources_sha256':tested,'resources':resource_hash,'input_sha256':input_hash,
         'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,
-        'scope':'Stored PlayerMotion binds resident client chunks and registered attributes/coefficients to air travel, jumping, Entity.move, step resolution, ground/support updates, restitution and speed factors. Repeated native Player.travel/jump/move and actual Player.aiStep / direct LivingEntity.aiStep compare position, velocity, bounds, collision/ground flags, support, climb state, fall-reset field, both sync flags, speed, head yaw, jump trigger and jump delay by exact bits. Prepared-local-input Player.aiStep paths verify the stored speed refresh after movement, with empty inventory and no nearby entities. Travel uses the actual Player.getSpeed movement-attribute query, independently of that stored base-living speed field; both getter and setter execute native bodies. Dry aiStep includes small-velocity cleanup, input damping, held/released jump timing and server frost-modifier removal. Snapshots also compare all allocated attribute instances, base/cache/dirty state, modifier values/operations/permanence and pending update/sync membership (not JVM identity-dependent iteration order). Dry resident scene, fixed standing dimensions, zero frozen ticks, empty equipment, no interpolation, fluids, vehicles, effects, crouching or other entities. Actual LivingEntity.checkFallDamage, registered Block.fallOn/bounceOn and Player/LivingEntity.causeFallDamage are composed, including float-narrowed fall-distance accumulation, reset, last-climb clearing, safe-fall and damage-multiplier attributes, impulse exemptions and ordered landing particle/sound/statistic/hit-ground/damage requests. Farmland pushes the stored player and replaces actual chunk state; repeated turtle-egg changes preserve hatch. Block state at the landing fixture is compared after every operation. World RNG is a seeded native legacy stream. Actual ServerPlayer/Player/LivingEntity hurt dispatch now updates native synchronized health and player absorption, modified armor/toughness reduction, exhaustion, damage cooldown/last-source state and velocity synchronization. Native health storage and dirty flags are compared after every operation. Damage sources use actual decoded/tagged pinned damage registries. ServerPlayer jump statistics and exhaustion are included; dead-or-dying state disables movement input and jumping. Empty equipment/hands/effects, configurable difficulty and natural regeneration, damage gamerules enabled, loaded client and no spawn-extra fall particles define this scene domain. Ordered health/statistic/combat-record/broadcast/sound/criterion/death requests are compared; criterion argument payloads retain the separate combat gate. Actual health changes are applied, but audiovisual playback, persistent statistics, combat tracker internals, full death/drop/respawn services, block neighbor/drop/block-entity callbacks, movement emission, block-inside and networking remain controlled consumers. Actual FoodData.tick and ServerPlayer.tickRegeneration now share the same stored health, attributes, exhaustion and registered starvation damage. Snapshots compare food level, saturation, exhaustion, timer and tick count. Cases cover all four difficulties, regeneration rule changes, absorption during starvation, Peaceful recovery, timer overflow and nonfinite food values. Simulation operations compose clock setup, actual player movement and actual food ticking in their native order, including fall damage followed by regeneration in the same tick. Explicit clock operations establish cooldown/hurt-time/game-time/tick-count state; full enclosing native tick/doTick methods are not invoked by those setup operations. Input preparation has its own client comparison. ServerPlayer.checkMovementStatistics executes on accepted resident deltas after movement and before food ticking. Additional direct method fixtures cover all 512 overlapping passenger/swim/eye-water/water/climb/ground/sprint/crouch/glide flag combinations, invulnerable abilities, centimeter rounding, overflow, signed zero and nonfinite deltas. Those query contexts apply only to the statistics method; fluid/vehicle/crouch/glide physics remain unbound. ServerGamePacketListener packet acceptance/rejection and scheduling are not executed. No full Player.tick, consumable item-use lifecycle, local input lifecycle, nonempty inventory/equipment ticks, full freezing, complete death lifecycle or full gameplay parity claim.'})
+        'scope':('Client sprint scene executes the real LocalPlayer.aiStep prefix through sprint decisions, stopping at the riding/parent movement boundary, followed by real LocalPlayer.modifyInput and the native server actor simulation. Sprint setters dispatch to that server actor, sharing its actual FoodData and collision conditions. Compares local sprint timer/input history and actual attribute changes, movement, distance exhaustion and hunger. No effects, equipment, vehicles, fluids or pose transitions; raw shift input is recorded but crouching is unbound. Full client/server tick and networking remain unfinished. ' if args.sprint_input else '')+'Stored PlayerMotion binds resident client chunks and registered attributes/coefficients to air travel, jumping, Entity.move, step resolution, ground/support updates, restitution and speed factors. Repeated native Player.travel/jump/move and actual Player.aiStep / direct LivingEntity.aiStep compare position, velocity, bounds, collision/ground flags, support, climb state, fall-reset field, both sync flags, speed, head yaw, jump trigger and jump delay by exact bits. Prepared-local-input Player.aiStep paths verify the stored speed refresh after movement, with empty inventory and no nearby entities. Travel uses the actual Player.getSpeed movement-attribute query, independently of that stored base-living speed field; both getter and setter execute native bodies. Dry aiStep includes small-velocity cleanup, input damping, held/released jump timing and server frost-modifier removal. Snapshots also compare all allocated attribute instances, base/cache/dirty state, modifier values/operations/permanence and pending update/sync membership (not JVM identity-dependent iteration order). Dry resident scene, fixed standing dimensions, zero frozen ticks, empty equipment, no interpolation, fluids, vehicles, effects, crouching or other entities. Actual LivingEntity.checkFallDamage, registered Block.fallOn/bounceOn and Player/LivingEntity.causeFallDamage are composed, including float-narrowed fall-distance accumulation, reset, last-climb clearing, safe-fall and damage-multiplier attributes, impulse exemptions and ordered landing particle/sound/statistic/hit-ground/damage requests. Farmland pushes the stored player and replaces actual chunk state; repeated turtle-egg changes preserve hatch. Block state at the landing fixture is compared after every operation. World RNG is a seeded native legacy stream. Actual ServerPlayer/Player/LivingEntity hurt dispatch now updates native synchronized health and player absorption, modified armor/toughness reduction, exhaustion, damage cooldown/last-source state and velocity synchronization. Native health storage and dirty flags are compared after every operation. Damage sources use actual decoded/tagged pinned damage registries. ServerPlayer jump statistics and exhaustion are included; dead-or-dying state disables movement input and jumping. Empty equipment/hands/effects, configurable difficulty and natural regeneration, damage gamerules enabled, loaded client and no spawn-extra fall particles define this scene domain. Ordered health/statistic/combat-record/broadcast/sound/criterion/death requests are compared; criterion argument payloads retain the separate combat gate. Actual health changes are applied, but audiovisual playback, persistent statistics, combat tracker internals, full death/drop/respawn services, block neighbor/drop/block-entity callbacks, movement emission, block-inside and networking remain controlled consumers. Actual FoodData.tick and ServerPlayer.tickRegeneration now share the same stored health, attributes, exhaustion and registered starvation damage. Snapshots compare food level, saturation, exhaustion, timer and tick count. Cases cover all four difficulties, regeneration rule changes, absorption during starvation, Peaceful recovery, timer overflow and nonfinite food values. Simulation operations compose clock setup, actual player movement and actual food ticking in their native order, including fall damage followed by regeneration in the same tick. Explicit clock operations establish cooldown/hurt-time/game-time/tick-count state; full enclosing native tick/doTick methods are not invoked by those setup operations. Input preparation has its own client comparison. ServerPlayer.checkMovementStatistics executes on accepted resident deltas after movement and before food ticking. Additional direct method fixtures cover all 512 overlapping passenger/swim/eye-water/water/climb/ground/sprint/crouch/glide flag combinations, invulnerable abilities, centimeter rounding, overflow, signed zero and nonfinite deltas. Those query contexts apply only to the statistics method; fluid/vehicle/crouch/glide physics remain unbound. ServerGamePacketListener packet acceptance/rejection and scheduling are not executed. No full Player.tick, consumable item-use lifecycle, local input lifecycle, nonempty inventory/equipment ticks, full freezing, complete death lifecycle or full gameplay parity claim.'})
     print(f'Scoped scene motion parity passed: {report}',flush=True)
 
 if __name__=='__main__':main()
