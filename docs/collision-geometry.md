@@ -820,3 +820,19 @@ all **35,723 states**, tag reloads, server/client distinctions, player type chec
 portal delays, changing above-fluid states, shared cache reuse and failures.
 Targeted Clippy passes. World storage is controlled; live entity movement and
 complete player/world gameplay integration remain pending.
+
+
+`living_landing` wraps base fall handling with fluid refresh, server-only changed
+block notification and landing particles, followed by climbing-position cleanup.
+Particle positions preserve the native support-block edge projection and capture
+entity coordinates before later callbacks. Attribute, fluid, particle and block
+callbacks can mutate fields; failures retain preceding writes.
+
+`python3 tools/test_living_landing_parity.py` invokes actual
+`LivingEntity.checkFallDamage` and its base implementation. The
+[living landing report](../benchmarks/rust-living-landing-2026-10-07/scoped-parity.json)
+records **244,844 matching lines per JAR**, including server/nonserver levels,
+water changes, numeric boundaries, particle locations/counts, callback failures,
+field mutations and climbing cleanup. Targeted Clippy passes. Fluid immersion,
+changed-block enchantments, particle rendering and live gameplay binding remain
+pending; those providers are controlled by this gate.

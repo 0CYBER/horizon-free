@@ -29,6 +29,7 @@ pub mod heightmap;
 pub mod interaction_shapes;
 pub mod liquid_collision;
 pub mod living_fall;
+pub mod living_landing;
 pub mod movement_emission;
 pub mod movement_properties;
 pub mod movement_restitution;
