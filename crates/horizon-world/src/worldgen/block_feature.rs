@@ -29,8 +29,18 @@ pub struct FeatureBlockBindings<'r> {
     pub(crate) blocks: BTreeMap<String, Arc<BTreeSet<BlockStateId>>>,
     pub(crate) tags: BTreeMap<String, Arc<BTreeSet<BlockStateId>>>,
     pub(crate) air: [BlockStateId; 3],
+    tree_blocks: std::sync::OnceLock<Arc<super::tree_blocks::TreeBlocks>>,
 }
 impl<'r> FeatureBlockBindings<'r> {
+    /// Shared tree/vegetation classifications, built on first use. Requires
+    /// state-provider and block-property bindings.
+    pub(crate) fn tree_blocks(&self) -> Result<Arc<super::tree_blocks::TreeBlocks>, DecodeError> {
+        if let Some(blocks) = self.tree_blocks.get() {
+            return Ok(blocks.clone());
+        }
+        let blocks = Arc::new(super::tree_blocks::TreeBlocks::build(self)?);
+        Ok(self.tree_blocks.get_or_init(|| blocks).clone())
+    }
     pub fn registry(&self) -> &'r BlockRegistry {
         self.registry
     }
@@ -143,6 +153,7 @@ impl<'r> FeatureBlockBindings<'r> {
                 .map(|(name, states)| (name, Arc::new(states)))
                 .collect(),
             tags: bound_tags,
+            tree_blocks: std::sync::OnceLock::new(),
             air: [
                 get("minecraft:air")?,
                 get("minecraft:cave_air")?,

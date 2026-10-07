@@ -29,6 +29,9 @@ pub trait RandomSource: Sized {
     fn next_boolean(&mut self) -> bool;
     fn next_float(&mut self) -> f32;
     fn next_double(&mut self) -> f64;
+    /// MarsagliaPolarGaussian over this source; the cached second value is
+    /// part of the source state (reset by `set_seed` where vanilla resets it).
+    fn next_gaussian(&mut self) -> f64;
     fn fork_positional(&mut self) -> Self::Positional;
     fn fork(&mut self) -> Self
     where
@@ -61,6 +64,7 @@ pub trait RandomSource: Sized {
 #[derive(Clone, Debug)]
 pub struct LegacyRandom {
     state: u64,
+    gaussian: Option<f64>,
 }
 
 impl LegacyRandom {
@@ -70,6 +74,7 @@ impl LegacyRandom {
     pub fn new(seed: i64) -> Self {
         Self {
             state: (seed as u64 ^ Self::MULTIPLIER) & Self::MASK,
+            gaussian: None,
         }
     }
 
@@ -125,6 +130,12 @@ impl RandomSource for LegacyRandom {
         let value = (i64::from(self.bits(26)) << 27) + i64::from(self.bits(27));
         value as f64 * (1.0 / 9_007_199_254_740_992.0)
     }
+    fn next_gaussian(&mut self) -> f64 {
+        let mut cache = self.gaussian.take();
+        let value = marsaglia_polar(&mut cache, || self.next_double());
+        self.gaussian = cache;
+        value
+    }
 
     fn fork(&mut self) -> Self {
         Self::new(self.next_long())
@@ -135,6 +146,7 @@ impl RandomSource for LegacyRandom {
 pub struct XoroshiroRandom {
     lo: u64,
     hi: u64,
+    gaussian: Option<f64>,
 }
 
 impl XoroshiroRandom {
@@ -154,9 +166,14 @@ impl XoroshiroRandom {
             Self {
                 lo: Self::GOLDEN_RATIO,
                 hi: Self::SILVER_RATIO,
+                gaussian: None,
             }
         } else {
-            Self { lo, hi }
+            Self {
+                lo,
+                hi,
+                gaussian: None,
+            }
         }
     }
 }
@@ -207,10 +224,34 @@ impl RandomSource for XoroshiroRandom {
     fn next_double(&mut self) -> f64 {
         ((self.next_long() as u64) >> 11) as f64 * (1.0 / 9_007_199_254_740_992.0)
     }
+    fn next_gaussian(&mut self) -> f64 {
+        let mut cache = self.gaussian.take();
+        let value = marsaglia_polar(&mut cache, || self.next_double());
+        self.gaussian = cache;
+        value
+    }
     fn fork(&mut self) -> Self {
         let lo = self.next_long() as u64;
         let hi = self.next_long() as u64;
         Self::from_state(lo, hi)
+    }
+}
+
+/// MarsagliaPolarGaussian.nextGaussian with an external second-value cache.
+pub fn marsaglia_polar(cache: &mut Option<f64>, mut next_double: impl FnMut() -> f64) -> f64 {
+    if let Some(value) = cache.take() {
+        return value;
+    }
+    loop {
+        let x = 2.0 * next_double() - 1.0;
+        let y = 2.0 * next_double() - 1.0;
+        let radius = x * x + y * y;
+        if radius >= 1.0 || radius == 0.0 {
+            continue;
+        }
+        let multiplier = (-2.0 * radius.ln() / radius).sqrt();
+        *cache = Some(y * multiplier);
+        return x * multiplier;
     }
 }
 

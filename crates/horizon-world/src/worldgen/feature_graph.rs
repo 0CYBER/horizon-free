@@ -66,6 +66,25 @@ pub enum FeatureDefinition {
     FillLayer(FillLayerFeature),
     ReplaceBlock(ReplaceBlockFeature),
     ScatteredOre(ScatteredOreFeature),
+    Ore(super::ore_feature::OreFeature),
+    Tree(Box<super::tree::TreeFeature>),
+    VegetationPatch(Box<super::vegetation::VegetationPatchFeature>),
+    Coral(Box<super::vegetation::CoralFeature>),
+    HugeMushroom(Box<super::vegetation::HugeMushroomFeature>),
+    MultifaceGrowth(Box<super::vegetation::MultifaceGrowthFeature>),
+    Lake(Box<super::cave::LakeFeature>),
+    MonsterRoom(Box<super::cave::MonsterRoomFeature>),
+    Geode(Box<super::cave::GeodeFeature>),
+    Iceberg(Box<super::iceberg::IcebergFeature>),
+    RootSystem(Box<super::root_system::RootSystemFeature>),
+    SpeleothemCluster(Box<super::dripstone::SpeleothemClusterFeature>),
+    LargeDripstone(Box<super::dripstone::LargeDripstoneFeature>),
+    HugeFungus(Box<super::fungus::HugeFungusFeature>),
+    SculkPatch(Box<super::sculk::SculkPatchFeature>),
+    EndSpike(Box<super::end_spike::EndSpikeFeature>),
+    ProjectedPatchySquare(Box<super::projected::ProjectedPatchySquareFeature>),
+    SteppedColumnCluster(Box<super::projected::SteppedColumnClusterFeature>),
+    FallenTree(Box<super::tree::FallenTreeFeature>),
     NoOp,
     WeightedChoice(OptionalWeightedList<PlacedFeatureDefinition>),
     Sequence(Vec<PlacedFeatureDefinition>),
@@ -102,6 +121,8 @@ pub enum FeatureExecutionError<E> {
     Query(PlacementQueryError),
     WorkLimit,
     InvalidPendingIndex,
+    /// A block-state transition required by a feature is absent from the registry.
+    InvalidState,
 }
 impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -129,6 +150,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::Query(e) => e.fmt(f),
             Self::WorkLimit => f.write_str("feature graph work limit exceeded"),
             Self::InvalidPendingIndex => f.write_str("invalid pending modifier index"),
+            Self::InvalidState => f.write_str("feature block state outside registry"),
         }
     }
 }
@@ -525,6 +547,15 @@ impl FeatureDefinition {
                 remaining,
             )
             .map(Self::ReplaceBlock),
+            "minecraft:ore" => super::ore_feature::OreFeature::decode(
+                json,
+                blocks.ok_or_else(|| {
+                    DecodeError::Registry("feature block bindings unavailable".into())
+                })?,
+                depth,
+                remaining,
+            )
+            .map(Self::Ore),
             "minecraft:scattered_ore" => ScatteredOreFeature::decode(
                 json,
                 blocks.ok_or_else(|| {
@@ -534,6 +565,134 @@ impl FeatureDefinition {
                 remaining,
             )
             .map(Self::ScatteredOre),
+            "minecraft:vegetation_patch" | "minecraft:waterlogged_vegetation_patch" => {
+                let bindings = blocks.ok_or(DecodeError::Field("vegetation patch bindings"))?;
+                let nested = |json: &str, depth: usize, remaining: &mut usize| {
+                    PlacedFeatureDefinition::decode(json, depth, remaining, empty_tags, blocks)
+                };
+                super::vegetation::VegetationPatchFeature::decode(
+                    json, bindings, depth, remaining, &nested,
+                )
+                .map(|f| Self::VegetationPatch(Box::new(f)))
+            }
+            "minecraft:root_system" => {
+                let bindings = blocks.ok_or(DecodeError::Field("root system bindings"))?;
+                let nested = |json: &str, depth: usize, remaining: &mut usize| {
+                    PlacedFeatureDefinition::decode(json, depth, remaining, empty_tags, blocks)
+                };
+                super::root_system::RootSystemFeature::decode(
+                    json, bindings, depth, remaining, &nested,
+                )
+                .map(|f| Self::RootSystem(Box::new(f)))
+            }
+            "minecraft:coral_tree" | "minecraft:coral_claw" => {
+                let nested = |json: &str, depth: usize, remaining: &mut usize| {
+                    PlacedFeatureDefinition::decode(json, depth, remaining, empty_tags, blocks)
+                };
+                super::vegetation::CoralFeature::decode(json, depth, remaining, &nested)
+                    .map(|f| Self::Coral(Box::new(f)))
+            }
+            "minecraft:huge_red_mushroom" | "minecraft:huge_brown_mushroom" => {
+                super::vegetation::HugeMushroomFeature::decode(
+                    json,
+                    blocks.ok_or(DecodeError::Field("huge mushroom bindings"))?,
+                    depth,
+                    remaining,
+                )
+                .map(|f| Self::HugeMushroom(Box::new(f)))
+            }
+            "minecraft:lake" => super::cave::LakeFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("lake bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(|f| Self::Lake(Box::new(f))),
+            "minecraft:monster_room" => super::cave::MonsterRoomFeature::new(
+                blocks.ok_or(DecodeError::Field("monster room bindings"))?,
+            )
+            .map(|f| Self::MonsterRoom(Box::new(f))),
+            "minecraft:geode" => super::cave::GeodeFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("geode bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(|f| Self::Geode(Box::new(f))),
+            "minecraft:speleothem_cluster" => super::dripstone::SpeleothemClusterFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("speleothem cluster bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(|f| Self::SpeleothemCluster(Box::new(f))),
+            "minecraft:large_dripstone" => super::dripstone::LargeDripstoneFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("large dripstone bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(|f| Self::LargeDripstone(Box::new(f))),
+            "minecraft:projected_random_patchy_square" => {
+                super::projected::ProjectedPatchySquareFeature::decode(
+                    json,
+                    blocks.ok_or(DecodeError::Field("patchy square bindings"))?,
+                    depth,
+                    remaining,
+                )
+                .map(|f| Self::ProjectedPatchySquare(Box::new(f)))
+            }
+            "minecraft:stepped_column_cluster" => {
+                super::projected::SteppedColumnClusterFeature::decode(
+                    json,
+                    blocks.ok_or(DecodeError::Field("column cluster bindings"))?,
+                    depth,
+                    remaining,
+                )
+                .map(|f| Self::SteppedColumnCluster(Box::new(f)))
+            }
+            "minecraft:end_spike" => super::end_spike::EndSpikeFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("end spike bindings"))?,
+            )
+            .map(|f| Self::EndSpike(Box::new(f))),
+            "minecraft:sculk_patch" => super::sculk::SculkPatchFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("sculk patch bindings"))?,
+            )
+            .map(|f| Self::SculkPatch(Box::new(f))),
+            "minecraft:huge_fungus" => super::fungus::HugeFungusFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("huge fungus bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(|f| Self::HugeFungus(Box::new(f))),
+            "minecraft:iceberg" => super::iceberg::IcebergFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("iceberg bindings"))?,
+            )
+            .map(|f| Self::Iceberg(Box::new(f))),
+            "minecraft:multiface_growth" => super::vegetation::MultifaceGrowthFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("multiface bindings"))?,
+            )
+            .map(|f| Self::MultifaceGrowth(Box::new(f))),
+            "minecraft:tree" | "minecraft:fallen_tree" => {
+                let bindings = blocks.ok_or(DecodeError::Field("tree bindings"))?;
+                let nested = |json: &str, depth: usize, remaining: &mut usize| {
+                    Self::decode(json, depth, remaining, empty_tags, blocks)
+                };
+                if kind == "minecraft:tree" {
+                    super::tree::TreeFeature::decode(json, bindings, depth, remaining, &nested)
+                        .map(|t| Self::Tree(Box::new(t)))
+                } else {
+                    super::tree::FallenTreeFeature::decode(
+                        json, bindings, depth, remaining, &nested,
+                    )
+                    .map(|t| Self::FallenTree(Box::new(t)))
+                }
+            }
             "minecraft:weighted_random_selector" => Ok(Self::WeightedChoice(
                 OptionalWeightedList::decode(required(&object, "features")?, |raw| {
                     PlacedFeatureDefinition::decode(
@@ -846,6 +1005,37 @@ impl FeatureDefinition {
             Self::ScatteredOre(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::Basic),
+            Self::Ore(feature) => feature.place(world, random, origin),
+            Self::VegetationPatch(feature) => {
+                feature.place(world, random, origin, &mut |f, w, r, p| {
+                    f.place_in(&mut placer, w, r, p, run)
+                })
+            }
+            Self::Coral(feature) => feature.place(world, random, origin, &mut |f, w, r, p| {
+                f.place_in(&mut placer, w, r, p, run)
+            }),
+            Self::HugeMushroom(feature) => feature.place(world, random, origin),
+            Self::MultifaceGrowth(feature) => feature.place(world, random, origin),
+            Self::Lake(feature) => feature.place(world, random, origin),
+            Self::MonsterRoom(feature) => feature.place(world, random, origin),
+            Self::Geode(feature) => feature.place(world, random, origin),
+            Self::Iceberg(feature) => feature.place(world, random, origin),
+            Self::SpeleothemCluster(feature) => feature.place(world, random, origin),
+            Self::LargeDripstone(feature) => feature.place(world, random, origin),
+            Self::HugeFungus(feature) => feature.place(world, random, origin),
+            Self::SculkPatch(feature) => feature.place(world, random, origin),
+            Self::EndSpike(feature) => feature.place(world, random, origin),
+            Self::ProjectedPatchySquare(feature) => feature.place(world, random, origin),
+            Self::SteppedColumnCluster(feature) => feature.place(world, random, origin),
+            Self::RootSystem(feature) => feature.place(world, random, origin, &mut |f, w, r, p| {
+                f.place_in(&mut placer, w, r, p, run)
+            }),
+            Self::Tree(feature) => feature.place(world, random, origin, &mut |f, w, r, p| {
+                f.place_inner(w, r, p, run)
+            }),
+            Self::FallenTree(feature) => feature.place(world, random, origin, &mut |f, w, r, p| {
+                f.place_inner(w, r, p, run)
+            }),
             Self::FillLayer(feature) => feature.place(world, origin).map_err(|e| match e {
                 BlockFeatureError::World(e) => FeatureExecutionError::Basic(FeatureError::World(e)),
                 BlockFeatureError::Query(e) => FeatureExecutionError::Query(e),

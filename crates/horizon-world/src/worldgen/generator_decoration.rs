@@ -43,7 +43,7 @@ use crate::{
 };
 use horizon_core::{
     biome::obfuscate_seed,
-    geometry::{Direction, VoxelShape},
+    geometry::{Axis, Direction, VoxelShape},
     position::{BlockPos, ChunkPos},
 };
 use serde_json::Value;
@@ -261,7 +261,8 @@ impl Decoration {
             biomes.push(chunk.biomes().clone());
         }
         let terrain = TerrainRegion::new(chunks, generation)
-            .and_then(|region| region.with_block_bindings(&self.bindings));
+            .and_then(|region| region.with_block_bindings(&self.bindings))
+            .map(|region| region.with_world_seed(seed));
         let terrain = match terrain {
             Ok(terrain) => terrain,
             Err(e) => return Err(resource(e.to_string())),
@@ -477,6 +478,44 @@ impl PlacementContext for World<'_> {
         support
             .is_face_sturdy(self, state, position, direction, SupportType::Full)
             .map_err(query)
+    }
+    fn collision_full_block(
+        &mut self,
+        state: BlockStateId,
+        position: [i32; 3],
+    ) -> Result<bool, PlacementQueryError> {
+        let collision = self.blocks()?.collision.clone();
+        let shape = collision
+            .collision_shape(self, state, position)
+            .map_err(query)?;
+        let [nx, ny, nz] = shape.sizes();
+        Ok(!shape.is_empty()
+            && [Axis::X, Axis::Y, Axis::Z]
+                .into_iter()
+                .all(|axis| shape.min(axis) == 0.0 && shape.max(axis) == 1.0)
+            && (0..nx).all(|x| {
+                (0..ny).all(|y| (0..nz).all(|z| shape.is_full(x as i32, y as i32, z as i32)))
+            }))
+    }
+    fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
+        self.region.world_seed()
+    }
+    fn ensure_can_write(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        Ok(self
+            .zone
+            .contains_block(BlockPos::new(position[0], position[1], position[2])))
+    }
+    /// BulkSectionAccess write: section storage only, no heightmap updates.
+    fn set_section_block(
+        &mut self,
+        [x, y, z]: [i32; 3],
+        state: BlockStateId,
+    ) -> Result<(), PlacementQueryError> {
+        self.region
+            .chunk_mut(x >> 4, z >> 4)?
+            .set_block_raw(x, y, z, state)
+            .map_err(|e| query(format!("{e:?}")))?;
+        Ok(())
     }
     /// Generation regions contain no entities.
     fn unobstructed_block(&mut self, _: [i32; 3]) -> Result<bool, PlacementQueryError> {

@@ -2,7 +2,7 @@
 mod catalog;
 mod noise;
 pub use catalog::StateProviderCatalog;
-mod properties;
+pub(crate) mod properties;
 use super::{
     DecodeError, Object,
     block_predicate::{BlockPredicate, PredicateBlockResolver},
@@ -137,7 +137,7 @@ impl<'r> StateProviderBindings<'r> {
             .clone()
             .map_err(DecodeError::Registry)
     }
-    fn properties(&self) -> Result<Arc<StateProperties>, DecodeError> {
+    pub(crate) fn properties(&self) -> Result<Arc<StateProperties>, DecodeError> {
         self.properties
             .get_or_init(|| StateProperties::build(self.registry, &self.integers).map(Arc::new))
             .clone()
