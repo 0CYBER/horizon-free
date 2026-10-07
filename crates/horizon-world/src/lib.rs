@@ -13,6 +13,8 @@ pub mod stored_consume;
 pub mod attribute_health;
 pub mod attribute_updates;
 pub mod live_attribute_updates;
+pub mod effect_particles;
+pub mod effect_sync;
 pub mod attributes;
 pub mod block_collision;
 pub mod block_collision_scan;

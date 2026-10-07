@@ -1,5 +1,5 @@
-//! Homogeneous synchronized scalar fields with native callback/dirty ordering.
-//! Mixed serializers, packet codecs and complete entity schemas are separate.
+//! Synchronized typed values with native callback/dirty ordering.
+//! Serializer codecs and complete entity schemas are separate.
 use crate::compression::invalid;
 use std::{fmt, io};
 #[derive(Clone, Copy, Debug)]
@@ -45,16 +45,21 @@ pub trait Observer<T: SyncedValue = f32> {
     }
 }
 /// Equality used by the corresponding boxed native serializer value.
-pub trait SyncedValue: Copy {
-    fn native_equal(self, other: Self) -> bool;
+pub trait SyncedValue: Clone {
+    fn native_equal(&self, other: &Self) -> bool;
 }
 impl SyncedValue for f32 {
-    fn native_equal(self, other: Self) -> bool {
+    fn native_equal(&self, other: &Self) -> bool {
         self.to_bits() == other.to_bits() || (self.is_nan() && other.is_nan())
     }
 }
 impl SyncedValue for u8 {
-    fn native_equal(self, other: Self) -> bool {
+    fn native_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+impl SyncedValue for bool {
+    fn native_equal(&self, other: &Self) -> bool {
         self == other
     }
 }
@@ -64,8 +69,8 @@ impl<T: SyncedValue> SyncedValues<T> {
             .iter()
             .map(|v| Entry {
                 id: v.id,
-                initial: v.value,
-                value: v.value,
+                initial: v.value.clone(),
+                value: v.value.clone(),
                 dirty: false,
             })
             .collect::<Vec<_>>();
@@ -84,7 +89,7 @@ impl<T: SyncedValue> SyncedValues<T> {
             .map_err(|_| id)
     }
     pub fn get(&self, id: u8) -> Result<T, u8> {
-        Ok(self.entries[self.index(id)?].value)
+        Ok(self.entries[self.index(id)?].value.clone())
     }
     pub fn is_dirty(&self) -> bool {
         self.dirty
@@ -94,7 +99,7 @@ impl<T: SyncedValue> SyncedValues<T> {
     }
     pub fn is_default(&self, id: u8) -> Result<bool, u8> {
         let e = &self.entries[self.index(id)?];
-        Ok(e.initial.native_equal(e.value))
+        Ok(e.initial.native_equal(&e.value))
     }
     pub fn set<O: Observer<T>>(
         &mut self,
@@ -104,7 +109,7 @@ impl<T: SyncedValue> SyncedValues<T> {
         observer: &mut O,
     ) -> Result<(), DataError<O::Error>> {
         let index = self.index(id).map_err(DataError::UnknownId)?;
-        if force || !value.native_equal(self.entries[index].value) {
+        if force || !value.native_equal(&self.entries[index].value) {
             self.entries[index].value = value;
             observer.updated(self, id).map_err(DataError::Observer)?;
             self.entries[index].dirty = true;
@@ -121,7 +126,7 @@ impl<T: SyncedValue> SyncedValues<T> {
     ) -> Result<(), DataError<O::Error>> {
         for v in values {
             let index = self.index(v.id).map_err(DataError::UnknownId)?;
-            self.entries[index].value = v.value;
+            self.entries[index].value = v.value.clone();
             observer.updated(self, v.id).map_err(DataError::Observer)?;
         }
         observer.assigned(self, values).map_err(DataError::Observer)
@@ -137,7 +142,7 @@ impl<T: SyncedValue> SyncedValues<T> {
                 e.dirty = false;
                 values.push(DataValue {
                     id: e.id,
-                    value: e.value,
+                    value: e.value.clone(),
                 });
             }
         }
@@ -147,10 +152,10 @@ impl<T: SyncedValue> SyncedValues<T> {
         let values: Vec<_> = self
             .entries
             .iter()
-            .filter(|e| !e.initial.native_equal(e.value))
+            .filter(|e| !e.initial.native_equal(&e.value))
             .map(|e| DataValue {
                 id: e.id,
-                value: e.value,
+                value: e.value.clone(),
             })
             .collect();
         if values.is_empty() {

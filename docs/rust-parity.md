@@ -1254,3 +1254,35 @@ Dimension rebuilding and waypoint-manager internals remain controlled, and
 passenger lists are empty in this combined fixture. Full active-effect lifecycle
 and particle/invisibility synchronization, player absorption storage and complete
 gameplay/platform integration remain unfinished.
+
+## Registered effect presentation synchronization
+
+Effect synchronization now builds the visible particle list in active-map order,
+updates invisibility and ambient state, and preserves the server/client glowing
+branches and shared flags. It retains each selected synchronized-data object and
+clears effect dirtiness only after both visibility and glowing updates succeed.
+Removing the particle list leaves the ambient field unchanged, matching vanilla.
+
+The registry exporter verifies all **40 effect factories**: **34** create fresh
+colored options, while **six** return constant simple particles. Colored options
+use native object identity, so equal colors in newly created lists still trigger
+updates. Constant options retain identity. Synchronized storage now supports
+shared list values as well as scalar fields, preserving callback and dirty-flag
+ordering.
+
+The [effect synchronization comparison](../benchmarks/rust-effect-sync-2026-10-07/scoped-parity.json)
+matches **2,754,744 lines per reference JAR**, including repeated updates,
+ambient/visible combinations, callback map changes, captured data objects,
+reentrant writes/packing and failure prefixes. The
+[byte](../benchmarks/rust-effect-sync-2026-10-07/synced-bytes-regression.json) and
+[float](../benchmarks/rust-effect-sync-2026-10-07/synced-floats-regression.json)
+storage regressions also pass against both JARs. Library and affected fixture
+Clippy checks pass, and all world targets compile.
+
+The registered factories have no world access; the exporter verifies their
+inherited implementation and captured arguments. This permits an immutable map
+traversal during particle creation. Custom impure factories remain outside this
+binding. Rendering, transport, full entity lifecycle integration and playable
+macOS, Linux and Windows gameplay remain unfinished. In this pinned version,
+`LivingEntity.updateDataBeforeSync` invokes dirty effect synchronization; it is a
+separate phase from `tickEffects`.
