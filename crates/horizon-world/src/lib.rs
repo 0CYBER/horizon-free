@@ -96,3 +96,5 @@ pub const DATA_VERSION: i32 = 5023;
 
 pub mod item_stack_refs;
 pub mod simple_container;
+
+pub mod player_inventory;

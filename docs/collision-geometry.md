@@ -1664,3 +1664,23 @@ the first empty slot clears the remainder before limiting the inserted copy.
 Targeted Clippy passes. Player inventory, menus, crafting accounting, persistence,
 arbitrary getItem/setItem overrides and complete gameplay integration remain
 pending. Reference counting here has not been benchmarked as a performance gain.
+
+
+`player_inventory` implements the 36 ordinary slots, seven mapped equipment
+slots, shared entity equipment, selected hotbar slot, picking, matching/crafting
+eligibility, removals, replacement, clearing and the change counter. Equipment
+retains populated entries when cleared. Stack and equipment references can be
+shared across inventories; replacing an inventory retains stack aliases.
+
+`python3 tools/test_player_inventory_parity.py` compares actual native Inventory,
+EntityEquipment and ItemStack methods. The
+[inventory report](../benchmarks/rust-player-inventory-2026-10-07/scoped-parity.json)
+records **790,440 matching lines per JAR**, including invalid-index failure
+prefixes, selected-slot changes, negative equipment removal amounts, ordinary
+versus equipment identity, self-replacement and shared equipment clearing.
+Components cover damage, unbreakable presence, a fixed enchantment and literal
+custom names. Native Map.of iteration order varies by JVM; fixtures explicitly
+supply equipment-map order to both sides when removing an aliased reference.
+Targeted Clippy passes. Pickup, inventory/equipment ticks, menus, recipe
+accounting, persistence, full component values and complete gameplay integration
+remain pending.
