@@ -1901,3 +1901,22 @@ wrapping clocks, zero/negative durations, float edge cases, empty visibility,
 reentrant ticks and mutation/failure prefixes. Targeted Clippy passes. Complete
 item-finish integration, server cooldown packets and full gameplay remain
 pending.
+
+
+`item_after_use` composes shared stack copying, item completion, validated
+remainder creation and cooldown application. The original stack is copied before
+the item handler; remainder, cooldown and count are captured from that copy
+before actor callbacks. The original copy reaches cooldown grouping even when
+the item handler returns another stack. `use_remainder::convert_with` permits
+creation and delivery to share the same mutable world without overlapping
+borrows. Templates and component patches support structural value equality.
+
+`python3 tools/test_item_after_use_parity.py` invokes actual
+ItemStack.finishUsingItem and native remainder/template/cooldown implementations.
+The [completion report](../benchmarks/rust-item-after-use-2026-10-07/scoped-parity.json)
+records **211,804 matching lines per JAR**, including prototype changes, original
+copies, empty aliases and mutations/failures at each effect boundary. The
+[remainder regression](../benchmarks/rust-item-after-use-2026-10-07/remainder-regression.json)
+retains **353,264 matching lines per JAR**. Targeted Clippy passes. Item handlers
+and actor extra-item delivery remain controlled; concrete consumables, full
+inventory-use binding, contained schemas and complete gameplay remain pending.

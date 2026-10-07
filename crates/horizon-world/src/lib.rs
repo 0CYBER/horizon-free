@@ -48,6 +48,7 @@ pub mod ground_support;
 pub mod heightmap;
 pub mod identifier;
 pub mod interaction_shapes;
+pub mod item_after_use;
 pub mod item_blocking;
 pub mod item_cooldowns;
 pub mod item_durability;

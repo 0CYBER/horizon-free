@@ -186,3 +186,11 @@ impl<I: Copy + Eq, K: Clone + Eq, V: Clone + PartialEq> ItemTemplate<I, K, V> {
         }
     }
 }
+
+impl<I: PartialEq, K: Eq, V: PartialEq> PartialEq for ItemTemplate<I, K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.item == other.0.item
+            && self.0.count == other.0.count
+            && self.0.patch == other.0.patch
+    }
+}

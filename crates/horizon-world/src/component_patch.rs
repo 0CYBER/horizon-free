@@ -188,3 +188,9 @@ impl<K: Eq, V: PartialEq> PartialEq for ComponentMap<K, V> {
         map_equal(&self.prototype.0, &other.prototype.0) && map_equal(&self.patch.0, &other.patch.0)
     }
 }
+
+impl<K: Eq, V: PartialEq> PartialEq for Patch<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        map_equal(&self.0, &other.0)
+    }
+}

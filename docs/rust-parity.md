@@ -13,7 +13,10 @@ and parts of feature placement and decoration. Movement/fluid interactions,
 registered attributes, hunger storage/ticks, synchronized player health and
 absorption, damage reduction, outer hurt gates, blocking-item damage, item
 durability and item-use start/tick/release/completion have scoped native comparisons.
-These kernels still need complete entity/world lifecycle bindings. All pinned block-survival
+Shared inventory/equipment storage now binds item-use flags and lifecycle, while
+item templates, remainders, checked bundle weights and cooldown expiry have
+native comparisons. Item completion composes stack copies with remainder and
+cooldown effects. These kernels still need complete entity/world lifecycle bindings. All pinned block-survival
 families now have native differential coverage. Full simulation callbacks,
 complete chunk generation, entity behavior, networking, rendering and playable
 integration remain unfinished. The linked subsystem documents and hashed reports
