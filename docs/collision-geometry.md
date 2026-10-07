@@ -854,3 +854,19 @@ Extreme effect amplifiers are injected directly for integer-boundary checks;
 normal constructor clamping is outside this gate. Collision movement, gravity,
 attributes and immersion remain controlled providers; live gameplay binding and
 complete player travel are pending.
+
+
+`living_fluid` adds native water/lava acceleration, slowdown, falling adjustment,
+shallow-lava handling, collision escape and ridden buoyancy. It shares input
+rotation with air movement. Fluid heights and escape queries remain lazy, with
+movement mutations visible to subsequent velocity updates.
+
+`python3 tools/test_living_fluid_parity.py` compares the actual native travel and
+fluid helper methods. The
+[fluid travel report](../benchmarks/rust-living-fluid-2026-10-07/scoped-parity.json)
+records **265,100 matching lines per JAR**, including sprint changes, movement
+efficiency, dolphin effects, shallow-fluid boundaries, escape probes, ridden
+float guards, nonfinite values, callback mutations and failures. Targeted Clippy
+passes. Collision movement, immersion depths, free-space queries, attributes and
+gravity are controlled; live fluid propagation and gameplay binding remain
+pending.
