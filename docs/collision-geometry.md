@@ -804,3 +804,19 @@ interaction-shape world queries are rejected by the fixture. Import checks rejec
 wrong table kind, partial mappings, missing canonical metadata, foreign state
 ordering and invalid IDs. Targeted Clippy passes. Registered outline/visual
 shapes, complete ray-world binding and gameplay integration remain pending.
+
+
+`FallRayRegistry` binds fall-reset tags, portal identities, interaction geometry
+and fluid states to the complete registered block-state table. `fall_reset_ray`
+uses that binding with the shared fluid-shape cache and native water selection.
+Tag reloads produce new validated registry snapshots; unknown tag members and
+invalid state IDs are rejected.
+
+`python3 tools/test_registry_fall_ray_parity.py` compares actual registered
+`BlockGetter.clip` behavior with native block/fluid tags and shape getters. The
+[registered fall-ray report](../benchmarks/rust-registry-fall-ray-2026-10-07/scoped-parity.json)
+records **3,024,623 matching lines per JAR** across **120,297 fixtures**, including
+all **35,723 states**, tag reloads, server/client distinctions, player type checks,
+portal delays, changing above-fluid states, shared cache reuse and failures.
+Targeted Clippy passes. World storage is controlled; live entity movement and
+complete player/world gameplay integration remain pending.

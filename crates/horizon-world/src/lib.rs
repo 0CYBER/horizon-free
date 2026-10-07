@@ -40,6 +40,7 @@ pub mod powder_snow_collision;
 pub mod region;
 pub mod registry;
 pub mod registry_collision_scan;
+pub mod registry_fall_ray;
 pub mod retrogen;
 pub mod suffocation;
 pub mod tick_data;
