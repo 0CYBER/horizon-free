@@ -202,6 +202,15 @@ fn main() -> Result<()> {
                 resources: &resources,
             };
             match op["mode"].as_str().unwrap() {
+                "shift" => world.player.shift_key_down = op["value"].as_bool().unwrap(),
+                "pose_tick" => world.update_player_pose()?,
+                "refresh_dimensions" => world.player.refresh_dimensions()?,
+                "pose" => world.player.set_pose(match op["value"].as_str().unwrap() {
+                    "STANDING" => horizon_client::pose::Pose::Standing,
+                    "CROUCHING" => horizon_client::pose::Pose::Crouching,
+                    "SWIMMING" => horizon_client::pose::Pose::Swimming,
+                    _ => return Err("unknown fixture pose".into()),
+                })?,
                 "controlled_tick" => {
                     let mask = op["value"].as_u64().unwrap();
                     world.controlled_simulation_tick(horizon_client::sprint::Keys {
@@ -482,6 +491,16 @@ fn main() -> Result<()> {
                 player.sprint_input.trigger_time,
                 player.sprint_input.previous_forward,
                 player.sprint_input.previous_shift
+            )?;
+            writeln!(
+                out,
+                "pose {} {} {} {:08x} {:08x} {:08x}",
+                player.pose.name(),
+                player.shift_key_down,
+                player.local_crouching,
+                player.dimensions.width.to_bits(),
+                player.dimensions.height.to_bits(),
+                player.dimensions.eye_height.to_bits()
             )?;
         }
         writeln!(out, "end")?;

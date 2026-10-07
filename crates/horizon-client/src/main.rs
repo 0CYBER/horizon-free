@@ -65,7 +65,7 @@ impl Options {
             }
             if argument == "--help" || argument == "-h" {
                 println!(
-                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions; F5 toggles walking test.\nWalking test: WASD move; Space jumps; Left Ctrl or double-tap W starts sprinting; gravity and collisions at 20 ticks/s.\n\nThis is a controlled development scene. Walking includes landing damage, stored health, hunger and regeneration. Crouching, full death/respawn, interaction, saving and complete gameplay remain unfinished."
+                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions; F5 toggles walking test.\nWalking test: WASD move; Space jumps; Left Shift crouches; Left Ctrl or double-tap W starts sprinting; gravity and collisions at 20 ticks/s.\n\nThis is a controlled development scene. Walking includes landing damage, stored health, hunger and regeneration. Full death/respawn, interaction, saving and complete gameplay remain unfinished."
                 );
                 return Ok(None);
             }
@@ -110,6 +110,10 @@ struct App<'a> {
     player: Option<PlayerMotion>,
     motion_clock: FixedStep,
     previous_player_position: Vec3,
+    eye_height: f32,
+    previous_eye_height: f32,
+    crouch_ticks: u64,
+    crouch_distance_cm: u64,
     movement_ticks: u64,
     sprint_ticks: u64,
     sprint_distance_cm: u64,
@@ -154,6 +158,8 @@ impl App<'_> {
             let feet = Vec3::new(p.x, p.y - f64::from(1.62_f32), p.z);
             self.player = Some(PlayerMotion::new(self.motion_resources, feet)?);
             self.previous_player_position = feet;
+            self.eye_height = 1.62;
+            self.previous_eye_height = self.eye_height;
             self.collision_camera = false;
         }
         self.motion_clock.reset();
@@ -198,20 +204,27 @@ impl App<'_> {
                     ) => match name {
                         "sprint_one_cm" => self.sprint_distance_cm += amount as u64,
                         "walk_one_cm" => self.walk_distance_cm += amount as u64,
+                        "crouch_one_cm" => self.crouch_distance_cm += amount as u64,
                         _ => {}
                     },
                     _ => {}
                 }
             }
+            // Camera.tick keeps float eye-height smoothing separate from physics.
+            self.previous_eye_height = self.eye_height;
+            self.eye_height += (player.dimensions.eye_height - self.eye_height) * 0.5;
+            self.crouch_ticks += u64::from(player.pose == horizon_client::pose::Pose::Crouching);
             self.movement_ticks += 1;
             self.sprint_ticks += u64::from(player.sprinting);
         }
         let from = self.previous_player_position;
         let to = player.position;
         let alpha = self.motion_clock.fraction();
+        let eye = self.previous_eye_height
+            + (alpha as f32) * (self.eye_height - self.previous_eye_height);
         self.camera.position = glam::DVec3::new(
             from.x + (to.x - from.x) * alpha,
-            from.y + (to.y - from.y) * alpha + f64::from(1.62_f32),
+            from.y + (to.y - from.y) * alpha + f64::from(eye),
             from.z + (to.z - from.z) * alpha,
         );
         if self.mesh_revision != self.world.revision {
@@ -315,6 +328,18 @@ impl App<'_> {
         report["player_sprinting"] = serde_json::json!(self.player.as_ref().map(|p| p.sprinting));
         report["player_sprint_trigger"] =
             serde_json::json!(self.player.as_ref().map(|p| p.sprint_input.trigger_time));
+        report["player_pose"] = serde_json::json!(self.player.as_ref().map(|p| p.pose.name()));
+        report["player_local_crouching"] =
+            serde_json::json!(self.player.as_ref().map(|p| p.local_crouching));
+        report["player_shift"] = serde_json::json!(self.player.as_ref().map(|p| p.shift_key_down));
+        report["player_dimensions"] = serde_json::json!(self.player.as_ref().map(|p| [
+            p.dimensions.width,
+            p.dimensions.height,
+            p.dimensions.eye_height
+        ]));
+        report["camera_eye_height"] = serde_json::json!(self.eye_height);
+        report["crouch_ticks"] = serde_json::json!(self.crouch_ticks);
+        report["crouch_distance_cm"] = serde_json::json!(self.crouch_distance_cm);
         report["sprint_ticks"] = serde_json::json!(self.sprint_ticks);
         report["sprint_distance_cm"] = serde_json::json!(self.sprint_distance_cm);
         report["walk_distance_cm"] = serde_json::json!(self.walk_distance_cm);
@@ -498,10 +523,11 @@ impl ApplicationHandler for App<'_> {
                                 / self.title_at.elapsed().as_secs_f64();
                             let health = self.player.as_ref().map_or_else(String::new, |p| {
                                 format!(
-                                    " | Health {} | Food {} | Sprint {}{}",
+                                    " | Health {} | Food {} | Sprint {} | Pose {}{}",
                                     p.health.health(),
                                     p.health.food.food,
                                     p.sprinting,
+                                    p.pose.name(),
                                     if p.health.dead_or_dying() {
                                         " (dead)"
                                     } else {
@@ -580,6 +606,10 @@ fn run() -> Result<()> {
         player: None,
         motion_clock: FixedStep::default(),
         previous_player_position: Vec3::ZERO,
+        eye_height: 1.62,
+        previous_eye_height: 1.62,
+        crouch_ticks: 0,
+        crouch_distance_cm: 0,
         movement_ticks: 0,
         sprint_ticks: 0,
         sprint_distance_cm: 0,

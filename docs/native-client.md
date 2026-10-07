@@ -13,7 +13,8 @@ F5 switches to a dry walking test with gravity, ground support, stepping and
 held-jump timing over the same resident chunks. Its movement runs at 20 ticks/s;
 the camera interpolates between tick positions. Landing damage now updates stored
 health, absorption and hurt cooldown state. Hunger and regeneration tick after
-movement. F3 diagnostics include health and food level.
+movement. Left Shift crouches, with pose-dependent collision bounds and eye height.
+F3 diagnostics include health, food, sprinting and pose.
 
 Eligible opaque unit-cube faces use greedy rectangles only when texture layer,
 UV rotation/mirroring and shading match. Each rectangle retains its signed UV
@@ -70,11 +71,12 @@ not a render-distance or world-streaming implementation.
 | WASD | Move horizontally |
 | Space / either Shift | Rise / descend in inspection mode; Space jumps in walking mode |
 | Either Ctrl | Boost inspection speed |
+| Left Shift | Crouch in walking mode |
 | Left Ctrl while moving forward, or double-tap W | Start sprinting in walking mode when eligible |
 | Arrow keys | Rotate camera |
 | Left click | Capture mouse for camera rotation |
 | Escape | Release mouse |
-| F3 | Toggle FPS/chunk/mesh/health/food/sprint diagnostics in the window title |
+| F3 | Toggle FPS/chunk/mesh/health/food/sprint/pose diagnostics in the window title |
 | F4 | Toggle inspection camera collisions; enabling requires an unobstructed position |
 | F5 | Toggle walking test at the current camera position; enabling requires an unobstructed position |
 | Ctrl+Q or window close | Exit |
@@ -82,9 +84,7 @@ not a render-distance or world-streaming implementation.
 Controls bind physical keyboard positions. Losing focus clears held keys and
 releases the mouse. Walking pauses while unfocused and resets partial tick time
 on focus changes. Sprinting continues after releasing Left Ctrl while forward
-input remains held; hunger and collisions can stop it. Walking currently has no
-crouch, flight, item use or
-block interaction. F5 returns to inspection mode; the finite scene has no
+input remains held; hunger and collisions can stop it. Walking currently has no flight, item use or block interaction. F5 returns to inspection mode; the finite scene has no
 streaming or boundary wall. `--trace-input` logs keyboard, mouse-button and focus events
 for diagnosis. On headless Linux use `vscreen run ./target/debug/horizon-client`,
 then `vscreen shot`. The `wtype` tool's default generated keymap does not preserve
@@ -98,8 +98,9 @@ into registered shape selection, block scanning, world movement resolution and
 occupancy checks. The scene has no other entities, block entities or border;
 entity-dependent queries report an error until an entity runtime is supplied.
 Camera collision uses a position context and disables stepping. The walking
-binding uses a standing entity context and its registered step-height attribute.
-Sneaking and the complete authoritative player tick remain unfinished.
+binding uses the current pose bounds, descending input and registered step-height
+attribute. Sneaking invokes ledge backoff before collision resolution. The
+complete authoritative player tick remains unfinished.
 
 ```sh
 python3 tools/prepare_native_client.py
@@ -115,7 +116,7 @@ ledges, ceilings, initial overlaps, negative and missing chunk boundaries, tiny
 and zero movement, and varied step heights. This verifies the scene adapter;
 it does not establish player locomotion or complete gameplay parity.
 
-The movement binding stores a player's position, velocity, standing bounds,
+The movement binding stores a player's position, velocity, pose bounds,
 ground/support state, collision flags, movement history and live registered
 attributes. `MotionWorld` composes the existing air-travel, jumping, collision,
 ground-support, restitution and block-coefficient code over the same scene.
@@ -147,8 +148,8 @@ input is supplied at the native virtual input boundary. Separately, the
 checks 13,988 cases against actual `KeyboardInput.tick` and
 `LocalPlayer.modifyInput`, covering every key combination, diagonal adjustment,
 item/riding/sneaking speed gates, signed zero and nonfinite values. This verifies
-input arithmetic; full `LocalPlayer` lifecycle, sprint eligibility and poses
-remain unfinished.
+input arithmetic; the sprint and crouch integration checks below extend it.
+The full `LocalPlayer` lifecycle remains unfinished.
 
 The fixed-rate driver limits work per rendered frame while retaining overdue
 ticks. Clock tests cover varied frame schedules and long stalls. The development
@@ -167,9 +168,9 @@ python3 tools/test_local_input_parity.py
 ```
 
 This binding is not yet a complete player tick or input controller. Its current
-domain is the dry resident scene, standing dimensions, zero frozen ticks,
-empty inventory/equipment, no entity interpolation, crouching, vehicles or status
-effects. Selected `Player.aiStep` phases are bound; the full tick and local input
+domain is the dry resident scene with standing/crouching/crawling dimensions,
+zero frozen ticks, empty inventory/equipment, and no entity interpolation,
+vehicles or status effects. Selected `Player.aiStep` phases are bound; the full tick and local input
 lifecycle remain unfinished.
 Landing now accumulates and resets the stored fall distance, clears climbing
 state on ground, and invokes registered block fall/bounce reactions. The
@@ -497,7 +498,7 @@ also covers swimming, underwater walking, water-surface walking, crouching and
 gliding. Direct method fixtures check all 512 overlapping query-flag combinations,
 invulnerable abilities, float-versus-double centimeter rounding, integer overflow,
 zero and nonfinite deltas. Those query overrides are restricted to statistics
-fixtures; the resident physics remain dry and standing. Combined scenes exercise
+fixtures; that checkpoint used dry, standing resident physics. Combined scenes exercise
 repeated movement, sprint-state changes, jumps, hunger consumption and healing.
 That checkpoint preceded the local sprint controls described below.
 
@@ -536,10 +537,10 @@ the default seven-tick double-tap window. The live food and collision fields
 control eligibility; sprint changes update the existing movement-speed
 attribute. The F3 title shows sprint state, and exit reports include sprint
 ticks and movement-distance counters. These counters are diagnostics, not saved
-statistics. Crouching, fluid movement, vehicles, effects, item use, input
-remapping and the complete client/server tick remain unfinished. The input
-comparison tests those eligibility queries in isolation; the current resident
-binding is dry, standing and uses empty equipment.
+statistics. Fluid movement, vehicles, effects, item use, input remapping and the
+complete client/server tick remain unfinished. The input comparison tests those
+eligibility queries in isolation; the sprint checkpoint used dry, standing
+actors with empty equipment. The crouch integration below extends that domain.
 
 ```sh
 python3 tools/test_sprint_input_parity.py
@@ -553,3 +554,42 @@ run visibly showed `Sprint true` during the second press and `Sprint false`
 after releasing W. Both runs ended grounded and alive without an error, and
 their views were visually inspected. These are development client checks;
 macOS/Windows runtime acceptance and complete gameplay remain pending.
+
+## Crouching and dry pose transitions
+
+Left Shift now binds crouching to the resident player. Local crouch selection
+uses the previous keyboard state before the new input is sampled; that local
+state controls slowdown and sprint eligibility. The current Shift input controls
+ledge backoff, descending collision context, bounce suppression and ladder
+sliding. After movement, pose-fit checks choose standing, crouching or crawling
+and refresh the cached bounds and eye height. Releasing Shift under a ceiling
+does not force the actor into a standing volume that cannot fit.
+
+The [combined input scene](../benchmarks/rust-native-crouch-2026-10-07/input-scene.json)
+checks 21,241 operations in 514 scenarios against the pinned client, including
+the actual `LocalPlayer.aiStep` input prefix and `modifyInput`. The
+[shared scene comparison](../benchmarks/rust-native-crouch-2026-10-07/scene-motion.json)
+checks 223,645 operations in 5,605 scenarios against both pinned JARs. It invokes
+actual native pose selection, dimension refresh and edge backoff. The new cases
+include low ceilings, blocked pose changes, scale and sneaking-speed attributes,
+diagonal ledges, step-height thresholds, jumping, release transitions and landing
+on different materials. Seven output lines per operation compare motion,
+attributes, events, health, hunger, input history and pose/dimension bits.
+The existing [isolated sprint comparison](../benchmarks/rust-native-crouch-2026-10-07/sprint-input.json)
+also passes after updating its scene controller.
+
+The native fixture controls pose storage and invokes the actual dimension-refresh
+body when the pose changes. Full synchronized pose data and network notifications
+remain unfinished. Scale changes use explicit refresh operations; the complete
+pending attribute-update lifecycle is separate. Crawling here means dry collision
+pose selection; swimming physics, sleeping, flight and death poses are unbound.
+
+The client camera follows the cached eye height with the inspected native float
+smoothing arithmetic. Full camera behavior and pixel parity are not established.
+The [Linux window check](../benchmarks/rust-native-crouch-2026-10-07/interactive-smoke.json)
+visibly switched from crouching to standing after releasing Shift. It recorded
+100 crouching ticks and 613 crouching centimeters, ending alive and grounded
+without an error. Both views were inspected. The
+[renderer startup check](../benchmarks/rust-native-crouch-2026-10-07/startup-smoke.json),
+seven client tests and all-target client Clippy also passed. These checks do not
+establish full vanilla gameplay or final macOS/Linux/Windows release acceptance.

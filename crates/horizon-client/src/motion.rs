@@ -12,9 +12,9 @@ use horizon_world::{
     block_collision::BlockCollisionRegistry,
     block_landing::BlockLandingRegistry,
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
+    edge_backoff::{self, EdgeBackoffInput, EdgeBackoffWorld},
     entity_move::{self, CollisionFlags, EntityMoveWorld, MovementHistory, MoverType},
     entity_obstruction::EntityIdentity,
-    edge_backoff::{self, EdgeBackoffInput, EdgeBackoffWorld},
     ground_support::{GroundState, find_supporting_block},
     living_air::{self, LivingAirWorld},
     living_fall::ImpulseContext,
@@ -314,11 +314,17 @@ impl MotionWorld<'_, '_, '_> {
             binding: self.collision_binding,
         }
     }
-    pub(crate) fn no_player_collision(&mut self, bounds:Aabb)->Result<bool> {
-        let context=self.context();
-        Ok(world_movement::no_world_collision(&mut self.collisions(),world_movement::CollisionCheckRequest {
-            entity:EntityIdentity(0),context,bounds,candidate_budget:1_000_000,
-        })?)
+    pub(crate) fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
+        let context = self.context();
+        Ok(world_movement::no_world_collision(
+            &mut self.collisions(),
+            world_movement::CollisionCheckRequest {
+                entity: EntityIdentity(0),
+                context,
+                bounds,
+                candidate_budget: 1_000_000,
+            },
+        )?)
     }
     fn block(&self, p: BlockPos) -> BlockStateId {
         self.scene.block(p.x, p.y, p.z)
@@ -397,10 +403,17 @@ impl MotionWorld<'_, '_, '_> {
     pub fn controlled_simulation_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
         self.update_local_crouching()?;
         self.player.sprint_input_tick(keys)?;
-        self.player.shift_key_down=keys.shift;
-        let sneak=if self.player.moving_slowly() {Some(self.player.attribute("minecraft:sneaking_speed")? as f32)}else{None};
+        self.player.shift_key_down = keys.shift;
+        let direction = keys.direction();
+        let sneak = if direction[0] * direction[0] + direction[1] * direction[1] != 0.0
+            && self.player.moving_slowly()
+        {
+            Some(self.player.attribute("minecraft:sneaking_speed")? as f32)
+        } else {
+            None
+        };
         self.simulation_tick(
-            crate::input::modify_input(keys.direction(), None, sneak),
+            crate::input::modify_input(direction, None, sneak),
             keys.jump,
         )
     }
@@ -492,7 +505,7 @@ impl MovementStatisticsWorld for MotionWorld<'_, '_, '_> {
         Ok(self.player.sprinting)
     }
     fn crouching(&mut self) -> Result<bool> {
-        Ok(self.player.pose==crate::pose::Pose::Crouching)
+        Ok(self.player.pose == crate::pose::Pose::Crouching)
     }
     fn fall_flying(&mut self) -> Result<bool> {
         Ok(false)
@@ -518,11 +531,19 @@ impl MovementBlockProvider for MotionWorld<'_, '_, '_> {
     }
 }
 impl EdgeBackoffWorld for MotionWorld<'_, '_, '_> {
-    type Error=Box<dyn std::error::Error>;
-    fn max_up_step(&mut self)->Result<f32> {Ok(self.player.attribute("minecraft:step_height")? as f32)}
-    fn staying_on_ground_surface(&mut self)->Result<bool> {Ok(self.player.shift_key_down)}
-    fn on_ground(&mut self)->Result<bool> {Ok(self.player.ground.on_ground)}
-    fn no_collision(&mut self,bounds:Aabb)->Result<bool> {self.no_player_collision(bounds)}
+    type Error = Box<dyn std::error::Error>;
+    fn max_up_step(&mut self) -> Result<f32> {
+        Ok(self.player.attribute("minecraft:step_height")? as f32)
+    }
+    fn staying_on_ground_surface(&mut self) -> Result<bool> {
+        Ok(self.player.shift_key_down)
+    }
+    fn on_ground(&mut self) -> Result<bool> {
+        Ok(self.player.ground.on_ground)
+    }
+    fn no_collision(&mut self, bounds: Aabb) -> Result<bool> {
+        self.no_player_collision(bounds)
+    }
 }
 impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
     type Error = Box<dyn std::error::Error>;
@@ -565,12 +586,16 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         Ok(())
     }
     fn back_off_edge(&mut self, movement: Vec3, mover: MoverType) -> Result<Vec3> {
-        let input=EdgeBackoffInput {
-            movement,bounds:self.player.bounds(),flying:false,
-            self_or_player:matches!(mover,MoverType::SelfMovement|MoverType::Player),
-            fall_distance:self.player.fall_distance,query_budget:1_000_000,
+        let input = EdgeBackoffInput {
+            movement,
+            bounds: self.player.bounds(),
+            flying: false,
+            self_or_player: matches!(mover, MoverType::SelfMovement | MoverType::Player),
+            fall_distance: self.player.fall_distance,
+            query_budget: 1_000_000,
         };
-        edge_backoff::back_off_from_edge(self,input).map_err(|e|io::Error::other(e.to_string()).into())
+        edge_backoff::back_off_from_edge(self, input)
+            .map_err(|e| io::Error::other(e.to_string()).into())
     }
     fn collide(&mut self, movement: Vec3) -> Result<Vec3> {
         let max_step = self.player.attribute("minecraft:step_height")? as f32;

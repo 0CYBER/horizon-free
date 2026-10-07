@@ -160,6 +160,7 @@ public final class VanillaSceneMotionOracle {
         @Override public boolean isInLava(){return false;}
         @Override public boolean isInLiquid(){return false;}
         @Override public boolean isFallFlying(){return statisticsFlags!=null&&statFlag(8);}
+        @Override public boolean isAutoSpinAttack(){return false;}
         @Override public boolean isSpectator(){return false;}
         @Override public boolean isNoGravity(){return false;}
         @Override public boolean hasEffect(Holder<MobEffect> effect){return false;}
