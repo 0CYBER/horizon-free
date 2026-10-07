@@ -121,6 +121,7 @@ pub struct PlayerMotion {
     pub stuck_multiplier: Vec3,
     pub yaw: f32,
     pub jumping: bool,
+    pub no_jump_delay: i32,
     pub sprinting: bool,
     pub speed: f32,
     pub last_climbable: Option<BlockPos>,
@@ -164,6 +165,7 @@ impl PlayerMotion {
             stuck_multiplier: Vec3::ZERO,
             yaw: 0.0,
             jumping: false,
+            no_jump_delay: 0,
             sprinting: false,
             speed: 0.0,
             last_climbable: None,
@@ -291,6 +293,37 @@ impl MotionWorld<'_, '_, '_> {
     }
     pub fn travel_in_air(&mut self, input: Vec3) -> Result<()> {
         living_air::travel_in_air(self, input)
+    }
+    /// Dry, standing movement phases of LivingEntity.aiStep. Equipment,
+    /// interpolation, effects, freezing and world/entity effects are not ticked
+    /// by this binding. Inputs are the native float xxa/yya/zza fields.
+    pub fn movement_tick(&mut self, input: [f32; 3]) -> Result<()> {
+        if self.player.no_jump_delay > 0 {
+            self.player.no_jump_delay -= 1;
+        }
+        let mut velocity = self.player.velocity;
+        if velocity.x * velocity.x + velocity.z * velocity.z < 9.0e-6 {
+            velocity.x = 0.0;
+            velocity.z = 0.0;
+        }
+        if velocity.y.abs() < 0.003 {
+            velocity.y = 0.0;
+        }
+        self.player.velocity = velocity;
+        let input = Vec3::new(
+            f64::from(input[0] * 0.98),
+            f64::from(input[1]),
+            f64::from(input[2] * 0.98),
+        );
+        if self.player.jumping {
+            if self.player.ground.on_ground && self.player.no_jump_delay == 0 {
+                self.jump_from_ground()?;
+                self.player.no_jump_delay = 10;
+            }
+        } else {
+            self.player.no_jump_delay = 0;
+        }
+        self.travel_in_air(input)
     }
     pub fn jump_from_ground(&mut self) -> Result<()> {
         living_motion::jump_from_ground(self)

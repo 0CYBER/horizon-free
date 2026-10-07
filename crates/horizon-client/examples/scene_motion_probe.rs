@@ -43,7 +43,7 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
     }
     writeln!(
         out,
-        "{} {} {} {} {} {} {} {:016x} {} {} {} {:08x}",
+        "{} {} {} {} {} {} {} {:016x} {} {} {} {:08x} {}",
         player.collision.horizontal,
         player.collision.vertical,
         player.collision.below,
@@ -55,7 +55,8 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
         position(player.last_climbable),
         player.needs_sync,
         player.sync_position,
-        player.speed.to_bits()
+        player.speed.to_bits(),
+        player.no_jump_delay
     )?;
     Ok(())
 }
@@ -90,6 +91,11 @@ fn main() -> Result<()> {
             };
             match op["mode"].as_str().unwrap() {
                 "travel" => world.travel_in_air(vector(&op["value"]))?,
+                "tick" => {
+                    let v = vector(&op["value"]);
+                    world.movement_tick([v.x as f32, v.y as f32, v.z as f32])?;
+                }
+                "delay" => world.player.no_jump_delay = op["value"].as_i64().unwrap() as i32,
                 "move" => world.move_self(vector(&op["value"]))?,
                 "jump" => world.jump_from_ground()?,
                 "sprint" => world.player.set_sprinting(op["value"].as_bool().unwrap())?,

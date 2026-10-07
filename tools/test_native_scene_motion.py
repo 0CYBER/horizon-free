@@ -20,6 +20,20 @@ def vec(values): return list(map(bits, values))
 def op(mode, value=None, **extra): return dict(mode=mode, value=value, **extra)
 
 def corpus():
+    # Native LivingEntity.aiStep drives repeated held/released jumps and the
+    # player-specific horizontal velocity threshold, including delay boundaries.
+    for start in [(25,4,25),(-11,4,0),(-7,4,26),(0,18,0)]:
+        for delay in [-1,0,1,9,10,11]:
+            ops=[op('speed',single(.1)),op('delay',delay),op('jumping',True)]
+            for i in range(180):
+                if i in [35,120]:ops.append(op('jumping',False))
+                if i in [36,140]:ops.append(op('jumping',True))
+                ops.append(op('tick',vec((.5 if i<90 else 0,0,0))))
+            yield dict(position=vec(start),ops=ops)
+    for x in [0,-0.0,.002,.0021213203435596424,.0029999999999999996,.003,.004]:
+        for z in [0,.002,.003,-.002]:
+            for y in [-.003,-.0029999999999999996,-0.0,0,.0029999999999999996,.003]:
+                yield dict(position=vec((25,12,25)),ops=[op('velocity',vec((x,y,z))),op('tick',vec((0,0,0))),op('tick',vec((0,0,0)))])
     for start in [(25,18,25),(0,18,0),(-15.9,4,-15.9),(-11,4,0),(5,4,14),(-7,4,26)]:
         for yaw in [0,45,90,180,-135]:
             for sprint in [False,True]:
