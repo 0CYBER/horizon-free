@@ -31,6 +31,7 @@ pub mod fluid_box;
 pub mod fluid_flow;
 pub mod fluid_occupancy;
 pub mod fluid_shape;
+pub mod food;
 pub mod free_space;
 pub mod ground_support;
 pub mod heightmap;

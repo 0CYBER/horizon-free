@@ -1133,3 +1133,19 @@ Clippy passes. The exporter asserts that registered default suppliers contain no
 modifiers. Set membership is observed in registry order: this does not establish
 JVM identity-hash collection order, cross-attribute bulk assignment/serialization,
 custom suppliers, equipment integration or a live entity tick.
+
+
+`food` implements eating, saturation, exhaustion, hunger predicates and the
+server hunger tick. It retains the captured level/difficulty, short-circuit
+player queries, fast/slow regeneration timers, starvation health/difficulty
+guards, wrapping integer arithmetic, Java float edge behavior and partial state
+writes when callbacks fail. Heal and starvation requests use explicit world
+hooks, which can mutate food state before subsequent tick work.
+
+`python3 tools/test_food_parity.py` compares actual `FoodData` methods. The
+[food report](../benchmarks/rust-food-2026-10-07/scoped-parity.json) records
+**180,878 matching lines per JAR** across **15,211 fixtures**, including 240-tick
+sequences, threshold boundaries, all difficulties, callback mutation/failure,
+signed zero and nonfinite arithmetic. Targeted Clippy passes. World rules,
+player health/healing and damage delivery are controlled; consumables, saved
+hunger data and live survival gameplay integration remain pending.
