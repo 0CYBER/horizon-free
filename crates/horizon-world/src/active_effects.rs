@@ -5,6 +5,8 @@ use crate::{
 };
 
 pub struct ActiveEffects<H> {
+    /// LivingEntity schedules effect synchronization from construction.
+    pub dirty: bool,
     /// Native activeEffects is exposed by getActiveEffectsMap. Direct mutations
     /// bypass lifecycle notifications, but retain the map's iterator semantics.
     pub entries: JavaHashMap<H, EffectInstance<H>>,
@@ -13,6 +15,7 @@ impl<H: JavaKey> Default for ActiveEffects<H> {
     fn default() -> Self {
         Self {
             entries: JavaHashMap::default(),
+            dirty: true,
         }
     }
 }

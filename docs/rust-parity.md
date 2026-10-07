@@ -1059,3 +1059,22 @@ operations and live iteration; alternate constructors, bulk methods, and externa
 structural mutation followed by iterator removal remain outside its scope.
 Binding this storage to attribute refresh and the complete entity lifecycle is
 the next step; this collection comparison does not establish gameplay parity.
+
+## Effect eligibility and entity notification bodies
+
+Effect eligibility now follows vanilla's ordered immunity-tag branches. Entity
+effect callbacks mark synchronization dirty, retain captured effect/map handles,
+apply or remove modifiers, refresh pending attributes and construct passenger
+update/removal packets in native order. New effect storage starts dirty, matching
+the entity constructor. Attribute refresh reads its captured live fastutil set
+and clears that same set only after every callback succeeds. Passenger lists
+remain captured while later connection fields and packet data are read at their
+native evaluation points.
+
+The [notification comparison](../benchmarks/rust-effect-notifications-2026-10-07/scoped-parity.json)
+matches **1,667,616 lines per reference JAR**, exercising inherited native
+eligibility, notification, refresh and passenger methods together with effect
+storage. The fixtures use actual status instances, pending sets, immutable
+passenger lists and packet constructors. Library and fixture Clippy pass.
+Modifier bodies, attribute-update consequences and packet transport are still
+controlled; their full bindings and complete gameplay remain unfinished.

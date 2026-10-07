@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod object_open_set;
+pub mod effect_notifications;
 pub mod active_effects;
 pub mod active_effect_tick;
 pub mod stored_consume;
