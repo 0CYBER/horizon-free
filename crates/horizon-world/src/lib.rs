@@ -12,6 +12,7 @@ pub mod active_effect_tick;
 pub mod stored_consume;
 pub mod attribute_health;
 pub mod attribute_updates;
+pub mod live_attribute_updates;
 pub mod attributes;
 pub mod block_collision;
 pub mod block_collision_scan;

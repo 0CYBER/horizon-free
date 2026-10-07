@@ -1230,3 +1230,27 @@ targets compile, and library/affected fixture Clippy checks pass. This borrowed
 binding keeps its selected attribute map fixed; entity virtual dispatch,
 attribute refresh, player absorption synchronization and starvation damage
 delivery still require their complete runtime integration.
+
+## Entity refresh over live registered attributes
+
+The live attribute bridge now connects virtual entity queries and pending
+attribute refresh to registered storage and attribute-update dispatch. Refresh
+retains its selected map through callbacks and clears that map's pending set
+only on success. Health and absorption consequences read actual computed limits;
+waypoint updates retain their manager before reading the direct attribute-map
+field. Scale changes dispatch dimension refresh.
+
+The [combined live update comparison](../benchmarks/rust-live-attribute-updates-2026-10-07/scoped-parity.json)
+matches **2,836,190 client-reference lines and 2,836,234 server-reference lines**.
+It executes actual native notifications, modifier loops, registered attribute
+queries, private refresh, health/absorption update bodies and synchronized Float
+storage. Cases cover all registered attributes/default suppliers, selected and
+captured map/data handles, callbacks changing limits or queues, null pending
+members, client guards, empty removals and failures late in large refreshes.
+Each reference uses its own JVM identity hashes, so callback-mutation paths can
+produce different trace lengths between runs. Library and fixture Clippy pass.
+
+Dimension rebuilding and waypoint-manager internals remain controlled, and
+passenger lists are empty in this combined fixture. Full active-effect lifecycle
+and particle/invisibility synchronization, player absorption storage and complete
+gameplay/platform integration remain unfinished.
