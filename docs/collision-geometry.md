@@ -1882,3 +1882,22 @@ collection comparison, not a gameplay parity claim. Targeted Clippy passes.
 Null/non-comparable keys, alternate map constructors and unexposed Map methods
 are outside this storage API. Concrete cooldown and gameplay integration remain
 pending.
+
+
+`item_cooldowns` composes cooldown entries with native hash-map ordering. Adds
+store before start notifications; removals notify even for missing groups. Tick
+expiry removes before end notifications, rereads the live clock and preserves
+iterator invalidation after callback mutations. Percentages use native wrapping
+integer differences and float arithmetic. `identifier` supplies validated names,
+Java hashes and path-first ordering. UseCooldown converts seconds and retrieves
+the player cooldown manager before adding through the stack's current group.
+
+`python3 tools/test_item_cooldowns_parity.py` compares actual ItemCooldowns and
+UseCooldown over real stack components, with controlled player/start/end
+callbacks. The
+[cooldown report](../benchmarks/rust-item-cooldowns-2026-10-07/scoped-parity.json)
+records **167,906 matching lines per JAR**, including colliding identifiers,
+wrapping clocks, zero/negative durations, float edge cases, empty visibility,
+reentrant ticks and mutation/failure prefixes. Targeted Clippy passes. Complete
+item-finish integration, server cooldown packets and full gameplay remain
+pending.
