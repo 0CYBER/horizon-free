@@ -28,6 +28,8 @@ pub struct WorldgenRandom<R: WorldgenSource> {
     source: R,
     count: i32,
     wrapped: bool,
+    /// The adapter's own Gaussian cache; native setSeed does not reset it.
+    gaussian: Option<f64>,
 }
 impl<R: WorldgenSource> WorldgenRandom<R> {
     pub fn new(source: R) -> Self {
@@ -35,6 +37,7 @@ impl<R: WorldgenSource> WorldgenRandom<R> {
             source,
             count: 0,
             wrapped: true,
+            gaussian: None,
         }
     }
     fn plain(source: R) -> Self {
@@ -42,6 +45,7 @@ impl<R: WorldgenSource> WorldgenRandom<R> {
             source,
             count: 0,
             wrapped: false,
+            gaussian: None,
         }
     }
     pub fn count(&self) -> i32 {
@@ -149,6 +153,15 @@ impl<R: WorldgenSource> RandomSource for WorldgenRandom<R> {
         }
         let bits = ((self.next_bits(26) as i64) << 27) + self.next_bits(27) as i64;
         bits as f64 * (1.0 / 9007199254740992.0)
+    }
+    fn next_gaussian(&mut self) -> f64 {
+        if !self.wrapped {
+            return self.source.next_gaussian();
+        }
+        let mut cache = self.gaussian.take();
+        let value = super::marsaglia_polar(&mut cache, || self.next_double());
+        self.gaussian = cache;
+        value
     }
     /// Native forks return the underlying source, not another bit adapter.
     /// The returned value keeps that behavior through a transparent variant.
