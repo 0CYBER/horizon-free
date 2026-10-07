@@ -1221,3 +1221,17 @@ The optimized implementation passes both pinned JAR comparisons again:
 (**1,771,555 lines per JAR**) and
 [health/hunger composition](../benchmarks/rust-attribute-memory-2026-10-07/health-regression.json)
 (**666,082 lines per JAR**). Targeted Clippy passes.
+
+
+`combat_rules` implements armor/toughness and magic-protection damage arithmetic.
+It preserves the nonnull-weapon/server-level guards and clamps modified armor
+effectiveness only after the server enchantment hook.
+
+`python3 tools/test_combat_rules_parity.py` compares actual `CombatRules` methods.
+The [combat rules report](../benchmarks/rust-combat-rules-2026-10-07/scoped-parity.json)
+records **184,248 matching lines per JAR**, including armor/toughness boundaries,
+random float bit patterns, nonfinite/signed-zero values, query mutations/failures,
+null/empty/unenchanted weapons and server/nonserver branches. Native unenchanted
+stacks have explicitly empty components. Targeted Clippy passes. Enchanted item
+components, damage tags, armor durability and the complete damage pipeline remain
+pending; the exposed enchantment hook is not an enchantment implementation.

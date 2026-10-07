@@ -18,6 +18,7 @@ pub mod chunk_status;
 pub mod climbing;
 pub mod collision;
 pub mod collision_context;
+pub mod combat_rules;
 pub mod compression;
 pub mod dynamic_support;
 pub mod edge_backoff;
