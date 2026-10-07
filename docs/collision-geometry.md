@@ -1646,3 +1646,21 @@ state, component patch order, stack identity and item/component/count equality.
 Targeted Clippy passes. The fixture arena preserves canonical EMPTY aliases;
 a production inventory, full component values/codecs and complete item-use,
 equipment and game-tick integration remain pending.
+
+
+`item_stack_refs` adds shared stack identity with automatic reference-counted
+lifetime management on the simulation thread. `simple_container` uses these
+references for get/set, merging, removals, reverse removal by type, clearing,
+capacity checks and item counts. Copies retain independent component patches;
+container slots and callers can deliberately share the same stack.
+
+`python3 tools/test_simple_container_parity.py` compares actual native container
+and stack methods, including changes and failures in virtual size/change hooks.
+The [container report](../benchmarks/rust-simple-container-2026-10-07/scoped-parity.json)
+records **590,402 matching lines per JAR**. It checks alias identity, raw/visible
+counts, empty-stack references, component-sensitive merging, overflow, invalid
+indices and mutation prefixes on failure. In particular, native insertion into
+the first empty slot clears the remainder before limiting the inserted copy.
+Targeted Clippy passes. Player inventory, menus, crafting accounting, persistence,
+arbitrary getItem/setItem overrides and complete gameplay integration remain
+pending. Reference counting here has not been benchmarked as a performance gain.

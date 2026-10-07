@@ -93,3 +93,6 @@ pub mod world_ray;
 pub mod worldgen;
 
 pub const DATA_VERSION: i32 = 5023;
+
+pub mod item_stack_refs;
+pub mod simple_container;
