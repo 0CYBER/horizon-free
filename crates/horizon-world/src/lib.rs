@@ -20,6 +20,7 @@ pub mod collision;
 pub mod collision_context;
 pub mod combat_rules;
 pub mod compression;
+pub mod damage_reduction;
 pub mod dynamic_support;
 pub mod edge_backoff;
 pub mod entity_collision;

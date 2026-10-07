@@ -28,7 +28,7 @@ pub trait DamageWorld {
     fn set_health(&mut self, value: f32) -> Result<(), Self::Error>;
     fn damage_event(&mut self) -> Result<(), Self::Error>;
 }
-fn positive(value: f32) -> f32 {
+pub(crate) fn positive(value: f32) -> f32 {
     if value.is_nan() {
         value
     } else if value <= 0.0 {
@@ -37,7 +37,7 @@ fn positive(value: f32) -> f32 {
         value
     }
 }
-fn stat_amount(value: f32) -> i32 {
+pub(crate) fn stat_amount(value: f32) -> i32 {
     let value = value * 10.0;
     // Java Math.round(float), including negative ties and integer saturation.
     let bits = value.to_bits() as i32;
@@ -52,7 +52,7 @@ fn stat_amount(value: f32) -> i32 {
         value as i32
     }
 }
-const STAT_LIMIT: f32 = 3.402_823_5e37;
+pub(crate) const STAT_LIMIT: f32 = 3.402_823_5e37;
 pub fn actually_hurt<W: DamageWorld>(
     world: &mut W,
     damage: f32,

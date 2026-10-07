@@ -1267,3 +1267,19 @@ captured food identity during mutations, guard short-circuiting, injected failur
 nonfinite exhaustion and integer hunger boundaries. The stored-state binding is
 also compared. Targeted Clippy passes. Consumable components, full ability storage
 and live player tick integration remain pending.
+
+
+`damage_reduction` composes native armor/toughness arithmetic with living damage
+bypass checks and armor-durability dispatch. Its magic-reduction path preserves
+resistance amplifier overflow, reduced-damage clamping, resisted statistics,
+repeated attacker lookup and the server-only enchantment protection query.
+Armor attributes floor to Java's saturated integer range before float conversion.
+
+`python3 tools/test_damage_reduction_parity.py` compares actual living methods
+for base entities and ServerPlayer receivers. The
+[damage reduction report](../benchmarks/rust-damage-reduction-2026-10-07/scoped-parity.json)
+records **78,069 matching lines per JAR**, covering bypass combinations,
+resistance/stat boundaries, numeric edges, query failures/mutations and actual
+empty-equipment protection iteration. Targeted Clippy passes. Equipment is empty;
+enchanted components, actual armor durability, registered damage/effect bindings
+and the full hurt sequence remain pending.
