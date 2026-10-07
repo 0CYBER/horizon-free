@@ -108,6 +108,7 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
         .iter()
         .filter_map(|e| match e {
             MotionEvent::Fall(e) => Some(e.trace()),
+            MotionEvent::Health(e) => Some(e.trace()),
             _ => None,
         })
         .collect();
@@ -144,6 +145,32 @@ fn main() -> Result<()> {
                 resources: &resources,
             };
             match op["mode"].as_str().unwrap() {
+                "clock" => world.player.health.advance_clock(),
+                "health" | "absorption" => world
+                    .player
+                    .set_health(single(&op["value"]), op["mode"] == "absorption")?,
+                "hurt" => {
+                    let source = resources
+                        .health
+                        .damage
+                        .id(op["name"].as_str().unwrap())
+                        .ok_or("missing fixture damage source")?;
+                    let kind = match op["name"].as_str().unwrap() {
+                        "minecraft:fall" => horizon_world::block_landing::LandingDamage::Fall,
+                        "minecraft:stalagmite" => {
+                            horizon_world::block_landing::LandingDamage::Stalagmite
+                        }
+                        _ => return Err("fixture source is not a landing source".into()),
+                    };
+                    let amount = single(&op["value"]);
+                    world.player.events.push(MotionEvent::Fall(
+                        horizon_client::landing::FallEvent::Damage {
+                            source: kind,
+                            amount,
+                        },
+                    ));
+                    world.player.hurt(&resources.health, source, amount)?;
+                }
                 "seed" => world.scene.random.set_seed(op["value"].as_i64().unwrap()),
                 "impulse" => world.player.impulse.set_ignore_fall_damage(
                     op["ignore"].as_bool().unwrap(),
@@ -276,6 +303,40 @@ fn main() -> Result<()> {
             let check_block = scene.block(25, 3, 25);
             snapshot(&mut out, &player)?;
             writeln!(out, "block {}", check_block.0)?;
+            let h = &player.health;
+            let canonical = |v: f32| {
+                if v.is_nan() {
+                    f32::NAN.to_bits()
+                } else {
+                    v.to_bits()
+                }
+            };
+            writeln!(
+                out,
+                "health {:08x} {:08x} {:08x} {} {} {:08x} {} {} {} {} {} {} {} {} {} {}",
+                canonical(h.health()),
+                canonical(h.absorption()),
+                canonical(h.food.exhaustion),
+                h.hurt.no_action_time,
+                h.hurt.cooldown,
+                canonical(h.hurt.last_hurt),
+                h.hurt.hurt_duration,
+                h.hurt.hurt_time,
+                h.hurt.last_source.map_or("none", |id| resources
+                    .health
+                    .damage
+                    .definition(id)
+                    .unwrap()
+                    .name
+                    .as_str()),
+                h.hurt.last_stamp,
+                h.dead,
+                h.sync_velocity,
+                h.data.is_dirty(),
+                h.data.item_dirty(h.ids.health).unwrap(),
+                h.data.item_dirty(h.ids.absorption).unwrap(),
+                h.game_time
+            )?;
             player.events.clear();
         }
         writeln!(out, "end")?;

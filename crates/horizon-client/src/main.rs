@@ -65,7 +65,7 @@ impl Options {
             }
             if argument == "--help" || argument == "-h" {
                 println!(
-                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions; F5 toggles walking test.\nWalking test: WASD move; Space jumps; gravity and collisions at 20 ticks/s.\n\nThis is a controlled development scene. Walking has no sprint/crouch, damage, interaction, saving or complete gameplay."
+                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions; F5 toggles walking test.\nWalking test: WASD move; Space jumps; gravity and collisions at 20 ticks/s.\n\nThis is a controlled development scene. Walking includes landing damage and stored health. Sprint/crouch, full death/respawn, interaction, saving and complete gameplay remain unfinished."
                 );
                 return Ok(None);
             }
@@ -172,6 +172,7 @@ impl App<'_> {
         );
         for _ in 0..self.motion_clock.advance(elapsed) {
             self.previous_player_position = player.position;
+            player.health.advance_clock();
             player.yaw = (-self.camera.yaw.to_degrees()) as f32;
             MotionWorld {
                 player,
@@ -181,8 +182,8 @@ impl App<'_> {
                 resources: self.motion_resources,
             }
             .player_movement_tick(direction, self.keys.contains(&KeyCode::Space))?;
-            // Damage requests are observable diagnostics until the full hurt
-            // and health lifecycle consumes them. Do not invent health loss.
+            // Health is already updated synchronously during landing. These
+            // counters expose incoming requests; delivery consumers remain pending.
             for event in player.events.drain(..) {
                 if let horizon_client::motion::MotionEvent::Fall(
                     horizon_client::landing::FallEvent::Damage { amount, .. },
@@ -279,6 +280,10 @@ impl App<'_> {
             "player_position": self.player.as_ref().map(|p| [p.position.x,p.position.y,p.position.z]),
             "player_velocity": self.player.as_ref().map(|p| [p.velocity.x,p.velocity.y,p.velocity.z]),
             "player_on_ground": self.player.as_ref().map(|p| p.ground.on_ground),
+            "player_health": self.player.as_ref().map(|p| p.health.health()),
+            "player_absorption": self.player.as_ref().map(|p| p.health.absorption()),
+            "player_dead": self.player.as_ref().map(|p| p.health.dead),
+            "player_hurt_cooldown": self.player.as_ref().map(|p| p.health.hurt.cooldown),
             "player_fall_distance": self.player.as_ref().map(|p| p.fall_distance),
             "fall_damage_requests": self.fall_damage_requests,
             "last_requested_fall_damage": self.last_requested_fall_damage,
@@ -467,8 +472,19 @@ impl ApplicationHandler for App<'_> {
                         if self.diagnostics && self.title_at.elapsed() >= Duration::from_secs(1) {
                             let fps = (self.frames - self.title_frames) as f64
                                 / self.title_at.elapsed().as_secs_f64();
+                            let health = self.player.as_ref().map_or_else(String::new, |p| {
+                                format!(
+                                    " | Health {}{}",
+                                    p.health.health(),
+                                    if p.health.dead_or_dying() {
+                                        " (dead)"
+                                    } else {
+                                        ""
+                                    }
+                                )
+                            });
                             self.window.as_ref().unwrap().set_title(&format!(
-                                "Horizon — Development | {fps:.0} FPS | {} chunks | {} quads",
+                                "Horizon — Development | {fps:.0} FPS | {} chunks | {} quads{health}",
                                 self.world.chunks.len(),
                                 self.mesh.cubes.len()
                             ));

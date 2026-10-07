@@ -22,15 +22,31 @@ import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.*;
+import net.minecraft.network.syncher.*;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.food.FoodData;
 import net.minecraft.world.phys.shapes.*;
 import static dev.horizonlab.parity.VanillaRegistryCollisionScanOracle.*;
 
-/** Real Player/LivingEntity movement, landing and fall calculation over stored
- * attributes and chunks. Sound/particle delivery, health damage and network
- * consumers remain controlled boundaries; their ordered requests are compared. */
+/** Real server-player movement, landing and hurt over stored attributes, health
+ * and chunks. Audio/network delivery, statistics/tracker/criterion listeners and
+ * full death services remain controlled boundaries. Clock operations set up the
+ * two damage-clock fields, not the complete enclosing native tick methods. */
 public final class VanillaSceneMotionOracle {
     static Field position,history,support,noBlocks,last,stuck,delay,trigger,attributeStorage,attributeDirty,attributeCached,impact,grace;
     static MethodHandle aiStep;
+    static EntityDataAccessor<Float> healthKey,absorptionKey;
+    static Field healthDead,cooldown,lastHurt,noAction,lastDamage,lastStamp,foodExhaustion,storedSpeed;
+    static Map<String,DamageSource> damageSources;
+    static String sourceName(DamageSource source){return source==null?"none":source.typeHolder().getRegisteredName();}
+    static final class Connection extends net.minecraft.server.network.ServerGamePacketListenerImpl {
+        Connection(){super(null,null,null,null);}
+        @Override public boolean hasClientLoaded(){return true;}
+    }
+    static final class Tracker extends CombatTracker {
+        Actor actor;Tracker(){super(null);}
+        @Override public void recordDamage(DamageSource source,float amount){actor.events.add(String.format("record-damage %08x",Float.floatToIntBits(amount)));}
+    }
     static float single(JsonElement v){return Float.intBitsToFloat(Integer.parseUnsignedInt(v.getAsString(),16));}
     static void write(Field f,Object o,Object value){try{f.set(o,value);}catch(Exception e){throw new AssertionError(e);}}
     static Field field(Class<?> c,String n)throws Exception{var f=c.getDeclaredField(n);f.setAccessible(true);return f;}
@@ -51,6 +67,13 @@ public final class VanillaSceneMotionOracle {
     static final class Level extends net.minecraft.server.level.ServerLevel {
         Map<Long,Chunk> chunks;WorldBorder border;Actor actor;Sources sources;net.minecraft.util.RandomSource rng;
         net.minecraft.server.MinecraftServer server;
+        net.minecraft.world.level.gamerules.GameRules rules=new net.minecraft.world.level.gamerules.GameRules(net.minecraft.world.flag.FeatureFlagSet.of());long time;
+        @Override public net.minecraft.world.level.gamerules.GameRules getGameRules(){return rules;}
+        @Override public net.minecraft.world.Difficulty getDifficulty(){return net.minecraft.world.Difficulty.NORMAL;}
+        static final net.minecraft.world.TickRateManager TICK_RATE=new net.minecraft.world.TickRateManager();
+        @Override public net.minecraft.world.TickRateManager tickRateManager(){return TICK_RATE;}
+        @Override public long getGameTime(){return time;}
+        @Override public void broadcastDamageEvent(Entity actor,DamageSource source){this.actor.events.add("broadcast-damage");}
         Level(){super(null,null,null,null,null,null,false,0L,List.of(),false);}
         @Override public boolean isClientSide(){return false;}
         @Override public BlockGetter getChunkForCollisions(int x,int z){return chunks.get(key(x,z));}
@@ -75,10 +98,31 @@ public final class VanillaSceneMotionOracle {
         @Override public boolean destroyBlock(BlockPos p,boolean drops){chunks.get(key(p.getX()>>4,p.getZ()>>4)).write(p,Block.getId(Blocks.AIR.defaultBlockState()));actor.events.add("destroy "+blockPos(p)+" "+drops);return true;}
         @Override public void levelEvent(int event,BlockPos p,int data){actor.events.add("level-event "+event+" "+blockPos(p)+" "+data);}
     }
-    static final class Actor extends Player {
-        AttributeMap attrs;byte flags;float speed;boolean preparedInput;List<String> events;
-        Actor(){super(null,null);}
-        void configure(Level l){setLevel(l);}
+    static final class Actor extends ServerPlayer {
+        AttributeMap attrs;byte flags;boolean preparedInput;List<String> events;
+        SynchedEntityData.DataItem<Float> healthItem,absorptionItem;Level sceneLevel;Tracker tracker;net.minecraft.server.PlayerAdvancements advancements;
+        Actor(){super(null,null,null,null);}
+        void configure(Level l){sceneLevel=l;setLevel(l);}
+        @Override public Level level(){return sceneLevel;}
+        @Override public boolean isChangingDimension(){return false;}
+        @Override public boolean isPermanentlyInvulnerable(){return false;}
+        @Override public boolean isTemporarilyInvulnerable(){return false;}
+        @Override public boolean fireImmune(){return false;}
+        @Override public boolean is(net.minecraft.tags.TagKey<EntityType<?>> tag){return false;} // player: neither fall immune nor freeze-extra
+        @Override public boolean isSleeping(){return false;}
+        @Override public ItemStack getUseItem(){return ItemStack.EMPTY;}
+        @Override public boolean isUsingItem(){return false;}
+        @Override public ItemStack getItemInHand(net.minecraft.world.InteractionHand hand){return ItemStack.EMPTY;}
+        @Override protected void removeEntitiesOnShoulder(){}
+        @Override public Collection<MobEffectInstance> getActiveEffects(){return List.of();}
+        @Override public CombatTracker getCombatTracker(){return tracker;}
+        @Override public net.minecraft.server.PlayerAdvancements getAdvancements(){events.add("hurt-criterion");return advancements;}
+        @Override public void onSyncedDataUpdated(EntityDataAccessor<?> key){if(key!=healthKey&&key!=absorptionKey)throw new AssertionError(key);events.add(String.format("updated %d %08x %s",key.id(),Float.floatToIntBits(getEntityData().get(key==healthKey?healthKey:absorptionKey)),getEntityData().isDirty()));}
+        @Override public void gameEvent(Holder<GameEvent> event){if(event==GameEvent.ENTITY_DAMAGE)events.add("entity-damage");else super.gameEvent(event);}
+        @Override public void die(DamageSource source){dead=true;events.add("death-request");}
+        @Override protected void playHurtSound(DamageSource source){events.add("hurt-sound");}
+        @Override protected SoundEvent getDeathSound(){return SoundEvents.PLAYER_DEATH;}
+        @Override public void makeSound(SoundEvent sound){events.add("death-sound");}
         @Override public GameType gameMode(){return GameType.SURVIVAL;}
         @Override public AttributeMap getAttributes(){return attrs;}
         @Override protected boolean getSharedFlag(int bit){return (flags&(1<<bit))!=0;}
@@ -101,22 +145,25 @@ public final class VanillaSceneMotionOracle {
         @Override public boolean isNoGravity(){return false;}
         @Override public boolean hasEffect(Holder<MobEffect> effect){return false;}
         @Override public MobEffectInstance getEffect(Holder<MobEffect> effect){return null;}
-        @Override public float getSpeed(){return speed;}
-        @Override public float getHealth(){return 20;}
-        @Override public void setSpeed(float value){speed=value;}
         @Override public MoveSimulationType getMoveSimulationType(){return MoveSimulationType.SERVER_AND_CLIENT;}
         @Override public boolean isClientAuthoritative(){return false;}
         @Override public void recordMovement(MoverType mover,Vec3 movement){}
         @Override protected boolean updateFluidInteraction(){return false;}
         @Override public void playSound(SoundEvent sound,float volume,float pitch){events.add(String.format("sound %s entity %08x %08x",soundName(sound),Float.floatToIntBits(volume),Float.floatToIntBits(pitch)));}
         @Override protected void playBlockFallSound(){events.add("block-fall-sound");}
-        @Override public void awardStat(Identifier stat,int value){if(stat!=net.minecraft.stats.Stats.FALL_ONE_CM)throw new AssertionError(stat);events.add("stat "+value);}
-        @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,DamageSource source,float damage){var sources=((Level)level).sources;events.add(String.format("damage %s %08x",source==sources.fall?"fall":source==sources.stalagmite?"stalagmite":"unknown",Float.floatToIntBits(damage)));return false;}
+        @Override public void awardStat(net.minecraft.stats.Stat<?> stat,int value){
+            if(stat.getValue()!=net.minecraft.stats.Stats.JUMP)throw new AssertionError(stat);
+            events.add("health-stat jump "+value);
+        }
+        @Override public void awardStat(Identifier stat,int value){
+            if(stat==net.minecraft.stats.Stats.FALL_ONE_CM){events.add("stat "+value);return;}
+            String name=stat==net.minecraft.stats.Stats.DAMAGE_ABSORBED?"absorbed":stat==net.minecraft.stats.Stats.DAMAGE_TAKEN?"taken":stat==net.minecraft.stats.Stats.DAMAGE_RESISTED?"resisted":null;
+            if(name==null)throw new AssertionError(stat);events.add("health-stat "+name+" "+value);
+        }
+        @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,DamageSource source,float damage){var sources=((Level)level).sources;events.add(String.format("damage %s %08x",source==sources.fall?"fall":source==sources.stalagmite?"stalagmite":"unknown",Float.floatToIntBits(damage)));return super.hurtServer(level,source,damage);}
         @Override public void teleportRelative(double x,double y,double z){setPos(getX()+x,getY()+y,getZ()+z);}
         @Override protected void playStepSound(BlockPos p,BlockState state){}
-        @Override public void causeFoodExhaustion(float v){}
         @Override public void gameEvent(Holder<GameEvent> event,Entity source){}
-        @Override protected boolean isImmobile(){return false;}
         @Override public LivingEntity getControllingPassenger(){return null;}
         @Override public double getFluidHeight(net.minecraft.tags.TagKey<net.minecraft.world.level.material.Fluid> tag){return 0;}
         @Override public double getFluidJumpThreshold(){return .4;}
@@ -150,18 +197,27 @@ public final class VanillaSceneMotionOracle {
         for(var v:List.of(p.position(),p.getDeltaMovement(),new Vec3(b.minX,b.minY,b.minZ),new Vec3(b.maxX,b.maxY,b.maxZ)))
             out.printf("%016x %016x %016x ",Double.doubleToLongBits(v.x),Double.doubleToLongBits(v.y),Double.doubleToLongBits(v.z));
         out.printf("%s %s %s %s %s %s %s %016x %s %s %s %08x %d %08x %d %d %s | %s%n",p.horizontalCollision,p.verticalCollision,p.verticalCollisionBelow,p.minorHorizontalCollision,
-            p.onGround(),noBlocks.getBoolean(p),pos(support.get(p)),Double.doubleToLongBits(p.fallDistance),pos(last.get(p)),p.needsSync,p.syncPosition,Float.floatToIntBits(p.speed),delay.getInt(p),Float.floatToIntBits(p.yHeadRot),trigger.getInt(p),grace.getInt(p),impact.get(p)==null?"none":vectorBits((Vec3)impact.get(p)),String.join(";",attributes));
+            p.onGround(),noBlocks.getBoolean(p),pos(support.get(p)),Double.doubleToLongBits(p.fallDistance),pos(last.get(p)),p.needsSync,p.syncPosition,Float.floatToIntBits(storedSpeed.getFloat(p)),delay.getInt(p),Float.floatToIntBits(p.yHeadRot),trigger.getInt(p),grace.getInt(p),impact.get(p)==null?"none":vectorBits((Vec3)impact.get(p)),String.join(";",attributes));
         out.println("events "+String.join(" | ",p.events));p.events.clear();
         out.println("block "+Block.getId(p.level().getBlockState(new BlockPos(25,3,25))));
+        out.printf("health %08x %08x %08x %d %d %08x %d %d %s %d %s %s %s %s %s %d%n",
+            Float.floatToIntBits(p.getHealth()),Float.floatToIntBits(p.getAbsorptionAmount()),Float.floatToIntBits(foodExhaustion.getFloat(p.getFoodData())),
+            noAction.getInt(p),cooldown.getInt(p),Float.floatToIntBits(lastHurt.getFloat(p)),p.hurtDuration,p.hurtTime,sourceName((DamageSource)lastDamage.get(p)),lastStamp.getLong(p),healthDead.getBoolean(p),p.syncVelocity,
+            p.getEntityData().isDirty(),p.healthItem.isDirty(),p.absorptionItem.isDirty(),p.sceneLevel.time);
     }
-    public static void main(String[] args)throws Exception{
+    @SuppressWarnings("unchecked") public static void main(String[] args)throws Exception{
         net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();Path dir=Path.of(args[1]);
         VanillaHeightmapOracle.bindTags(JsonParser.parseString(Files.readString(Path.of(args[2]).resolve("block-tags.json"))).getAsJsonObject());
         var u=Class.forName("sun.misc.Unsafe");var f=u.getDeclaredField("theUnsafe");f.setAccessible(true);var unsafe=f.get(null);var allocate=u.getMethod("allocateInstance",Class.class);
         position=field(Entity.class,"position");history=field(Entity.class,"movementThisTick");support=field(Entity.class,"mainSupportingBlockPos");noBlocks=field(Entity.class,"onGroundNoBlocks");last=field(LivingEntity.class,"lastClimbablePos");stuck=field(Entity.class,"stuckSpeedMultiplier");
         var abilities=field(Player.class,"abilities");
+        healthKey=(EntityDataAccessor<Float>)field(LivingEntity.class,"DATA_HEALTH_ID").get(null);absorptionKey=(EntityDataAccessor<Float>)field(Player.class,"DATA_PLAYER_ABSORPTION_ID").get(null);
+        healthDead=field(LivingEntity.class,"dead");cooldown=field(LivingEntity.class,"damageCooldownTime");lastHurt=field(LivingEntity.class,"lastHurt");noAction=field(LivingEntity.class,"noActionTime");lastDamage=field(LivingEntity.class,"lastDamageSource");lastStamp=field(LivingEntity.class,"lastDamageStamp");foodExhaustion=field(FoodData.class,"exhaustionLevel");
+        var dataCtor=SynchedEntityData.class.getDeclaredConstructor(SyncedDataHolder.class,SynchedEntityData.DataItem[].class);dataCtor.setAccessible(true);
+        var damageRegistry=VanillaDamageSourceOracle.registry(dir.resolve("damage"));damageSources=new HashMap<>();
+        for(var name:damageRegistry.keySet())damageSources.put(name.toString(),new DamageSource(damageRegistry.get(name).orElseThrow()));
         delay=field(LivingEntity.class,"noJumpDelay");
-        trigger=field(Player.class,"jumpTriggerTime");
+        trigger=field(Player.class,"jumpTriggerTime");storedSpeed=field(LivingEntity.class,"speed");
         impact=field(LivingEntity.class,"currentImpulseImpactPos");grace=field(LivingEntity.class,"currentImpulseContextResetGraceTime");
         attributeStorage=field(AttributeMap.class,"attributes");attributeDirty=field(AttributeInstance.class,"dirty");attributeCached=field(AttributeInstance.class,"cachedValue");
         aiStep=MethodHandles.privateLookupIn(LivingEntity.class,MethodHandles.lookup()).findSpecial(LivingEntity.class,"aiStep",MethodType.methodType(void.class),LivingEntity.class);
@@ -169,7 +225,8 @@ public final class VanillaSceneMotionOracle {
         var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
         var level=(Level)allocate.invoke(unsafe,Level.class);level.chunks=VanillaSceneCollisionOracle.scene(description,trace);level.border=new Border();
         level.rng=net.minecraft.util.RandomSource.create(0);level.sources=(Sources)allocate.invoke(unsafe,Sources.class);
-        level.sources.fall=(DamageSource)allocate.invoke(unsafe,DamageSource.class);level.sources.stalagmite=(DamageSource)allocate.invoke(unsafe,DamageSource.class);
+        level.sources.fall=damageSources.get("minecraft:fall");level.sources.stalagmite=damageSources.get("minecraft:stalagmite");
+        level.rules=new net.minecraft.world.level.gamerules.GameRules(net.minecraft.world.flag.FeatureFlagSet.of());
         var server=(VanillaBlockLandingOracle.Server)allocate.invoke(unsafe,VanillaBlockLandingOracle.Server.class);
         server.d=new VanillaBlockLandingOracle.Data();server.d.out=new PrintWriter(OutputStream.nullOutputStream());server.d.f=JsonParser.parseString("{\"fail\":-1,\"protected\":false}").getAsJsonObject();level.server=server;
         try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var lines=Files.lines(dir.resolve("inputs.txt"))){
@@ -182,9 +239,23 @@ public final class VanillaSceneMotionOracle {
                 write(field(Player.class,"inventory"),p,new Inventory(p,equipment));
                 p.attrs=new AttributeMap(VanillaEntityAttributeOracle.supplier(EntityTypes.PLAYER));
                 write(history,p,new ArrayDeque<>());write(support,p,Optional.empty());write(last,p,Optional.empty());write(stuck,p,Vec3.ZERO);write(abilities,p,new Abilities());
+                write(field(ServerPlayer.class,"shoulderEntityLeft"),p,new net.minecraft.nbt.CompoundTag());write(field(ServerPlayer.class,"shoulderEntityRight"),p,new net.minecraft.nbt.CompoundTag());
+                p.connection=(Connection)allocate.invoke(unsafe,Connection.class);
+                p.advancements=(net.minecraft.server.PlayerAdvancements)allocate.invoke(unsafe,net.minecraft.server.PlayerAdvancements.class);
+                write(field(net.minecraft.server.PlayerAdvancements.class,"activeTriggers"),p.advancements,new HashMap<>());
+                p.tracker=(Tracker)allocate.invoke(unsafe,Tracker.class);p.tracker.actor=p;
+                write(field(Player.class,"foodData"),p,new FoodData());
+                var items=new SynchedEntityData.DataItem<?>[Math.max(healthKey.id(),absorptionKey.id())+1];
+                for(int i=0;i<items.length;i++)items[i]=new SynchedEntityData.DataItem<Float>(new EntityDataAccessor<Float>(i,EntityDataSerializers.FLOAT),0f);
+                items[healthKey.id()]=p.healthItem=new SynchedEntityData.DataItem<Float>(healthKey,1f);items[absorptionKey.id()]=p.absorptionItem=new SynchedEntityData.DataItem<Float>(absorptionKey,0f);
+                write(field(Entity.class,"entityData"),p,dataCtor.newInstance(p,items));p.setHealth(p.getMaxHealth());p.events.clear();level.time=0;
                 p.setDeltaMovement(Vec3.ZERO);p.setPos(VanillaSceneCollisionOracle.vector(row.get("position")));
                 for(var value:row.getAsJsonArray("ops")){
                     var op=value.getAsJsonObject();switch(op.get("mode").getAsString()){
+                        case "health"->p.setHealth(single(op.get("value")));
+                        case "absorption"->p.setAbsorptionAmount(single(op.get("value")));
+                        case "hurt"->p.hurtServer(level,damageSources.get(op.get("name").getAsString()),single(op.get("value")));
+                        case "clock"->{level.time++;if(cooldown.getInt(p)>0)cooldown.setInt(p,cooldown.getInt(p)-1);if(p.hurtTime>0)p.hurtTime--;}
                         case "seed"->level.rng.setSeed(op.get("value").getAsLong());
                         case "impulse"->p.setIgnoreFallDamageFromCurrentImpulse(op.get("ignore").getAsBoolean(),op.get("value").isJsonNull()?null:VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "block"->{var v=op.getAsJsonArray("position");var pos=new BlockPos(v.get(0).getAsInt(),v.get(1).getAsInt(),v.get(2).getAsInt());var state=VanillaSceneCollisionOracle.state(op.get("name").getAsString());if(op.has("properties"))for(var property:op.getAsJsonObject("properties").entrySet())state=VanillaSceneCollisionOracle.property(state,state.getBlock().getStateDefinition().getProperty(property.getKey()),property.getValue().getAsString());level.chunks.get(key(pos.getX()>>4,pos.getZ()>>4)).write(pos,Block.getId(state));}

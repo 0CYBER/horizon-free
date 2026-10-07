@@ -511,6 +511,10 @@ impl LivingFallWorld for FallCall<'_, '_, '_, '_> {
             source: self.source,
             amount,
         });
+        let resources = &self.world.resources.health;
+        self.world
+            .player
+            .hurt(resources, resources.landing_source(self.source), amount)?;
         Ok(())
     }
 }

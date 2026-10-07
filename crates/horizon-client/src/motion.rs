@@ -1,5 +1,5 @@
 //! Stored movement state for the resident scene. This binds the validated air,
-//! jump, collision, support and restitution kernels. Entity lifecycle, damage,
+//! jump, collision, support, restitution and stored health bindings. Entity lifecycle,
 //! block-inside effects and audiovisual event consumers remain separate work.
 use crate::{Result, assets::Assets, collisions::SceneCollisions, world::TestWorld};
 use horizon_core::{
@@ -43,6 +43,7 @@ pub struct MotionResources {
     pub climbable: BTreeSet<String>,
     pub fall_reset: BTreeSet<String>,
     pub landing: BlockLandingRegistry,
+    pub health: crate::health::HealthResources,
 }
 impl MotionResources {
     pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
@@ -78,6 +79,7 @@ impl MotionResources {
         };
         Ok(Self {
             landing: crate::landing::load(root, &properties)?,
+            health: crate::health::HealthResources::load(root)?,
             attributes,
             blocks: properties.bind(&MovementTags {
                 fences: tag("minecraft:fences")?,
@@ -90,10 +92,11 @@ impl MotionResources {
     }
 }
 
-/// Explicit phase records until the entity runtime can dispatch damage, events
-/// and networking. A queued landing is not a claim that damage was applied.
+/// Ordered requests and phase records for world/audio/network consumers. Landing
+/// hurt dispatch updates stored health synchronously before these are drained.
 #[derive(Clone, Copy, Debug)]
 pub enum MotionEvent {
+    Health(crate::health::HealthEvent),
     Fall(crate::landing::FallEvent),
     Recorded {
         mover: MoverType,
@@ -137,6 +140,7 @@ pub struct PlayerMotion {
     pub events: Vec<MotionEvent>,
     pub attributes: LiveAttributes<Box<dyn FnMut() -> i32>>,
     pub impulse: ImpulseContext,
+    pub health: crate::health::PlayerHealth,
 }
 fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
@@ -156,7 +160,7 @@ impl PlayerMotion {
             identity = identity.wrapping_add(1);
             identity
         });
-        let attributes = LiveAttributes::new(
+        let mut attributes = LiveAttributes::new(
             resources.attributes.clone(),
             "minecraft:player",
             &hashes,
@@ -164,6 +168,7 @@ impl PlayerMotion {
         )
         .map_err(attribute_error)?;
         Ok(Self {
+            health: crate::health::PlayerHealth::new(&resources.health, &mut attributes)?,
             impulse: ImpulseContext::default(),
             position,
             velocity: Vec3::ZERO,
@@ -362,7 +367,7 @@ impl MotionWorld<'_, '_, '_> {
             velocity.y = 0.0;
         }
         self.player.velocity = velocity;
-        let input = match input {
+        let mut input = match input {
             TickInput::Living(v) => Vec3::new(
                 f64::from(v[0] * 0.98),
                 f64::from(v[1]),
@@ -373,6 +378,11 @@ impl MotionWorld<'_, '_, '_> {
                 Vec3::new(f64::from(direction[0]), 0.0, f64::from(direction[1]))
             }
         };
+        if self.player.health.dead_or_dying() {
+            self.player.jumping = false;
+            input.x = 0.0;
+            input.z = 0.0;
+        }
         if self.player.jumping {
             if self.player.ground.on_ground && self.player.no_jump_delay == 0 {
                 self.jump_from_ground()?;
@@ -385,7 +395,18 @@ impl MotionWorld<'_, '_, '_> {
         self.player.remove_frost()
     }
     pub fn jump_from_ground(&mut self) -> Result<()> {
-        living_motion::jump_from_ground(self)
+        living_motion::jump_from_ground(self)?;
+        self.player
+            .events
+            .push(MotionEvent::Health(crate::health::HealthEvent::Statistic {
+                name: "jump",
+                amount: 1,
+            }));
+        self.player
+            .health
+            .food
+            .add_exhaustion(if self.player.sprinting { 0.2 } else { 0.05 });
+        Ok(())
     }
     pub fn move_self(&mut self, movement: Vec3) -> Result<()> {
         entity_move::move_entity(self, MoverType::SelfMovement, movement)
@@ -666,7 +687,7 @@ impl LivingAirWorld for MotionWorld<'_, '_, '_> {
         self.player.attribute("minecraft:friction_modifier")
     }
     fn speed(&mut self) -> Result<f32> {
-        Ok(self.player.speed)
+        Ok(self.player.attribute("minecraft:movement_speed")? as f32)
     }
     fn flying_speed(&mut self) -> Result<f32> {
         Ok(if self.player.sprinting {
@@ -800,7 +821,7 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
         Ok(false)
     }
     fn speed(&mut self) -> Result<f32> {
-        Ok(self.player.speed)
+        Ok(self.player.attribute("minecraft:movement_speed")? as f32)
     }
     fn omnidirectional_air_mover(&mut self) -> Result<bool> {
         Ok(false)

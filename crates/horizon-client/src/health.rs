@@ -1,0 +1,534 @@
+//! Stored player health and empty-equipment server damage for the resident scene.
+//! World/audio/network consumers are queued explicitly; full death and tick
+//! lifecycles (drops, respawn, regeneration, effects) remain separate work.
+use crate::{
+    Result,
+    motion::{MotionEvent, PlayerMotion},
+};
+use horizon_world::{
+    attributes::live::LiveAttributes,
+    block_landing::LandingDamage,
+    combat_rules::ArmorWorld,
+    damage_immunity::{self, DamageRule, ImmunityTag, ImmunityWorld},
+    damage_reduction::Bypass,
+    damage_source::{Catalog, DamageSource, DamageTypeId, Scaling},
+    food::{Difficulty, FoodData},
+    living_damage::DamageStat,
+    living_hurt::{HurtState, HurtTag, HurtWorld},
+    player_health::{PlayerAttributeHealth, PlayerFloatIds},
+    player_hurt::{CausingEntity, PlayerHurtWorld, ServerPlayerHurtWorld},
+    server_player_combat::{CombatEnvironment, ServerPlayerCombat},
+    server_player_damage::ServerDamageEnvironment,
+    synced_floats::{FloatValue, Observer, SyncedFloats},
+};
+use std::{fs, io, path::Path};
+type Attributes = LiveAttributes<Box<dyn FnMut() -> i32>>;
+type State = HurtState<DamageTypeId>;
+
+pub struct HealthResources {
+    pub damage: Catalog,
+    pub ids: PlayerFloatIds,
+}
+impl HealthResources {
+    pub fn load(root: &Path) -> Result<Self> {
+        let read = |name: &str| -> Result<serde_json::Value> {
+            Ok(serde_json::from_slice(&fs::read(root.join(name))?)?)
+        };
+        let ids = read("player-float-ids.json")?;
+        let id = |name: &str| -> Result<u8> {
+            Ok(u8::try_from(
+                ids[name].as_u64().ok_or("missing player float ID")?,
+            )?)
+        };
+        let damage = Catalog::from_json(&read("damage-catalog.json")?, &read("damage-tags.json")?)?;
+        for name in ["minecraft:fall", "minecraft:stalagmite"] {
+            if damage.id(name).is_none() {
+                return Err(format!("missing damage type {name}").into());
+            }
+        }
+        Ok(Self {
+            damage,
+            ids: PlayerFloatIds {
+                health: id("health")?,
+                absorption: id("absorption")?,
+            },
+        })
+    }
+    pub fn landing_source(&self, source: LandingDamage) -> DamageTypeId {
+        self.damage
+            .id(match source {
+                LandingDamage::Fall => "minecraft:fall",
+                LandingDamage::Stalagmite => "minecraft:stalagmite",
+            })
+            .expect("validated landing source")
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub enum HealthEvent {
+    Updated {
+        id: u8,
+        value: f32,
+        dirty: bool,
+    },
+    Statistic {
+        name: &'static str,
+        amount: i32,
+    },
+    RecordedDamage {
+        source: DamageTypeId,
+        amount: f32,
+    },
+    Phase(&'static str),
+    Criterion {
+        original: f32,
+        amount: f32,
+        blocked: bool,
+    },
+}
+impl HealthEvent {
+    pub fn trace(self) -> String {
+        match self {
+            Self::Updated { id, value, dirty } => {
+                format!("updated {id} {:08x} {dirty}", value.to_bits())
+            }
+            Self::Statistic { name, amount } => format!("health-stat {name} {amount}"),
+            Self::RecordedDamage { amount, .. } => {
+                format!("record-damage {:08x}", amount.to_bits())
+            }
+            Self::Phase(name) => name.into(),
+            Self::Criterion { .. } => "hurt-criterion".into(),
+        }
+    }
+}
+struct Updates<'a>(&'a mut Vec<MotionEvent>);
+impl Observer for Updates<'_> {
+    type Error = io::Error;
+    fn updated(&mut self, data: &mut SyncedFloats, id: u8) -> io::Result<()> {
+        self.0.push(MotionEvent::Health(HealthEvent::Updated {
+            id,
+            value: data.get(id).expect("existing updated field"),
+            dirty: data.is_dirty(),
+        }));
+        Ok(())
+    }
+}
+pub struct PlayerHealth {
+    pub data: SyncedFloats,
+    pub ids: PlayerFloatIds,
+    pub food: FoodData,
+    pub hurt: State,
+    pub dead: bool,
+    pub sync_velocity: bool,
+    pub game_time: i64,
+}
+impl PlayerHealth {
+    pub fn new(resources: &HealthResources, attributes: &mut Attributes) -> Result<Self> {
+        let ids = resources.ids;
+        let mut data = SyncedFloats::new(&[
+            FloatValue {
+                id: ids.health,
+                value: 1.0,
+            },
+            FloatValue {
+                id: ids.absorption,
+                value: 0.0,
+            },
+        ])?;
+        let mut ignored = Vec::new();
+        let mut observer = Updates(&mut ignored);
+        let maximum = attributes
+            .key("minecraft:max_health")
+            .ok_or("missing max health")?;
+        let maximum = attributes
+            .value(
+                Some(maximum),
+                horizon_world::attribute_map::ValueKind::Computed,
+            )
+            .map_err(|e| io::Error::other(format!("health attribute: {e:?}")))?
+            as f32;
+        PlayerAttributeHealth::new(attributes, &mut data, ids, false, &mut observer)?
+            .set_health(maximum)?;
+        Ok(Self {
+            data,
+            ids,
+            food: FoodData::default(),
+            hurt: HurtState {
+                no_action_time: 0,
+                cooldown: 0,
+                last_hurt: 0.0,
+                hurt_duration: 0,
+                hurt_time: 0,
+                last_source: None,
+                last_stamp: 0,
+            },
+            dead: false,
+            sync_velocity: false,
+            game_time: 0,
+        })
+    }
+    pub fn health(&self) -> f32 {
+        self.data
+            .get(self.ids.health)
+            .expect("validated health field")
+    }
+    pub fn absorption(&self) -> f32 {
+        self.data
+            .get(self.ids.absorption)
+            .expect("validated absorption field")
+    }
+    pub fn dead_or_dying(&self) -> bool {
+        self.health() <= 0.0 || self.dead
+    }
+    /// The damage-clock phases of ServerPlayer.tick and LivingEntity.baseTick.
+    /// The complete enclosing ticks, including death removal, are not yet bound.
+    pub fn advance_clock(&mut self) {
+        self.game_time = self.game_time.wrapping_add(1);
+        if self.hurt.cooldown > 0 {
+            self.hurt.cooldown -= 1;
+        }
+        if self.hurt.hurt_time > 0 {
+            self.hurt.hurt_time -= 1;
+        }
+    }
+}
+impl PlayerMotion {
+    pub fn hurt(
+        &mut self,
+        resources: &HealthResources,
+        source: DamageTypeId,
+        amount: f32,
+    ) -> Result<bool> {
+        let source = resources
+            .damage
+            .source::<()>(source, None, None, None)
+            .ok_or("unknown resident damage source")?;
+        let h = &mut self.health;
+        let mut environment = Environment {
+            source,
+            events: &mut self.events,
+            dead: &mut h.dead,
+            sync_velocity: &mut h.sync_velocity,
+            game_time: h.game_time,
+        };
+        Ok(ServerPlayerCombat::new(
+            &mut self.attributes,
+            &mut h.data,
+            &mut h.food,
+            h.ids,
+            &mut environment,
+        )?
+        .hurt(&mut h.hurt, amount)?)
+    }
+    pub fn set_health(&mut self, value: f32, absorption: bool) -> Result<()> {
+        let h = &mut self.health;
+        let mut observer = Updates(&mut self.events);
+        let mut binding = PlayerAttributeHealth::new(
+            &mut self.attributes,
+            &mut h.data,
+            h.ids,
+            h.dead,
+            &mut observer,
+        )?;
+        if absorption {
+            binding.set_absorption(value)?;
+        } else {
+            binding.set_health(value)?;
+        }
+        Ok(())
+    }
+}
+struct Environment<'a> {
+    source: DamageSource<'a, ()>,
+    events: &'a mut Vec<MotionEvent>,
+    dead: &'a mut bool,
+    sync_velocity: &'a mut bool,
+    game_time: i64,
+}
+impl Environment<'_> {
+    fn event(&mut self, event: HealthEvent) {
+        self.events.push(MotionEvent::Health(event));
+    }
+    fn phase(&mut self, name: &'static str) -> io::Result<()> {
+        self.event(HealthEvent::Phase(name));
+        Ok(())
+    }
+    fn stat(&mut self, name: &'static str, amount: i32) -> io::Result<()> {
+        self.event(HealthEvent::Statistic { name, amount });
+        Ok(())
+    }
+}
+impl Observer for Environment<'_> {
+    type Error = io::Error;
+    fn updated(&mut self, data: &mut SyncedFloats, id: u8) -> io::Result<()> {
+        Updates(self.events).updated(data, id)
+    }
+}
+impl ArmorWorld for Environment<'_> {
+    type Error = io::Error;
+    type Weapon = ();
+    type ServerLevel = ();
+    fn weapon(&mut self) -> io::Result<Option<()>> {
+        Ok(None)
+    }
+    fn server_level(&mut self) -> io::Result<Option<()>> {
+        Ok(Some(()))
+    }
+    fn modify_armor_effectiveness(&mut self, _: (), _: (), value: f32) -> io::Result<f32> {
+        Ok(value)
+    }
+}
+impl ServerDamageEnvironment<Attributes> for Environment<'_> {
+    type Attacker = ();
+    fn invulnerable(&mut self) -> io::Result<bool> {
+        damage_immunity::server_player_immunity(self)
+    }
+    fn bypasses(&mut self, kind: Bypass) -> io::Result<bool> {
+        Ok(self.source.bypasses(kind))
+    }
+    fn hurt_armor(&mut self, _: &mut Attributes, _: f32) -> io::Result<()> {
+        Ok(())
+    } // empty equipment
+    fn has_resistance(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn resistance_amplifier(&mut self) -> io::Result<i32> {
+        Err(io::Error::other("no resistance effect"))
+    }
+    fn award_resisted(&mut self, value: i32) -> io::Result<()> {
+        self.stat("resisted", value)
+    }
+    fn attacker(&mut self) -> io::Result<Option<()>> {
+        Ok(None)
+    }
+    fn award_dealt_resisted(&mut self, _: i32) -> io::Result<()> {
+        Err(io::Error::other("no damage attacker"))
+    }
+    fn damage_protection(&mut self, _: ()) -> io::Result<f32> {
+        Ok(0.0)
+    } // empty equipment
+    fn award_self(&mut self, stat: DamageStat, value: i32) -> io::Result<()> {
+        self.stat(
+            match stat {
+                DamageStat::Absorbed => "absorbed",
+                DamageStat::Taken => "taken",
+                DamageStat::DealtAbsorbed => return Err(io::Error::other("attacker statistic")),
+            },
+            value,
+        )
+    }
+    fn award_attacker(&mut self, _: (), _: DamageStat, _: i32) -> io::Result<()> {
+        Err(io::Error::other("no damage attacker"))
+    }
+    fn source_food_exhaustion(&mut self) -> io::Result<f32> {
+        Ok(self.source.definition().exhaustion)
+    }
+    fn ability_invulnerable(&self) -> bool {
+        false
+    }
+    fn level_is_client(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn record_damage(&mut self, amount: f32) -> io::Result<()> {
+        self.event(HealthEvent::RecordedDamage {
+            source: self.source.type_id(),
+            amount,
+        });
+        Ok(())
+    }
+    fn damage_event(&mut self) -> io::Result<()> {
+        self.phase("entity-damage")
+    }
+}
+impl CombatEnvironment<Attributes> for Environment<'_> {
+    fn dead_flag(&self) -> bool {
+        *self.dead
+    }
+}
+impl ImmunityWorld for Environment<'_> {
+    type Error = io::Error;
+    fn removed(&self) -> bool {
+        false
+    }
+    fn permanently_invulnerable(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn temporarily_invulnerable(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn tag(&mut self, tag: ImmunityTag) -> io::Result<bool> {
+        Ok(self.source.immunity_tag(tag))
+    }
+    fn creative_source(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn fire_immune(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn fall_immune(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn enchantment_immunity(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn damage_rule(&mut self, _: DamageRule) -> io::Result<bool> {
+        Ok(true)
+    }
+    fn changing_dimension(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn ender_pearl(&mut self) -> io::Result<bool> {
+        Ok(self.source.is_type("minecraft:ender_pearl"))
+    }
+    fn client_loaded(&mut self) -> io::Result<bool> {
+        Ok(true)
+    }
+}
+impl HurtWorld for Environment<'_> {
+    type Error = io::Error;
+    type Source = DamageTypeId;
+    type UseItem = ();
+    type Blocking = ();
+    type Sound = ();
+    fn source(&self) -> DamageTypeId {
+        self.source.type_id()
+    }
+    fn is_server_player(&self) -> bool {
+        true
+    }
+    fn invulnerable(&mut self, _: &mut State) -> io::Result<bool> {
+        damage_immunity::server_player_immunity(self)
+    }
+    fn dead_or_dying(&mut self, _: &mut State) -> io::Result<bool> {
+        Err(io::Error::other("combat binding supplies health predicate"))
+    }
+    fn tag(&mut self, _: &mut State, tag: HurtTag) -> io::Result<bool> {
+        Ok(self.source.hurt_tag(tag))
+    }
+    fn fire_resistance(&mut self, _: &mut State) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn sleeping(&mut self, _: &mut State) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn stop_sleeping(&mut self, _: &mut State) -> io::Result<()> {
+        Ok(())
+    }
+    fn use_item(&mut self, _: &mut State) -> io::Result<()> {
+        Ok(())
+    }
+    fn apply_blocking(&mut self, _: &mut State, _: f32) -> io::Result<f32> {
+        Ok(0.0)
+    }
+    fn freeze_hurts_extra(&mut self, _: &mut State) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn helmet_empty(&mut self, _: &mut State) -> io::Result<bool> {
+        Ok(true)
+    }
+    fn hurt_helmet(&mut self, _: &mut State, _: f32) -> io::Result<()> {
+        Ok(())
+    }
+    fn actually_hurt(&mut self, _: &mut State, _: f32) -> io::Result<()> {
+        Err(io::Error::other("combat binding supplies inner damage"))
+    }
+    fn resolve_mob(&mut self, _: &mut State) -> io::Result<()> {
+        Ok(())
+    }
+    fn resolve_player(&mut self, _: &mut State) -> io::Result<()> {
+        Ok(())
+    }
+    fn blocking_component(&mut self, _: ()) -> Option<()> {
+        None
+    }
+    fn on_blocked(&mut self, _: &mut State, _: ()) -> io::Result<()> {
+        Ok(())
+    }
+    fn broadcast_damage(&mut self, _: &mut State) -> io::Result<()> {
+        self.phase("broadcast-damage")
+    }
+    fn mark_hurt(&mut self, _: &mut State) -> io::Result<()> {
+        *self.sync_velocity = true;
+        Ok(())
+    }
+    fn knockback(&mut self, _: &mut State, _: f32, _: bool) -> io::Result<()> {
+        Ok(())
+    } // no entity or position on these sources
+    fn death_protection(&mut self, _: &mut State) -> io::Result<bool> {
+        Ok(false)
+    } // empty hands
+    fn death_sound(&mut self, _: &mut State) -> io::Result<()> {
+        Ok(())
+    }
+    fn make_sound(&mut self, _: &mut State, _: ()) -> io::Result<()> {
+        self.phase("death-sound")
+    }
+    fn secondary_sound(&mut self, _: &mut State) -> io::Result<()> {
+        if self.source.definition().effects == "thorns" {
+            self.phase("thorns-sound")?;
+        }
+        Ok(())
+    }
+    fn die(&mut self, _: &mut State) -> io::Result<()> {
+        *self.dead = true;
+        self.phase("death-request")
+    }
+    fn hurt_sound(&mut self, _: &mut State) -> io::Result<()> {
+        self.phase("hurt-sound")
+    }
+    fn game_time(&mut self, _: &mut State) -> io::Result<i64> {
+        Ok(self.game_time)
+    }
+    fn effects_on_hurt(&mut self, _: &mut State, _: f32) -> io::Result<()> {
+        Ok(())
+    }
+    fn player_hurt_criterion(
+        &mut self,
+        _: &mut State,
+        original: f32,
+        amount: f32,
+        blocked: bool,
+    ) -> io::Result<()> {
+        self.event(HealthEvent::Criterion {
+            original,
+            amount,
+            blocked,
+        });
+        Ok(())
+    }
+    fn award_blocked(&mut self, _: &mut State, amount: i32) -> io::Result<()> {
+        self.stat("blocked", amount)
+    }
+    fn attacker_criterion(&mut self, _: &mut State, _: f32, _: f32, _: bool) -> io::Result<()> {
+        Ok(())
+    }
+}
+impl PlayerHurtWorld for Environment<'_> {
+    fn ability_invulnerable(&self) -> bool {
+        false
+    }
+    fn bypasses_invulnerability(&mut self, _: &mut State) -> io::Result<bool> {
+        Ok(self.source.in_tag("minecraft:bypasses_invulnerability"))
+    }
+    fn remove_shoulders(&mut self, _: &mut State) -> io::Result<()> {
+        Ok(())
+    }
+    fn scales_with_difficulty(&mut self, _: &mut State) -> io::Result<bool> {
+        Ok(self.source.definition().scaling == Scaling::Always)
+    } // no causing entity
+    fn difficulty(&mut self, _: &mut State) -> io::Result<Difficulty> {
+        Ok(Difficulty::Normal)
+    }
+}
+impl ServerPlayerHurtWorld for Environment<'_> {
+    type Player = ();
+    type Arrow = ();
+    fn causing_entity(&mut self, _: &mut State) -> io::Result<CausingEntity<(), ()>> {
+        Ok(CausingEntity::Other)
+    }
+    fn arrow_player_owner(&mut self, _: &mut State, _: ()) -> io::Result<Option<()>> {
+        Ok(None)
+    }
+    fn can_harm_player(&mut self, _: &mut State, _: ()) -> io::Result<bool> {
+        Ok(true)
+    }
+}

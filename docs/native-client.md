@@ -11,7 +11,8 @@ volume that queries the rendered resident chunks through the shared world
 collision implementation. The camera can still fly; it does not simulate a player.
 F5 switches to a dry walking test with gravity, ground support, stepping and
 held-jump timing over the same resident chunks. Its movement runs at 20 ticks/s;
-the camera interpolates between tick positions.
+the camera interpolates between tick positions. Landing damage now updates stored
+health, absorption and hurt cooldown state. F3 diagnostics include health.
 
 Eligible opaque unit-cube faces use greedy rectangles only when texture layer,
 UV rotation/mirroring and shading match. Each rectangle retains its signed UV
@@ -19,7 +20,7 @@ basis, so weighted texture variation survives merging. Other baked geometry and
 binary-alpha cutouts use the separate model-face instance pipeline. Geometry
 with nonintegral UV-lock rounding also stays on that path.
 
-This checkpoint has partial player movement. Vanilla world generation, block
+This checkpoint has partial player movement and landing damage. Vanilla world generation, block
 interaction, inventory, sound, networking and world save/load remain unbound in
 the native client. It does not meet
 the [playable-build acceptance criteria](rust-parity.md#completion-criteria-and-playable-builds).
@@ -71,7 +72,7 @@ not a render-distance or world-streaming implementation.
 | Arrow keys | Rotate camera |
 | Left click | Capture mouse for camera rotation |
 | Escape | Release mouse |
-| F3 | Toggle FPS/chunk/mesh diagnostics in the window title |
+| F3 | Toggle FPS/chunk/mesh/health diagnostics in the window title |
 | F4 | Toggle inspection camera collisions; enabling requires an unobstructed position |
 | F5 | Toggle walking test at the current camera position; enabling requires an unobstructed position |
 | Ctrl+Q or window close | Exit |
@@ -181,8 +182,9 @@ preserve hatch state. The resulting block state is checked after each operation.
 
 The client refreshes its mesh after a resident block revision changes. This is
 a complete scene rebuild for now, with no performance improvement claimed.
-Damage requests are counted in runtime reports; health loss, death, audiovisual
-playback and networking still need consumers. Block writes currently update
+Damage requests are counted in runtime reports, and the health binding described
+below applies them synchronously. Full death/respawn, audiovisual playback and
+networking still need consumers. Block writes currently update
 resident storage; neighbor updates, drops and block-entity lifecycle remain
 unfinished. Block-inside effects such as cobweb slowdown and the full entity
 lifecycle are also unfinished. The reference harness explicitly controls these
@@ -408,5 +410,36 @@ or a hardware performance comparison.
 
 The [landing interactive smoke check](../benchmarks/rust-native-landing-2026-10-07/interactive-smoke.json)
 exercises F5 walking from the initial camera position. The player lands at y=4,
-resets fall distance and records one damage request of 9.0. Health consumption
-is still pending. The Linux window exits cleanly after visual inspection.
+resets fall distance and records one damage request of 9.0. That historical
+checkpoint preceded the health integration below. The Linux window exits cleanly after visual inspection.
+
+The [health integration comparison](../benchmarks/rust-native-health-2026-10-07/scene-motion.json)
+connects actual server-player hurt to the same live attributes, synchronized
+health/absorption storage and hunger state used by the resident player. It checks
+90,065 operations in 1,881 scenarios against both pinned JARs. Repeated hits,
+absorption, armor/toughness, health limits, damage cooldown boundaries, lethal
+hits and nonfinite incoming damage retain native results and event order.
+Travel reads the live movement-speed attribute through the actual native player
+getter, independently of the base-living stored speed field. This removes a
+controlled getter from the older movement harness and corrects the runtime
+query. Dead-or-dying state disables movement input and jumping. Server-player jumps now
+add the native exhaustion amount and queue a jump statistic, including when
+jump strength prevents upward motion. The damage-clock fields advance at 20 Hz;
+clock operations in the comparison establish elapsed-time state rather than
+invoking complete native tick methods. Hunger regeneration remains unfinished.
+
+The scene loads native-decoded damage definitions, damage tags and health field
+IDs from the pinned private resources. Statistics, combat records, sound,
+network broadcasts and advancement criteria are queued service requests. The
+death consumer marks the stored actor dead and queues a request; drops, removal,
+respawn and the death screen are unfinished. F5 constructs a fresh development
+actor when walking is enabled. This is not vanilla respawn behavior.
+
+The [health interactive smoke check](../benchmarks/rust-native-health-2026-10-07/interactive-smoke.json)
+enables walking and F3 diagnostics, lands from the initial position, then walks
+and jumps before exiting. Health falls from 20 to 11, matching the single damage
+request of 9.0; the cooldown expires to zero. The final report is grounded at y=4
+with 110 movement ticks and no error. The ground view was visually inspected.
+The [startup check](../benchmarks/rust-native-health-2026-10-07/startup-smoke.json)
+also passes with the additional health resources. These are Linux development
+checks, not release acceptance or a hardware performance comparison.
