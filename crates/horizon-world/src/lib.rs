@@ -85,6 +85,7 @@ pub mod living_motion;
 pub mod movement_emission;
 pub mod movement_properties;
 pub mod movement_restitution;
+pub mod movement_statistics;
 pub mod movement_support;
 pub mod nbt;
 pub mod object_open_map;

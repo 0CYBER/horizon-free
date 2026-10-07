@@ -24,6 +24,7 @@ use horizon_world::{
         RegistryMovementWorld,
     },
     movement_restitution::{self, RestitutionInput, RestitutionWorld},
+    movement_statistics::{self, MovementStat, MovementStatisticsWorld},
     movement_support::{self, MovementLocation},
     nbt::{self, Limits},
     registry::BlockStateId,
@@ -359,9 +360,16 @@ impl MotionWorld<'_, '_, '_> {
     /// services are still incomplete; this composes clocks, movement and hunger.
     pub fn simulation_tick(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
         self.player.health.advance_clock();
+        let previous = self.player.position;
         self.player_movement_tick(direction, jumping)?;
+        // The resident scene accepts the resolved local movement directly.
+        // Vanilla dispatches this separately from travel, on packet acceptance.
+        self.check_movement_statistics(previous.vector_to(self.player.position))?;
         self.player
             .food_tick(&self.resources.health, self.scene.health_rules)
+    }
+    pub fn check_movement_statistics(&mut self, delta: Vec3) -> Result<()> {
+        movement_statistics::check(self, delta)
     }
     fn dry_tick(&mut self, input: TickInput) -> Result<()> {
         if self.player.no_jump_delay > 0 {
@@ -419,6 +427,52 @@ impl MotionWorld<'_, '_, '_> {
     }
     pub fn move_self(&mut self, movement: Vec3) -> Result<()> {
         entity_move::move_entity(self, MoverType::SelfMovement, movement)
+    }
+}
+// Current resident movement domain: dry, standing, no vehicles or gliding.
+// The shared kernel also handles swimming/crouching/flight when those states
+// are supplied by their eventual runtime bindings.
+impl MovementStatisticsWorld for MotionWorld<'_, '_, '_> {
+    type Error = Box<dyn std::error::Error>;
+    fn passenger(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn swimming(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn eyes_in_water(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn in_water(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn on_climbable(&mut self) -> Result<bool> {
+        self.climbable()
+    }
+    fn on_ground(&mut self) -> Result<bool> {
+        Ok(self.player.ground.on_ground)
+    }
+    fn sprinting(&mut self) -> Result<bool> {
+        Ok(self.player.sprinting)
+    }
+    fn crouching(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn fall_flying(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn award(&mut self, stat: MovementStat, amount: i32) -> Result<()> {
+        self.player
+            .events
+            .push(MotionEvent::Health(crate::health::HealthEvent::Statistic {
+                name: stat.name(),
+                amount,
+            }));
+        Ok(())
+    }
+    fn exhaust(&mut self, amount: f32) -> Result<()> {
+        self.player.health.food.add_exhaustion(amount);
+        Ok(())
     }
 }
 impl MovementBlockProvider for MotionWorld<'_, '_, '_> {

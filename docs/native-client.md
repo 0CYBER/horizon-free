@@ -463,8 +463,8 @@ regeneration rules, fast/slow healing timers, timer overflow, signed zero,
 nonfinite food state and combined falling/movement/food ticks. Explicit clock
 setup supplies elapsed-time fields; complete enclosing `tick`/`doTick` methods
 remain outside this comparison. The default walking scene uses Normal
-difficulty with natural regeneration enabled. Food item use, movement-distance
-exhaustion, effect ticks, full death/respawn services and save integration remain
+difficulty with natural regeneration enabled. At that checkpoint food item use,
+movement-distance exhaustion, effect ticks, full death/respawn services and save integration remained
 unfinished.
 
 The [interactive hunger check](../benchmarks/rust-native-hunger-2026-10-07/interactive-smoke.json)
@@ -476,3 +476,32 @@ The ground view was visually inspected and the client exited without an error.
 The development client pauses movement without focus, so wall time is not
 simulation time. This checks the resident simulation and window, not full
 gameplay, release acceptance or hardware performance.
+
+The [movement statistics comparison](../benchmarks/rust-native-movement-statistics-2026-10-07/scene-motion.json)
+checks 215,204 operations in 5,510 scenarios against both pinned references.
+The resident simulation now feeds the change in player position to the movement
+statistics method after movement and before hunger ticking. Sprint distance
+adds exhaustion to the same stored food state; ordinary walking adds zero.
+Climbing and airborne distance also produce their native statistic requests.
+Statistics persistence and scoreboard delivery remain unfinished.
+
+Vanilla invokes `ServerPlayer.checkMovementStatistics` from its packet listener
+when accepting movement, separately from `Entity.move` and travel. The resident
+scene directly accepts its resolved local displacement at this boundary; its
+comparison invokes the actual native statistics method. It does not yet run the
+packet listener's acceptance, rejection or scheduling logic. The shared kernel
+also covers swimming, underwater walking, water-surface walking, crouching and
+gliding. Direct method fixtures check all 512 overlapping query-flag combinations,
+invulnerable abilities, float-versus-double centimeter rounding, integer overflow,
+zero and nonfinite deltas. Those query overrides are restricted to statistics
+fixtures; the resident physics remain dry and standing. Combined scenes exercise
+repeated movement, sprint-state changes, jumps, hunger consumption and healing.
+Native local sprint-key eligibility and double-tap controls remain to be connected.
+
+The [Linux window check](../benchmarks/rust-native-movement-statistics-2026-10-07/interactive-smoke.json)
+enabled walking, showed diagnostics and held W for 650 ms. The player moved from
+`[25, 4, 25]` to `[23.12939004788537, 4, 23.12939004788537]`, remained grounded
+and alive, and exited without an error after 82 movement ticks. Health recovered
+to 14 after the initial fall. The ground view was visually inspected; this is a
+client smoke check, while statistic amounts and exhaustion are checked by the
+native comparisons above.

@@ -10,6 +10,7 @@ use horizon_client::{
 use horizon_core::geometry::Vec3;
 use horizon_core::{position::BlockPos, random::RandomSource};
 use horizon_world::attributes::{Modifier, Operation};
+use horizon_world::movement_statistics::{self, MovementStat, MovementStatisticsWorld};
 use serde_json::Value;
 use std::{
     fs,
@@ -27,6 +28,61 @@ fn vector(v: &Value) -> Vec3 {
 }
 fn position(p: Option<horizon_core::position::BlockPos>) -> String {
     p.map_or_else(|| "none".into(), |p| format!("{},{},{}", p.x, p.y, p.z))
+}
+struct StatisticsContext<'a> {
+    flags: u16,
+    invulnerable: bool,
+    player: &'a mut PlayerMotion,
+}
+impl StatisticsContext<'_> {
+    fn flag(&self, bit: u32) -> Result<bool> {
+        Ok(self.flags & (1 << bit) != 0)
+    }
+}
+impl MovementStatisticsWorld for StatisticsContext<'_> {
+    type Error = Box<dyn std::error::Error>;
+    fn passenger(&mut self) -> Result<bool> {
+        self.flag(0)
+    }
+    fn swimming(&mut self) -> Result<bool> {
+        self.flag(1)
+    }
+    fn eyes_in_water(&mut self) -> Result<bool> {
+        self.flag(2)
+    }
+    fn in_water(&mut self) -> Result<bool> {
+        self.flag(3)
+    }
+    fn on_climbable(&mut self) -> Result<bool> {
+        self.flag(4)
+    }
+    fn on_ground(&mut self) -> Result<bool> {
+        self.flag(5)
+    }
+    fn sprinting(&mut self) -> Result<bool> {
+        self.flag(6)
+    }
+    fn crouching(&mut self) -> Result<bool> {
+        self.flag(7)
+    }
+    fn fall_flying(&mut self) -> Result<bool> {
+        self.flag(8)
+    }
+    fn award(&mut self, stat: MovementStat, amount: i32) -> Result<()> {
+        self.player.events.push(MotionEvent::Health(
+            horizon_client::health::HealthEvent::Statistic {
+                name: stat.name(),
+                amount,
+            },
+        ));
+        Ok(())
+    }
+    fn exhaust(&mut self, amount: f32) -> Result<()> {
+        if !self.invulnerable {
+            self.player.health.food.add_exhaustion(amount);
+        }
+        Ok(())
+    }
 }
 fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
     // Compare membership and stored values without allocating lazy instances or
@@ -146,6 +202,15 @@ fn main() -> Result<()> {
                 resources: &resources,
             };
             match op["mode"].as_str().unwrap() {
+                "movement_statistics" => world.check_movement_statistics(vector(&op["value"]))?,
+                "statistics_context" => movement_statistics::check(
+                    &mut StatisticsContext {
+                        player: world.player,
+                        flags: op["flags"].as_u64().unwrap() as u16,
+                        invulnerable: op["invulnerable"].as_bool().unwrap(),
+                    },
+                    vector(&op["value"]),
+                )?,
                 "tick_count" => {
                     world.player.health.tick_count = op["value"].as_i64().unwrap() as i32
                 }

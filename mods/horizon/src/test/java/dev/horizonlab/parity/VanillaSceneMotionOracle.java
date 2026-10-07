@@ -108,6 +108,10 @@ public final class VanillaSceneMotionOracle {
     }
     static final class Actor extends ServerPlayer {
         AttributeMap attrs;byte flags;boolean preparedInput;List<String> events;
+        // Query overrides only while directly exercising the complete statistics
+        // method; regular resident movement keeps its actual standing/dry state.
+        Integer statisticsFlags;
+        boolean statFlag(int bit){return (statisticsFlags&(1<<bit))!=0;}
         SynchedEntityData.DataItem<Float> healthItem,absorptionItem;Level sceneLevel;Tracker tracker;net.minecraft.server.PlayerAdvancements advancements;
         Actor(){super(null,null,null,null);}
         void configure(Level l){sceneLevel=l;setLevel(l);}
@@ -139,12 +143,17 @@ public final class VanillaSceneMotionOracle {
         @Override public BlockPos blockPosition(){return BlockPos.containing(position());}
         @Override public BlockState getInBlockState(){return level().getBlockState(blockPosition());}
         @Override public ItemStack getMainHandItem(){return ItemStack.EMPTY;}
-        @Override public boolean isPassenger(){return false;}
-        @Override public boolean isSwimming(){return false;}
-        @Override public boolean isInWater(){return false;}
+        @Override public boolean isPassenger(){return statisticsFlags!=null&&statFlag(0);}
+        @Override public boolean isSwimming(){return statisticsFlags!=null&&statFlag(1);}
+        @Override public boolean isEyeInFluid(net.minecraft.tags.TagKey<net.minecraft.world.level.material.Fluid> tag){return statisticsFlags!=null&&statFlag(2);}
+        @Override public boolean isInWater(){return statisticsFlags!=null&&statFlag(3);}
+        @Override public boolean onClimbable(){return statisticsFlags!=null?statFlag(4):super.onClimbable();}
+        @Override public boolean onGround(){return statisticsFlags!=null?statFlag(5):super.onGround();}
+        @Override public boolean isSprinting(){return statisticsFlags!=null?statFlag(6):super.isSprinting();}
+        @Override public boolean isCrouching(){return statisticsFlags!=null?statFlag(7):super.isCrouching();}
         @Override public boolean isInLava(){return false;}
         @Override public boolean isInLiquid(){return false;}
-        @Override public boolean isFallFlying(){return false;}
+        @Override public boolean isFallFlying(){return statisticsFlags!=null&&statFlag(8);}
         @Override public boolean isSpectator(){return false;}
         @Override public Pose getPose(){return Pose.STANDING;}
         @Override public boolean isDescending(){return false;}
@@ -166,7 +175,7 @@ public final class VanillaSceneMotionOracle {
         @Override public void awardStat(Identifier stat,int value){
             if(stat==net.minecraft.stats.Stats.FALL_ONE_CM){events.add("stat "+value);return;}
             String name=stat==net.minecraft.stats.Stats.DAMAGE_ABSORBED?"absorbed":stat==net.minecraft.stats.Stats.DAMAGE_TAKEN?"taken":stat==net.minecraft.stats.Stats.DAMAGE_RESISTED?"resisted":null;
-            if(name==null)throw new AssertionError(stat);events.add("health-stat "+name+" "+value);
+            if(name==null){name=stat.getPath();if(!Set.of("swim_one_cm","walk_under_water_one_cm","walk_on_water_one_cm","climb_one_cm","sprint_one_cm","crouch_one_cm","walk_one_cm","aviate_one_cm","fly_one_cm").contains(name))throw new AssertionError(stat);}events.add("health-stat "+name+" "+value);
         }
         @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,DamageSource source,float damage){var sources=((Level)level).sources;events.add(String.format("damage %s %08x",source==sources.fall?"fall":source==sources.stalagmite?"stalagmite":source==sources.starve?"starve":"unknown",Float.floatToIntBits(damage)));return super.hurtServer(level,source,damage);}
         @Override public void teleportRelative(double x,double y,double z){setPos(getX()+x,getY()+y,getZ()+z);}
@@ -274,7 +283,13 @@ public final class VanillaSceneMotionOracle {
                         case "eat"->p.getFoodData().eat(op.get("nutrition").getAsInt(),single(op.get("value")));
                         case "food_tick"->p.getFoodData().tick(p);
                         case "peaceful"->p.peaceful();
-                        case "simulation_tick"->{p.clock();p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());p.getFoodData().tick(p);}
+                        case "simulation_tick"->{p.clock();var before=p.position();p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);}
+                        case "movement_statistics"->{var delta=VanillaSceneCollisionOracle.vector(op.get("value"));p.checkMovementStatistics(delta.x,delta.y,delta.z);}
+                        case "statistics_context"->{
+                            p.statisticsFlags=op.get("flags").getAsInt();p.getAbilities().invulnerable=op.get("invulnerable").getAsBoolean();
+                            try{var delta=VanillaSceneCollisionOracle.vector(op.get("value"));p.checkMovementStatistics(delta.x,delta.y,delta.z);}
+                            finally{p.statisticsFlags=null;p.getAbilities().invulnerable=false;}
+                        }
                         case "seed"->level.rng.setSeed(op.get("value").getAsLong());
                         case "impulse"->p.setIgnoreFallDamageFromCurrentImpulse(op.get("ignore").getAsBoolean(),op.get("value").isJsonNull()?null:VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "block"->{var v=op.getAsJsonArray("position");var pos=new BlockPos(v.get(0).getAsInt(),v.get(1).getAsInt(),v.get(2).getAsInt());var state=VanillaSceneCollisionOracle.state(op.get("name").getAsString());if(op.has("properties"))for(var property:op.getAsJsonObject("properties").entrySet())state=VanillaSceneCollisionOracle.property(state,state.getBlock().getStateDefinition().getProperty(property.getKey()),property.getValue().getAsString());level.chunks.get(key(pos.getX()>>4,pos.getZ()>>4)).write(pos,Block.getId(state));}
