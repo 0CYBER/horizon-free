@@ -1514,3 +1514,19 @@ delay boundaries, absent components, empty stacks, shared item types, partial
 float values and callback mutations/failures. Targeted Clippy passes. Full
 item-use lifecycle, damageable-item storage and complete combat/world integration
 remain pending.
+
+
+`item_durability` stores the durability projection of an item stack, including
+raw versus visible counts/components, clamped damage access, damageability/break
+predicates and wrapping count changes. Server-level damage preserves creative
+immunity, the positive float enchantment pipeline, advancement-before-write and
+copy-before-shrink ordering. The non-breaking variant retains its native empty
+break consumer, including unusual invalid component values.
+
+`python3 tools/test_item_durability_parity.py` compares actual unenchanted native
+ItemStack operations. The [durability report](../benchmarks/rust-item-durability-2026-10-07/scoped-parity.json)
+records **81,762 matching lines per JAR**, including absent components, empty/air
+stacks, unbreakable flags, integer boundaries, callback mutations and failures.
+Targeted Clippy passes. This is a durability projection, not complete item-stack
+component storage. Enchantment effects, component codecs, equipment break
+handling and full gameplay integration remain pending.
