@@ -96,6 +96,8 @@ pub struct Chunk {
     pub lit: bool,
     /// Newly generated (not loaded from a save): eligible for generation-time spawns.
     pub fresh: bool,
+    /// Block entities read from a save, moved into the world on arrival.
+    pub block_entities: Vec<((i32, i32, i32), crate::containers::BlockEntity)>,
 }
 impl Chunk {
     pub fn empty(x: i32, z: i32) -> Self {
@@ -107,6 +109,7 @@ impl Chunk {
             heights: Arc::new([MIN_Y as i16; 256]),
             lit: false,
             fresh: false,
+            block_entities: Vec::new(),
         }
     }
     #[inline]

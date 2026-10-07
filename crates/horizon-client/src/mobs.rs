@@ -617,6 +617,16 @@ pub fn render(mob: &Mob, alpha: f32, camera: glam::DVec3, uv: [f32; 4], light: u
         }
         pose
     };
+    render_model(&mob.kind.model, base, &pose_for, uv, light, overlay, out);
+}
+/// Load one baked model layer from `entity-models.json` (e.g. `minecraft:chest#main`).
+pub fn load_model(root: &Path, key: &str) -> Option<Part> {
+    let models: Value = serde_json::from_slice(&fs::read(root.join("entity-models.json")).ok()?).ok()?;
+    models.get(key).map(|m| Part::parse("root", m))
+}
+/// ModelPart.render: translate, rotate ZYX, scale, then children.
+pub fn render_model(part: &Part, base: glam::Mat4, pose_for: &dyn Fn(&Part) -> [f32; 9], uv: [f32; 4], light: u32, overlay: u32, out: &mut Vec<Vertex>) {
+    visit(part, base, pose_for, uv, light, overlay, out);
     fn visit(part: &Part, parent: glam::Mat4, pose_for: &dyn Fn(&Part) -> [f32; 9], uv: [f32; 4], light: u32, overlay: u32, out: &mut Vec<Vertex>) {
         let p = pose_for(part);
         let m = parent
@@ -639,5 +649,4 @@ pub fn render(mob: &Mob, alpha: f32, camera: glam::DVec3, uv: [f32; 4], light: u
             visit(c, m, pose_for, uv, light, overlay, out);
         }
     }
-    visit(&mob.kind.model, base, &pose_for, uv, light, overlay, out);
 }

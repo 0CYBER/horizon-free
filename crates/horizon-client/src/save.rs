@@ -49,6 +49,94 @@ fn bits_for(len: usize, min: u32) -> u32 {
 fn string(s: &str) -> Tag {
     Tag::String(s.into())
 }
+
+fn encode_items(slots: &[Option<crate::items::ItemStack>]) -> Tag {
+    Tag::List(
+        slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                let s = s.as_ref()?;
+                let mut entries = vec![
+                    ("Slot", Tag::Byte(i as i8)),
+                    ("id", string(&s.item)),
+                    ("count", Tag::Int(s.count as i32)),
+                ];
+                if s.damage > 0 {
+                    entries.push(("components", Tag::compound([("minecraft:damage", Tag::Int(s.damage as i32))])));
+                }
+                Some(Tag::compound(entries))
+            })
+            .collect(),
+    )
+}
+fn decode_items(tag: Option<&Tag>, size: usize) -> Vec<Option<crate::items::ItemStack>> {
+    let mut slots = vec![None; size];
+    if let Some(Tag::List(items)) = tag {
+        for it in items {
+            let Some(Tag::Byte(slot)) = it.get("Slot") else { continue };
+            let Some(Tag::String(id)) = it.get("id") else { continue };
+            let count = match it.get("count") {
+                Some(Tag::Int(c)) => *c as u32,
+                Some(Tag::Byte(c)) => *c as u32,
+                _ => 1,
+            };
+            let damage = match it.get("components").and_then(|c| c.get("minecraft:damage")) {
+                Some(Tag::Int(d)) => *d as u32,
+                _ => 0,
+            };
+            if let Some(cell) = slots.get_mut(*slot as u8 as usize) {
+                *cell = Some(crate::items::ItemStack { item: Arc::from(id.to_string_lossy().as_str()), count, damage });
+            }
+        }
+    }
+    slots
+}
+fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity) -> Tag {
+    use crate::containers::BlockEntity;
+    let mut entries = vec![
+        ("id", string(e.id())),
+        ("x", Tag::Int(p.0)),
+        ("y", Tag::Int(p.1)),
+        ("z", Tag::Int(p.2)),
+        ("keepPacked", Tag::Byte(0)),
+    ];
+    match e {
+        BlockEntity::Chest(items) => entries.push(("Items", encode_items(items))),
+        BlockEntity::Furnace(f) => {
+            entries.push(("Items", encode_items(&f.items)));
+            entries.push(("lit_time_remaining", Tag::Short(f.lit_remaining.clamp(0, i32::from(i16::MAX)) as i16)));
+            entries.push(("lit_total_time", Tag::Short(f.lit_total.clamp(0, i32::from(i16::MAX)) as i16)));
+            entries.push(("cooking_time_spent", Tag::Short(f.cooking_timer as i16)));
+            entries.push(("cooking_total_time", Tag::Short(f.cooking_total as i16)));
+        }
+    }
+    Tag::compound(entries)
+}
+fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
+    use crate::containers::BlockEntity;
+    let int = |k: &str| match tag.get(k) {
+        Some(Tag::Int(v)) => Some(*v),
+        Some(Tag::Short(v)) => Some(i32::from(*v)),
+        _ => None,
+    };
+    let Some(Tag::String(id)) = tag.get("id") else { return None };
+    let id = id.to_string_lossy();
+    let pos = (int("x")?, int("y")?, int("z")?);
+    let mut entity = BlockEntity::for_block(&id)?;
+    match &mut entity {
+        BlockEntity::Chest(items) => *items = decode_items(tag.get("Items"), 27),
+        BlockEntity::Furnace(f) => {
+            let items = decode_items(tag.get("Items"), 3);
+            f.items = [items[0].clone(), items[1].clone(), items[2].clone()];
+            f.lit_remaining = int("lit_time_remaining").unwrap_or(0);
+            f.lit_total = int("lit_total_time").unwrap_or(0);
+            f.cooking_timer = int("cooking_time_spent").unwrap_or(0);
+            f.cooking_total = int("cooking_total_time").unwrap_or(200);
+        }
+    }
+    Some((pos, entity))
+}
 pub fn encode(chunk: &Chunk, registry: &BlockRegistry, biomes: &Biomes) -> NamedTag {
     let mut sections = Vec::new();
     for (si, section) in chunk.sections.iter().enumerate() {
@@ -121,7 +209,7 @@ pub fn encode(chunk: &Chunk, registry: &BlockRegistry, biomes: &Biomes) -> Named
             ("InhabitedTime", Tag::Long(0)),
             ("isLightOn", Tag::Byte(0)),
             ("sections", Tag::List(sections)),
-            ("block_entities", Tag::List(vec![])),
+            ("block_entities", Tag::List(chunk.block_entities.iter().map(|(p, e)| encode_block_entity(*p, e)).collect())),
         ]),
     }
 }
@@ -187,6 +275,9 @@ pub fn decode(root: &NamedTag, registry: &BlockRegistry, biomes: &Biomes) -> Opt
         }
     }
     chunk.biomes = Arc::new(biome_data);
+    if let Some(Tag::List(entities)) = tag.get("block_entities") {
+        chunk.block_entities = entities.iter().filter_map(decode_block_entity).collect();
+    }
     Some(chunk)
 }
 /// The world folder. Region files are read lazily by worker threads.

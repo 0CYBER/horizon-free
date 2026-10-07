@@ -20,6 +20,7 @@ pub struct World {
     pub dirty_light: HashSet<(i32, i32)>,
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
+    pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
     pub game_time: i64,
     pub day_time: i64,
 }
@@ -34,6 +35,7 @@ impl World {
             dirty_sections: HashSet::new(),
             dirty_light: HashSet::new(),
             modified: HashSet::new(),
+            block_entities: HashMap::new(),
             game_time: 0,
             day_time: 1000,
         }

@@ -31,6 +31,10 @@ pub struct ItemInfo {
     /// Main-hand `attack_damage` / `attack_speed` modifier amounts.
     pub attack_damage: f32,
     pub attack_speed: f32,
+    /// `cooking_fuel`: burn-time and speed-multiplier provider references.
+    pub fuel: Option<(Value, Value)>,
+    /// Item left behind after crafting/fuel use (e.g. bucket).
+    pub remainder: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ItemStack {
@@ -152,6 +156,8 @@ impl Items {
                         .unwrap_or(1.0) as f32,
                     food,
                     model: c["minecraft:item_model"].as_str().unwrap_or(name).to_owned(),
+                    fuel: c.get("minecraft:cooking_fuel").map(|f| (f["burn_time"].clone(), f["speed_multiplier"].clone())),
+                    remainder: c["minecraft:use_remainder"]["id"].as_str().or(c["minecraft:crafting_remainder"]["id"].as_str()).or(c["minecraft:crafting_remainder"].as_str()).map(str::to_owned),
                     attack_damage: modifier("minecraft:attack_damage"),
                     attack_speed: modifier("minecraft:attack_speed"),
                 },

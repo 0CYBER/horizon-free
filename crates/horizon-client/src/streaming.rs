@@ -248,8 +248,9 @@ impl Streaming {
                         self.protos.insert(key, Some(proto));
                     }
                 }
-                Done::Generated(chunk) => {
+                Done::Generated(mut chunk) => {
                     let key = (chunk.x, chunk.z);
+                    world.block_entities.extend(std::mem::take(&mut chunk.block_entities));
                     self.generating.remove(&key);
                     self.finishing.remove(&key);
                     self.decorated.insert(key);

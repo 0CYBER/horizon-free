@@ -8,6 +8,7 @@ pub mod biome;
 pub mod blocks;
 pub mod chunk;
 pub mod clock;
+pub mod containers;
 pub mod crafting;
 pub mod collisions;
 pub mod entities;

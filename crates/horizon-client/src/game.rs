@@ -11,6 +11,7 @@ use horizon_client::{
     entities::{Arrow, ArrowHit, ItemEntity},
     mobs::{Mob, MobEvent, MobType, MobTypes, MobWorld},
     particles::Particle,
+    containers::{BlockEntity, Providers},
     crafting::Recipes,
     collisions,
     environment::Environment,
@@ -154,6 +155,8 @@ pub struct Resources {
     icons: HashMap<String, Option<Icon>>,
     layer_names: HashMap<u32, String>,
     mob_types: HashMap<String, Arc<MobType>>,
+    providers: Providers,
+    chest_model: Option<horizon_client::mobs::Part>,
 }
 struct Game<'a> {
     res: &'a mut Resources,
@@ -175,6 +178,9 @@ struct Game<'a> {
     carried: Option<ItemStack>,
     craft_grid: Vec<Option<ItemStack>>,
     craft_size: usize,
+    /// Open container block entity, if any.
+    container: Option<(i32, i32, i32)>,
+    scratch_slot: Option<ItemStack>,
     mining: Option<Mining>,
     destroy_delay: u32,
     use_delay: u32,
@@ -209,6 +215,7 @@ struct Game<'a> {
     arrows: Vec<Arrow>,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
+    chest_open: HashMap<(i32, i32, i32), (f32, f32)>,
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -480,6 +487,16 @@ impl Game<'_> {
             None
         }
         .unwrap_or(self.world.air);
+        if let Some(entity) = self.world.block_entities.remove(&(pos[0], pos[1], pos[2])) {
+            // Containers.dropContents
+            for stack in entity.contents() {
+                self.pop_resource(pos, stack);
+            }
+            if self.container == Some((pos[0], pos[1], pos[2])) {
+                self.container = None;
+                self.screen = Screen::Playing;
+            }
+        }
         self.world.set(pos[0], pos[1], pos[2], replacement)?;
         self.destroy_particles(pos, state);
         let center = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
@@ -600,7 +617,21 @@ impl Game<'_> {
             && let Some(hit) = self.pick()
         {
             let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-            if &*self.res.facts.get(clicked).name == "minecraft:crafting_table" {
+            let name = self.res.facts.get(clicked).name.clone();
+            let key = (hit.pos[0], hit.pos[1], hit.pos[2]);
+            if let Some(entity) = BlockEntity::for_block(&name) {
+                self.world.block_entities.entry(key).or_insert(entity);
+                self.container = Some(key);
+                self.screen = Screen::Inventory;
+                self.capture(false);
+                self.right = false;
+                let sound = if name.contains("chest") { Some("minecraft:block.chest.open") } else if &*name == "minecraft:barrel" { Some("minecraft:block.barrel.open") } else { None };
+                if let Some(sound) = sound {
+                    self.audio.play(sound, Some([f64::from(key.0) + 0.5, f64::from(key.1) + 0.5, f64::from(key.2) + 0.5]), 0.5, 1.0);
+                }
+                return Ok(());
+            }
+            if &*name == "minecraft:crafting_table" {
                 self.craft_size = 3;
                 self.screen = Screen::Inventory;
                 self.capture(false);
@@ -653,6 +684,9 @@ impl Game<'_> {
             }
         }
         self.world.set(target[0], target[1], target[2], state)?;
+        if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
+            self.world.block_entities.insert((target[0], target[1], target[2]), entity);
+        }
         let sounds = self.res.facts.get(state).sounds.clone();
         let center = [f64::from(target[0]) + 0.5, f64::from(target[1]) + 0.5, f64::from(target[2]) + 0.5];
         self.audio.play(&sounds.place, Some(center), (sounds.volume + 1.0) / 2.0, sounds.pitch * 0.8);
@@ -926,6 +960,7 @@ impl Game<'_> {
         self.tick_mining()?;
         self.tick_items();
         self.tick_mobs()?;
+        self.tick_block_entities()?;
         let facts = &self.res.facts;
         let world = &self.world;
         self.particles.retain_mut(|p| p.tick(world, |id| facts.states[id as usize].full_collision));
@@ -1220,18 +1255,34 @@ impl Game<'_> {
         ((batch.width - 176.0) / 2.0, (batch.height - 166.0) / 2.0)
     }
     /// Slot ids: 0..36 player inventory, 100..109 crafting grid, 200 result.
+    fn container_kind(&self) -> Option<&BlockEntity> {
+        self.container.and_then(|k| self.world.block_entities.get(&k))
+    }
+    /// 300.. are the open container's slots.
     fn slots(&self) -> Vec<usize> {
         let mut v: Vec<usize> = (0..36).collect();
-        v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
-        v.push(200);
+        match self.container_kind() {
+            Some(BlockEntity::Chest(items)) => v.extend((0..items.len()).map(|i| 300 + i)),
+            Some(BlockEntity::Furnace(_)) => v.extend(300..303),
+            None => {
+                v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
+                v.push(200);
+            }
+        }
         v
     }
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
         let table = self.craft_size == 3;
+        // ContainerScreen (3 rows) shifts the player inventory down by one pixel.
+        let shift = if matches!(self.container_kind(), Some(BlockEntity::Chest(_))) { 1.0 } else { 0.0 };
         match i {
-            0..9 => (8.0 + i as f32 * 18.0, 142.0),
-            9..36 => (8.0 + ((i - 9) % 9) as f32 * 18.0, 84.0 + ((i - 9) / 9) as f32 * 18.0),
+            0..9 => (8.0 + i as f32 * 18.0, 142.0 + shift),
+            9..36 => (8.0 + ((i - 9) % 9) as f32 * 18.0, 84.0 + shift + ((i - 9) / 9) as f32 * 18.0),
+            300.. => match self.container_kind() {
+                Some(BlockEntity::Furnace(_)) => [(56.0, 17.0), (56.0, 53.0), (116.0, 35.0)][(i - 300).min(2)],
+                _ => (8.0 + ((i - 300) % 9) as f32 * 18.0, 18.0 + ((i - 300) / 9) as f32 * 18.0),
+            },
             200 => if table { (124.0, 35.0) } else { (154.0, 28.0) },
             _ => {
                 let g = i - 100;
@@ -1252,7 +1303,14 @@ impl Game<'_> {
         })
     }
     fn slot_mut(&mut self, i: usize) -> &mut Option<ItemStack> {
-        if i >= 100 && i < 109 {
+        if i >= 300 {
+            let key = self.container;
+            return match key.and_then(|k| self.world.block_entities.get_mut(&k)) {
+                Some(e) => e.slots_mut().get_mut(i - 300).unwrap_or(&mut self.scratch_slot),
+                None => &mut self.scratch_slot,
+            };
+        }
+        if (100..109).contains(&i) {
             &mut self.craft_grid[i - 100]
         } else {
             &mut self.inventory[i]
@@ -1268,17 +1326,58 @@ impl Game<'_> {
         {
             let atlas = &self.res.atlas;
             batch.fill(atlas, 0.0, 0.0, batch.width, batch.height, rgba(16, 16, 16, 160));
-            let texture = if self.craft_size == 3 { "gui/container/crafting_table" } else { "gui/container/inventory" };
-            if let Some(r) = atlas.sprites.get(texture).copied() {
-                // Container textures are 256x256 with the screen in the top-left 176x166.
-                let mut r = r;
-                r.u1 = r.u0 + (r.u1 - r.u0) * 176.0 / r.w as f32;
-                r.v1 = r.v0 + (r.v1 - r.v0) * 166.0 / r.h as f32;
-                batch.rect_uv(ox, oy, 176.0, 166.0, r, u32::MAX);
+            let part = |batch: &mut HudBatch, name: &str, sx: f32, sy: f32, w: f32, h: f32, dx: f32, dy: f32| {
+                if let Some(mut r) = atlas.sprites.get(name).copied() {
+                    let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
+                    r.u0 += sx * du;
+                    r.v0 += sy * dv;
+                    r.u1 = r.u0 + w * du;
+                    r.v1 = r.v0 + h * dv;
+                    batch.rect_uv(dx, dy, w, h, r, u32::MAX);
+                }
+            };
+            let grey = rgba(64, 64, 64, 255);
+            match self.container.and_then(|k| self.world.block_entities.get(&k)) {
+                Some(BlockEntity::Chest(_)) => {
+                    // ContainerScreen with 3 rows: top 71px, then the player inventory from v=126.
+                    part(batch, "gui/container/generic_54", 0.0, 0.0, 176.0, 71.0, ox, oy);
+                    part(batch, "gui/container/generic_54", 0.0, 126.0, 176.0, 96.0, ox, oy + 71.0);
+                    let name = self.container.map(|k| self.world.block(k.0, k.1, k.2)).map(|s| self.res.facts.get(s).name.clone());
+                    let title = if name.as_deref() == Some("minecraft:barrel") { "Barrel" } else { "Chest" };
+                    batch.text(atlas, title, ox + 8.0, oy + 6.0, grey, false);
+                    batch.text(atlas, "Inventory", ox + 8.0, oy + 73.0, grey, false);
+                }
+                Some(BlockEntity::Furnace(f)) => {
+                    let (tex, title) = match f.kind {
+                        horizon_client::containers::FurnaceKind::Furnace => ("gui/container/furnace", "Furnace"),
+                        horizon_client::containers::FurnaceKind::BlastFurnace => ("gui/container/blast_furnace", "Blast Furnace"),
+                        horizon_client::containers::FurnaceKind::Smoker => ("gui/container/smoker", "Smoker"),
+                    };
+                    part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
+                    let tw = HudBatch::text_width(atlas, title);
+                    batch.text(atlas, title, ox + (176.0 - tw) / 2.0, oy + 6.0, grey, false);
+                    batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+                    if f.lit_remaining > 0 {
+                        // AbstractFurnaceScreen: flame height ceil(lit * 13) + 1.
+                        let total = if f.lit_total == 0 { 200 } else { f.lit_total };
+                        let h = ((f.lit_remaining as f32 / total as f32) * 13.0).ceil() + 1.0;
+                        part(batch, "gui/sprites/container/furnace/lit_progress", 0.0, 14.0 - h, 14.0, h, ox + 56.0, oy + 36.0 + 14.0 - h);
+                    }
+                    if f.cooking_timer > 0 && f.cooking_total > 0 {
+                        let w = ((f.cooking_timer as f32 / f.cooking_total as f32) * 24.0).ceil();
+                        part(batch, "gui/sprites/container/furnace/burn_progress", 0.0, 0.0, w, 16.0, ox + 79.0, oy + 34.0);
+                    }
+                }
+                None => {
+                    let texture = if self.craft_size == 3 { "gui/container/crafting_table" } else { "gui/container/inventory" };
+                    part(batch, texture, 0.0, 0.0, 176.0, 166.0, ox, oy);
+                    let (title, tx) = if self.craft_size == 3 { ("Crafting", 29.0) } else { ("Crafting", 97.0) };
+                    batch.text(atlas, title, ox + tx, oy + if self.craft_size == 3 { 6.0 } else { 8.0 }, grey, false);
+                    if self.craft_size == 3 {
+                        batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+                    }
+                }
             }
-            let (title, tx) = if self.craft_size == 3 { ("Crafting", 29.0) } else { ("Crafting", 97.0) };
-            batch.text(atlas, title, ox + tx, oy + if self.craft_size == 3 { 6.0 } else { 8.0 }, rgba(64, 64, 64, 255), false);
-            batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, rgba(64, 64, 64, 255), false);
         }
         for i in self.slots() {
             let (sx, sy) = self.slot_position(i);
@@ -1306,6 +1405,14 @@ impl Game<'_> {
             }
         }
         self.craft_size = 2;
+        if let Some(key) = self.container.take() {
+            let name = self.res.facts.get(self.world.block(key.0, key.1, key.2)).name.clone();
+            let sound = if name.contains("chest") { Some("minecraft:block.chest.close") } else if &*name == "minecraft:barrel" { Some("minecraft:block.barrel.close") } else { None };
+            if let Some(sound) = sound {
+                self.audio.play(sound, Some([f64::from(key.0) + 0.5, f64::from(key.1) + 0.5, f64::from(key.2) + 0.5]), 0.5, 1.0);
+            }
+            self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+        }
     }
     fn click_inventory(&mut self, right: bool) {
         let Some(size) = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]) else { return };
@@ -1313,6 +1420,29 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else { return };
         let max = |items: &Items, s: &ItemStack| items.get(&s.item).map_or(64, |i| i.max_stack);
         let shift = self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        if slot >= 300 {
+            if let Some(key) = self.container {
+                self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+            }
+        }
+        let is_furnace = matches!(self.container_kind(), Some(BlockEntity::Furnace(_)));
+        if is_furnace && slot == 302 {
+            // FurnaceResultSlot: take only.
+            let Some(result) = self.slot_mut(302).take() else { return };
+            match &mut self.carried {
+                None => self.carried = Some(result),
+                Some(c) if c.item == result.item && c.count + result.count <= max(&self.res.items, c) => c.count += result.count,
+                _ => *self.slot_mut(302) = Some(result),
+            }
+            return;
+        }
+        if is_furnace
+            && slot == 300
+            && let Some(BlockEntity::Furnace(f)) = self.container.and_then(|k| self.world.block_entities.get_mut(&k))
+        {
+            // Changing the input restarts cooking (AbstractFurnaceBlockEntity.setItem).
+            f.cooking_timer = 0;
+        }
         if slot == 200 {
             // ResultSlot: take the crafted stack and consume one of each ingredient.
             let mut crafted = 0;
@@ -1491,6 +1621,50 @@ impl Game<'_> {
                         out.push(Vertex { pos: v.to_array(), uv, layer: 0, color: 0xFFFF_FFFF, light: 240 | 240 << 8 });
                     }
                 }
+            }
+        }
+        // Chests (ChestRenderer): rotate by facing around the block centre, lift the lid.
+        if let Some(model) = &self.res.chest_model {
+            for (pos, entity) in &self.world.block_entities {
+                if !matches!(entity, BlockEntity::Chest(_)) {
+                    continue;
+                }
+                let state = self.world.block(pos.0, pos.1, pos.2);
+                let name = &self.res.facts.get(state).name;
+                let texture = match &**name {
+                    "minecraft:chest" => "entity/chest/normal",
+                    "minecraft:trapped_chest" => "entity/chest/trapped",
+                    _ => continue,
+                };
+                let origin = glam::DVec3::new(f64::from(pos.0), f64::from(pos.1), f64::from(pos.2)) - camera;
+                if origin.length_squared() > 64.0 * 64.0 {
+                    continue;
+                }
+                let Some(r) = self.res.atlas.sprites.get(texture).copied() else { continue };
+                let facing = self.res.assets.registry.state(state).and_then(|s| s.properties.get("facing").cloned()).unwrap_or_default();
+                let yrot: f32 = match facing.as_str() {
+                    "west" => 90.0,
+                    "north" => 180.0,
+                    "east" => 270.0,
+                    _ => 0.0,
+                };
+                let (prev, cur) = self.chest_open.get(pos).copied().unwrap_or((0.0, 0.0));
+                let o = prev + (cur - prev) * alpha as f32;
+                let open = 1.0 - (1.0 - o).powi(3);
+                let base = glam::Mat4::from_translation(origin.as_vec3())
+                    * glam::Mat4::from_translation(glam::Vec3::new(0.5, 0.0, 0.5))
+                    * glam::Mat4::from_rotation_y((-yrot).to_radians())
+                    * glam::Mat4::from_translation(glam::Vec3::new(-0.5, 0.0, -0.5));
+                let light = self.world.light(pos.0, pos.1, pos.2);
+                let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+                let pose = |part: &horizon_client::mobs::Part| {
+                    let mut p = part.pose;
+                    if part.name == "lid" || part.name == "lock" {
+                        p[3] = -(open * std::f32::consts::FRAC_PI_2);
+                    }
+                    p
+                };
+                horizon_client::mobs::render_model(model, base, &pose, [r.u0, r.v0, r.u1, r.v1], packed, 0, &mut out);
             }
         }
         // Camera-facing particle quads.
@@ -1806,6 +1980,50 @@ impl Game<'_> {
         }
         Ok(())
     }
+    fn tick_block_entities(&mut self) -> Result<()> {
+        // ChestLidController: 0.1 per tick towards open/closed.
+        if let Some(key) = self.container {
+            self.chest_open.entry(key).or_insert((0.0, 0.0));
+        }
+        let open = self.container;
+        self.chest_open.retain(|k, (prev, cur)| {
+            *prev = *cur;
+            *cur = if Some(*k) == open { (*cur + 0.1).min(1.0) } else { (*cur - 0.1).max(0.0) };
+            *cur > 0.0 || *prev > 0.0
+        });
+        let mut lit_changes = Vec::new();
+        for (pos, entity) in self.world.block_entities.iter_mut() {
+            if let BlockEntity::Furnace(f) = entity
+                && let Some(lit) = f.tick(&self.res.recipes, &self.res.items, &self.res.providers)
+            {
+                lit_changes.push((*pos, lit));
+            }
+        }
+        for ((x, y, z), lit) in lit_changes {
+            let state = self.world.block(x, y, z);
+            if let Some(mut s) = self.res.assets.registry.state(state).cloned()
+                && s.properties.contains_key("lit")
+            {
+                s.properties.insert("lit".into(), lit.to_string());
+                if let Ok(id) = self.res.assets.registry.resolve(&s) {
+                    self.world.set(x, y, z, id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    /// A copy of a chunk carrying its block entities, for saving.
+    fn with_entities(&self, chunk: &Arc<horizon_client::chunk::Chunk>) -> Arc<horizon_client::chunk::Chunk> {
+        let mut c = (**chunk).clone();
+        c.block_entities = self
+            .world
+            .block_entities
+            .iter()
+            .filter(|(p, _)| p.0 >> 4 == c.x && p.2 >> 4 == c.z)
+            .map(|(p, e)| (*p, e.clone()))
+            .collect();
+        Arc::new(c)
+    }
     fn tick_mobs(&mut self) -> Result<()> {
         self.attack_ticks = self.attack_ticks.saturating_add(1);
         // Generation-time creature packs for newly generated chunks.
@@ -1917,11 +2135,11 @@ impl Game<'_> {
         Ok(())
     }
     fn save_game(&mut self) -> Result<()> {
-        let chunks: Vec<_> = self
-            .world
-            .modified
-            .drain()
-            .filter_map(|k| self.world.chunks.get(&k).cloned())
+        let keys: Vec<_> = self.world.modified.drain().collect();
+        let chunks: Vec<_> = keys
+            .iter()
+            .filter_map(|k| self.world.chunks.get(k))
+            .map(|c| self.with_entities(c))
             .collect();
         self.save.save(&chunks, &self.res.assets.registry, &self.res.biomes)?;
         let level = &mut self.level;
@@ -2012,11 +2230,15 @@ impl Game<'_> {
             self.streaming.center = ((p.position.x.floor() as i32) >> 4, (p.position.z.floor() as i32) >> 4);
         }
         let (uploads, unloaded) = self.streaming.update(&mut self.world);
-        let modified: Vec<_> = unloaded
+        let dirty: Vec<_> = unloaded
             .iter()
             .filter(|c| self.world.modified.remove(&(c.x, c.z)))
             .cloned()
             .collect();
+        let modified: Vec<_> = dirty.iter().map(|c| self.with_entities(c)).collect();
+        for c in &unloaded {
+            self.world.block_entities.retain(|p, _| !(p.0 >> 4 == c.x && p.2 >> 4 == c.z));
+        }
         if !modified.is_empty()
             && let Err(e) = self.save.save(&modified, &self.res.assets.registry, &self.res.biomes)
         {
@@ -2391,6 +2613,8 @@ pub fn run() -> Result<()> {
         atlas,
         icons: HashMap::new(),
         layer_names,
+        providers: Providers::load(&root),
+        chest_model: horizon_client::mobs::load_model(&root, "minecraft:chest#main"),
         mob_types: MobTypes::load(&root)?.types.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
     };
     let mut inventory = vec![None; 36];
@@ -2426,6 +2650,8 @@ pub fn run() -> Result<()> {
         carried: None,
         craft_grid: vec![None; 9],
         craft_size: 2,
+        container: None,
+        scratch_slot: None,
         mining: None,
         destroy_delay: 0,
         use_delay: 0,
@@ -2460,6 +2686,7 @@ pub fn run() -> Result<()> {
         arrows: Vec::new(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
+        chest_open: HashMap::new(),
     };
     EventLoop::new()?.run_app(&mut game)?;
     if let Some(path) = &game.options.report {
