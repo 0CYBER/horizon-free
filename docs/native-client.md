@@ -112,14 +112,28 @@ It compares every resulting position, velocity and bounding-box component by
 exact bits, along with support, climbing and collision state and both separate
 velocity/position synchronization flags.
 
+The dry movement tick additionally binds small-velocity cleanup, float input
+damping, held-jump delay and server frost-modifier removal. The expanded
+[tick comparison](../benchmarks/rust-native-motion-tick-2026-10-07/scoped-parity.json)
+checks 47,393 operations in 847 scenarios against both pinned JARs, including
+direct calls to the actual `LivingEntity.aiStep` body. It compares lazy attribute
+instance creation, stored base/cache/dirty state, modifier values and permanence,
+and pending update/sync membership alongside the motion fields. Queue iteration
+order depends on runtime identity hashes and is outside this scene comparison.
+The test caught an omission where matching positions concealed a retained
+powder-snow modifier and missing attribute notifications; dry ticks now remove
+that modifier after travel, as vanilla does.
+
 ```sh
 python3 tools/prepare_native_client.py
 python3 tools/test_native_scene_motion.py
 ```
 
 This binding is not yet a complete player tick or input controller. Its current
-domain is the dry resident scene, standing dimensions, no crouching, vehicles
-or status effects. Landing/damage, movement emission and external networking
+domain is the dry resident scene, standing dimensions, zero frozen ticks,
+empty equipment, no interpolation, crouching, vehicles or status effects.
+The outer `Player.aiStep` and local input controller remain unbound.
+Landing/damage, movement emission and external networking
 remain recorded phase boundaries; damage is not applied and ordinary falling
 does not yet accumulate fall distance. Block-inside effects such as cobweb
 slowdown and world/entity lifecycle remain unfinished. These boundaries are

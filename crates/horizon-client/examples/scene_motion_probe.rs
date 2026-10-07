@@ -8,6 +8,7 @@ use horizon_client::{
     world::TestWorld,
 };
 use horizon_core::geometry::Vec3;
+use horizon_world::attributes::{Modifier, Operation};
 use serde_json::Value;
 use std::{
     fs,
@@ -27,6 +28,36 @@ fn position(p: Option<horizon_core::position::BlockPos>) -> String {
     p.map_or_else(|| "none".into(), |p| format!("{},{},{}", p.x, p.y, p.z))
 }
 fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
+    // Compare membership and stored values without allocating lazy instances or
+    // evaluating computed values. Runtime identity hashes differ between VMs.
+    let mut attributes = Vec::new();
+    for (handle, key, value) in player.attributes.instances() {
+        let mut modifiers: Vec<_> = value
+            .modifiers()
+            .iter()
+            .map(|m| {
+                format!(
+                    "{}:{:016x}:{}:{}",
+                    m.id(),
+                    m.amount().to_bits(),
+                    m.operation() as u8,
+                    value.permanent_modifiers().iter().any(|p| p.id() == m.id())
+                )
+            })
+            .collect();
+        modifiers.sort();
+        attributes.push(format!(
+            "{}:{:016x}:{}:{:016x}:{}:{}:[{}]",
+            key.name(),
+            value.base_value().to_bits(),
+            value.is_dirty(),
+            value.cached_value().to_bits(),
+            player.attributes.updates().contains(Some(handle)),
+            player.attributes.sync().contains(Some(handle)),
+            modifiers.join(",")
+        ));
+    }
+    attributes.sort();
     for v in [
         player.position,
         player.velocity,
@@ -43,7 +74,7 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
     }
     writeln!(
         out,
-        "{} {} {} {} {} {} {} {:016x} {} {} {} {:08x} {}",
+        "{} {} {} {} {} {} {} {:016x} {} {} {} {:08x} {} | {}",
         player.collision.horizontal,
         player.collision.vertical,
         player.collision.below,
@@ -56,7 +87,8 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
         player.needs_sync,
         player.sync_position,
         player.speed.to_bits(),
-        player.no_jump_delay
+        player.no_jump_delay,
+        attributes.join(";")
     )?;
     Ok(())
 }
@@ -105,6 +137,42 @@ fn main() -> Result<()> {
                 "stuck" => world.player.stuck_multiplier = vector(&op["value"]),
                 "fall" => world.player.fall_distance = number(&op["value"]),
                 "jumping" => world.player.jumping = op["value"].as_bool().unwrap(),
+                "ack_attributes" => {
+                    world.player.attributes.updates_mut().clear();
+                    world.player.attributes.sync_mut().clear();
+                }
+                "modifier" => {
+                    let key = world
+                        .player
+                        .attributes
+                        .key(op["name"].as_str().unwrap())
+                        .unwrap();
+                    let handle = world
+                        .player
+                        .attributes
+                        .get_instance(Some(key))
+                        .map_err(|e| format!("{e:?}"))?
+                        .unwrap();
+                    let operation = match op["operation"].as_u64().unwrap() {
+                        0 => Operation::AddValue,
+                        1 => Operation::AddMultipliedBase,
+                        2 => Operation::AddMultipliedTotal,
+                        _ => return Err("unknown modifier operation".into()),
+                    };
+                    let modifier =
+                        Modifier::new(op["id"].as_str().unwrap(), number(&op["value"]), operation)?;
+                    world
+                        .player
+                        .attributes
+                        .edit(&handle, |a, o| {
+                            if op["permanent"].as_bool().unwrap() {
+                                a.add_permanent(modifier, o)
+                            } else {
+                                a.add_transient(modifier, o)
+                            }
+                        })
+                        .map_err(|e| format!("{e:?}"))?;
+                }
                 "attribute" => {
                     let key = world
                         .player

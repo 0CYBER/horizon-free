@@ -227,6 +227,26 @@ impl PlayerMotion {
             .map_err(attribute_error)?;
         Ok(())
     }
+    fn remove_frost(&mut self) -> Result<()> {
+        let key = self
+            .attributes
+            .key("minecraft:movement_speed")
+            .ok_or("missing movement speed")?;
+        // Native removeFrost obtains the instance even when no modifier exists.
+        // Pure value lookup would miss lazy creation and its pending updates.
+        if let Some(handle) = self
+            .attributes
+            .get_instance(Some(key))
+            .map_err(attribute_error)?
+        {
+            self.attributes
+                .edit(&handle, |value, observer| {
+                    value.remove("minecraft:powder_snow", observer)
+                })
+                .map_err(attribute_error)?;
+        }
+        Ok(())
+    }
 }
 
 pub struct MotionWorld<'p, 'w, 'r> {
@@ -294,9 +314,10 @@ impl MotionWorld<'_, '_, '_> {
     pub fn travel_in_air(&mut self, input: Vec3) -> Result<()> {
         living_air::travel_in_air(self, input)
     }
-    /// Dry, standing movement phases of LivingEntity.aiStep. Equipment,
-    /// interpolation, effects, freezing and world/entity effects are not ticked
-    /// by this binding. Inputs are the native float xxa/yya/zza fields.
+    /// Dry, standing movement phases of LivingEntity.aiStep, including server
+    /// frost-modifier cleanup with zero frozen ticks. Equipment, interpolation,
+    /// effects and world/entity effects remain unbound. Inputs are the native
+    /// float xxa/yya/zza fields, before LivingEntity.applyInput damping.
     pub fn movement_tick(&mut self, input: [f32; 3]) -> Result<()> {
         if self.player.no_jump_delay > 0 {
             self.player.no_jump_delay -= 1;
@@ -323,7 +344,8 @@ impl MotionWorld<'_, '_, '_> {
         } else {
             self.player.no_jump_delay = 0;
         }
-        self.travel_in_air(input)
+        self.travel_in_air(input)?;
+        self.player.remove_frost()
     }
     pub fn jump_from_ground(&mut self) -> Result<()> {
         living_motion::jump_from_ground(self)

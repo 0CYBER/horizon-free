@@ -27,7 +27,7 @@ import static dev.horizonlab.parity.VanillaRegistryCollisionScanOracle.*;
  * actual block scanning, support updates and restitution. Landing and external
  * sound/event/network consumers are controlled phase boundaries. */
 public final class VanillaSceneMotionOracle {
-    static Field position,history,support,noBlocks,last,stuck,delay;
+    static Field position,history,support,noBlocks,last,stuck,delay,attributeStorage,attributeDirty,attributeCached;
     static MethodHandle aiStep;
     static float single(JsonElement v){return Float.intBitsToFloat(Integer.parseUnsignedInt(v.getAsString(),16));}
     static void write(Field f,Object o,Object value){try{f.set(o,value);}catch(Exception e){throw new AssertionError(e);}}
@@ -95,12 +95,22 @@ public final class VanillaSceneMotionOracle {
         }
     }
     static String pos(Object v){var o=(Optional<?>)v;return o.isEmpty()?"none":((BlockPos)o.get()).getX()+","+((BlockPos)o.get()).getY()+","+((BlockPos)o.get()).getZ();}
+    @SuppressWarnings("unchecked")
     static void snapshot(PrintWriter out,Actor p)throws Exception{
+        var attributes=new ArrayList<String>();
+        var stored=(Map<Holder<Attribute>,AttributeInstance>)attributeStorage.get(p.attrs);
+        for(var entry:stored.entrySet()){
+            var a=entry.getValue();var modifiers=new ArrayList<String>();
+            for(var m:a.getModifiers())modifiers.add(String.format("%s:%016x:%d:%s",m.id(),Double.doubleToLongBits(m.amount()),m.operation().ordinal(),a.getPermanentModifiers().contains(m)));
+            Collections.sort(modifiers);
+            attributes.add(String.format("%s:%016x:%s:%016x:%s:%s:[%s]",entry.getKey().getRegisteredName(),Double.doubleToLongBits(a.getBaseValue()),attributeDirty.getBoolean(a),Double.doubleToLongBits(attributeCached.getDouble(a)),p.attrs.getAttributesToUpdate().contains(a),p.attrs.getAttributesToSync().contains(a),String.join(",",modifiers)));
+        }
+        Collections.sort(attributes);
         AABB b=p.getBoundingBox();
         for(var v:List.of(p.position(),p.getDeltaMovement(),new Vec3(b.minX,b.minY,b.minZ),new Vec3(b.maxX,b.maxY,b.maxZ)))
             out.printf("%016x %016x %016x ",Double.doubleToLongBits(v.x),Double.doubleToLongBits(v.y),Double.doubleToLongBits(v.z));
-        out.printf("%s %s %s %s %s %s %s %016x %s %s %s %08x %d%n",p.horizontalCollision,p.verticalCollision,p.verticalCollisionBelow,p.minorHorizontalCollision,
-            p.onGround(),noBlocks.getBoolean(p),pos(support.get(p)),Double.doubleToLongBits(p.fallDistance),pos(last.get(p)),p.needsSync,p.syncPosition,Float.floatToIntBits(p.speed),delay.getInt(p));
+        out.printf("%s %s %s %s %s %s %s %016x %s %s %s %08x %d | %s%n",p.horizontalCollision,p.verticalCollision,p.verticalCollisionBelow,p.minorHorizontalCollision,
+            p.onGround(),noBlocks.getBoolean(p),pos(support.get(p)),Double.doubleToLongBits(p.fallDistance),pos(last.get(p)),p.needsSync,p.syncPosition,Float.floatToIntBits(p.speed),delay.getInt(p),String.join(";",attributes));
     }
     public static void main(String[] args)throws Exception{
         net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();Path dir=Path.of(args[1]);
@@ -109,6 +119,7 @@ public final class VanillaSceneMotionOracle {
         position=field(Entity.class,"position");history=field(Entity.class,"movementThisTick");support=field(Entity.class,"mainSupportingBlockPos");noBlocks=field(Entity.class,"onGroundNoBlocks");last=field(LivingEntity.class,"lastClimbablePos");stuck=field(Entity.class,"stuckSpeedMultiplier");
         var abilities=field(Player.class,"abilities");
         delay=field(LivingEntity.class,"noJumpDelay");
+        attributeStorage=field(AttributeMap.class,"attributes");attributeDirty=field(AttributeInstance.class,"dirty");attributeCached=field(AttributeInstance.class,"cachedValue");
         aiStep=MethodHandles.privateLookupIn(LivingEntity.class,MethodHandles.lookup()).findSpecial(LivingEntity.class,"aiStep",MethodType.methodType(void.class),LivingEntity.class);
         var description=JsonParser.parseString(Files.readString(dir.resolve("scene.json"))).getAsJsonObject();
         var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
@@ -127,6 +138,12 @@ public final class VanillaSceneMotionOracle {
                         case "travel"->p.travel(VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "tick"->p.movementTick(VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "delay"->delay.setInt(p,op.get("value").getAsInt());
+                        case "ack_attributes"->{p.attrs.getAttributesToUpdate().clear();p.attrs.getAttributesToSync().clear();}
+                        case "modifier"->{
+                            var holder=BuiltInRegistries.ATTRIBUTE.get(Identifier.parse(op.get("name").getAsString())).orElseThrow();
+                            var modifier=new AttributeModifier(Identifier.parse(op.get("id").getAsString()),number(op.get("value")),AttributeModifier.Operation.values()[op.get("operation").getAsInt()]);
+                            if(op.get("permanent").getAsBoolean())p.getAttribute(holder).addPermanentModifier(modifier);else p.getAttribute(holder).addTransientModifier(modifier);
+                        }
                         case "move"->p.move(MoverType.SELF,VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "jump"->p.jumpFromGround();
                         case "sprint"->p.setSprinting(op.get("value").getAsBoolean());
