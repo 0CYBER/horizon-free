@@ -165,6 +165,10 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
         .filter_map(|e| match e {
             MotionEvent::Fall(e) => Some(e.trace()),
             MotionEvent::Health(e) => Some(e.trace()),
+            MotionEvent::Waypoint { receiver, enabled } => Some(format!(
+                "waypoint {} {enabled}",
+                if *receiver { "receive" } else { "transmit" }
+            )),
             _ => None,
         })
         .collect();
@@ -173,8 +177,10 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() != 2 {
-        return Err("usage: scene_motion_probe RESOURCES FIXTURE_DIRECTORY".into());
+    if args.len() != 3 {
+        return Err(
+            "usage: scene_motion_probe RESOURCES FIXTURE_DIRECTORY --describe|REFERENCE".into(),
+        );
     }
     let root = PathBuf::from(&args[0]);
     let dir = PathBuf::from(&args[1]);
@@ -188,11 +194,44 @@ fn main() -> Result<()> {
             &serde_json::json!({"radius":1,"resident_chunks":scene.chunks.len(),"model_gallery":assets.model_gallery}),
         )?,
     )?;
-    let mut out = std::io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
-    for line in std::io::BufReader::new(fs::File::open(dir.join("inputs.txt"))?).lines() {
+    if args[2] == "--describe" {
+        return Ok(());
+    }
+    let side = &args[2];
+    let mut out = std::io::BufWriter::new(fs::File::create(dir.join(format!("rust-{side}.txt")))?);
+    for line in
+        std::io::BufReader::new(fs::File::open(dir.join(format!("inputs-{side}.txt")))?).lines()
+    {
         let f: Value = serde_json::from_str(&line?)?;
         scene.health_rules = horizon_client::health::HealthRules::default();
-        let mut player = PlayerMotion::new(&resources, vector(&f["position"]))?;
+        let hashes: Vec<_> = resources
+            .attributes
+            .attributes()
+            .map(|(_, a)| {
+                f["holder_hashes"][&a.name]
+                    .as_i64()
+                    .expect("missing holder identity") as i32
+            })
+            .collect();
+        let mut instances = f["instance_hashes"]
+            .as_array()
+            .ok_or("missing instance identities")?
+            .iter()
+            .map(|v| v.as_i64().unwrap() as i32)
+            .collect::<Vec<_>>()
+            .into_iter();
+        let count = instances.len();
+        let used = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = used.clone();
+        let mut player = PlayerMotion::with_attribute_identities(
+            &resources,
+            vector(&f["position"]),
+            &hashes,
+            Box::new(move || {
+                counter.set(counter.get() + 1);
+                instances.next().expect("unexpected instance allocation")
+            }),
+        )?;
         for op in f["ops"].as_array().unwrap() {
             let mut world = MotionWorld {
                 player: &mut player,
@@ -205,6 +244,7 @@ fn main() -> Result<()> {
                 "shift" => world.player.shift_key_down = op["value"].as_bool().unwrap(),
                 "pose_tick" => world.update_player_pose()?,
                 "refresh_dimensions" => world.player.refresh_dimensions()?,
+                "refresh_attributes" => world.player.refresh_attributes()?,
                 "pose" => world.player.set_pose(match op["value"].as_str().unwrap() {
                     "STANDING" => horizon_client::pose::Pose::Standing,
                     "CROUCHING" => horizon_client::pose::Pose::Crouching,
@@ -504,6 +544,9 @@ fn main() -> Result<()> {
             )?;
         }
         writeln!(out, "end")?;
+        if used.get() != count {
+            return Err("reference instance allocation count differs".into());
+        }
     }
     Ok(())
 }

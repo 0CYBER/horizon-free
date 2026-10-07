@@ -580,8 +580,8 @@ also passes after updating its scene controller.
 
 The native fixture controls pose storage and invokes the actual dimension-refresh
 body when the pose changes. Full synchronized pose data and network notifications
-remain unfinished. Scale changes use explicit refresh operations; the complete
-pending attribute-update lifecycle is separate. Crawling here means dry collision
+remain unfinished. That checkpoint used explicit dimension refreshes; the
+pending attribute integration below adds the simulation tick phase. Crawling here means dry collision
 pose selection; swimming physics, sleeping, flight and death poses are unbound.
 
 The client camera follows the cached eye height with the inspected native float
@@ -593,3 +593,42 @@ without an error. Both views were inspected. The
 [renderer startup check](../benchmarks/rust-native-crouch-2026-10-07/startup-smoke.json),
 seven client tests and all-target client Clippy also passed. These checks do not
 establish full vanilla gameplay or final macOS/Linux/Windows release acceptance.
+
+
+## Pending attribute updates
+
+The resident simulation now dispatches pending attribute callbacks after movement
+and before pose selection, matching their position in `LivingEntity.tick` and
+`Player.tick`. Reducing maximum health or absorption clamps the stored value;
+changing scale rebuilds the cached player dimensions even when the pose stays
+the same. The update set clears after the callbacks finish, while attribute
+synchronization stays queued. Existing modifier, cache and dirty-state behavior
+is preserved.
+
+The scene oracle invokes the actual private native refresh method and the
+`ServerPlayer.onAttributeUpdated` override. Waypoint transmit/receive changes
+produce ordered manager requests; waypoint management and network delivery remain
+unbound. Health and absorption use the same synchronized float storage as damage
+and hunger. The full enclosing player/entity tick is still incomplete.
+
+Callback order depends on native attribute-instance identity hashes. The oracle
+now exports each reference process's holder and instance identities, and the Rust
+probe replays them. The check compares ordered health/waypoint events and validates
+that the same number of attribute instances is allocated. It does not sort those
+events to conceal ordering differences. Registry snapshots still compare map and
+modifier contents independently of iteration order.
+
+The [shared scene check](../benchmarks/rust-native-attribute-updates-2026-10-07/scene-motion.json)
+passes 234,949 operations in 5,801 scenarios against both pinned JARs. The
+[combined input scene](../benchmarks/rust-native-attribute-updates-2026-10-07/input-scene.json)
+passes 30,025 operations in 710 scenarios against the client. New cases combine
+health and absorption limits, scale, both waypoint ranges, permanent/transient
+modifiers, repeated refreshes and nonfinite values. Low-tunnel histories exercise
+movement, releasing Shift under a ceiling and changing scale between ticks.
+
+The [Linux walking check](../benchmarks/rust-native-attribute-updates-2026-10-07/interactive-smoke.json)
+recorded 36 sprinting ticks and 36 crouching ticks, ending grounded and alive
+without an error. Its view was inspected. The
+[startup check](../benchmarks/rust-native-attribute-updates-2026-10-07/startup-smoke.json),
+seven client tests and all-target client Clippy passed. Full gameplay parity and
+playable macOS/Linux/Windows release acceptance remain pending.

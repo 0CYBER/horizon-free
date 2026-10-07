@@ -98,6 +98,10 @@ impl MotionResources {
 /// hurt dispatch updates stored health synchronously before these are drained.
 #[derive(Clone, Copy, Debug)]
 pub enum MotionEvent {
+    Waypoint {
+        receiver: bool,
+        enabled: bool,
+    },
     Health(crate::health::HealthEvent),
     Fall(crate::landing::FallEvent),
     Recorded {
@@ -154,8 +158,8 @@ fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
 }
 impl PlayerMotion {
     pub fn new(resources: &MotionResources, position: Vec3) -> Result<Self> {
-        // Identity hashes affect map order, not queried movement values. These
-        // are process-owned identities; no JVM allocation order is assumed.
+        // Process-owned identities determine native collection callback order.
+        // Differential fixtures can replay a reference process's identities.
         let hashes: Vec<_> = resources
             .attributes
             .attributes()
@@ -167,10 +171,19 @@ impl PlayerMotion {
             identity = identity.wrapping_add(1);
             identity
         });
+        Self::with_attribute_identities(resources, position, &hashes, next)
+    }
+    /// Explicit identity allocation for deterministic reference replay.
+    pub fn with_attribute_identities(
+        resources: &MotionResources,
+        position: Vec3,
+        hashes: &[i32],
+        next: Box<dyn FnMut() -> i32>,
+    ) -> Result<Self> {
         let mut attributes = LiveAttributes::new(
             resources.attributes.clone(),
             "minecraft:player",
-            &hashes,
+            hashes,
             next,
         )
         .map_err(attribute_error)?;
@@ -393,6 +406,7 @@ impl MotionWorld<'_, '_, '_> {
         self.player.health.advance_clock();
         let previous = self.player.position;
         self.player_movement_tick(direction, jumping)?;
+        self.player.refresh_attributes()?;
         self.update_player_pose()?;
         // The resident scene accepts the resolved local movement directly.
         // Vanilla dispatches this separately from travel, on packet acceptance.

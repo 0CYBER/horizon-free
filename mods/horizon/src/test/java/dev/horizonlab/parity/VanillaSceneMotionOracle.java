@@ -35,9 +35,26 @@ import static dev.horizonlab.parity.VanillaRegistryCollisionScanOracle.*;
 public final class VanillaSceneMotionOracle {
     static Field position,history,support,noBlocks,last,stuck,delay,trigger,attributeStorage,attributeDirty,attributeCached,impact,grace;
     static MethodHandle aiStep;
+    static Method refreshAttributes;
     static EntityDataAccessor<Float> healthKey,absorptionKey;
     static Field healthDead,cooldown,lastHurt,noAction,lastDamage,lastStamp,foodExhaustion,foodTimer,storedSpeed;
     static Map<String,DamageSource> damageSources;
+    static final class TrackedAttributes extends AttributeMap {
+        final List<AttributeInstance> instances=new ArrayList<>();
+        TrackedAttributes(AttributeSupplier supplier){super(supplier);}
+        @Override public AttributeInstance getInstance(Holder<Attribute> key){
+            var instance=super.getInstance(key);
+            if(instance!=null&&!instances.contains(instance))instances.add(instance);
+            return instance;
+        }
+    }
+    static final class Waypoints extends net.minecraft.server.waypoints.ServerWaypointManager {
+        Level level;
+        @Override public void trackWaypoint(net.minecraft.world.waypoints.WaypointTransmitter actor){level.actor.events.add("waypoint transmit true");}
+        @Override public void untrackWaypoint(net.minecraft.world.waypoints.WaypointTransmitter actor){level.actor.events.add("waypoint transmit false");}
+        @Override public void addPlayer(ServerPlayer actor){level.actor.events.add("waypoint receive true");}
+        @Override public void removePlayer(ServerPlayer actor){level.actor.events.add("waypoint receive false");}
+    }
     static String sourceName(DamageSource source){return source==null?"none":source.typeHolder().getRegisteredName();}
     static final class Connection extends net.minecraft.server.network.ServerGamePacketListenerImpl {
         Connection(){super(null,null,null,null);}
@@ -75,7 +92,8 @@ public final class VanillaSceneMotionOracle {
     static final class Level extends net.minecraft.server.level.ServerLevel {
         Map<Long,Chunk> chunks;WorldBorder border;Actor actor;Sources sources;net.minecraft.util.RandomSource rng;
         net.minecraft.server.MinecraftServer server;
-        Rules rules;net.minecraft.world.Difficulty difficulty;long time;
+        Rules rules;net.minecraft.world.Difficulty difficulty;long time;Waypoints waypoints;
+        @Override public net.minecraft.server.waypoints.ServerWaypointManager getWaypointManager(){return waypoints;}
         @Override public net.minecraft.world.level.gamerules.GameRules getGameRules(){return rules;}
         @Override public net.minecraft.world.Difficulty getDifficulty(){return difficulty;}
         static final net.minecraft.world.TickRateManager TICK_RATE=new net.minecraft.world.TickRateManager();
@@ -109,7 +127,7 @@ public final class VanillaSceneMotionOracle {
     static final class Actor extends ServerPlayer {
         AttributeMap attrs;byte flags;boolean preparedInput;List<String> events;
         // Query overrides only while directly exercising the complete statistics
-        // method; regular resident movement keeps its actual standing/dry state.
+        // method; regular resident movement keeps its actual dry pose state.
         Integer statisticsFlags;
         Object sprintController;
         Pose scenePose=Pose.STANDING;
@@ -117,6 +135,7 @@ public final class VanillaSceneMotionOracle {
         @Override public void setPose(Pose pose){if(scenePose!=pose){scenePose=pose;super.refreshDimensions();}}
         public boolean fitPose(Pose pose){return super.canPlayerFitWithinBlocksAndEntitiesWhen(pose);}
         public void poseTick(){updatePlayerPose();}
+        public void attributeTick()throws Exception{refreshAttributes.invoke(this);}
         boolean statFlag(int bit){return (statisticsFlags&(1<<bit))!=0;}
         SynchedEntityData.DataItem<Float> healthItem,absorptionItem;Level sceneLevel;Tracker tracker;net.minecraft.server.PlayerAdvancements advancements;
         Actor(){super(null,null,null,null);}
@@ -245,16 +264,18 @@ public final class VanillaSceneMotionOracle {
         trigger=field(Player.class,"jumpTriggerTime");storedSpeed=field(LivingEntity.class,"speed");
         impact=field(LivingEntity.class,"currentImpulseImpactPos");grace=field(LivingEntity.class,"currentImpulseContextResetGraceTime");
         attributeStorage=field(AttributeMap.class,"attributes");attributeDirty=field(AttributeInstance.class,"dirty");attributeCached=field(AttributeInstance.class,"cachedValue");
+        refreshAttributes=LivingEntity.class.getDeclaredMethod("refreshDirtyAttributes");refreshAttributes.setAccessible(true);
         aiStep=MethodHandles.privateLookupIn(LivingEntity.class,MethodHandles.lookup()).findSpecial(LivingEntity.class,"aiStep",MethodType.methodType(void.class),LivingEntity.class);
         var description=JsonParser.parseString(Files.readString(dir.resolve("scene.json"))).getAsJsonObject();
         var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
         var level=(Level)allocate.invoke(unsafe,Level.class);level.chunks=VanillaSceneCollisionOracle.scene(description,trace);level.border=new Border();
         level.rng=net.minecraft.util.RandomSource.create(0);level.sources=(Sources)allocate.invoke(unsafe,Sources.class);
         level.sources.fall=damageSources.get("minecraft:fall");level.sources.stalagmite=damageSources.get("minecraft:stalagmite");level.sources.starve=damageSources.get("minecraft:starve");
+        level.waypoints=(Waypoints)allocate.invoke(unsafe,Waypoints.class);level.waypoints.level=level;
         level.rules=new Rules();level.difficulty=net.minecraft.world.Difficulty.NORMAL;
         var server=(VanillaBlockLandingOracle.Server)allocate.invoke(unsafe,VanillaBlockLandingOracle.Server.class);
         server.d=new VanillaBlockLandingOracle.Data();server.d.out=new PrintWriter(OutputStream.nullOutputStream());server.d.f=JsonParser.parseString("{\"fail\":-1,\"protected\":false}").getAsJsonObject();level.server=server;
-        try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var lines=Files.lines(dir.resolve("inputs.txt"))){
+        try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var enriched=new PrintWriter(Files.newBufferedWriter(dir.resolve("inputs-"+args[0]+".txt")));var lines=Files.lines(dir.resolve("inputs.txt"))){
             for(var line:(Iterable<String>)lines::iterator){
                 var row=JsonParser.parseString(line).getAsJsonObject();var p=(Actor)allocate.invoke(unsafe,Actor.class);p.configure(level);p.events=new ArrayList<>();level.actor=p;
                 write(field(Entity.class,"type"),p,EntityTypes.PLAYER);
@@ -263,7 +284,7 @@ public final class VanillaSceneMotionOracle {
                 write(field(Entity.class,"interpolationHandler"),p,InterpolationHandler.NO_OP);
                 var equipment=new EntityEquipment();write(field(LivingEntity.class,"equipment"),p,equipment);
                 write(field(Player.class,"inventory"),p,new Inventory(p,equipment));
-                p.attrs=new AttributeMap(VanillaEntityAttributeOracle.supplier(EntityTypes.PLAYER));
+                p.attrs=new TrackedAttributes(VanillaEntityAttributeOracle.supplier(EntityTypes.PLAYER));write(field(LivingEntity.class,"attributes"),p,p.attrs);
                 write(history,p,new ArrayDeque<>());write(support,p,Optional.empty());write(last,p,Optional.empty());write(stuck,p,Vec3.ZERO);write(abilities,p,new Abilities());
                 write(field(ServerPlayer.class,"shoulderEntityLeft"),p,new net.minecraft.nbt.CompoundTag());write(field(ServerPlayer.class,"shoulderEntityRight"),p,new net.minecraft.nbt.CompoundTag());
                 p.connection=(Connection)allocate.invoke(unsafe,Connection.class);
@@ -281,11 +302,12 @@ public final class VanillaSceneMotionOracle {
                         case "shift"->p.setShiftKeyDown(op.get("value").getAsBoolean());
                         case "pose_tick"->p.poseTick();
                         case "refresh_dimensions"->p.refreshDimensions();
+                        case "refresh_attributes"->p.attributeTick();
                         case "pose"->p.setPose(Pose.valueOf(op.get("value").getAsString()));
                         case "controlled_tick"->{
                             if(p.sprintController==null)p.sprintController=Class.forName("dev.horizonlab.parity.VanillaSprintInputOracle$Controller").getConstructor(ServerPlayer.class).newInstance(p);
                             int mask=op.get("value").getAsInt();var direction=(net.minecraft.world.phys.Vec2)p.sprintController.getClass().getMethod("step",int.class).invoke(p.sprintController,mask);
-                            p.clock();var before=p.position();p.playerMovementTick(new Vec3(direction.x,0,direction.y),(mask&16)!=0);p.poseTick();p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);
+                            p.clock();var before=p.position();p.playerMovementTick(new Vec3(direction.x,0,direction.y),(mask&16)!=0);p.attributeTick();p.poseTick();p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);
                         }
                         case "health"->p.setHealth(single(op.get("value")));
                         case "absorption"->p.setAbsorptionAmount(single(op.get("value")));
@@ -298,7 +320,7 @@ public final class VanillaSceneMotionOracle {
                         case "eat"->p.getFoodData().eat(op.get("nutrition").getAsInt(),single(op.get("value")));
                         case "food_tick"->p.getFoodData().tick(p);
                         case "peaceful"->p.peaceful();
-                        case "simulation_tick"->{p.clock();var before=p.position();p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());p.poseTick();p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);}
+                        case "simulation_tick"->{p.clock();var before=p.position();p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());p.attributeTick();p.poseTick();p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);}
                         case "movement_statistics"->{var delta=VanillaSceneCollisionOracle.vector(op.get("value"));p.checkMovementStatistics(delta.x,delta.y,delta.z);}
                         case "statistics_context"->{
                             p.statisticsFlags=op.get("flags").getAsInt();p.getAbilities().invulnerable=op.get("invulnerable").getAsBoolean();
@@ -335,6 +357,9 @@ public final class VanillaSceneMotionOracle {
                     snapshot(out,p);
                 }
                 out.println("end");
+                var hashes=new JsonObject();for(var attr:BuiltInRegistries.ATTRIBUTE){var key=BuiltInRegistries.ATTRIBUTE.wrapAsHolder(attr);hashes.addProperty(key.getRegisteredName(),key.hashCode());}row.add("holder_hashes",hashes);
+                var instances=new JsonArray();for(var instance:((TrackedAttributes)p.attrs).instances)instances.add(System.identityHashCode(instance));row.add("instance_hashes",instances);
+                enriched.println(row);
             }
         }
     }

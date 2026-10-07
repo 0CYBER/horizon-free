@@ -1,6 +1,7 @@
 //! Shared resident-scene loading and queries for the native development client.
 #![forbid(unsafe_code)]
 pub mod assets;
+pub mod attribute_updates;
 pub mod clock;
 pub mod collisions;
 pub mod health;
