@@ -2023,3 +2023,20 @@ edges and mapper mutation/failure behavior. Equality excludes hidden and blend
 state as in vanilla. Mismatched-holder warning logs are outside the comparison.
 Server/client ticking, concrete effect behavior, registries and full entity
 integration remain pending.
+
+
+`consume_effect` implements apply-status, remove-status, clear-status and sound
+consumption effects. Applying status effects draws probability even for an empty
+list, creates fresh native-style instance copies and visits every entry without
+short-circuiting on success. Removal preserves holder order and duplicates;
+sound playback captures block position before querying the actor's category.
+
+`python3 tools/test_consume_effect_parity.py` compares the four actual native
+consume-effect classes with real effect instances and random generators. The
+[consume-effect report](../benchmarks/rust-consume-effect-2026-10-07/scoped-parity.json)
+records **184,437 matching lines per JAR**, including NaN/probability edges,
+copy identity/details, hidden/blend resets, shared input mutation, return-value
+aggregation, sound arguments and callback failure prefixes. Targeted Clippy
+passes. Actor status add/remove/clear and sound delivery remain controlled;
+named holder-set rebinding, teleport consumption and full gameplay integration
+remain pending.
