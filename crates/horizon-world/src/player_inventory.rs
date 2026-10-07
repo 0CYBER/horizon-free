@@ -124,6 +124,21 @@ impl<I: Copy + Eq, K: Clone + Eq, V: Clone + PartialEq> PlayerInventory<I, K, V>
             times_changed: 0,
         }
     }
+    pub(crate) fn stacks(&self) -> &ItemStacks<I, K, V> {
+        &self.stacks
+    }
+    pub(crate) fn set_non_equipment(
+        &mut self,
+        index: i32,
+        stack: StackRef<I, K, V>,
+    ) -> Result<(), InventoryError> {
+        let index = usize::try_from(index)
+            .ok()
+            .filter(|i| *i < 36)
+            .ok_or(InventoryError::Index)?;
+        self.items[index] = stack;
+        Ok(())
+    }
     pub fn items(&self) -> &[StackRef<I, K, V>; 36] {
         &self.items
     }

@@ -98,3 +98,5 @@ pub mod item_stack_refs;
 pub mod simple_container;
 
 pub mod player_inventory;
+
+pub mod inventory_pickup;

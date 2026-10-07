@@ -1684,3 +1684,19 @@ supply equipment-map order to both sides when removing an aliased reference.
 Targeted Clippy passes. Pickup, inventory/equipment ticks, menus, recipe
 accounting, persistence, full component values and complete gameplay integration
 remain pending.
+
+
+`inventory_pickup` composes player slot search and insertion with shared stack
+storage. Search checks the selected slot, offhand, then ordinary slots. Insertion
+consumes its source, preserves component-sensitive merging and pop time, and
+handles damaged stacks and creative fallback at their native callback points.
+
+`python3 tools/test_inventory_pickup_parity.py` compares actual native
+Inventory.add/getSlotWithRemainingSpace, ItemStack operations and shared
+equipment. The [pickup report](../benchmarks/rust-inventory-pickup-2026-10-07/scoped-parity.json)
+records **424,282 matching lines per JAR**, including source/destination aliases,
+callback mutations, failures, count overflow, invalid slots and the damaged
+copy-and-clear that happens before slot validation. Targeted Clippy passes.
+Native crash-report wrapping is represented as an error; diagnostic text is not
+compared. Item-entity pickup events, networking, inventory ticks, menus, full
+components and complete gameplay integration remain pending.
