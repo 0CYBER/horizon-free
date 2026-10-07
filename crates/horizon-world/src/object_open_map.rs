@@ -85,7 +85,12 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
     }
     pub fn get(&self, key: Option<&K>) -> Option<V> {
         let p = key.map_or(self.n(), |k| self.find(k));
-        self.table.borrow().values[p].clone()
+        let table = self.table.borrow();
+        if key.map_or(self.null, |_| table.keys[p].is_some()) {
+            table.values[p].clone()
+        } else {
+            None
+        }
     }
     pub fn entries(&self) -> Vec<(Option<K>, Option<V>)> {
         let table = self.table.borrow();

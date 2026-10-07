@@ -1096,3 +1096,21 @@ methods, health setters and synchronized Float storage execute together. Library
 and fixture Clippy pass. Attribute values, dimension rebuilds and waypoint-manager
 internals remain controlled. Registered modifier bodies, full player integration
 and complete gameplay/platform builds are still unfinished.
+
+## Effect-modifier map storage
+
+The default fastutil object map now preserves native slot order, nullable keys
+and values, growth/shrink behavior and live indexed entry handles. Entry
+iterators invalidate their current handle on removal; older handles continue
+reading the live arrays at their stored indexes. Callback traversal captures the
+key array but reads values from the current array, including after a rehash.
+Writes through a stale entry into an empty slot do not make that key present.
+
+The [map comparison](../benchmarks/rust-object-open-map-2026-10-07/scoped-parity.json)
+matches **1,142,630 lines per reference classpath** against pinned fastutil
+8.5.18. Library and fixture Clippy pass. The gate includes collision clusters,
+equal-key identity retention, entry mutation/invalidation and traversal callback
+failure prefixes. Alternate constructors, custom default return values,
+compute/merge/bulk APIs and external structural mutation combined with iterator
+removal remain outside this scope. Effect-modifier and full gameplay integration
+remain unfinished.
