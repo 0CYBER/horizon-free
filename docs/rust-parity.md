@@ -1078,3 +1078,21 @@ storage. The fixtures use actual status instances, pending sets, immutable
 passenger lists and packet constructors. Library and fixture Clippy pass.
 Modifier bodies, attribute-update consequences and packet transport are still
 controlled; their full bindings and complete gameplay remain unfinished.
+
+## Attribute-update consequences and health storage
+
+Pending attribute refresh now dispatches native max-health, max-absorption,
+scale and waypoint-range consequences. Lowering a health limit compares against
+the first captured maximum, then uses the ordinary setter and its fresh limit
+lookup. Health synchronization retains its selected data object through later
+callbacks. Waypoint changes capture the server manager before reading the
+actor's direct attribute-map field, and track only a strictly positive range.
+
+The [combined attribute-update comparison](../benchmarks/rust-attribute-updates-2026-10-07/scoped-parity.json)
+matches **3,111,429 lines per reference JAR**, including the notification corpus,
+finite/nonfinite limits, signed zero, dirty health callbacks, map/manager changes
+and failure prefixes. Actual native effect notifications, attribute-update
+methods, health setters and synchronized Float storage execute together. Library
+and fixture Clippy pass. Attribute values, dimension rebuilds and waypoint-manager
+internals remain controlled. Registered modifier bodies, full player integration
+and complete gameplay/platform builds are still unfinished.
