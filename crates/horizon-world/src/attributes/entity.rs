@@ -17,7 +17,7 @@ pub struct RegisteredAttribute {
 pub struct Catalog {
     attributes: Vec<RegisteredAttribute>,
     ids: BTreeMap<String, AttributeId>,
-    defaults: BTreeMap<String, Vec<Option<f64>>>,
+    defaults: BTreeMap<String, Arc<[Option<f64>]>>,
 }
 fn string(v: &Value) -> io::Result<&str> {
     v.as_str()
@@ -84,7 +84,7 @@ impl Catalog {
                     .ok_or_else(|| invalid("unknown supplier attribute"))?;
                 bases[id.0] = Some(number(base)?);
             }
-            defaults.insert(entity.clone(), bases);
+            defaults.insert(entity.clone(), Arc::from(bases));
         }
         Ok(Self {
             attributes,
@@ -144,8 +144,8 @@ impl Observer for DirtyObserver<'_> {
 }
 pub struct EntityAttributes {
     catalog: Arc<Catalog>,
-    bases: Vec<Option<f64>>,
-    instances: Vec<Option<Instance>>,
+    bases: Arc<[Option<f64>]>,
+    instances: Vec<Option<Box<Instance>>>,
     updates: Vec<bool>,
     sync: Vec<bool>,
 }
@@ -157,11 +157,11 @@ impl EntityAttributes {
         self.bases[id.0].is_some()
     }
     pub fn instance(&self, id: AttributeId) -> Option<&Instance> {
-        self.instances[id.0].as_ref()
+        self.instances[id.0].as_deref()
     }
     /// Merely querying a default value must not instantiate or dirty it.
     pub fn value(&mut self, id: AttributeId) -> Result<f64, LookupError> {
-        if let Some(a) = self.instances[id.0].as_mut() {
+        if let Some(a) = self.instances[id.0].as_deref_mut() {
             return Ok(a.value());
         }
         let base = self.bases[id.0].ok_or(LookupError::MissingAttribute)?;
@@ -169,7 +169,7 @@ impl EntityAttributes {
     }
     pub fn base_value(&self, id: AttributeId) -> Result<f64, LookupError> {
         self.instances[id.0]
-            .as_ref()
+            .as_deref()
             .map(Instance::base_value)
             .or(self.bases[id.0])
             .ok_or(LookupError::MissingAttribute)
@@ -213,7 +213,7 @@ impl EntityAttributes {
         let mut source = Instance::new(definition.definition);
         source.base = base;
         instance.replace_from(&source, &mut observer).unwrap();
-        self.instances[id.0] = Some(instance);
+        self.instances[id.0] = Some(Box::new(instance));
         true
     }
     /// Mutations must use the supplied observer to preserve dirty memberships.
@@ -230,7 +230,10 @@ impl EntityAttributes {
             sync: &mut self.sync[id.0],
             syncable: self.catalog.attribute(id).syncable,
         };
-        Some(f(self.instances[id.0].as_mut().unwrap(), &mut observer))
+        Some(f(
+            self.instances[id.0].as_deref_mut().unwrap(),
+            &mut observer,
+        ))
     }
     /// Reset uses the entity supplier's base, without creating a missing instance.
     pub fn reset_base(&mut self, id: AttributeId) -> bool {

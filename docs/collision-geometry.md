@@ -1199,3 +1199,25 @@ sequences and failed synchronization callbacks. Targeted Clippy passes. The
 internal absorption sink and starvation damage delivery are controlled;
 player absorption synchronization, attribute-change refresh, full damage and
 live gameplay integration remain pending.
+
+
+Entity attribute storage now shares immutable supplier bases and allocates each
+mutable instance only on first access. This retains dense lookup indices while
+avoiding space for unused instance objects in every entity.
+
+`python3 tools/measure_attribute_memory.py --phase before|after` measures a Linux
+release-process workload of 20,000 held-live zombie attribute maps, using five
+fresh processes per case. Median process RSS changed from **175,820 to 12,848
+KiB** with defaults only, and **175,800 to 29,076 KiB** with four active attributes
+per entity. Both cases retain the same health-read checksum. The
+[before](../benchmarks/rust-attribute-memory-2026-10-07/before.json) and
+[after](../benchmarks/rust-attribute-memory-2026-10-07/after.json) reports record
+samples and source hashes; the baseline entity implementation is `fd185a6`.
+RSS includes runtime, catalog and allocator overhead. This is not whole-game
+memory, a timing benchmark or evidence of an FPS improvement.
+
+The optimized implementation passes both pinned JAR comparisons again:
+[entity attributes](../benchmarks/rust-attribute-memory-2026-10-07/entity-regression.json)
+(**1,771,555 lines per JAR**) and
+[health/hunger composition](../benchmarks/rust-attribute-memory-2026-10-07/health-regression.json)
+(**666,082 lines per JAR**). Targeted Clippy passes.
