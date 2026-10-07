@@ -123,6 +123,12 @@ pub enum IntProvider {
         min: i32,
         max: i32,
     },
+    ClampedNormal {
+        mean: f32,
+        deviation: f32,
+        min: i32,
+        max: i32,
+    },
 }
 impl IntProvider {
     pub fn from_json(json: &str) -> Result<Self, DecodeError> {
@@ -170,6 +176,12 @@ impl IntProvider {
                 }
                 Ok(Self::Trapezoid { min, max, plateau })
             }
+            "minecraft:clamped_normal" => Ok(Self::ClampedNormal {
+                mean: required(&object, "mean").and_then(float)?,
+                deviation: required(&object, "deviation").and_then(float)?,
+                min,
+                max,
+            }),
             "minecraft:clamped" => Ok(Self::Clamped {
                 source: Box::new(Self::decode(
                     required(&object, "source")?,
@@ -196,7 +208,8 @@ impl IntProvider {
             Self::Uniform { min, max }
             | Self::BiasedToBottom { min, max }
             | Self::VeryBiasedToBottom { min, max }
-            | Self::Trapezoid { min, max, .. } => [*min, *max],
+            | Self::Trapezoid { min, max, .. }
+            | Self::ClampedNormal { min, max, .. } => [*min, *max],
             Self::Clamped { source, min, max } => {
                 let bounds = source.bounds();
                 [(*min).max(bounds[0]), (*max).min(bounds[1])]
@@ -235,6 +248,17 @@ impl IntProvider {
             Self::Clamped { source, min, max } => {
                 let value = source.sample(random)?;
                 Ok(if value < *min { *min } else { value.min(*max) })
+            }
+            // Mth.normal, then float Mth.clamp and a saturating int cast.
+            Self::ClampedNormal {
+                mean,
+                deviation,
+                min,
+                max,
+            } => {
+                let value = mean + random.next_gaussian() as f32 * deviation;
+                let (min, max) = (*min as f32, *max as f32);
+                Ok((if value < min { min } else { value.min(max) }) as i32)
             }
         }
     }
