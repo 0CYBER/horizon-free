@@ -1610,3 +1610,22 @@ has no prototype default. Targeted Clippy passes. Prototypes have at most seven
 keys in this suite; callers supply prototype order and native value equality.
 Native large-prototype identity-hash ordering, codecs, mutable payload aliases
 and full item/inventory integration remain pending.
+
+
+`component_durability` binds damage/count queries and mutations directly to
+shared component prototypes and patches. The durability algorithm now accepts
+`DurabilityStorage`, so writes and storage errors occur at their native points,
+including before break callbacks. The earlier plain durability projection
+remains supported through the same interface.
+
+`python3 tools/test_component_durability_parity.py` compares native ItemStack
+operations with nonempty prototypes and observable patches at every callback.
+The [component durability report](../benchmarks/rust-component-durability-2026-10-07/scoped-parity.json)
+records **83,727 matching lines per JAR**, including original/copy independence
+and mutation-before-error for unsanitized restored removals. Targeted Clippy
+passes. The refactor also preserves both native regression suites:
+[scalar durability](../benchmarks/rust-component-durability-2026-10-07/scalar-regression.json)
+(**81,762 lines per JAR**) and
+[blocking durability](../benchmarks/rust-component-durability-2026-10-07/blocking-regression.json)
+(**71,800 lines per JAR**). Full component codecs, enchanted durability, equipment
+and complete gameplay integration remain pending.

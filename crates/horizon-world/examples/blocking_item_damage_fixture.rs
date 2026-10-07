@@ -61,6 +61,10 @@ impl World<'_> {
 }
 impl DurabilityWorld for World<'_> {
     type Error = io::Error;
+    type Stack = DurabilityStack;
+    fn storage_error(error: std::convert::Infallible) -> Self::Error {
+        match error {}
+    }
     fn infinite_materials(&mut self, s: &mut DurabilityStack) -> io::Result<bool> {
         self.event(s, "infinite")?;
         Ok(self.f[if self.changed {
