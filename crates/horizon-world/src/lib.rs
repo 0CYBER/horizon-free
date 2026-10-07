@@ -51,6 +51,7 @@ pub mod region;
 pub mod registry;
 pub mod registry_collision_scan;
 pub mod registry_fall_ray;
+pub mod registry_fluid;
 pub mod retrogen;
 pub mod suffocation;
 pub mod tick_data;

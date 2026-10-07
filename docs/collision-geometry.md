@@ -992,3 +992,21 @@ falling deflection, wrapping coordinates and query failures. Targeted Clippy
 passes. Block tag/class flags and face support are controlled in this comparison;
 binding those to registered block storage and support shapes, fluid spreading
 and complete gameplay remain pending.
+
+
+`registry_fluid` now binds contained fluid states, resolved flow-blocking tags and
+actual IceBlock class membership to the full block registry. Its world adapter
+composes current/height/camera queries with cached and dynamic support shapes.
+Foreign registry identities, unknown tag members and invalid state IDs are
+rejected explicitly; tag reloads use a new immutable binding.
+
+`python3 tools/test_registry_fluid_parity.py` compares actual registered height,
+camera immersion, current vectors and solid-face queries. The
+[registered fluid report](../benchmarks/rust-registry-fluid-2026-10-07/scoped-parity.json)
+records **2,446,969 matching lines per JAR** from **409,389 fixtures**, covering all
+**35,723 block states**, waterlogged contents, cached/dynamic support, natural and
+reloaded tags, neighboring fluid families, coordinate wrapping and failures.
+Targeted Clippy passes, including checks for typed invalid-ID and foreign-registry
+errors. World cells are controlled and block entities are absent in this suite;
+active block-entity lifecycle, live entity binding, fluid spreading and complete
+playable integration remain pending.
