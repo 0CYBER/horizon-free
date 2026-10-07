@@ -1748,3 +1748,20 @@ The native regressions retain **144,736 lifecycle**, **84,873 start-use** and
 Targeted Clippy and all 20 horizon-world library tests pass. Hand queries and
 flags remain controlled in these fixtures; composing them with actual player
 inventory, synchronized flags and full item effects remains pending.
+
+
+`synced_values` shares the synchronized scalar algorithm between bytes and
+floats, retaining Java boxed-float equality. `living_use_flags` binds the pinned
+byte field to using-item/offhand queries and signed-mask flag writes. Flag writes
+use the same write-before-callback, callback-before-dirty ordering as other
+synchronized values.
+
+`python3 tools/test_synced_bytes_parity.py` compares actual byte SynchedEntityData
+and inherited LivingEntity flag methods. The
+[byte/flag report](../benchmarks/rust-synced-bytes-2026-10-07/scoped-parity.json)
+records **572,100 matching lines per JAR**, covering all initial bytes, signed
+masks, forced updates, assignments, reentrant callbacks, dirty packing and
+failures. The [float regression](../benchmarks/rust-synced-bytes-2026-10-07/float-regression.json)
+retains **554,909 matching lines per JAR**. Targeted Clippy passes. Mixed-serializer
+storage, entity schemas, wire codecs and full item-use/gameplay integration remain
+pending.

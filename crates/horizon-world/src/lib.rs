@@ -104,3 +104,6 @@ pub mod inventory_pickup;
 pub mod inventory_tick;
 
 pub mod player_equipment;
+
+pub mod living_use_flags;
+pub mod synced_values;
