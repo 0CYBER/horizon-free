@@ -228,10 +228,8 @@ pub enum ItemKind {
     Block,
     DoubleHigh,
     StandingAndWall,
-    Bed,
     Scaffolding,
     PlaceOnWater,
-    Sign,
     HangingSign,
     SolidBucket,
     Other,
@@ -896,17 +894,23 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             continue;
         };
         let classes: Vec<&str> = binding["class"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-        let kind = match classes.first().copied().unwrap_or("BlockItem") {
-            "BlockItem" | "GameMasterBlockItem" => ItemKind::Block,
-            "DoubleHighBlockItem" => ItemKind::DoubleHigh,
-            "StandingAndWallBlockItem" => ItemKind::StandingAndWall,
-            "SignItem" => ItemKind::Sign,
-            "HangingSignItem" => ItemKind::HangingSign,
-            "BedItem" => ItemKind::Bed,
-            "ScaffoldingBlockItem" => ItemKind::Scaffolding,
-            "PlaceOnWaterBlockItem" => ItemKind::PlaceOnWater,
-            "SolidBucketItem" => ItemKind::SolidBucket,
-            _ => ItemKind::Other,
+        let has = |name: &str| classes.contains(&name);
+        let kind = if has("HangingSignItem") {
+            ItemKind::HangingSign
+        } else if has("StandingAndWallBlockItem") {
+            ItemKind::StandingAndWall
+        } else if has("DoubleHighBlockItem") {
+            ItemKind::DoubleHigh
+        } else if has("ScaffoldingBlockItem") {
+            ItemKind::Scaffolding
+        } else if has("PlaceOnWaterBlockItem") {
+            ItemKind::PlaceOnWater
+        } else if has("SolidBucketItem") {
+            ItemKind::SolidBucket
+        } else if has("BlockItem") {
+            ItemKind::Block
+        } else {
+            ItemKind::Other
         };
         items.insert(
             item.clone(),

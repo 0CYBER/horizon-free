@@ -418,7 +418,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         result
     }
-    fn diode_should_turn_on(&self, pos: BlockPos, state: BlockStateId) -> bool {
+    pub(crate) fn diode_should_turn_on(&self, pos: BlockPos, state: BlockStateId) -> bool {
         if self.b.instance_of(state, Class::Comparator) {
             let input = self.diode_input_signal(pos, state);
             if input == 0 {

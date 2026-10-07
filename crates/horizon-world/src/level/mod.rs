@@ -71,7 +71,7 @@ mod tests;
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
 pub use falling::Landing;
 pub use place::{PlaceContext, PlaceOutcome};
-pub use interact::{InteractionResult, PlayerContext};
+pub use interact::{InteractionResult, PlayerContext, PlayerEffect};
 pub use states::{BlockId, PropKey, StateTable};
 pub use ticks::Ticks;
 
@@ -182,6 +182,12 @@ pub enum LevelEvent {
         pos: BlockPos,
         state: BlockStateId,
         kind: &'static str,
+    },
+    /// A player-side effect of [`Behaviours::use_without_item`].
+    Player {
+        pos: BlockPos,
+        state: BlockStateId,
+        effect: PlayerEffect,
     },
     /// `Level.gameEvent` (vibration system), by vanilla identifier.
     GameEvent { pos: BlockPos, event: &'static str },

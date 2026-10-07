@@ -179,6 +179,7 @@ classes! {
     HorizontalDirectional = "HorizontalDirectionalBlock",
     HugeMushroom = "HugeMushroomBlock",
     Infested = "InfestedBlock",
+    InfestedRotatedPillar = "InfestedRotatedPillarBlock",
     IronBars = "IronBarsBlock",
     StainedGlassPane = "StainedGlassPaneBlock",
     Jukebox = "JukeboxBlock",

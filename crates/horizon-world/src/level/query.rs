@@ -39,12 +39,6 @@ pub(crate) fn axis_of(direction: Direction) -> horizon_core::geometry::Axis {
         Direction::North | Direction::South => Axis::Z,
     }
 }
-pub(crate) fn step_x(direction: Direction) -> i32 {
-    direction.normal()[0]
-}
-pub(crate) fn step_z(direction: Direction) -> i32 {
-    direction.normal()[2]
-}
 /// `Direction.from2DDataValue` (S, W, N, E).
 pub(crate) fn from_2d(value: i32) -> Direction {
     [Direction::South, Direction::West, Direction::North, Direction::East][value.rem_euclid(4) as usize]
@@ -90,12 +84,6 @@ impl Behaviours {
     pub(crate) fn full_collision(&self, state: BlockStateId) -> bool {
         self.has_flag(state, state_flags::FULL_COLLISION)
     }
-    pub(crate) fn collision_empty(&self, state: BlockStateId) -> bool {
-        self.has_flag(state, state_flags::COLLISION_EMPTY)
-    }
-    pub(crate) fn has_block_entity(&self, state: BlockStateId) -> bool {
-        self.has_flag(state, state_flags::BLOCK_ENTITY)
-    }
     /// `Block.isFaceFull(state.getCollisionShape(level, pos), direction)`.
     pub(crate) fn collision_face_full(&self, state: BlockStateId, direction: Direction) -> bool {
         self.shape_info(state).full_faces & (1 << direction as u8) != 0
@@ -117,14 +105,23 @@ impl Behaviours {
             || block == n.pumpkin
             || self.tags.shulker_boxes.contains(block)
     }
-    pub(crate) fn bool_prop(&self, state: BlockStateId, key: PropKey) -> bool {
-        self.table.bool(state, key)
-    }
     pub(crate) fn is_waterlogged(&self, state: BlockStateId) -> bool {
         self.table.bool(state, self.props.waterlogged)
     }
     pub(crate) fn facing(&self, state: BlockStateId) -> Direction {
         self.table.dir(state, self.props.facing).unwrap_or(Direction::North)
+    }
+    /// The boolean/enum property named after `direction` (`north`, `up`, ...).
+    pub(crate) fn dir_prop(&self, direction: Direction) -> PropKey {
+        let p = &self.props;
+        match direction {
+            Direction::Down => p.down,
+            Direction::Up => p.up,
+            Direction::North => p.north,
+            Direction::South => p.south,
+            Direction::West => p.west,
+            Direction::East => p.east,
+        }
     }
     pub(crate) fn default_of(&self, block: BlockId) -> BlockStateId {
         self.table.default_state(block)

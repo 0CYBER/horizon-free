@@ -434,3 +434,125 @@ fn crops_grow_and_leaves_decay() {
     w.tick();
     assert_eq!(w.prop(BlockPos::new(9, 5, 5), "distance"), "1");
 }
+
+impl World<'_> {
+    /// Right-click `item` on the `face` of `clicked`, hitting the face centre
+    /// (offset vertically by `dy`), looking with `yaw`/`pitch`.
+    fn place(&mut self, item: &str, clicked: BlockPos, face: Direction, yaw: f32, pitch: f32, dy: f64) -> PlaceOutcome {
+        let [nx, ny, nz] = face.normal();
+        let hit = horizon_core::geometry::Vec3::new(
+            f64::from(clicked.x) + 0.5 + f64::from(nx) * 0.5,
+            f64::from(clicked.y) + 0.5 + f64::from(ny) * 0.5 + dy,
+            f64::from(clicked.z) + 0.5 + f64::from(nz) * 0.5,
+        );
+        let ctx = PlaceContext {
+            clicked_pos: clicked,
+            face,
+            hit,
+            inside: false,
+            yaw,
+            pitch,
+            sneaking: false,
+            item: format!("minecraft:{item}"),
+        };
+        self.f.behaviours.place_block(&mut self.level, &mut self.ticks, &ctx)
+    }
+    fn use_block(&mut self, pos: BlockPos) -> InteractionResult {
+        let player = PlayerContext {
+            yaw: 0.0,
+            pitch: 0.0,
+            may_build: true,
+            can_eat: true,
+            game_master: false,
+        };
+        let hit = horizon_core::geometry::Vec3::new(f64::from(pos.x) + 0.5, f64::from(pos.y) + 0.5, f64::from(pos.z));
+        self.f.behaviours.use_without_item(&mut self.level, &mut self.ticks, pos, Direction::North, hit, player)
+    }
+}
+
+#[test]
+fn placement_orients_blocks() {
+    let mut w = world!();
+    w.floor(0, 6, "stone");
+    let ground = BlockPos::new(0, 0, 0);
+    // Looking north (yaw 180) at the top of the floor.
+    w.place("oak_stairs", ground, Direction::Up, 180.0, 30.0, 0.0);
+    assert_eq!(w.name(BlockPos::new(0, 1, 0)), "oak_stairs[facing=north,half=bottom,shape=straight,waterlogged=false]");
+    w.place("oak_log", BlockPos::new(1, 0, 0), Direction::Up, 0.0, 0.0, 0.0);
+    w.place("oak_log", BlockPos::new(1, 1, 0), Direction::East, 0.0, 0.0, 0.0);
+    assert_eq!(w.prop(BlockPos::new(2, 1, 0), "axis"), "x");
+    // Torch against the log's east face becomes a wall torch facing east.
+    w.place("torch", BlockPos::new(2, 1, 0), Direction::East, 270.0, 0.0, 0.0);
+    assert_eq!(w.name(BlockPos::new(3, 1, 0)), "wall_torch[facing=east]");
+    // Furnaces face the player; observers face where the player looks.
+    w.place("furnace", BlockPos::new(-2, 0, 0), Direction::Up, 0.0, 0.0, 0.0);
+    assert_eq!(w.prop(BlockPos::new(-2, 1, 0), "facing"), "north");
+    w.place("observer", BlockPos::new(-3, 0, 0), Direction::Up, 0.0, 0.0, 0.0);
+    assert_eq!(w.prop(BlockPos::new(-3, 1, 0), "facing"), "south");
+}
+
+#[test]
+fn placement_merges_slabs_and_stacks() {
+    let mut w = world!();
+    w.floor(0, 4, "stone");
+    let ground = BlockPos::new(0, 0, 0);
+    w.place("oak_slab", ground, Direction::Up, 0.0, 60.0, 0.0);
+    assert_eq!(w.prop(BlockPos::new(0, 1, 0), "type"), "bottom");
+    w.place("oak_slab", BlockPos::new(0, 1, 0), Direction::Up, 0.0, 60.0, -0.5);
+    assert_eq!(w.prop(BlockPos::new(0, 1, 0), "type"), "double");
+    // Clicking the upper half of a side face places a top slab.
+    w.place("oak_slab", BlockPos::new(0, 1, 0), Direction::East, 0.0, 0.0, 0.25);
+    assert_eq!(w.prop(BlockPos::new(1, 1, 0), "type"), "top");
+    w.place("snow", BlockPos::new(3, 0, 0), Direction::Up, 0.0, 60.0, 0.0);
+    w.place("snow", BlockPos::new(3, 1, 0), Direction::Up, 0.0, 60.0, -0.375);
+    assert_eq!(w.prop(BlockPos::new(3, 1, 0), "layers"), "2");
+    w.place("candle", BlockPos::new(-3, 0, 0), Direction::Up, 0.0, 60.0, 0.0);
+    w.place("candle", BlockPos::new(-3, 1, 0), Direction::Up, 0.0, 60.0, -0.4);
+    assert_eq!(w.prop(BlockPos::new(-3, 1, 0), "candles"), "2");
+}
+
+#[test]
+fn doors_beds_and_plants_place_both_halves() {
+    let mut w = world!();
+    w.floor(0, 6, "grass_block");
+    let ground = BlockPos::new(0, 0, 0);
+    w.place("oak_door", ground, Direction::Up, 180.0, 30.0, 0.0);
+    assert_eq!(w.prop(BlockPos::new(0, 1, 0), "half"), "lower");
+    assert_eq!(w.prop(BlockPos::new(0, 2, 0), "half"), "upper");
+    assert_eq!(w.use_block(BlockPos::new(0, 1, 0)), InteractionResult::Success);
+    assert_eq!(w.prop(BlockPos::new(0, 1, 0), "open"), "true");
+    assert_eq!(w.prop(BlockPos::new(0, 2, 0), "open"), "true", "the upper half follows");
+    w.place("red_bed", BlockPos::new(3, 0, 0), Direction::Up, 180.0, 30.0, 0.0);
+    assert_eq!(w.prop(BlockPos::new(3, 1, 0), "part"), "foot");
+    assert_eq!(w.prop(BlockPos::new(3, 1, -1), "part"), "head");
+    w.place("sunflower", BlockPos::new(-3, 0, 0), Direction::Up, 0.0, 30.0, 0.0);
+    assert_eq!(w.prop(BlockPos::new(-3, 2, 0), "half"), "upper");
+    // Iron doors cannot be opened by hand.
+    w.place("iron_door", BlockPos::new(5, 0, 0), Direction::Up, 180.0, 30.0, 0.0);
+    assert_eq!(w.use_block(BlockPos::new(5, 1, 0)), InteractionResult::Pass);
+    // A placement into a solid block fails.
+    assert_eq!(w.place("stone", BlockPos::new(0, 0, 0), Direction::West, 0.0, 0.0, 0.0), PlaceOutcome::Failed);
+}
+
+#[test]
+fn levers_power_wire_through_interaction() {
+    let mut w = world!();
+    w.floor(0, 8, "stone");
+    w.place("lever", BlockPos::new(0, 0, 0), Direction::Up, 0.0, 60.0, 0.0);
+    for x in 1..=3 {
+        w.place("redstone", BlockPos::new(x, 0, 0), Direction::Up, 0.0, 60.0, 0.0);
+    }
+    assert_eq!(w.use_block(BlockPos::new(0, 1, 0)), InteractionResult::Success);
+    assert_eq!(w.prop(BlockPos::new(0, 1, 0), "powered"), "true");
+    assert_eq!(w.prop(BlockPos::new(3, 1, 0), "power"), "13");
+    w.use_block(BlockPos::new(0, 1, 0));
+    assert_eq!(w.prop(BlockPos::new(1, 1, 0), "power"), "0");
+    // Buttons release after their pressed time.
+    w.place("stone_button", BlockPos::new(5, 0, 0), Direction::Up, 0.0, 60.0, 0.0);
+    w.use_block(BlockPos::new(5, 1, 0));
+    assert_eq!(w.prop(BlockPos::new(5, 1, 0), "powered"), "true");
+    for _ in 0..20 {
+        w.tick();
+    }
+    assert_eq!(w.prop(BlockPos::new(5, 1, 0), "powered"), "false");
+}

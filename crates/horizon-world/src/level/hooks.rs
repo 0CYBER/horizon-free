@@ -4,7 +4,7 @@ use super::{
     LevelAccess, Sim,
     classes::Class,
     states::BlockId,
-    update::{HORIZONTAL, below, rel},
+    update::{below, rel},
 };
 use crate::registry::BlockStateId;
 use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource};
@@ -448,9 +448,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 pitch,
             });
         }
-    }
-    pub(crate) fn horizontal_neighbours(pos: BlockPos) -> [BlockPos; 4] {
-        HORIZONTAL.map(|d| rel(pos, d))
     }
 }
 
