@@ -1177,3 +1177,22 @@ methods remain controlled; passenger lists are empty here, with packet behavior
 covered separately. Registered attribute/effect definitions, combined health
 and dimension consequences, complete entity gameplay and platform builds remain
 unfinished.
+
+## Stored attribute queries and base reset
+
+Attribute-map queries now select the existing instance or supplier prototype
+without creating an instance. Computed values preserve the selected object's
+cache, and modifier queries distinguish missing cached modifiers from supplier
+lookup failures. Base reset checks supplier membership before looking up the
+current instance, then retains that instance across the supplier base lookup.
+Resetting a supported attribute with no instance leaves it uncreated.
+
+The [query comparison](../benchmarks/rust-attribute-map-queries-2026-10-07/scoped-parity.json)
+matches **34,531,715 lines per reference JAR**. It includes the full stored
+notification corpus, actual native map query/reset methods, mutable supplier
+prototypes, reference-sharing modifiers, alias/null lookup entries, prototype
+and instance cache state, nonfinite arithmetic and dirty callback failures.
+Library and fixture Clippy pass. Present supplier prototypes are non-null;
+custom virtual prototype methods, registered ranged-attribute integration and
+combined health/dimension consequences remain outside this gate. Complete
+gameplay and playable platform builds remain unfinished.
