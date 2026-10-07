@@ -192,6 +192,22 @@ def main():
             subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
                             'dev.horizonlab.parity.VanillaGameplayFactsExporter', str(gameplay)],
                            check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+    # Block classes, instance configuration and per-state support/signal/fluid
+    # facts for horizon-world's level behaviour (level::Behaviours::load).
+    behaviours = root / 'block-behaviours.json'
+    behaviour_oracle = oracle.with_name('VanillaBlockBehaviourExporter.java')
+    behaviour_sources = base.source_hashes([behaviour_oracle])
+    if not (previous.get('behaviour_exporters_sha256') == behaviour_sources and behaviours.exists()
+            and previous.get('server_sha256') == origin['server_sha256']):
+        classes = lab.LOCAL / 'block-behaviours' / 'classes'; classes.mkdir(parents=True, exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+        with (root / 'behaviour-export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(behaviour_oracle)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
+                            'dev.horizonlab.parity.VanillaBlockBehaviourExporter', str(behaviours)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
     items = root / 'items.json'
     if not items.exists() or previous.get('server_sha256') != origin['server_sha256']:
         # Vanilla's own data generator reports every item's default components.
@@ -218,6 +234,7 @@ def main():
                              'render_files_sha256': {name: lab.digest(root/name, 'sha256') for name in render_files},
                              'model_state_exporters_sha256': binding_sources,
                              'gameplay_exporters_sha256': gameplay_sources,
+                             'behaviour_exporters_sha256': behaviour_sources,
                              'model_states_sha256': lab.digest(model_states, 'sha256'), 'data_version': version['world_version'],
                              'facts_sha256': lab.digest(facts, 'sha256'),
                              'block_tags_sha256': lab.digest(root / 'block-tags.json', 'sha256'), 'resource_files': count})

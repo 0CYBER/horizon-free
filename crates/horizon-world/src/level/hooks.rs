@@ -78,7 +78,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.rail_update_state(pos, state, moved);
                     }
                 }
-                Class::Brushable => self.schedule_tick(pos, block, 2),
+                Class::Brushable => {
+                    self.schedule_tick(pos, block, 2);
+                }
                 Class::Composter => {
                     if b.table.int(state, b.props.level) == 7 {
                         self.schedule_tick(pos, block, 20);
@@ -131,7 +133,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.wire_update_neighbors_of_neighboring_wires(pos);
                     }
                 }
-                Class::Scaffolding => self.schedule_tick(pos, block, 1),
+                Class::Scaffolding => {
+                    self.schedule_tick(pos, block, 1);
+                }
                 Class::SculkSensor => {
                     if !same && b.table.int(state, b.props.power) > 0 && !self.ticks.has_block_tick(pos, block) {
                         self.set_block(pos, b.table.set_int(state, b.props.power, 0), 18);
@@ -289,6 +293,52 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
 
+    /// `ServerPlayerGameMode.destroyBlock`: `playerWillDestroy` then
+    /// `removeBlock`. Drops are the caller's (tool-dependent loot).
+    pub(crate) fn player_destroy(&mut self, pos: BlockPos, creative: bool) -> bool {
+        let b = self.b;
+        let p = b.props;
+        let state = self.state(pos);
+        if b.is_air(state) {
+            return false;
+        }
+        let data = b.data(state);
+        if creative && (data.is(Class::DoublePlant) || data.is(Class::Door)) && b.table.text(state, p.half) == "upper" {
+            let bottom = below(pos);
+            let bottom_state = self.state(bottom);
+            if b.is_block(bottom_state, b.block(state)) && b.table.text(bottom_state, p.half) == "lower" {
+                let replacement = if b.is_water_fluid(b.fluid(bottom_state).kind()) { b.default_of(b.named.water) } else { b.air() };
+                self.set_block(bottom, replacement, 35);
+                self.level_event(2001, bottom, bottom_state.0 as i32);
+            }
+        }
+        if creative && data.is(Class::AbstractBed) && b.table.text(state, p.part) == "foot" {
+            let head_pos = rel(pos, b.facing(state));
+            let head = self.state(head_pos);
+            if b.is_block(head, b.block(state)) && b.table.text(head, p.part) == "head" {
+                self.set_block(head_pos, b.air(), 35);
+                self.level_event(2001, head_pos, head.0 as i32);
+            }
+        }
+        self.level_event(2001, pos, state.0 as i32);
+        self.game_event(pos, "minecraft:block_destroy");
+        self.remove_block(pos, false)
+    }
+    /// `entityInside` for entity-sensing blocks.
+    pub(crate) fn entity_inside(&mut self, pos: BlockPos) {
+        let b = self.b;
+        let state = self.state(pos);
+        let data = b.data(state);
+        if data.is(Class::BasePressurePlate) {
+            let signal = self.plate_signal_for_state(state);
+            if signal == 0 {
+                self.plate_check_pressed(pos, state, signal);
+            }
+        } else if data.is(Class::TripWire) && !b.table.bool(state, b.props.powered) && !self.ticks.has_block_tick(pos, b.block(state)) {
+            self.tripwire_check_pressed(pos);
+        }
+    }
+
     // ---- misc helpers ----
 
     /// `BaseFireBlock.onPlace` (portal ignition is not modelled).
@@ -387,16 +437,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     fn big_dripleaf_reset_tilt(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
+        let next = b.table.set_text(state, b.props.tilt, "none");
+        self.set_block(pos, next, 2);
         if b.table.text(state, b.props.tilt) != "none" {
-            let next = b.table.set_text(state, b.props.tilt, "none");
-            self.set_block(pos, next, 2);
+            let pitch = self.random().next_float() * 0.4 + 0.8;
             self.emit(super::LevelEvent::Sound {
                 pos,
                 sound: "minecraft:block.big_dripleaf.tilt_up".into(),
                 volume: 1.0,
-                pitch: 1.0,
+                pitch,
             });
-            self.ticks.blocks.clear_area(horizon_core::ticks::TickArea::new(pos, pos));
         }
     }
     pub(crate) fn horizontal_neighbours(pos: BlockPos) -> [BlockPos; 4] {

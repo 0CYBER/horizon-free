@@ -41,6 +41,7 @@ pub mod state_flags {
     pub const FULL_COLLISION: u32 = 1 << 14;
     pub const SKYLIGHT_DOWN: u32 = 1 << 15;
     pub const REQUIRES_TOOL: u32 = 1 << 16;
+    pub const SHAPE_OCCLUSION: u32 = 1 << 17;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -551,6 +552,7 @@ props! {
     crafting = "crafting",
     side_chain = "side_chain",
     copper_golem_pose = "copper_golem_pose",
+    sculk_sensor_phase = "sculk_sensor_phase",
 }
 
 fn fail(message: &str) -> io::Error {
@@ -582,6 +584,33 @@ fn set_type(value: &Value, cache: &mut HashMap<String, Arc<str>>) -> Option<SetT
         button_on: interned(cache, text("buttonClickOn")),
         button_off: interned(cache, text("buttonClickOff")),
     })
+}
+
+/// Build the block-state registry from the resources' `facts.json` (the
+/// same source the native client uses).
+pub fn load_registry(root: &Path) -> io::Result<BlockRegistry> {
+    use crate::{DATA_VERSION, nbt::Tag};
+    fn tag(value: &Value) -> io::Result<Tag> {
+        Ok(match value {
+            Value::String(value) => Tag::String(value.as_str().into()),
+            Value::Number(value) => Tag::Int(value.as_i64().and_then(|v| i32::try_from(v).ok()).ok_or_else(|| fail("invalid registry number"))?),
+            Value::Array(values) => Tag::List(values.iter().map(tag).collect::<io::Result<_>>()?),
+            Value::Object(values) => Tag::Compound(
+                values
+                    .iter()
+                    .map(|(name, value)| Ok((name.as_str().into(), tag(value)?)))
+                    .collect::<io::Result<_>>()?,
+            ),
+            _ => return Err(fail("unsupported registry value")),
+        })
+    }
+    let facts = read_json(&root.join("facts.json"))?;
+    let states = facts["states"].as_array().ok_or_else(|| fail("missing registry state facts"))?;
+    BlockRegistry::from_nbt(&Tag::compound([
+        ("DataVersion", Tag::Int(DATA_VERSION)),
+        ("states", Tag::List(states.iter().map(|state| tag(&state[4])).collect::<io::Result<_>>()?)),
+        ("defaults", tag(&facts["defaults"])?),
+    ]))
 }
 
 pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviours> {
@@ -711,6 +740,7 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             ("full_collision", state_flags::FULL_COLLISION),
             ("skylight_down", state_flags::SKYLIGHT_DOWN),
             ("requires_tool", state_flags::REQUIRES_TOOL),
+            ("shape_occlusion", state_flags::SHAPE_OCCLUSION),
         ] {
             if gb(key) {
                 flags |= bit;
@@ -794,6 +824,7 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             "base",
             "candleBlock",
             "requiredBlock",
+            "baseBlock",
         ]
         .into_iter()
         .find_map(block_field);

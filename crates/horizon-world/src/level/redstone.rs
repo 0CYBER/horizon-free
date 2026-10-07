@@ -567,7 +567,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::LavaCauldron => 3,
             Class::RespawnAnchor => {
                 let charges = b.table.int(state, p.charges);
-                ((charges - 0) as f32 / 4.0 * 15.0).floor() as i32
+                (charges as f32 / 4.0 * 15.0).floor() as i32
             }
             Class::CopperGolemStatue => {
                 let pose = b.table.text(state, p.copper_golem_pose);

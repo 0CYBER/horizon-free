@@ -52,12 +52,13 @@ pub mod data;
 pub mod states;
 pub mod ticks;
 
-mod connect;
 mod falling;
 mod fluids;
+mod hooks;
 mod interact;
 mod place;
-mod plants;
+mod query;
+mod rails;
 mod redstone;
 mod shapes;
 mod survive;
@@ -68,6 +69,7 @@ mod update;
 mod tests;
 
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
+pub use falling::Landing;
 pub use place::{PlaceContext, PlaceOutcome};
 pub use interact::{InteractionResult, PlayerContext};
 pub use states::{BlockId, PropKey, StateTable};
@@ -173,6 +175,14 @@ pub enum LevelEvent {
     },
     /// `TntBlock.prime`: the TNT block is removed; spawn primed TNT.
     PrimeTnt { pos: BlockPos },
+    /// Block-entity or entity side effects the caller implements: `"dispense"`
+    /// (dispenser/dropper/crafter scheduled tick), `"hatch"` (frogspawn
+    /// hatched into tadpoles; the block is already destroyed).
+    BlockEvent {
+        pos: BlockPos,
+        state: BlockStateId,
+        kind: &'static str,
+    },
     /// `Level.gameEvent` (vibration system), by vanilla identifier.
     GameEvent { pos: BlockPos, event: &'static str },
 }
@@ -351,6 +361,56 @@ impl Behaviours {
     /// Tick type ID of a fluid for [`Ticks::schedule_fluid`].
     pub fn fluid_kind(&self, state: BlockStateId) -> FluidKind {
         self.fluid(state).kind()
+    }
+}
+
+/// Level mutation entry points (all keep vanilla update semantics).
+impl Behaviours {
+    /// `Level.setBlock(pos, state, flags)` with vanilla's update limit (512).
+    /// Returns false when nothing was written (unloaded, out of bounds, or
+    /// the state was already present).
+    pub fn set_block<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, state: BlockStateId, flags: i32) -> bool {
+        self.sim(level, ticks).set_block(pos, state, flags)
+    }
+    /// `Level.removeBlock(pos, movedByPiston)`: replace with the fluid's block.
+    pub fn remove_block<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, moved_by_piston: bool) -> bool {
+        self.sim(level, ticks).remove_block(pos, moved_by_piston)
+    }
+    /// `Level.destroyBlock(pos, dropResources)`: destroy particles (2001),
+    /// optional drops, and replacement by the block's fluid.
+    pub fn destroy_block<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, drop: bool) -> bool {
+        self.sim(level, ticks).destroy_block(pos, drop, flags::UPDATE_LIMIT)
+    }
+    /// A player breaking a block (`playerWillDestroy` + `Level.destroyBlock`
+    /// without drops; the caller handles the player's loot/tool). Double
+    /// blocks (doors, tall plants, beds) remove their other half as vanilla.
+    pub fn player_destroy_block<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, creative: bool) -> bool {
+        self.sim(level, ticks).player_destroy(pos, creative)
+    }
+    /// `BlockState.canSurvive(level, pos)`.
+    pub fn can_survive<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, state: BlockStateId) -> bool {
+        self.sim(level, ticks).can_survive(state, pos)
+    }
+    /// `Block.updateFromNeighbourShapes`: a state adjusted to its neighbours.
+    pub fn update_from_neighbour_shapes<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, state: BlockStateId) -> BlockStateId {
+        self.sim(level, ticks).update_from_neighbour_shapes(state, pos)
+    }
+    /// `Level.updateNeighborsAt(pos, block)`: notify the six neighbours.
+    pub fn update_neighbors_at<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, block: BlockId) {
+        self.sim(level, ticks).update_neighbors_at(pos, block);
+    }
+    /// Entity collision with a block (`entityInside`) for the entity-sensing
+    /// blocks: pressure plates, tripwires and buttons hit by arrows are
+    /// re-evaluated through [`LevelAccess::count_entities`].
+    pub fn entity_inside<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos) {
+        self.sim(level, ticks).entity_inside(pos);
+    }
+    /// Redstone signal queries (`SignalGetter`).
+    pub fn has_neighbor_signal<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos) -> bool {
+        self.sim(level, ticks).has_neighbor_signal(pos)
+    }
+    pub fn best_neighbor_signal<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos) -> i32 {
+        self.sim(level, ticks).best_neighbor_signal(pos)
     }
 }
 

@@ -8,7 +8,7 @@
 macro_rules! classes {
     ($($name:ident = $java:literal,)*) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-        #[repr(u8)]
+        #[repr(u16)]
         pub enum Class { $($name,)* }
         impl Class {
             pub const ALL: &'static [Class] = &[$(Class::$name,)*];
@@ -327,7 +327,7 @@ impl Interface {
 
 /// Set of recognised classes in one block's chain.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ClassSet([u64; 4]);
+pub struct ClassSet([u64; 5]);
 impl ClassSet {
     pub fn insert(&mut self, class: Class) {
         let i = class as usize;

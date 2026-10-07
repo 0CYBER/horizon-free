@@ -393,10 +393,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             while let Some(update) = updater.added.pop() {
                 updater.stack.push(update);
             }
-            loop {
-                let Some(top) = self.ticks.updater.stack.last_mut() else {
-                    break;
-                };
+            while let Some(top) = self.ticks.updater.stack.last_mut() {
                 let (step, more) = top.next();
                 self.execute(step);
                 if !more {
