@@ -112,6 +112,11 @@ public final class VanillaSceneMotionOracle {
         // method; regular resident movement keeps its actual standing/dry state.
         Integer statisticsFlags;
         Object sprintController;
+        Pose scenePose=Pose.STANDING;
+        @Override public Pose getPose(){return scenePose;}
+        @Override public void setPose(Pose pose){if(scenePose!=pose){scenePose=pose;super.refreshDimensions();}}
+        public boolean fitPose(Pose pose){return super.canPlayerFitWithinBlocksAndEntitiesWhen(pose);}
+        public void poseTick(){updatePlayerPose();}
         boolean statFlag(int bit){return (statisticsFlags&(1<<bit))!=0;}
         SynchedEntityData.DataItem<Float> healthItem,absorptionItem;Level sceneLevel;Tracker tracker;net.minecraft.server.PlayerAdvancements advancements;
         Actor(){super(null,null,null,null);}
@@ -140,7 +145,7 @@ public final class VanillaSceneMotionOracle {
         @Override public AttributeMap getAttributes(){return attrs;}
         @Override protected boolean getSharedFlag(int bit){return (flags&(1<<bit))!=0;}
         @Override protected void setSharedFlag(int bit,boolean v){flags=(byte)(v?flags|(1<<bit):flags&~(1<<bit));}
-        @Override public void setPos(double x,double y,double z){write(position,this,new Vec3(x,y,z));setBoundingBox(EntityDimensions.scalable(.6f,1.8f).makeBoundingBox(position()));}
+        @Override public void setPos(double x,double y,double z){write(position,this,new Vec3(x,y,z));setBoundingBox(EntityDimensions.scalable(getBbWidth(),getBbHeight()).makeBoundingBox(position()));}
         @Override public BlockPos blockPosition(){return BlockPos.containing(position());}
         @Override public BlockState getInBlockState(){return level().getBlockState(blockPosition());}
         @Override public ItemStack getMainHandItem(){return ItemStack.EMPTY;}
@@ -156,10 +161,6 @@ public final class VanillaSceneMotionOracle {
         @Override public boolean isInLiquid(){return false;}
         @Override public boolean isFallFlying(){return statisticsFlags!=null&&statFlag(8);}
         @Override public boolean isSpectator(){return false;}
-        @Override public Pose getPose(){return Pose.STANDING;}
-        @Override public boolean isDescending(){return false;}
-        @Override public boolean isSuppressingBounce(){return false;}
-        @Override public boolean isSuppressingSlidingDownLadder(){return false;}
         @Override public boolean isNoGravity(){return false;}
         @Override public boolean hasEffect(Holder<MobEffect> effect){return false;}
         @Override public MobEffectInstance getEffect(Holder<MobEffect> effect){return null;}
@@ -226,6 +227,7 @@ public final class VanillaSceneMotionOracle {
             p.getEntityData().isDirty(),p.healthItem.isDirty(),p.absorptionItem.isDirty(),p.sceneLevel.time);
         var food=p.getFoodData();out.printf("food %d %08x %d %d %d %s%n",food.getFoodLevel(),Float.floatToIntBits(food.getSaturationLevel()),foodTimer.getInt(food),p.tickCount,p.sceneLevel.difficulty.ordinal(),p.sceneLevel.rules.regenerate);
         out.println("input "+p.isSprinting()+" "+(p.sprintController==null?"0 false false":p.sprintController.getClass().getMethod("state").invoke(p.sprintController)));
+        out.printf("pose %s %s %s %08x %08x %08x%n",p.getPose(),p.isShiftKeyDown(),p.sprintController!=null&&((Boolean)p.sprintController.getClass().getMethod("crouching").invoke(p.sprintController)),Float.floatToIntBits(p.getBbWidth()),Float.floatToIntBits(p.getBbHeight()),Float.floatToIntBits(p.getEyeHeight()));
     }
     @SuppressWarnings("unchecked") public static void main(String[] args)throws Exception{
         net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();Path dir=Path.of(args[1]);
@@ -255,7 +257,8 @@ public final class VanillaSceneMotionOracle {
             for(var line:(Iterable<String>)lines::iterator){
                 var row=JsonParser.parseString(line).getAsJsonObject();var p=(Actor)allocate.invoke(unsafe,Actor.class);p.configure(level);p.events=new ArrayList<>();level.actor=p;
                 write(field(Entity.class,"type"),p,EntityTypes.PLAYER);
-                write(field(Entity.class,"passengers"),p,com.google.common.collect.ImmutableList.of());write(field(Entity.class,"dimensions"),p,EntityDimensions.scalable(.6f,1.8f));
+                p.scenePose=Pose.STANDING;
+                write(field(Entity.class,"passengers"),p,com.google.common.collect.ImmutableList.of());write(field(Entity.class,"dimensions"),p,p.getDefaultDimensions(Pose.STANDING));write(field(Entity.class,"eyeHeight"),p,1.62f);
                 write(field(Entity.class,"interpolationHandler"),p,InterpolationHandler.NO_OP);
                 var equipment=new EntityEquipment();write(field(LivingEntity.class,"equipment"),p,equipment);
                 write(field(Player.class,"inventory"),p,new Inventory(p,equipment));
@@ -274,10 +277,14 @@ public final class VanillaSceneMotionOracle {
                 p.setDeltaMovement(Vec3.ZERO);p.setPos(VanillaSceneCollisionOracle.vector(row.get("position")));
                 for(var value:row.getAsJsonArray("ops")){
                     var op=value.getAsJsonObject();switch(op.get("mode").getAsString()){
+                        case "shift"->p.setShiftKeyDown(op.get("value").getAsBoolean());
+                        case "pose_tick"->p.poseTick();
+                        case "refresh_dimensions"->p.refreshDimensions();
+                        case "pose"->p.setPose(Pose.valueOf(op.get("value").getAsString()));
                         case "controlled_tick"->{
                             if(p.sprintController==null)p.sprintController=Class.forName("dev.horizonlab.parity.VanillaSprintInputOracle$Controller").getConstructor(ServerPlayer.class).newInstance(p);
                             int mask=op.get("value").getAsInt();var direction=(net.minecraft.world.phys.Vec2)p.sprintController.getClass().getMethod("step",int.class).invoke(p.sprintController,mask);
-                            p.clock();var before=p.position();p.playerMovementTick(new Vec3(direction.x,0,direction.y),(mask&16)!=0);p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);
+                            p.clock();var before=p.position();p.playerMovementTick(new Vec3(direction.x,0,direction.y),(mask&16)!=0);p.poseTick();p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);
                         }
                         case "health"->p.setHealth(single(op.get("value")));
                         case "absorption"->p.setAbsorptionAmount(single(op.get("value")));
@@ -290,7 +297,7 @@ public final class VanillaSceneMotionOracle {
                         case "eat"->p.getFoodData().eat(op.get("nutrition").getAsInt(),single(op.get("value")));
                         case "food_tick"->p.getFoodData().tick(p);
                         case "peaceful"->p.peaceful();
-                        case "simulation_tick"->{p.clock();var before=p.position();p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);}
+                        case "simulation_tick"->{p.clock();var before=p.position();p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());p.poseTick();p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);}
                         case "movement_statistics"->{var delta=VanillaSceneCollisionOracle.vector(op.get("value"));p.checkMovementStatistics(delta.x,delta.y,delta.z);}
                         case "statistics_context"->{
                             p.statisticsFlags=op.get("flags").getAsInt();p.getAbilities().invulnerable=op.get("invulnerable").getAsBoolean();

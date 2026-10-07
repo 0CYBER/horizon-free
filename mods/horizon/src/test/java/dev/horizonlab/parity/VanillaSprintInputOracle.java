@@ -51,12 +51,17 @@ public final class VanillaSprintInputOracle {
         @Override public boolean isUsingItem(){return flag(7);}
         @Override public boolean isFallFlying(){return flag(9);}
         @Override public boolean isUnderWater(){return flag(10);}
-        @Override public boolean isMovingSlowly(){return flag(11);}
+        @Override public boolean isMovingSlowly(){return controlled==null?flag(11):super.isMovingSlowly();}
+        @Override public Pose getPose(){return controlled==null?Pose.STANDING:controlled.getPose();}
+        @Override public double getAttributeValue(Holder<net.minecraft.world.entity.ai.attributes.Attribute> attribute){return controlled==null?super.getAttributeValue(attribute):controlled.getAttributeValue(attribute);}
         @Override public boolean isSwimming(){return flag(12);}
         @Override public boolean isInWater(){return flag(13);}
         @Override public boolean onGround(){return flag(14);}
         @Override public boolean isSleeping(){return false;}
-        @Override public boolean canPlayerFitWithinBlocksAndEntitiesWhen(Pose pose){return true;}
+        @Override public boolean canPlayerFitWithinBlocksAndEntitiesWhen(Pose pose){
+            if(controlled==null)return true;
+            try{var method=Player.class.getDeclaredMethod("canPlayerFitWithinBlocksAndEntitiesWhen",Pose.class);method.setAccessible(true);return (Boolean)method.invoke(controlled,pose);}catch(ReflectiveOperationException e){throw new AssertionError(e);}
+        }
         @Override public float getEffectBlendFactor(Holder<MobEffect> effect,float partial){return 0;}
         @Override public boolean isEyeInFluid(TagKey<Fluid> tag){return false;}
         @Override public boolean onClimbable(){return false;}
@@ -94,9 +99,11 @@ public final class VanillaSprintInputOracle {
             p.horizontalCollision=p.controlled.horizontalCollision;p.minorHorizontalCollision=p.controlled.minorHorizontalCollision;
             p.calls.clear();for(int i=0;i<keys.length;i++)down.setBoolean(keys[i],(mask&(1<<i))!=0);
             try{p.aiStep();throw new AssertionError("missing sprint boundary");}catch(Boundary expected){}
+            p.controlled.setShiftKeyDown((mask&32)!=0);
             return (net.minecraft.world.phys.Vec2)modify.invoke(p,p.input.getMoveVector());
         }
         public String state(){return p.trigger()+" "+p.input.hasForwardImpulse()+" "+p.input.keyPresses.shift();}
+        public boolean crouching(){return p.isCrouching();}
     }
     static void initialize()throws Exception{
         if(unsafe!=null)return;

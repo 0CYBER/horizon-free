@@ -341,10 +341,10 @@ impl BlockLandingWorld for MotionWorld<'_, '_, '_> {
         Ok(true)
     }
     fn entity_dimensions(&self) -> (f32, f32) {
-        (0.6, 1.8)
+        (self.player.dimensions.width, self.player.dimensions.height)
     }
     fn suppressing_bounce(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.shift_key_down)
     }
     fn damage_source(
         &mut self,
