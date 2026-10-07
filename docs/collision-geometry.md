@@ -1252,3 +1252,18 @@ types, stat limits/rounding, nonfinite values, mutations and failures at query
 boundaries. Targeted Clippy passes. Armor/magic results, health storage, combat/
 stat sinks and exhaustion delivery are controlled. Outer hurt gates, resistance/
 equipment binding, combat tracking and playable damage integration remain pending.
+
+
+`player_food` implements player exhaustion, eating eligibility and the hunger
+threshold for exhaustive manoeuvres. Invulnerability reads the abilities field
+directly. Exhaustion additionally checks the client/server side before updating
+direct food storage; manoeuvre eligibility uses virtual food and ability lookups.
+`StoredPlayerFood` binds these operations to ordinary mutable `FoodData` state.
+
+`python3 tools/test_player_food_parity.py` compares actual Player methods and
+native FoodData. The [player food report](../benchmarks/rust-player-food-2026-10-07/scoped-parity.json)
+records **32,723 matching lines per JAR**, covering direct/virtual distinctions,
+captured food identity during mutations, guard short-circuiting, injected failures,
+nonfinite exhaustion and integer hunger boundaries. The stored-state binding is
+also compared. Targeted Clippy passes. Consumable components, full ability storage
+and live player tick integration remain pending.

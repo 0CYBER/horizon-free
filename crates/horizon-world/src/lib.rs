@@ -54,6 +54,7 @@ pub mod movement_support;
 pub mod nbt;
 pub mod piston_movement;
 pub mod piston_shape;
+pub mod player_food;
 pub mod player_travel;
 pub mod powder_snow_collision;
 pub mod region;
