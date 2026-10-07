@@ -870,3 +870,18 @@ float guards, nonfinite values, callback mutations and failures. Targeted Clippy
 passes. Collision movement, immersion depths, free-space queries, attributes and
 gravity are controlled; live fluid propagation and gameplay binding remain
 pending.
+
+
+`living_motion` implements default living jump strength/boost, sprint jump
+impulses, gravity and slow falling, vertical liquid input, rider flight speed
+and air drag. Native finite-addition filtering and delayed synchronization flags
+preserve partial writes when providers fail.
+
+`python3 tools/test_living_motion_parity.py` compares the corresponding actual
+living methods plus `Entity.applyGravity` and `addDeltaMovement`. The
+[jump and gravity report](../benchmarks/rust-living-motion-2026-10-07/scoped-parity.json)
+records **113,623 matching lines per JAR**, including float thresholds, extreme
+raw effect amplifiers, signed zero/nonfinite values, rider classes, callback
+mutations and failures. Targeted Clippy passes. Entity-type jump/flight overrides,
+effect and attribute storage, registered jump-factor binding and live gameplay
+integration remain pending.

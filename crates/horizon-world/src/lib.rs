@@ -32,6 +32,7 @@ pub mod living_air;
 pub mod living_fall;
 pub mod living_fluid;
 pub mod living_landing;
+pub mod living_motion;
 pub mod movement_emission;
 pub mod movement_properties;
 pub mod movement_restitution;
