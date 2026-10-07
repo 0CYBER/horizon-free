@@ -1499,3 +1499,18 @@ captured items/components, piercing/bypass combinations, native direction/math,
 client/stat guards and melee responses. Targeted Clippy passes. Native stacks
 are explicitly undamageable; actual damageable-item mutation, blocking eligibility,
 component codecs and complete combat/world integration remain pending.
+
+
+`item_use` implements blocking-item eligibility and both elapsed-use timer
+overloads. It retains the original blocking delay while rereading active-item
+storage and remaining ticks after the virtual duration query; partial-tick
+queries preserve the second virtual use-state check.
+
+`python3 tools/test_item_use_parity.py` compares the actual inherited native
+methods with real blocking components and controlled virtual item durations.
+The [item-use report](../benchmarks/rust-item-use-2026-10-07/scoped-parity.json)
+records **108,690 matching lines per JAR**, covering wrapping tick arithmetic,
+delay boundaries, absent components, empty stacks, shared item types, partial
+float values and callback mutations/failures. Targeted Clippy passes. Full
+item-use lifecycle, damageable-item storage and complete combat/world integration
+remain pending.

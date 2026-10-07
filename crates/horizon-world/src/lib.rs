@@ -44,6 +44,7 @@ pub mod ground_support;
 pub mod heightmap;
 pub mod interaction_shapes;
 pub mod item_blocking;
+pub mod item_use;
 pub mod liquid_collision;
 pub mod living_air;
 pub mod living_damage;
