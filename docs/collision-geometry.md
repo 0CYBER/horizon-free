@@ -1453,3 +1453,18 @@ Targeted Clippy passes. Equipment is unenchanted; virtual entity flags/rule
 values, blocking amounts, durability, PvP permission, attribution, effects,
 knockback/death services and empty criterion listeners remain controlled.
 Complete entity lifecycle and playable game integration remain pending.
+
+
+`blocking_rules` implements damage-reduction angle/type conditions, ordered
+reduction sums and clamping, block delay/disable tick rounding and item-damage
+threshold/floor arithmetic. Source type-set membership is queried only when its
+entry's angle condition reaches that check.
+
+`python3 tools/test_blocking_rules_parity.py` compares native BlocksAttacks
+records and direct holder-set membership. The
+[blocking rules report](../benchmarks/rust-blocking-rules-2026-10-07/scoped-parity.json)
+records **105,068 matching lines per JAR**, including exact angle boundaries,
+NaN/infinity/signed zero, randomized float bits, source-type mutations and query
+failures. Targeted Clippy passes. Angles are supplied in radians; direction/acos
+calculation, component codecs, item durability, sounds and full blocking
+integration remain pending.
