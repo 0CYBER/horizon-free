@@ -101,6 +101,33 @@ ledges, ceilings, initial overlaps, negative and missing chunk boundaries, tiny
 and zero movement, and varied step heights. This verifies the scene adapter;
 it does not establish player locomotion or complete gameplay parity.
 
+The next movement binding stores a player's position, velocity, standing bounds,
+ground/support state, collision flags, movement history and live registered
+attributes. `MotionWorld` composes the existing air-travel, jumping, collision,
+ground-support, restitution and block-coefficient code over the same scene.
+The [stored-motion comparison](../benchmarks/rust-native-scene-motion-2026-10-07/scoped-parity.json)
+checks 42,257 operations across 637 evolving scenarios against actual native
+`Player.travel`, jumping and movement, using real native attributes and chunks.
+It compares every resulting position, velocity and bounding-box component by
+exact bits, along with support, climbing and collision state and both separate
+velocity/position synchronization flags.
+
+```sh
+python3 tools/prepare_native_client.py
+python3 tools/test_native_scene_motion.py
+```
+
+This binding is not yet a complete player tick or input controller. Its current
+domain is the dry resident scene, standing dimensions, no crouching, vehicles
+or status effects. Landing/damage, movement emission and external networking
+remain recorded phase boundaries; damage is not applied and ordinary falling
+does not yet accumulate fall distance. Block-inside effects such as cobweb
+slowdown and world/entity lifecycle remain unfinished. These boundaries are
+explicit in the native harness and are not included in its parity claim.
+The earlier [scene collision comparison](../benchmarks/rust-native-scene-motion-2026-10-07/collision-regression.json)
+and [renderer startup](../benchmarks/rust-native-scene-motion-2026-10-07/startup-smoke.json)
+also pass with this binding and the additional prepared movement resources.
+
 The accompanying [startup check](../benchmarks/rust-native-scene-collision-2026-10-07/startup-smoke.json)
 passes after sharing scene loading between the GUI and headless collision probe.
 An [interactive Linux check](../benchmarks/rust-native-scene-collision-2026-10-07/interactive-smoke.json)

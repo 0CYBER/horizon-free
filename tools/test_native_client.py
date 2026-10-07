@@ -21,7 +21,7 @@ except ImportError:
 
 
 def resource_fingerprint(root):
-    files = [root / 'facts.json', root / 'model-states.json', root / 'render-definitions.json', root / 'occlusion.nbt', root / 'cached-collision.nbt', root / 'block-tags.json', root / 'horizon-resources.json',
+    files = [root / 'facts.json', root / 'model-states.json', root / 'render-definitions.json', root / 'occlusion.nbt', root / 'cached-collision.nbt', root / 'movement-properties.nbt', root / 'attributes.json', root / 'block-tags.json', root / 'horizon-resources.json',
              *sorted(path for path in (root / 'assets').rglob('*') if path.is_file())]
     digest = hashlib.sha256()
     for path in files:

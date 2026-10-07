@@ -40,17 +40,12 @@ public final class VanillaSceneCollisionOracle {
     static Vec3 vector(JsonElement value) {
         var a=value.getAsJsonArray();return new Vec3(number(a.get(0)),number(a.get(1)),number(a.get(2)));
     }
-    public static void main(String[] args)throws Exception {
-        net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();
-        Path dir=Path.of(args[1]);
-        VanillaHeightmapOracle.bindTags(JsonParser.parseString(Files.readString(Path.of(args[2]).resolve("block-tags.json"))).getAsJsonObject());
-        var description=JsonParser.parseString(Files.readString(dir.resolve("scene.json"))).getAsJsonObject();
+    static HashMap<Long,Chunk> scene(JsonObject description,Trace trace)throws Exception {
         int radius=description.get("radius").getAsInt();
         if(radius<1||radius>16)throw new AssertionError("invalid scene radius");
         Holder<Biome> biome=Holder.Reference.createStandAlone(new HolderOwner<Biome>(){},Biomes.PLAINS);
         var ids=new IdMapper<Holder<Biome>>();ids.add(biome);
         factory=new PalettedContainerFactory(Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY),Blocks.AIR.defaultBlockState(),null,Strategy.createForBiomes(ids),biome,null);
-        var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
         var chunks=new HashMap<Long,Chunk>();
         String[] names={"bedrock","dirt","stone","sand","oak_planks","bricks"};
         BlockState[] materials=Arrays.stream(names).map(VanillaSceneCollisionOracle::state).toArray(BlockState[]::new);
@@ -74,6 +69,15 @@ public final class VanillaSceneCollisionOracle {
                 throw new AssertionError("gallery differs at "+i);
             put(chunks,x,4,z,state);
         }
+        return chunks;
+    }
+    public static void main(String[] args)throws Exception {
+        net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();
+        Path dir=Path.of(args[1]);
+        VanillaHeightmapOracle.bindTags(JsonParser.parseString(Files.readString(Path.of(args[2]).resolve("block-tags.json"))).getAsJsonObject());
+        var description=JsonParser.parseString(Files.readString(dir.resolve("scene.json"))).getAsJsonObject();
+        var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
+        var chunks=scene(description,trace);
         var world=(CollisionGetter)Proxy.newProxyInstance(CollisionGetter.class.getClassLoader(),new Class<?>[]{CollisionGetter.class},(proxy,method,values)->{
             if(method.getName().equals("getChunkForCollisions"))return chunks.get(key((int)values[0],(int)values[1]));
             if(method.getName().equals("getBlockEntity"))return null;

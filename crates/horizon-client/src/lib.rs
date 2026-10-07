@@ -3,6 +3,7 @@
 pub mod assets;
 pub mod collisions;
 pub mod models;
+pub mod motion;
 pub mod sprites;
 pub mod world;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

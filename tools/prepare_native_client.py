@@ -68,6 +68,29 @@ def main():
     visibility = oracle.with_name('VanillaFaceVisibilityOracle.java')
     collision = oracle.with_name('VanillaCollisionOracle.java')
     collision_sources = base.source_hashes([collision])
+    movement = oracle.with_name('VanillaMovementRegistryOracle.java')
+    attributes = oracle.with_name('VanillaEntityAttributeOracle.java')
+    motion_sources = base.source_hashes([movement, attributes, oracle])
+    motion_files = ['movement-properties.nbt', 'attributes.json']
+    if not (previous.get('motion_exporters_sha256') == motion_sources
+            and previous.get('server_sha256') == origin['server_sha256']
+            and previous.get('block_tags_sha256') == lab.digest(root/'block-tags.json', 'sha256')
+            and all((root/name).exists() and previous.get('motion_files_sha256', {}).get(name)
+                    == lab.digest(root/name, 'sha256') for name in motion_files)):
+        export = lab.LOCAL/'horizon-client-motion'; export.mkdir(exist_ok=True)
+        lab.write_json(export/'tags.json', tags)
+        classes = export/'classes'; classes.mkdir(exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+        with (export/'export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(movement), str(attributes), str(oracle)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            for name in ['VanillaMovementRegistryOracle', 'VanillaEntityAttributeOracle']:
+                subprocess.run(['java', '-Xmx768M', '-cp', str(classes)+os.pathsep+dependencies,
+                                'dev.horizonlab.parity.'+name, 'export', str(export)],
+                               check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+        (root/'movement-properties.nbt').write_bytes((export/'movement-properties.nbt').read_bytes())
+        (root/'attributes.json').write_bytes((export/'catalog.json').read_bytes())
     collision_file = root / 'cached-collision.nbt'
     if not (previous.get('collision_exporters_sha256') == collision_sources
             and previous.get('server_sha256') == origin['server_sha256']
@@ -122,7 +145,9 @@ def main():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
             count += 1
-    lab.write_json(manifest, {'schema': 4, **origin,
+    lab.write_json(manifest, {'schema': 5, **origin,
+                             'motion_exporters_sha256': motion_sources,
+                             'motion_files_sha256': {name: lab.digest(root/name, 'sha256') for name in motion_files},
                              'collision_exporters_sha256': collision_sources,
                              'collision_sha256': lab.digest(collision_file, 'sha256'),
                              'render_exporters_sha256': render_sources,
