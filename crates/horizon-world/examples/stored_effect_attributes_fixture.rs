@@ -244,35 +244,36 @@ impl World {
     }
     fn get(&mut self, map: &mut Map, key: Option<Key>) -> Result<Option<Handle>, Stop> {
         self.event(map, None, format!("get {}", desc(key.as_ref())))?;
-        map.get_instance(key, |map, key| {
-            let Some(key) = key else {
-                return Ok(None);
-            };
-            let Some(source) = self.suppliers[key.id].clone() else {
-                return Ok(None);
-            };
-            self.event(map, None, format!("default {}", key.id))?;
-            let mut a = Instance::new(Definition::basic(self.defaults[key.id]));
-            let id = self.instances.len();
-            let handle = Handle {
-                id,
-                hash: self.hashes[id],
-            };
-            self.instances.push(Node {
-                key,
-                handle: handle.clone(),
-                value: None,
-            });
-            let mut cb = Dirty {
-                world: self,
-                map,
-                handle: handle.clone(),
-            };
-            let result = a.replace_from(&source, &mut cb).map_err(attribute_error);
-            self.instances[id].value = Some(a);
-            result?;
-            Ok(Some(handle))
-        })
+        map.get_instance(key, |map, key| self.create(map, key))
+    }
+    fn create(&mut self, map: &mut Map, key: Option<Key>) -> Result<Option<Handle>, Stop> {
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        let Some(source) = self.suppliers[key.id].clone() else {
+            return Ok(None);
+        };
+        self.event(map, None, format!("default {}", key.id))?;
+        let mut a = Instance::new(Definition::basic(self.defaults[key.id]));
+        let id = self.instances.len();
+        let handle = Handle {
+            id,
+            hash: self.hashes[id],
+        };
+        self.instances.push(Node {
+            key,
+            handle: handle.clone(),
+            value: None,
+        });
+        let mut cb = Dirty {
+            world: self,
+            map,
+            handle: handle.clone(),
+        };
+        let result = a.replace_from(&source, &mut cb).map_err(attribute_error);
+        self.instances[id].value = Some(a);
+        result?;
+        Ok(Some(handle))
     }
     fn edit<R>(
         &mut self,

@@ -1156,3 +1156,24 @@ remain controlled callbacks; the fixture covers queue and lookup mutation but
 not arbitrary recursive instance mutation. Registered definitions, entity
 notification binding, bulk map methods and complete gameplay/platform builds
 remain unfinished.
+
+## Entity notifications bound to stored attributes
+
+The stored-attribute adapter now connects effect modifier dispatch to a captured
+attribute map, supplier creation and instance operations. Entity effect
+notifications and pending refresh execute over the same concrete lookup and
+update/synchronization sets, preserving queued instance identity after lookup
+aliasing or removal. Refresh clears the pending update set only after every
+attribute callback succeeds.
+
+The [combined notification comparison](../benchmarks/rust-stored-effect-notifications-2026-10-07/scoped-parity.json)
+matches **21,117,051 lines per reference JAR**. It includes the full previous
+stored-attribute corpus plus inherited native entity notification and private
+refresh methods, client guards, dirty state, optional reapplication, empty
+removal and callback failure/queue mutation. Library and both affected fixture
+Clippy checks pass. Native JVM instance hashes are replayed separately per
+reference. Attribute-update consequences and basic-attribute default/syncability
+methods remain controlled; passenger lists are empty here, with packet behavior
+covered separately. Registered attribute/effect definitions, combined health
+and dimension consequences, complete entity gameplay and platform builds remain
+unfinished.
