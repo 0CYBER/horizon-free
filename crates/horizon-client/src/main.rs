@@ -111,6 +111,10 @@ struct App<'a> {
     motion_clock: FixedStep,
     previous_player_position: Vec3,
     movement_ticks: u64,
+    fall_damage_requests: u64,
+    last_requested_fall_damage: Option<f32>,
+    visibility: horizon_world::block_render::FaceVisibility,
+    mesh_revision: u64,
     mesh: Mesh,
     options: Options,
     window: Option<Arc<Window>>,
@@ -171,14 +175,23 @@ impl App<'_> {
             player.yaw = (-self.camera.yaw.to_degrees()) as f32;
             MotionWorld {
                 player,
-                scene: &self.world,
+                scene: &mut self.world,
                 assets: self.assets,
                 collision_binding: self.collision_binding,
                 resources: self.motion_resources,
             }
             .player_movement_tick(direction, self.keys.contains(&KeyCode::Space))?;
-            // Consumers for these phase records are not yet integrated.
-            player.events.clear();
+            // Damage requests are observable diagnostics until the full hurt
+            // and health lifecycle consumes them. Do not invent health loss.
+            for event in player.events.drain(..) {
+                if let horizon_client::motion::MotionEvent::Fall(
+                    horizon_client::landing::FallEvent::Damage { amount, .. },
+                ) = event
+                {
+                    self.fall_damage_requests += 1;
+                    self.last_requested_fall_damage = Some(amount);
+                }
+            }
             self.movement_ticks += 1;
         }
         let from = self.previous_player_position;
@@ -189,6 +202,15 @@ impl App<'_> {
             from.y + (to.y - from.y) * alpha + f64::from(1.62_f32),
             from.z + (to.z - from.z) * alpha,
         );
+        if self.mesh_revision != self.world.revision {
+            let mesh = mesh::build(&self.world, self.assets, &mut self.visibility)?;
+            self.renderer
+                .as_mut()
+                .ok_or("missing renderer")?
+                .replace_mesh(&mesh.cubes, &mesh.models)?;
+            self.mesh = mesh;
+            self.mesh_revision = self.world.revision;
+        }
         Ok(())
     }
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: impl ToString) {
@@ -257,6 +279,11 @@ impl App<'_> {
             "player_position": self.player.as_ref().map(|p| [p.position.x,p.position.y,p.position.z]),
             "player_velocity": self.player.as_ref().map(|p| [p.velocity.x,p.velocity.y,p.velocity.z]),
             "player_on_ground": self.player.as_ref().map(|p| p.ground.on_ground),
+            "player_fall_distance": self.player.as_ref().map(|p| p.fall_distance),
+            "fall_damage_requests": self.fall_damage_requests,
+            "last_requested_fall_damage": self.last_requested_fall_damage,
+            "world_revision": self.world.revision,
+            "mesh_revision": self.mesh_revision,
             "error": self.error,
         });
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -512,6 +539,10 @@ fn run() -> Result<()> {
         motion_clock: FixedStep::default(),
         previous_player_position: Vec3::ZERO,
         movement_ticks: 0,
+        fall_damage_requests: 0,
+        last_requested_fall_damage: None,
+        visibility,
+        mesh_revision: 0,
         mesh,
         options,
         window: None,

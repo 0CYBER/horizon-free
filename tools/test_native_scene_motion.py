@@ -20,6 +20,31 @@ def vec(values): return list(map(bits, values))
 def op(mode, value=None, **extra): return dict(mode=mode, value=value, **extra)
 
 def corpus():
+    for name,properties in [('pointed_dripstone',{'vertical_direction':'up','thickness':'tip'}),('turtle_egg',{'eggs':'4','hatch':'2'})]:
+        for seed in range(8):
+            yield dict(position=vec((25.5,4,25.5)),ops=[op('seed',seed),op('block',name='minecraft:'+name,position=[25,3,25],properties=properties),
+                *[v for _ in range(8) for v in [op('fall',bits(8)),op('landing',bits(-.1),ground=True,position=[25,3,25])]],
+                op('block',name='minecraft:stone',position=[25,3,25])])
+    for safe in [0,1,3,6,20]:
+        for multiplier in [0,.5,1,2]:
+            for impact in [None,3,4,4.1,7,18]:
+                ops=[op('attribute',bits(safe),name='minecraft:safe_fall_distance'),op('attribute',bits(multiplier),name='minecraft:fall_damage_multiplier'),
+                     op('impulse',None if impact is None else vec((25.5,impact,25.5)),ignore=True),op('fall',bits(12)),
+                     op('landing',bits(-.125),ground=True,position=[25,3,25])]
+                yield dict(position=vec((25.5,4,25.5)),ops=ops)
+    for name in ['stone','hay_block','honey_block','slime_block','powder_snow','pointed_dripstone','farmland','turtle_egg','shelf_mushroom']:
+        for seed in range(4):
+            for distance in [0,.25,2,2.999999,3,3.000001,4,7,20]:
+                ops=[op('seed',seed),op('block',name='minecraft:'+name,position=[25,3,25]),op('fall',bits(distance)),
+                     op('landing',bits(-.125),ground=True,position=[25,3,25]),op('landing',bits(0),ground=True,position=[25,3,25]),
+                     op('block',name='minecraft:stone',position=[25,3,25])]
+                yield dict(position=vec((25.5,3.9375 if name=='farmland' else 4,25.5)),ops=ops)
+    for name in ['stone','hay_block','honey_block','slime_block','farmland','turtle_egg']:
+        for height in [4,5,7,8,11,18,40]:
+            ops=[op('block',name='minecraft:'+name,position=[25,3,25])]
+            ops += [op('player_tick',vec((0,0,0)),jumping=False) for _ in range(100)]
+            ops.append(op('block',name='minecraft:stone',position=[25,3,25]))
+            yield dict(position=vec((25.5,height,25.5)),ops=ops)
     for start in [(25,4,25),(25,18,25),(-11,4,0),(-7,5,14),(0,18,0)]:
         for yaw in [0,45,90,-135,180]:
             for trigger in [-1,0,1,7]:
@@ -104,7 +129,7 @@ def main():
     oracle=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSceneMotionOracle.java'
     helpers=[oracle.with_name(name+'.java') for name in ['VanillaSceneCollisionOracle','VanillaRegistryCollisionScanOracle',
         'VanillaHeightmapOracle','VanillaCollisionOracle','VanillaBlockStateCodecOracle','VanillaSuffocationOracle',
-        'VanillaFaceSupportOracle','VanillaEntityAttributeOracle']]
+        'VanillaFaceSupportOracle','VanillaEntityAttributeOracle','VanillaBlockLandingOracle','VanillaMovementRegistryOracle']]
     sources=[Path(__file__),lab.ROOT/'tools/test_native_client.py',lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',
              lab.ROOT/'tools/prepare_native_client.py',oracle,*helpers,lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',
              lab.ROOT/'crates/horizon-client/examples/scene_motion_probe.rs']
@@ -118,7 +143,7 @@ def main():
     dependencies=os.pathsep.join(map(str,libraries))
     run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',str(jars['server'])+os.pathsep+dependencies,
          '-d',classes,oracle,*helpers],'compile-java')
-    fixtures=list(corpus());expected_lines=sum(len(f['ops'])+1 for f in fixtures)
+    fixtures=list(corpus());operations=sum(len(f['ops']) for f in fixtures);expected_lines=3*operations+len(fixtures)
     (build/'inputs.txt').write_text(''.join(json.dumps(f,separators=(',',':'))+'\n' for f in fixtures))
     input_hash=lab.digest(build/'inputs.txt','sha256')
     run(['cargo','build','--locked','-p','horizon-client','--example','scene_motion_probe'],'compile-rust')
@@ -139,9 +164,9 @@ def main():
     lab.write_json(report,{'schema':1,'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],
         'platform':platform.platform(),'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),
         'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'fixtures':len(fixtures),
-        'operations':expected_lines-len(fixtures),'sources_sha256':tested,'resources':resource_hash,'input_sha256':input_hash,
+        'operations':operations,'sources_sha256':tested,'resources':resource_hash,'input_sha256':input_hash,
         'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,
-        'scope':'Stored PlayerMotion binds resident client chunks and registered attributes/coefficients to air travel, jumping, Entity.move, step resolution, ground/support updates, restitution and speed factors. Repeated native Player.travel/jump/move and actual Player.aiStep / direct LivingEntity.aiStep compare position, velocity, bounds, collision/ground flags, support, climb state, fall-reset field, both sync flags, speed, head yaw, jump trigger and jump delay by exact bits. Prepared-local-input Player.aiStep paths verify speed refresh after movement, with empty inventory and no nearby entities. Dry aiStep includes small-velocity cleanup, input damping, held/released jump timing and server frost-modifier removal. Snapshots also compare all allocated attribute instances, base/cache/dirty state, modifier values/operations/permanence and pending update/sync membership (not JVM identity-dependent iteration order). Dry resident scene, fixed standing dimensions, zero frozen ticks, empty equipment, no interpolation, fluids, vehicles, effects, crouching or other entities. Landing/damage, audiovisual emission, block-inside and network consumers remain controlled boundaries. Input preparation is a controlled boundary here and has its own client comparison. No full Player.tick, local input lifecycle, nonempty inventory/equipment ticks, full freezing, health/damage or full gameplay parity claim.'})
+        'scope':'Stored PlayerMotion binds resident client chunks and registered attributes/coefficients to air travel, jumping, Entity.move, step resolution, ground/support updates, restitution and speed factors. Repeated native Player.travel/jump/move and actual Player.aiStep / direct LivingEntity.aiStep compare position, velocity, bounds, collision/ground flags, support, climb state, fall-reset field, both sync flags, speed, head yaw, jump trigger and jump delay by exact bits. Prepared-local-input Player.aiStep paths verify speed refresh after movement, with empty inventory and no nearby entities. Dry aiStep includes small-velocity cleanup, input damping, held/released jump timing and server frost-modifier removal. Snapshots also compare all allocated attribute instances, base/cache/dirty state, modifier values/operations/permanence and pending update/sync membership (not JVM identity-dependent iteration order). Dry resident scene, fixed standing dimensions, zero frozen ticks, empty equipment, no interpolation, fluids, vehicles, effects, crouching or other entities. Actual LivingEntity.checkFallDamage, registered Block.fallOn/bounceOn and Player/LivingEntity.causeFallDamage are composed, including float-narrowed fall-distance accumulation, reset, last-climb clearing, safe-fall and damage-multiplier attributes, impulse exemptions and ordered landing particle/sound/statistic/hit-ground/damage requests. Farmland pushes the stored player and replaces actual chunk state; repeated turtle-egg changes preserve hatch. Block state at the landing fixture is compared after every operation. World RNG is a seeded native legacy stream. Health damage, audiovisual playback, block neighbor/drop/block-entity callbacks, movement emission, block-inside and networking remain controlled boundaries; the native hurtServer consumer records requests and returns false. Input preparation has its own client comparison. No full Player.tick, local input lifecycle, nonempty inventory/equipment ticks, full freezing, health/damage lifecycle or full gameplay parity claim.'})
     print(f'Scoped scene motion parity passed: {report}',flush=True)
 
 if __name__=='__main__':main()

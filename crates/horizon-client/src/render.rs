@@ -35,6 +35,27 @@ pub struct Renderer {
     fog_distance: f32,
 }
 impl Renderer {
+    pub fn replace_mesh(&mut self, quads: &[Quad], model_faces: &[ModelInstance]) -> Result<()> {
+        let quad_count = u32::try_from(quads.len())?;
+        let model_quad_count = u32::try_from(model_faces.len())?;
+        self.quads = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Updated resident cube faces"),
+                contents: bytemuck::cast_slice(quads),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        self.model_quads = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Updated resident model faces"),
+                contents: bytemuck::cast_slice(model_faces),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        self.quad_count = quad_count;
+        self.model_quad_count = model_quad_count;
+        Ok(())
+    }
     pub async fn new(
         window: Arc<Window>,
         assets: &Assets,

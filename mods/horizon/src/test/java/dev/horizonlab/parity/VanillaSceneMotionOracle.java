@@ -9,6 +9,8 @@ import net.minecraft.core.*;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.effect.*;
+import net.minecraft.world.damagesource.*;
+import net.minecraft.sounds.*;
 import net.minecraft.world.entity.*;
 import net.minecraft.world.entity.ai.attributes.*;
 import net.minecraft.world.entity.player.*;
@@ -23,20 +25,32 @@ import net.minecraft.world.phys.*;
 import net.minecraft.world.phys.shapes.*;
 import static dev.horizonlab.parity.VanillaRegistryCollisionScanOracle.*;
 
-/** Real Player/LivingEntity travel, jump and Entity.move with stored attributes,
- * actual block scanning, support updates and restitution. Landing and external
- * sound/event/network consumers are controlled phase boundaries. */
+/** Real Player/LivingEntity movement, landing and fall calculation over stored
+ * attributes and chunks. Sound/particle delivery, health damage and network
+ * consumers remain controlled boundaries; their ordered requests are compared. */
 public final class VanillaSceneMotionOracle {
-    static Field position,history,support,noBlocks,last,stuck,delay,trigger,attributeStorage,attributeDirty,attributeCached;
+    static Field position,history,support,noBlocks,last,stuck,delay,trigger,attributeStorage,attributeDirty,attributeCached,impact,grace;
     static MethodHandle aiStep;
     static float single(JsonElement v){return Float.intBitsToFloat(Integer.parseUnsignedInt(v.getAsString(),16));}
     static void write(Field f,Object o,Object value){try{f.set(o,value);}catch(Exception e){throw new AssertionError(e);}}
     static Field field(Class<?> c,String n)throws Exception{var f=c.getDeclaredField(n);f.setAccessible(true);return f;}
+    static String blockPos(BlockPos p){return p.getX()+","+p.getY()+","+p.getZ();}
+    static String vectorBits(Vec3 p){return String.format("%016x,%016x,%016x",Double.doubleToLongBits(p.x),Double.doubleToLongBits(p.y),Double.doubleToLongBits(p.z));}
+    static String soundName(SoundEvent s){
+        if(s==SoundEvents.PLAYER_SMALL_FALL)return "small";if(s==SoundEvents.PLAYER_BIG_FALL)return "big";
+        return VanillaBlockLandingOracle.sound(s);
+    }
+    static final class Sources extends DamageSources {
+        DamageSource fall,stalagmite;Sources(){super(null);}
+        @Override public DamageSource fall(){return fall;}
+        @Override public DamageSource stalagmite(){return stalagmite;}
+    }
     static final class Border extends WorldBorder {
         @Override public boolean isInsideCloseToBorder(Entity e,AABB b){return false;}
     }
     static final class Level extends net.minecraft.server.level.ServerLevel {
-        Map<Long,Chunk> chunks;WorldBorder border;
+        Map<Long,Chunk> chunks;WorldBorder border;Actor actor;Sources sources;net.minecraft.util.RandomSource rng;
+        net.minecraft.server.MinecraftServer server;
         Level(){super(null,null,null,null,null,null,false,0L,List.of(),false);}
         @Override public boolean isClientSide(){return false;}
         @Override public BlockGetter getChunkForCollisions(int x,int z){return chunks.get(key(x,z));}
@@ -44,12 +58,25 @@ public final class VanillaSceneMotionOracle {
         @Override public FluidState getFluidState(BlockPos p){return getBlockState(p).getFluidState();}
         @Override public List<VoxelShape> getEntityCollisions(Entity e,AABB b){return List.of();}
         @Override public List<Entity> getPushableEntities(Entity e,AABB b){return List.of();}
-        @Override public List<Entity> getEntities(Entity e,AABB b){return List.of();}
+        @Override public List<Entity> getEntities(Entity e,AABB b){return e!=actor&&b.intersects(actor.getBoundingBox())?List.of(actor):List.of();}
         @Override public WorldBorder getWorldBorder(){return border;}
-        @Override public void gameEvent(Holder<GameEvent> event,Vec3 pos,GameEvent.Context context){}
+        @Override public DamageSources damageSources(){return sources;}
+        @Override public net.minecraft.util.RandomSource getRandom(){return rng;}
+        @Override public net.minecraft.server.MinecraftServer getServer(){return server;}
+        @Override public void gameEvent(Holder<GameEvent> event,Vec3 pos,GameEvent.Context context){if(event==GameEvent.HIT_GROUND)actor.events.add("hit "+vectorBits(pos)+" "+Block.getId(context.affectedState()));}
+        @Override public void gameEvent(Holder<GameEvent> event,BlockPos pos,GameEvent.Context context){actor.events.add("event "+(event==GameEvent.BLOCK_CHANGE?"change":event==GameEvent.BLOCK_DESTROY?"destroy":"unknown")+" "+blockPos(pos)+" "+Block.getId(context.affectedState())+" "+(context.sourceEntity()!=null));}
+        @Override public <T extends net.minecraft.core.particles.ParticleOptions> int sendParticles(T particle,double x,double y,double z,int count,double dx,double dy,double dz,double speed){
+            var b=(net.minecraft.core.particles.BlockParticleOption)particle;if(dx!=0||dy!=0||dz!=0)throw new AssertionError();
+            actor.events.add(String.format("particles %d %s %d %016x",Block.getId(b.getState()),vectorBits(new Vec3(x,y,z)),count,Double.doubleToLongBits(speed)));return 0;
+        }
+        @Override public void playSound(Entity e,BlockPos p,SoundEvent s,SoundSource source,float volume,float pitch){if(e!=null||source!=SoundSource.BLOCKS)throw new AssertionError();actor.events.add(String.format("sound %s %s %08x %08x",soundName(s),blockPos(p),Float.floatToIntBits(volume),Float.floatToIntBits(pitch)));}
+        @Override public void broadcastEntityEvent(Entity e,byte event){actor.events.add("broadcast "+Byte.toUnsignedInt(event));}
+        @Override public boolean setBlock(BlockPos p,BlockState state,int flags){chunks.get(key(p.getX()>>4,p.getZ()>>4)).write(p,Block.getId(state));actor.events.add("write "+blockPos(p)+" "+Block.getId(state)+" "+flags);return true;}
+        @Override public boolean destroyBlock(BlockPos p,boolean drops){chunks.get(key(p.getX()>>4,p.getZ()>>4)).write(p,Block.getId(Blocks.AIR.defaultBlockState()));actor.events.add("destroy "+blockPos(p)+" "+drops);return true;}
+        @Override public void levelEvent(int event,BlockPos p,int data){actor.events.add("level-event "+event+" "+blockPos(p)+" "+data);}
     }
     static final class Actor extends Player {
-        AttributeMap attrs;byte flags;float speed;boolean preparedInput;
+        AttributeMap attrs;byte flags;float speed;boolean preparedInput;List<String> events;
         Actor(){super(null,null);}
         void configure(Level l){setLevel(l);}
         @Override public GameType gameMode(){return GameType.SURVIVAL;}
@@ -80,7 +107,12 @@ public final class VanillaSceneMotionOracle {
         @Override public MoveSimulationType getMoveSimulationType(){return MoveSimulationType.SERVER_AND_CLIENT;}
         @Override public boolean isClientAuthoritative(){return false;}
         @Override public void recordMovement(MoverType mover,Vec3 movement){}
-        @Override protected void checkFallDamage(double dy,boolean ground,BlockState state,BlockPos p){}
+        @Override protected boolean updateFluidInteraction(){return false;}
+        @Override public void playSound(SoundEvent sound,float volume,float pitch){events.add(String.format("sound %s entity %08x %08x",soundName(sound),Float.floatToIntBits(volume),Float.floatToIntBits(pitch)));}
+        @Override protected void playBlockFallSound(){events.add("block-fall-sound");}
+        @Override public void awardStat(Identifier stat,int value){if(stat!=net.minecraft.stats.Stats.FALL_ONE_CM)throw new AssertionError(stat);events.add("stat "+value);}
+        @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,DamageSource source,float damage){var sources=((Level)level).sources;events.add(String.format("damage %s %08x",source==sources.fall?"fall":source==sources.stalagmite?"stalagmite":"unknown",Float.floatToIntBits(damage)));return false;}
+        @Override public void teleportRelative(double x,double y,double z){setPos(getX()+x,getY()+y,getZ()+z);}
         @Override protected void playStepSound(BlockPos p,BlockState state){}
         @Override public void causeFoodExhaustion(float v){}
         @Override public void gameEvent(Holder<GameEvent> event,Entity source){}
@@ -100,6 +132,7 @@ public final class VanillaSceneMotionOracle {
             xxa=(float)input.x;yya=(float)input.y;zza=(float)input.z;
             try{aiStep.invoke((LivingEntity)this);}catch(Throwable t){if(t instanceof Exception e)throw e;throw new AssertionError(t);}
         }
+        void land(double dy,boolean ground,BlockPos pos){checkFallDamage(dy,ground,level().getBlockState(pos),pos);}
     }
     static String pos(Object v){var o=(Optional<?>)v;return o.isEmpty()?"none":((BlockPos)o.get()).getX()+","+((BlockPos)o.get()).getY()+","+((BlockPos)o.get()).getZ();}
     @SuppressWarnings("unchecked")
@@ -116,8 +149,10 @@ public final class VanillaSceneMotionOracle {
         AABB b=p.getBoundingBox();
         for(var v:List.of(p.position(),p.getDeltaMovement(),new Vec3(b.minX,b.minY,b.minZ),new Vec3(b.maxX,b.maxY,b.maxZ)))
             out.printf("%016x %016x %016x ",Double.doubleToLongBits(v.x),Double.doubleToLongBits(v.y),Double.doubleToLongBits(v.z));
-        out.printf("%s %s %s %s %s %s %s %016x %s %s %s %08x %d %08x %d | %s%n",p.horizontalCollision,p.verticalCollision,p.verticalCollisionBelow,p.minorHorizontalCollision,
-            p.onGround(),noBlocks.getBoolean(p),pos(support.get(p)),Double.doubleToLongBits(p.fallDistance),pos(last.get(p)),p.needsSync,p.syncPosition,Float.floatToIntBits(p.speed),delay.getInt(p),Float.floatToIntBits(p.yHeadRot),trigger.getInt(p),String.join(";",attributes));
+        out.printf("%s %s %s %s %s %s %s %016x %s %s %s %08x %d %08x %d %d %s | %s%n",p.horizontalCollision,p.verticalCollision,p.verticalCollisionBelow,p.minorHorizontalCollision,
+            p.onGround(),noBlocks.getBoolean(p),pos(support.get(p)),Double.doubleToLongBits(p.fallDistance),pos(last.get(p)),p.needsSync,p.syncPosition,Float.floatToIntBits(p.speed),delay.getInt(p),Float.floatToIntBits(p.yHeadRot),trigger.getInt(p),grace.getInt(p),impact.get(p)==null?"none":vectorBits((Vec3)impact.get(p)),String.join(";",attributes));
+        out.println("events "+String.join(" | ",p.events));p.events.clear();
+        out.println("block "+Block.getId(p.level().getBlockState(new BlockPos(25,3,25))));
     }
     public static void main(String[] args)throws Exception{
         net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();Path dir=Path.of(args[1]);
@@ -127,15 +162,21 @@ public final class VanillaSceneMotionOracle {
         var abilities=field(Player.class,"abilities");
         delay=field(LivingEntity.class,"noJumpDelay");
         trigger=field(Player.class,"jumpTriggerTime");
+        impact=field(LivingEntity.class,"currentImpulseImpactPos");grace=field(LivingEntity.class,"currentImpulseContextResetGraceTime");
         attributeStorage=field(AttributeMap.class,"attributes");attributeDirty=field(AttributeInstance.class,"dirty");attributeCached=field(AttributeInstance.class,"cachedValue");
         aiStep=MethodHandles.privateLookupIn(LivingEntity.class,MethodHandles.lookup()).findSpecial(LivingEntity.class,"aiStep",MethodType.methodType(void.class),LivingEntity.class);
         var description=JsonParser.parseString(Files.readString(dir.resolve("scene.json"))).getAsJsonObject();
         var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
         var level=(Level)allocate.invoke(unsafe,Level.class);level.chunks=VanillaSceneCollisionOracle.scene(description,trace);level.border=new Border();
+        level.rng=net.minecraft.util.RandomSource.create(0);level.sources=(Sources)allocate.invoke(unsafe,Sources.class);
+        level.sources.fall=(DamageSource)allocate.invoke(unsafe,DamageSource.class);level.sources.stalagmite=(DamageSource)allocate.invoke(unsafe,DamageSource.class);
+        var server=(VanillaBlockLandingOracle.Server)allocate.invoke(unsafe,VanillaBlockLandingOracle.Server.class);
+        server.d=new VanillaBlockLandingOracle.Data();server.d.out=new PrintWriter(OutputStream.nullOutputStream());server.d.f=JsonParser.parseString("{\"fail\":-1,\"protected\":false}").getAsJsonObject();level.server=server;
         try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var lines=Files.lines(dir.resolve("inputs.txt"))){
             for(var line:(Iterable<String>)lines::iterator){
-                var row=JsonParser.parseString(line).getAsJsonObject();var p=(Actor)allocate.invoke(unsafe,Actor.class);p.configure(level);
+                var row=JsonParser.parseString(line).getAsJsonObject();var p=(Actor)allocate.invoke(unsafe,Actor.class);p.configure(level);p.events=new ArrayList<>();level.actor=p;
                 write(field(Entity.class,"type"),p,EntityTypes.PLAYER);
+                write(field(Entity.class,"passengers"),p,com.google.common.collect.ImmutableList.of());write(field(Entity.class,"dimensions"),p,EntityDimensions.scalable(.6f,1.8f));
                 write(field(Entity.class,"interpolationHandler"),p,InterpolationHandler.NO_OP);
                 var equipment=new EntityEquipment();write(field(LivingEntity.class,"equipment"),p,equipment);
                 write(field(Player.class,"inventory"),p,new Inventory(p,equipment));
@@ -144,6 +185,10 @@ public final class VanillaSceneMotionOracle {
                 p.setDeltaMovement(Vec3.ZERO);p.setPos(VanillaSceneCollisionOracle.vector(row.get("position")));
                 for(var value:row.getAsJsonArray("ops")){
                     var op=value.getAsJsonObject();switch(op.get("mode").getAsString()){
+                        case "seed"->level.rng.setSeed(op.get("value").getAsLong());
+                        case "impulse"->p.setIgnoreFallDamageFromCurrentImpulse(op.get("ignore").getAsBoolean(),op.get("value").isJsonNull()?null:VanillaSceneCollisionOracle.vector(op.get("value")));
+                        case "block"->{var v=op.getAsJsonArray("position");var pos=new BlockPos(v.get(0).getAsInt(),v.get(1).getAsInt(),v.get(2).getAsInt());var state=VanillaSceneCollisionOracle.state(op.get("name").getAsString());if(op.has("properties"))for(var property:op.getAsJsonObject("properties").entrySet())state=VanillaSceneCollisionOracle.property(state,state.getBlock().getStateDefinition().getProperty(property.getKey()),property.getValue().getAsString());level.chunks.get(key(pos.getX()>>4,pos.getZ()>>4)).write(pos,Block.getId(state));}
+                        case "landing"->{var v=op.getAsJsonArray("position");p.land(number(op.get("value")),op.get("ground").getAsBoolean(),new BlockPos(v.get(0).getAsInt(),v.get(1).getAsInt(),v.get(2).getAsInt()));}
                         case "travel"->p.travel(VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "tick"->p.movementTick(VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "player_tick"->p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());

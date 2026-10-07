@@ -4,12 +4,14 @@ use crate::{
     Result,
     assets::{Assets, Properties},
 };
-use horizon_core::position::ChunkPos;
+use horizon_core::{position::ChunkPos, random::LegacyRandom};
 use horizon_world::{registry::BlockStateId, worldgen::terrain::TerrainChunk};
 use std::collections::BTreeMap;
 
 pub struct TestWorld<'a> {
     pub chunks: BTreeMap<(i32, i32), TerrainChunk<'a, Properties>>,
+    pub random: LegacyRandom,
+    pub revision: u64,
     air: BlockStateId,
 }
 impl<'a> TestWorld<'a> {
@@ -20,6 +22,8 @@ impl<'a> TestWorld<'a> {
             .ok_or("missing air state")?;
         let mut world = Self {
             chunks: BTreeMap::new(),
+            random: LegacyRandom::new(0),
+            revision: 0,
             air,
         };
         for cz in -radius..=radius {
@@ -74,13 +78,23 @@ impl<'a> TestWorld<'a> {
         for (position, state) in &assets.model_placements {
             world.set(position.x, position.y, position.z, *state)?;
         }
+        world.revision = 0;
         Ok(world)
     }
-    fn set(&mut self, x: i32, y: i32, z: i32, state: BlockStateId) -> Result<()> {
-        self.chunks
+    /// Resident storage write. Neighbor updates, drops and block-entity
+    /// lifecycle must be dispatched by the owning gameplay runtime.
+    pub fn set(&mut self, x: i32, y: i32, z: i32, state: BlockStateId) -> Result<()> {
+        let chunk = self
+            .chunks
             .get_mut(&(x >> 4, z >> 4))
-            .ok_or("test scene exceeds resident chunks")?
-            .set_block_worldgen(x, y, z, state)?;
+            .ok_or("test scene exceeds resident chunks")?;
+        if y < chunk.min_y() || y >= chunk.min_y() + chunk.height() {
+            return Err("test scene write exceeds resident height".into());
+        }
+        let previous = chunk.set_block_worldgen(x, y, z, state)?;
+        if previous != state {
+            self.revision = self.revision.wrapping_add(1);
+        }
         Ok(())
     }
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {

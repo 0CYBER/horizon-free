@@ -10,11 +10,13 @@ use horizon_world::{
     attribute_map::ValueKind,
     attributes::{Modifier, Operation, entity::Catalog, live::LiveAttributes},
     block_collision::BlockCollisionRegistry,
+    block_landing::BlockLandingRegistry,
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
     entity_move::{self, CollisionFlags, EntityMoveWorld, MovementHistory, MoverType},
     entity_obstruction::EntityIdentity,
     ground_support::{GroundState, find_supporting_block},
     living_air::{self, LivingAirWorld},
+    living_fall::ImpulseContext,
     living_motion::{self, LivingMotionWorld},
     movement_emission::MovementEmission,
     movement_properties::{
@@ -40,6 +42,7 @@ pub struct MotionResources {
     pub blocks: BoundMovementProperties,
     pub climbable: BTreeSet<String>,
     pub fall_reset: BTreeSet<String>,
+    pub landing: BlockLandingRegistry,
 }
 impl MotionResources {
     pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
@@ -74,6 +77,7 @@ impl MotionResources {
                 .collect())
         };
         Ok(Self {
+            landing: crate::landing::load(root, &properties)?,
             attributes,
             blocks: properties.bind(&MovementTags {
                 fences: tag("minecraft:fences")?,
@@ -90,6 +94,7 @@ impl MotionResources {
 /// and networking. A queued landing is not a claim that damage was applied.
 #[derive(Clone, Copy, Debug)]
 pub enum MotionEvent {
+    Fall(crate::landing::FallEvent),
     Recorded {
         mover: MoverType,
         movement: Vec3,
@@ -131,6 +136,7 @@ pub struct PlayerMotion {
     pub sync_position: bool,
     pub events: Vec<MotionEvent>,
     pub attributes: LiveAttributes<Box<dyn FnMut() -> i32>>,
+    pub impulse: ImpulseContext,
 }
 fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
@@ -158,6 +164,7 @@ impl PlayerMotion {
         )
         .map_err(attribute_error)?;
         Ok(Self {
+            impulse: ImpulseContext::default(),
             position,
             velocity: Vec3::ZERO,
             ground: GroundState::default(),
@@ -255,7 +262,7 @@ impl PlayerMotion {
 
 pub struct MotionWorld<'p, 'w, 'r> {
     pub player: &'p mut PlayerMotion,
-    pub scene: &'w TestWorld<'r>,
+    pub scene: &'w mut TestWorld<'r>,
     pub assets: &'r Assets,
     pub collision_binding: &'w BlockCollisionRegistry<'r>,
     pub resources: &'w MotionResources,
@@ -519,9 +526,7 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
             state,
             position,
         });
-        // This phase is deliberately left for the owning entity lifecycle. Do
-        // not fabricate health/damage or reset a caller's fall-distance field.
-        Ok(())
+        horizon_world::living_landing::check_living_fall_damage(self, dy, grounded, state, position)
     }
     fn removed(&mut self) -> Result<bool> {
         Ok(false)
@@ -620,7 +625,15 @@ impl RestitutionWorld for MotionWorld<'_, '_, '_> {
             position,
             fall_distance,
         });
-        Ok(())
+        self.resources
+            .landing
+            .bounce_on(
+                self,
+                state,
+                position,
+                horizon_world::block_landing::LandingEntityKind::Player,
+            )
+            .map_err(|e| e.to_string().into())
     }
     fn bounce_event(&mut self) -> Result<()> {
         Ok(())

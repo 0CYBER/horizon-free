@@ -4,10 +4,11 @@ use horizon_client::{
     Result,
     assets::Assets,
     collisions,
-    motion::{MotionResources, MotionWorld, PlayerMotion},
+    motion::{MotionEvent, MotionResources, MotionWorld, PlayerMotion},
     world::TestWorld,
 };
 use horizon_core::geometry::Vec3;
+use horizon_core::{position::BlockPos, random::RandomSource};
 use horizon_world::attributes::{Modifier, Operation};
 use serde_json::Value;
 use std::{
@@ -74,7 +75,7 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
     }
     writeln!(
         out,
-        "{} {} {} {} {} {} {} {:016x} {} {} {} {:08x} {} {:08x} {} | {}",
+        "{} {} {} {} {} {} {} {:016x} {} {} {} {:08x} {} {:08x} {} {} {} | {}",
         player.collision.horizontal,
         player.collision.vertical,
         player.collision.below,
@@ -90,8 +91,27 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
         player.no_jump_delay,
         player.head_yaw.to_bits(),
         player.jump_trigger_time,
+        player.impulse.reset_grace_time,
+        player.impulse.impact_position.map_or_else(
+            || "none".into(),
+            |p| format!(
+                "{:016x},{:016x},{:016x}",
+                p.x.to_bits(),
+                p.y.to_bits(),
+                p.z.to_bits()
+            )
+        ),
         attributes.join(";")
     )?;
+    let events: Vec<_> = player
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            MotionEvent::Fall(e) => Some(e.trace()),
+            _ => None,
+        })
+        .collect();
+    writeln!(out, "events {}", events.join(" | "))?;
     Ok(())
 }
 fn main() -> Result<()> {
@@ -102,7 +122,7 @@ fn main() -> Result<()> {
     let root = PathBuf::from(&args[0]);
     let dir = PathBuf::from(&args[1]);
     let assets = Assets::load(&root)?;
-    let scene = TestWorld::new(&assets, 1)?;
+    let mut scene = TestWorld::new(&assets, 1)?;
     let binding = collisions::load(&root, &assets.registry)?;
     let resources = MotionResources::load(&root, &assets)?;
     fs::write(
@@ -118,12 +138,62 @@ fn main() -> Result<()> {
         for op in f["ops"].as_array().unwrap() {
             let mut world = MotionWorld {
                 player: &mut player,
-                scene: &scene,
+                scene: &mut scene,
                 assets: &assets,
                 collision_binding: &binding,
                 resources: &resources,
             };
             match op["mode"].as_str().unwrap() {
+                "seed" => world.scene.random.set_seed(op["value"].as_i64().unwrap()),
+                "impulse" => world.player.impulse.set_ignore_fall_damage(
+                    op["ignore"].as_bool().unwrap(),
+                    if op["value"].is_null() {
+                        None
+                    } else {
+                        Some(vector(&op["value"]))
+                    },
+                ),
+                "block" => {
+                    let p = &op["position"];
+                    let mut state = assets
+                        .registry
+                        .default_state(op["name"].as_str().unwrap())
+                        .ok_or("missing fixture block")?;
+                    if let Some(properties) = op["properties"].as_object() {
+                        let mut definition = assets.registry.state(state).unwrap().clone();
+                        for (name, value) in properties {
+                            definition
+                                .properties
+                                .insert(name.clone(), value.as_str().unwrap().into());
+                        }
+                        state = assets
+                            .registry
+                            .id(&definition)
+                            .ok_or("missing fixture state")?;
+                    }
+                    world.scene.set(
+                        p[0].as_i64().unwrap() as i32,
+                        p[1].as_i64().unwrap() as i32,
+                        p[2].as_i64().unwrap() as i32,
+                        state,
+                    )?;
+                }
+                "landing" => {
+                    let p = &op["position"];
+                    let p = BlockPos::new(
+                        p[0].as_i64().unwrap() as i32,
+                        p[1].as_i64().unwrap() as i32,
+                        p[2].as_i64().unwrap() as i32,
+                    );
+                    let state = world.scene.block(p.x, p.y, p.z);
+                    horizon_world::entity_move::EntityMoveWorld::check_fall_damage(
+                        &mut world,
+                        number(&op["value"]),
+                        op["ground"].as_bool().unwrap(),
+                        state,
+                        p,
+                    )?;
+                }
                 "travel" => world.travel_in_air(vector(&op["value"]))?,
                 "tick" => {
                     let v = vector(&op["value"]);
@@ -203,7 +273,9 @@ fn main() -> Result<()> {
                 }
                 _ => return Err("unknown motion operation".into()),
             }
+            let check_block = scene.block(25, 3, 25);
             snapshot(&mut out, &player)?;
+            writeln!(out, "block {}", check_block.0)?;
             player.events.clear();
         }
         writeln!(out, "end")?;

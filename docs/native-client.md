@@ -166,11 +166,27 @@ domain is the dry resident scene, standing dimensions, zero frozen ticks,
 empty inventory/equipment, no entity interpolation, crouching, vehicles or status
 effects. Selected `Player.aiStep` phases are bound; the full tick and local input
 lifecycle remain unfinished.
-Landing/damage, movement emission and external networking
-remain recorded phase boundaries; damage is not applied and ordinary falling
-does not yet accumulate fall distance. Block-inside effects such as cobweb
-slowdown and world/entity lifecycle remain unfinished. These boundaries are
-explicit in the native harness and are not included in its parity claim.
+Landing now accumulates and resets the stored fall distance, clears climbing
+state on ground, and invokes registered block fall/bounce reactions. The
+[composed landing comparison](../benchmarks/rust-native-landing-2026-10-07/scene-motion.json)
+checks 73,025 operations in 1,449 scenarios against both pinned JARs. It compares
+fall state, impulse exemptions, attributes and ordered damage, statistic,
+particle, sound and hit-ground requests alongside the previous motion fields.
+Actual native `LivingEntity.checkFallDamage`, registered block methods and
+`Player`/`LivingEntity.causeFallDamage` execute in the reference harness.
+The cases include hay, honey, slime, powder snow, pointed dripstone, farmland,
+turtle eggs and shelf mushrooms, with seeded world randomness. Farmland pushes
+the stored player and changes the resident block to dirt; repeated egg changes
+preserve hatch state. The resulting block state is checked after each operation.
+
+The client refreshes its mesh after a resident block revision changes. This is
+a complete scene rebuild for now, with no performance improvement claimed.
+Damage requests are counted in runtime reports; health loss, death, audiovisual
+playback and networking still need consumers. Block writes currently update
+resident storage; neighbor updates, drops and block-entity lifecycle remain
+unfinished. Block-inside effects such as cobweb slowdown and the full entity
+lifecycle are also unfinished. The reference harness explicitly controls these
+boundaries, which remain outside the comparison's scope.
 The earlier [scene collision comparison](../benchmarks/rust-native-scene-motion-2026-10-07/collision-regression.json)
 and [renderer startup](../benchmarks/rust-native-scene-motion-2026-10-07/startup-smoke.json)
 also pass with this binding and the additional prepared movement resources.
@@ -389,3 +405,8 @@ rotated and mirrored UV bases, texture and shade boundaries, negative origins,
 neighbor seams and cavities; cube projection tests cover all XYZ quarter turns.
 These checks cover CPU mesh behavior and GPU startup, not native shader pixels
 or a hardware performance comparison.
+
+The [landing interactive smoke check](../benchmarks/rust-native-landing-2026-10-07/interactive-smoke.json)
+exercises F5 walking from the initial camera position. The player lands at y=4,
+resets fall distance and records one damage request of 9.0. Health consumption
+is still pending. The Linux window exits cleanly after visual inspection.
