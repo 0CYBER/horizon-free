@@ -64,7 +64,7 @@ impl TagFile {
     }
 }
 // Identifier.CODEC permits the empty path as well as an omitted namespace.
-pub(super) fn identifier(name: &str) -> Result<String, DecodeError> {
+pub(crate) fn identifier(name: &str) -> Result<String, DecodeError> {
     let (namespace, path) = name.split_once(':').unwrap_or(("minecraft", name));
     let namespace = if namespace.is_empty() {
         "minecraft"

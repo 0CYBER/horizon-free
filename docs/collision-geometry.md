@@ -1418,3 +1418,21 @@ retains **161,198 matching lines per JAR** after extracting the shared body.
 Targeted Clippy passes. Virtual flags, source tags/rule values and the other
 world services listed above remain controlled; the fixture now executes the
 immunity decisions themselves instead of supplying their final result.
+
+
+`damage_source` imports version-checked native decoded damage definitions and
+resolves their raw tag resources with the shared tag implementation. Sources
+retain distinct direct/causing entities and optional explicit positions. Weapon
+and fallback position queries use the direct entity; difficulty scaling uses
+the stored causing entity, while creative-source detection dispatches virtual
+causing-entity access before reading player abilities.
+
+`python3 tools/test_damage_source_parity.py` covers all **51 bundled damage
+types and 36 damage-type tags**, using the actual native DamageType codec and
+TagLoader. The [damage-source report](../benchmarks/rust-damage-source-2026-10-07/scoped-parity.json)
+records **152,175 matching lines per JAR**, including constructor identities,
+scaling, exhaustion, tag/type membership, position/weapon queries, virtual
+causing-entity replacement, mutations and failures. Targeted Clippy passes.
+Catalogs are immutable snapshots with local indices, not network IDs. Rust
+DamageType codecs, runtime reload, death-message generation, full entity query
+bindings and combat source integration remain pending.
