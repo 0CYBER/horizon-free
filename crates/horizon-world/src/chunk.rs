@@ -357,9 +357,33 @@ impl ChunkData {
 
 /// Resident section: 4,096 blocks stored as numeric palette entries. Uniform
 /// sections have no word array; property strings live in the shared registry.
+/// Multiplicative hash for dense state IDs; section palettes are hashed on
+/// every block write, where SipHash dominated generation profiles.
+#[derive(Default)]
+struct StateIdHasher(u64);
+impl std::hash::Hasher for StateIdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0.rotate_left(8) ^ u64::from(b)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        }
+    }
+    fn write_u32(&mut self, value: u32) {
+        self.0 = (self.0 ^ u64::from(value)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+}
+type LocalIds =
+    std::collections::HashMap<BlockStateId, u32, std::hash::BuildHasherDefault<StateIdHasher>>;
+fn local_ids(state: BlockStateId) -> LocalIds {
+    let mut ids = LocalIds::default();
+    ids.insert(state, 0);
+    ids
+}
 pub struct BlockSection<'r> {
     palette: Vec<BlockStateId>,
-    local_ids: std::collections::HashMap<BlockStateId, u32>,
+    local_ids: LocalIds,
     counts: Vec<u16>,
     free: Vec<u32>,
     storage: Option<PackedStorage>,
@@ -376,7 +400,7 @@ impl<'r> BlockSection<'r> {
         }
         Ok(Self {
             palette: vec![state],
-            local_ids: [(state, 0)].into(),
+            local_ids: local_ids(state),
             counts: vec![4096],
             free: Vec::new(),
             storage: None,
@@ -474,7 +498,7 @@ impl<'r> BlockSection<'r> {
         }
         if self.counts[id as usize] == 4096 {
             self.palette = vec![state];
-            self.local_ids = [(state, 0)].into();
+            self.local_ids = local_ids(state);
             self.counts = vec![4096];
             self.free.clear();
             self.storage = None;

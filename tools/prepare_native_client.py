@@ -15,6 +15,61 @@ except ImportError:
     import test_model_baking_parity as baking
 
 
+WORLDGEN_BUNDLES = {
+    'noises': 'worldgen/noise', 'densities': 'worldgen/density_function', 'rules': 'worldgen/material_rule',
+    'conditions': 'worldgen/material_condition', 'settings': 'worldgen/noise_settings', 'carvers': 'worldgen/carver',
+    'biomes': 'worldgen/biome', 'world_presets': 'worldgen/world_preset', 'features': 'worldgen/feature',
+    'placed_features': 'worldgen/placed_feature', 'state_providers': 'worldgen/block_state_provider',
+    'biome_tags': 'tags/worldgen/biome', 'feature_tags': 'tags/worldgen/feature', 'block_tags': 'tags/block',
+    'fluid_tags': 'tags/fluid'}
+
+
+def prepare_worldgen(root, jars, local):
+    """Write the chunk generator's resource bundle to root/worldgen (see GeneratorData::load)."""
+    out = root / 'worldgen'
+    out.mkdir(exist_ok=True)
+    with zipfile.ZipFile(jars['server']) as server, zipfile.ZipFile(jars['client']) as client:
+        for name, path in WORLDGEN_BUNDLES.items():
+            prefix = f'data/minecraft/{path}/'
+            def extract(archive):
+                return {'minecraft:'+n[len(prefix):-5]: archive.read(n).decode('utf-8')
+                        for n in sorted(archive.namelist()) if n.startswith(prefix) and n.endswith('.json')}
+            resources = extract(server)
+            if not resources or resources != extract(client):
+                raise ValueError('Reference worldgen resources disagree: '+path)
+            (out/(name+'.json')).write_text(json.dumps(resources, separators=(',', ':')), encoding='utf-8')
+    facts = json.loads((root/'facts.json').read_text())
+    (out/'block_flags.json').write_text(json.dumps([[s[1], s[2]] for s in facts['states']], separators=(',', ':')))
+    reports = out/'biome_parameters'
+    reports.mkdir(exist_ok=True)
+    presets = reports
+    for source in [root/'biome-parameters', local/'datagen/out/reports/biome_parameters/minecraft']:
+        if (source/'overworld.json').exists():
+            for report in sorted(source.glob('*.json')):
+                (reports/report.name).write_bytes(report.read_bytes())
+            break
+    else:
+        presets = None
+    # Block behavior used by feature placement checks (survival, support, collision).
+    # These come from the Java exporters of the simple-block parity run.
+    behavior = local/'rust-simple-block-parity'
+    blocks = out/'blocks'
+    names = ['block-properties.nbt', 'cached-collision.nbt', 'cached-support.nbt', 'survival-rules.json',
+             'survival-extra-definitions.json', 'placement-definitions.json']
+    if all((behavior/name).exists() for name in names):
+        blocks.mkdir(exist_ok=True)
+        for name in names:
+            (blocks/name).write_bytes((behavior/name).read_bytes())
+    else:
+        print('Feature block behavior exports missing; run tools/test_simple_block_parity.py for full decoration')
+    if presets is None:
+        # Fall back to the Java-exported quantized tables from the material-stage parity run.
+        presets = local/'rust-material-stage-parity/presets.json'
+        if not presets.exists():
+            raise FileNotFoundError('No multi-noise biome parameter tables; run the data generator reports')
+        (out/'presets.json').write_bytes(presets.read_bytes())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prepare', action='store_true', help='Fetch pinned reference artifacts first')
@@ -160,6 +215,7 @@ def main():
                            check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
         (root/'render-definitions.json').write_bytes((export/'definitions.json').read_bytes())
         (root/'occlusion.nbt').write_bytes((export/'occlusion.nbt').read_bytes())
+    prepare_worldgen(root, jars, lab.LOCAL)
     count = 0
     # The playable client needs every client asset (textures, models, fonts, GUI)
     # and every data-pack resource (worldgen, recipes, loot tables, tags).
