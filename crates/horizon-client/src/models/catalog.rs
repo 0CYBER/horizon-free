@@ -31,6 +31,8 @@ pub struct BakedFace {
     pub quad: ModelQuad,
     pub layer: u32,
     pub opaque: bool,
+    /// Fractional alpha: drawn in the sorted translucent pass.
+    pub translucent: bool,
 }
 pub struct BakedModel {
     pub faces: Vec<BakedFace>,
@@ -168,14 +170,10 @@ impl StateModels {
                 bake_model_transformed(&model, BlockModelTransform::new(turns, lock))?
                     .into_iter()
                     .map(|quad| {
-                        if quad.material.force_translucent || quad.tint_index != -1 {
-                            return Err(
-                        "inspection gallery requires untinted opaque or binary-cutout materials"
-                            .into(),
-                    );
-                        }
                         let layer = sprites.insert(root, &quad.material.sprite)?;
                         Ok(BakedFace {
+                            translucent: quad.material.force_translucent
+                                || sprites.translucent[layer as usize],
                             quad,
                             layer,
                             opaque: sprites.opaque[layer as usize],

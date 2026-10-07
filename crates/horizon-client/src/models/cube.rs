@@ -27,7 +27,7 @@ pub fn cube_styles(faces: &[BakedFace]) -> Option<[CubeStyle; 6]> {
     }
     let mut styles = [None; 6];
     for face in faces {
-        if !face.opaque || face.quad.light_emission != 0 {
+        if !face.opaque || face.translucent || face.quad.tint_index != -1 || face.quad.light_emission != 0 {
             return None;
         }
         let q = &face.quad;
@@ -114,6 +114,7 @@ mod tests {
                             quad,
                             layer: 7,
                             opaque: true,
+                            translucent: false,
                         })
                         .collect();
                         let Some(styles) = cube_styles(&faces) else {
@@ -147,6 +148,7 @@ mod tests {
                     quad,
                     layer: 0,
                     opaque: true,
+                    translucent: false,
                 })
                 .collect();
         faces[0].opaque = false;

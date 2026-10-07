@@ -1,4 +1,4 @@
-//! Shared nearest-sampled sprite array for the controlled scene.
+//! Shared nearest-sampled sprite array for block and item textures.
 use crate::Result;
 use horizon_assets::animation::{AnimationClip, AnimationMetadata};
 use std::{
@@ -31,7 +31,10 @@ pub struct Sprites {
     pub layers: BTreeMap<String, u32>,
     pub animations: Vec<SpriteAnimation>,
     pub opaque: Vec<bool>,
+    pub translucent: Vec<bool>,
 }
+/// Edge length of every sprite array layer.
+pub const SPRITE_SIZE: u32 = 16;
 impl Sprites {
     pub fn insert(&mut self, root: &Path, name: &str) -> Result<u32> {
         if let Some(layer) = self.layers.get(name) {
@@ -62,27 +65,14 @@ impl Sprites {
         ];
         let info = reader.next_frame(&mut bytes)?;
         let (width, height) = if let Some(animation) = &animation {
-            if animation.interpolate {
-                return Err(
-                    "interpolated animation is not yet supported by the inspection renderer".into(),
-                );
-            }
             let [width, height] =
                 animation.frame_size(i32::try_from(info.width)?, i32::try_from(info.height)?);
             (u32::try_from(width)?, u32::try_from(height)?)
         } else {
             (info.width, info.height)
         };
-        if width != height
-            || width == 0
-            || info.width % width != 0
-            || info.height % height != 0
-            || (self.size != 0 && self.size != width)
-        {
-            return Err(format!(
-                "inspection sprite {name} must be square and match the sprite array dimensions"
-            )
-            .into());
+        if width == 0 || height == 0 || info.width % width != 0 || info.height % height != 0 {
+            return Err(format!("sprite {name} has invalid frame dimensions").into());
         }
         let channels = info.color_type.samples();
         let mut pixels = Vec::with_capacity(info.width as usize * info.height as usize * 4);
@@ -94,12 +84,6 @@ impl Sprites {
                 png::ColorType::GrayscaleAlpha => [pixel[0], pixel[0], pixel[0], pixel[1]],
                 _ => return Err("unsupported expanded sprite format".into()),
             };
-            if rgba[3] != 0 && rgba[3] != 255 {
-                return Err(format!(
-                    "inspection sprite {name} requires fractional-alpha rendering"
-                )
-                .into());
-            }
             pixels.extend(rgba);
         }
         let layer = u32::try_from(self.layers.len())?;
@@ -109,10 +93,16 @@ impl Sprites {
         for index in 0..count {
             let x = index % columns * width;
             let y = index / columns * height;
-            let mut frame = Vec::with_capacity((width * height * 4) as usize);
-            for row in y..y + height {
-                let offset = ((row * info.width + x) * 4) as usize;
-                frame.extend_from_slice(&pixels[offset..offset + (width * 4) as usize]);
+            // Every array layer is SPRITE_SIZE square; other sizes are
+            // nearest-resampled so UVs (normalized per layer) are unchanged.
+            let mut frame = Vec::with_capacity((SPRITE_SIZE * SPRITE_SIZE * 4) as usize);
+            for row in 0..SPRITE_SIZE {
+                let source_row = y + row * height / SPRITE_SIZE;
+                for column in 0..SPRITE_SIZE {
+                    let offset =
+                        ((source_row * info.width + x + column * width / SPRITE_SIZE) * 4) as usize;
+                    frame.extend_from_slice(&pixels[offset..offset + 4]);
+                }
             }
             frames.push(frame);
         }
@@ -133,8 +123,15 @@ impl Sprites {
         }
         self.opaque
             .push(pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
+        self.translucent.push(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[3] != 0 && p[3] != 255),
+        );
         self.layers.insert(name.to_owned(), layer);
-        self.size = width;
+        self.size = SPRITE_SIZE;
         self.pixels.extend_from_slice(&frames[initial]);
         Ok(layer)
     }

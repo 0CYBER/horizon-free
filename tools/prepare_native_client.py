@@ -161,8 +161,9 @@ def main():
         (root/'render-definitions.json').write_bytes((export/'definitions.json').read_bytes())
         (root/'occlusion.nbt').write_bytes((export/'occlusion.nbt').read_bytes())
     count = 0
-    prefixes = ('assets/minecraft/blockstates/', 'assets/minecraft/models/block/',
-                'assets/minecraft/textures/block/')
+    # The playable client needs every client asset (textures, models, fonts, GUI)
+    # and every data-pack resource (worldgen, recipes, loot tables, tags).
+    prefixes = ('assets/', 'data/')
     with zipfile.ZipFile(jars['client']) as archive:
         version = json.loads(archive.read('version.json'))
         for name in archive.namelist():
@@ -177,6 +178,35 @@ def main():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
             count += 1
+    gameplay = root / 'gameplay-facts.json'
+    gameplay_oracle = oracle.with_name('VanillaGameplayFactsExporter.java')
+    gameplay_sources = base.source_hashes([gameplay_oracle])
+    if not (previous.get('gameplay_exporters_sha256') == gameplay_sources and gameplay.exists()
+            and previous.get('server_sha256') == origin['server_sha256']):
+        classes = lab.LOCAL / 'gameplay-facts' / 'classes'; classes.mkdir(parents=True, exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+        with (root / 'gameplay-export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(gameplay_oracle)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
+                            'dev.horizonlab.parity.VanillaGameplayFactsExporter', str(gameplay)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+    items = root / 'items.json'
+    if not items.exists() or previous.get('server_sha256') != origin['server_sha256']:
+        # Vanilla's own data generator reports every item's default components.
+        datagen = lab.LOCAL / 'datagen'; datagen.mkdir(exist_ok=True)
+        with (datagen / 'datagen.log').open('w') as log:
+            subprocess.run(['java', '-DbundlerMainClass=net.minecraft.data.Main', '-jar',
+                            str(jars['server'].with_name('server.jar')), '--reports', '--output', 'out'],
+                           cwd=datagen, check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+        reports = datagen / 'out' / 'reports'
+        components = {f'minecraft:{f.stem}': json.loads(f.read_text())['components']
+                      for f in sorted((reports / 'minecraft' / 'components' / 'item').glob('*.json'))}
+        items.write_text(json.dumps(components))
+        (root / 'biome-parameters').mkdir(exist_ok=True)
+        for f in (reports / 'biome_parameters' / 'minecraft').glob('*.json'):
+            (root / 'biome-parameters' / f.name).write_bytes(f.read_bytes())
     lab.write_json(manifest, {'schema': 7, **origin,
                              'health_exporters_sha256': health_sources,
                              'health_files_sha256': {name: lab.digest(root/name, 'sha256') for name in health_files},
@@ -187,6 +217,7 @@ def main():
                              'render_exporters_sha256': render_sources,
                              'render_files_sha256': {name: lab.digest(root/name, 'sha256') for name in render_files},
                              'model_state_exporters_sha256': binding_sources,
+                             'gameplay_exporters_sha256': gameplay_sources,
                              'model_states_sha256': lab.digest(model_states, 'sha256'), 'data_version': version['world_version'],
                              'facts_sha256': lab.digest(facts, 'sha256'),
                              'block_tags_sha256': lab.digest(root / 'block-tags.json', 'sha256'), 'resource_files': count})
