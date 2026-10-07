@@ -13,6 +13,7 @@ pub mod block_properties;
 pub mod block_render;
 pub mod block_support;
 pub mod block_survival;
+pub mod blocking_item_damage;
 pub mod blocking_rules;
 pub mod chunk;
 pub mod chunk_status;

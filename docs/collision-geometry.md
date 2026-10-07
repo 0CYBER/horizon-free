@@ -1530,3 +1530,18 @@ stacks, unbreakable flags, integer boundaries, callback mutations and failures.
 Targeted Clippy passes. This is a durability projection, not complete item-stack
 component storage. Enchantment effects, component codecs, equipment break
 handling and full gameplay integration remain pending.
+
+
+`blocking_item_damage` composes blocking-component item-damage arithmetic with
+stored durability. It preserves player-only handling, the passed level's client
+guard for item-use statistics, the later virtual entity-level check and the
+server-player-only creative/advancement queries. Break callbacks receive the
+pre-shrink stack copy and the caller's original equipment slot.
+
+`python3 tools/test_blocking_item_damage_parity.py` compares actual native
+BlocksAttacks calls into ItemStack storage on non-player, Player and ServerPlayer
+receivers. The [blocking durability report](../benchmarks/rust-blocking-item-damage-2026-10-07/scoped-parity.json)
+records **71,800 matching lines per JAR**, including scalar float boundaries,
+invalid/absent durability components, statistic item capture, callback mutations
+and failures. Targeted Clippy passes. Stacks are unenchanted; full component
+storage, equipment lifecycle and complete combat/world integration remain pending.
