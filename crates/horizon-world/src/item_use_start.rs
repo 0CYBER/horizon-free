@@ -33,20 +33,20 @@ pub fn start<W: StartUseWorld>(
     hand: W::Hand,
 ) -> Result<(), W::Error> {
     let item = w.hand_item(s, hand)?;
-    if w.is_empty(item) || w.using_item(s)? {
+    if w.is_empty(item.clone()) || w.using_item(s)? {
         return Ok(());
     }
-    s.item = item;
+    s.item = item.clone();
     s.remaining = w.duration(s, item)?;
     let level = w.level(s)?;
     if !w.is_client(s, level)? {
         let level = w.level(s)?;
-        w.synchronize_equipment(s, level, hand, s.item)?;
+        w.synchronize_equipment(s, level, hand, s.item.clone())?;
         w.set_using_flag(s, true)?;
         let off = w.is_off_hand(hand);
         w.set_off_hand_flag(s, off)?;
-        w.start_vibration(s, s.item)?;
-        if w.has_kinetic_weapon(s.item) {
+        w.start_vibration(s, s.item.clone())?;
+        if w.has_kinetic_weapon(s.item.clone()) {
             w.reset_recent_kinetic_enemies(s);
         }
     }

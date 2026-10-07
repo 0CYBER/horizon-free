@@ -2,7 +2,7 @@
 //! use-item storage and remaining ticks around the virtual item-duration query.
 pub trait ItemUseWorld {
     type Error;
-    type Item: Copy;
+    type Item: Clone;
     type ItemType: Copy;
     fn using_item(&mut self) -> Result<bool, Self::Error>;
     fn use_item(&self) -> Self::Item;
@@ -50,7 +50,7 @@ pub fn ticks_using_item<W: ItemUseWorld>(w: &mut W) -> Result<i32, W::Error> {
         return Ok(0);
     }
     let item = w.use_item();
-    let item_type = w.item_type(item);
+    let item_type = w.item_type(item.clone());
     let duration = w.use_duration(item_type, item)?;
     Ok(duration.wrapping_sub(w.remaining_ticks_virtual()?))
 }

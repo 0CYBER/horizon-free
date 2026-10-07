@@ -1732,3 +1732,19 @@ mutations/failures, old/new aliases, raw enum-map main-hand entries and the
 selected main-hand override. Targeted Clippy passes. Full onEquipItem effects,
 synchronized flags, active-use integration and complete gameplay integration
 remain pending.
+
+
+The item-use interfaces now accept cloned shared references as well as small
+copyable handles. `StackRef` equality compares object identity; component/count
+value comparisons remain explicit. Captured references stay alive through
+callbacks that replace the active or held stack. The lifecycle fixture now uses
+the production reference-counted stack implementation.
+
+The native regressions retain **144,736 lifecycle**, **84,873 start-use** and
+**108,690 eligibility/timing** matching lines per JAR. Reports:
+[lifecycle](../benchmarks/rust-shared-item-use-2026-10-07/item-use-lifecycle.json),
+[start](../benchmarks/rust-shared-item-use-2026-10-07/item-use-start.json),
+[eligibility](../benchmarks/rust-shared-item-use-2026-10-07/item-use.json).
+Targeted Clippy and all 20 horizon-world library tests pass. Hand queries and
+flags remain controlled in these fixtures; composing them with actual player
+inventory, synchronized flags and full item effects remains pending.

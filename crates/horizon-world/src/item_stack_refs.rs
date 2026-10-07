@@ -17,6 +17,14 @@ impl<I, K, V> Clone for StackRef<I, K, V> {
         Self(self.0.clone())
     }
 }
+// Native ItemStack object equality is reference identity. Value comparisons
+// remain explicit on ItemStackData (same_item_components/matches).
+impl<I, K, V> PartialEq for StackRef<I, K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.same_reference(other)
+    }
+}
+impl<I, K, V> Eq for StackRef<I, K, V> {}
 impl<I, K, V> StackRef<I, K, V> {
     pub fn new(data: ItemStackData<I, K, V>) -> Self {
         Self(Rc::new(RefCell::new(data)))

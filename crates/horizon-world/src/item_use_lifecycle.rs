@@ -7,7 +7,7 @@ pub struct UseState<I> {
 }
 pub trait UseLifecycleWorld: Sized {
     type Error;
-    type Item: Copy + Eq;
+    type Item: Clone + Eq;
     type Hand: Copy;
     type Level: Copy;
     fn empty_item(&self) -> Self::Item;
@@ -89,10 +89,10 @@ pub fn tick<W: UseLifecycleWorld>(w: &mut W, s: &mut UseState<W::Item>) -> Resul
     if w.using_item(s)? {
         let hand = w.used_hand(s)?;
         let held = w.hand_item(s, hand)?;
-        if w.same_item_type(held, s.item) {
+        if w.same_item_type(held.clone(), s.item.clone()) {
             let hand = w.used_hand(s)?;
             s.item = w.hand_item(s, hand)?;
-            w.update_using_item(s, s.item)?;
+            w.update_using_item(s, s.item.clone())?;
         } else {
             w.stop_using_item(s)?;
         }
@@ -106,7 +106,7 @@ pub fn update<W: UseLifecycleWorld>(
 ) -> Result<(), W::Error> {
     let level = w.level(s)?;
     let remaining = w.remaining_ticks(s)?;
-    w.item_tick(s, item, level, remaining)?;
+    w.item_tick(s, item.clone(), level, remaining)?;
     s.remaining = s.remaining.wrapping_sub(1);
     if s.remaining == 0 {
         let level = w.level(s)?;
@@ -125,13 +125,13 @@ pub fn complete<W: UseLifecycleWorld>(
         return Ok(());
     }
     let hand = w.used_hand(s)?;
-    let original = s.item;
+    let original = s.item.clone();
     if original != w.hand_item(s, hand)? {
         w.release_using_item(s)?;
         return Ok(());
     }
-    if !w.is_empty(s.item) && w.using_item(s)? {
-        let item = s.item;
+    if !w.is_empty(s.item.clone()) && w.using_item(s)? {
+        let item = s.item.clone();
         let level = w.level(s)?;
         let result = w.finish_item(s, item, level)?;
         if result != s.item {
@@ -144,13 +144,13 @@ pub fn complete<W: UseLifecycleWorld>(
 pub fn release<W: UseLifecycleWorld>(w: &mut W, s: &mut UseState<W::Item>) -> Result<(), W::Error> {
     let hand = w.used_hand(s)?;
     let held = w.hand_item(s, hand)?;
-    if !w.is_empty(s.item) && w.same_item_type(held, s.item) {
+    if !w.is_empty(s.item.clone()) && w.same_item_type(held.clone(), s.item.clone()) {
         s.item = held;
-        let item = s.item;
+        let item = s.item.clone();
         let level = w.level(s)?;
         let remaining = w.remaining_ticks(s)?;
         w.release_item(s, item, level, remaining)?;
-        if w.use_on_release(s, s.item)? {
+        if w.use_on_release(s, s.item.clone())? {
             tick(w, s)?;
         }
     }
@@ -163,7 +163,7 @@ pub fn stop<W: UseLifecycleWorld>(w: &mut W, s: &mut UseState<W::Item>) -> Resul
         s.has_recent_kinetic_enemies = false;
         w.set_using_flag(s, false)?;
         if using {
-            w.finish_vibration(s, s.item)?;
+            w.finish_vibration(s, s.item.clone())?;
         }
     }
     s.item = w.empty_item();
