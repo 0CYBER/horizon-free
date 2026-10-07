@@ -34,6 +34,7 @@ pub mod feature_region;
 pub mod feature_sort;
 pub mod fluid_predicate;
 pub mod generator;
+mod generator_blocks;
 mod generator_decoration;
 pub mod height_provider;
 pub mod material_condition;

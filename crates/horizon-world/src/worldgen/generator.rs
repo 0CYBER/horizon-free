@@ -142,6 +142,9 @@ pub(super) struct FeatureResources {
     pub(super) placed: BTreeMap<String, String>,
     pub(super) feature_tags: BTreeMap<String, String>,
     pub(super) fluid_tags: BTreeMap<String, Vec<String>>,
+    pub(super) state_providers: BTreeMap<String, String>,
+    /// Block properties, support, collision and survival for placement checks.
+    pub(super) blocks: Option<super::generator_blocks::BlockBehavior>,
 }
 
 /// Seed-independent generation resources, loaded once and shared by every
@@ -255,7 +258,8 @@ impl GeneratorData {
     /// per registry state. Multi-noise tables come from `presets.json`
     /// (quantized) or `biome_parameters/<name>.json` data-generator reports.
     /// Optional decoration inputs: `features`, `placed_features`,
-    /// `feature_tags`, `fluid_tags`. Integer block properties are derived from
+    /// `feature_tags`, `fluid_tags`, `state_providers` and the Java-exported
+    /// block behavior files in `blocks/` (see `generator_blocks`). Integer block properties are derived from
     /// the registry: properties whose every value is a decimal integer.
     pub fn load(dir: &Path, registry: &'static BlockRegistry) -> Result<Arc<Self>, GeneratorError> {
         let flags: Vec<(bool, bool)> =
@@ -376,7 +380,15 @@ impl GeneratorData {
                     features,
                     placed,
                     feature_tags: read_optional_bundle(dir, "feature_tags")?.unwrap_or_default(),
+                    blocks: super::generator_blocks::BlockBehavior::load(
+                        &dir.join("blocks"),
+                        registry,
+                        &block_tags,
+                        &fluid_tags,
+                    )?,
                     fluid_tags,
+                    state_providers: read_optional_bundle(dir, "state_providers")?
+                        .unwrap_or_default(),
                 })
             }
             _ => None,
@@ -512,11 +524,12 @@ struct Pipeline<R: RandomSource> {
     extensions: MaterialExtensions<R::Positional>,
     picker: GlobalFluidPicker,
     zoom: BiomeZoom,
-    biome_cache: Mutex<HashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>>,
+    biome_cache: BiomeCache,
     carver_cache: Mutex<HashMap<(i32, i32), BiomeId>>,
     pub(super) decoration: Option<super::generator_decoration::Decoration>,
 }
 const CACHE_LIMIT: usize = 16384;
+type BiomeCache = Mutex<HashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>>;
 
 fn state(registry: &BlockRegistry, raw: &Value) -> Result<BlockStateId, GeneratorError> {
     let name = raw
@@ -1052,7 +1065,25 @@ where
     ) -> Result<DecorateStats, GeneratorError> {
         match &self.decoration {
             Some(decoration) => {
-                decoration.decorate(&self.data, self.seed, self.generation(), worker, region)
+                let center = region[4].position();
+                // WorldGenRegion's level random, positioned at the center chunk.
+                let mut random = self
+                    .root
+                    .from_hash_of("minecraft:worldgen_region_random")
+                    .fork_positional()
+                    .at(BlockPos::new(
+                        center.x.wrapping_shl(4),
+                        0,
+                        center.z.wrapping_shl(4),
+                    ));
+                decoration.decorate(
+                    &self.data,
+                    self.seed,
+                    self.generation(),
+                    worker,
+                    region,
+                    || random.next_boolean(),
+                )
             }
             None => Err(resource("decoration resources were not loaded")),
         }

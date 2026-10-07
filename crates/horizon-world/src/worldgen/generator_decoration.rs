@@ -27,13 +27,23 @@ use super::{
     terrain::PreLightChunkStage,
     write_zone::GenerationWriteZone,
 };
+use super::{
+    generator_blocks::BlockBehavior,
+    state_provider::{StateProviderBindings, StateProviderCatalog},
+};
 use crate::{
+    block_collision::{DynamicCollisionWorld, ShulkerCollisionState},
+    block_placement::BlockPlacementBindings,
+    block_support::SupportType,
+    block_survival::SurvivalWorld,
+    dynamic_support::DynamicSupportWorld,
     fluid::{FluidKind, FluidState},
     heightmap::{HeightmapState, HeightmapType},
     registry::BlockStateId,
 };
 use horizon_core::{
     biome::obfuscate_seed,
+    geometry::{Direction, VoxelShape},
     position::{BlockPos, ChunkPos},
 };
 use serde_json::Value;
@@ -111,10 +121,31 @@ impl Decoration {
                 .collect(),
             &data.biome_tags,
         )?);
-        let bindings =
+        let mut bindings =
             FeatureBlockBindings::with_tags(registry, data.integers().clone(), &data.block_tags)?
                 .with_fluid_tags(&resources.fluid_tags)?
-                .with_biomes(biomes);
+                .with_biomes(biomes.clone());
+        if let Some(blocks) = &resources.blocks {
+            bindings = bindings
+                .with_block_properties(&blocks.properties)?
+                .with_state_providers(
+                    StateProviderBindings::new(
+                        registry,
+                        data.integers().clone(),
+                        &data.block_tags,
+                    )?
+                    .with_block_properties(&blocks.properties)?
+                    .with_fluid_tags(&resources.fluid_tags)?
+                    .with_biomes(biomes),
+                    StateProviderCatalog::from_resources(&resources.state_providers)?,
+                    BlockPlacementBindings::new(
+                        registry,
+                        &blocks.properties,
+                        &blocks.double_plants,
+                        &blocks.mossy_carpets,
+                    )?,
+                )?;
+        }
         let tags = feature_tags
             .build(|name, _| resources.placed.contains_key(name).then(|| name.to_owned()))
             .map_err(|e| resource(format!("feature tags: {e:?}")))?
@@ -196,6 +227,7 @@ impl Decoration {
         generation: WorldGenerationContext,
         worker: &mut WorkerState,
         region: &mut [ProtoChunk; 9],
+        next_boolean: impl FnMut() -> bool,
     ) -> Result<DecorateStats, GeneratorError> {
         let center = region[4].position();
         for (i, chunk) in region.iter().enumerate() {
@@ -234,7 +266,13 @@ impl Decoration {
             Ok(terrain) => terrain,
             Err(e) => return Err(resource(e.to_string())),
         };
+        let mut next_boolean = next_boolean;
         let mut world = World {
+            next_boolean: &mut next_boolean,
+            blocks: data
+                .feature_resources
+                .as_ref()
+                .and_then(|r| r.blocks.as_ref()),
             region: terrain,
             biomes: BiomeRegion::new(biomes, obfuscate_seed(seed))
                 .map_err(|e| resource(e.to_string()))?,
@@ -287,6 +325,8 @@ impl Decoration {
 /// WorldGenRegion-style view: reads anywhere in the 3×3 region, writes within
 /// the FEATURES step's write radius, biome lookups through the biome zoom.
 struct World<'a> {
+    next_boolean: &'a mut dyn FnMut() -> bool,
+    blocks: Option<&'a BlockBehavior>,
     region: TerrainRegion<'static, GenBlockStates>,
     biomes: BiomeRegion<BiomeId>,
     zone: GenerationWriteZone,
@@ -335,7 +375,113 @@ impl FeatureWorld for World<'_> {
 fn query(e: impl std::fmt::Display) -> PlacementQueryError {
     PlacementQueryError::Failed(e.to_string())
 }
+impl<'a> World<'a> {
+    fn blocks(&self) -> Result<&'a BlockBehavior, PlacementQueryError> {
+        self.blocks.ok_or(PlacementQueryError::Unavailable)
+    }
+}
+/// Proto chunks hold no block entities, so dynamic shapes resolve to absent.
+impl DynamicSupportWorld for World<'_> {
+    type Error = PlacementQueryError;
+    fn shulker_is_closed(&mut self, _: [i32; 3]) -> Result<Option<bool>, PlacementQueryError> {
+        Ok(None)
+    }
+    fn moving_piston_shape(
+        &mut self,
+        _: [i32; 3],
+    ) -> Result<Option<VoxelShape>, PlacementQueryError> {
+        Ok(None)
+    }
+}
+impl DynamicCollisionWorld for World<'_> {
+    fn shulker_collision_state(
+        &mut self,
+        _: [i32; 3],
+    ) -> Result<Option<ShulkerCollisionState>, PlacementQueryError> {
+        Ok(None)
+    }
+}
+impl SurvivalWorld for World<'_> {
+    fn fluid_state(&mut self, position: [i32; 3]) -> Result<FluidState, PlacementQueryError> {
+        self.region.fluid_state(position)
+    }
+    /// Unlit generation chunks report no sky or block light.
+    fn raw_brightness(&mut self, _: [i32; 3], _: i32) -> Result<i32, PlacementQueryError> {
+        Ok(0)
+    }
+    fn block_state(&mut self, position: [i32; 3]) -> Result<BlockStateId, PlacementQueryError> {
+        self.region.block_state(position)
+    }
+}
 impl PlacementContext for World<'_> {
+    fn state_collision_empty(
+        &mut self,
+        state: BlockStateId,
+        position: [i32; 3],
+    ) -> Result<bool, PlacementQueryError> {
+        let collision = self.blocks()?.collision.clone();
+        collision
+            .collision_shape(self, state, position)
+            .map(|shape| shape.is_empty())
+            .map_err(query)
+    }
+    /// Block entities are not stored in proto chunks; loot tables are no-ops.
+    fn set_block_entity_loot_table(
+        &mut self,
+        _: [i32; 3],
+        _: &str,
+        _: &mut impl horizon_core::random::RandomSource,
+    ) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
+    fn attachment_at(
+        &mut self,
+        position: [i32; 3],
+        direction: Direction,
+    ) -> Result<bool, PlacementQueryError> {
+        let blocks = self.blocks()?;
+        blocks
+            .survival
+            .can_attach_to(self, position, direction)
+            .map_err(query)
+    }
+    fn next_world_boolean(&mut self) -> Result<bool, PlacementQueryError> {
+        Ok((self.next_boolean)())
+    }
+    fn block_survives(
+        &mut self,
+        state: BlockStateId,
+        position: [i32; 3],
+    ) -> Result<bool, PlacementQueryError> {
+        let blocks = self.blocks()?;
+        blocks
+            .survival
+            .can_survive(self, state, position)
+            .map_err(query)
+    }
+    fn face_sturdy(
+        &mut self,
+        position: [i32; 3],
+        direction: Direction,
+    ) -> Result<bool, PlacementQueryError> {
+        let state = self.region.block_state(position)?;
+        self.state_face_sturdy(state, position, direction)
+    }
+    fn state_face_sturdy(
+        &mut self,
+        state: BlockStateId,
+        position: [i32; 3],
+        direction: Direction,
+    ) -> Result<bool, PlacementQueryError> {
+        let support = self.blocks()?.support.clone();
+        support
+            .is_face_sturdy(self, state, position, direction, SupportType::Full)
+            .map_err(query)
+    }
+    /// Generation regions contain no entities.
+    fn unobstructed_block(&mut self, _: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        Ok(true)
+    }
     fn destroy_block_without_entity(
         &mut self,
         position: [i32; 3],

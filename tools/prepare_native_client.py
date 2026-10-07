@@ -42,12 +42,27 @@ def prepare_worldgen(root, jars, local):
     (out/'block_flags.json').write_text(json.dumps([[s[1], s[2]] for s in facts['states']], separators=(',', ':')))
     reports = out/'biome_parameters'
     reports.mkdir(exist_ok=True)
+    presets = reports
     for source in [root/'biome-parameters', local/'datagen/out/reports/biome_parameters/minecraft']:
         if (source/'overworld.json').exists():
             for report in sorted(source.glob('*.json')):
                 (reports/report.name).write_bytes(report.read_bytes())
             break
     else:
+        presets = None
+    # Block behavior used by feature placement checks (survival, support, collision).
+    # These come from the Java exporters of the simple-block parity run.
+    behavior = local/'rust-simple-block-parity'
+    blocks = out/'blocks'
+    names = ['block-properties.nbt', 'cached-collision.nbt', 'cached-support.nbt', 'survival-rules.json',
+             'survival-extra-definitions.json', 'placement-definitions.json']
+    if all((behavior/name).exists() for name in names):
+        blocks.mkdir(exist_ok=True)
+        for name in names:
+            (blocks/name).write_bytes((behavior/name).read_bytes())
+    else:
+        print('Feature block behavior exports missing; run tools/test_simple_block_parity.py for full decoration')
+    if presets is None:
         # Fall back to the Java-exported quantized tables from the material-stage parity run.
         presets = local/'rust-material-stage-parity/presets.json'
         if not presets.exists():
