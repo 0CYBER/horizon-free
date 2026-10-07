@@ -2,12 +2,11 @@
 
 The behavior target is the repository's pinned **Minecraft Java Edition 26.3**.
 One-to-one vanilla gameplay parity is the acceptance criterion. It has **not**
-been reached. Horizon now has a [native development client](native-client.md)
-that renders a controlled resident-chunk scene with blockstate-selected models
-and an inspection camera with optional resident-block collisions. F5 now enables
-a dry walking test with fixed-rate gravity, jumping, stepping and native-checked
-keyboard input preparation over that scene. It does not run a
-complete game server or gameplay simulation.
+been reached, but the Rust game is now playable: the [native client](native-client.md)
+has a title screen and world management. It generates vanilla terrain with
+decoration and streams, lights and renders it. Survival play works: mining,
+placing, crafting, chests and furnaces, items, mobs, combat, hunger, health,
+sounds, and Anvil saves.
 The Rust workspace implements core arithmetic/random streams, world data and
 resident sections, scheduled tick ordering, geometry, contained fluid states,
 noise/density evaluation, biome and terrain generation kernels, material rules,

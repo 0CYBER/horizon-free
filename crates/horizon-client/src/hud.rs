@@ -74,7 +74,7 @@ impl HudAtlas {
         walk(&textures.join("particle"), &mut files);
         files.retain(|p| {
             let s = p.to_string_lossy();
-            !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
+            (!s.contains("title/background") || s.contains("panorama_")) && !s.contains("realms") && !s.contains("presets")
         });
         let decode_one = |path: &PathBuf| -> Option<(String, u32, u32, Vec<u8>)> {
             let name = path
@@ -91,7 +91,19 @@ impl HudAtlas {
             } else {
                 pixels
             };
-            (w <= 512 && h <= 512).then_some((name, w, h, pixels))
+            // Title panorama faces are downsampled to 256 for the shared atlas.
+            if name.contains("panorama_") && w >= 512 && w == h {
+                let step = (w / 256) as usize;
+                let mut small = Vec::with_capacity(256 * 256 * 4);
+                for y in 0..256usize {
+                    for x in 0..256usize {
+                        let i = ((y * step) * w as usize + x * step) * 4;
+                        small.extend_from_slice(&pixels[i..i + 4]);
+                    }
+                }
+                return Some((name, 256, 256, small));
+            }
+            (w <= 1024 && h <= 512).then_some((name, w, h, pixels))
         };
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
         let chunk = files.len().div_ceil(threads).max(1);

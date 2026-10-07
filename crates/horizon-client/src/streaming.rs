@@ -104,6 +104,8 @@ pub struct Streaming {
     sequence: u64,
     pub center: (i32, i32),
     pub radius: i32,
+    /// No work is scheduled while paused (title screen).
+    pub paused: bool,
     pub generated_total: u64,
     pub meshed_total: u64,
 }
@@ -193,6 +195,7 @@ impl Streaming {
             sequence: 0,
             center: (0, 0),
             radius: 8,
+            paused: false,
             generated_total: 0,
             meshed_total: 0,
         }
@@ -229,6 +232,9 @@ impl Streaming {
     /// Returns meshes ready for upload and columns that were unloaded.
     pub fn update(&mut self, world: &mut World) -> (Vec<((i32, i32, i32), SectionMesh)>, Vec<Arc<Chunk>>) {
         let mut uploads = Vec::new();
+        if self.paused {
+            return (uploads, Vec::new());
+        }
         while let Ok(done) = self.results.try_recv() {
             match done {
                 Done::Proto(x, z, proto) => {

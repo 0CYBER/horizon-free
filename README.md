@@ -1,8 +1,25 @@
 # Horizon
 
-Horizon is a Rust rewrite effort targeting one-to-one vanilla gameplay parity with Minecraft Java **26.3**, alongside client performance research. The Rust implementation has core primitives and world-data storage verified against pinned vanilla classes, plus a [native development client](docs/native-client.md) for inspecting a controlled block scene. It does not yet run a playable game. Existing playable downloads use Java performance packs. Not affiliated with Mojang or Microsoft.
+Horizon is a Rust rewrite of Minecraft Java **26.3** targeting one-to-one vanilla gameplay parity, alongside client performance research. Not affiliated with Mojang or Microsoft.
 
-**First playable release:** pinned Java performance packs, distant terrain, an original frame/tick recorder, and Mac/client/server starter downloads. The M2 Pro/16 GB Mac is the first testing target. A Rust rewrite or custom renderer has not been completed; no M2 FPS improvement has been measured yet.
+**The Rust game is now playable.** The [native client](docs/native-client.md) opens on a vanilla-style title screen with world creation and selection, and generates worlds with the Rust port of the vanilla overworld generator: noise terrain, aquifers, surface rules, carvers, and the placed features ported so far, all checked against vanilla. It streams and lights chunks on worker threads and renders every vanilla block model with smooth lighting, biome tints, the vanilla sky, sun, moon, stars and clouds. Gameplay so far:
+- validated player physics, health and hunger;
+- mining with vanilla tool rules and loot tables;
+- placing, crafting, chests and furnaces;
+- dropped items and particles;
+- sounds;
+- passive and hostile mobs with combat;
+- Anvil saves.
+
+Parity is **not** complete: block behaviours (fluids, redstone, crop growth), structures, many mobs, enchanting, the Nether and End, and multiplayer are still missing. See [Rust rewrite status](docs/rust-parity.md).
+
+```sh
+python3 tools/prepare_native_client.py --prepare   # needs JDK 25; extracts private vanilla resources
+python3 tools/fetch_sounds.py                      # optional: vanilla sounds
+cargo run --release -p horizon-client
+```
+
+**Java performance packs (separate track):** pinned Java performance packs, distant terrain, an original frame/tick recorder, and Mac/client/server starter downloads. The M2 Pro/16 GB Mac is the first testing target.
 
 The Rust rewrite’s final deliverables include **playable native builds for macOS, Linux and Windows**, with launch instructions and platform gameplay validation. Track implementation and acceptance criteria in [Rust rewrite status](docs/rust-parity.md).
 

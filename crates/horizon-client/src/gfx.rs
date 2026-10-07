@@ -40,6 +40,8 @@ pub struct Frame<'a> {
     /// Render distance in blocks (fog end).
     pub distance: f32,
     pub underwater: bool,
+    /// Title screen: only the panorama (in `celestial`) and the HUD.
+    pub title: bool,
     pub water_fog: [f32; 3],
     pub outline: Option<[f64; 6]>,
     pub hud: &'a HudBatch,
@@ -745,6 +747,9 @@ impl Renderer {
             },
         );
     }
+    pub fn clear_sections(&mut self) {
+        self.sections.clear();
+    }
     pub fn remove(&mut self, key: SectionKey) {
         self.sections.remove(&key);
     }
@@ -1026,11 +1031,15 @@ impl Renderer {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: f64::from(fog_color[0]),
-                        g: f64::from(fog_color[1]),
-                        b: f64::from(fog_color[2]),
-                        a: 1.0,
+                    load: wgpu::LoadOp::Clear(if frame.title {
+                        wgpu::Color::BLACK
+                    } else {
+                        wgpu::Color {
+                            r: f64::from(fog_color[0]),
+                            g: f64::from(fog_color[1]),
+                            b: f64::from(fog_color[2]),
+                            a: 1.0,
+                        }
                     }),
                     store: wgpu::StoreOp::Store,
                 },
@@ -1050,8 +1059,10 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.group, &[]);
             if !frame.underwater {
-                pass.set_pipeline(&self.sky);
-                pass.draw(0..3, 0..1);
+                if !frame.title {
+                    pass.set_pipeline(&self.sky);
+                    pass.draw(0..3, 0..1);
+                }
                 if celestial_vertices > 0 {
                     pass.set_pipeline(&self.celestial_pipeline);
                     pass.set_bind_group(0, &self.entity_group, &[]);
@@ -1060,6 +1071,9 @@ impl Renderer {
                     pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
                     pass.set_bind_group(0, &self.group, &[]);
                 }
+            }
+            if frame.title {
+                visible.clear();
             }
             pass.set_pipeline(&self.solid);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);

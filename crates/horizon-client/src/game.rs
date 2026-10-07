@@ -25,6 +25,7 @@ use horizon_client::{
     sprint::Keys,
     streaming::{Streaming, WorkerContext},
     save::{Level, Persistent, SaveDir},
+    title::{Action, Title},
     testgen::TestTerrain,
     vanillagen::VanillaTerrain,
     world::World,
@@ -55,7 +56,7 @@ struct Options {
     screenshot_after: Option<u64>,
     timeout: Duration,
     report: Option<PathBuf>,
-    world: String,
+    world: Option<String>,
     look: Option<(f32, f32)>,
     time: Option<i64>,
 }
@@ -79,7 +80,7 @@ impl Options {
             screenshot_after: None,
             timeout: Duration::from_secs(120),
             report: None,
-            world: "New World".into(),
+            world: None,
             look: None,
             time: None,
         };
@@ -117,7 +118,7 @@ impl Options {
                         "--timeout-seconds" => o.timeout = Duration::from_secs(value.parse()?),
                         "--smoke-report" => o.report = Some(value.into()),
                         "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
-                        "--world" => o.world = value,
+                        "--world" => o.world = Some(value),
                         "--time" => o.time = Some(value.parse()?),
                         "--look" => {
                             let (y, p) = value.split_once(',').ok_or("--look takes YAW,PITCH")?;
@@ -168,6 +169,8 @@ pub struct Resources {
     chest_model: Option<horizon_client::mobs::Part>,
     /// clouds.png: (width, height, filled cells).
     clouds: (u32, u32, Vec<bool>),
+    context: Arc<WorkerContext>,
+    threads: usize,
 }
 struct Game<'a> {
     res: &'a mut Resources,
@@ -229,6 +232,7 @@ struct Game<'a> {
     chest_open: HashMap<(i32, i32, i32), (f32, f32)>,
     /// Item being used (eaten): hotbar slot and ticks used.
     using: Option<(usize, u32)>,
+    title: Option<Title>,
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -1198,6 +1202,10 @@ impl Game<'_> {
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
         let (w, h) = (batch.width, batch.height);
+        if let Some(title) = &self.title {
+            title.draw(&self.res.atlas, &mut batch, self.cursor);
+            return batch;
+        }
         let atlas_ptr: *const HudAtlas = &self.res.atlas;
         let _ = atlas_ptr;
         if self.player.is_none() {
@@ -2331,6 +2339,119 @@ impl Game<'_> {
             }
         }
     }
+    /// Load (or create) a world folder under saves/ and start streaming it.
+    fn open_world(&mut self, folder: &str, name: Option<&str>, seed: Option<i64>, creative: bool) -> Result<()> {
+        let save_root = std::env::current_dir()?.join("saves").join(folder);
+        let level = Level::read(&save_root).unwrap_or_else(|| Level {
+            name: name.unwrap_or(folder).to_owned(),
+            // WorldOptions.randomSeed when no seed was given.
+            seed: seed.unwrap_or_else(|| {
+                let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+                (t ^ (t >> 29)).wrapping_mul(0x9E37_79B9_7F4A_7C15) as i64
+            }),
+            creative,
+            day_time: 0,
+            health: 20.0,
+            food: 20,
+            saturation: 5.0,
+            ..Level::default()
+        });
+        let save = Arc::new(SaveDir::new(save_root.clone()));
+        let res = &*self.res;
+        let mut streaming = if self.options.test_terrain {
+            let inner = Arc::new(TestTerrain::new(res.assets.registry, &res.biomes)?);
+            Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
+        } else {
+            let inner = Arc::new(VanillaTerrain::new(&self.options.resources.join("worldgen"), res.assets.registry, &res.biomes, level.seed).map_err(|e| {
+                format!("{e}\nPrepare the worldgen bundle with: python3 tools/prepare_native_client.py")
+            })?);
+            Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
+        };
+        streaming.radius = self.options.distance;
+        let mut world = World::new(self.res.facts.air, level.seed);
+        world.game_time = level.time;
+        world.day_time = self.options.time.unwrap_or(level.day_time);
+        self.creative = level.creative;
+        let mut inventory = vec![None; 36];
+        for (slot, id, count, damage) in &level.inventory {
+            if let Some(cell) = inventory.get_mut(usize::from(*slot)) {
+                *cell = Some(ItemStack { item: Arc::from(id.as_str()), count: *count, damage: *damage });
+            }
+        }
+        if self.creative && level.inventory.is_empty() && level.position.is_none() {
+            for (i, name) in ["minecraft:grass_block", "minecraft:stone", "minecraft:oak_planks", "minecraft:glass", "minecraft:torch", "minecraft:oak_log", "minecraft:chest", "minecraft:furnace", "minecraft:diamond_pickaxe"].iter().enumerate() {
+                inventory[i] = Some(ItemStack { item: Arc::from(*name), count: 1, damage: 0 });
+            }
+        }
+        let (yaw, pitch) = self.options.look.unwrap_or((level.rotation[0], level.rotation[1]));
+        self.yaw = yaw;
+        self.pitch = pitch;
+        self.streaming = streaming;
+        self.world = world;
+        self.inventory = inventory;
+        self.save = save;
+        self.level = level;
+        self.player = None;
+        self.spawn = None;
+        self.spawn_search = 0;
+        self.mobs.clear();
+        self.arrows.clear();
+        self.dropped.clear();
+        self.particles.clear();
+        self.mining = None;
+        self.container = None;
+        self.carried = None;
+        self.using = None;
+        self.screen = Screen::Playing;
+        self.title = None;
+        if let Some(r) = self.renderer.as_mut() {
+            r.clear_sections();
+        }
+        // New worlds get their level.dat right away.
+        if !save_root.join("level.dat").exists() {
+            self.level.write(&save_root)?;
+        }
+        Ok(())
+    }
+    fn close_world(&mut self) -> Result<()> {
+        self.save_game()?;
+        self.streaming.paused = true;
+        self.world = World::new(self.res.facts.air, 0);
+        self.player = None;
+        self.mobs.clear();
+        self.arrows.clear();
+        self.dropped.clear();
+        self.particles.clear();
+        self.screen = Screen::Playing;
+        if let Some(r) = self.renderer.as_mut() {
+            r.clear_sections();
+        }
+        self.title = Some(Title::new(std::env::current_dir()?.join("saves")));
+        self.capture(false);
+        Ok(())
+    }
+    /// The title panorama as six camera-centred faces (panorama_0..5:
+    /// front, right, back, left, up, down).
+    fn panorama_geometry(&self) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        let d = 100.0;
+        let faces: [(&str, [glam::Vec3; 4]); 6] = [
+            ("0", [glam::Vec3::new(-d, d, -d), glam::Vec3::new(d, d, -d), glam::Vec3::new(d, -d, -d), glam::Vec3::new(-d, -d, -d)]),
+            ("1", [glam::Vec3::new(d, d, -d), glam::Vec3::new(d, d, d), glam::Vec3::new(d, -d, d), glam::Vec3::new(d, -d, -d)]),
+            ("2", [glam::Vec3::new(d, d, d), glam::Vec3::new(-d, d, d), glam::Vec3::new(-d, -d, d), glam::Vec3::new(d, -d, d)]),
+            ("3", [glam::Vec3::new(-d, d, d), glam::Vec3::new(-d, d, -d), glam::Vec3::new(-d, -d, -d), glam::Vec3::new(-d, -d, d)]),
+            ("4", [glam::Vec3::new(-d, d, d), glam::Vec3::new(d, d, d), glam::Vec3::new(d, d, -d), glam::Vec3::new(-d, d, -d)]),
+            ("5", [glam::Vec3::new(-d, -d, -d), glam::Vec3::new(d, -d, -d), glam::Vec3::new(d, -d, d), glam::Vec3::new(-d, -d, d)]),
+        ];
+        for (index, corners) in faces {
+            let Some(r) = self.res.atlas.sprites.get(&format!("gui/title/background/panorama_{index}")).copied() else { continue };
+            let uv = [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]];
+            for (p, uv) in corners.iter().zip(uv) {
+                out.push(Vertex { pos: p.to_array(), uv, layer: 2, color: 0xFFFF_FFFF, light: 0 });
+            }
+        }
+        out
+    }
     fn save_game(&mut self) -> Result<()> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys
@@ -2400,22 +2521,28 @@ impl Game<'_> {
             None
         };
         let hud = self.hud(size);
-        let entities = self.entity_geometry(camera, alpha);
-        let celestial = self.celestial_geometry(&sky);
+        let title = self.title.is_some();
+        let entities = if title { Vec::new() } else { self.entity_geometry(camera, alpha) };
+        let celestial = if title { self.panorama_geometry() } else { self.celestial_geometry(&sky) };
         let mut entities = entities;
-        self.cloud_geometry(&sky, camera, alpha, &mut entities);
+        if !title {
+            self.cloud_geometry(&sky, camera, alpha, &mut entities);
+        }
+        // PanoramaRenderer: the title cube spins at 0.1 degrees per tick, pitched 10 degrees.
+        let (yaw, pitch) = if title { (-(self.started.elapsed().as_secs_f32() * 2.0) % 360.0, 10.0) } else { (self.yaw, self.pitch) };
         let water_fog = {
             let c = info.water_fog;
             [(c >> 16 & 255) as f32 / 255.0, (c >> 8 & 255) as f32 / 255.0, (c & 255) as f32 / 255.0]
         };
         let frame = Frame {
             camera,
-            yaw: self.yaw,
-            pitch: self.pitch,
-            fov_degrees: 70.0,
+            yaw,
+            pitch,
+            fov_degrees: if title { 85.0 } else { 70.0 },
             sky,
             distance: (self.streaming.radius * 16) as f32,
             underwater,
+            title,
             water_fog,
             outline,
             hud: &hud,
@@ -2500,7 +2627,9 @@ impl ApplicationHandler for Game<'_> {
         let result: Result<()> = (|| {
             match event {
                 WindowEvent::CloseRequested => {
-                    self.save_game()?;
+                    if self.title.is_none() {
+                        self.save_game()?;
+                    }
                     event_loop.exit();
                 }
                 WindowEvent::Resized(size) => {
@@ -2535,6 +2664,20 @@ impl ApplicationHandler for Game<'_> {
                         self.selected = (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
                     }
                 }
+                WindowEvent::MouseInput { state, button: MouseButton::Left, .. }
+                    if self.title.is_some() && state == ElementState::Pressed =>
+                {
+                    let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
+                    let b = HudBatch::new(size);
+                    let action = self.title.as_mut().map_or(Action::None, |t| t.click(self.cursor.0, self.cursor.1, (b.width, b.height)));
+                    match action {
+                        Action::Quit => event_loop.exit(),
+                        Action::Play { folder } => self.open_world(&folder, None, None, false)?,
+                        Action::Create { folder, name, seed, creative } => self.open_world(&folder, Some(&name), seed, creative)?,
+                        Action::None => {}
+                    }
+                }
+                WindowEvent::MouseInput { .. } if self.title.is_some() => {}
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
                     match self.screen {
@@ -2585,8 +2728,7 @@ impl ApplicationHandler for Game<'_> {
                                         self.screen = Screen::Playing;
                                         self.capture(true);
                                     } else {
-                                        self.save_game()?;
-                                        event_loop.exit();
+                                        self.close_world()?;
                                     }
                                 }
                             }
@@ -2598,6 +2740,22 @@ impl ApplicationHandler for Game<'_> {
                             self.capture(true);
                         }
                         _ => {}
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
+                    if event.state == ElementState::Pressed
+                        && let Some(title) = self.title.as_mut()
+                    {
+                        match event.physical_key {
+                            PhysicalKey::Code(KeyCode::Backspace) => title.backspace(),
+                            PhysicalKey::Code(KeyCode::Tab) => title.tab(),
+                            PhysicalKey::Code(KeyCode::Escape) => title.escape(),
+                            _ => {
+                                if let Some(text) = &event.text {
+                                    title.type_text(text);
+                                }
+                            }
+                        }
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
@@ -2665,11 +2823,15 @@ impl ApplicationHandler for Game<'_> {
                     let secs = elapsed.as_secs_f32().min(0.1);
                     self.yaw += (turn(KeyCode::ArrowRight) - turn(KeyCode::ArrowLeft)) * 90.0 * secs;
                     self.pitch = (self.pitch + (turn(KeyCode::ArrowDown) - turn(KeyCode::ArrowUp)) * 90.0 * secs).clamp(-90.0, 90.0);
-                    self.update_world();
-                    self.spawn_player()?;
+                    if self.title.is_none() {
+                        self.update_world();
+                        self.spawn_player()?;
+                    }
                     let steps = self.clock.advance(elapsed);
                     for _ in 0..steps {
-                        self.tick()?;
+                        if self.title.is_none() {
+                            self.tick()?;
+                        }
                     }
                     if self.render()? {
                         self.frames += 1;
@@ -2757,37 +2919,6 @@ pub fn run() -> Result<()> {
         light,
     });
     let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).saturating_sub(1).max(1);
-    let save_root = std::env::current_dir()?.join("saves").join(&options.world);
-    let level = Level::read(&save_root).unwrap_or_else(|| Level {
-        name: options.world.clone(),
-        seed: options.seed,
-        creative: options.creative,
-        day_time: 1000,
-        health: 20.0,
-        food: 20,
-        saturation: 5.0,
-        ..Level::default()
-    });
-    let save = Arc::new(SaveDir::new(save_root));
-    let mut streaming = if options.test_terrain {
-        let inner = Arc::new(TestTerrain::new(assets.registry, &biomes)?);
-        Streaming::new(
-            Arc::new(Persistent { inner, save: save.clone(), registry: assets.clone(), biomes: biomes.clone() }),
-            context,
-            threads,
-        )
-    } else {
-        let inner = Arc::new(VanillaTerrain::new(&root.join("worldgen"), assets.registry, &biomes, level.seed).map_err(|e| {
-            format!("{e}\nPrepare the worldgen bundle with: python3 tools/prepare_native_client.py")
-        })?);
-        eprintln!("load worldgen: {:.2}s", started.elapsed().as_secs_f32());
-        Streaming::new(
-            Arc::new(Persistent { inner, save: save.clone(), registry: assets.clone(), biomes: biomes.clone() }),
-            context,
-            threads,
-        )
-    };
-    streaming.radius = options.distance;
     eprintln!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
@@ -2796,11 +2927,18 @@ pub fn run() -> Result<()> {
         biomes.list.len(),
         threads
     );
+    // Until a world is opened the streamer is idle.
+    let mut streaming = Streaming::new(
+        Arc::new(TestTerrain::new(assets.registry, &biomes)?),
+        context.clone(),
+        1,
+    );
+    streaming.paused = true;
+    let level = Level::default();
+    let save = Arc::new(SaveDir::new(std::env::current_dir()?.join("saves").join(".horizon-title")));
     let audio = Audio::new(&root);
-    let mut world = World::new(facts.air, level.seed);
-    world.game_time = level.time;
-    world.day_time = options.time.unwrap_or(level.day_time);
-    let creative = level.creative || options.creative;
+    let world = World::new(facts.air, 0);
+    let creative = options.creative;
     let mut resources = Resources {
         assets,
         facts,
@@ -2817,19 +2955,10 @@ pub fn run() -> Result<()> {
             .map(|(w, h, px)| (w, h, px.chunks_exact(4).map(|p| p[3] > 0).collect()))
             .unwrap_or((1, 1, vec![false])),
         mob_types: MobTypes::load(&root)?.types.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
+        context,
+        threads,
     };
-    let mut inventory = vec![None; 36];
-    for (slot, id, count, damage) in &level.inventory {
-        if let Some(cell) = inventory.get_mut(usize::from(*slot)) {
-            *cell = Some(ItemStack { item: Arc::from(id.as_str()), count: *count, damage: *damage });
-        }
-    }
-    let fresh = level.inventory.is_empty() && level.position.is_none();
-    if creative && fresh {
-        for (i, name) in ["minecraft:grass_block", "minecraft:stone", "minecraft:oak_planks", "minecraft:glass", "minecraft:torch", "minecraft:oak_log", "minecraft:cobblestone", "minecraft:water_bucket", "minecraft:diamond_pickaxe"].iter().enumerate() {
-            inventory[i] = Some(ItemStack { item: Arc::from(*name), count: 1, damage: 0 });
-        }
-    }
+    let inventory = vec![None; 36];
     let now = Instant::now();
     let look = options.look;
     let mut game = Game {
@@ -2890,7 +3019,15 @@ pub fn run() -> Result<()> {
         last_hurt_by_player: HashSet::new(),
         chest_open: HashMap::new(),
         using: None,
+        title: None,
     };
+    match game.options.world.clone() {
+        Some(folder) => {
+            let (seed, creative) = (game.options.seed, game.options.creative);
+            game.open_world(&folder, None, Some(seed), creative)?;
+        }
+        None => game.title = Some(Title::new(std::env::current_dir()?.join("saves"))),
+    }
     EventLoop::new()?.run_app(&mut game)?;
     if let Some(path) = &game.options.report {
         let report = serde_json::json!({
