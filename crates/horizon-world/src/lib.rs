@@ -66,6 +66,7 @@ pub mod registry_fluid;
 pub mod retrogen;
 pub mod suffocation;
 pub mod swimming;
+pub mod synced_floats;
 pub mod tick_data;
 pub mod water_splash;
 pub mod world_movement;

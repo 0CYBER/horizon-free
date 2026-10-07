@@ -1283,3 +1283,19 @@ resistance/stat boundaries, numeric edges, query failures/mutations and actual
 empty-equipment protection iteration. Targeted Clippy passes. Equipment is empty;
 enchanted components, actual armor durability, registered damage/effect bindings
 and the full hurt sequence remain pending.
+
+
+`synced_floats` stores multiple synchronized float fields. It preserves boxed
+float equality, per-field/global dirty state, ascending-ID dirty/default lists,
+received assignment without newly marking dirty, per-entry and batch callbacks,
+and prefix effects when an observer or field lookup fails. Callbacks may reenter
+the table to set/assign fields or drain existing dirty values.
+
+`python3 tools/test_synced_floats_parity.py` compares actual `SynchedEntityData`.
+The [synchronized float report](../benchmarks/rust-synced-floats-2026-10-07/scoped-parity.json)
+records **554,909 matching lines per JAR**, including forced/equal updates,
+received duplicates, reentrant operations, missing IDs, callback failures and
+NaN/signed-zero equality. Native gaps are untouched default float items; observed
+keys are explicit configured IDs. Targeted Clippy passes. Other serializers,
+serializer-mismatch errors, wire codecs and player absorption binding remain
+pending.
