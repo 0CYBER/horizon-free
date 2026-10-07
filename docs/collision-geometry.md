@@ -1165,3 +1165,21 @@ missing/wrong-type fields, conversion boundaries, nonfinite values and save/load
 round trips. Targeted Clippy passes. ProblemReporter diagnostics and the complete
 player save lifecycle remain pending; these results establish the four hunger
 fields, not a playable save/load implementation.
+
+
+`living_health` implements health/absorption clamping, healing dispatch, player
+hurt and living dead-or-dying predicates. Health writes capture synchronized
+storage before attribute lookup. `SyncedFloat` preserves Java boxed-float
+equality, writes the value before the update callback, and marks dirty only
+after that callback succeeds; it also supports default/dirty extraction for a
+single float item.
+
+`python3 tools/test_living_health_parity.py` compares actual LivingEntity/Player
+methods and actual `SynchedEntityData` float items. The
+[living health report](../benchmarks/rust-living-health-2026-10-07/scoped-parity.json)
+records **442,007 matching lines per JAR**, covering nonfinite values, signed
+zeros/NaN equality, forced updates, dirty extraction, health-data replacement
+during callbacks and partial effects after exceptions. Targeted Clippy passes.
+Attribute values and the internal absorption sink are controlled. Player-specific
+absorption synchronization, multiple synchronized items, registered attribute
+binding, full damage processing and playable entities remain pending.
