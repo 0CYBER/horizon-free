@@ -51,6 +51,8 @@ pub mod spike;
 pub mod spring;
 pub mod state_provider;
 pub mod tags;
+pub mod tree;
+pub(crate) mod tree_blocks;
 pub mod terrain;
 pub mod underwater_magma;
 pub mod value_provider;

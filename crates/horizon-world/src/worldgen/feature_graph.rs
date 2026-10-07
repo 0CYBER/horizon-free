@@ -66,6 +66,9 @@ pub enum FeatureDefinition {
     FillLayer(FillLayerFeature),
     ReplaceBlock(ReplaceBlockFeature),
     ScatteredOre(ScatteredOreFeature),
+    Ore(super::ore_feature::OreFeature),
+    Tree(Box<super::tree::TreeFeature>),
+    FallenTree(Box<super::tree::FallenTreeFeature>),
     NoOp,
     WeightedChoice(OptionalWeightedList<PlacedFeatureDefinition>),
     Sequence(Vec<PlacedFeatureDefinition>),
@@ -102,6 +105,8 @@ pub enum FeatureExecutionError<E> {
     Query(PlacementQueryError),
     WorkLimit,
     InvalidPendingIndex,
+    /// A block-state transition required by a feature is absent from the registry.
+    InvalidState,
 }
 impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -129,6 +134,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::Query(e) => e.fmt(f),
             Self::WorkLimit => f.write_str("feature graph work limit exceeded"),
             Self::InvalidPendingIndex => f.write_str("invalid pending modifier index"),
+            Self::InvalidState => f.write_str("feature block state outside registry"),
         }
     }
 }
@@ -525,6 +531,15 @@ impl FeatureDefinition {
                 remaining,
             )
             .map(Self::ReplaceBlock),
+            "minecraft:ore" => super::ore_feature::OreFeature::decode(
+                json,
+                blocks.ok_or_else(|| {
+                    DecodeError::Registry("feature block bindings unavailable".into())
+                })?,
+                depth,
+                remaining,
+            )
+            .map(Self::Ore),
             "minecraft:scattered_ore" => ScatteredOreFeature::decode(
                 json,
                 blocks.ok_or_else(|| {
@@ -534,6 +549,21 @@ impl FeatureDefinition {
                 remaining,
             )
             .map(Self::ScatteredOre),
+            "minecraft:tree" | "minecraft:fallen_tree" => {
+                let bindings = blocks.ok_or(DecodeError::Field("tree bindings"))?;
+                let nested = |json: &str, depth: usize, remaining: &mut usize| {
+                    Self::decode(json, depth, remaining, empty_tags, blocks)
+                };
+                if kind == "minecraft:tree" {
+                    super::tree::TreeFeature::decode(json, bindings, depth, remaining, &nested)
+                        .map(|t| Self::Tree(Box::new(t)))
+                } else {
+                    super::tree::FallenTreeFeature::decode(
+                        json, bindings, depth, remaining, &nested,
+                    )
+                    .map(|t| Self::FallenTree(Box::new(t)))
+                }
+            }
             "minecraft:weighted_random_selector" => Ok(Self::WeightedChoice(
                 OptionalWeightedList::decode(required(&object, "features")?, |raw| {
                     PlacedFeatureDefinition::decode(
@@ -846,6 +876,17 @@ impl FeatureDefinition {
             Self::ScatteredOre(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::Basic),
+            Self::Ore(feature) => feature.place(world, random, origin),
+            Self::Tree(feature) => {
+                feature.place(world, random, origin, &mut |f, w, r, p| {
+                    f.place_inner(w, r, p, run)
+                })
+            }
+            Self::FallenTree(feature) => {
+                feature.place(world, random, origin, &mut |f, w, r, p| {
+                    f.place_inner(w, r, p, run)
+                })
+            }
             Self::FillLayer(feature) => feature.place(world, origin).map_err(|e| match e {
                 BlockFeatureError::World(e) => FeatureExecutionError::Basic(FeatureError::World(e)),
                 BlockFeatureError::Query(e) => FeatureExecutionError::Query(e),

@@ -234,6 +234,28 @@ impl FeatureCatalog {
                     object.insert("cap_feature".into(), raw(expanded)?);
                 }
             }
+            "minecraft:tree" => {
+                // PaleMossDecorator places the registry's pale_moss_patch by key.
+                let pale_moss = super::optional(&object, "decorators")
+                    .map(|raw| serde_json::from_str::<Vec<Object>>(raw.get()))
+                    .transpose()?
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|d| {
+                        d.get("type").is_some_and(|t| {
+                            serde_json::from_str::<String>(t.get())
+                                .ok()
+                                .and_then(|t| identifier(&t).ok())
+                                .as_deref()
+                                == Some("minecraft:pale_moss")
+                        })
+                    });
+                const PATCH: &str = "minecraft:pale_moss_patch";
+                if pale_moss && self.features.contains_key(PATCH) {
+                    let expanded = self.named(PATCH, false, depth, work)?;
+                    object.insert(super::tree::GROUND_FEATURE_KEY.into(), raw(expanded)?);
+                }
+            }
             "minecraft:sequence" | "minecraft:overlay" | "minecraft:simple_random_selector" => {
                 let expanded = self.expand_set(required(&object, "features")?, depth + 1, work)?;
                 object.insert("features".into(), raw(expanded)?);

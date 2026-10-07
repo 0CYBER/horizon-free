@@ -425,6 +425,15 @@ where
         state: BlockStateId,
         flags: i32,
     ) -> Result<bool, RegionError> {
+        if !self.can_write(position)? {
+            return Ok(false);
+        }
+        (self.write)(self.region, position, state, flags)
+    }
+}
+impl<'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'_, 'r, B, F> {
+    /// WorldGenRegion.ensureCanWrite without its diagnostic logging.
+    fn can_write(&mut self, position: [i32; 3]) -> Result<bool, RegionError> {
         if self.write_zone.is_some_and(|zone| {
             !zone.contains_block(BlockPos::new(position[0], position[1], position[2]))
         }) {
@@ -441,10 +450,7 @@ where
                 })
             }
         };
-        if height.is_some_and(|height| !height.contains(position[1])) {
-            return Ok(false);
-        }
-        (self.write)(self.region, position, state, flags)
+        Ok(!height.is_some_and(|height| !height.contains(position[1])))
     }
 }
 impl<'r, B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, 'r, B, F>
@@ -475,6 +481,31 @@ where
         position: [i32; 3],
     ) -> Result<crate::fluid::FluidState, PlacementQueryError> {
         self.region.fluid_state(position)
+    }
+    fn ensure_can_write(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        self.can_write(position).map_err(Into::into)
+    }
+    fn section_block(
+        &mut self,
+        position: [i32; 3],
+    ) -> Result<Option<BlockStateId>, PlacementQueryError> {
+        if position[1] < self.region.min_y
+            || position[1] >= self.region.min_y.wrapping_add(self.region.height)
+        {
+            return Ok(None);
+        }
+        self.region.block(position).map(Some).map_err(Into::into)
+    }
+    fn set_section_block(
+        &mut self,
+        [x, y, z]: [i32; 3],
+        state: BlockStateId,
+    ) -> Result<(), PlacementQueryError> {
+        self.region
+            .chunk_mut(x >> 4, z >> 4)?
+            .set_block_raw(x, y, z, state)
+            .map_err(RegionError::from)?;
+        Ok(())
     }
     fn water_at(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
         self.region.water_at(position)

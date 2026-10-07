@@ -26,6 +26,50 @@ pub enum LayerBlock {
     Ground,
 }
 pub trait PlacementContext {
+    /// StructureTemplate.updateShapeAtEdge for one outer face of a placed
+    /// voxel shape: update the state at `position` against its neighbor in
+    /// `direction`, then the neighbor against the (possibly new) state, writing
+    /// changes with `flags & !1`. Worlds without block shape-update behavior
+    /// accept this as a no-op.
+    fn update_shape_at_face(
+        &mut self,
+        _position: [i32; 3],
+        _direction: horizon_core::geometry::Direction,
+        _flags: i32,
+    ) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
+    /// WorldGenRegion.ensureCanWrite: horizontal write radius and upgrade height.
+    fn ensure_can_write(&mut self, _position: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        Ok(true)
+    }
+    /// BulkSectionAccess read: None outside the world's section range.
+    fn section_block(
+        &mut self,
+        position: [i32; 3],
+    ) -> Result<Option<crate::registry::BlockStateId>, PlacementQueryError> {
+        if self.outside_build_height(position[1])? {
+            return Ok(None);
+        }
+        self.block_state(position).map(Some)
+    }
+    /// Raw LevelChunkSection write: no heightmap, light, POI or neighbor effects.
+    fn set_section_block(
+        &mut self,
+        _position: [i32; 3],
+        _state: crate::registry::BlockStateId,
+    ) -> Result<(), PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    /// Store worldgen beehive occupants (ticks in hive per bee) in the nest
+    /// block entity at `position`. Worlds without block-entity storage drop them.
+    fn store_beehive_occupants(
+        &mut self,
+        _position: [i32; 3],
+        _ticks_in_hive: &[i32],
+    ) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
     /// Test the already-read state's collision shape in an empty entity context.
     fn state_collision_empty(
         &mut self,
