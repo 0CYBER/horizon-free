@@ -2073,3 +2073,23 @@ zero/negative/infinite durations, raw amplifiers, early application failures,
 downgrade notifications, blend float edge cases, removed actors and callback
 mutation/failure prefixes. Targeted Clippy passes. Registered effect behaviors,
 entity effect maps, UI rendering and full gameplay remain pending.
+
+
+`java_hash_map` now supports non-comparable keys, unequal keys whose comparable
+ordering returns zero, and the native map-copy constructor. Lookup searches
+ambiguous tree branches; tree insertion uses class/identity tie-breaking. Copies
+size their table from the source count before insertion, retaining shared values
+while allowing the resulting bucket order to differ.
+
+`python3 tools/test_java_identity_map_parity.py` compares actual JDK 25 HashMap
+operations and copies across mixed key classes. Each Java process exports its
+actual identity hashes for Rust to use in that same scenario. The
+[identity/copy report](../benchmarks/rust-java-identity-map-2026-10-07/scoped-parity.json)
+records **577,200 matching lines per classpath run**. The
+[ordered-key regression](../benchmarks/rust-java-identity-map-2026-10-07/ordered-map-regression.json)
+retains **601,084 matching lines**, and the
+[cooldown regression](../benchmarks/rust-java-identity-map-2026-10-07/cooldown-regression.json)
+retains **167,906 matching lines per JAR**. Targeted Clippy passes. Map-only runs
+use the same installed JDK; these comparisons do not assert gameplay parity or
+equal identity hashes across processes. Keys must have pure operations; null
+keys and other unexposed Map APIs remain outside this storage subset.

@@ -86,4 +86,10 @@ impl JavaKey for Identifier {
     fn java_hash(&self) -> i32 {
         self.hash_code()
     }
+    fn comparable_compare(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+    fn tie_break(&self, other: &Self) -> std::cmp::Ordering {
+        self.cmp(other)
+    }
 }

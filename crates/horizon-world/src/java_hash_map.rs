@@ -1,9 +1,17 @@
-//! Default-capacity Java HashMap traversal for non-null, consistently ordered
-//! keys (such as Identifier). Tree bins preserve native linked iteration order.
+//! Java HashMap traversal for non-null keys with pure hash/equality/order
+//! operations. Tree bins preserve native linked iteration order.
 //! This is the storage/iterator subset needed by simulation callback lifecycles.
 use std::{cmp::Ordering, sync::Arc};
-pub trait JavaKey: Ord {
+pub trait JavaKey: Eq {
     fn java_hash(&self) -> i32;
+    /// Comparable comparison when both keys have the appropriate same Java
+    /// class. None and Equal both require subtree searches for unequal keys.
+    fn comparable_compare(&self, _other: &Self) -> Option<Ordering> {
+        None
+    }
+    /// Native class-name ordering, then identity-hash ordering. Equal identity
+    /// hashes break to Less, even for two different objects. Never return Equal.
+    fn tie_break(&self, other: &Self) -> Ordering;
 }
 type Link = Option<usize>;
 struct Node<K, V> {
@@ -120,16 +128,7 @@ impl<K: JavaKey, V> JavaHashMap<K, V> {
         let h = Self::hash(key);
         let mut p = self.table[h as usize & (self.table.len() - 1)];
         if let Some(first) = p.filter(|i| self.node(*i).tree) {
-            p = Some(self.root(first));
-            while let Some(i) = p {
-                let node = self.node(i);
-                match h.cmp(&node.hash).then_with(|| key.cmp(&node.key)) {
-                    Ordering::Equal => return Some(i),
-                    Ordering::Less => p = node.left,
-                    Ordering::Greater => p = node.right,
-                }
-            }
-            return None;
+            return self.find_tree(Some(self.root(first)), h, key);
         }
         while let Some(i) = p {
             let n = self.node(i);
@@ -139,6 +138,52 @@ impl<K: JavaKey, V> JavaHashMap<K, V> {
             p = n.next;
         }
         None
+    }
+    fn find_tree(&self, mut p: Link, hash: i32, key: &K) -> Link {
+        while let Some(i) = p {
+            let node = self.node(i);
+            if hash < node.hash {
+                p = node.left;
+            } else if hash > node.hash {
+                p = node.right;
+            } else if key == &node.key {
+                return Some(i);
+            } else if node.left.is_none() {
+                p = node.right;
+            } else if node.right.is_none() {
+                p = node.left;
+            } else {
+                match key.comparable_compare(&node.key) {
+                    Some(Ordering::Less) => p = node.left,
+                    Some(Ordering::Greater) => p = node.right,
+                    _ => {
+                        if let Some(found) = self.find_tree(node.right, hash, key) {
+                            return Some(found);
+                        }
+                        p = node.left;
+                    }
+                }
+            }
+        }
+        None
+    }
+    /// Native new HashMap(source), including sizing before entry insertion.
+    /// Values are cloned according to their storage semantics (shared handles
+    /// retain identity). This may change bucket order relative to the source.
+    pub fn copied(&self) -> Self
+    where
+        K: Clone,
+        V: Clone,
+    {
+        let mut result = Self::default();
+        if self.size > 0 {
+            let capacity = ((self.size as f64 / 0.75).ceil() as usize).min(1 << 30);
+            result.threshold = capacity.next_power_of_two();
+            for (key, value) in self.entries() {
+                result.put(key.clone(), value.clone());
+            }
+        }
+        result
     }
     pub fn get(&self, key: &K) -> Option<&V> {
         self.find(key).map(|i| &self.node(i).value)
@@ -159,10 +204,13 @@ impl<K: JavaKey, V> JavaHashMap<K, V> {
         p
     }
     fn compare(&self, a: usize, b: usize) -> Ordering {
-        self.node(a)
-            .hash
-            .cmp(&self.node(b).hash)
-            .then_with(|| self.node(a).key.cmp(&self.node(b).key))
+        self.node(a).hash.cmp(&self.node(b).hash).then_with(|| {
+            let a = &self.node(a).key;
+            let b = &self.node(b).key;
+            a.comparable_compare(b)
+                .filter(|v| *v != Ordering::Equal)
+                .unwrap_or_else(|| a.tie_break(b))
+        })
     }
     fn rotate_left(&mut self, mut root: usize, p: usize) -> usize {
         let Some(r) = self.node(p).right else {
@@ -339,7 +387,19 @@ impl<K: JavaKey, V> JavaHashMap<K, V> {
     }
     fn resize(&mut self) {
         let old_len = self.table.len();
-        let new_len = if old_len == 0 { 16 } else { old_len * 2 };
+        if old_len >= 1 << 30 {
+            self.threshold = i32::MAX as usize;
+            return;
+        }
+        let new_len = if old_len == 0 {
+            if self.threshold > 0 {
+                self.threshold
+            } else {
+                16
+            }
+        } else {
+            old_len * 2
+        };
         let old = std::mem::replace(&mut self.table, vec![None; new_len]);
         self.threshold = new_len * 3 / 4;
         for (bucket, first) in old.into_iter().enumerate() {

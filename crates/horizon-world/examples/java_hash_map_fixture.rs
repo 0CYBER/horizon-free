@@ -25,6 +25,12 @@ impl JavaKey for Key {
     fn java_hash(&self) -> i32 {
         self.hash
     }
+    fn comparable_compare(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+    fn tie_break(&self, other: &Self) -> Ordering {
+        self.cmp(other)
+    }
 }
 fn opt(v: Option<i32>) -> String {
     v.map_or("none".into(), |v| v.to_string())
