@@ -49,6 +49,7 @@ pub mod interaction_shapes;
 pub mod item_blocking;
 pub mod item_durability;
 pub mod item_stack_storage;
+pub mod item_template;
 pub mod item_use;
 pub mod item_use_catalog;
 pub mod item_use_lifecycle;

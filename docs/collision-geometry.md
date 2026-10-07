@@ -1814,3 +1814,21 @@ equipment packet construction, observer reactions, callback mutations/failures
 and clearing a populated kinetic-enemy map. Targeted Clippy passes. Packet
 encoding/delivery, the full kinetic-enemy map and combat, complete item/equip
 effects and full gameplay integration remain pending.
+
+
+`item_template` implements immutable template construction, conversion from
+stacks, count replacement with native reference identity, current-prototype
+component lookup, creation and patch precedence. Strict validation checks
+damageable/stackable incompatibility before contained components and top-level
+size. A required component-schema service handles contained validation. Rejected
+creations return canonical EMPTY; rejected applied patches restore the exact
+previous raw patch, including redundant entries.
+
+`python3 tools/test_item_template_parity.py` compares actual ItemStackTemplate
+and ItemStack validation with scalar max-stack-size/max-damage/damage components.
+The [template report](../benchmarks/rust-item-template-2026-10-07/scoped-parity.json)
+records **518,556 matching lines per JAR**, covering zero/negative/overflow-edge
+counts, changed prototypes, component removals, aliasing and validation rollback.
+Targeted Clippy passes. Contained components and bundle-weight validation are
+not exercised by this corpus; their schema implementation, codecs, use-remainder
+integration and complete gameplay integration remain pending.
