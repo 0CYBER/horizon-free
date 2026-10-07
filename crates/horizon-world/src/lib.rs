@@ -41,6 +41,7 @@ pub mod heightmap;
 pub mod interaction_shapes;
 pub mod liquid_collision;
 pub mod living_air;
+pub mod living_damage;
 pub mod living_fall;
 pub mod living_fluid;
 pub mod living_health;

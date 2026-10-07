@@ -1235,3 +1235,20 @@ null/empty/unenchanted weapons and server/nonserver branches. Native unenchanted
 stacks have explicitly empty components. Targeted Clippy passes. Enchanted item
 components, damage tags, armor durability and the complete damage pipeline remain
 pending; the exposed enchantment hook is not an enchantment implementation.
+
+
+`living_damage` implements the inner `actuallyHurt` sequence for base living
+entities and players. It preserves invulnerability/armor/magic dispatch, both
+absorption reads before the first write, guarded absorbed statistics, Java float
+rounding, player exhaustion/taken statistics, base-living second absorption
+writes, and combat/health/game-event ordering. Callback failures retain preceding
+writes and effects.
+
+`python3 tools/test_living_damage_parity.py` compares actual LivingEntity/Player
+methods with real final absorption clamping and controlled phase/storage sinks.
+The [living damage report](../benchmarks/rust-living-damage-2026-10-07/scoped-parity.json)
+records **161,198 matching lines per JAR**, including entity/player paths, attacker
+types, stat limits/rounding, nonfinite values, mutations and failures at query
+boundaries. Targeted Clippy passes. Armor/magic results, health storage, combat/
+stat sinks and exhaustion delivery are controlled. Outer hurt gates, resistance/
+equipment binding, combat tracking and playable damage integration remain pending.
