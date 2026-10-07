@@ -19,6 +19,11 @@ pub struct Ticks {
     /// `Level.randValue`, the LCG behind `getBlockRandomPos`.
     pub random_tick_value: i32,
     pub(crate) updater: NeighborUpdater,
+    /// `ComparatorBlockEntity.output` per comparator position (block-entity
+    /// state owned by the level; persist it with the chunk if desired).
+    pub comparator_outputs: std::collections::HashMap<BlockPos, i32>,
+    /// `RedstoneTorchBlock.RECENT_TOGGLES` (position, game time).
+    pub torch_toggles: Vec<(BlockPos, i64)>,
 }
 impl Default for Ticks {
     fn default() -> Self {
@@ -35,6 +40,8 @@ impl Ticks {
             sub_tick: 0,
             random_tick_value: random_tick_seed,
             updater: NeighborUpdater::default(),
+            comparator_outputs: Default::default(),
+            torch_toggles: Vec::new(),
         }
     }
     /// Register a loaded chunk's saved block and fluid ticks.

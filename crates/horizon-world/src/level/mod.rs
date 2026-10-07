@@ -233,6 +233,17 @@ pub trait LevelAccess {
     fn is_unobstructed(&self, _pos: BlockPos, _state: BlockStateId) -> bool {
         true
     }
+    /// Comparator input from a block entity (`getAnalogOutputSignal` of
+    /// containers, jukeboxes, lecterns, ...). State-only sources (cake,
+    /// composter, cauldrons, beehives, ...) are evaluated by the library.
+    fn block_entity_analog_signal(&self, _pos: BlockPos, _state: BlockStateId, _direction: Direction) -> i32 {
+        0
+    }
+    /// Weak/strong signal of a block-entity-driven source (trapped chest
+    /// openers); other sources are evaluated by the library.
+    fn block_entity_signal(&self, _pos: BlockPos, _state: BlockStateId, _direction: Direction) -> i32 {
+        0
+    }
     /// Count of entities intersecting `area` that trigger pressure plates or
     /// tripwires under `query`.
     fn count_entities(&self, _area: Aabb, _query: EntityQuery) -> usize {
@@ -348,4 +359,17 @@ pub(crate) struct Sim<'a, L: LevelAccess + ?Sized> {
     pub b: &'a Behaviours,
     pub level: &'a mut L,
     pub ticks: &'a mut Ticks,
+    /// `RedstoneWireBlock.shouldSignal` is false while a wire samples its
+    /// neighbours (`getBlockSignal`).
+    pub wire_signal_off: std::cell::Cell<bool>,
+}
+impl Behaviours {
+    pub(crate) fn sim<'a, L: LevelAccess + ?Sized>(&'a self, level: &'a mut L, ticks: &'a mut Ticks) -> Sim<'a, L> {
+        Sim {
+            b: self,
+            level,
+            ticks,
+            wire_signal_off: std::cell::Cell::new(false),
+        }
+    }
 }

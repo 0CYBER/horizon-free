@@ -550,6 +550,7 @@ props! {
     orientation = "orientation",
     crafting = "crafting",
     side_chain = "side_chain",
+    copper_golem_pose = "copper_golem_pose",
 }
 
 fn fail(message: &str) -> io::Error {
