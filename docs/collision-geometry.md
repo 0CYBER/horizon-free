@@ -1149,3 +1149,19 @@ sequences, threshold boundaries, all difficulties, callback mutation/failure,
 signed zero and nonfinite arithmetic. Targeted Clippy passes. World rules,
 player health/healing and damage delivery are controlled; consumables, saved
 hunger data and live survival gameplay integration remain pending.
+
+
+`food_storage` reads/writes hunger state in player NBT compounds. Missing and
+nonnumeric fields use native defaults; numeric tags retain vanilla coercions,
+including floor-to-int for floats/doubles, truncation of long integer bits and
+no post-load clamping. Writes replace the four hunger fields with native int/
+float types, normalize float signed zero and preserve unrelated player fields.
+
+`python3 tools/test_food_storage_parity.py` compares actual `FoodData` persistence
+through `TagValueInput`/`TagValueOutput`. The
+[food storage report](../benchmarks/rust-food-storage-2026-10-07/scoped-parity.json)
+records **45,955 matching lines per JAR**, covering every NBT numeric type,
+missing/wrong-type fields, conversion boundaries, nonfinite values and save/load
+round trips. Targeted Clippy passes. ProblemReporter diagnostics and the complete
+player save lifecycle remain pending; these results establish the four hunger
+fields, not a playable save/load implementation.
