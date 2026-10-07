@@ -1629,3 +1629,20 @@ passes. The refactor also preserves both native regression suites:
 [blocking durability](../benchmarks/rust-component-durability-2026-10-07/blocking-regression.json)
 (**71,800 lines per JAR**). Full component codecs, enchanted durability, equipment
 and complete gameplay integration remain pending.
+
+
+`item_stack_storage` implements stored item identity, count/pop-time storage,
+component visibility, copying, splitting, transmutation and consumption. Copies
+share component data until a write; canonical empty results are explicit so a
+containing item store can preserve reference identity. Negative counts and
+wrapping arithmetic follow the pinned methods, including mutations to an empty
+stack and consumption callbacks that change or fail after a copy is captured.
+
+`python3 tools/test_item_stack_storage_parity.py` compares 7,856 fixtures with
+actual native ItemStack methods and small bound integer-component prototypes.
+The [storage report](../benchmarks/rust-item-stack-storage-2026-10-07/scoped-parity.json)
+records **568,580 matching lines per JAR**. Comparisons include raw and visible
+state, component patch order, stack identity and item/component/count equality.
+Targeted Clippy passes. The fixture arena preserves canonical EMPTY aliases;
+a production inventory, full component values/codecs and complete item-use,
+equipment and game-tick integration remain pending.
