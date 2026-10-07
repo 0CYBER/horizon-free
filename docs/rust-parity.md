@@ -1134,3 +1134,25 @@ asserts actual holder hashes when constructing collision cases. Attribute-map
 lookup and dirty callback receivers remain controlled. Registered effect
 definitions, pending queue ownership, entity bindings and complete gameplay/
 platform builds remain unfinished.
+
+## Attribute-map creation and live queues
+
+Effect modifiers now have a concrete attribute-map storage path with separate
+instance lookup, update and synchronization collections. Lazy creation copies
+the supplier before inserting the instance into the lookup map. Its dirty
+callback adds the update entry before checking synchronization eligibility, so
+a failed creation can leave an instance queued without a lookup entry. Later
+lookups can create a second instance while the first remains queued. Successful
+creation uses an ordinary map insertion after the callback, preserving callback
+replacement, resize and alias behavior.
+
+The [stored-attribute comparison](../benchmarks/rust-stored-effect-attributes-2026-10-07/scoped-parity.json)
+matches **4,543,569 lines per reference JAR**. It combines actual native effect
+modifier methods, attribute-map lookup, supplier creation, attribute-instance
+replacement and permanent modifiers with real pending sets. Native instance
+identity hashes are captured separately for each JVM and replayed in Rust.
+Library and fixture Clippy pass. Basic-attribute default/synchronization methods
+remain controlled callbacks; the fixture covers queue and lookup mutation but
+not arbitrary recursive instance mutation. Registered definitions, entity
+notification binding, bulk map methods and complete gameplay/platform builds
+remain unfinished.

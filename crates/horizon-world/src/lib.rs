@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod object_open_map;
+pub mod attribute_map;
 pub mod effect_attribute_modifiers;
 pub mod object_open_set;
 pub mod effect_notifications;
