@@ -25,6 +25,7 @@ pub mod entity_move;
 pub mod entity_obstruction;
 pub mod fall_damage;
 pub mod fluid;
+pub mod fluid_flow;
 pub mod fluid_occupancy;
 pub mod fluid_shape;
 pub mod free_space;

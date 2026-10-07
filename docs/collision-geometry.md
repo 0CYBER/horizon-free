@@ -976,3 +976,19 @@ controlled here; neighboring-cell flow calculation, live world/entity binding
 and full playable integration remain pending. Extreme-coordinate Java scans are
 bounded by injected callback failures rather than allowed to traverse billions
 of cells.
+
+
+`fluid_flow` computes water/lava current vectors from ordered horizontal and
+lower neighbors, preserving f32 height subtraction before f64 accumulation.
+Falling fluids apply the native wall deflection, including the same-family,
+upward-face and IceBlock guards, then normalize the resulting vector.
+
+`python3 tools/test_fluid_flow_parity.py` invokes actual registered
+`FluidState.getFlow`, `FlowingFluid.getFlow` and its solid-face helper. The
+[fluid flow report](../benchmarks/rust-fluid-flow-2026-10-07/scoped-parity.json)
+records **1,051,071 matching lines per JAR** from **51,846 fixtures** covering all
+registered fluid states, neighboring families/heights, per-face wall flags,
+falling deflection, wrapping coordinates and query failures. Targeted Clippy
+passes. Block tag/class flags and face support are controlled in this comparison;
+binding those to registered block storage and support shapes, fluid spreading
+and complete gameplay remain pending.
