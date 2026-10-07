@@ -38,15 +38,18 @@ public final class VanillaTreeFeatureOracle {
  }
  /** Shared with the Rust fixture: layered column, pseudo-random holes and obstacles, overrides. */
  static final class Terrain {
-  final int[][] layers;final int holeMod,holeState,obstacleMod,obstacleState,obstacleMin;final Map<BlockPos,Integer> overrides=new HashMap<>();
+  final int[][] layers;final int[][] boxes;final int holeMod,holeState,obstacleMod,obstacleState,obstacleMin;final Map<BlockPos,Integer> overrides=new HashMap<>();
   Terrain(JsonObject f){
    var raw=f.getAsJsonArray("layers");layers=new int[raw.size()][];for(int i=0;i<raw.size();i++){var l=raw.get(i).getAsJsonArray();layers[i]=new int[]{l.get(0).getAsInt(),l.get(1).getAsInt()};}
+   var rawBoxes=f.has("boxes")?f.getAsJsonArray("boxes"):new JsonArray();boxes=new int[rawBoxes.size()][7];
+   for(int i=0;i<rawBoxes.size();i++)for(int j=0;j<7;j++)boxes[i][j]=rawBoxes.get(i).getAsJsonArray().get(j).getAsInt();
    holeMod=f.get("hole_mod").getAsInt();holeState=f.get("hole_state").getAsInt();obstacleMod=f.get("obstacle_mod").getAsInt();obstacleState=f.get("obstacle_state").getAsInt();obstacleMin=f.get("obstacle_min").getAsInt();
    for(var e:f.getAsJsonArray("states")){var v=e.getAsJsonArray();overrides.put(pos(v),v.get(3).getAsInt());}
   }
   static int hash(int x,int y,int z){int h=x*73856093^y*19349663^z*83492791;h^=h>>>13;h*=0x5bd1e995;h^=h>>>15;return h&0x7fffffff;}
   int at(int x,int y,int z){
    var o=overrides.get(new BlockPos(x,y,z));if(o!=null)return o;
+   for(var b:boxes)if(x>=b[0]&&y>=b[1]&&z>=b[2]&&x<=b[3]&&y<=b[4]&&z<=b[5])return b[6];
    int base=-1;for(var l:layers)if(y<=l[0]){base=l[1];break;}
    int h=hash(x,y,z);
    if(base>=0){if(holeMod>0&&h%holeMod==0)return holeState;return base;}
@@ -55,7 +58,7 @@ public final class VanillaTreeFeatureOracle {
   }
  }
  private static final class World implements InvocationHandler {
-  final JsonObject f;final PrintWriter out;final Terrain terrain;final Map<ChunkPos,ProtoChunk> chunks=new HashMap<>();final Map<BlockPos,BeehiveBlockEntity> hives=new HashMap<>();
+  final JsonObject f;final PrintWriter out;final Terrain terrain;final Map<ChunkPos,ProtoChunk> chunks=new HashMap<>();final Map<BlockPos,BeehiveBlockEntity> hives=new HashMap<>();final Map<BlockPos,ChestBlockEntity> chests=new HashMap<>();final Map<BlockPos,SpawnerBlockEntity> spawners=new HashMap<>();
   final RandomSource shapeRandom=RandomSource.create(0);
   World(JsonObject f,PrintWriter out){this.f=f;this.out=out;this.terrain=new Terrain(f);}
   ProtoChunk chunk(int cx,int cz){
@@ -81,12 +84,17 @@ public final class VanillaTreeFeatureOracle {
     case "isFluidAtPosition":return ((java.util.function.Predicate<net.minecraft.world.level.material.FluidState>)args[1]).test(get((BlockPos)args[0]).getFluidState());
     case "getMinY":return MIN_Y;
     case "getSeaLevel":return 63;
+    case "getRawBrightness":case "getMaxLocalRawBrightness":return 15;
+    case "getBrightness":return 15;
+    case "getSeed":return f.get("world_seed").getAsLong();
     case "ensureCanWrite":return true;
     case "getRandom":return shapeRandom;
-    case "scheduleTick":return null;
+    case "scheduleTick":return null;  // Edge shape updates also schedule ticks; not compared.
     case "setCurrentlyGenerating":return null;
     case "getBlockEntity":{
      if(args.length!=1)break;var p=((BlockPos)args[0]).immutable();var state=get(p);
+     if(state.is(Blocks.CHEST))return chests.computeIfAbsent(p,key->new ChestBlockEntity(key,state){@Override public void setLootTable(net.minecraft.resources.ResourceKey<net.minecraft.world.level.storage.loot.LootTable> table,long seed){out.println("loot "+xyz(key)+" "+table.identifier()+" "+seed);super.setLootTable(table,seed);}});
+     if(state.is(Blocks.SPAWNER))return spawners.computeIfAbsent(p,key->new SpawnerBlockEntity(key,state){@Override public void setEntityId(net.minecraft.world.entity.EntityType<?> type,RandomSource r){super.setEntityId(type,r);out.println("spawner "+xyz(key)+" "+BuiltInRegistries.ENTITY_TYPE.getKey(type));}});
      if(!state.is(Blocks.BEE_NEST))return null;
      return hives.computeIfAbsent(p,key->new BeehiveBlockEntity(key,state){@Override public void storeBee(BeehiveBlockEntity.Occupant occupant){out.println("bee "+xyz(key)+" "+occupant.ticksInHive());}});
     }
@@ -106,6 +114,21 @@ public final class VanillaTreeFeatureOracle {
    throw new AssertionError(method);
   }
  }
+ /** Parses named holders on first use from the bundled vanilla resources. */
+ static final class Lazy<T> implements HolderGetter<T>, HolderOwner<T> {
+  JsonObject json;com.mojang.serialization.Codec<T> codec;RegistryOps<JsonElement> ops;final Map<ResourceKey<T>,Holder.Reference<T>> cache=new HashMap<>();
+  public Optional<Holder.Reference<T>> get(ResourceKey<T> key){
+   var cached=cache.get(key);if(cached!=null)return Optional.of(cached);
+   var text=json.get(key.identifier().toString());if(text==null)return Optional.empty();
+   var ref=Holder.Reference.createStandAlone(this,key);cache.put(key,ref);
+   T value=codec.parse(ops,JsonParser.parseString(text.getAsString())).getOrThrow();
+   try{var bind=Holder.Reference.class.getDeclaredMethod("bindValue",Object.class);bind.setAccessible(true);bind.invoke(ref,value);}catch(ReflectiveOperationException e){throw new IllegalStateException(e);}
+   return Optional.of(ref);
+  }
+  public Optional<HolderSet.Named<T>> get(net.minecraft.tags.TagKey<T> tag){return Optional.empty();}
+ }
+ static final Lazy<Feature> lazyFeatures=new Lazy<>();
+ static final Lazy<net.minecraft.world.level.levelgen.placement.PlacedFeature> lazyPlaced=new Lazy<>();
  @SuppressWarnings("unchecked")
  public static void main(String[] args)throws Exception {
   net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();Path dir=Path.of(args[1]);
@@ -114,6 +137,8 @@ public final class VanillaTreeFeatureOracle {
   var providers=new MappedRegistry<BlockStateProvider>(Registries.BLOCK_STATE_PROVIDER,com.mojang.serialization.Lifecycle.stable());
   var ops=RegistryOps.create(JsonOps.INSTANCE,new RegistryOps.RegistryInfoLookup(){public <T> Optional<HolderGetter<T>> lookup(ResourceKey<? extends Registry<? extends T>> key){
    if(key.equals(Registries.BLOCK_STATE_PROVIDER))return (Optional<HolderGetter<T>>)(Optional<?>)Optional.of(providers);
+   if(key.equals(Registries.FEATURE))return (Optional<HolderGetter<T>>)(Optional<?>)Optional.of(lazyFeatures);
+   if(key.equals(Registries.PLACED_FEATURE))return (Optional<HolderGetter<T>>)(Optional<?>)Optional.of(lazyPlaced);
    if(key.equals(Registries.FLUID))return (Optional<HolderGetter<T>>)(Optional<?>)Optional.of(BuiltInRegistries.FLUID);
    return key.equals(Registries.BLOCK)?(Optional<HolderGetter<T>>)(Optional<?>)Optional.of(BuiltInRegistries.BLOCK):Optional.empty();
   }});
@@ -121,7 +146,11 @@ public final class VanillaTreeFeatureOracle {
   for(var entry:bundle.getAsJsonObject("providers").entrySet())
    providers.register(ResourceKey.create(Registries.BLOCK_STATE_PROVIDER,Identifier.parse(entry.getKey())),BlockStateProvider.DIRECT_CODEC.parse(ops,JsonParser.parseString(entry.getValue().getAsString())).getOrThrow(),RegistrationInfo.BUILT_IN);
   providers.freeze();
-  var features=bundle.getAsJsonObject("features");
+  var features=bundle.getAsJsonObject("features");var placedJson=bundle.getAsJsonObject("placed");
+  lazyFeatures.json=features;lazyPlaced.json=placedJson;lazyFeatures.codec=Feature.DIRECT_CODEC;lazyPlaced.codec=net.minecraft.world.level.levelgen.placement.PlacedFeature.DIRECT_CODEC;lazyFeatures.ops=ops;lazyPlaced.ops=ops;
+  var contextMethod=VanillaPlacementOracle.class.getDeclaredMethod("context",JsonObject.class);contextMethod.setAccessible(true);
+  var bounds=new JsonObject();bounds.add("context",JsonParser.parseString("[-64,384,63]"));
+  var generator=((net.minecraft.world.level.levelgen.placement.PlacementContext)contextMethod.invoke(null,bounds)).generator();
   try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var inputs=Files.lines(dir.resolve("inputs.txt"))) {
    for(var line:(Iterable<String>)inputs::iterator){
     var f=JsonParser.parseString(line).getAsJsonObject();long seed=f.get("seed").getAsLong();
@@ -131,7 +160,7 @@ public final class VanillaTreeFeatureOracle {
     try{decoded=Feature.DIRECT_CODEC.parse(ops,JsonParser.parseString(features.get(f.get("feature").getAsString()).getAsString())).result();}catch(RuntimeException error){decoded=Optional.empty();}
     if(decoded.isEmpty()){out.println("decode error");continue;}
     var handler=new World(f,out);var world=(WorldGenLevel)Proxy.newProxyInstance(WorldGenLevel.class.getClassLoader(),new Class<?>[]{WorldGenLevel.class},handler);
-    try{out.println("place "+decoded.get().place(world,null,random,pos(f.getAsJsonArray("origin"))));}catch(RuntimeException error){out.println("place error "+error);}
+    try{out.println("place "+decoded.get().place(world,generator,random,pos(f.getAsJsonArray("origin"))));}catch(RuntimeException error){out.println("place error");System.err.println(f.get("feature").getAsString()+": "+error);}
     out.println("next "+random.nextLong());
     var keys=new ArrayList<>(handler.chunks.keySet());keys.sort(Comparator.<ChunkPos>comparingInt(ChunkPos::x).thenComparingInt(ChunkPos::z));
     var changes=new TreeMap<BlockPos,Integer>(Comparator.<BlockPos>comparingInt(BlockPos::getX).thenComparingInt(BlockPos::getY).thenComparingInt(BlockPos::getZ));

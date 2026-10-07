@@ -77,6 +77,8 @@ pub enum FeatureDefinition {
     Geode(Box<super::cave::GeodeFeature>),
     Iceberg(Box<super::iceberg::IcebergFeature>),
     RootSystem(Box<super::root_system::RootSystemFeature>),
+    SpeleothemCluster(Box<super::dripstone::SpeleothemClusterFeature>),
+    LargeDripstone(Box<super::dripstone::LargeDripstoneFeature>),
     FallenTree(Box<super::tree::FallenTreeFeature>),
     NoOp,
     WeightedChoice(OptionalWeightedList<PlacedFeatureDefinition>),
@@ -612,6 +614,20 @@ impl FeatureDefinition {
                 remaining,
             )
             .map(|f| Self::Geode(Box::new(f))),
+            "minecraft:speleothem_cluster" => super::dripstone::SpeleothemClusterFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("speleothem cluster bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(|f| Self::SpeleothemCluster(Box::new(f))),
+            "minecraft:large_dripstone" => super::dripstone::LargeDripstoneFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("large dripstone bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(|f| Self::LargeDripstone(Box::new(f))),
             "minecraft:iceberg" => super::iceberg::IcebergFeature::decode(
                 json,
                 blocks.ok_or(DecodeError::Field("iceberg bindings"))?,
@@ -964,6 +980,8 @@ impl FeatureDefinition {
             Self::MonsterRoom(feature) => feature.place(world, random, origin),
             Self::Geode(feature) => feature.place(world, random, origin),
             Self::Iceberg(feature) => feature.place(world, random, origin),
+            Self::SpeleothemCluster(feature) => feature.place(world, random, origin),
+            Self::LargeDripstone(feature) => feature.place(world, random, origin),
             Self::RootSystem(feature) => {
                 feature.place(world, random, origin, &mut |f, w, r, p| {
                     f.place_in(&mut placer, w, r, p, run)

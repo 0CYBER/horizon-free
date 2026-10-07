@@ -18,9 +18,9 @@ except ImportError:
 
 def feature_resources(jar):
     """Vanilla configured features and named state providers from the authenticated JAR."""
-    result={'features':{},'providers':{}}
+    result={'features':{},'providers':{},'placed':{}}
     with zipfile.ZipFile(jar) as archive:
-        for kind,key in [('feature','features'),('block_state_provider','providers')]:
+        for kind,key in [('feature','features'),('block_state_provider','providers'),('placed_feature','placed')]:
             prefix=f'data/minecraft/worldgen/{kind}/'
             for name in sorted(archive.namelist()):
                 if name.startswith(prefix) and name.endswith('.json'):
@@ -38,16 +38,17 @@ def corpus(facts,resources):
     def fixture(feature,**extra):
         f={'feature':feature,'seed':0,'legacy':False,'origin':[8,65,8],'height':65,'layers':[[59,get('stone')],[63,get('dirt')],[64,get('grass_block')]],
            'hole_mod':0,'hole_state':get('air'),'obstacle_mod':0,'obstacle_state':get('air'),'obstacle_min':0,'states':[]}
-        f.update(extra);return f
+        f.update(extra);f.setdefault('world_seed',f['seed']^0x2545F4914F6CDD1D);return f
     seeds=[0,1,-1,0x5DEECE66D,0x123456789abcdef,-8070450532247928832]
     origins=[[8,65,8],[15,65,0],[0,65,15],[-1,65,-17],[31,65,-16],[100003,65,-4097]]
-    trees,ores=[],[]
+    trees,ores,others=[],[],[]
     for name,text in resources['features'].items():
         value=json.loads(text);kind=value['type'].removeprefix('minecraft:')
         if kind in ('tree','fallen_tree'):
             if 'pale_moss' in text:continue  # needs the level's feature registry and server level
             trees.append(name)
         elif kind in ('ore','scattered_ore'):ores.append(name)
+        elif kind not in ('freeze_top_layer',):others.append(name)
     worlds=[
         {},
         {'obstacle_mod':37,'obstacle_state':get('oak_leaves'),'obstacle_min':66},
@@ -75,6 +76,21 @@ def corpus(facts,resources):
                 origin=list(origins[(s+w)%len(origins)]);origin[1]=[-60,-3,0,40,316,-64][(s*5+w)%6]
                 yield fixture(name,seed=seed,legacy=s%3==2,origin=origin,**world)
 
+    air,water,stone=get('air'),get('water'),get('stone')
+    generic_worlds=[
+        ({},[65]),
+        ({'layers':[[200,stone]],'height':201,'boxes':[[-40,20,-40,56,35,56,air]]},[20,35,27]),
+        ({'layers':[[200,stone]],'height':201,'boxes':[[-40,23,-40,56,35,56,air],[-40,20,-40,56,22,56,water]]},[21,23]),
+        ({'layers':[[35,stone],[39,get('sand')],[62,water]],'height':40},[40,63]),
+        ({'layers':[[31,get('lava')],[100,get('netherrack')]],'height':101,'boxes':[[-40,32,-40,56,60,56,air]]},[32,60]),
+    ]
+    for name in others:
+        for w,(world,ys) in enumerate(generic_worlds):
+            for y in ys:
+                for s,seed in enumerate(seeds[:4]):
+                    origin=list(origins[(s+w)%len(origins)]);origin[1]=y
+                    yield fixture(name,seed=seed,legacy=s%3==2,origin=origin,**world)
+
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--prepare',action='store_true');args=parser.parse_args()
@@ -100,6 +116,7 @@ def main():
         if path.read_bytes()!=(build/'client-definitions'/path.name).read_bytes():raise ValueError('reference definitions differ: '+path.name)
         (build/path.name).write_bytes(path.read_bytes())
     facts=json.loads((build/'facts.json').read_text())
+    rules=survival.bind_definitions(*[json.loads((build/name).read_text()) for name in ['survival-classes.json','survival-placement-classes.json','survival-support-tags.json']]);(build/'survival-rules.json').write_text(json.dumps(rules,separators=(',',':')))
     inputs=build/'inputs.txt';count=0
     with inputs.open('w',encoding='utf-8') as output:
         for fixture in corpus(facts,resources):output.write(json.dumps(fixture,separators=(',',':'))+'\n');count+=1

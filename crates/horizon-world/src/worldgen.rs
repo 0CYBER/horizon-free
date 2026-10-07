@@ -26,6 +26,7 @@ pub mod decoration;
 pub mod delta;
 pub mod density;
 pub mod disk;
+pub mod dripstone;
 pub mod end_gateway;
 pub mod end_podium;
 pub mod feature;

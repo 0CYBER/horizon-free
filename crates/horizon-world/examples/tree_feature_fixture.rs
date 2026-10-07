@@ -4,7 +4,9 @@ use horizon_core::{
     random::{LegacyRandom, RandomSource, XoroshiroRandom},
 };
 use horizon_world::{
+    block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
     block_placement::BlockPlacementBindings,
+    block_survival::{BlockSurvivalRegistry, SurvivalDefinitions, SurvivalRule, SurvivalWorld},
     block_properties::BlockPropertiesRegistry,
     block_support::{BlockSupportRegistry, SupportType},
     collision::CachedCollisionRegistry,
@@ -37,6 +39,7 @@ const HEIGHT: i32 = 384;
 
 struct Terrain {
     layers: Vec<[i32; 2]>,
+    boxes: Vec<[i32; 7]>,
     hole: [i32; 2],
     obstacle: [i32; 3],
     overrides: HashMap<[i32; 3], u32>,
@@ -52,6 +55,16 @@ impl Terrain {
                 .iter()
                 .map(|l| [l[0].as_i64().unwrap() as i32, l[1].as_i64().unwrap() as i32])
                 .collect(),
+            boxes: f
+                .get("boxes")
+                .and_then(Value::as_array)
+                .map(|boxes| {
+                    boxes
+                        .iter()
+                        .map(|b| std::array::from_fn(|i| b[i].as_i64().unwrap() as i32))
+                        .collect()
+                })
+                .unwrap_or_default(),
             hole: [n("hole_mod"), n("hole_state")],
             obstacle: [n("obstacle_mod"), n("obstacle_state"), n("obstacle_min")],
             overrides: f["states"]
@@ -79,6 +92,11 @@ impl Terrain {
         if let Some(state) = self.overrides.get(&[x, y, z]) {
             return BlockStateId(*state);
         }
+        for b in &self.boxes {
+            if x >= b[0] && y >= b[1] && z >= b[2] && x <= b[3] && y <= b[4] && z <= b[5] {
+                return BlockStateId(b[6] as u32);
+            }
+        }
         let h = Self::hash(x, y, z);
         if let Some(layer) = self.layers.iter().find(|l| y <= l[0]) {
             if self.hole[0] > 0 && h % self.hole[0] == 0 {
@@ -102,6 +120,12 @@ struct World<'a, 'r, W> {
     fluids: &'a FluidStateTable,
     tags: &'a BTreeMap<String, BTreeSet<BlockStateId>>,
     support: &'a BlockSupportRegistry<'r>,
+    survival: &'a BlockSurvivalRegistry<'r>,
+    collision: &'a BlockCollisionRegistry<'r>,
+    seed: i64,
+    chest: BlockStateId,
+    world_random: LegacyRandom,
+    water_mask: u8,
 }
 impl<W: Write> World<'_, '_, W> {
     fn get(&self, p: [i32; 3]) -> BlockStateId {
@@ -140,7 +164,77 @@ impl<W: Write> DynamicSupportWorld for World<'_, '_, W> {
         Ok(None)
     }
 }
+impl<W: Write> DynamicCollisionWorld for World<'_, '_, W> {
+    fn shulker_collision_state(&mut self, _: [i32; 3]) -> io::Result<Option<ShulkerCollisionState>> {
+        Ok(None)
+    }
+}
+impl<W: Write> SurvivalWorld for World<'_, '_, W> {
+    fn block_state(&mut self, p: [i32; 3]) -> io::Result<BlockStateId> {
+        Ok(self.get(p))
+    }
+    fn fluid_state(&mut self, p: [i32; 3]) -> io::Result<FluidState> {
+        self.fluids
+            .get(self.get(p))
+            .ok_or_else(|| io::Error::other("unknown fluid"))
+    }
+    fn raw_brightness(&mut self, _: [i32; 3], _: i32) -> io::Result<i32> {
+        Ok(15)
+    }
+}
 impl<W: Write> PlacementContext for World<'_, '_, W> {
+    fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
+        Ok(self.seed)
+    }
+    fn next_world_boolean(&mut self) -> Result<bool, PlacementQueryError> {
+        Ok(self.world_random.next_boolean())
+    }
+    fn schedule_block_tick(&mut self, _: [i32; 3], _: BlockStateId, _: i32) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
+    fn schedule_fluid_tick(&mut self, _: [i32; 3], _: FluidKind, _: i32) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
+    fn block_brightness(&mut self, _: [i32; 3]) -> Result<i32, PlacementQueryError> {
+        Ok(15)
+    }
+    fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
+        Ok(63)
+    }
+    fn water_at(&mut self, p: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        let fluid = PlacementContext::fluid_state(self, p)?;
+        Ok(fluid.kind().mask() & self.water_mask != 0)
+    }
+    fn block_survives(&mut self, state: BlockStateId, p: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        let survival = self.survival;
+        survival.can_survive(self, state, p).map_err(query)
+    }
+    fn attachment_at(&mut self, p: [i32; 3], direction: Direction) -> Result<bool, PlacementQueryError> {
+        let survival = self.survival;
+        survival.can_attach_to(self, p, direction).map_err(query)
+    }
+    fn state_collision_empty(&mut self, state: BlockStateId, p: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        let collision = self.collision;
+        collision
+            .collision_shape(self, state, p)
+            .map(|shape| shape.is_empty())
+            .map_err(query)
+    }
+    fn set_block_entity_loot_table(
+        &mut self,
+        p: [i32; 3],
+        table: &str,
+        random: &mut impl RandomSource,
+    ) -> Result<(), PlacementQueryError> {
+        if self.get(p) == self.chest {
+            let seed = random.next_long();
+            writeln!(self.out, "loot {} {} {} {table} {seed}", p[0], p[1], p[2]).map_err(query)?;
+        }
+        Ok(())
+    }
+    fn configure_spawner(&mut self, p: [i32; 3], entity: &str) -> Result<(), PlacementQueryError> {
+        writeln!(self.out, "spawner {} {} {} {entity}", p[0], p[1], p[2]).map_err(query)
+    }
     fn generation(&self) -> WorldGenerationContext {
         WorldGenerationContext::new(MIN_Y, HEIGHT, 63)
     }
@@ -217,7 +311,10 @@ fn fixture<R: RandomSource>(
     let origin = std::array::from_fn(|i| f["origin"][i].as_i64().unwrap() as i32);
     match feature.place(world, &mut random, origin, blocks) {
         Ok(result) => writeln!(world.out, "place {result}")?,
-        Err(error) => writeln!(world.out, "place error {error}")?,
+        Err(error) => {
+            eprintln!("{name}: {error}");
+            writeln!(world.out, "place error")?
+        }
     }
     writeln!(world.out, "next {}", random.next_long())?;
     let changes: Vec<_> = world
@@ -232,6 +329,63 @@ fn fixture<R: RandomSource>(
     writeln!(world.out, "end")
 }
 
+fn survival_rule(rule: &str) -> SurvivalRule {
+    use SurvivalRule::*;
+    match rule {
+        value if value.starts_with("TagBelow:") => TagBelow(value[9..].to_owned()),
+        "CactusFlower" => CactusFlower,
+        "Seagrass" => Seagrass,
+        "BubbleColumn" => BubbleColumn,
+        "RedstoneWire" => RedstoneWire,
+        "DoublePlant" => DoublePlant,
+        "Door" => Door,
+        "BigDripleaf" => BigDripleaf,
+        "BigDripleafStem" => BigDripleafStem,
+        "Farmland" => Farmland,
+        "Cocoa" => Cocoa,
+        "Crop" => Crop,
+        "GrowingPlant" => GrowingPlant,
+        "MangrovePropagule" => MangrovePropagule,
+        "Speleothem" => Speleothem,
+        "Scaffolding" => Scaffolding,
+        "PistonHead" => PistonHead,
+        "ChorusPlant" => ChorusPlant,
+        "ChorusFlower" => ChorusFlower,
+        "PitcherCrop" => PitcherCrop,
+        "Multiface" => Multiface,
+        "Vine" => Vine,
+        "HangingMoss" => HangingMoss,
+        "SnowLayer" => SnowLayer,
+        "SeaPickle" => SeaPickle,
+        "Fire" => Fire,
+        "Cactus" => Cactus,
+        "Path" => Path,
+        "Mushroom" => Mushroom,
+        "Bell" => Bell,
+        "SugarCane" => SugarCane,
+        "LilyPad" => LilyPad,
+        "Frogspawn" => Frogspawn,
+        "SporeBlossom" => SporeBlossom,
+        "SmallDripleaf" => SmallDripleaf,
+        "TallSeagrass" => TallSeagrass,
+        "Always" => Always,
+        "SolidBelow" => SolidBelow,
+        "SolidBehind" => SolidBehind,
+        "NonAirBelow" => NonAirBelow,
+        "MossCarpet" => MossCarpet,
+        "CenterBelow" => CenterBelow,
+        "Lantern" => Lantern,
+        "FullAbove" => FullAbove,
+        "FullBehind" => FullBehind,
+        "RigidOrCenterBelow" => RigidOrCenterBelow,
+        "RigidBelow" => RigidBelow,
+        "FullBelow" => FullBelow,
+        "CenterAbove" => CenterAbove,
+        "FaceAttached" => FaceAttached,
+        "SupportsBamboo" => SupportsBamboo,
+        _ => panic!("unknown rule {rule}"),
+    }
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = std::env::args().nth(1).expect("private fixture directory");
     let dir = Path::new(&arg);
@@ -268,6 +422,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::from_str(&fs::read_to_string(dir.join("vanilla-features.json"))?)?;
     let providers: BTreeMap<String, String> = serde_json::from_value(bundle["providers"].clone())?;
     let features: BTreeMap<String, String> = serde_json::from_value(bundle["features"].clone())?;
+    let placed: BTreeMap<String, String> = serde_json::from_value(bundle["placed"].clone())?;
     let definitions: Value =
         serde_json::from_str(&fs::read_to_string(dir.join("placement-definitions.json"))?)?;
     let bindings = FeatureBlockBindings::with_tags(&registry, integers.clone(), &tags.tags)?
@@ -285,7 +440,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &serde_json::from_value(definitions["mossy_carpets"].clone())?,
             )?,
         )?;
-    let catalog = FeatureCatalog::from_resources(&features, &BTreeMap::new(), &TagDefinitions::default())?;
+    let catalog = FeatureCatalog::from_resources(&features, &placed, &TagDefinitions::default())?;
     let blocks = FeatureBlocks::from_registry(&registry)?;
     let fluids = FluidStateTable::new(&registry)?;
     let mut by_name = BTreeMap::<String, Vec<BlockStateId>>::new();
@@ -310,6 +465,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
     let support = Arc::new(support);
+    let definitions_text: BTreeMap<String, String> =
+        serde_json::from_str(&fs::read_to_string(dir.join("survival-rules.json"))?)?;
+    let rules = definitions_text
+        .into_iter()
+        .map(|(name, rule)| (name, survival_rule(&rule)))
+        .collect();
+    let extra: Value = serde_json::from_str(&fs::read_to_string(
+        dir.join("survival-extra-definitions.json"),
+    )?)?;
+    let survival_definitions = SurvivalDefinitions {
+        rules,
+        ignition_odds: serde_json::from_value(extra["ignition_odds"].clone())?,
+        fence_gates: serde_json::from_value(extra["fence_gates"].clone())?,
+    };
+    let collision = Arc::new(BlockCollisionRegistry::new(Arc::new(
+        CachedCollisionRegistry::from_nbt(&read("cached-collision.nbt")?, &registry)?,
+    ))?);
+    let survival = BlockSurvivalRegistry::new(
+        &registry,
+        &properties,
+        support.clone(),
+        collision.clone(),
+        &survival_definitions,
+        &tags.tags,
+        &fluid_tags.tags,
+    )?;
+    let chest = registry.default_state("minecraft:chest").unwrap();
+    let water_mask = fluid_tags.tags["minecraft:water"]
+        .iter()
+        .fold(0, |mask, name| mask | FluidKind::from_name(name).unwrap().mask());
     let air = registry.default_state("minecraft:air").unwrap().0;
     let void_air = registry.default_state("minecraft:void_air").unwrap();
     let mut out = io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
@@ -324,6 +509,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fluids: &fluids,
             tags: &tag_states,
             support: &support,
+            survival: &survival,
+            collision: &collision,
+            seed: f["world_seed"].as_i64().unwrap_or(0),
+            chest,
+            world_random: LegacyRandom::new(0),
+            water_mask,
         };
         let seed = f["seed"].as_i64().unwrap();
         if f["legacy"].as_bool().unwrap() {

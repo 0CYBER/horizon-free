@@ -41,6 +41,7 @@ pub(crate) const SPAWNER: u32 = 1 << 25;
 pub(crate) const FLUID_SOURCE: u32 = 1 << 26;
 /// Fluid amount 8 (sources and falling fluids).
 pub(crate) const FLUID_FULL: u32 = 1 << 27;
+pub(crate) const BASE_STONE_OVERWORLD: u32 = 1 << 28;
 
 /// Immutable per-state facts. Missing tags or blocks are empty classifications.
 pub struct TreeBlocks {
@@ -132,6 +133,11 @@ impl TreeBlocks {
             &mut flags,
         );
         mark_tag("minecraft:fire", FIRE, &mut flags);
+        mark_tag(
+            "minecraft:base_stone_overworld",
+            BASE_STONE_OVERWORLD,
+            &mut flags,
+        );
         mark_tag(
             "minecraft:features_cannot_replace",
             FEATURES_CANNOT_REPLACE,
