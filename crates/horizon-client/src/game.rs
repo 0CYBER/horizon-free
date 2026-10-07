@@ -24,6 +24,7 @@ use horizon_client::{
     streaming::{Streaming, WorkerContext},
     save::{Level, Persistent, SaveDir},
     testgen::TestTerrain,
+    vanillagen::VanillaTerrain,
     world::World,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -201,6 +202,7 @@ struct Game<'a> {
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: Vec<Particle>,
+    spawn_search: u32,
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -740,33 +742,92 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// The i-th world spawn search point: a square spiral in 48-block steps.
+    fn spawn_candidate(i: u32) -> (i32, i32) {
+        if i == 0 {
+            return (0, 0);
+        }
+        let mut k = 1u32;
+        let mut ring = 1i32;
+        loop {
+            let points = 8 * ring as u32;
+            if i < k + points {
+                let j = (i - k) as i32;
+                let side = j / (2 * ring);
+                let t = j % (2 * ring) - ring;
+                let (x, z) = match side {
+                    0 => (t, -ring),
+                    1 => (ring, t),
+                    2 => (-t, ring),
+                    _ => (-ring, -t),
+                };
+                return (x * 48, z * 48);
+            }
+            k += points;
+            ring += 1;
+        }
+    }
+    /// A column whose surface is a full solid, non-fluid, non-leaf block open to the sky.
+    fn land_column(&self, x: i32, z: i32) -> Option<i32> {
+        let mut y = MIN_Y + HEIGHT - 1;
+        while y > MIN_Y {
+            let s = self.world.block(x, y, z);
+            if !self.res.facts.is_air(s) {
+                let f = self.res.facts.get(s);
+                let ok = f.full_collision && f.fluid == Fluid::None && !f.name.contains("leaves") && f.hardness >= 0.0;
+                return ok.then_some(y + 1);
+            }
+            y -= 1;
+        }
+        None
+    }
     fn spawn_player(&mut self) -> Result<()> {
         if self.player.is_some() {
             return Ok(());
         }
-        let (sx, sz) = (0, 0);
-        if !(-1..=1).all(|dz| (-1..=1).all(|dx| self.streaming.is_lit(dx, dz))) {
-            return Ok(());
-        }
-        let saved = self.level.position.take().map(|p| Vec3::new(p[0], p[1], p[2]));
-        if saved.is_some() && self.spawn.is_none() {
+        let saved = self.level.position.map(|p| Vec3::new(p[0], p[1], p[2]));
+        if self.spawn.is_none() {
             self.spawn = self.level.spawn.map(|s| Vec3::new(s[0] + 0.5, s[1], s[2] + 0.5));
         }
-        let feet = match saved.or(self.spawn) {
-            Some(s) => s,
-            None => {
-                let mut y = MIN_Y + HEIGHT - 1;
-                while y > MIN_Y {
-                    let s = self.world.block(sx, y, sz);
-                    let f = self.res.facts.get(s);
-                    if !self.res.facts.is_air(s) && (f.full_collision || f.fluid != Fluid::None) {
-                        break;
+        let anchor = match saved.or(self.spawn) {
+            Some(p) => (p.x.floor() as i32, p.z.floor() as i32),
+            None => Self::spawn_candidate(self.spawn_search),
+        };
+        let (cx, cz) = (anchor.0 >> 4, anchor.1 >> 4);
+        self.streaming.center = (cx, cz);
+        if !(-1..=1).all(|dz| (-1..=1).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
+            return Ok(());
+        }
+        let feet = if let Some(p) = saved {
+            self.level.position = None;
+            p
+        } else if let Some(s) = self.spawn {
+            // WorldSpawn: the stored column, lifted onto its current surface.
+            let y = self.land_column(s.x.floor() as i32, s.z.floor() as i32).map_or(s.y, f64::from);
+            Vec3::new(s.x, y.max(s.y), s.z)
+        } else {
+            let mut best: Option<(i64, i32, i32, i32)> = None;
+            for z in (cz - 1) * 16..(cz + 2) * 16 {
+                for x in (cx - 1) * 16..(cx + 2) * 16 {
+                    if let Some(y) = self.land_column(x, z) {
+                        let d = i64::from(x - anchor.0).pow(2) + i64::from(z - anchor.1).pow(2);
+                        if best.is_none_or(|b| d < b.0) {
+                            best = Some((d, x, y, z));
+                        }
                     }
-                    y -= 1;
                 }
-                let spawn = Vec3::new(f64::from(sx) + 0.5, f64::from(y + 1), f64::from(sz) + 0.5);
-                self.spawn = Some(spawn);
-                spawn
+            }
+            match best {
+                Some((_, x, y, z)) => {
+                    let spawn = Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
+                    self.spawn = Some(spawn);
+                    self.level.spawn = Some([f64::from(x), f64::from(y), f64::from(z)]);
+                    spawn
+                }
+                None => {
+                    self.spawn_search += 1;
+                    return Ok(());
+                }
             }
         };
         let mut player = PlayerMotion::new(self.motion, feet)?;
@@ -1020,7 +1081,7 @@ impl Game<'_> {
         let atlas_ptr: *const HudAtlas = &self.res.atlas;
         let _ = atlas_ptr;
         if self.player.is_none() {
-            let text = "Loading terrain...";
+            let text = if self.spawn_search > 0 { "Finding a place to spawn..." } else { "Loading terrain..." };
             let atlas = &self.res.atlas;
             let tw = HudBatch::text_width(atlas, text);
             batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
@@ -1826,9 +1887,6 @@ impl ApplicationHandler for Game<'_> {
         event_loop.set_control_flow(ControlFlow::Poll);
     }
 }
-struct Generators {
-    test: Option<Arc<TestTerrain>>,
-}
 pub fn run() -> Result<()> {
     let Some(options) = Options::read()? else { return Ok(()) };
     let started = Instant::now();
@@ -1868,10 +1926,6 @@ pub fn run() -> Result<()> {
         light,
     });
     let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).saturating_sub(1).max(1);
-    let generators = Generators {
-        test: Some(Arc::new(TestTerrain::new(&assets.registry, &biomes)?)),
-    };
-    let _ = options.test_terrain;
     let save_root = std::env::current_dir()?.join("saves").join(&options.world);
     let level = Level::read(&save_root).unwrap_or_else(|| Level {
         name: options.world.clone(),
@@ -1884,13 +1938,24 @@ pub fn run() -> Result<()> {
         ..Level::default()
     });
     let save = Arc::new(SaveDir::new(save_root));
-    let generator = Arc::new(Persistent {
-        inner: generators.test.clone().ok_or("generator")?,
-        save: save.clone(),
-        registry: assets.clone(),
-        biomes: biomes.clone(),
-    });
-    let mut streaming = Streaming::new(generator, context, threads);
+    let mut streaming = if options.test_terrain {
+        let inner = Arc::new(TestTerrain::new(assets.registry, &biomes)?);
+        Streaming::new(
+            Arc::new(Persistent { inner, save: save.clone(), registry: assets.clone(), biomes: biomes.clone() }),
+            context,
+            threads,
+        )
+    } else {
+        let inner = Arc::new(VanillaTerrain::new(&root.join("worldgen"), assets.registry, &biomes, level.seed).map_err(|e| {
+            format!("{e}\nPrepare the worldgen bundle with: python3 tools/prepare_native_client.py")
+        })?);
+        eprintln!("load worldgen: {:.2}s", started.elapsed().as_secs_f32());
+        Streaming::new(
+            Arc::new(Persistent { inner, save: save.clone(), registry: assets.clone(), biomes: biomes.clone() }),
+            context,
+            threads,
+        )
+    };
     streaming.radius = options.distance;
     eprintln!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
@@ -1978,6 +2043,7 @@ pub fn run() -> Result<()> {
         dropped: Vec::new(),
         next_entity: 0,
         particles: Vec::new(),
+        spawn_search: 0,
     };
     EventLoop::new()?.run_app(&mut game)?;
     if let Some(path) = &game.options.report {

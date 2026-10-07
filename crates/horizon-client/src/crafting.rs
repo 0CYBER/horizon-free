@@ -77,6 +77,7 @@ impl Recipes {
         let mut files: Vec<_> = fs::read_dir(root.join("data/minecraft/recipe"))?
             .flatten()
             .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "json"))
             .collect();
         files.sort();
         for path in files {

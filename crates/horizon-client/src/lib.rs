@@ -30,5 +30,6 @@ pub mod sprint;
 pub mod sprites;
 pub mod streaming;
 pub mod testgen;
+pub mod vanillagen;
 pub mod world;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

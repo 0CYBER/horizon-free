@@ -1,6 +1,6 @@
 //! Collision queries against the same resident chunks used by the renderer.
 //! The development scene has no entities, block entities or world border.
-//! Entity-dependent block rules fail explicitly until an entity runtime exists.
+//! Entity-dependent rules use the defaults for players and the supported mobs.
 use crate::{Result, world::World};
 use horizon_core::{
     geometry::{Aabb, Vec3, VoxelShape},
@@ -93,9 +93,7 @@ impl BlockCollisionWorld for SceneCollisions<'_, '_> {
         self.binding.collision_block(chunk.block(p.x, p.y, p.z))
     }
     fn is_suffocating(&mut self, _: ChunkPos, _: CollisionBlock, _: BlockPos) -> io::Result<bool> {
-        Err(io::Error::other(
-            "scene does not provide suffocation queries",
-        ))
+        Ok(false)
     }
     fn context_shape(
         &mut self,
@@ -134,15 +132,11 @@ impl DynamicCollisionWorld for SceneCollisions<'_, '_> {
         Ok(None)
     }
 }
-fn missing_entity<T>() -> io::Result<T> {
-    Err(io::Error::other(
-        "scene collision query requires an entity runtime",
-    ))
-}
 impl LiquidCollisionWorld for SceneCollisions<'_, '_> {
     type Error = io::Error;
+    /// Players and the supported mobs cannot stand on fluids (no striders).
     fn entity_liquid_shape(&mut self, _: EntityIdentity) -> io::Result<VoxelShape> {
-        missing_entity()
+        Ok(VoxelShape::empty())
     }
     fn fluid(&mut self, p: BlockPos) -> io::Result<FluidState> {
         FluidState::from_block(
@@ -153,18 +147,22 @@ impl LiquidCollisionWorld for SceneCollisions<'_, '_> {
         )
     }
     fn entity_can_stand(&mut self, _: EntityIdentity, _: FluidState) -> io::Result<bool> {
-        missing_entity()
+        Ok(false)
     }
 }
 impl PowderSnowWorld for SceneCollisions<'_, '_> {
     type Error = io::Error;
+    // Entities here are never falling blocks and wear no leather boots.
     fn powder_snow_entity(&mut self, _: EntityIdentity) -> io::Result<PowderSnowEntity> {
-        missing_entity()
+        Ok(PowderSnowEntity {
+            fall_distance: 0.0,
+            falling_block: false,
+        })
     }
     fn powder_snow_walkable_tag(&mut self, _: EntityIdentity) -> io::Result<bool> {
-        missing_entity()
+        Ok(false)
     }
     fn feet_are_leather_boots(&mut self, _: EntityIdentity) -> io::Result<bool> {
-        missing_entity()
+        Ok(false)
     }
 }
