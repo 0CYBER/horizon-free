@@ -1299,3 +1299,19 @@ NaN/signed-zero equality. Native gaps are untouched default float items; observe
 keys are explicit configured IDs. Targeted Clippy passes. Other serializers,
 serializer-mismatch errors, wire codecs and player absorption binding remain
 pending.
+
+
+`player_health` binds ordinary registered player attributes to health and
+absorption in one synchronized float table. The player absorption getter and
+internal setter use virtual data access; health retains its direct data access.
+The final absorption setter still applies the registered maximum before writing.
+
+`python3 tools/test_player_health_parity.py` compares actual Player methods,
+registered player attributes and `SynchedEntityData`, exporting the actual pinned
+health/absorption field IDs. The
+[player health report](../benchmarks/rust-player-health-2026-10-07/scoped-parity.json)
+records **243,146 matching lines per JAR**, covering modified limits, healing,
+absorption reads/writes, combined dirty/default lists, received assignments,
+callback packet drains and failures. Targeted Clippy passes. Observer effects
+are controlled; custom virtual data replacement, other synchronized serializers,
+wire codecs and full player damage/tick integration remain pending.
