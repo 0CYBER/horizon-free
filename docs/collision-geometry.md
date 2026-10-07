@@ -917,3 +917,22 @@ all trapdoor states against every registered ladder facing, tag reloads,
 spectator/gliding guards, captured positions, mutations and failures. Targeted
 Clippy passes. Entity/world storage is controlled; live movement binding and
 equipment-based glide eligibility remain pending.
+
+
+`fluid_occupancy` implements section-ordered liquid checks over resident block
+sections with a complete registered fluid-presence table. `BlockSection.any_state`
+checks active palette entries so dry sections skip cell unpacking. Bounds use
+inclusive floored endpoints, and chunk requests retain native behavior even when
+no requested vertical section is within world height. Invalid geometry, foreign
+registries and query-budget exhaustion return explicit errors.
+
+`python3 tools/test_fluid_occupancy_parity.py` compares actual
+`LevelReader.containsAnyLiquid`, `BoxBlockMatcher` and `BlockScanUtils` with
+native ProtoChunk sections. The
+[liquid occupancy report](../benchmarks/rust-fluid-occupancy-2026-10-07/scoped-parity.json)
+records **116,664 matching lines per JAR**, including fluid presence for all
+**35,723 states**, public chunk/section query order, height boundaries, palette
+changes/compaction and failures. Rust-only checks verify typed budget, nonfinite
+and registry errors. Targeted Clippy passes. Chunk snapshots repeat controlled
+resident data; collision composition for `Entity.isFree` and live world binding
+remain pending. No performance gain is claimed without measurement.

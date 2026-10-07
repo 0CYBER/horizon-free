@@ -403,6 +403,14 @@ impl<'r> BlockSection<'r> {
         section.extra = container.extra;
         Ok(section)
     }
+    /// Test current distinct states without unpacking all 4,096 cells. The
+    /// predicate should be pure; unused palette slots are intentionally skipped.
+    pub fn any_state(&self, mut predicate: impl FnMut(BlockStateId) -> bool) -> bool {
+        self.palette
+            .iter()
+            .zip(&self.counts)
+            .any(|(&state, &count)| count != 0 && predicate(state))
+    }
     pub fn bits(&self) -> u8 {
         self.storage.as_ref().map_or(0, PackedStorage::bits)
     }
