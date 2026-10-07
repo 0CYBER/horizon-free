@@ -48,7 +48,7 @@ def corpus(facts,resources):
             if 'pale_moss' in text:continue  # needs the level's feature registry and server level
             trees.append(name)
         elif kind in ('ore','scattered_ore'):ores.append(name)
-        elif kind not in ('freeze_top_layer',):others.append(name)
+        elif kind not in ('freeze_top_layer','template','fossil'):others.append(name)  # templates need structure resources
     worlds=[
         {},
         {'obstacle_mod':37,'obstacle_state':get('oak_leaves'),'obstacle_min':66},

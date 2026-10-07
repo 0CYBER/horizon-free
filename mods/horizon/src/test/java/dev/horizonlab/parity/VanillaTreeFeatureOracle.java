@@ -157,10 +157,10 @@ public final class VanillaTreeFeatureOracle {
     RandomSource random=f.get("legacy").getAsBoolean()?new LegacyRandomSource(seed):new XoroshiroRandomSource(seed);
     out.println("fixture "+f.get("feature").getAsString());
     Optional<Feature> decoded;
-    try{decoded=Feature.DIRECT_CODEC.parse(ops,JsonParser.parseString(features.get(f.get("feature").getAsString()).getAsString())).result();}catch(RuntimeException error){decoded=Optional.empty();}
+    try{decoded=Feature.DIRECT_CODEC.parse(ops,JsonParser.parseString(features.get(f.get("feature").getAsString()).getAsString())).result();}catch(Throwable error){decoded=Optional.empty();}
     if(decoded.isEmpty()){out.println("decode error");continue;}
     var handler=new World(f,out);var world=(WorldGenLevel)Proxy.newProxyInstance(WorldGenLevel.class.getClassLoader(),new Class<?>[]{WorldGenLevel.class},handler);
-    try{out.println("place "+decoded.get().place(world,generator,random,pos(f.getAsJsonArray("origin"))));}catch(RuntimeException error){out.println("place error");System.err.println(f.get("feature").getAsString()+": "+error);}
+    try{out.println("place "+decoded.get().place(world,generator,random,pos(f.getAsJsonArray("origin"))));}catch(Throwable error){out.println("place error");System.err.println(f.get("feature").getAsString()+": "+error);}
     out.println("next "+random.nextLong());
     var keys=new ArrayList<>(handler.chunks.keySet());keys.sort(Comparator.<ChunkPos>comparingInt(ChunkPos::x).thenComparingInt(ChunkPos::z));
     var changes=new TreeMap<BlockPos,Integer>(Comparator.<BlockPos>comparingInt(BlockPos::getX).thenComparingInt(BlockPos::getY).thenComparingInt(BlockPos::getZ));

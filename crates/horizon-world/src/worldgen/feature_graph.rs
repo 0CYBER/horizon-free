@@ -79,6 +79,7 @@ pub enum FeatureDefinition {
     RootSystem(Box<super::root_system::RootSystemFeature>),
     SpeleothemCluster(Box<super::dripstone::SpeleothemClusterFeature>),
     LargeDripstone(Box<super::dripstone::LargeDripstoneFeature>),
+    HugeFungus(Box<super::fungus::HugeFungusFeature>),
     ProjectedPatchySquare(Box<super::projected::ProjectedPatchySquareFeature>),
     SteppedColumnCluster(Box<super::projected::SteppedColumnClusterFeature>),
     FallenTree(Box<super::tree::FallenTreeFeature>),
@@ -648,6 +649,13 @@ impl FeatureDefinition {
                 )
                 .map(|f| Self::SteppedColumnCluster(Box::new(f)))
             }
+            "minecraft:huge_fungus" => super::fungus::HugeFungusFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("huge fungus bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(|f| Self::HugeFungus(Box::new(f))),
             "minecraft:iceberg" => super::iceberg::IcebergFeature::decode(
                 json,
                 blocks.ok_or(DecodeError::Field("iceberg bindings"))?,
@@ -1002,6 +1010,7 @@ impl FeatureDefinition {
             Self::Iceberg(feature) => feature.place(world, random, origin),
             Self::SpeleothemCluster(feature) => feature.place(world, random, origin),
             Self::LargeDripstone(feature) => feature.place(world, random, origin),
+            Self::HugeFungus(feature) => feature.place(world, random, origin),
             Self::ProjectedPatchySquare(feature) => feature.place(world, random, origin),
             Self::SteppedColumnCluster(feature) => feature.place(world, random, origin),
             Self::RootSystem(feature) => {
