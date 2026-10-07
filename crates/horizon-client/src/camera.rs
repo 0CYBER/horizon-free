@@ -17,6 +17,24 @@ impl Default for Camera {
     }
 }
 impl Camera {
+    /// A standing-sized inspection volume, not a simulated player entity.
+    pub fn collision_bounds(&self) -> horizon_core::geometry::Aabb {
+        use horizon_core::geometry::{Aabb, Vec3};
+        let half_width = f64::from(0.6_f32 / 2.0);
+        let feet = self.position.y - f64::from(1.62_f32);
+        Aabb::new(
+            Vec3::new(
+                self.position.x - half_width,
+                feet,
+                self.position.z - half_width,
+            ),
+            Vec3::new(
+                self.position.x + half_width,
+                feet + f64::from(1.8_f32),
+                self.position.z + half_width,
+            ),
+        )
+    }
     pub fn look(&mut self, x: f64, y: f64) {
         self.yaw -= x * 0.002;
         self.pitch = (self.pitch - y * 0.002).clamp(-1.55, 1.55);

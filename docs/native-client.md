@@ -6,7 +6,9 @@ registry state, including the terrain and sixteen featured placements. It loads
 block definitions, cuboid models, sprites and occlusion grids from pinned Java
 Edition 26.3 resources. Model selection uses the default block position seed;
 neighbor visibility uses the validated Rust face rules across chunk boundaries.
-The camera remains a free inspection tool.
+The camera remains an inspection tool. F4 enables a standing-sized collision
+volume that queries the rendered resident chunks through the shared world
+collision implementation. The camera can still fly; it does not simulate a player.
 
 Eligible opaque unit-cube faces use greedy rectangles only when texture layer,
 UV rotation/mirroring and shading match. Each rectangle retains its signed UV
@@ -66,6 +68,7 @@ not a render-distance or world-streaming implementation.
 | Left click | Capture mouse for camera rotation |
 | Escape | Release mouse |
 | F3 | Toggle FPS/chunk/mesh diagnostics in the window title |
+| F4 | Toggle inspection camera collisions; enabling requires an unobstructed position |
 | Ctrl+Q or window close | Exit |
 
 Controls bind physical keyboard positions. Losing focus clears held keys and
@@ -75,6 +78,35 @@ then `vscreen shot`. The `wtype` tool's default generated keymap does not preser
 physical key positions; typing the character W can report physical Escape.
 
 ## Validation
+
+The client loads a separate, registry-checked collision-shape export alongside
+render resources. `SceneCollisions` feeds its actual `TerrainChunk` instances
+into registered shape selection, block scanning, world movement resolution and
+occupancy checks. The scene has no other entities, block entities or border;
+entity-dependent queries report an error until an entity runtime is supplied.
+Camera collision uses a position context and disables stepping. Gravity,
+grounding, jumping, sneaking and the authoritative player tick remain unfinished.
+
+```sh
+python3 tools/prepare_native_client.py
+python3 tools/test_native_scene_collision.py
+```
+
+The [scene collision comparison](../benchmarks/rust-native-scene-collision-2026-10-07/scoped-parity.json)
+checks **14,150 movement requests**, each with before/after occupancy queries,
+against both pinned reference JARs. Native code independently builds the nine-
+and twenty-five-chunk scenes and all sixteen gallery placements. Movement
+components compare by exact double bits. Cases include partial blocks, pyramid
+ledges, ceilings, initial overlaps, negative and missing chunk boundaries, tiny
+and zero movement, and varied step heights. This verifies the scene adapter;
+it does not establish player locomotion or complete gameplay parity.
+
+The accompanying [startup check](../benchmarks/rust-native-scene-collision-2026-10-07/startup-smoke.json)
+passes after sharing scene loading between the GUI and headless collision probe.
+An [interactive Linux check](../benchmarks/rust-native-scene-collision-2026-10-07/interactive-smoke.json)
+enables F4, holds Shift to descend, verifies that the camera stops at the terrain
+surface, and exits with Ctrl+Q. The window was visually inspected on Vulkan
+llvmpipe; this is not a hardware performance measurement.
 
 The separate `horizon-assets` crate decodes the pinned 26.3 cuboid model format.
 Its native comparison covers all **2,883 block-model JSON files** in the client

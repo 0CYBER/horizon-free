@@ -1,15 +1,12 @@
 //! Native Horizon development client. The scene and free camera are rendering
 //! tools; they do not replace the authoritative gameplay implementation.
 #![forbid(unsafe_code)]
-mod assets;
 mod camera;
 mod mesh;
-mod models;
 mod render;
-mod sprites;
-mod world;
 use assets::Assets;
 use camera::Camera;
+use horizon_client::{assets, collisions, models, sprites, world};
 use mesh::Mesh;
 use render::Renderer;
 use std::{
@@ -62,7 +59,7 @@ impl Options {
             }
             if argument == "--help" || argument == "-h" {
                 println!(
-                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics.\n\nThis is a controlled block/model scene with a free inspection camera, not complete gameplay."
+                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions.\n\nThis is a controlled block/model scene with a free inspection camera, not complete gameplay."
                 );
                 return Ok(None);
             }
@@ -101,6 +98,8 @@ impl Options {
 struct App<'a> {
     assets: &'a Assets,
     world: TestWorld<'a>,
+    collision_binding: &'a horizon_world::block_collision::BlockCollisionRegistry<'a>,
+    collision_camera: bool,
     mesh: Mesh,
     options: Options,
     window: Option<Arc<Window>>,
@@ -159,7 +158,7 @@ impl App<'_> {
         let report = serde_json::json!({
             "schema": 1,
             "project": "Horizon",
-            "scope": "Native cube and cuboid-model renderer with binary cutouts, stepped sprite animation and free camera; no gameplay simulation",
+            "scope": "Native cube and cuboid-model renderer with binary cutouts, stepped sprite animation and optional camera collisions; no gameplay simulation",
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
             "adapter": adapter,
@@ -179,6 +178,7 @@ impl App<'_> {
             "camera_position": self.camera.position.to_array(),
             "camera_yaw": self.camera.yaw,
             "camera_pitch": self.camera.pitch,
+            "collision_camera": self.collision_camera,
             "error": self.error,
         });
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -264,6 +264,24 @@ impl ApplicationHandler for App<'_> {
                         if key == KeyCode::Escape {
                             self.capture(false);
                         }
+                        if key == KeyCode::F4 && !event.repeat {
+                            if self.collision_camera {
+                                self.collision_camera = false;
+                            } else {
+                                let mut collision = collisions::SceneCollisions {
+                                    world: &self.world,
+                                    binding: self.collision_binding,
+                                };
+                                match collision.unobstructed(self.camera.collision_bounds()) {
+                                    Ok(clear) => self.collision_camera = clear,
+                                    Err(error) => self.fail(event_loop, error),
+                                }
+                            }
+                            eprintln!(
+                                "Horizon inspection camera collisions: {}",
+                                self.collision_camera
+                            );
+                        }
                         if key == KeyCode::F3 && !event.repeat {
                             self.diagnostics = !self.diagnostics;
                             if !self.diagnostics {
@@ -289,7 +307,31 @@ impl ApplicationHandler for App<'_> {
                 let seconds = now.duration_since(self.previous).as_secs_f64().min(0.1);
                 self.previous = now;
                 if self.focused {
+                    let from = self.camera.position;
+                    let bounds = self.camera.collision_bounds();
                     self.camera.update(&self.keys, seconds);
+                    if self.collision_camera {
+                        let delta = self.camera.position - from;
+                        let mut collision = collisions::SceneCollisions {
+                            world: &self.world,
+                            binding: self.collision_binding,
+                        };
+                        match collision.resolve(
+                            bounds,
+                            horizon_core::geometry::Vec3::new(delta.x, delta.y, delta.z),
+                            0.0,
+                            false,
+                        ) {
+                            Ok(movement) => {
+                                self.camera.position =
+                                    from + glam::DVec3::new(movement.x, movement.y, movement.z)
+                            }
+                            Err(error) => {
+                                self.fail(event_loop, error);
+                                return;
+                            }
+                        }
+                    }
                 }
                 let result = self.renderer.as_mut().unwrap().render(&self.camera);
                 match result {
@@ -357,10 +399,11 @@ fn run() -> Result<()> {
         format!("{error}\nPrepare pinned resources with: python3 tools/prepare_native_client.py")
     })?;
     let world = TestWorld::new(&assets, options.radius)?;
+    let collision_binding = collisions::load(&options.resources, &assets.registry)?;
     let mut visibility = models::load_visibility(&options.resources, &assets.registry)?;
     let mesh = mesh::build(&world, &assets, &mut visibility)?;
     eprintln!(
-        "Horizon development scene: {} resident chunks, {} merged cube faces, {} baked model faces.\nClick to capture mouse; WASD/Space/Shift move; arrows rotate; Esc releases; Ctrl+Q quits.",
+        "Horizon development scene: {} resident chunks, {} merged cube faces, {} baked model faces.\nClick to capture mouse; WASD/Space/Shift move; arrows rotate; F4 toggles camera collisions; Esc releases; Ctrl+Q quits.",
         world.chunks.len(),
         mesh.cubes.len(),
         mesh.models.len()
@@ -369,6 +412,8 @@ fn run() -> Result<()> {
     let mut app = App {
         assets: &assets,
         world,
+        collision_binding: &collision_binding,
+        collision_camera: false,
         mesh,
         options,
         window: None,

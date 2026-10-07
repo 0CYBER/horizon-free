@@ -4,7 +4,7 @@ The behavior target is the repository's pinned **Minecraft Java Edition 26.3**.
 One-to-one vanilla gameplay parity is the acceptance criterion. It has **not**
 been reached. Horizon now has a [native development client](native-client.md)
 that renders a controlled resident-chunk scene with blockstate-selected models
-and a free camera. It does not run a
+and an inspection camera with optional resident-block collisions. It does not run a
 complete game server or gameplay simulation.
 The Rust workspace implements core arithmetic/random streams, world data and
 resident sections, scheduled tick ordering, geometry, contained fluid states,

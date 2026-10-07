@@ -67,6 +67,23 @@ def main():
     lab.write_json(root / 'block-tags.json', tags)
     visibility = oracle.with_name('VanillaFaceVisibilityOracle.java')
     collision = oracle.with_name('VanillaCollisionOracle.java')
+    collision_sources = base.source_hashes([collision])
+    collision_file = root / 'cached-collision.nbt'
+    if not (previous.get('collision_exporters_sha256') == collision_sources
+            and previous.get('server_sha256') == origin['server_sha256']
+            and collision_file.exists()
+            and previous.get('collision_sha256') == lab.digest(collision_file, 'sha256')):
+        export = lab.LOCAL/'horizon-client-collision'; export.mkdir(exist_ok=True)
+        classes = export/'classes'; classes.mkdir(exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+        with (export/'export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(collision)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx768M', '-cp', str(classes)+os.pathsep+dependencies,
+                            'dev.horizonlab.parity.VanillaCollisionOracle', 'generate', str(export)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+        collision_file.write_bytes((export/'cached-collision.nbt').read_bytes())
     render_sources = base.source_hashes([visibility, collision, oracle])
     render_files = ['render-definitions.json', 'occlusion.nbt']
     tag_hash = lab.digest(root/'block-tags.json', 'sha256')
@@ -105,7 +122,9 @@ def main():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
             count += 1
-    lab.write_json(manifest, {'schema': 3, **origin,
+    lab.write_json(manifest, {'schema': 4, **origin,
+                             'collision_exporters_sha256': collision_sources,
+                             'collision_sha256': lab.digest(collision_file, 'sha256'),
                              'render_exporters_sha256': render_sources,
                              'render_files_sha256': {name: lab.digest(root/name, 'sha256') for name in render_files},
                              'model_state_exporters_sha256': binding_sources,
