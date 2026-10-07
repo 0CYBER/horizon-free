@@ -81,6 +81,7 @@ pub enum FeatureDefinition {
     LargeDripstone(Box<super::dripstone::LargeDripstoneFeature>),
     HugeFungus(Box<super::fungus::HugeFungusFeature>),
     SculkPatch(Box<super::sculk::SculkPatchFeature>),
+    EndSpike(Box<super::end_spike::EndSpikeFeature>),
     ProjectedPatchySquare(Box<super::projected::ProjectedPatchySquareFeature>),
     SteppedColumnCluster(Box<super::projected::SteppedColumnClusterFeature>),
     FallenTree(Box<super::tree::FallenTreeFeature>),
@@ -650,6 +651,11 @@ impl FeatureDefinition {
                 )
                 .map(|f| Self::SteppedColumnCluster(Box::new(f)))
             }
+            "minecraft:end_spike" => super::end_spike::EndSpikeFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("end spike bindings"))?,
+            )
+            .map(|f| Self::EndSpike(Box::new(f))),
             "minecraft:sculk_patch" => super::sculk::SculkPatchFeature::decode(
                 json,
                 blocks.ok_or(DecodeError::Field("sculk patch bindings"))?,
@@ -1018,6 +1024,7 @@ impl FeatureDefinition {
             Self::LargeDripstone(feature) => feature.place(world, random, origin),
             Self::HugeFungus(feature) => feature.place(world, random, origin),
             Self::SculkPatch(feature) => feature.place(world, random, origin),
+            Self::EndSpike(feature) => feature.place(world, random, origin),
             Self::ProjectedPatchySquare(feature) => feature.place(world, random, origin),
             Self::SteppedColumnCluster(feature) => feature.place(world, random, origin),
             Self::RootSystem(feature) => {

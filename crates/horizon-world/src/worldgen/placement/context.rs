@@ -69,6 +69,16 @@ pub trait PlacementContext {
     ) -> Result<bool, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
     }
+    /// Add an End crystal entity (structure spawn) at an entity position.
+    fn spawn_end_crystal(
+        &mut self,
+        _position: [f64; 3],
+        _yaw: f32,
+        _beam_target: Option<[i32; 3]>,
+        _invulnerable: bool,
+    ) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
     /// WorldGenLevel.getSeed: the world seed for seed-derived feature noise.
     fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
