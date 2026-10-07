@@ -65,6 +65,7 @@ pub mod registry_collision_scan;
 pub mod registry_fall_ray;
 pub mod registry_fluid;
 pub mod retrogen;
+pub mod server_player_damage;
 pub mod suffocation;
 pub mod swimming;
 pub mod synced_floats;

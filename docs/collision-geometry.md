@@ -1315,3 +1315,20 @@ absorption reads/writes, combined dirty/default lists, received assignments,
 callback packet drains and failures. Targeted Clippy passes. Observer effects
 are controlled; custom virtual data replacement, other synchronized serializers,
 wire codecs and full player damage/tick integration remain pending.
+
+
+`server_player_damage` composes ordinary server-player inner damage with
+registered armor/toughness and health/absorption limits, shared synchronized
+float storage and stored hunger. Armor break callbacks may change attributes
+before the hit queries armor; received damage uses the actual reduction and
+health modules, and player exhaustion retains its ability/client guards.
+
+`python3 tools/test_server_player_damage_parity.py` compares the native Player
+inner damage method on ServerPlayer receivers, using actual native reduction,
+registered modified attributes, synchronized data and FoodData. The
+[server-player damage report](../benchmarks/rust-server-player-damage-2026-10-07/scoped-parity.json)
+records **373,455 matching lines per JAR**, covering repeated hits, bypass flags,
+resistance, numeric edges, armor attribute mutation, dirty packet drains and
+callback failures. Targeted Clippy passes. Empty equipment and controlled
+source/effect, durability, combat/stat/event services bound this scope; outer
+hurt gates, enchanted equipment and the complete player lifecycle remain pending.
