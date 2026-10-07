@@ -2006,3 +2006,20 @@ callbacks, statistics, effect bodies and event delivery remain controlled;
 listener enumeration here binds the ordinary food schema. Full advancement
 evaluation, potion effects, entity/world lifecycle integration and playable
 gameplay remain pending.
+
+
+`status_effect` stores shared MobEffectInstance identity, scalar details, hidden
+chains and blend state. Native copies retain scalar details while omitting hidden
+effects and resetting blend state. Stronger/longer effect updates preserve
+hidden-chain aliases and native change flags. Duration mapping skips zero and
+infinite durations; scaling uses the pinned version's floor and narrowing rules.
+
+`python3 tools/test_status_effect_parity.py` compares actual constructors,
+copy/update operations, duration mapping/scaling, equality and blend copying.
+The [status storage report](../benchmarks/rust-status-effect-2026-10-07/scoped-parity.json)
+records **655,643 matching lines per JAR**, covering constructor clamping, raw
+amplifiers, shared hidden chains, negative/overflow/infinite durations, float
+edges and mapper mutation/failure behavior. Equality excludes hidden and blend
+state as in vanilla. Mismatched-holder warning logs are outside the comparison.
+Server/client ticking, concrete effect behavior, registries and full entity
+integration remain pending.
