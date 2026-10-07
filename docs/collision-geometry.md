@@ -1483,3 +1483,19 @@ cosine boundaries, arbitrary float rotations, degenerate horizontal vectors and
 the widened float-PI fallback. Targeted Clippy passes. Full item-blocking dispatch
 and validation against JVMs on other platforms remain pending. This does not
 resolve the separately tracked Math.cos/Gaussian portability differences.
+
+
+`item_blocking` implements living blocking dispatch: item/component capture,
+bypass and pierced-arrow rejection, source direction, component reduction,
+blocking-item damage dispatch and the later non-projectile melee response.
+The virtual level/used hand are queried after reduction; melee response retains
+the original server-level argument and performs a fresh direct-entity lookup.
+
+`python3 tools/test_item_blocking_parity.py` compares actual LivingEntity
+applyItemBlocking with native components on base and ServerPlayer receivers.
+The [item-blocking report](../benchmarks/rust-item-blocking-2026-10-07/scoped-parity.json)
+records **87,930 matching lines per JAR**, including callback mutations/failures,
+captured items/components, piercing/bypass combinations, native direction/math,
+client/stat guards and melee responses. Targeted Clippy passes. Native stacks
+are explicitly undamageable; actual damageable-item mutation, blocking eligibility,
+component codecs and complete combat/world integration remain pending.
