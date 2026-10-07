@@ -227,6 +227,8 @@ struct Game<'a> {
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
     chest_open: HashMap<(i32, i32, i32), (f32, f32)>,
+    /// Item being used (eaten): hotbar slot and ticks used.
+    using: Option<(usize, u32)>,
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -463,6 +465,9 @@ impl Game<'_> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
         if !self.creative {
+            if let Some(p) = self.player.as_mut() {
+                p.health.food.exhaustion = (p.health.food.exhaustion + 0.005).min(40.0);
+            }
             let held = self.held().cloned();
             let harvest = !facts.requires_tool
                 || self.res.items.correct_for_drops(held.as_ref(), &facts.name);
@@ -652,14 +657,14 @@ impl Game<'_> {
         }
         let Some(stack) = self.held().cloned() else { return Ok(()) };
         let Some(info) = self.res.items.get(&stack.item).cloned() else { return Ok(()) };
-        if let Some((nutrition, saturation)) = info.food
-            && let Some(p) = self.player.as_mut()
+        if info.food.is_some()
+            && let Some(p) = self.player.as_ref()
             && (p.health.food.food < 20 || self.creative)
         {
-            let food = &mut p.health.food;
-            food.food = (food.food + nutrition as i32).min(20);
-            food.saturation = (food.saturation + saturation).min(food.food as f32);
-            self.consume_held();
+            // Consumable.startConsuming: held right click for consume_seconds.
+            if self.using.is_none() {
+                self.using = Some((self.selected, 0));
+            }
             return Ok(());
         }
         let Some(hit) = self.pick() else { return Ok(()) };
@@ -725,6 +730,54 @@ impl Game<'_> {
             if s.count == 0 {
                 self.inventory[self.selected] = None;
             }
+        }
+    }
+    fn tick_using(&mut self) {
+        let Some((slot, ticks)) = self.using else { return };
+        let Some(stack) = self.inventory[slot].clone() else {
+            self.using = None;
+            return;
+        };
+        if !self.right || slot != self.selected || self.screen != Screen::Playing {
+            self.using = None;
+            return;
+        }
+        let Some(info) = self.res.items.get(&stack.item).cloned() else {
+            self.using = None;
+            return;
+        };
+        let duration = 32;
+        let ticks = ticks + 1;
+        let remaining = duration - ticks.min(duration);
+        let eye = self.eye_position().unwrap_or_default();
+        // Consumable.shouldEmitParticlesAndSounds: every 4 ticks in the last 25.
+        if remaining <= 25 && remaining % 4 == 0 {
+            let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
+            self.audio.play("minecraft:entity.generic.eat", Some(eye), 0.5 + 0.5 * self.world.random.next_int_bound(2).unwrap_or(0) as f32, pitch);
+            if let Some(Icon::Flat(sprite)) = self.icon(&stack.item) {
+                let (yaw, pitch) = (f64::from(self.yaw).to_radians(), f64::from(self.pitch).to_radians());
+                let at = [eye[0] - yaw.sin() * pitch.cos() * 0.3, eye[1] - 0.1, eye[2] + yaw.cos() * pitch.cos() * 0.3];
+                for _ in 0..5 {
+                    let v = [(f64::from(self.world.random.next_float()) - 0.5) * 0.1, 0.1, (f64::from(self.world.random.next_float()) - 0.5) * 0.1];
+                    let p = Particle::terrain(&mut self.world.random, at, v, sprite.clone(), 0xFFFFFF);
+                    self.particles.push(p);
+                }
+            }
+        }
+        if ticks >= duration {
+            self.using = None;
+            if let Some((nutrition, saturation)) = info.food
+                && let Some(p) = self.player.as_mut()
+            {
+                // FoodData.eat(nutrition, saturation)
+                let food = &mut p.health.food;
+                food.food = (food.food + nutrition as i32).clamp(0, 20);
+                food.saturation = (food.saturation + saturation).clamp(0.0, food.food as f32);
+                self.audio.play("minecraft:entity.player.burp", Some(eye), 0.5, self.world.random.next_float() * 0.1 + 0.9);
+                self.consume_held();
+            }
+        } else {
+            self.using = Some((slot, ticks));
         }
     }
     fn tick_mining(&mut self) -> Result<()> {
@@ -965,9 +1018,23 @@ impl Game<'_> {
             let _ = player.set_health(0.0, false);
         }
         if player.health.dead_or_dying() && self.screen != Screen::Dead {
+            // Inventory.dropAll: every stack thrown in a random direction.
+            let at = [player.position.x, player.position.y + 1.32, player.position.z];
+            if !self.creative {
+                let stacks: Vec<ItemStack> = self.inventory.iter_mut().filter_map(Option::take).collect();
+                for stack in stacks {
+                    let r = &mut self.world.random;
+                    let strength = f64::from(r.next_float()) * 0.5;
+                    let angle = f64::from(r.next_float()) * std::f64::consts::TAU;
+                    let v = [-angle.sin() * strength, 0.2, angle.cos() * strength];
+                    self.spawn_item(stack, at, v, 40);
+                }
+            }
+            self.audio.play("minecraft:entity.player.death", Some(at), 1.0, 1.0);
             self.screen = Screen::Dead;
             self.capture(false);
         }
+        self.tick_using();
         self.tick_mining()?;
         self.tick_items();
         self.tick_mobs()?;
@@ -1896,6 +1963,12 @@ impl Game<'_> {
             amount *= 1.5;
         }
         self.attack_ticks = 0;
+        if let Some(p) = self.player.as_mut()
+            && !self.creative
+        {
+            p.health.food.exhaustion = (p.health.food.exhaustion + 0.1).min(40.0);
+        }
+        let player = self.player.as_ref();
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
         let mob = &mut self.mobs[index];
         let center = [mob.position.x, mob.position.y + mob.kind.height / 2.0, mob.position.z];
@@ -2521,9 +2594,6 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Dead if pressed => {
                             self.player = None;
                             self.screen = Screen::Playing;
-                            if !self.creative {
-                                self.inventory.iter_mut().for_each(|s| *s = None);
-                            }
                             self.spawn_player()?;
                             self.capture(true);
                         }
@@ -2819,6 +2889,7 @@ pub fn run() -> Result<()> {
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
         chest_open: HashMap::new(),
+        using: None,
     };
     EventLoop::new()?.run_app(&mut game)?;
     if let Some(path) = &game.options.report {
