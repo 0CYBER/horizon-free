@@ -90,7 +90,8 @@ public final class VanillaTreeFeatureOracle {
     case "ensureCanWrite":return true;
     case "getRandom":return shapeRandom;
     case "scheduleTick":return null;  // Edge shape updates also schedule ticks; not compared.
-    case "setCurrentlyGenerating":return null;
+    case "setCurrentlyGenerating":case "playSound":case "levelEvent":case "gameEvent":case "blockEvent":return null;
+    case "getEntities":return java.util.List.of();
     case "getBlockEntity":{
      if(args.length!=1)break;var p=((BlockPos)args[0]).immutable();var state=get(p);
      if(state.is(Blocks.CHEST))return chests.computeIfAbsent(p,key->new ChestBlockEntity(key,state){@Override public void setLootTable(net.minecraft.resources.ResourceKey<net.minecraft.world.level.storage.loot.LootTable> table,long seed){out.println("loot "+xyz(key)+" "+table.identifier()+" "+seed);super.setLootTable(table,seed);}});

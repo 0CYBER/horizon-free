@@ -197,6 +197,9 @@ impl<W: Write> PlacementContext for World<'_, '_, W> {
                 (0..ny).all(|y| (0..nz).all(|z| shape.is_full(x as i32, y as i32, z as i32)))
             }))
     }
+    fn configure_end_gateway(&mut self, _: [i32; 3], _: [i32; 3], _: bool) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
     fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
         Ok(self.seed)
     }

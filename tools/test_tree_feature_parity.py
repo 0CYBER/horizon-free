@@ -120,7 +120,10 @@ def main():
     rules=survival.bind_definitions(*[json.loads((build/name).read_text()) for name in ['survival-classes.json','survival-placement-classes.json','survival-support-tags.json']]);(build/'survival-rules.json').write_text(json.dumps(rules,separators=(',',':')))
     inputs=build/'inputs.txt';count=0
     with inputs.open('w',encoding='utf-8') as output:
-        for fixture in corpus(facts,resources):output.write(json.dumps(fixture,separators=(',',':'))+'\n');count+=1
+        only=os.environ.get('FEATURE_FILTER')  # optional regex over feature names for focused reruns
+        for fixture in corpus(facts,resources):
+            if only and not __import__('re').search(only,fixture['feature']):continue
+            output.write(json.dumps(fixture,separators=(',',':'))+'\n');count+=1
     fixtures=[inputs,*sorted(build.glob('*.nbt')),*[p for p in sorted(build.glob('*.json')) if p.name!='report.json']];tested_fixtures=fixture_hashes(fixtures)
     print(f'Prepared {count:,} feature fixtures',flush=True)
     run(['cargo','build','--release','-p','horizon-world','--example','tree_feature_fixture'],'compile-rust')

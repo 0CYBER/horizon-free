@@ -425,3 +425,39 @@ pub(crate) fn shuffle<T>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::random::{LegacyRandom, RandomSource};
+    #[test]
+    fn pos_set_iterates_in_java_hash_bucket_order() {
+        let mut set = PosSet::default();
+        let inserted = [[0, 64, 1], [1, 64, 0], [0, 65, 0], [0, 64, 0]];
+        for p in inserted {
+            set.insert(p);
+        }
+        // BlockPos.hashCode spread by h ^ (h >>> 16) into 16 buckets; ties keep
+        // insertion order within a bucket.
+        let mut expected = inserted.to_vec();
+        expected.sort_by_key(|p| {
+            let h = crate::java_hash_map::JavaKey::java_hash(&JavaPos(*p)) as u32;
+            (h ^ (h >> 16)) & 15
+        });
+        assert_eq!(set.to_vec(), expected);
+        assert_eq!(set.pop_first(), Some(expected[0]));
+        assert!(!set.contains(expected[0]));
+    }
+    #[test]
+    fn fisher_yates_matches_native_draw_order() {
+        let mut values = [0, 1, 2, 3];
+        shuffle(&mut values, &mut LegacyRandom::new(42)).unwrap();
+        let mut reference = [0, 1, 2, 3];
+        let mut random = LegacyRandom::new(42);
+        for i in (2..=4).rev() {
+            let j = random.next_int_bound(i).unwrap() as usize;
+            reference.swap(i as usize - 1, j);
+        }
+        assert_eq!(values, reference);
+    }
+}

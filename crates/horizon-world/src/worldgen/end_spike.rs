@@ -202,3 +202,19 @@ impl EndSpikeFeature {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn spike_layout_is_a_permutation_of_sizes() {
+        let spikes = spikes_for_seed(0);
+        assert_eq!(spikes.len(), 10);
+        let mut heights: Vec<i32> = spikes.iter().map(|s| s.height).collect();
+        heights.sort_unstable();
+        assert_eq!(heights, (0..10).map(|s| 76 + s * 3).collect::<Vec<_>>());
+        assert_eq!(spikes.iter().filter(|s| s.guarded).count(), 2);
+        assert_eq!((spikes[0].center_x, spikes[0].center_z), (42, 0));
+        assert_eq!(spikes_for_seed(0), spikes_for_seed(0));
+    }
+}
