@@ -1848,3 +1848,19 @@ empty-but-distinct inputs, reference replacement and callback failures. Targeted
 Clippy passes. The concrete actor inventory/drop handler, contained-component
 validation, finish-use side effects and complete gameplay integration remain
 pending.
+
+
+`bundle_weight` implements checked native fraction construction, addition and
+multiplication, nested-bundle overhead, occupied-beehive weight and lazy caching
+of successful and failed weight calculations. Contained validation checks
+container sizes, then bundle sizes and weight, then charged projectile sizes.
+It does not recursively apply full strict validation to each contained item.
+
+`python3 tools/test_bundle_weight_parity.py` compares pinned Fraction arithmetic,
+actual BundleContents and ItemStack strict validation. The
+[bundle report](../benchmarks/rust-bundle-weight-2026-10-07/scoped-parity.json)
+records **137,332 matching lines per JAR**, including overflow, negative template
+counts, changed prototypes, cached errors, nested bundles, bee presence, empty
+component visibility and validation order. Targeted Clippy passes. Typed schema
+adapters remain fixture-local; complete bundle inventory operations, codecs,
+item-use integration and full gameplay integration remain pending.
