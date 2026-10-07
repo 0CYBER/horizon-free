@@ -836,3 +836,21 @@ water changes, numeric boundaries, particle locations/counts, callback failures,
 field mutations and climbing cleanup. Targeted Clippy passes. Fluid immersion,
 changed-block enchantments, particle rendering and live gameplay binding remain
 pending; those providers are controlled by this gate.
+
+
+`living_air` implements input normalization/rotation, friction-influenced speed,
+ladder/scaffolding limits, relative movement, collision-triggered climbing and
+air travel. Ground friction is captured before movement while levitation,
+gravity and drag are sampled afterwards. Player class identity controls ladder
+slide suppression. Native float arithmetic and quantized trigonometry are kept.
+
+`python3 tools/test_living_air_parity.py` invokes the actual native private air,
+relative movement, climbing, speed, friction and input-vector methods. The
+[air travel report](../benchmarks/rust-living-air-2026-10-07/scoped-parity.json)
+records **443,554 matching lines per JAR**, including both player/nonplayer
+classes, changed ground/climbing predicates, missing client chunks, levitation,
+nonfinite boundaries, callback mutations and failures. Targeted Clippy passes.
+Extreme effect amplifiers are injected directly for integer-boundary checks;
+normal constructor clamping is outside this gate. Collision movement, gravity,
+attributes and immersion remain controlled providers; live gameplay binding and
+complete player travel are pending.
