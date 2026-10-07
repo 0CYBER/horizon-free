@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod active_effects;
+pub mod active_effect_tick;
 pub mod stored_consume;
 pub mod attribute_health;
 pub mod attributes;

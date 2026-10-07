@@ -21,8 +21,11 @@ composes food storage, native random streams and eating particles, with exact
 sound parameters and effect ordering checked against both pinned JARs. Consume
 effect bodies now cover status application/removal/clearing, sounds and random
 teleport attempts. Shared status instances implement hidden-chain updates,
-server/client countdown and client blending with native comparisons. These
-kernels still need complete entity/world lifecycle bindings. All pinned block-survival
+server/client countdown and client blending with native comparisons. Entity
+effect storage now binds consumable status changes and the effect tick loop,
+including expiration, periodic refresh and client particle selection. Registered
+effect behavior, notification side effects and full entity/world lifecycle
+bindings remain unfinished. All pinned block-survival
 families now have native differential coverage. Full simulation callbacks,
 complete chunk generation, entity behavior, networking, rendering and playable
 integration remain unfinished. The linked subsystem documents and hashed reports
@@ -1014,3 +1017,28 @@ and fixture Clippy checks pass. Eligibility policy, registered effect behavior,
 attribute/packet notifications and sound delivery remain controlled. Named
 holder-set binding, the full player consumption lifecycle and complete gameplay
 remain pending.
+
+## Entity effect tick loop and client particles
+
+The Rust entity effect loop now iterates shared active storage, removes expired
+effects before notifying observers, reports hidden-effect restoration, and
+refreshes surviving effects on vanilla's 600-tick duration boundary. It uses the
+actual level class distinction. Server iteration catches concurrent-modification
+failures from map iteration or callbacks; the initial level query and client
+iteration preserve their propagating failure behavior. Value replacement alone
+does not invalidate iteration, and callbacks continue using captured instances.
+
+Client ticks advance each instance's duration and blend, then read synchronized
+particle/ambience data, apply the invisibility-dependent random interval, and
+select particles from the captured list. Position queries and the destination
+level preserve native evaluation order.
+
+The [effect-loop comparison](../benchmarks/rust-active-effect-tick-2026-10-07/scoped-parity.json)
+matches **1,732,406 client-JAR lines** and **1,732,849 server-JAR lines** across
+**4,036 fixtures**. Each reference exports its own holder identity hashes; those
+hashes can change iteration order and subsequent callback paths between JVMs.
+The checks execute inherited native entity and instance methods, native maps,
+synchronized data and both RNG implementations. Library and fixture Clippy pass.
+Registered effect bodies, attribute/packet notification side effects and random
+position methods are still controlled. Complete entity ticking, gameplay and
+playable platform builds remain pending.
