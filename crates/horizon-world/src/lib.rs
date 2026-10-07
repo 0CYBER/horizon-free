@@ -35,6 +35,7 @@ pub mod entity_fluid;
 pub mod entity_fluid_tick;
 pub mod entity_move;
 pub mod entity_obstruction;
+pub mod extra_items;
 pub mod fall_damage;
 pub mod fluid;
 pub mod fluid_box;

@@ -1920,3 +1920,20 @@ copies, empty aliases and mutations/failures at each effect boundary. The
 retains **353,264 matching lines per JAR**. Targeted Clippy passes. Item handlers
 and actor extra-item delivery remain controlled; concrete consumables, full
 inventory-use binding, contained schemas and complete gameplay remain pending.
+
+
+`extra_items::deliver` connects server-player remainder delivery to actual
+inventory pickup. Failed insertion reaches the predicted drop service with the
+same remaining stack; successful insertion retains native count consumption and
+slot aliases. The drop service represents throwRandomly=false and
+Prediction::PREDICTED.
+
+`python3 tools/test_extra_items_parity.py` composes native item completion,
+remainders and cooldowns with inherited ServerPlayer extra-item handling and
+real Inventory/PlayerEquipment. The
+[delivery report](../benchmarks/rust-extra-items-2026-10-07/scoped-parity.json)
+records **272,124 matching lines per JAR**, including full/partially filled
+inventories, offhand merging, aliased slots, creative material queries, partial
+insertion and callback failures. Targeted Clippy passes. Drop arguments are
+verified, but entity spawning remains controlled. Concrete item handlers, full
+contained schemas, complete use lifecycle and full gameplay remain pending.
