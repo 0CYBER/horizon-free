@@ -1049,3 +1049,17 @@ Targeted Clippy passes. Shared-fixture regressions also pass:
 (**607,338 lines per JAR**). Chunk presence and section wet flags are controlled,
 and block entities are absent here; full live chunk/entity lifecycle, fluid
 propagation and playable gameplay remain pending.
+
+
+`swimming` implements entity/player swimming transitions, underwater/shallow-water
+predicates and the fluid jump threshold. The player flying ability disables
+swimming directly. Other transitions preserve short-circuit query order, prior
+eye-in-water state, passenger guards, captured block position and final state
+writes only after all required queries succeed.
+
+`python3 tools/test_swimming_parity.py` compares actual Entity/Player methods.
+The [swimming report](../benchmarks/rust-swimming-2026-10-07/scoped-parity.json)
+records **191,142 matching lines per JAR**, including flag combinations, native
+fluid tag membership, failures/mutations, and f32 eye-height boundaries/nonfinite
+values. Targeted Clippy passes. Synchronized entity storage, full input/tick
+integration and playable gameplay remain pending.

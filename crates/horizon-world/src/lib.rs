@@ -55,6 +55,7 @@ pub mod registry_fall_ray;
 pub mod registry_fluid;
 pub mod retrogen;
 pub mod suffocation;
+pub mod swimming;
 pub mod tick_data;
 pub mod world_movement;
 pub mod world_ray;
