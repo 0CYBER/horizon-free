@@ -1969,3 +1969,19 @@ cases, random-source replacement and callback mutation/failure prefixes.
 Targeted Clippy passes. The fixture uses scalar damage component patches and
 controlled particle delivery; renderer enqueue, full consumable dispatch and
 complete gameplay remain pending.
+
+
+`consumable` supplies consumption timing and particle/sound dispatch. Both
+eating and drinking pitch draws occur for every animation before particle
+callbacks. Sound overrides run afterward; volume and pitch retain their
+previously drawn values. Particle emission may use a different actor random
+source from the one supplied for sound selection.
+
+`python3 tools/test_consumable_emission_parity.py` composes actual Consumable
+emission with inherited LivingEntity particles and real item templates. The
+[consumable emission report](../benchmarks/rust-consumable-emission-2026-10-07/scoped-parity.json)
+records **124,732 matching lines per JAR**, covering all animations, timing
+overflow and float edges, random-source aliases, optional particles, sound
+overrides and callback mutation/failure prefixes. Targeted Clippy passes. Sound
+playback, rendering, consumable completion/effects and full gameplay remain
+pending.

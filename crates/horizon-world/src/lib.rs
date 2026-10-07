@@ -25,6 +25,7 @@ pub mod combat_rules;
 pub mod component_durability;
 pub mod component_patch;
 pub mod compression;
+pub mod consumable;
 pub mod damage_immunity;
 pub mod damage_reduction;
 pub mod damage_source;
