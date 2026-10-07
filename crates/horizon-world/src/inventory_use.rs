@@ -7,12 +7,20 @@ use crate::{
     living_use_flags,
     player_equipment::{self, InteractionHand},
     player_inventory::{EquipmentSlot, PlayerInventory},
-    synced_values::{DataError, Observer, SyncedValues},
+    synced_values::{DataError, DataValue, Observer, SyncedValues},
 };
 pub type ActiveStack<I, K, V> = UseState<StackRef<I, K, V>>;
 pub struct UseView<'a, I, K, V> {
     pub inventory: &'a mut PlayerInventory<I, K, V>,
     pub flags: &'a mut SyncedValues<u8>,
+}
+impl<I, K, V> UseView<'_, I, K, V> {
+    pub fn reborrow(&mut self) -> UseView<'_, I, K, V> {
+        UseView {
+            inventory: self.inventory,
+            flags: self.flags,
+        }
+    }
 }
 pub trait UseServices<I, K, V> {
     type Error;
@@ -300,5 +308,78 @@ impl<I: Copy + Eq, K: Clone + Eq, V: Clone + PartialEq, S: UseServices<I, K, V>>
             state,
             item,
         )
+    }
+}
+
+/// Duration dispatch used when client synchronization discovers a newly held
+/// active stack. Implementations retain the captured stack across callbacks.
+pub trait DurationServices<I, K, V>: UseServices<I, K, V> {
+    fn duration(
+        &mut self,
+        view: UseView<'_, I, K, V>,
+        state: &mut ActiveStack<I, K, V>,
+        item: StackRef<I, K, V>,
+    ) -> Result<i32, Self::Error>;
+}
+/// LivingEntity's reaction to DATA_LIVING_ENTITY_FLAGS after Entity's observer
+/// has run. Other synchronized keys (pose, sleeping position, etc.) are separate.
+pub fn flags_updated<
+    I: Copy + Eq,
+    K: Clone + Eq,
+    V: Clone + PartialEq,
+    S: DurationServices<I, K, V>,
+>(
+    services: &mut S,
+    mut view: UseView<'_, I, K, V>,
+    state: &mut ActiveStack<I, K, V>,
+) -> Result<(), S::Error> {
+    let level = services.level(view.reborrow(), state)?;
+    if !services.is_client(view.reborrow(), state, level)? {
+        return Ok(());
+    }
+    if living_use_flags::using_item(view.flags).expect("validated flags")
+        && state.item.read().is_empty()
+    {
+        let hand = living_use_flags::used_hand(view.flags).expect("validated flags");
+        state.item = player_equipment::get_hand(view.inventory, hand);
+        if !state.item.read().is_empty() {
+            let item = state.item.clone();
+            state.remaining = services.duration(view, state, item)?;
+        }
+    } else if !living_use_flags::using_item(view.flags).expect("validated flags")
+        && !state.item.read().is_empty()
+    {
+        state.item = view.inventory.stacks().empty();
+        state.remaining = 0;
+    }
+    Ok(())
+}
+impl<I: Copy + Eq, K: Clone + Eq, V: Clone + PartialEq, S: UseServices<I, K, V>>
+    InventoryUse<I, K, V, S>
+{
+    pub fn assign_flags(
+        &mut self,
+        state: &mut ActiveStack<I, K, V>,
+        values: &[DataValue<u8>],
+    ) -> Result<(), DataError<S::Error>> {
+        let mut observer = FlagObserver {
+            inventory: &mut self.inventory,
+            state,
+            services: &mut self.services,
+        };
+        self.flags.assign(values, &mut observer)
+    }
+    pub fn set_flag(
+        &mut self,
+        state: &mut ActiveStack<I, K, V>,
+        mask: i32,
+        value: bool,
+    ) -> Result<(), DataError<S::Error>> {
+        let mut observer = FlagObserver {
+            inventory: &mut self.inventory,
+            state,
+            services: &mut self.services,
+        };
+        living_use_flags::set_flag(&mut self.flags, mask, value, &mut observer)
     }
 }

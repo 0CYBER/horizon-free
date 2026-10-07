@@ -1782,3 +1782,20 @@ replacement and failed callbacks. Targeted Clippy passes. Item/level effects and
 the equip/synchronized observers are controlled; starting use, default observer
 reactions, consumables, kinetic combat, remainders/cooldowns and complete gameplay
 integration remain pending.
+
+
+`inventory_use::flags_updated` implements LivingEntity's synchronized use-flag
+reaction. On clients, a using flag can select the held stack and query its
+duration; clearing use can clear the active stack and remaining time. Server
+notifications leave active-use state unchanged. Received assignments notify even
+when the byte value is unchanged, while ordinary unchanged writes do not.
+
+`python3 tools/test_use_flag_reaction_parity.py` invokes the inherited native
+observer through actual synchronized writes/assignments, player inventory and
+equipment. The [reaction report](../benchmarks/rust-use-flag-reaction-2026-10-07/scoped-parity.json)
+records **366,331 matching lines per JAR**, including duration callbacks,
+empty-but-distinct stack references, signed masks, repeated received values,
+selection/count mutations and failures before dirty marking. Ordinary lifecycle
+operations are also exercised with the real observer reaction. Targeted Clippy
+passes. Other synchronized keys, start-use packet flow, full item/equip effects
+and complete gameplay integration remain pending.
