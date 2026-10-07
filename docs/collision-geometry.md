@@ -788,3 +788,19 @@ geometry, cache population, canonical/alias identities, query suppression and
 failures. Targeted Clippy passes. The pinned registry has no amount-nine state;
 unsupported custom fluid definitions are outside this module. Fluid propagation,
 entity immersion and live world/ray integration remain pending.
+
+
+`InteractionShapes` imports a complete state-bound table with a distinct table
+kind and mandatory canonical identity metadata. The pinned owner audit finds
+only default empty, cauldron, composter, hopper and scaffolding implementations;
+all are static per state. Geometry uses the existing validated discrete shape
+importer while preserving eight native shape identities.
+
+`python3 tools/test_interaction_shape_parity.py` compares every registered state
+and actual native interaction-face overrides with supplied collision geometry.
+The [interaction shape report](../benchmarks/rust-interaction-shape-2026-10-07/scoped-parity.json)
+records **188,682 matching lines per JAR** across all **35,723 states**. Native
+interaction-shape world queries are rejected by the fixture. Import checks reject
+wrong table kind, partial mappings, missing canonical metadata, foreign state
+ordering and invalid IDs. Targeted Clippy passes. Registered outline/visual
+shapes, complete ray-world binding and gameplay integration remain pending.

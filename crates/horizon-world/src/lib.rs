@@ -26,6 +26,7 @@ pub mod fluid;
 pub mod fluid_shape;
 pub mod ground_support;
 pub mod heightmap;
+pub mod interaction_shapes;
 pub mod liquid_collision;
 pub mod living_fall;
 pub mod movement_emission;
