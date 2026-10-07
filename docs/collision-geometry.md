@@ -1436,3 +1436,20 @@ causing-entity replacement, mutations and failures. Targeted Clippy passes.
 Catalogs are immutable snapshots with local indices, not network IDs. Rust
 DamageType codecs, runtime reload, death-message generation, full entity query
 bindings and combat source integration remain pending.
+
+
+Registered damage sources now drive a composed player-combat fixture. Source
+helpers map the immunity, outer-hurt and reduction tag enums to the imported
+vanilla tags. Native source methods supply exhaustion, difficulty scaling,
+creative-source abilities and direct-entity weapon selection through the real
+ServerPlayer hurt chain; thorns also follows its native secondary-sound branch.
+
+`python3 tools/test_registered_player_combat_parity.py` records **1,431,711
+matching lines per JAR** in the
+[registered player-combat report](../benchmarks/rust-registered-player-combat-2026-10-07/scoped-parity.json),
+covering all 51 damage types and 36 tags, direct/causing entity combinations,
+repeated hits, health/absorption/hunger, cooldown state and callback failures.
+Targeted Clippy passes. Equipment is unenchanted; virtual entity flags/rule
+values, blocking amounts, durability, PvP permission, attribution, effects,
+knockback/death services and empty criterion listeners remain controlled.
+Complete entity lifecycle and playable game integration remain pending.

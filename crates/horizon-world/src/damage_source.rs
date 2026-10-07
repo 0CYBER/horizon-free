@@ -202,6 +202,36 @@ impl<E: Copy + Eq> DamageSource<'_, E> {
     pub fn in_tag(&self, tag: &str) -> bool {
         self.catalog.in_tag(self.id, tag)
     }
+    pub fn bypasses(&self, kind: crate::damage_reduction::Bypass) -> bool {
+        use crate::damage_reduction::Bypass;
+        self.in_tag(match kind {
+            Bypass::Armor => "minecraft:bypasses_armor",
+            Bypass::Effects => "minecraft:bypasses_effects",
+            Bypass::Resistance => "minecraft:bypasses_resistance",
+            Bypass::Enchantments => "minecraft:bypasses_enchantments",
+        })
+    }
+    pub fn hurt_tag(&self, tag: crate::living_hurt::HurtTag) -> bool {
+        use crate::living_hurt::HurtTag;
+        self.in_tag(match tag {
+            HurtTag::Fire => "minecraft:is_fire",
+            HurtTag::Freezing => "minecraft:is_freezing",
+            HurtTag::DamagesHelmet => "minecraft:damages_helmet",
+            HurtTag::BypassesCooldown => "minecraft:bypasses_cooldown",
+            HurtTag::NoImpact => "minecraft:no_impact",
+            HurtTag::NoKnockback => "minecraft:no_knockback",
+        })
+    }
+    pub fn immunity_tag(&self, tag: crate::damage_immunity::ImmunityTag) -> bool {
+        use crate::damage_immunity::ImmunityTag;
+        self.in_tag(match tag {
+            ImmunityTag::BypassesInvulnerability => "minecraft:bypasses_invulnerability",
+            ImmunityTag::Fire => "minecraft:is_fire",
+            ImmunityTag::Fall => "minecraft:is_fall",
+            ImmunityTag::Drowning => "minecraft:is_drowning",
+            ImmunityTag::Freezing => "minecraft:is_freezing",
+        })
+    }
     pub fn direct_entity(&self) -> Option<E> {
         self.direct
     }
