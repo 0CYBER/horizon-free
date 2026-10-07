@@ -7,6 +7,12 @@ mod render;
 use assets::Assets;
 use camera::Camera;
 use horizon_client::{assets, collisions, models, sprites, world};
+use horizon_client::{
+    clock::FixedStep,
+    input,
+    motion::{MotionResources, MotionWorld, PlayerMotion},
+};
+use horizon_core::geometry::Vec3;
 use mesh::Mesh;
 use render::Renderer;
 use std::{
@@ -59,7 +65,7 @@ impl Options {
             }
             if argument == "--help" || argument == "-h" {
                 println!(
-                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions.\n\nThis is a controlled block/model scene with a free inspection camera, not complete gameplay."
+                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions; F5 toggles walking test.\nWalking test: WASD move; Space jumps; gravity and collisions at 20 ticks/s.\n\nThis is a controlled development scene. Walking has no sprint/crouch, damage, interaction, saving or complete gameplay."
                 );
                 return Ok(None);
             }
@@ -100,6 +106,11 @@ struct App<'a> {
     world: TestWorld<'a>,
     collision_binding: &'a horizon_world::block_collision::BlockCollisionRegistry<'a>,
     collision_camera: bool,
+    motion_resources: &'a MotionResources,
+    player: Option<PlayerMotion>,
+    motion_clock: FixedStep,
+    previous_player_position: Vec3,
+    movement_ticks: u64,
     mesh: Mesh,
     options: Options,
     window: Option<Arc<Window>>,
@@ -118,6 +129,68 @@ struct App<'a> {
     error: Option<String>,
 }
 impl App<'_> {
+    fn toggle_walking(&mut self) -> Result<()> {
+        if self.player.is_some() {
+            self.player = None;
+        } else {
+            let mut collision = collisions::SceneCollisions {
+                world: &self.world,
+                binding: self.collision_binding,
+            };
+            if !collision.unobstructed(self.camera.collision_bounds())? {
+                eprintln!(
+                    "Horizon: move the inspection camera to an unobstructed position before walking."
+                );
+                return Ok(());
+            }
+            let p = self.camera.position;
+            let feet = Vec3::new(p.x, p.y - f64::from(1.62_f32), p.z);
+            self.player = Some(PlayerMotion::new(self.motion_resources, feet)?);
+            self.previous_player_position = feet;
+            self.collision_camera = false;
+        }
+        self.motion_clock.reset();
+        self.previous = Instant::now();
+        eprintln!("Horizon walking test: {}", self.player.is_some());
+        Ok(())
+    }
+    fn move_player(&mut self, elapsed: Duration) -> Result<()> {
+        let player = self.player.as_mut().ok_or("missing movement actor")?;
+        let direction = input::modify_input(
+            input::keyboard_direction(
+                self.keys.contains(&KeyCode::KeyW),
+                self.keys.contains(&KeyCode::KeyS),
+                self.keys.contains(&KeyCode::KeyA),
+                self.keys.contains(&KeyCode::KeyD),
+            ),
+            None,
+            None,
+        );
+        for _ in 0..self.motion_clock.advance(elapsed) {
+            self.previous_player_position = player.position;
+            player.yaw = (-self.camera.yaw.to_degrees()) as f32;
+            MotionWorld {
+                player,
+                scene: &self.world,
+                assets: self.assets,
+                collision_binding: self.collision_binding,
+                resources: self.motion_resources,
+            }
+            .player_movement_tick(direction, self.keys.contains(&KeyCode::Space))?;
+            // Consumers for these phase records are not yet integrated.
+            player.events.clear();
+            self.movement_ticks += 1;
+        }
+        let from = self.previous_player_position;
+        let to = player.position;
+        let alpha = self.motion_clock.fraction();
+        self.camera.position = glam::DVec3::new(
+            from.x + (to.x - from.x) * alpha,
+            from.y + (to.y - from.y) * alpha + f64::from(1.62_f32),
+            from.z + (to.z - from.z) * alpha,
+        );
+        Ok(())
+    }
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: impl ToString) {
         self.error = Some(error.to_string());
         event_loop.exit();
@@ -158,7 +231,7 @@ impl App<'_> {
         let report = serde_json::json!({
             "schema": 1,
             "project": "Horizon",
-            "scope": "Native cube and cuboid-model renderer with binary cutouts, stepped sprite animation and optional camera collisions; no gameplay simulation",
+            "scope": "Native resident-scene renderer with inspection camera and optional fixed-rate dry walking test; full gameplay remains unfinished",
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
             "adapter": adapter,
@@ -179,6 +252,11 @@ impl App<'_> {
             "camera_yaw": self.camera.yaw,
             "camera_pitch": self.camera.pitch,
             "collision_camera": self.collision_camera,
+            "walking": self.player.is_some(),
+            "movement_ticks": self.movement_ticks,
+            "player_position": self.player.as_ref().map(|p| [p.position.x,p.position.y,p.position.z]),
+            "player_velocity": self.player.as_ref().map(|p| [p.velocity.x,p.velocity.y,p.velocity.z]),
+            "player_on_ground": self.player.as_ref().map(|p| p.ground.on_ground),
             "error": self.error,
         });
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -251,6 +329,7 @@ impl ApplicationHandler for App<'_> {
                     self.capture(false);
                 }
                 self.previous = Instant::now();
+                self.motion_clock.reset();
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
@@ -264,7 +343,13 @@ impl ApplicationHandler for App<'_> {
                         if key == KeyCode::Escape {
                             self.capture(false);
                         }
-                        if key == KeyCode::F4 && !event.repeat {
+                        if key == KeyCode::F5
+                            && !event.repeat
+                            && let Err(error) = self.toggle_walking()
+                        {
+                            self.fail(event_loop, error);
+                        }
+                        if key == KeyCode::F4 && !event.repeat && self.player.is_none() {
                             if self.collision_camera {
                                 self.collision_camera = false;
                             } else {
@@ -304,9 +389,16 @@ impl ApplicationHandler for App<'_> {
             }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
-                let seconds = now.duration_since(self.previous).as_secs_f64().min(0.1);
+                let elapsed = now.duration_since(self.previous);
+                let seconds = elapsed.as_secs_f64().min(0.1);
                 self.previous = now;
-                if self.focused {
+                if self.focused && self.player.is_some() {
+                    self.camera.turn(&self.keys, seconds);
+                    if let Err(error) = self.move_player(elapsed) {
+                        self.fail(event_loop, error);
+                        return;
+                    }
+                } else if self.focused {
                     let from = self.camera.position;
                     let bounds = self.camera.collision_bounds();
                     self.camera.update(&self.keys, seconds);
@@ -400,10 +492,11 @@ fn run() -> Result<()> {
     })?;
     let world = TestWorld::new(&assets, options.radius)?;
     let collision_binding = collisions::load(&options.resources, &assets.registry)?;
+    let motion_resources = MotionResources::load(&options.resources, &assets)?;
     let mut visibility = models::load_visibility(&options.resources, &assets.registry)?;
     let mesh = mesh::build(&world, &assets, &mut visibility)?;
     eprintln!(
-        "Horizon development scene: {} resident chunks, {} merged cube faces, {} baked model faces.\nClick to capture mouse; WASD/Space/Shift move; arrows rotate; F4 toggles camera collisions; Esc releases; Ctrl+Q quits.",
+        "Horizon development scene: {} resident chunks, {} merged cube faces, {} baked model faces.\nClick to capture mouse; WASD/Space/Shift move; arrows rotate; F4 toggles camera collisions; F5 toggles walking test; Esc releases; Ctrl+Q quits.",
         world.chunks.len(),
         mesh.cubes.len(),
         mesh.models.len()
@@ -414,6 +507,11 @@ fn run() -> Result<()> {
         world,
         collision_binding: &collision_binding,
         collision_camera: false,
+        motion_resources: &motion_resources,
+        player: None,
+        motion_clock: FixedStep::default(),
+        previous_player_position: Vec3::ZERO,
+        movement_ticks: 0,
         mesh,
         options,
         window: None,

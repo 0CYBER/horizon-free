@@ -74,7 +74,7 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
     }
     writeln!(
         out,
-        "{} {} {} {} {} {} {} {:016x} {} {} {} {:08x} {} | {}",
+        "{} {} {} {} {} {} {} {:016x} {} {} {} {:08x} {} {:08x} {} | {}",
         player.collision.horizontal,
         player.collision.vertical,
         player.collision.below,
@@ -88,6 +88,8 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
         player.sync_position,
         player.speed.to_bits(),
         player.no_jump_delay,
+        player.head_yaw.to_bits(),
+        player.jump_trigger_time,
         attributes.join(";")
     )?;
     Ok(())
@@ -127,6 +129,14 @@ fn main() -> Result<()> {
                     let v = vector(&op["value"]);
                     world.movement_tick([v.x as f32, v.y as f32, v.z as f32])?;
                 }
+                "player_tick" => {
+                    let v = vector(&op["value"]);
+                    world.player_movement_tick(
+                        [v.x as f32, v.z as f32],
+                        op["jumping"].as_bool().unwrap(),
+                    )?;
+                }
+                "trigger" => world.player.jump_trigger_time = op["value"].as_i64().unwrap() as i32,
                 "delay" => world.player.no_jump_delay = op["value"].as_i64().unwrap() as i32,
                 "move" => world.move_self(vector(&op["value"]))?,
                 "jump" => world.jump_from_ground()?,

@@ -6,9 +6,12 @@ registry state, including the terrain and sixteen featured placements. It loads
 block definitions, cuboid models, sprites and occlusion grids from pinned Java
 Edition 26.3 resources. Model selection uses the default block position seed;
 neighbor visibility uses the validated Rust face rules across chunk boundaries.
-The camera remains an inspection tool. F4 enables a standing-sized collision
+The default camera is an inspection tool. F4 enables a standing-sized collision
 volume that queries the rendered resident chunks through the shared world
 collision implementation. The camera can still fly; it does not simulate a player.
+F5 switches to a dry walking test with gravity, ground support, stepping and
+held-jump timing over the same resident chunks. Its movement runs at 20 ticks/s;
+the camera interpolates between tick positions.
 
 Eligible opaque unit-cube faces use greedy rectangles only when texture layer,
 UV rotation/mirroring and shading match. Each rectangle retains its signed UV
@@ -16,8 +19,9 @@ basis, so weighted texture variation survives merging. Other baked geometry and
 binary-alpha cutouts use the separate model-face instance pipeline. Geometry
 with nonintegral UV-lock rounding also stays on that path.
 
-This checkpoint has no player simulation, vanilla world generation, block
-interaction, inventory, sound, networking or world save/load. It does not meet
+This checkpoint has partial player movement. Vanilla world generation, block
+interaction, inventory, sound, networking and world save/load remain unbound in
+the native client. It does not meet
 the [playable-build acceptance criteria](rust-parity.md#completion-criteria-and-playable-builds).
 The controlled chunk scene now uses blockstate dispatch, weighted variants,
 multipart conditions and transformed baking. Full block-catalog material support,
@@ -62,17 +66,21 @@ not a render-distance or world-streaming implementation.
 | Control | Action |
 | --- | --- |
 | WASD | Move horizontally |
-| Space / either Shift | Rise / descend |
+| Space / either Shift | Rise / descend in inspection mode; Space jumps in walking mode |
 | Either Ctrl | Boost inspection speed |
 | Arrow keys | Rotate camera |
 | Left click | Capture mouse for camera rotation |
 | Escape | Release mouse |
 | F3 | Toggle FPS/chunk/mesh diagnostics in the window title |
 | F4 | Toggle inspection camera collisions; enabling requires an unobstructed position |
+| F5 | Toggle walking test at the current camera position; enabling requires an unobstructed position |
 | Ctrl+Q or window close | Exit |
 
 Controls bind physical keyboard positions. Losing focus clears held keys and
-releases the mouse. `--trace-input` logs keyboard, mouse-button and focus events
+releases the mouse. Walking pauses while unfocused and resets partial tick time
+on focus changes. Walking currently has no sprint, crouch, flight, item use or
+block interaction. F5 returns to inspection mode; the finite scene has no
+streaming or boundary wall. `--trace-input` logs keyboard, mouse-button and focus events
 for diagnosis. On headless Linux use `vscreen run ./target/debug/horizon-client`,
 then `vscreen shot`. The `wtype` tool's default generated keymap does not preserve
 physical key positions; typing the character W can report physical Escape.
@@ -84,8 +92,9 @@ render resources. `SceneCollisions` feeds its actual `TerrainChunk` instances
 into registered shape selection, block scanning, world movement resolution and
 occupancy checks. The scene has no other entities, block entities or border;
 entity-dependent queries report an error until an entity runtime is supplied.
-Camera collision uses a position context and disables stepping. Gravity,
-grounding, jumping, sneaking and the authoritative player tick remain unfinished.
+Camera collision uses a position context and disables stepping. The walking
+binding uses a standing entity context and its registered step-height attribute.
+Sneaking and the complete authoritative player tick remain unfinished.
 
 ```sh
 python3 tools/prepare_native_client.py
@@ -101,7 +110,7 @@ ledges, ceilings, initial overlaps, negative and missing chunk boundaries, tiny
 and zero movement, and varied step heights. This verifies the scene adapter;
 it does not establish player locomotion or complete gameplay parity.
 
-The next movement binding stores a player's position, velocity, standing bounds,
+The movement binding stores a player's position, velocity, standing bounds,
 ground/support state, collision flags, movement history and live registered
 attributes. `MotionWorld` composes the existing air-travel, jumping, collision,
 ground-support, restitution and block-coefficient code over the same scene.
@@ -124,15 +133,39 @@ The test caught an omission where matching positions concealed a retained
 powder-snow modifier and missing attribute notifications; dry ticks now remove
 that modifier after travel, as vanilla does.
 
+The [walking movement comparison](../benchmarks/rust-native-walking-2026-10-07/scene-motion.json)
+extends this to 65,893 operations in 947 scenarios, invoking actual
+`Player.aiStep` with empty inventory/equipment and no nearby entities. It checks
+head yaw, jump-trigger countdown and speed refresh after movement. Prepared
+input is supplied at the native virtual input boundary. Separately, the
+[local input comparison](../benchmarks/rust-native-walking-2026-10-07/local-input.json)
+checks 13,988 cases against actual `KeyboardInput.tick` and
+`LocalPlayer.modifyInput`, covering every key combination, diagonal adjustment,
+item/riding/sneaking speed gates, signed zero and nonfinite values. This verifies
+input arithmetic; full `LocalPlayer` lifecycle, sprint eligibility and poses
+remain unfinished.
+
+The fixed-rate driver limits work per rendered frame while retaining overdue
+ticks. Clock tests cover varied frame schedules and long stalls. The development
+focus pause is explicit; no vanilla pause-menu or multiplayer timing is claimed.
+The [Linux walking smoke check](../benchmarks/rust-native-walking-2026-10-07/interactive-smoke.json)
+enabled F5, landed at ground height 4, walked, jumped, switched modes and exited
+with Ctrl+Q. Ground, moved and airborne screenshots were visually inspected;
+the run recorded 207 movement ticks and finished grounded without an error.
+The [renderer startup check](../benchmarks/rust-native-walking-2026-10-07/startup-smoke.json)
+also passes after the movement integration.
+
 ```sh
 python3 tools/prepare_native_client.py
 python3 tools/test_native_scene_motion.py
+python3 tools/test_local_input_parity.py
 ```
 
 This binding is not yet a complete player tick or input controller. Its current
 domain is the dry resident scene, standing dimensions, zero frozen ticks,
-empty equipment, no interpolation, crouching, vehicles or status effects.
-The outer `Player.aiStep` and local input controller remain unbound.
+empty inventory/equipment, no entity interpolation, crouching, vehicles or status
+effects. Selected `Player.aiStep` phases are bound; the full tick and local input
+lifecycle remain unfinished.
 Landing/damage, movement emission and external networking
 remain recorded phase boundaries; damage is not applied and ordinary falling
 does not yet accumulate fall distance. Block-inside effects such as cobweb

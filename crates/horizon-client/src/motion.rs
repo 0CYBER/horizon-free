@@ -120,8 +120,10 @@ pub struct PlayerMotion {
     pub fall_distance: f64,
     pub stuck_multiplier: Vec3,
     pub yaw: f32,
+    pub head_yaw: f32,
     pub jumping: bool,
     pub no_jump_delay: i32,
+    pub jump_trigger_time: i32,
     pub sprinting: bool,
     pub speed: f32,
     pub last_climbable: Option<BlockPos>,
@@ -164,8 +166,10 @@ impl PlayerMotion {
             fall_distance: 0.0,
             stuck_multiplier: Vec3::ZERO,
             yaw: 0.0,
+            head_yaw: 0.0,
             jumping: false,
             no_jump_delay: 0,
+            jump_trigger_time: 0,
             sprinting: false,
             speed: 0.0,
             last_climbable: None,
@@ -256,6 +260,10 @@ pub struct MotionWorld<'p, 'w, 'r> {
     pub collision_binding: &'w BlockCollisionRegistry<'r>,
     pub resources: &'w MotionResources,
 }
+enum TickInput {
+    Living([f32; 3]),
+    PreparedLocal { direction: [f32; 2], jumping: bool },
+}
 impl MotionWorld<'_, '_, '_> {
     fn context(&self) -> CollisionContext<'static> {
         CollisionContext::for_entity(
@@ -319,6 +327,22 @@ impl MotionWorld<'_, '_, '_> {
     /// effects and world/entity effects remain unbound. Inputs are the native
     /// float xxa/yya/zza fields, before LivingEntity.applyInput damping.
     pub fn movement_tick(&mut self, input: [f32; 3]) -> Result<()> {
+        self.dry_tick(TickInput::Living(input))
+    }
+    /// Dry Player.aiStep movement with a prepared local input vector. The
+    /// caller applies LocalPlayer input preparation once. Empty inventory,
+    /// equipment and nearby-entity sets are the current scene domain.
+    pub fn player_movement_tick(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
+        if self.player.jump_trigger_time > 0 {
+            self.player.jump_trigger_time -= 1;
+        }
+        self.dry_tick(TickInput::PreparedLocal { direction, jumping })?;
+        self.player.head_yaw = self.player.yaw;
+        // Player.aiStep refreshes speed after movement, not before travel.
+        self.player.speed = self.player.attribute("minecraft:movement_speed")? as f32;
+        Ok(())
+    }
+    fn dry_tick(&mut self, input: TickInput) -> Result<()> {
         if self.player.no_jump_delay > 0 {
             self.player.no_jump_delay -= 1;
         }
@@ -331,11 +355,17 @@ impl MotionWorld<'_, '_, '_> {
             velocity.y = 0.0;
         }
         self.player.velocity = velocity;
-        let input = Vec3::new(
-            f64::from(input[0] * 0.98),
-            f64::from(input[1]),
-            f64::from(input[2] * 0.98),
-        );
+        let input = match input {
+            TickInput::Living(v) => Vec3::new(
+                f64::from(v[0] * 0.98),
+                f64::from(v[1]),
+                f64::from(v[2] * 0.98),
+            ),
+            TickInput::PreparedLocal { direction, jumping } => {
+                self.player.jumping = jumping;
+                Vec3::new(f64::from(direction[0]), 0.0, f64::from(direction[1]))
+            }
+        };
         if self.player.jumping {
             if self.player.ground.on_ground && self.player.no_jump_delay == 0 {
                 self.jump_from_ground()?;

@@ -40,11 +40,8 @@ impl Camera {
         self.pitch = (self.pitch - y * 0.002).clamp(-1.55, 1.55);
     }
     pub fn update(&mut self, keys: &HashSet<KeyCode>, seconds: f64) {
+        self.turn(keys, seconds);
         let held = |key| f64::from(u8::from(keys.contains(&key)));
-        self.yaw += (held(KeyCode::ArrowLeft) - held(KeyCode::ArrowRight)) * seconds * 1.5;
-        self.pitch = (self.pitch
-            + (held(KeyCode::ArrowUp) - held(KeyCode::ArrowDown)) * seconds * 1.5)
-            .clamp(-1.55, 1.55);
         let forward = DVec3::new(self.yaw.sin(), 0.0, self.yaw.cos());
         let right = DVec3::new(-self.yaw.cos(), 0.0, self.yaw.sin());
         let movement = forward * (held(KeyCode::KeyW) - held(KeyCode::KeyS))
@@ -60,6 +57,13 @@ impl Camera {
                     12.0
                 };
         }
+    }
+    pub fn turn(&mut self, keys: &HashSet<KeyCode>, seconds: f64) {
+        let held = |key| f64::from(u8::from(keys.contains(&key)));
+        self.yaw += (held(KeyCode::ArrowLeft) - held(KeyCode::ArrowRight)) * seconds * 1.5;
+        self.pitch = (self.pitch
+            + (held(KeyCode::ArrowUp) - held(KeyCode::ArrowDown)) * seconds * 1.5)
+            .clamp(-1.55, 1.55);
     }
     pub fn matrix(&self, aspect: f32) -> Mat4 {
         let forward = Vec3::new(

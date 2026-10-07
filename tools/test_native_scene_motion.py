@@ -20,6 +20,15 @@ def vec(values): return list(map(bits, values))
 def op(mode, value=None, **extra): return dict(mode=mode, value=value, **extra)
 
 def corpus():
+    for start in [(25,4,25),(25,18,25),(-11,4,0),(-7,5,14),(0,18,0)]:
+        for yaw in [0,45,90,-135,180]:
+            for trigger in [-1,0,1,7]:
+                ops=[op('yaw',single(yaw)),op('trigger',trigger)]
+                for i in range(180):
+                    if i in [20,80]:ops.append(op('sprint',i==20))
+                    if i==120:ops.append(op('attribute',bits(.2),name='minecraft:movement_speed'))
+                    ops.append(op('player_tick',vec((.7071067690849304 if i<45 else 0,0,.7071067690849304 if i<45 else .98 if i<90 else 0)),jumping=(10<=i<60 or 120<=i<150)))
+                yield dict(position=vec(start),ops=ops)
     for permanent in [False,True]:
         for operation in range(3):
             for value in [-.05,0,.2]:
@@ -132,7 +141,7 @@ def main():
         'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'fixtures':len(fixtures),
         'operations':expected_lines-len(fixtures),'sources_sha256':tested,'resources':resource_hash,'input_sha256':input_hash,
         'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,
-        'scope':'Stored PlayerMotion binds resident client chunks and registered attributes/coefficients to air travel, jumping, Entity.move, step resolution, ground/support updates, restitution and speed factors. Repeated native Player.travel/jump/move and direct LivingEntity.aiStep compare position, velocity, bounds, collision/ground flags, support, climb state, fall-reset field, both sync flags, speed and jump delay by exact bits. Dry aiStep includes small-velocity cleanup, input damping, held/released jump timing and server frost-modifier removal. Snapshots also compare all allocated attribute instances, base/cache/dirty state, modifier values/operations/permanence and pending update/sync membership (not JVM identity-dependent iteration order). Dry resident scene, fixed standing dimensions, zero frozen ticks, empty equipment, no interpolation, fluids, vehicles, effects, crouching or other entities. Landing/damage, audiovisual emission, block-inside and network consumers remain controlled boundaries. No outer Player.aiStep/tick, local input controller, full freezing, health/damage or full gameplay parity claim.'})
+        'scope':'Stored PlayerMotion binds resident client chunks and registered attributes/coefficients to air travel, jumping, Entity.move, step resolution, ground/support updates, restitution and speed factors. Repeated native Player.travel/jump/move and actual Player.aiStep / direct LivingEntity.aiStep compare position, velocity, bounds, collision/ground flags, support, climb state, fall-reset field, both sync flags, speed, head yaw, jump trigger and jump delay by exact bits. Prepared-local-input Player.aiStep paths verify speed refresh after movement, with empty inventory and no nearby entities. Dry aiStep includes small-velocity cleanup, input damping, held/released jump timing and server frost-modifier removal. Snapshots also compare all allocated attribute instances, base/cache/dirty state, modifier values/operations/permanence and pending update/sync membership (not JVM identity-dependent iteration order). Dry resident scene, fixed standing dimensions, zero frozen ticks, empty equipment, no interpolation, fluids, vehicles, effects, crouching or other entities. Landing/damage, audiovisual emission, block-inside and network consumers remain controlled boundaries. Input preparation is a controlled boundary here and has its own client comparison. No full Player.tick, local input lifecycle, nonempty inventory/equipment ticks, full freezing, health/damage or full gameplay parity claim.'})
     print(f'Scoped scene motion parity passed: {report}',flush=True)
 
 if __name__=='__main__':main()
