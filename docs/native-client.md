@@ -466,3 +466,13 @@ remain outside this comparison. The default walking scene uses Normal
 difficulty with natural regeneration enabled. Food item use, movement-distance
 exhaustion, effect ticks, full death/respawn services and save integration remain
 unfinished.
+
+The [interactive hunger check](../benchmarks/rust-native-hunger-2026-10-07/interactive-smoke.json)
+enabled walking and F3 diagnostics on Linux. After one landing damage request
+of 9, stored health recovered from 11 to 12.5 as saturation fell from 5 to 3;
+food remained 20 and exhaustion ended at 1. The player remained alive and
+grounded at `[25, 4, 25]`, with an expired hurt cooldown, after 42 movement ticks.
+The ground view was visually inspected and the client exited without an error.
+The development client pauses movement without focus, so wall time is not
+simulation time. This checks the resident simulation and window, not full
+gameplay, release acceptance or hardware performance.
