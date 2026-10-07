@@ -11,7 +11,8 @@ resident sections, scheduled tick ordering, geometry, contained fluid states,
 noise/density evaluation, biome and terrain generation kernels, material rules,
 and parts of feature placement and decoration. Movement/fluid interactions,
 registered attributes, hunger storage/ticks, synchronized player health and
-absorption, damage reduction and outer hurt gates have scoped native comparisons.
+absorption, damage reduction, outer hurt gates, blocking-item damage, item
+durability and item-use start/tick/release/completion have scoped native comparisons.
 These kernels still need complete entity/world lifecycle bindings. All pinned block-survival
 families now have native differential coverage. Full simulation callbacks,
 complete chunk generation, entity behavior, networking, rendering and playable

@@ -1561,3 +1561,19 @@ kinetic-map presence and callback mutation/failure ordering. Targeted Clippy
 passes. Starting use, actual synchronized flags, consumable/kinetic effects,
 remainder/cooldown components and full inventory/game-tick integration remain
 pending.
+
+
+`item_use_start` starts use from a captured held stack, writes the returned
+duration after its callback, synchronizes equipment before changing using/offhand
+flags, emits the component's start vibration and resets recent kinetic enemies
+when the final active stack has a kinetic-weapon component.
+
+`python3 tools/test_item_use_start_parity.py` compares inherited native
+startUsingItem and its private equipment packet construction. The
+[start-use report](../benchmarks/rust-item-use-start-2026-10-07/scoped-parity.json)
+records **84,873 matching lines per JAR**, including captured stack/level/hand
+arguments, empty stacks, callback mutation/failure ordering, flag writes, native
+UseEffects/KineticWeapon presence and clearing a populated kinetic-enemy map.
+Targeted Clippy passes; all 20 existing horizon-world library tests pass with
+these changes. Synchronized flag storage, packet encoding/delivery, kinetic
+combat and complete inventory/game-tick integration remain pending.
