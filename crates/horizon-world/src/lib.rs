@@ -43,6 +43,7 @@ pub mod fluid_flow;
 pub mod fluid_occupancy;
 pub mod fluid_shape;
 pub mod food;
+pub mod food_properties;
 pub mod food_storage;
 pub mod free_space;
 pub mod ground_support;

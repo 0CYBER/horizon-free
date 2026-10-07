@@ -1937,3 +1937,18 @@ inventories, offhand merging, aliased slots, creative material queries, partial
 insertion and callback failures. Targeted Clippy passes. Drop arguments are
 verified, but entity spawning remains controlled. Concrete item handlers, full
 contained schemas, complete use lifecycle and full gameplay remain pending.
+
+
+`food_properties` implements the food consumption listener with stored FoodData
+and native random streams. It captures the actor's random source before the
+first sound, updates hunger and saturation for players, then emits the burp
+sound using the captured source and current position.
+
+`python3 tools/test_food_properties_parity.py` compares actual
+FoodProperties.onConsume with real FoodData and both native random generators.
+The [food listener report](../benchmarks/rust-food-properties-2026-10-07/scoped-parity.json)
+records **70,632 matching lines per JAR**, including player/non-player actors,
+sound arguments, subsequent random state, changed food stores and positions,
+and callback mutation/failure prefixes. Targeted Clippy passes. Sound playback,
+complete consumable dispatch, particles/effects and full gameplay integration
+remain pending.
