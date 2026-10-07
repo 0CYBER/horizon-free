@@ -1077,3 +1077,21 @@ virtual modifier dispatch, thin/inverted bounds, waterline boundaries, signed
 zero/nonfinite values and mutations/failures. Targeted Clippy passes. Vehicle
 snapshots are controlled; live passenger lifecycle and full gameplay remain
 pending.
+
+
+`water_splash` generates native water-entry sound, bubble/splash particle and game
+event requests. It preserves controlling-passenger identity, captured velocity,
+f32 volume/pitch arithmetic, float-rounded surface height, changing entity width,
+and random draws before each emitted effect. A particle budget returns an
+explicit error after preserving preceding effects and RNG consumption.
+
+`python3 tools/test_water_splash_parity.py` invokes actual
+`Entity.doWaterSplashEffect` with native legacy and xoroshiro random generators.
+The [water splash report](../benchmarks/rust-water-splash-2026-10-07/scoped-parity.json)
+records **192,506 matching lines per JAR** across **7,840 fixtures**, including
+sound thresholds, self/other passengers, particle positions/velocities, callback
+mutations/failures, nonfinite arithmetic and the next RNG value after the effect.
+A Rust-only budget check verifies that exhaustion preserves the two sound-pitch
+random draws. Targeted Clippy passes. Sound identities and effect sinks are
+controlled; audio playback, particle simulation/rendering and full gameplay
+integration remain pending.

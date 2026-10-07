@@ -58,6 +58,7 @@ pub mod retrogen;
 pub mod suffocation;
 pub mod swimming;
 pub mod tick_data;
+pub mod water_splash;
 pub mod world_movement;
 pub mod world_ray;
 pub mod worldgen;
