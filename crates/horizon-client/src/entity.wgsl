@@ -30,12 +30,14 @@ struct Out {
     let l = vec2(f32(light.y), f32(light.x));
     let lm = textureSampleLevel(lightmap, lightmap_sampler,
         clamp(l / 256.0 + 0.5 / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0)), 0.0);
-    var c = color * lm;
+    // overlay 2: celestial bodies use their vertex colour unlit.
+    var c = select(color * lm, color, overlay == 2u);
     // Hurt overlay (OverlayTexture red tint).
     if overlay == 1u { c = vec4(mix(c.rgb, vec3(1.0, 0.0, 0.0), 0.3), c.a); }
     out.color = c;
-    out.spherical = length(position);
-    out.cylindrical = max(length(position.xz), abs(position.y));
+    // Sky geometry (clouds, celestial bodies) is exempt from render-distance fog.
+    out.spherical = select(length(position), 0.0, overlay >= 2u);
+    out.cylindrical = select(max(length(position.xz), abs(position.y)), 0.0, overlay >= 2u);
     return out;
 }
 fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
@@ -49,4 +51,9 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
                 linear_fog(in.cylindrical, globals.fog.z, globals.fog.w));
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
+}
+
+@fragment fn fs_celestial(in: Out) -> @location(0) vec4<f32> {
+    let color = textureSample(atlas, atlas_sampler, in.uv) * in.color;
+    return color;
 }

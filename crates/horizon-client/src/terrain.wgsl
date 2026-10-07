@@ -94,15 +94,6 @@ struct SkyOut {
         // Void below the horizon.
         color = mix(color, globals.sky_color.rgb * 0.2, smoothstep(0.0, -0.3, up) * (1.0 - globals.misc.x));
     }
-    // Sun disc.
-    let sun_dot = dot(view, normalize(globals.sun.xyz));
-    if sun_dot > 0.9985 { color = mix(color, vec3(1.0, 1.0, 0.85), 0.95); }
-    let moon_dot = dot(view, -normalize(globals.sun.xyz));
-    if moon_dot > 0.9993 { color = mix(color, vec3(0.85, 0.87, 0.95), 0.9); }
-    // Stars.
-    let cell = floor(view * 300.0);
-    let h = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-    if h > 0.9985 && up > 0.0 { color += vec3(globals.sun.w * 2.0); }
     return vec4(color, 1.0);
 }
 

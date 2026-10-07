@@ -31,7 +31,7 @@ pub struct HudAtlas {
     glyphs: HashMap<char, Glyph>,
     white: Rect,
 }
-fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
+pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
     let mut decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(path)?));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info()?;

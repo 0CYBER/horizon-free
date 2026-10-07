@@ -45,6 +45,8 @@ pub struct Frame<'a> {
     pub hud: &'a HudBatch,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    /// Camera-relative sun, moon and stars (drawn behind everything, additive).
+    pub celestial: &'a [Vertex],
     pub game_time: f32,
     pub ticks: u64,
 }
@@ -60,6 +62,8 @@ pub struct Renderer {
     sky: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     entity_pipeline: wgpu::RenderPipeline,
+    celestial_pipeline: wgpu::RenderPipeline,
+    celestial_buffer: wgpu::Buffer,
     entity_group: wgpu::BindGroup,
     entity_buffer: wgpu::Buffer,
     entity_capacity: u64,
@@ -571,6 +575,54 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let celestial_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Celestial bodies"),
+            layout: Some(&entity_layout),
+            vertex: wgpu::VertexState {
+                module: &entity_shader,
+                entry_point: Some("vs_entity"),
+                compilation_options: Default::default(),
+                buffers: &entity_vertex,
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &entity_shader,
+                entry_point: Some("fs_celestial"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format.remove_srgb_suffix(),
+                    // RenderPipelines.CELESTIAL: additive (src alpha, one).
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent::OVER,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let celestial_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Celestial vertices"),
+            size: 2048 * 4 * std::mem::size_of::<Vertex>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let entity_capacity = 1 << 14;
         let entity_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Entity vertices"),
@@ -590,6 +642,8 @@ impl Renderer {
             sky,
             lines,
             entity_pipeline,
+            celestial_pipeline,
+            celestial_buffer,
             entity_group,
             entity_buffer,
             entity_capacity,
@@ -944,6 +998,14 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.entity_buffer, 0, bytemuck::cast_slice(frame.entities));
         }
+        let celestial_vertices = frame.celestial.len().min(2048 * 4);
+        if celestial_vertices > 0 {
+            self.queue.write_buffer(
+                &self.celestial_buffer,
+                0,
+                bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
+            );
+        }
         let entity_quads = (entity_vertices / 4) as u32;
         if entity_quads > self.index_quads {
             self.index_quads = entity_quads.next_power_of_two();
@@ -990,6 +1052,14 @@ impl Renderer {
             if !frame.underwater {
                 pass.set_pipeline(&self.sky);
                 pass.draw(0..3, 0..1);
+                if celestial_vertices > 0 {
+                    pass.set_pipeline(&self.celestial_pipeline);
+                    pass.set_bind_group(0, &self.entity_group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
+                    pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
+                    pass.set_bind_group(0, &self.group, &[]);
+                }
             }
             pass.set_pipeline(&self.solid);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);

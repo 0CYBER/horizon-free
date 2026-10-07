@@ -56,6 +56,8 @@ struct Options {
     timeout: Duration,
     report: Option<PathBuf>,
     world: String,
+    look: Option<(f32, f32)>,
+    time: Option<i64>,
 }
 impl Options {
     fn read() -> Result<Option<Self>> {
@@ -78,6 +80,8 @@ impl Options {
             timeout: Duration::from_secs(120),
             report: None,
             world: "New World".into(),
+            look: None,
+            time: None,
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -114,6 +118,11 @@ impl Options {
                         "--smoke-report" => o.report = Some(value.into()),
                         "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
                         "--world" => o.world = value,
+                        "--time" => o.time = Some(value.parse()?),
+                        "--look" => {
+                            let (y, p) = value.split_once(',').ok_or("--look takes YAW,PITCH")?;
+                            o.look = Some((y.parse()?, p.parse()?));
+                        }
                         _ => return Err(format!("unknown option {arg}").into()),
                     }
                 }
@@ -157,6 +166,8 @@ pub struct Resources {
     mob_types: HashMap<String, Arc<MobType>>,
     providers: Providers,
     chest_model: Option<horizon_client::mobs::Part>,
+    /// clouds.png: (width, height, filled cells).
+    clouds: (u32, u32, Vec<bool>),
 }
 struct Game<'a> {
     res: &'a mut Resources,
@@ -2134,6 +2145,119 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
+    fn celestial_geometry(&self, sky: &horizon_client::environment::Sky) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        let atlas = &self.res.atlas;
+        let frame = |angle: f32| glam::Mat4::from_rotation_y((-90.0f32).to_radians()) * glam::Mat4::from_rotation_x(angle.to_radians());
+        let mut body = |name: &str, angle: f32, size: f32, color: u32| {
+            let Some(r) = atlas.sprites.get(name).copied() else { return };
+            let m = frame(angle);
+            let corners = [(-size, -size), (size, -size), (size, size), (-size, size)];
+            let uv = [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]];
+            for ((x, z), uv) in corners.iter().zip(uv) {
+                let p = m.transform_point3(glam::Vec3::new(*x, 100.0, *z));
+                out.push(Vertex { pos: p.to_array(), uv, layer: 2, color: color, light: 0 });
+            }
+        };
+        body("environment/celestial/sun", sky.sun_angle, 30.0, 0xFFFF_FFFF);
+        let phases = ["full_moon", "waning_gibbous", "third_quarter", "waning_crescent", "new_moon", "waxing_crescent", "first_quarter", "waxing_gibbous"];
+        let phase = phases[(self.world.day_time / 24000).rem_euclid(8) as usize];
+        body(&format!("environment/celestial/moon/{phase}"), sky.moon_angle, 20.0, 0xFFFF_FFFF);
+        if sky.star_brightness > 0.0 {
+            let b = (sky.star_brightness.clamp(0.0, 1.0) * 255.0) as u32;
+            let color = b << 24 | b << 16 | b << 8 | b;
+            let white = atlas.sprites.get("horizon/white").copied();
+            let m = frame(sky.star_angle);
+            if let Some(r) = white {
+                let (cu, cv) = ((r.u0 + r.u1) / 2.0, (r.v0 + r.v1) / 2.0);
+                // SkyRenderer.buildStars with its fixed seed.
+                let mut random = horizon_core::random::LegacyRandom::new(10842);
+                for _ in 0..1500 {
+                    let x = random.next_float() * 2.0 - 1.0;
+                    let y = random.next_float() * 2.0 - 1.0;
+                    let z = random.next_float() * 2.0 - 1.0;
+                    let size = 0.15 + random.next_float() * 0.1;
+                    let l = x * x + y * y + z * z;
+                    if l <= 0.010_000_001 || l >= 1.0 {
+                        continue;
+                    }
+                    let center = glam::Vec3::new(x, y, z).normalize() * 100.0;
+                    let z_rot = (random.next_double() * std::f64::consts::TAU) as f32;
+                    let forward = -center.normalize();
+                    let right = glam::Vec3::Y.cross(forward).normalize_or(glam::Vec3::X);
+                    let up = forward.cross(right);
+                    let (s, c) = (-z_rot).sin_cos();
+                    let (r2, u2) = (right * c + up * s, up * c - right * s);
+                    for (a, b) in [(size, -size), (size, size), (-size, size), (-size, -size)] {
+                        let p = m.transform_point3(center + r2 * a + u2 * b);
+                        out.push(Vertex { pos: p.to_array(), uv: [cu, cv], layer: 2, color, light: 0 });
+                    }
+                }
+            }
+        }
+        out
+    }
+    /// CloudRenderer (fancy): 12x4x12 cells from clouds.png drifting east.
+    fn cloud_geometry(&self, sky: &horizon_client::environment::Sky, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+        let (w, h, cells) = &self.res.clouds;
+        let (w, h) = (i64::from(*w), i64::from(*h));
+        let Some(white) = self.res.atlas.sprites.get("horizon/white").copied() else { return };
+        let uv = [(white.u0 + white.u1) / 2.0, (white.v0 + white.v1) / 2.0];
+        let cloud_height = 192.33;
+        let offset = (self.world.game_time.rem_euclid(w * 400)) as f64 + alpha;
+        let mut cloud_x = camera.x + offset * 0.030_000_001;
+        let mut cloud_z = camera.z + 3.96;
+        let (tw, th) = (w as f64 * 12.0, h as f64 * 12.0);
+        cloud_x -= (cloud_x / tw).floor() * tw;
+        cloud_z -= (cloud_z / th).floor() * th;
+        let cell_x = (cloud_x / 12.0).floor() as i64;
+        let cell_z = (cloud_z / 12.0).floor() as i64;
+        let x_in = (cloud_x - cell_x as f64 * 12.0) as f32;
+        let z_in = (cloud_z - cell_z as f64 * 12.0) as f32;
+        let bottom = (cloud_height - camera.y) as f32;
+        let filled = |cx: i64, cz: i64| cells[(cz.rem_euclid(h) * w + cx.rem_euclid(w)) as usize];
+        let radius = (self.streaming.radius * 16 / 12 + 1) as i64;
+        let c = sky.cloud_color;
+        let color = |shade: f32| {
+            let ch = |v: f32| ((v * shade).clamp(0.0, 1.0) * 255.0) as u32;
+            ch(c[3].max(0.0).min(1.0)) << 24 | ch(c[2]) << 16 | ch(c[1]) << 8 | ch(c[0])
+        };
+        let light = 240 | 240 << 8;
+        for dz in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx * dx + dz * dz > radius * radius {
+                    continue;
+                }
+                let (cx, cz) = (cell_x + dx, cell_z + dz);
+                if !filled(cx, cz) {
+                    continue;
+                }
+                let x0 = dx as f32 * 12.0 - x_in;
+                let z0 = dz as f32 * 12.0 - z_in;
+                let (x1, z1, y0, y1) = (x0 + 12.0, z0 + 12.0, bottom, bottom + 4.0);
+                let mut quad = |p: [[f32; 3]; 4], shade: f32| {
+                    for v in p {
+                        out.push(Vertex { pos: v, uv, layer: 2, color: color(shade), light });
+                    }
+                };
+                quad([[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]], 1.0);
+                quad([[x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [x0, y0, z0]], 0.7);
+                if !filled(cx, cz - 1) {
+                    quad([[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]], 0.8);
+                }
+                if !filled(cx, cz + 1) {
+                    quad([[x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1]], 0.8);
+                }
+                if !filled(cx - 1, cz) {
+                    quad([[x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0]], 0.9);
+                }
+                if !filled(cx + 1, cz) {
+                    quad([[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]], 0.9);
+                }
+            }
+        }
+    }
     fn save_game(&mut self) -> Result<()> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys
@@ -2204,6 +2328,9 @@ impl Game<'_> {
         };
         let hud = self.hud(size);
         let entities = self.entity_geometry(camera, alpha);
+        let celestial = self.celestial_geometry(&sky);
+        let mut entities = entities;
+        self.cloud_geometry(&sky, camera, alpha, &mut entities);
         let water_fog = {
             let c = info.water_fog;
             [(c >> 16 & 255) as f32 / 255.0, (c >> 8 & 255) as f32 / 255.0, (c & 255) as f32 / 255.0]
@@ -2220,6 +2347,7 @@ impl Game<'_> {
             outline,
             hud: &hud,
             entities: &entities,
+            celestial: &celestial,
             game_time: self.world.game_time as f32,
             ticks: self.ticks,
         };
@@ -2601,7 +2729,7 @@ pub fn run() -> Result<()> {
     let audio = Audio::new(&root);
     let mut world = World::new(facts.air, level.seed);
     world.game_time = level.time;
-    world.day_time = level.day_time;
+    world.day_time = options.time.unwrap_or(level.day_time);
     let creative = level.creative || options.creative;
     let mut resources = Resources {
         assets,
@@ -2615,6 +2743,9 @@ pub fn run() -> Result<()> {
         layer_names,
         providers: Providers::load(&root),
         chest_model: horizon_client::mobs::load_model(&root, "minecraft:chest#main"),
+        clouds: horizon_client::hud::decode(&root.join("assets/minecraft/textures/environment/clouds.png"))
+            .map(|(w, h, px)| (w, h, px.chunks_exact(4).map(|p| p[3] > 0).collect()))
+            .unwrap_or((1, 1, vec![false])),
         mob_types: MobTypes::load(&root)?.types.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
     };
     let mut inventory = vec![None; 36];
@@ -2630,6 +2761,7 @@ pub fn run() -> Result<()> {
         }
     }
     let now = Instant::now();
+    let look = options.look;
     let mut game = Game {
         res: &mut resources,
         collision: &collision,
@@ -2643,8 +2775,8 @@ pub fn run() -> Result<()> {
         previous_position: Vec3::ZERO,
         eye: 1.62,
         previous_eye: 1.62,
-        yaw: level.rotation[0],
-        pitch: level.rotation[1],
+        yaw: look.map_or(level.rotation[0], |l| l.0),
+        pitch: look.map_or(level.rotation[1], |l| l.1),
         inventory,
         selected: 0,
         carried: None,
