@@ -2040,3 +2040,20 @@ aggregation, sound arguments and callback failure prefixes. Targeted Clippy
 passes. Actor status add/remove/clear and sound delivery remain controlled;
 named holder-set rebinding, teleport consumption and full gameplay integration
 remain pending.
+
+
+`teleport_consume` implements random-teleport consumption, including the
+16-attempt limit, coordinate/random evaluation order, logical-height bounds,
+dismounting and post-success effects. Successful teleports emit the game event,
+class-specific sound and optional packed directional-particle event before
+resetting fall distance and impulse context.
+
+`python3 tools/test_teleport_consume_parity.py` compares actual
+TeleportRandomlyConsumeEffect with both native random generators, ordinary and
+fox actor classes, native offset packing and fall/impulse reset bodies. The
+[teleport consumption report](../benchmarks/rust-teleport-consume-2026-10-07/scoped-parity.json)
+records **282,010 matching lines per JAR**, including exact candidates and
+subsequent random state, height overflow, float edges, attempt exhaustion,
+captured/live positions and callback mutation/failure prefixes. Targeted Clippy
+passes. Destination validation and teleporting, passenger links and world event
+delivery remain controlled services; full gameplay integration remains pending.

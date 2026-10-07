@@ -96,6 +96,7 @@ pub mod server_player_damage;
 pub mod suffocation;
 pub mod swimming;
 pub mod synced_floats;
+pub mod teleport_consume;
 pub mod tick_data;
 pub mod use_remainder;
 pub mod view_direction;
