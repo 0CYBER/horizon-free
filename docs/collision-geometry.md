@@ -1095,3 +1095,23 @@ A Rust-only budget check verifies that exhaustion preserves the two sound-pitch
 random draws. Targeted Clippy passes. Sound identities and effect sinks are
 controlled; audio playback, particle simulation/rendering and full gameplay
 integration remain pending.
+
+
+`attributes` implements basic/ranged attribute instances, ordered modifiers,
+three-stage value calculation, cache invalidation and permanent-state packing.
+Modifier clones retain reference identity for transient-update notifications.
+Per-operation maps preserve native hash-table iteration, growth and deletion
+order because modifier arithmetic is sensitive to floating-point association.
+The implementation also retains native partial writes when a dirty observer
+fails, stale operation entries after operation-changing updates, merge-on-apply
+semantics and self-replacement behavior.
+
+`python3 tools/test_attribute_parity.py` compares actual `AttributeInstance`
+methods using every registered attribute definition. The
+[attribute report](../benchmarks/rust-attributes-2026-10-07/scoped-parity.json)
+records **1,404,798 matching lines per JAR** across **2,391 fixtures**, including
+collision clusters, resize/shrink boundaries, seeded operation sequences,
+reference identity, observer cache reads/failures, nonfinite values and signed
+zero. The adapter observes iterator order, as native calculation does; Java
+stream traversal can differ. Targeted Clippy passes. Registry/entity/equipment
+binding, packed data/network codecs and full gameplay integration remain pending.
