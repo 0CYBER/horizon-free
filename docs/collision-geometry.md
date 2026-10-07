@@ -955,3 +955,24 @@ integration remain pending.
 The [collision-only regression](../benchmarks/rust-free-space-2026-10-07/collision-regression.json)
 also passes **4,793,095 matching lines per JAR** after extending the shared
 fixture and registry binding.
+
+
+`entity_fluid` tracks body depth, eye immersion and current accumulation across
+updates. It preserves one-tick tracker retention, missing-chunk preflight,
+ordered cell scans, the first matching current tag, camera support checks and
+partial writes on query failure. Current application distinguishes player
+averaging from other entities' normalization and dispatches the final velocity
+addition with its finite-input filter and fresh velocity read.
+
+`python3 tools/test_entity_fluid_parity.py` invokes actual
+`EntityFluidInteraction` and `Entity.addDeltaMovement`. The
+[entity fluid report](../benchmarks/rust-entity-fluid-2026-10-07/scoped-parity.json)
+records **607,338 matching lines per JAR** with real ProtoChunk fluid-presence
+sections, ordered/reloaded overlapping tags, wet/dry sequences, eye boundaries,
+nonfinite heights/current arithmetic, mutations and injected failures. Rust-only
+checks cover explicit query-budget/nonfinite errors and reset-before-error
+behavior. Targeted Clippy passes. Fluid heights/flows and entity fields are
+controlled here; neighboring-cell flow calculation, live world/entity binding
+and full playable integration remain pending. Extreme-coordinate Java scans are
+bounded by injected callback failures rather than allowed to traverse billions
+of cells.
