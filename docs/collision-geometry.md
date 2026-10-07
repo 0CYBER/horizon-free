@@ -1985,3 +1985,24 @@ overflow and float edges, random-source aliases, optional particles, sound
 overrides and callback mutation/failure prefixes. Targeted Clippy passes. Sound
 playback, rendering, consumable completion/effects and full gameplay remain
 pending.
+
+
+`consumable` now also runs eligibility, immediate/timed start and completion.
+Completion captures its random source before emission, selects the current item
+for server statistics, dispatches live component listeners, then runs server
+effects, the game event and finite-material stack shrink in native order. The
+same input stack is returned even when callbacks empty it. Timed starts return
+CONSUME without a transformed stack; immediate starts return that stack.
+
+`python3 tools/test_consumable_parity.py` compares actual Consumable methods
+with concrete FoodProperties/FoodData, inherited particles, shared stacks and
+both native random generators. The
+[consumption report](../benchmarks/rust-consumable-2026-10-07/scoped-parity.json)
+records **246,033 matching lines per JAR**, covering player/non-player/server
+branches, food component changes, stat item selection, empty advancement trigger
+storage, client/server effects, game events, creative material queries and
+mutation/failure prefixes. Targeted Clippy passes. Eligibility and start-use
+callbacks, statistics, effect bodies and event delivery remain controlled;
+listener enumeration here binds the ordinary food schema. Full advancement
+evaluation, potion effects, entity/world lifecycle integration and playable
+gameplay remain pending.
