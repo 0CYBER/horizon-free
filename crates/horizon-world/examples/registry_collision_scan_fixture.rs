@@ -12,6 +12,8 @@ use horizon_world::{
     edge_backoff::{EdgeBackoffInput, EdgeBackoffWorld, back_off_from_edge},
     entity_obstruction::EntityIdentity,
     fluid::FluidState,
+    fluid_occupancy::{FluidOccupancyWorld, FluidPresence},
+    free_space::offset_is_free,
     heightmap::HeightmapState,
     liquid_collision::LiquidCollisionWorld,
     nbt::{self, Limits},
@@ -219,6 +221,49 @@ fn box_shape(v: &Value) -> io::Result<VoxelShape> {
     ))
     .map_err(io::Error::other)
 }
+impl FluidOccupancyWorld for World<'_> {
+    type Error = io::Error;
+    type Chunk = (i32, i32);
+    fn minimum_section_y(&mut self) -> io::Result<i32> {
+        self.trace.borrow_mut().query("liquid-min-section".into())?;
+        Ok(-1)
+    }
+    fn maximum_section_y(&mut self) -> io::Result<i32> {
+        self.trace.borrow_mut().query("liquid-max-section".into())?;
+        Ok(1)
+    }
+    fn chunk(&mut self, x: i32, z: i32) -> io::Result<Self::Chunk> {
+        self.trace
+            .borrow_mut()
+            .query(format!("liquid-chunk {x} {z}"))?;
+        if self.chunks.contains_key(&(x, z)) {
+            Ok((x, z))
+        } else {
+            Err(io::Error::other("missing required liquid chunk"))
+        }
+    }
+    fn section(
+        &mut self,
+        chunk: Self::Chunk,
+        y: i32,
+    ) -> io::Result<&horizon_world::chunk::BlockSection<'_>> {
+        self.trace
+            .borrow_mut()
+            .query(format!("liquid-section {y}"))?;
+        self.chunks[&chunk]
+            .0
+            .section((y + 1) as usize)
+            .ok_or_else(|| io::Error::other("missing section"))
+    }
+    fn minimum_y(&mut self) -> io::Result<i32> {
+        self.trace.borrow_mut().query("liquid-min-y".into())?;
+        Ok(-16)
+    }
+    fn maximum_y(&mut self) -> io::Result<i32> {
+        self.trace.borrow_mut().query("liquid-max-y".into())?;
+        Ok(31)
+    }
+}
 impl EntityMovementWorld for World<'_> {
     type Error = io::Error;
     fn entity_collisions(
@@ -389,6 +434,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .collect::<BTreeSet<_>>();
     let binding = SuffocationRegistry::new(collisions, &definitions, &natural)?;
+    let fluids = FluidPresence::new(&registry)?;
     let properties = Properties(Arc::new(
         (0..registry.len())
             .map(|id| {
@@ -512,6 +558,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let calls = t.calls;
                 writeln!(t.out, "done edge {calls}")?;
+                continue;
+            }
+            if m.get("free").and_then(Value::as_bool) == Some(true) {
+                let result = offset_is_free(
+                    &mut bound,
+                    &fluids,
+                    CollisionCheckRequest {
+                        entity: EntityIdentity(1),
+                        context,
+                        bounds,
+                        candidate_budget: 1_000_000,
+                    },
+                    Vec3::new(number(&v[0]), number(&v[1]), number(&v[2])),
+                    1_000_000,
+                );
+                let mut t = trace.borrow_mut();
+                match result {
+                    Ok(b) => writeln!(t.out, "free {b}")?,
+                    Err(_) => writeln!(t.out, "error")?,
+                };
+                let calls = t.calls;
+                writeln!(t.out, "done free {calls}")?;
                 continue;
             }
             if m.get("check").and_then(Value::as_bool) == Some(true) {

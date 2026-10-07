@@ -124,3 +124,38 @@ impl<W: crate::world_movement::EntityMovementWorld> crate::world_movement::Entit
             .map_err(CollisionQueryError::Context)
     }
 }
+
+impl<W: crate::fluid_occupancy::FluidOccupancyWorld> crate::fluid_occupancy::FluidOccupancyWorld
+    for RegistryCollisionWorld<'_, '_, W>
+{
+    type Error = CollisionQueryError<W::Error>;
+    type Chunk = W::Chunk;
+    fn minimum_section_y(&mut self) -> Result<i32, Self::Error> {
+        self.world
+            .minimum_section_y()
+            .map_err(CollisionQueryError::Context)
+    }
+    fn maximum_section_y(&mut self) -> Result<i32, Self::Error> {
+        self.world
+            .maximum_section_y()
+            .map_err(CollisionQueryError::Context)
+    }
+    fn chunk(&mut self, x: i32, z: i32) -> Result<Self::Chunk, Self::Error> {
+        self.world.chunk(x, z).map_err(CollisionQueryError::Context)
+    }
+    fn section(
+        &mut self,
+        chunk: Self::Chunk,
+        y: i32,
+    ) -> Result<&crate::chunk::BlockSection<'_>, Self::Error> {
+        self.world
+            .section(chunk, y)
+            .map_err(CollisionQueryError::Context)
+    }
+    fn minimum_y(&mut self) -> Result<i32, Self::Error> {
+        self.world.minimum_y().map_err(CollisionQueryError::Context)
+    }
+    fn maximum_y(&mut self) -> Result<i32, Self::Error> {
+        self.world.maximum_y().map_err(CollisionQueryError::Context)
+    }
+}

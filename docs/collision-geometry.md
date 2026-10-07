@@ -936,3 +936,22 @@ changes/compaction and failures. Rust-only checks verify typed budget, nonfinite
 and registry errors. Targeted Clippy passes. Chunk snapshots repeat controlled
 resident data; collision composition for `Entity.isFree` and live world binding
 remain pending. No performance gain is claimed without measurement.
+
+
+`free_space.offset_is_free` composes native offset bounds, registry-bound
+block/entity/border collision clearance and resident liquid occupancy. The
+liquid scan runs only after collision clearance succeeds. Both phases share
+resident TerrainChunk storage through `RegistryCollisionWorld`; their typed
+errors and separate query budgets remain visible to the caller.
+
+`python3 tools/test_free_space_parity.py` invokes actual `Entity.isFree`, native
+collision iteration and liquid scanning on the corresponding resident ProtoChunk
+storage. The [free-space report](../benchmarks/rust-free-space-2026-10-07/scoped-parity.json)
+records **5,764,046 matching lines per JAR** across all **35,723 states**, offsets,
+fluid/context variants, height boundaries, required missing chunks and failures.
+Targeted Clippy passes. Entity lists, border applicability and collision contexts
+are controlled; chunk generation, live entity indexing and full playable
+integration remain pending.
+The [collision-only regression](../benchmarks/rust-free-space-2026-10-07/collision-regression.json)
+also passes **4,793,095 matching lines per JAR** after extending the shared
+fixture and registry binding.
