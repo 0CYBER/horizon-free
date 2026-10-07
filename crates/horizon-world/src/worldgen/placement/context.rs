@@ -61,6 +61,14 @@ pub trait PlacementContext {
     ) -> Result<(), PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
     }
+    /// BlockState.isCollisionShapeFullBlock for an already-read state.
+    fn collision_full_block(
+        &mut self,
+        _state: crate::registry::BlockStateId,
+        _position: [i32; 3],
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
     /// WorldGenLevel.getSeed: the world seed for seed-derived feature noise.
     fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)

@@ -183,6 +183,20 @@ impl<W: Write> SurvivalWorld for World<'_, '_, W> {
     }
 }
 impl<W: Write> PlacementContext for World<'_, '_, W> {
+    fn collision_full_block(&mut self, state: BlockStateId, p: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        use horizon_core::geometry::Axis;
+        let collision = self.collision;
+        let shape = collision.collision_shape(self, state, p).map_err(query)?;
+        let [nx, ny, nz] = shape.sizes();
+        let spans = [Axis::X, Axis::Y, Axis::Z]
+            .into_iter()
+            .all(|axis| shape.min(axis) == 0.0 && shape.max(axis) == 1.0);
+        Ok(!shape.is_empty()
+            && spans
+            && (0..nx).all(|x| {
+                (0..ny).all(|y| (0..nz).all(|z| shape.is_full(x as i32, y as i32, z as i32)))
+            }))
+    }
     fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
         Ok(self.seed)
     }

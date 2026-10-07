@@ -49,6 +49,7 @@ pub mod replace_blobs;
 pub mod root_system;
 pub mod router;
 pub mod rule_test;
+pub mod sculk;
 pub mod settings;
 pub mod simple_block;
 pub mod snow_freeze;

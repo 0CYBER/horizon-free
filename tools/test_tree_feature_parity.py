@@ -113,6 +113,7 @@ def main():
     for side in jars:
         export=build/(side+'-definitions');export.mkdir(exist_ok=True);java('VanillaSimpleBlockOracle',side,'export',export)
     for path in (build/'server-definitions').iterdir():
+        if path.name=='inputs.txt':continue  # survival export's own corpus
         if path.read_bytes()!=(build/'client-definitions'/path.name).read_bytes():raise ValueError('reference definitions differ: '+path.name)
         (build/path.name).write_bytes(path.read_bytes())
     facts=json.loads((build/'facts.json').read_text())
