@@ -1,8 +1,9 @@
 use horizon_world::{
-    attribute_health::{AttributeHealth, HealthError, HealthObserver},
+    attribute_health::{AttributeHealth, HealthAttributes, HealthError, HealthObserver},
     attributes::{
         Modifier, Operation,
-        entity::{Catalog, EntityAttributes},
+        entity::{AttributeId, Catalog, EntityAttributes},
+        live::{Key, LiveAttributes},
     },
     food::{Difficulty, FoodData, FoodWorld},
     living_health::SyncedFloat,
@@ -57,8 +58,74 @@ impl HealthObserver for Observer<'_> {
         self.effect(&format!("updated {:08x}", bits(h.value())))
     }
 }
-struct World<'a> {
-    attributes: EntityAttributes,
+// This fixture observes health/food values, not cross-attribute hash order.
+// Live map/queue order is checked separately with actual JVM hash sequences.
+trait TestAttributes: HealthAttributes<Error: std::fmt::Debug> + Sized {
+    fn create(catalog: &Arc<Catalog>, entity: &str) -> Self;
+    fn set_attribute(&mut self, key: Self::Key, value: f64);
+    fn update_attribute(&mut self, key: Self::Key, modifier: Modifier);
+    fn remove_attribute(&mut self, key: Self::Key, id: &str);
+    fn reset_attribute(&mut self, key: Self::Key);
+}
+impl TestAttributes for EntityAttributes {
+    fn create(catalog: &Arc<Catalog>, entity: &str) -> Self {
+        catalog.create(entity).unwrap()
+    }
+    fn set_attribute(&mut self, key: AttributeId, value: f64) {
+        self.edit(key, |a, o| a.set_base_value(value, o))
+            .unwrap()
+            .unwrap();
+    }
+    fn update_attribute(&mut self, key: AttributeId, modifier: Modifier) {
+        self.edit(key, |a, o| a.add_or_update_transient(modifier, o))
+            .unwrap()
+            .unwrap();
+    }
+    fn remove_attribute(&mut self, key: AttributeId, id: &str) {
+        self.edit(key, |a, o| a.remove(id, o)).unwrap().unwrap();
+    }
+    fn reset_attribute(&mut self, key: AttributeId) {
+        self.reset_base(key);
+    }
+}
+type Live = LiveAttributes<Box<dyn FnMut() -> i32>>;
+impl TestAttributes for Live {
+    fn create(catalog: &Arc<Catalog>, entity: &str) -> Self {
+        let hashes: Vec<_> = (0..catalog.attributes().count())
+            .map(|i| i as i32)
+            .collect();
+        let mut identity = 0;
+        Self::new(
+            catalog.clone(),
+            entity,
+            &hashes,
+            Box::new(move || {
+                identity += 1;
+                identity
+            }),
+        )
+        .unwrap()
+    }
+    fn set_attribute(&mut self, key: Key, value: f64) {
+        let handle = self.get_instance(Some(key)).unwrap().unwrap();
+        self.edit(&handle, |a, o| a.set_base_value(value, o))
+            .unwrap();
+    }
+    fn update_attribute(&mut self, key: Key, modifier: Modifier) {
+        let handle = self.get_instance(Some(key)).unwrap().unwrap();
+        self.edit(&handle, |a, o| a.add_or_update_transient(modifier, o))
+            .unwrap();
+    }
+    fn remove_attribute(&mut self, key: Key, id: &str) {
+        let handle = self.get_instance(Some(key)).unwrap().unwrap();
+        self.edit(&handle, |a, o| a.remove(id, o)).unwrap();
+    }
+    fn reset_attribute(&mut self, key: Key) {
+        self.reset_base(Some(key)).unwrap();
+    }
+}
+struct World<'a, A> {
+    attributes: A,
     health: SyncedFloat,
     absorption: f32,
     dead: bool,
@@ -66,8 +133,8 @@ struct World<'a> {
     difficulty: Difficulty,
     observer: Observer<'a>,
 }
-impl<'a> World<'a> {
-    fn binding(&mut self) -> AttributeHealth<'_, Observer<'a>> {
+impl<'a, A: TestAttributes> World<'a, A> {
+    fn binding(&mut self) -> AttributeHealth<'_, Observer<'a>, A> {
         AttributeHealth::new(
             &mut self.attributes,
             &mut self.health,
@@ -78,8 +145,8 @@ impl<'a> World<'a> {
         .unwrap()
     }
 }
-impl FoodWorld for World<'_> {
-    type Error = HealthError<io::Error>;
+impl<A: TestAttributes> FoodWorld for World<'_, A> {
+    type Error = HealthError<io::Error, A::Error>;
     type Level = ();
     fn level(&mut self, _: &mut FoodData) -> Result<(), Self::Error> {
         Ok(())
@@ -105,21 +172,15 @@ impl FoodWorld for World<'_> {
             .map_err(HealthError::Observer)
     }
 }
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let arg = std::env::args().nth(1).unwrap();
-    let dir = Path::new(&arg);
-    let mut out = io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
+fn run<A: TestAttributes>(dir: &Path, output: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut out = io::BufWriter::new(fs::File::create(dir.join(output))?);
     let catalog = Arc::new(Catalog::from_json(&serde_json::from_str(
         &fs::read_to_string(dir.join("catalog.json"))?,
     )?)?);
-    let keys = [
-        catalog.id("minecraft:max_health").unwrap(),
-        catalog.id("minecraft:max_absorption").unwrap(),
-    ];
     for line in fs::read_to_string(dir.join("inputs.txt"))?.lines() {
         let f: Value = serde_json::from_str(line)?;
         let mut w = World {
-            attributes: catalog.create(f["entity"].as_str().unwrap()).unwrap(),
+            attributes: A::create(&catalog, f["entity"].as_str().unwrap()),
             health: SyncedFloat::new(single(&f["health"])),
             absorption: single(&f["absorption"]),
             dead: f["dead"].as_bool().unwrap(),
@@ -136,6 +197,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fail: f["fail"].as_i64().unwrap(),
             },
         };
+        let keys = [
+            w.attributes
+                .health_attribute_key("minecraft:max_health")
+                .unwrap(),
+            w.attributes
+                .health_attribute_key("minecraft:max_absorption")
+                .unwrap(),
+        ];
         let t = &f["food"];
         let mut food = FoodData {
             food: t["food"].as_i64().unwrap() as i32,
@@ -145,13 +214,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         for op in f["ops"].as_array().unwrap() {
             let v = single(&op["value"]);
-            let key = keys[op["attribute"].as_u64().unwrap() as usize];
+            let key = keys[op["attribute"].as_u64().unwrap() as usize].clone();
             let result = match op["mode"].as_str().unwrap() {
                 "base" => {
-                    w.attributes
-                        .edit(key, |a, o| a.set_base_value(number(&op["amount"]), o))
-                        .unwrap()
-                        .unwrap();
+                    w.attributes.set_attribute(key, number(&op["amount"]));
                     Ok(())
                 }
                 "add" => {
@@ -160,21 +226,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         number(&op["amount"]),
                         Operation::ALL[op["operation"].as_u64().unwrap() as usize],
                     )?;
-                    w.attributes
-                        .edit(key, |a, o| a.add_or_update_transient(m, o))
-                        .unwrap()
-                        .unwrap();
+                    w.attributes.update_attribute(key, m);
                     Ok(())
                 }
                 "remove" => {
                     w.attributes
-                        .edit(key, |a, o| a.remove(op["id"].as_str().unwrap(), o))
-                        .unwrap()
-                        .unwrap();
+                        .remove_attribute(key, op["id"].as_str().unwrap());
                     Ok(())
                 }
                 "reset" => {
-                    w.attributes.reset_base(key);
+                    w.attributes.reset_attribute(key);
                     Ok(())
                 }
                 "set" => w.binding().set_health(v),
@@ -227,10 +288,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             writeln!(
                 w.observer.out,
                 "limits {:016x} {:016x}",
-                double_bits(w.attributes.value(keys[0]).unwrap()),
-                double_bits(w.attributes.value(keys[1]).unwrap())
+                double_bits(
+                    w.attributes
+                        .health_attribute_value(keys[0].clone())
+                        .unwrap()
+                ),
+                double_bits(
+                    w.attributes
+                        .health_attribute_value(keys[1].clone())
+                        .unwrap()
+                )
             )?;
         }
     }
     Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let arg = std::env::args().nth(1).unwrap();
+    let dir = Path::new(&arg);
+    if std::env::args().nth(2).as_deref() == Some("live") {
+        run::<Live>(dir, "rust-live.txt")
+    } else {
+        run::<EntityAttributes>(dir, "rust.txt")
+    }
 }

@@ -62,13 +62,16 @@ def main():
     run(['cargo','build','--release','-p','horizon-world','--example','attribute_health_fixture'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True))
     binary=Path(metadata['target_directory'])/'release/examples'/('attribute_health_fixture.exe' if os.name=='nt' else 'attribute_health_fixture')
-    run([binary,build],'rust');references=[]
+    run([binary,build],'rust');run([binary,build,'live'],'rust-live');references=[]
     for side,jar in jars.items():
         java(side,side,build);reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt')
-        references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched})
-        print(f'{side}: {matched:,} attribute health output lines match Rust',flush=True)
+        live_matched=base.compare(reference,build/'rust-live.txt')
+        references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched,'live_matched_output_lines':live_matched})
+        print(f'{side}: {matched:,} attribute health output lines match both Rust storage backends',flush=True)
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixture_paths,tested_fixtures)
     report={'schema':1,'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'fixtures':len(fixtures),'sources_sha256':tested_sources,'fixtures_sha256':tested_fixtures,'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,'scope':'Registered entity AttributeMap defaults/modifiers composed with actual LivingEntity/Player health methods, SynchedEntityData float health and FoodData regeneration. All 93 default suppliers; attribute mutations, health limits, actual healing and dirty state, hunger/exhaustion/timers, observer failures and starvation requests. Internal absorption storage and starvation damage delivery are controlled; Player absorption synchronization, attribute-change refresh, full damage and live gameplay remain pending.'}
+    report['live_rust_output_sha256']=lab.digest(build/'rust-live.txt','sha256')
+    report['scope'] += ' Both the per-attribute EntityAttributes storage and native-order LiveAttributes component execute the same production health binding. This health trace normalizes attribute collection order; actual JVM map/queue order is covered by the separate live-attribute gate.'
     lab.write_json(report_path,report);print(f'Scoped attribute health parity passed: {report_path}')
 
 

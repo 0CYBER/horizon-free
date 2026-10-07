@@ -1219,3 +1219,14 @@ exporter verifies that assumption. Mutable custom suppliers and their internal
 caches use the separate generic storage interfaces. Combined entity health and
 dimension consequences, full gameplay, save/network codecs and playable native
 macOS, Linux and Windows builds remain unfinished.
+
+The production health binding now accepts the live component through computed
+attribute queries. Healing, health and base absorption limits, synchronized
+health storage and hunger regeneration therefore share its stored values and
+modifier engine. The [health integration comparison](../benchmarks/rust-live-attribute-health-2026-10-07/scoped-parity.json)
+matches **666,082 lines per reference JAR for each storage backend**, including
+all 93 entity suppliers and observer failure prefixes. All `horizon-world`
+targets compile, and library/affected fixture Clippy checks pass. This borrowed
+binding keeps its selected attribute map fixed; entity virtual dispatch,
+attribute refresh, player absorption synchronization and starvation damage
+delivery still require their complete runtime integration.
