@@ -1196,3 +1196,26 @@ Library and fixture Clippy pass. Present supplier prototypes are non-null;
 custom virtual prototype methods, registered ranged-attribute integration and
 combined health/dimension consequences remain outside this gate. Complete
 gameplay and playable platform builds remain unfinished.
+
+## Live registered attribute component
+
+Registered entity attributes now have a reusable component combining immutable
+catalog defaults with lazy instances, effect modifiers and native-order lookup,
+update and synchronization collections. Instance handles retain their identity
+independently of pending queue membership. Queries and base resets leave absent
+instances uncreated; effect application uses the same stored instance and queues
+as direct edits.
+
+The [live attribute comparison](../benchmarks/rust-live-attributes-2026-10-07/scoped-parity.json)
+matches **8,350,018 lines per reference JAR**. Client and server exports agree on
+all **40 attributes and 93 entity suppliers**. The gate includes the previous
+entity-attribute corpus, range boundaries, null lookups, modifier identities and
+caches, nonfinite values, wrapping amplifiers and independent/bulk queue
+acknowledgements. It replays each JVM's actual holder and instance hashes to
+compare collection order. Library and fixture Clippy pass.
+
+This component assumes immutable registered defaults with no modifiers; the
+exporter verifies that assumption. Mutable custom suppliers and their internal
+caches use the separate generic storage interfaces. Combined entity health and
+dimension consequences, full gameplay, save/network codecs and playable native
+macOS, Linux and Windows builds remain unfinished.
