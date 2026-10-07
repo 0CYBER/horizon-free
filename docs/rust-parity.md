@@ -996,3 +996,21 @@ World-library and fixture Clippy checks pass. Eligibility policy, attribute and
 packet notifications, and registered effect behavior remain controlled in these
 checks. Consumable integration, the entity effect tick loop and complete gameplay
 remain pending; this is scoped evidence, not full-game parity.
+
+## Consumable effects bound to entity storage
+
+`StoredConsume` now binds concrete apply/remove/clear consume effects to the
+entity's shared active-effect map. Consumable additions use a null source and
+ordinary status-instance copies, then execute the entity's eligibility, update
+and notification sequence. Sound and RNG services receive access to live storage
+so callback mutations affect subsequent operations.
+
+The [combined comparison](../benchmarks/rust-stored-consume-2026-10-07/scoped-parity.json)
+matches **1,214,124 lines per reference JAR**, executing actual native consume
+effects and inherited entity storage together. It covers both random generators,
+probability boundaries, duplicate inputs, hidden chains, colliding holder keys,
+map-copy removal order, callback mutations and failure prefixes. World-library
+and fixture Clippy checks pass. Eligibility policy, registered effect behavior,
+attribute/packet notifications and sound delivery remain controlled. Named
+holder-set binding, the full player consumption lifecycle and complete gameplay
+remain pending.
