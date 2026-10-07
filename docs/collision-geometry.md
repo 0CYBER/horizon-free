@@ -2093,3 +2093,17 @@ retains **167,906 matching lines per JAR**. Targeted Clippy passes. Map-only run
 use the same installed JDK; these comparisons do not assert gameplay parity or
 equal identity hashes across processes. Keys must have pure operations; null
 keys and other unexposed Map APIs remain outside this storage subset.
+
+`PlayerAttributeHealth`, `ServerPlayerDamage` and `ServerPlayerCombat` can now
+borrow `LiveAttributes`, the same storage used by the resident moving player,
+as well as `EntityAttributes`. Health limits and armor queries use the borrowed
+store; equipment damage callbacks can update it before damage reduction reads
+armor and toughness. Player absorption retains synchronized float storage.
+
+The [live player combat comparison](../benchmarks/rust-live-player-combat-2026-10-07/scoped-parity.json)
+runs the identical corpus through both stores and matches 1,176,994 output lines
+against each pinned Java reference. It covers repeated hits, cooldowns, health
+and absorption writes, exhaustion, numeric edges, armor mutation during a hit
+and callback failures. Equipment, attribution, death services and other world
+consumers retain the controlled boundaries documented in the report. Connecting
+this binding to the resident client landing consumer remains the next step.

@@ -1,5 +1,6 @@
 //! Server-player outer hurt composed with registered attributes and player storage.
 use crate::{
+    attribute_health::HealthAttributes,
     attributes::entity::EntityAttributes,
     combat_rules::ArmorWorld,
     damage_immunity::{self, ImmunityWorld},
@@ -14,24 +15,24 @@ use crate::{
 };
 use std::io;
 type Error<E> = <E as ArmorWorld>::Error;
-pub trait CombatEnvironment:
-    ServerDamageEnvironment
+pub trait CombatEnvironment<A: HealthAttributes = EntityAttributes>:
+    ServerDamageEnvironment<A>
     + ServerPlayerHurtWorld<Error = <Self as ArmorWorld>::Error>
     + ImmunityWorld<Error = <Self as ArmorWorld>::Error>
 {
     /// Direct death flag, read only after health fails the native <= zero test.
     fn dead_flag(&self) -> bool;
 }
-pub struct ServerPlayerCombat<'a, E> {
-    attributes: &'a mut EntityAttributes,
+pub struct ServerPlayerCombat<'a, E, A: HealthAttributes = EntityAttributes> {
+    attributes: &'a mut A,
     data: &'a mut SyncedFloats,
     food: &'a mut FoodData,
     ids: PlayerFloatIds,
     environment: &'a mut E,
 }
-impl<'a, E: CombatEnvironment> ServerPlayerCombat<'a, E> {
+impl<'a, A: HealthAttributes, E: CombatEnvironment<A>> ServerPlayerCombat<'a, E, A> {
     pub fn new(
-        attributes: &'a mut EntityAttributes,
+        attributes: &'a mut A,
         data: &'a mut SyncedFloats,
         food: &'a mut FoodData,
         ids: PlayerFloatIds,
@@ -50,12 +51,12 @@ impl<'a, E: CombatEnvironment> ServerPlayerCombat<'a, E> {
         &mut self,
         state: &mut HurtState<E::Source>,
         damage: f32,
-    ) -> Result<bool, ServerDamageError<Error<E>>> {
+    ) -> Result<bool, ServerDamageError<Error<E>, A::Error>> {
         server_player_hurt_server(state, self, damage)
     }
 }
-impl<E: CombatEnvironment> HurtWorld for ServerPlayerCombat<'_, E> {
-    type Error = ServerDamageError<Error<E>>;
+impl<A: HealthAttributes, E: CombatEnvironment<A>> HurtWorld for ServerPlayerCombat<'_, E, A> {
+    type Error = ServerDamageError<Error<E>, A::Error>;
     type Source = E::Source;
     type UseItem = E::UseItem;
     type Blocking = E::Blocking;
@@ -249,7 +250,9 @@ impl<E: CombatEnvironment> HurtWorld for ServerPlayerCombat<'_, E> {
             .map_err(ServerDamageError::Environment)
     }
 }
-impl<E: CombatEnvironment> PlayerHurtWorld for ServerPlayerCombat<'_, E> {
+impl<A: HealthAttributes, E: CombatEnvironment<A>> PlayerHurtWorld
+    for ServerPlayerCombat<'_, E, A>
+{
     fn ability_invulnerable(&self) -> bool {
         ServerDamageEnvironment::ability_invulnerable(self.environment)
     }
@@ -278,7 +281,9 @@ impl<E: CombatEnvironment> PlayerHurtWorld for ServerPlayerCombat<'_, E> {
         PlayerHurtWorld::difficulty(self.environment, state).map_err(ServerDamageError::Environment)
     }
 }
-impl<E: CombatEnvironment> ServerPlayerHurtWorld for ServerPlayerCombat<'_, E> {
+impl<A: HealthAttributes, E: CombatEnvironment<A>> ServerPlayerHurtWorld
+    for ServerPlayerCombat<'_, E, A>
+{
     type Player = E::Player;
     type Arrow = E::Arrow;
     fn causing_entity(

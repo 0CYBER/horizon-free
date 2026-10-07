@@ -1,9 +1,11 @@
 use horizon_world::damage_immunity::{DamageRule, ImmunityTag, ImmunityWorld};
 use horizon_world::living_hurt::{HurtState, HurtTag, HurtWorld};
 use horizon_world::{
+    attribute_health::HealthAttributes,
     attributes::{
         Modifier, Operation,
         entity::{Catalog, EntityAttributes},
+        live::LiveAttributes,
     },
     combat_rules::ArmorWorld,
     damage_reduction::Bypass,
@@ -25,6 +27,60 @@ use std::{
     io::{self, Write},
     path::Path,
 };
+// Run the identical native combat corpus through both attribute stores.
+trait FixtureAttributes: HealthAttributes {
+    fn create(catalog: Arc<Catalog>) -> Self;
+    fn configure(&mut self, name: &str, base: f64, modifier: Option<Modifier>);
+}
+impl FixtureAttributes for EntityAttributes {
+    fn create(catalog: Arc<Catalog>) -> Self {
+        catalog.create("minecraft:player").unwrap()
+    }
+    fn configure(&mut self, name: &str, base: f64, modifier: Option<Modifier>) {
+        let key = self.catalog().id(name).unwrap();
+        self.edit(key, |a, o| {
+            a.set_base_value(base, o)?;
+            if let Some(m) = modifier {
+                a.add_transient(m, o)?;
+            }
+            Ok::<_, horizon_world::attributes::AttributeError<std::convert::Infallible>>(())
+        })
+        .unwrap()
+        .unwrap();
+    }
+}
+type Live = LiveAttributes<Box<dyn FnMut() -> i32>>;
+impl FixtureAttributes for Live {
+    fn create(catalog: Arc<Catalog>) -> Self {
+        let hashes: Vec<_> = catalog
+            .attributes()
+            .enumerate()
+            .map(|(i, _)| i as i32)
+            .collect();
+        let mut next = 0i32;
+        Self::new(
+            catalog,
+            "minecraft:player",
+            &hashes,
+            Box::new(move || {
+                next = next.wrapping_add(1);
+                next
+            }),
+        )
+        .unwrap()
+    }
+    fn configure(&mut self, name: &str, base: f64, modifier: Option<Modifier>) {
+        let handle = self.get_instance(self.key(name)).unwrap().unwrap();
+        self.edit(&handle, |a, o| {
+            a.set_base_value(base, o)?;
+            if let Some(m) = modifier {
+                a.add_transient(m, o)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+}
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
 }
@@ -320,7 +376,7 @@ impl ArmorWorld for Env<'_> {
         Ok(v)
     }
 }
-impl ServerDamageEnvironment for Env<'_> {
+impl<A: FixtureAttributes> ServerDamageEnvironment<A> for Env<'_> {
     type Attacker = ();
     fn invulnerable(&mut self) -> io::Result<bool> {
         self.event("invulnerable")?;
@@ -336,15 +392,10 @@ impl ServerDamageEnvironment for Env<'_> {
         self.event(&format!("tag bypass_{n}"))?;
         Ok(self.flag(&format!("bypass_{n}")))
     }
-    fn hurt_armor(&mut self, a: &mut EntityAttributes, v: f32) -> io::Result<()> {
+    fn hurt_armor(&mut self, a: &mut A, v: f32) -> io::Result<()> {
         self.event(&format!("hurt-armor {:08x}", bits(v)))?;
         if self.flag("break_armor") {
-            let id = a.catalog().id("minecraft:armor").unwrap();
-            a.edit(id, |a, o| {
-                a.set_base_value(number(&self.op["armor_after"]), o)
-            })
-            .unwrap()
-            .unwrap();
+            a.configure("minecraft:armor", number(&self.op["armor_after"]), None);
         }
         Ok(())
     }
@@ -405,7 +456,7 @@ impl ServerDamageEnvironment for Env<'_> {
         self.event("damage-event")
     }
 }
-impl CombatEnvironment for Env<'_> {
+impl<A: FixtureAttributes> CombatEnvironment<A> for Env<'_> {
     fn dead_flag(&self) -> bool {
         self.dead
     }
@@ -413,6 +464,13 @@ impl CombatEnvironment for Env<'_> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = std::env::args().nth(1).unwrap();
     let dir = Path::new(&arg);
+    if std::env::args().nth(2).as_deref() == Some("--live") {
+        run::<Live>(dir, "rust-live.txt")
+    } else {
+        run::<EntityAttributes>(dir, "rust.txt")
+    }
+}
+fn run<A: FixtureAttributes>(dir: &Path, output: &str) -> Result<(), Box<dyn std::error::Error>> {
     let ids: Value = serde_json::from_str(&fs::read_to_string(dir.join("ids.json"))?)?;
     let ids = PlayerFloatIds {
         health: ids["health"].as_u64().unwrap() as u8,
@@ -428,12 +486,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "minecraft:armor_toughness",
         "minecraft:max_health",
         "minecraft:max_absorption",
-    ]
-    .map(|k| catalog.id(k).unwrap());
-    let mut out = io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
+    ];
+    let mut out = io::BufWriter::new(fs::File::create(dir.join(output))?);
     for line in fs::read_to_string(dir.join("inputs.txt"))?.lines() {
         let f: Value = serde_json::from_str(line)?;
-        let mut attributes = catalog.create("minecraft:player").unwrap();
+        let mut attributes = A::create(catalog.clone());
         for (i, key) in keys.iter().enumerate() {
             let a = &f["attributes"][i];
             let m = Modifier::new(
@@ -441,13 +498,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 number(&a["amount"]),
                 Operation::ALL[a["operation"].as_u64().unwrap() as usize],
             )?;
-            attributes
-                .edit(*key, |a, o| {
-                    a.set_base_value(number(&f["attributes"][i]["base"]), o)?;
-                    a.add_transient(m, o)
-                })
-                .unwrap()
-                .unwrap();
+            attributes.configure(key, number(&f["attributes"][i]["base"]), Some(m));
         }
         let mut data = SyncedFloats::new(&[
             FloatValue {

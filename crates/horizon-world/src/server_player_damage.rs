@@ -2,7 +2,8 @@
 //! synchronized health/absorption and stored hunger. Outer hurt gates stay with
 //! the caller; equipment, effect, statistic and combat services stay explicit.
 use crate::{
-    attributes::entity::{AttributeId, EntityAttributes, LookupError},
+    attribute_health::HealthAttributes,
+    attributes::entity::{EntityAttributes, LookupError},
     combat_rules::ArmorWorld,
     compression::invalid,
     damage_reduction::{self, Bypass, DamageReductionWorld},
@@ -14,12 +15,12 @@ use crate::{
 use std::{fmt, io};
 type EnvError<E> = <E as ArmorWorld>::Error;
 #[derive(Debug)]
-pub enum ServerDamageError<E> {
-    Attribute(LookupError),
+pub enum ServerDamageError<E, A = LookupError> {
+    Attribute(A),
     Data(DataError<E>),
     Environment(E),
 }
-impl<E: fmt::Display> fmt::Display for ServerDamageError<E> {
+impl<E: fmt::Display, A: fmt::Debug> fmt::Display for ServerDamageError<E, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Attribute(e) => write!(f, "damage attribute lookup: {e:?}"),
@@ -28,14 +29,14 @@ impl<E: fmt::Display> fmt::Display for ServerDamageError<E> {
         }
     }
 }
-impl<E: std::error::Error + 'static> std::error::Error for ServerDamageError<E> {}
-fn health_error<E>(e: PlayerHealthError<E>) -> ServerDamageError<E> {
+impl<E: std::error::Error + 'static, A: fmt::Debug> std::error::Error for ServerDamageError<E, A> {}
+fn health_error<E, A>(e: PlayerHealthError<E, A>) -> ServerDamageError<E, A> {
     match e {
         PlayerHealthError::Attribute(e) => ServerDamageError::Attribute(e),
         PlayerHealthError::Data(e) => ServerDamageError::Data(e),
     }
 }
-pub trait ServerDamageEnvironment:
+pub trait ServerDamageEnvironment<A: HealthAttributes = EntityAttributes>:
     ArmorWorld + Observer<Error = <Self as ArmorWorld>::Error>
 {
     type Attacker: Copy;
@@ -43,11 +44,7 @@ pub trait ServerDamageEnvironment:
     fn bypasses(&mut self, kind: Bypass) -> Result<bool, EnvError<Self>>;
     /// Equipment breakage may update the live attribute map before armor and
     /// toughness are queried by the rest of this hit.
-    fn hurt_armor(
-        &mut self,
-        attributes: &mut EntityAttributes,
-        damage: f32,
-    ) -> Result<(), EnvError<Self>>;
+    fn hurt_armor(&mut self, attributes: &mut A, damage: f32) -> Result<(), EnvError<Self>>;
     fn has_resistance(&mut self) -> Result<bool, EnvError<Self>>;
     fn resistance_amplifier(&mut self) -> Result<i32, EnvError<Self>>;
     fn award_resisted(&mut self, amount: i32) -> Result<(), EnvError<Self>>;
@@ -67,30 +64,28 @@ pub trait ServerDamageEnvironment:
     fn record_damage(&mut self, amount: f32) -> Result<(), EnvError<Self>>;
     fn damage_event(&mut self) -> Result<(), EnvError<Self>>;
 }
-pub struct ServerPlayerDamage<'a, E> {
-    attributes: &'a mut EntityAttributes,
+pub struct ServerPlayerDamage<'a, E, A: HealthAttributes = EntityAttributes> {
+    attributes: &'a mut A,
     data: &'a mut SyncedFloats,
     food: &'a mut FoodData,
     ids: PlayerFloatIds,
-    armor: AttributeId,
-    toughness: AttributeId,
+    armor: A::Key,
+    toughness: A::Key,
     environment: &'a mut E,
 }
-impl<'a, E: ServerDamageEnvironment> ServerPlayerDamage<'a, E> {
+impl<'a, A: HealthAttributes, E: ServerDamageEnvironment<A>> ServerPlayerDamage<'a, E, A> {
     pub fn new(
-        attributes: &'a mut EntityAttributes,
+        attributes: &'a mut A,
         data: &'a mut SyncedFloats,
         food: &'a mut FoodData,
         ids: PlayerFloatIds,
         environment: &'a mut E,
     ) -> io::Result<Self> {
         let armor = attributes
-            .catalog()
-            .id("minecraft:armor")
+            .health_attribute_key("minecraft:armor")
             .ok_or_else(|| invalid("missing ARMOR definition"))?;
         let toughness = attributes
-            .catalog()
-            .id("minecraft:armor_toughness")
+            .health_attribute_key("minecraft:armor_toughness")
             .ok_or_else(|| invalid("missing ARMOR_TOUGHNESS definition"))?;
         PlayerAttributeHealth::new(attributes, data, ids, false, environment)?;
         Ok(Self {
@@ -103,7 +98,7 @@ impl<'a, E: ServerDamageEnvironment> ServerPlayerDamage<'a, E> {
             environment,
         })
     }
-    fn health_binding(&mut self) -> PlayerAttributeHealth<'_, E> {
+    fn health_binding(&mut self) -> PlayerAttributeHealth<'_, E, A> {
         PlayerAttributeHealth::new(
             self.attributes,
             self.data,
@@ -113,18 +108,20 @@ impl<'a, E: ServerDamageEnvironment> ServerPlayerDamage<'a, E> {
         )
         .expect("validated immutable player float schema")
     }
-    pub fn apply(&mut self, damage: f32) -> Result<(), ServerDamageError<EnvError<E>>> {
+    pub fn apply(&mut self, damage: f32) -> Result<(), ServerDamageError<EnvError<E>, A::Error>> {
         living_damage::actually_hurt(self, damage, true)
     }
     pub(crate) fn apply_after_immunity_check(
         &mut self,
         damage: f32,
-    ) -> Result<(), ServerDamageError<EnvError<E>>> {
+    ) -> Result<(), ServerDamageError<EnvError<E>, A::Error>> {
         living_damage::actually_hurt_after_immunity_check(self, damage, true)
     }
 }
-impl<E: ServerDamageEnvironment> ArmorWorld for ServerPlayerDamage<'_, E> {
-    type Error = ServerDamageError<EnvError<E>>;
+impl<A: HealthAttributes, E: ServerDamageEnvironment<A>> ArmorWorld
+    for ServerPlayerDamage<'_, E, A>
+{
+    type Error = ServerDamageError<EnvError<E>, A::Error>;
     type Weapon = E::Weapon;
     type ServerLevel = E::ServerLevel;
     fn weapon(&mut self) -> Result<Option<Self::Weapon>, Self::Error> {
@@ -148,7 +145,9 @@ impl<E: ServerDamageEnvironment> ArmorWorld for ServerPlayerDamage<'_, E> {
             .map_err(ServerDamageError::Environment)
     }
 }
-impl<E: ServerDamageEnvironment> DamageReductionWorld for ServerPlayerDamage<'_, E> {
+impl<A: HealthAttributes, E: ServerDamageEnvironment<A>> DamageReductionWorld
+    for ServerPlayerDamage<'_, E, A>
+{
     fn bypasses(&mut self, b: Bypass) -> Result<bool, Self::Error> {
         self.environment
             .bypasses(b)
@@ -161,13 +160,13 @@ impl<E: ServerDamageEnvironment> DamageReductionWorld for ServerPlayerDamage<'_,
     }
     fn armor_value(&mut self) -> Result<i32, Self::Error> {
         self.attributes
-            .value(self.armor)
+            .health_attribute_value(self.armor.clone())
             .map(damage_reduction::armor_from_attribute)
             .map_err(ServerDamageError::Attribute)
     }
     fn toughness_attribute(&mut self) -> Result<f64, Self::Error> {
         self.attributes
-            .value(self.toughness)
+            .health_attribute_value(self.toughness.clone())
             .map_err(ServerDamageError::Attribute)
     }
     fn has_resistance(&mut self) -> Result<bool, Self::Error> {
@@ -205,8 +204,10 @@ impl<E: ServerDamageEnvironment> DamageReductionWorld for ServerPlayerDamage<'_,
             .map_err(ServerDamageError::Environment)
     }
 }
-impl<E: ServerDamageEnvironment> DamageWorld for ServerPlayerDamage<'_, E> {
-    type Error = ServerDamageError<EnvError<E>>;
+impl<A: HealthAttributes, E: ServerDamageEnvironment<A>> DamageWorld
+    for ServerPlayerDamage<'_, E, A>
+{
+    type Error = ServerDamageError<EnvError<E>, A::Error>;
     type Attacker = E::Attacker;
     fn invulnerable(&mut self) -> Result<bool, Self::Error> {
         self.environment
