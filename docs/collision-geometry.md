@@ -885,3 +885,19 @@ raw effect amplifiers, signed zero/nonfinite values, rider classes, callback
 mutations and failures. Targeted Clippy passes. Entity-type jump/flight overrides,
 effect and attribute storage, registered jump-factor binding and live gameplay
 integration remain pending.
+
+
+`player_travel` wraps living travel with passenger bypass, swimming pitch
+adjustment, head-fluid checks and preservation of creative-flight vertical
+velocity. It also binds player flight speed to sprint/passenger/ability rules
+and implements the flying ability's fluid-affection predicate.
+
+`python3 tools/test_player_travel_parity.py` invokes actual `Player.travel`,
+`getFlyingSpeed` and `isAffectedByFluids`. The
+[player travel report](../benchmarks/rust-player-travel-2026-10-07/scoped-parity.json)
+records **120,933 matching lines per JAR**, including ability and velocity
+mutations, callback failures, signed zero/nonfinite positions and the distinction
+between direct ability fields and virtual ability access. Targeted Clippy passes.
+Parent travel is selected through a controlled fluid callback; connecting the
+verified living phases and collision movement to the live player/world remains
+pending.
