@@ -1545,3 +1545,19 @@ records **71,800 matching lines per JAR**, including scalar float boundaries,
 invalid/absent durability components, statistic item capture, callback mutations
 and failures. Targeted Clippy passes. Stacks are unenchanted; full component
 storage, equipment lifecycle and complete combat/world integration remain pending.
+
+
+`item_use_lifecycle` implements living use ticks, per-item updates, completion,
+release and stop ordering. Stable stack handles preserve type versus identity
+checks, rereads after virtual hand queries, captured level/item arguments,
+wrapping countdowns, returned-item placement and failure-visible state changes.
+
+`python3 tools/test_item_use_lifecycle_parity.py` compares actual inherited native
+methods and ItemStack dispatch with controlled custom item handlers. The
+[lifecycle report](../benchmarks/rust-item-use-lifecycle-2026-10-07/scoped-parity.json)
+records **144,736 matching lines per JAR**, including empty stacks, changed
+held/active items, shared item types, client/server queries, finish vibrations,
+kinetic-map presence and callback mutation/failure ordering. Targeted Clippy
+passes. Starting use, actual synchronized flags, consumable/kinetic effects,
+remainder/cooldown components and full inventory/game-tick integration remain
+pending.
