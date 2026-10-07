@@ -901,3 +901,19 @@ between direct ability fields and virtual ability access. Targeted Clippy passes
 Parent travel is selected through a controlled fluid callback; connecting the
 verified living phases and collision movement to the live player/world remains
 pending.
+
+
+`ClimbingRegistry` binds resolved climbing/glide-through tags and actual trapdoor
+class identities to all registered states. `on_climbable` preserves spectator
+and gliding guards, open-trapdoor/ladder facing checks, wrapping below-position
+arithmetic and last-climbable position writes. Negative or failed checks retain
+the previous climbing position. Unknown members/properties and IDs are rejected.
+
+`python3 tools/test_climbing_parity.py` invokes actual registered
+`LivingEntity.onClimbable` and trapdoor support checks. The
+[climbing report](../benchmarks/rust-climbing-2026-10-07/scoped-parity.json)
+records **3,820,054 matching lines per JAR** across all **35,723 states**, including
+all trapdoor states against every registered ladder facing, tag reloads,
+spectator/gliding guards, captured positions, mutations and failures. Targeted
+Clippy passes. Entity/world storage is controlled; live movement binding and
+equipment-based glide eligibility remain pending.
