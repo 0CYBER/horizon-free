@@ -1042,3 +1042,20 @@ synchronized data and both RNG implementations. Library and fixture Clippy pass.
 Registered effect bodies, attribute/packet notification side effects and random
 position methods are still controlled. Complete entity ticking, gameplay and
 playable platform builds remain pending.
+
+## Pending-attribute set storage
+
+Rust now implements the default fastutil object set used by vanilla attribute
+update and synchronization queues. It preserves null membership, retained key
+identity, native slot order, growth/shrink behavior and iterator removal across
+wrapped clusters. Iterators read the live slot array and retain their original
+remaining count; external mutations have native failure prefixes rather than
+HashMap-style concurrent-modification checks.
+
+The [set comparison](../benchmarks/rust-object-open-set-2026-10-07/scoped-parity.json)
+matches **611,998 lines per reference classpath** against the pinned fastutil
+8.5.18 library. Library and fixture Clippy pass. The gate covers default set
+operations and live iteration; alternate constructors, bulk methods, and external
+structural mutation followed by iterator removal remain outside its scope.
+Binding this storage to attribute refresh and the complete entity lifecycle is
+the next step; this collection comparison does not establish gameplay parity.
