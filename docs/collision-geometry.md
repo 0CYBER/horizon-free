@@ -1351,3 +1351,20 @@ Clippy passes. Inner damage, blocking amounts, sounds, knockback, death and
 attribution/effect services are controlled. Successful totems, attacker-player
 criteria, actual blocking reduction, full service bindings and player-specific
 outer gates remain pending.
+
+
+`player_hurt` adds the player ability/invulnerability gates, no-action reset,
+shoulder removal, damage-source difficulty scaling and exact-zero rejection
+before living hurt. The server-player wrapper first checks PvP permission for
+player attackers and player owners of arrow attackers. Difficulty is queried
+separately for the peaceful, easy and hard branches as in vanilla.
+
+`python3 tools/test_player_hurt_parity.py` compares actual Player and ServerPlayer
+methods through the native living hurt sequence. The
+[player hurt report](../benchmarks/rust-player-hurt-2026-10-07/scoped-parity.json)
+records **410,880 matching lines per JAR**, including all three-query difficulty
+combinations, player/arrow-owner PvP gates, repeated hits and callback failures.
+Targeted Clippy passes. Native downstream living services retain the controlled
+fixture scope above; invulnerability internals, rule/source registries, actual
+team permissions, successful totems, attacker server-player criteria and complete
+player lifecycle integration remain pending.
