@@ -1368,3 +1368,18 @@ Targeted Clippy passes. Native downstream living services retain the controlled
 fixture scope above; invulnerability internals, rule/source registries, actual
 team permissions, successful totems, attacker server-player criteria and complete
 player lifecycle integration remain pending.
+
+
+`damage_immunity` implements entity permanent/temporary invulnerability and base
+source immunity, living enchantment dispatch, ordered player damage gamerules,
+and server-player dimension-change/client-loading checks. It preserves early
+returns and repeated source-tag queries across the inheritance layers.
+
+`python3 tools/test_damage_immunity_parity.py` compares each native layer on
+ServerPlayer receivers, retaining native empty-equipment enchantment iteration.
+The [damage immunity report](../benchmarks/rust-damage-immunity-2026-10-07/scoped-parity.json)
+records **170,314 matching lines per JAR**, including mixed damage tags, rule
+precedence, virtual flag mutations and callback failures. Targeted Clippy passes.
+Source/rule queries and virtual flags are controlled; registered source/rule
+bindings, nonempty enchantment immunity and full pipeline integration remain
+pending.
