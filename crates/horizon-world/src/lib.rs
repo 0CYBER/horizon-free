@@ -21,6 +21,7 @@ pub mod climbing;
 pub mod collision;
 pub mod collision_context;
 pub mod combat_rules;
+pub mod component_patch;
 pub mod compression;
 pub mod damage_immunity;
 pub mod damage_reduction;

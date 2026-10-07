@@ -1594,3 +1594,19 @@ changes and component mutation sequences, override behavior, stackability,
 durability and integer/float extremes. Targeted Clippy passes. The imported
 projection does not implement all item components or their codecs; full inventory,
 enchantment effects and stored gameplay integration remain pending.
+
+
+`component_patch` stores shared immutable prototypes and ordered copy-on-write
+patches. Set/remove return values, redundant-value sanitation, explicit removals,
+unsanitized restoration, independent copies and saved patch snapshots retain
+native behavior. Entry iteration emits patched values before untouched defaults;
+key-set order instead applies the patch to the prototype's key sequence.
+
+`python3 tools/test_component_patch_parity.py` compares actual native patched
+maps. The [component-patch report](../benchmarks/rust-component-patch-2026-10-07/scoped-parity.json)
+records **622,680 matching lines per JAR**, including integer/boxed-float equality,
+NaN/signed zero, copy isolation and mutation-before-error when a restored removal
+has no prototype default. Targeted Clippy passes. Prototypes have at most seven
+keys in this suite; callers supply prototype order and native value equality.
+Native large-prototype identity-hash ordering, codecs, mutable payload aliases
+and full item/inventory integration remain pending.
