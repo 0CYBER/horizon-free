@@ -473,6 +473,9 @@ impl ProtoChunk {
     pub fn is_decorated(&self) -> bool {
         self.decorated
     }
+    pub(super) fn set_decorated(&mut self) {
+        self.decorated = true;
+    }
     /// Highest non-air block + 1 in the column (WORLD_SURFACE).
     pub fn surface_height(&self, x: i32, z: i32) -> i32 {
         self.terrain
@@ -1029,6 +1032,7 @@ trait SeededPipeline: Send + Sync {
     ) -> Result<DecorateStats, GeneratorError>;
     fn data(&self) -> &Arc<GeneratorData>;
     fn sea_level(&self) -> i32;
+    fn unsupported_features(&self) -> Vec<(String, String)>;
 }
 impl<R: RandomSource + 'static> SeededPipeline for Pipeline<R>
 where
@@ -1058,6 +1062,12 @@ where
     }
     fn sea_level(&self) -> i32 {
         self.settings.sea_level
+    }
+    fn unsupported_features(&self) -> Vec<(String, String)> {
+        self.decoration
+            .as_ref()
+            .map(super::generator_decoration::Decoration::unsupported)
+            .unwrap_or_default()
     }
 }
 
@@ -1137,6 +1147,11 @@ impl OverworldGenerator {
     pub fn sea_level(&self) -> i32 {
         self.pipeline.sea_level()
     }
+    /// Placed features of this dimension's biomes that decoration skips because
+    /// their algorithm or bindings are not implemented, with the decode error.
+    pub fn unsupported_features(&self) -> Vec<(String, String)> {
+        self.pipeline.unsupported_features()
+    }
     /// Create per-thread state. Workers are cheap; keep one per thread.
     pub fn worker(&self) -> GeneratorWorker {
         let data = self.pipeline.data();
@@ -1181,5 +1196,28 @@ impl GeneratorWorker {
         region: &mut [ProtoChunk; 9],
     ) -> Result<DecorateStats, GeneratorError> {
         self.pipeline.decorate(&mut self.state, region)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parameter_reports_quantize_like_vanilla() {
+        let report = r#"{"biomes":[{"biome":"minecraft:plains","parameters":{
+            "temperature":[-0.45,-0.15],"humidity":[-1.0,-0.35],"continentalness":[-0.11,0.03],
+            "erosion":[0.45,0.55],"depth":0.0,"weirdness":[-0.2633,-0.05],"offset":0.0}}]}"#;
+        let table: Value =
+            serde_json::from_str(&quantize_parameter_report(report).unwrap()).unwrap();
+        assert_eq!(
+            table,
+            serde_json::json!([{"coordinates":[[-4500,-1500],[-10000,-3500],[-1100,300],
+                [4500,5500],[0,0],[-2633,-500]],"offset":0,"biome":"minecraft:plains"}])
+        );
+        assert!(
+            quantize_parameter_report(r#"{"biomes":[{"parameters":{"temperature":"x"}}]}"#)
+                .is_err()
+        );
     }
 }

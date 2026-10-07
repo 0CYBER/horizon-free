@@ -146,6 +146,20 @@ fn verify(data: &std::sync::Arc<GeneratorData>, parity: &Path) -> Result<(), Err
     }
 }
 
+/// Process CPU seconds (Linux), robust against other load on shared machines.
+fn cpu_seconds() -> f64 {
+    fs::read_to_string("/proc/self/stat")
+        .ok()
+        .and_then(|stat| {
+            let fields = stat
+                .rsplit_once(')')?
+                .1
+                .split_whitespace()
+                .collect::<Vec<_>>();
+            Some((fields[11].parse::<f64>().ok()? + fields[12].parse::<f64>().ok()?) / 100.)
+        })
+        .unwrap_or(0.)
+}
 fn glyph(name: &str) -> char {
     let name = name.strip_prefix("minecraft:").unwrap_or(name);
     match name {
@@ -206,6 +220,7 @@ fn main() -> Result<(), Error> {
     let next = AtomicUsize::new(0);
     let slots: Vec<Mutex<Option<ProtoChunk>>> = (0..count).map(|_| Mutex::new(None)).collect();
     let timings = Mutex::new(Vec::new());
+    let cpu = cpu_seconds();
     let start = Instant::now();
     std::thread::scope(|scope| -> Result<(), Error> {
         let handles = (0..threads)
@@ -231,6 +246,10 @@ fn main() -> Result<(), Error> {
         "generated {count} proto chunks with {threads} threads in {elapsed:.2?}: {:.1} chunks/s ({:.1} ms/chunk/thread)",
         count as f64 / elapsed.as_secs_f64(),
         elapsed.as_secs_f64() * 1000. * threads as f64 / count as f64
+    );
+    println!(
+        "  cpu time {:.1} ms/chunk",
+        (cpu_seconds() - cpu) * 1000. / count as f64
     );
     let timings = timings.into_inner().unwrap();
     let per_chunk = |f: fn(&StageTimings) -> std::time::Duration| {
@@ -319,6 +338,11 @@ fn main() -> Result<(), Error> {
             totals.unsupported,
             totals.failed
         );
+        if std::env::var_os("HORIZON_FEATURE_ERRORS").is_some() {
+            for (name, error) in generator.unsupported_features() {
+                println!("unsupported {name}: {error}");
+            }
+        }
         if !totals.skipped.is_empty() {
             println!(
                 "skipped roots: {}",

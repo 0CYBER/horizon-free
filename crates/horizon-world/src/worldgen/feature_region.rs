@@ -177,6 +177,10 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         self.sea_level = sea_level;
         self
     }
+    /// Release the resident chunks, ordered by X then Z; match them by position.
+    pub fn into_chunks(self) -> Vec<TerrainChunk<'r, B>> {
+        self.chunks.into_values().collect()
+    }
     pub fn chunks(&self) -> impl Iterator<Item = &TerrainChunk<'r, B>> {
         self.chunks.values()
     }
