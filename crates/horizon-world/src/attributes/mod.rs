@@ -1,6 +1,7 @@
 //! Ordered attribute modifiers, native cache invalidation and permanent state.
 use crate::compression::invalid;
 use std::{fmt, io, sync::Arc};
+pub mod entity;
 mod operation_map;
 use operation_map::OperationMap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

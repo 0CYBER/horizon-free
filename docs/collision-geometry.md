@@ -1115,3 +1115,21 @@ reference identity, observer cache reads/failures, nonfinite values and signed
 zero. The adapter observes iterator order, as native calculation does; Java
 stream traversal can differ. Targeted Clippy passes. Registry/entity/equipment
 binding, packed data/network codecs and full gameplay integration remain pending.
+
+
+`attributes::entity` imports version-checked attribute definitions and entity
+supplier bases, and composes them with the attribute engine. Reads fall back to
+the supplier without creating instances; first instance access schedules an
+update and a sync for client-syncable attributes. Mutations retain those set
+memberships until individually acknowledged. Base resets use the entity's
+supplier value and do not instantiate absent entries. Missing attributes and
+missing modifiers remain distinguishable, including lookup after instantiation.
+
+`python3 tools/test_entity_attribute_parity.py` compares actual `AttributeMap`
+operations with **40 registered attributes** and **93 entity suppliers**. The
+[entity attribute report](../benchmarks/rust-entity-attributes-2026-10-07/scoped-parity.json)
+records **1,771,555 matching lines per JAR** across **4,720 fixtures**. Targeted
+Clippy passes. The exporter asserts that registered default suppliers contain no
+modifiers. Set membership is observed in registry order: this does not establish
+JVM identity-hash collection order, cross-attribute bulk assignment/serialization,
+custom suppliers, equipment integration or a live entity tick.
