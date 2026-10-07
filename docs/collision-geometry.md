@@ -1468,3 +1468,18 @@ NaN/infinity/signed zero, randomized float bits, source-type mutations and query
 failures. Targeted Clippy passes. Angles are supplied in radians; direction/acos
 calculation, component codecs, item durability, sounds and full blocking
 integration remain pending.
+
+
+`view_direction` implements native float-table pitch/yaw vectors and horizontal
+blocking angles, using the pinned pure-Rust `libm` 0.2.16 inverse cosine. A local
+203,072-input probe found 7,908 differences with the platform `acos`, versus none
+with this pinned implementation, so platform math is not used for this path.
+
+`python3 tools/test_view_direction_parity.py` compares actual native view vectors
+and Java Math.acos, plus the native view/subtract/normalize/dot/acos composition
+used by blocking. The [view-direction report](../benchmarks/rust-view-direction-2026-10-07/scoped-parity.json)
+records **226,459 matching lines per JAR**, including random doubles, inverse-
+cosine boundaries, arbitrary float rotations, degenerate horizontal vectors and
+the widened float-PI fallback. Targeted Clippy passes. Full item-blocking dispatch
+and validation against JVMs on other platforms remain pending. This does not
+resolve the separately tracked Math.cos/Gaussian portability differences.

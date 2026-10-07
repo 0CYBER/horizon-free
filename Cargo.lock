@@ -609,6 +609,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "horizon-core",
+ "libm",
  "lz4_flex",
  "serde_json",
  "xxhash-rust",
