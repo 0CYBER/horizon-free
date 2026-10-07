@@ -55,6 +55,7 @@ pub mod item_use;
 pub mod item_use_catalog;
 pub mod item_use_lifecycle;
 pub mod item_use_start;
+pub mod java_hash_map;
 pub mod liquid_collision;
 pub mod living_air;
 pub mod living_damage;

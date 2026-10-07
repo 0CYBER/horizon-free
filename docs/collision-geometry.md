@@ -1864,3 +1864,21 @@ counts, changed prototypes, cached errors, nested bundles, bee presence, empty
 component visibility and validation order. Targeted Clippy passes. Typed schema
 adapters remain fixture-local; complete bundle inventory operations, codecs,
 item-use integration and full gameplay integration remain pending.
+
+
+`java_hash_map` supplies default-capacity storage for non-null keys with native
+hash codes and a total comparable ordering consistent with equality. It retains
+linked bucket traversal, tree-bin root movement, red/black insertion/deletion,
+resize splits, iterator removal and structural-modification checks. Tree lookup
+uses the ordered tree; removed arena slots are reused.
+
+`python3 tools/test_java_hash_map_parity.py` compares this API with the actual
+JDK 25 HashMap used by vanilla cooldown storage. The
+[map report](../benchmarks/rust-java-hash-map-2026-10-07/scoped-parity.json) records
+**601,084 matching lines** for each pinned-game classpath run, including all-key
+collisions, tree/list transitions, varied removal orders, iterator mutations
+and clear-on-empty behavior. Both runs use the same installed JDK; this is a
+collection comparison, not a gameplay parity claim. Targeted Clippy passes.
+Null/non-comparable keys, alternate map constructors and unexposed Map methods
+are outside this storage API. Concrete cooldown and gameplay integration remain
+pending.
