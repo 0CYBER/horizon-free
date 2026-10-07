@@ -909,31 +909,43 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
     })
 }
 
-pub const INSTRUMENTS: [&str; 23] = [
-    "HARP",
-    "BASEDRUM",
-    "SNARE",
-    "HAT",
-    "BASS",
-    "FLUTE",
-    "BELL",
-    "GUITAR",
-    "CHIME",
-    "XYLOPHONE",
-    "IRON_XYLOPHONE",
-    "COW_BELL",
-    "DIDGERIDOO",
-    "BIT",
-    "BANJO",
-    "PLING",
-    "TRUMPET",
-    "TRUMPET_EXPOSED",
-    "TRUMPET_WEATHERED",
-    "TRUMPET_OXIDIZED",
-    "ZOMBIE",
-    "SKELETON",
-    "CREEPER",
+/// `NoteBlockInstrument` serialized names in declaration order.
+pub const INSTRUMENTS: [&str; 27] = [
+    "harp",
+    "basedrum",
+    "snare",
+    "hat",
+    "bass",
+    "flute",
+    "bell",
+    "guitar",
+    "chime",
+    "xylophone",
+    "iron_xylophone",
+    "cow_bell",
+    "didgeridoo",
+    "bit",
+    "banjo",
+    "pling",
+    "trumpet",
+    "trumpet_exposed",
+    "trumpet_oxidized",
+    "trumpet_weathered",
+    "zombie",
+    "skeleton",
+    "creeper",
+    "dragon",
+    "wither_skeleton",
+    "piglin",
+    "custom_head",
 ];
+/// `NoteBlockInstrument.worksAboveNoteBlock` (mob heads and custom heads).
+pub fn instrument_works_above(index: u8) -> bool {
+    index >= 20
+}
 fn instrument_index(name: &str) -> u8 {
-    INSTRUMENTS.iter().position(|n| *n == name).map_or(255, |i| i as u8)
+    INSTRUMENTS
+        .iter()
+        .position(|n| n.eq_ignore_ascii_case(name))
+        .map_or(0, |i| i as u8)
 }
