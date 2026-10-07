@@ -1183,3 +1183,19 @@ during callbacks and partial effects after exceptions. Targeted Clippy passes.
 Attribute values and the internal absorption sink are controlled. Player-specific
 absorption synchronization, multiple synchronized items, registered attribute
 binding, full damage processing and playable entities remain pending.
+
+
+`attribute_health` binds the health engine to registered entity attributes and
+mutable synchronized health. `AttributeHealth` borrows existing state, queries
+actual modified MAX_HEALTH/MAX_ABSORPTION values and propagates observer errors
+without losing partial health writes. Base living absorption uses field storage.
+
+`python3 tools/test_attribute_health_parity.py` composes actual registered
+`AttributeMap`, LivingEntity/Player health methods, `SynchedEntityData` and
+`FoodData`. The [composition report](../benchmarks/rust-attribute-health-2026-10-07/scoped-parity.json)
+records **666,082 matching lines per JAR**, including all **93 entity suppliers**,
+attribute base/modifier changes, real regeneration health writes, 100-tick hunger
+sequences and failed synchronization callbacks. Targeted Clippy passes. The
+internal absorption sink and starvation damage delivery are controlled;
+player absorption synchronization, attribute-change refresh, full damage and
+live gameplay integration remain pending.
