@@ -1063,3 +1063,17 @@ records **191,142 matching lines per JAR**, including flag combinations, native
 fluid tag membership, failures/mutations, and f32 eye-height boundaries/nonfinite
 values. Targeted Clippy passes. Synchronized entity storage, full input/tick
 integration and playable gameplay remain pending.
+
+
+`fluid_box` implements default entity immersion bounds and boat passenger
+waterline clipping. Entity bounds are deflated and captured before vehicle
+lookup. Submerged boats retain those bounds; other boats restrict immersion to
+the portion strictly above their top, returning no box when none remains.
+
+`python3 tools/test_fluid_box_parity.py` compares actual entity/boat methods. The
+[fluid box report](../benchmarks/rust-fluid-box-2026-10-07/scoped-parity.json)
+records **92,822 matching lines per JAR**, including actual boat status values,
+virtual modifier dispatch, thin/inverted bounds, waterline boundaries, signed
+zero/nonfinite values and mutations/failures. Targeted Clippy passes. Vehicle
+snapshots are controlled; live passenger lifecycle and full gameplay remain
+pending.
