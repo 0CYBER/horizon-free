@@ -18,20 +18,39 @@ use std::{
     thread,
 };
 
-/// Produces fully generated chunk columns. Implementations must be thread-safe;
-/// each worker thread owns one `Worker` for per-thread caches.
+/// A chunk under generation, opaque to the streamer.
+pub type Proto = Box<dyn std::any::Any + Send>;
+/// Chunk generation in vanilla's stages: a neighbour-independent proto chunk
+/// (biomes, noise, surface, carvers), decoration of a 3x3 neighbourhood
+/// (FEATURES, which may write into neighbours), then conversion of a chunk
+/// whose eight neighbours are decorated into a final column. Implementations
+/// must be thread-safe; each worker thread owns one `Worker`.
 pub trait ChunkGenerator: Send + Sync + 'static {
     type Worker: Send + 'static;
     fn worker(&self) -> Self::Worker;
-    fn generate(&self, worker: &mut Self::Worker, x: i32, z: i32) -> Chunk;
+    /// A previously saved final chunk, bypassing generation.
+    fn load(&self, _x: i32, _z: i32) -> Option<Chunk> {
+        None
+    }
+    fn proto(&self, worker: &mut Self::Worker, x: i32, z: i32) -> Proto;
+    fn decorates(&self) -> bool {
+        false
+    }
+    /// Decorate `region[4]`; the region is row-major (dz, dx) around it.
+    fn decorate(&self, _worker: &mut Self::Worker, _region: &mut [Proto; 9]) {}
+    fn finish(&self, proto: Proto) -> Chunk;
 }
 enum Job {
     Generate(i32, i32),
+    Decorate(i32, i32, Box<[Proto; 9]>),
+    Finish(i32, i32, Proto),
     Light(i32, i32, Box<Region>, u64),
     Mesh(i32, i32, i32, Box<Region>, u64),
 }
 pub enum Done {
     Generated(Chunk),
+    Proto(i32, i32, Proto),
+    Decorated(i32, i32, Box<[Proto; 9]>),
     Lit(i32, i32, Vec<Arc<crate::chunk::Section>>, u64),
     Meshed(i32, i32, i32, SectionMesh, u64),
 }
@@ -70,6 +89,12 @@ pub struct Streaming {
     threads: Vec<thread::JoinHandle<()>>,
     order: u64,
     generating: HashSet<(i32, i32)>,
+    /// Proto chunks: `None` while checked out to a decoration job.
+    protos: HashMap<(i32, i32), Option<Proto>>,
+    decorated: HashSet<(i32, i32)>,
+    decorating: usize,
+    finishing: HashSet<(i32, i32)>,
+    decorates: bool,
     lighting: HashMap<(i32, i32), u64>,
     meshing: HashMap<(i32, i32, i32), u64>,
     /// Chunks whose light is current.
@@ -126,9 +151,15 @@ impl Streaming {
                                 }
                             };
                             let done = match job {
-                                Job::Generate(x, z) => {
-                                    Done::Generated(generator.generate(&mut worker, x, z))
+                                Job::Generate(x, z) => match generator.load(x, z) {
+                                    Some(chunk) => Done::Generated(chunk),
+                                    None => Done::Proto(x, z, generator.proto(&mut worker, x, z)),
+                                },
+                                Job::Decorate(x, z, mut region) => {
+                                    generator.decorate(&mut worker, &mut region);
+                                    Done::Decorated(x, z, region)
                                 }
+                                Job::Finish(_, _, proto) => Done::Generated(generator.finish(proto)),
                                 Job::Light(x, z, region, seq) => {
                                     Done::Lit(x, z, light_chunk(&borrow(&region), &context.light), seq)
                                 }
@@ -150,6 +181,11 @@ impl Streaming {
             threads,
             order: 0,
             generating: HashSet::new(),
+            protos: HashMap::new(),
+            decorated: HashSet::new(),
+            decorating: 0,
+            finishing: HashSet::new(),
+            decorates: generator.decorates(),
             lighting: HashMap::new(),
             meshing: HashMap::new(),
             lit: HashSet::new(),
@@ -195,9 +231,28 @@ impl Streaming {
         let mut uploads = Vec::new();
         while let Ok(done) = self.results.try_recv() {
             match done {
+                Done::Proto(x, z, proto) => {
+                    self.generating.remove(&(x, z));
+                    if self.in_range(x, z, 4) {
+                        self.protos.insert((x, z), Some(proto));
+                        if !self.decorates {
+                            self.decorated.insert((x, z));
+                        }
+                    }
+                }
+                Done::Decorated(x, z, region) => {
+                    self.decorating -= 1;
+                    self.decorated.insert((x, z));
+                    for (i, proto) in region.into_iter().enumerate() {
+                        let key = (x + (i % 3) as i32 - 1, z + (i / 3) as i32 - 1);
+                        self.protos.insert(key, Some(proto));
+                    }
+                }
                 Done::Generated(chunk) => {
                     let key = (chunk.x, chunk.z);
                     self.generating.remove(&key);
+                    self.finishing.remove(&key);
+                    self.decorated.insert(key);
                     if self.in_range(key.0, key.1, 2) {
                         self.generated_total += 1;
                         world.chunks.insert(key, Arc::new(chunk));
@@ -249,6 +304,9 @@ impl Streaming {
             .copied()
             .filter(|&(x, z)| !self.in_range(x, z, 3))
             .collect();
+        for key in &far {
+            self.decorated.remove(key);
+        }
         let mut removed = Vec::with_capacity(far.len());
         for key in &far {
             if let Some(chunk) = world.chunks.remove(key) {
@@ -257,17 +315,78 @@ impl Streaming {
             self.lit.remove(key);
             self.meshed.remove(key);
         }
-        // Generation, closest first, bounded in flight.
+        // Drop far proto chunks that are not checked out.
+        let (cx, cz, r4) = (self.center.0, self.center.1, i64::from(self.radius + 4));
+        self.protos.retain(|&(x, z), p| {
+            let d = i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2);
+            p.is_none() || d <= r4 * r4
+        });
+        let (protos, finishing) = (&self.protos, &self.finishing);
+        self.decorated
+            .retain(|k| protos.contains_key(k) || finishing.contains(k) || world.chunks.contains_key(k));
+        // Finalize chunks whose neighbourhood is decorated.
+        let candidates: Vec<(i32, i32)> = self.protos.keys().copied().collect();
+        for (x, z) in candidates {
+            if world.chunks.contains_key(&(x, z)) || self.finishing.contains(&(x, z)) || !self.in_range(x, z, 1) {
+                continue;
+            }
+            let ready = (-1..=1).all(|dz| {
+                (-1..=1).all(|dx| self.decorated.contains(&(x + dx, z + dz)) || world.chunks.contains_key(&(x + dx, z + dz)))
+            });
+            if ready && let Some(Some(_)) = self.protos.get(&(x, z)) {
+                let proto = self.protos.remove(&(x, z)).flatten().expect("present proto");
+                self.finishing.insert((x, z));
+                self.submit(self.distance(x, z) * 4, Job::Finish(x, z, proto));
+            }
+        }
+        // Decorate chunks whose 3x3 proto neighbourhood is available.
         let workers = self.threads.len();
+        if self.decorates && self.decorating < workers * 2 {
+            let mut wanted: Vec<(i64, i32, i32)> = self
+                .protos
+                .iter()
+                .filter(|(k, p)| p.is_some() && !self.decorated.contains(k) && self.in_range(k.0, k.1, 2))
+                .map(|(k, _)| (self.distance(k.0, k.1), k.0, k.1))
+                .collect();
+            wanted.sort_unstable();
+            for (d, x, z) in wanted {
+                if self.decorating >= workers * 2 {
+                    break;
+                }
+                let keys: Vec<(i32, i32)> = (0..9).map(|i| (x + (i % 3) - 1, z + (i / 3) - 1)).collect();
+                // A final (saved) neighbour cannot receive writes: skip decoration.
+                if keys.iter().any(|k| world.chunks.contains_key(k)) {
+                    self.decorated.insert((x, z));
+                    continue;
+                }
+                if !keys.iter().all(|k| matches!(self.protos.get(k), Some(Some(_)))) {
+                    continue;
+                }
+                let region: Vec<Proto> = keys
+                    .iter()
+                    .map(|k| self.protos.insert(*k, None).flatten().expect("present proto"))
+                    .collect();
+                let region: Box<[Proto; 9]> = match region.try_into() {
+                    Ok(r) => Box::new(r),
+                    Err(_) => continue,
+                };
+                self.decorating += 1;
+                self.submit(d * 4 + 1, Job::Decorate(x, z, region));
+            }
+        }
+        // Generation (load or proto), closest first, bounded in flight.
+        let margin = if self.decorates { 3 } else { 1 };
         if self.generating.len() < workers * 3 {
-            let r = self.radius + 1;
+            let r = self.radius + margin;
             let mut wanted = Vec::new();
             for dz in -r..=r {
                 for dx in -r..=r {
                     let (x, z) = (self.center.0 + dx, self.center.1 + dz);
-                    if !self.in_range(x, z, 1)
+                    if !self.in_range(x, z, margin)
                         || world.chunks.contains_key(&(x, z))
                         || self.generating.contains(&(x, z))
+                        || self.protos.contains_key(&(x, z))
+                        || self.finishing.contains(&(x, z))
                     {
                         continue;
                     }

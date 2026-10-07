@@ -50,7 +50,8 @@ impl TerrainBlockStates for Properties {
     }
 }
 pub struct Assets {
-    pub registry: BlockRegistry,
+    /// Leaked once per process: shared by world generation threads.
+    pub registry: &'static BlockRegistry,
     pub properties: Properties,
     pub material_states: [BlockStateId; 6],
     pub sprite_size: u32,
@@ -178,7 +179,8 @@ impl Assets {
             material_states[layer] = state;
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
-        let models = crate::models::prepare(root, &registry, &mut sprites)?;
+        let registry: &'static BlockRegistry = Box::leak(Box::new(registry));
+        let models = crate::models::prepare(root, registry, &mut sprites)?;
         // Fluids are drawn by the fluid renderer, not block models; breaking
         // progress uses the destroy-stage overlays.
         for name in ["water_still", "water_flow", "water_overlay", "lava_still", "lava_flow"] {

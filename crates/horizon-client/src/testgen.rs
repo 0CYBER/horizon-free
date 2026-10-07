@@ -64,6 +64,14 @@ fn hash(x: i32, z: i32) -> u32 {
 impl ChunkGenerator for TestTerrain {
     type Worker = ();
     fn worker(&self) {}
+    fn proto(&self, w: &mut (), x: i32, z: i32) -> crate::streaming::Proto {
+        Box::new(self.generate(w, x, z))
+    }
+    fn finish(&self, proto: crate::streaming::Proto) -> Chunk {
+        *proto.downcast::<Chunk>().expect("test terrain proto")
+    }
+}
+impl TestTerrain {
     fn generate(&self, _: &mut (), cx: i32, cz: i32) -> Chunk {
         let mut chunk = Chunk::empty(cx, cz);
         chunk.biomes = std::sync::Arc::new(vec![self.plains; chunk.biomes.len()]);

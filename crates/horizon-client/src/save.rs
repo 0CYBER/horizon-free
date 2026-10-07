@@ -409,13 +409,23 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     fn worker(&self) -> G::Worker {
         self.inner.worker()
     }
-    fn generate(&self, worker: &mut G::Worker, x: i32, z: i32) -> Chunk {
-        if let Some(mut chunk) = self.save.load(x, z, &self.registry.registry, &self.biomes) {
-            for s in &mut chunk.sections {
-                Arc::make_mut(s).compact();
-            }
-            return chunk;
+    fn load(&self, x: i32, z: i32) -> Option<Chunk> {
+        let mut chunk = self.save.load(x, z, &self.registry.registry, &self.biomes)?;
+        for s in &mut chunk.sections {
+            Arc::make_mut(s).compact();
         }
-        self.inner.generate(worker, x, z)
+        Some(chunk)
+    }
+    fn proto(&self, worker: &mut G::Worker, x: i32, z: i32) -> crate::streaming::Proto {
+        self.inner.proto(worker, x, z)
+    }
+    fn decorates(&self) -> bool {
+        self.inner.decorates()
+    }
+    fn decorate(&self, worker: &mut G::Worker, region: &mut [crate::streaming::Proto; 9]) {
+        self.inner.decorate(worker, region);
+    }
+    fn finish(&self, proto: crate::streaming::Proto) -> Chunk {
+        self.inner.finish(proto)
     }
 }
