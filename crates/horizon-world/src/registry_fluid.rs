@@ -151,3 +151,62 @@ impl<W: FluidBlockWorld> FluidHeightWorld for RegistryFluidWorld<'_, '_, W> {
         self.is_face_sturdy(s, p, Direction::Down)
     }
 }
+
+use crate::entity_fluid::{FluidInteractionWorld, FluidMembership, FluidSections, FluidTagId};
+use horizon_core::geometry::{Aabb, Vec3};
+/// Entity fields and loaded chunk views needed by the registered immersion scan.
+/// Cell height/current behavior comes from this module's registry/support binding.
+pub trait FluidEntityWorld: FluidBlockWorld + FluidMembership {
+    type Chunk: Copy;
+    fn interaction_box(&mut self) -> Result<Option<Aabb>, Self::Error>;
+    fn loaded_chunk(&mut self, x: i32, z: i32) -> Result<Option<Self::Chunk>, Self::Error>;
+    fn chunk_sections(&mut self, chunk: Self::Chunk) -> Result<FluidSections<'_>, Self::Error>;
+    fn bounding_box_min_y(&self) -> f64;
+    fn block_x(&self) -> i32;
+    fn eye_y(&mut self) -> Result<f64, Self::Error>;
+    fn block_z(&self) -> i32;
+}
+impl<W: FluidMembership> FluidMembership for RegistryFluidWorld<'_, '_, W> {
+    fn fluid_in_tag(&self, fluid: crate::fluid::FluidKind, tag: FluidTagId) -> bool {
+        self.world.fluid_in_tag(fluid, tag)
+    }
+}
+impl<W: FluidEntityWorld> FluidInteractionWorld for RegistryFluidWorld<'_, '_, W> {
+    type Error = FluidQueryError<W::Error>;
+    type Chunk = W::Chunk;
+    fn interaction_box(&mut self) -> Result<Option<Aabb>, Self::Error> {
+        self.world.interaction_box().map_err(FluidQueryError::World)
+    }
+    fn loaded_chunk(&mut self, x: i32, z: i32) -> Result<Option<Self::Chunk>, Self::Error> {
+        self.world
+            .loaded_chunk(x, z)
+            .map_err(FluidQueryError::World)
+    }
+    fn chunk_sections(&mut self, c: Self::Chunk) -> Result<FluidSections<'_>, Self::Error> {
+        self.world.chunk_sections(c).map_err(FluidQueryError::World)
+    }
+    fn bounding_box_min_y(&self) -> f64 {
+        self.world.bounding_box_min_y()
+    }
+    fn block_x(&self) -> i32 {
+        self.world.block_x()
+    }
+    fn eye_y(&mut self) -> Result<f64, Self::Error> {
+        self.world.eye_y().map_err(FluidQueryError::World)
+    }
+    fn block_z(&self) -> i32 {
+        self.world.block_z()
+    }
+    fn fluid_state(&mut self, p: BlockPos) -> Result<FluidState, Self::Error> {
+        FluidFlowWorld::fluid(self, p)
+    }
+    fn fluid_height(&mut self, s: FluidState, p: BlockPos) -> Result<f32, Self::Error> {
+        s.height_at(self, [p.x, p.y, p.z])
+    }
+    fn camera_height(&mut self, s: FluidState, p: BlockPos) -> Result<f32, Self::Error> {
+        s.camera_height_at(self, [p.x, p.y, p.z])
+    }
+    fn flow(&mut self, s: FluidState, p: BlockPos) -> Result<Vec3, Self::Error> {
+        crate::fluid_flow::flow_at(self, s, p)
+    }
+}

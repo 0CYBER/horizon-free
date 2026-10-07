@@ -1029,3 +1029,23 @@ arithmetic, callback mutations and failures around partial writes. The
 also passes **607,338 lines per JAR** after extending the shared fixtures.
 Targeted Clippy passes. Splash dispatch is controlled; audio/particle generation,
 full live entity/world binding and playable integration remain pending.
+
+
+`RegistryFluidWorld` now implements entity immersion queries through the bound
+fluid contents, height calculations, camera support and neighbor-derived current
+vectors. Entity fields and loaded chunk/section views remain supplied by the
+world provider, preserving captured positions and partial-write order.
+
+`python3 tools/test_registered_entity_fluid_parity.py` invokes actual
+`EntityFluidInteraction` with registered fluid and support behavior. The
+[registered immersion report](../benchmarks/rust-registered-entity-fluid-2026-10-07/scoped-parity.json)
+records **6,550,126 matching lines per JAR**, including all **35,723 states** in
+immersed and above-eye cells, mixed water/lava neighborhoods, waterlogged blocks,
+ordered/reloaded tags, current velocities, tracker retention and query failures.
+Targeted Clippy passes. Shared-fixture regressions also pass:
+[tick composition](../benchmarks/rust-registered-entity-fluid-2026-10-07/tick-regression.json)
+(**953,830 lines per JAR**) and
+[controlled immersion](../benchmarks/rust-registered-entity-fluid-2026-10-07/immersion-regression.json)
+(**607,338 lines per JAR**). Chunk presence and section wet flags are controlled,
+and block entities are absent here; full live chunk/entity lifecycle, fluid
+propagation and playable gameplay remain pending.

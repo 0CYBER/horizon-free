@@ -3,12 +3,18 @@ use horizon_core::{
     position::BlockPos,
 };
 use horizon_world::{
+    block_support::BlockSupportRegistry,
+    dynamic_support::DynamicSupportWorld,
     entity_fluid::*,
     entity_fluid_tick::{self, EntityFluidTickWorld},
     fluid::{FluidKind, FluidState},
+    nbt::{self, Limits},
+    registry::{BlockRegistry, BlockStateId},
+    registry_fluid::{FluidBlockWorld, FluidEntityWorld, FluidRegistry, RegistryFluidWorld},
 };
 use serde_json::Value;
 use std::{
+    collections::BTreeSet,
     fs,
     io::{self, Write},
     path::Path,
@@ -156,6 +162,54 @@ impl FluidInteractionWorld for World<'_> {
         Ok(vector(&self.cell(p)["flow"]))
     }
 }
+impl DynamicSupportWorld for World<'_> {
+    type Error = io::Error;
+    fn shulker_is_closed(&mut self, p: [i32; 3]) -> io::Result<Option<bool>> {
+        self.query(format!("entity {} {} {}", p[0], p[1], p[2]))?;
+        Ok(None)
+    }
+    fn moving_piston_shape(
+        &mut self,
+        p: [i32; 3],
+    ) -> io::Result<Option<horizon_core::geometry::VoxelShape>> {
+        self.query(format!("entity {} {} {}", p[0], p[1], p[2]))?;
+        Ok(None)
+    }
+}
+impl FluidBlockWorld for World<'_> {
+    fn block_state(&mut self, p: BlockPos) -> io::Result<BlockStateId> {
+        self.query(format!("block {}", pos(p)))?;
+        Ok(BlockStateId(self.cell(p)["state"].as_u64().unwrap() as u32))
+    }
+    fn fluid_block_state(&mut self, p: BlockPos) -> io::Result<BlockStateId> {
+        self.query(format!("fluid {}", pos(p)))?;
+        Ok(BlockStateId(self.cell(p)["state"].as_u64().unwrap() as u32))
+    }
+}
+impl FluidEntityWorld for World<'_> {
+    type Chunk = ();
+    fn interaction_box(&mut self) -> io::Result<Option<Aabb>> {
+        FluidInteractionWorld::interaction_box(self)
+    }
+    fn loaded_chunk(&mut self, x: i32, z: i32) -> io::Result<Option<()>> {
+        FluidInteractionWorld::loaded_chunk(self, x, z)
+    }
+    fn chunk_sections(&mut self, c: ()) -> io::Result<FluidSections<'_>> {
+        FluidInteractionWorld::chunk_sections(self, c)
+    }
+    fn bounding_box_min_y(&self) -> f64 {
+        FluidInteractionWorld::bounding_box_min_y(self)
+    }
+    fn block_x(&self) -> i32 {
+        FluidInteractionWorld::block_x(self)
+    }
+    fn eye_y(&mut self) -> io::Result<f64> {
+        FluidInteractionWorld::eye_y(self)
+    }
+    fn block_z(&self) -> i32 {
+        FluidInteractionWorld::block_z(self)
+    }
+}
 impl CurrentTarget for World<'_> {
     type Error = io::Error;
     fn is_player_class(&self) -> bool {
@@ -207,6 +261,7 @@ impl EntityFluidTickWorld for World<'_> {
 }
 fn limit_checks(template: &Value, states: [FluidState; 5]) {
     let mut op = template.clone();
+    op["cells"] = serde_json::json!({});
     op["default"]["kind"] = 2.into();
     op["default"]["height"] = format!("{:08x}", 0.8f32.to_bits()).into();
     op["eye"] = format!("{:016x}", 0.5f64.to_bits()).into();
@@ -268,6 +323,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = std::env::args().nth(1).expect("private fixture directory");
     let dir = Path::new(&arg);
     let mut out = io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
+    let load = |n: &str| -> Result<_, Box<dyn std::error::Error>> {
+        Ok(nbt::read_named(&fs::read(dir.join(n))?, Limits::default())?
+            .0
+            .tag)
+    };
+    let registry = if dir.join("block-registry.nbt").exists() {
+        Some(BlockRegistry::from_nbt(&load("block-registry.nbt")?)?)
+    } else {
+        None
+    };
+    let support = registry
+        .as_ref()
+        .map(|r| {
+            Ok::<_, Box<dyn std::error::Error>>(BlockSupportRegistry::from_nbt(
+                &load("cached-support.nbt")?,
+                r,
+            )?)
+        })
+        .transpose()?;
+    let bindings = registry
+        .as_ref()
+        .map(|r| -> Result<_, Box<dyn std::error::Error>> {
+            let info: Value = serde_json::from_slice(&fs::read(dir.join("fluid-info.json"))?)?;
+            let names = |v: &Value| -> BTreeSet<String> {
+                v.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_owned())
+                    .collect()
+            };
+            let ice = names(&info["ice"]);
+            let all = (0..r.len())
+                .map(|i| r.state(BlockStateId(i as u32)).unwrap().name.clone())
+                .collect();
+            Ok([
+                FluidRegistry::new(r, &names(&info["blocks_flow"]), &ice)?,
+                FluidRegistry::new(r, &BTreeSet::new(), &ice)?,
+                FluidRegistry::new(r, &all, &ice)?,
+            ])
+        })
+        .transpose()?;
     let states = FluidKind::ALL
         .map(|k| FluidState::from_json(&format!("{{\"id\":\"{}\"}}", k.name())).unwrap());
     let input = fs::read_to_string(dir.join("inputs.txt"))?;
@@ -314,6 +410,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     FluidTagId(1),
                     1_000_000,
                 ) {
+                    Ok(v) => writeln!(w.out, "result {v}")?,
+                    Err(_) => writeln!(w.out, "error")?,
+                }
+            } else if op["mode"].as_str().unwrap() == "registered" {
+                let binding =
+                    &bindings.as_ref().unwrap()[op["block_tag"].as_u64().unwrap() as usize];
+                let result = interaction.update(
+                    &mut RegistryFluidWorld::new(binding, support.as_ref().unwrap(), &mut w)?,
+                    op["ignore"].as_bool().unwrap(),
+                    1_000_000,
+                );
+                match result {
                     Ok(v) => writeln!(w.out, "result {v}")?,
                     Err(_) => writeln!(w.out, "error")?,
                 }
