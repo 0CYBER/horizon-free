@@ -7,6 +7,11 @@ use std::{collections::BTreeMap, convert::Infallible, io, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AttributeId(usize);
+impl AttributeId {
+    pub(super) fn index(self) -> usize {
+        self.0
+    }
+}
 #[derive(Debug)]
 pub struct RegisteredAttribute {
     pub name: String,
@@ -33,6 +38,9 @@ fn number(v: &Value) -> io::Result<f64> {
     ))
 }
 impl Catalog {
+    pub(super) fn default_bases(&self, entity: &str) -> Option<Arc<[Option<f64>]>> {
+        self.defaults.get(entity).cloned()
+    }
     /// Imports a version-checked export of registered definitions and actual
     /// DefaultAttributes suppliers. Defaults contain base values, not instances.
     pub fn from_json(v: &Value) -> io::Result<Self> {

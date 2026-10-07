@@ -2,6 +2,7 @@
 use crate::compression::invalid;
 use std::{fmt, io, sync::Arc};
 pub mod entity;
+pub mod live;
 mod operation_map;
 use operation_map::OperationMap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
