@@ -1010,3 +1010,22 @@ Targeted Clippy passes, including checks for typed invalid-ID and foreign-regist
 errors. World cells are controlled and block entities are absent in this suite;
 active block-entity lifecycle, live entity binding, fluid spreading and complete
 playable integration remain pending.
+
+
+`entity_fluid_tick` composes immersion updates with entity water-entry behavior
+and current application. It captures water/lava membership before effects,
+resets fall distance in water, dispatches a splash after the first tick when
+newly entering water, updates the touching-water flag and queries the push
+predicate again before applying forces. Lava uses the dimension's FAST_LAVA
+attribute to select its current coefficient.
+
+`python3 tools/test_entity_fluid_tick_parity.py` invokes actual
+`Entity.updateFluidInteraction` with native immersion and current application.
+The [entity fluid tick report](../benchmarks/rust-entity-fluid-tick-2026-10-07/scoped-parity.json)
+records **953,830 matching lines per JAR**, including changing push predicates,
+first-tick/entry flags, simultaneous water/lava, attribute selection, nonfinite
+arithmetic, callback mutations and failures around partial writes. The
+[immersion regression](../benchmarks/rust-entity-fluid-tick-2026-10-07/immersion-regression.json)
+also passes **607,338 lines per JAR** after extending the shared fixtures.
+Targeted Clippy passes. Splash dispatch is controlled; audio/particle generation,
+full live entity/world binding and playable integration remain pending.

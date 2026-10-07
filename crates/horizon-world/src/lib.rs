@@ -21,6 +21,7 @@ pub mod dynamic_support;
 pub mod edge_backoff;
 pub mod entity_collision;
 pub mod entity_fluid;
+pub mod entity_fluid_tick;
 pub mod entity_move;
 pub mod entity_obstruction;
 pub mod fall_damage;

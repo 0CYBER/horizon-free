@@ -4,6 +4,7 @@ use horizon_core::{
 };
 use horizon_world::{
     entity_fluid::*,
+    entity_fluid_tick::{self, EntityFluidTickWorld},
     fluid::{FluidKind, FluidState},
 };
 use serde_json::Value;
@@ -41,6 +42,12 @@ fn position(v: &Value) -> BlockPos {
         v[2].as_i64().unwrap() as i32,
     )
 }
+#[derive(Clone, Copy, Default)]
+struct Tick {
+    touch: bool,
+    first: bool,
+    fall: f64,
+}
 struct World<'a> {
     op: &'a Value,
     out: &'a mut dyn Write,
@@ -50,6 +57,8 @@ struct World<'a> {
     wet: Vec<bool>,
     states: [FluidState; 5],
     player: bool,
+    tick: Tick,
+    pushed: usize,
 }
 impl World<'_> {
     fn query(&mut self, s: String) -> io::Result<()> {
@@ -62,6 +71,11 @@ impl World<'_> {
         if n == self.op["mutate_at"].as_i64().unwrap() {
             self.velocity = vector(&self.op["after_velocity"]);
             self.block = position(&self.op["after_block"]);
+            if self.op.get("after_touch").is_some() {
+                self.tick.touch = self.op["after_touch"].as_bool().unwrap();
+                self.tick.first = self.op["after_first"].as_bool().unwrap();
+                self.tick.fall = number(&self.op["after_fall"]);
+            }
         }
         Ok(())
     }
@@ -161,6 +175,36 @@ impl CurrentTarget for World<'_> {
         Ok(())
     }
 }
+impl EntityFluidTickWorld for World<'_> {
+    fn is_pushed_by_fluid(&mut self) -> io::Result<bool> {
+        self.query("pushed".into())?;
+        let values = self.op["pushed"].as_array().unwrap();
+        let result = values[self.pushed.min(values.len() - 1)].as_bool().unwrap();
+        self.pushed += 1;
+        Ok(result)
+    }
+    fn reset_fall_distance(&mut self) -> io::Result<()> {
+        self.query("reset-fall".into())?;
+        self.tick.fall = 0.0;
+        Ok(())
+    }
+    fn was_touching_water(&self) -> bool {
+        self.tick.touch
+    }
+    fn first_tick(&self) -> bool {
+        self.tick.first
+    }
+    fn water_splash(&mut self) -> io::Result<()> {
+        self.query("splash".into())
+    }
+    fn set_was_touching_water(&mut self, value: bool) {
+        self.tick.touch = value;
+    }
+    fn fast_lava(&mut self) -> io::Result<bool> {
+        self.query("fast-lava".into())?;
+        Ok(self.op["fast_lava"].as_bool().unwrap())
+    }
+}
 fn limit_checks(template: &Value, states: [FluidState; 5]) {
     let mut op = template.clone();
     op["default"]["kind"] = 2.into();
@@ -176,6 +220,8 @@ fn limit_checks(template: &Value, states: [FluidState; 5]) {
         wet: vec![false, true, false],
         states,
         player: false,
+        tick: Tick::default(),
+        pushed: 0,
     };
     let mut interaction = EntityFluidInteraction::new([FluidTagId(0)]);
     assert!(matches!(
@@ -236,6 +282,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .map(|v| FluidTagId(v.as_u64().unwrap() as u32)),
         );
+        let initial = f.get("tick_initial");
+        let mut tick = initial.map_or(Tick::default(), |v| Tick {
+            touch: v["touch"].as_bool().unwrap(),
+            first: v["first"].as_bool().unwrap(),
+            fall: number(&v["fall"]),
+        });
         for op in f["ops"].as_array().unwrap() {
             let mut w = World {
                 op,
@@ -251,8 +303,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .collect(),
                 states,
                 player: f["player"].as_bool().unwrap(),
+                tick,
+                pushed: 0,
             };
-            if op["mode"].as_str().unwrap() == "update" {
+            if op["mode"].as_str().unwrap() == "tick" {
+                match entity_fluid_tick::update(
+                    &mut interaction,
+                    &mut w,
+                    FluidTagId(0),
+                    FluidTagId(1),
+                    1_000_000,
+                ) {
+                    Ok(v) => writeln!(w.out, "result {v}")?,
+                    Err(_) => writeln!(w.out, "error")?,
+                }
+            } else if op["mode"].as_str().unwrap() == "update" {
                 match interaction.update(&mut w, op["ignore"].as_bool().unwrap(), 1_000_000) {
                     Ok(v) => writeln!(w.out, "result {v}")?,
                     Err(_) => writeln!(w.out, "error")?,
@@ -296,6 +361,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             writeln!(w.out, "final {}", show(w.velocity))?;
             writeln!(w.out, "queries {}", w.calls)?;
+            tick = w.tick;
+            if initial.is_some() {
+                writeln!(
+                    w.out,
+                    "tick {} {} {:016x}",
+                    tick.touch,
+                    tick.first,
+                    bits(tick.fall)
+                )?;
+            }
         }
     }
     Ok(())
