@@ -482,10 +482,20 @@ pub fn fill_noise<B: TerrainBlockStates>(
     chunk.ensure_heightmap(HeightmapType::WorldSurfaceWg);
     let mut density = vec![0.; volume.size()];
     final_density.sample_volume(context, &mut density, volume)?;
+    const MAPS: [HeightmapType; 2] = [HeightmapType::OceanFloorWg, HeightmapType::WorldSurfaceWg];
     for z in 0..sz {
         let world_z = bz.wrapping_add(z as i32);
         for x in 0..sx {
             let world_x = bx.wrapping_add(x as i32);
+            // Heightmap updates at or below first-available - 2 are no-ops; the
+            // bound only changes through an update, so skip those calls.
+            let mut settled = MAPS.map(|kind| {
+                chunk.heightmaps[kind as usize]
+                    .as_ref()
+                    .expect("ensured heightmap")
+                    .first_available(x as i32, z as i32)
+                    .map(|first| first.wrapping_sub(2))
+            });
             for y in (0..sy).rev() {
                 let world_y = by.wrapping_add(y as i32);
                 let value = density[volume.index([x, y, z]).expect("valid density coordinates")];
@@ -496,20 +506,17 @@ pub fn fill_noise<B: TerrainBlockStates>(
                     continue;
                 }
                 chunk.set_block_raw(x as i32, world_y, z as i32, state)?;
-                chunk.update_heightmap(
-                    HeightmapType::OceanFloorWg,
-                    x as i32,
-                    world_y,
-                    z as i32,
-                    state,
-                )?;
-                chunk.update_heightmap(
-                    HeightmapType::WorldSurfaceWg,
-                    x as i32,
-                    world_y,
-                    z as i32,
-                    state,
-                )?;
+                for (kind, settled) in MAPS.into_iter().zip(&mut settled) {
+                    if matches!(settled, Ok(bound) if world_y <= *bound) {
+                        continue;
+                    }
+                    chunk.update_heightmap(kind, x as i32, world_y, z as i32, state)?;
+                    *settled = chunk.heightmaps[kind as usize]
+                        .as_ref()
+                        .expect("ensured heightmap")
+                        .first_available(x as i32, z as i32)
+                        .map(|first| first.wrapping_sub(2));
+                }
                 if aquifer.should_schedule_fluid_update()
                     && chunk.blocks.properties.heightmap_state(state).has_fluid()
                 {
