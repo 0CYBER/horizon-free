@@ -115,8 +115,10 @@ impl BlockBehavior {
         let json = |name: &str| -> Result<Value, GeneratorError> {
             Ok(serde_json::from_str(&fs::read_to_string(dir.join(name))?)?)
         };
-        let collisions = CachedCollisionRegistry::from_nbt(&read("cached-collision.nbt")?, registry)?;
-        let properties = BlockPropertiesRegistry::from_nbt(&read("block-properties.nbt")?, &collisions)?;
+        let collisions =
+            CachedCollisionRegistry::from_nbt(&read("cached-collision.nbt")?, registry)?;
+        let properties =
+            BlockPropertiesRegistry::from_nbt(&read("block-properties.nbt")?, &collisions)?;
         let support = Arc::new(BlockSupportRegistry::from_nbt(
             &read("cached-support.nbt")?,
             registry,
