@@ -158,9 +158,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if self.b.is_randomly_ticking(state) {
             self.random_tick_block(state, pos);
         }
-        // Only lava's fluid state ticks randomly.
+        // Only lava's fluid state ticks randomly. A lava block is ticked twice
+        // (LiquidBlock.randomTick, then FluidState.randomTick), as in vanilla.
         let fluid = self.b.fluid(state).kind();
-        if matches!(fluid, FluidKind::Lava | FluidKind::FlowingLava) && !self.b.instance_of(state, Class::Liquid) {
+        if matches!(fluid, FluidKind::Lava | FluidKind::FlowingLava) {
             self.lava_random_tick(pos);
         }
     }
@@ -198,6 +199,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Crop => self.crop_random_tick(state, pos),
                 Class::BuddingAmethyst => self.budding_amethyst_tick(pos),
                 Class::Cactus => self.cactus_random_tick(state, pos),
+                Class::ChorusFlower => self.chorus_flower_random_tick(state, pos),
                 Class::Cocoa => {
                     if self.rand_int(5) == 0 {
                         let age = b.table.int(state, p.age);
@@ -227,7 +229,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.remove_block(pos, false);
                     }
                 }
-                Class::Liquid => self.lava_random_tick(pos),
+                Class::Liquid => {
+                    if matches!(b.fluid(state).kind(), FluidKind::Lava | FluidKind::FlowingLava) {
+                        self.lava_random_tick(pos);
+                    }
+                }
                 Class::MangrovePropagule => {
                     if !b.table.bool(state, p.hanging) {
                         if self.rand_int(7) == 0 {
@@ -1043,6 +1049,128 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         true
     }
+    /// `ChorusFlowerBlock.randomTick`.
+    fn chorus_flower_random_tick(&mut self, state: BlockStateId, pos: BlockPos) {
+        let b = self.b;
+        let p = b.props;
+        let block = b.block(state);
+        let plant = b.named.chorus_plant;
+        let above_pos = above(pos);
+        if !self.is_empty_block(above_pos) || above_pos.y > self.level.max_y() - 1 {
+            return;
+        }
+        let age = b.table.int(state, p.age);
+        if age >= 5 {
+            return;
+        }
+        let mut grow_up = false;
+        let mut pillar_on_support = false;
+        let below_state = self.below_state(pos);
+        if b.in_set(below_state, &b.tags.supports_chorus_flower) {
+            grow_up = true;
+        } else if b.is_block(below_state, plant) {
+            let mut height = 1;
+            for _ in 0..4 {
+                let test = self.state(pos.offset(0, -(height + 1), 0));
+                if !b.is_block(test, plant) {
+                    if b.in_set(test, &b.tags.supports_chorus_flower) {
+                        pillar_on_support = true;
+                    }
+                    break;
+                }
+                height += 1;
+            }
+            if height < 2 || height <= self.rand_int(if pillar_on_support { 5 } else { 4 }) {
+                grow_up = true;
+            }
+        } else if b.is_air(below_state) {
+            grow_up = true;
+        }
+        let all_empty = |sim: &Self, at: BlockPos, ignore: Option<Direction>| {
+            HORIZONTAL.into_iter().all(|d| Some(d) == ignore || sim.is_empty_block(rel(at, d)))
+        };
+        let plant_state = b.default_of(plant);
+        if grow_up && all_empty(self, above_pos, None) && self.is_empty_block(pos.offset(0, 2, 0)) {
+            let connected = self.chorus_plant_with_connections(pos, plant_state);
+            self.set_block(pos, connected, 2);
+            self.set_block(above_pos, b.table.set_int(b.default_of(block), p.age, age), 2);
+            self.level_event(1033, above_pos, 0);
+        } else if age < 4 {
+            let mut attempts = self.rand_int(4);
+            if pillar_on_support {
+                attempts += 1;
+            }
+            let mut branched = false;
+            for _ in 0..attempts {
+                let direction = HORIZONTAL[self.rand_int(4) as usize];
+                let target = rel(pos, direction);
+                if self.is_empty_block(target) && self.is_empty_block(below(target)) && all_empty(self, target, Some(direction.opposite())) {
+                    self.set_block(target, b.table.set_int(b.default_of(block), p.age, age + 1), 2);
+                    self.level_event(1033, target, 0);
+                    branched = true;
+                }
+            }
+            if branched {
+                let connected = self.chorus_plant_with_connections(pos, plant_state);
+                self.set_block(pos, connected, 2);
+            } else {
+                self.set_block(pos, b.table.set_int(state, p.age, 5), 2);
+                self.level_event(1034, pos, 0);
+            }
+        } else {
+            self.set_block(pos, b.table.set_int(state, p.age, 5), 2);
+            self.level_event(1034, pos, 0);
+        }
+    }
+    /// `ServerLevel.tickPrecipitation` at a column whose top (motion-blocking
+    /// heightmap) position and biome answers are supplied by the caller.
+    pub(crate) fn precipitation_tick(&mut self, info: Precipitation) {
+        let b = self.b;
+        let p = b.props;
+        let top = info.top;
+        let below_pos = below(top);
+        if info.freezes_below {
+            self.set_block_and_update(below_pos, b.default_of(b.named.ice));
+        }
+        if !self.level.is_raining() {
+            return;
+        }
+        let max_height = self.level.game_rules().max_snow_accumulation_height;
+        if max_height > 0 && info.snows_at_top {
+            let state = self.state(top);
+            if b.is_block(state, b.named.snow) {
+                let layers = b.table.int(state, p.layers);
+                if layers < max_height.min(8) {
+                    self.set_block_and_update(top, b.table.set_int(state, p.layers, layers + 1));
+                }
+            } else {
+                self.set_block_and_update(top, b.default_of(b.named.snow));
+            }
+        }
+        if info.kind != PrecipitationKind::None {
+            let below_state = self.state(below_pos);
+            let data = b.data(below_state);
+            let chance = match info.kind {
+                PrecipitationKind::Rain => 0.05,
+                PrecipitationKind::Snow => 0.1,
+                PrecipitationKind::None => 0.0,
+            };
+            if data.is(Class::Cauldron) {
+                if self.random().next_float() < chance {
+                    let next = if info.kind == PrecipitationKind::Rain { b.named.water_cauldron } else { b.named.powder_snow_cauldron };
+                    self.set_block_and_update(below_pos, b.default_of(next));
+                    self.game_event(below_pos, "minecraft:block_change");
+                }
+            } else if data.is(Class::LayeredCauldron) && self.random().next_float() < chance {
+                let matches = (info.kind == PrecipitationKind::Rain && b.is_block(below_state, b.named.water_cauldron))
+                    || (info.kind == PrecipitationKind::Snow && b.is_block(below_state, b.named.powder_snow_cauldron));
+                if b.table.int(below_state, p.level) != 3 && matches {
+                    self.set_block_and_update(below_pos, b.table.cycle(below_state, p.level));
+                    self.game_event(below_pos, "minecraft:block_change");
+                }
+            }
+        }
+    }
     /// `ChangeOverTimeBlock.changeOverTime` for weathering copper.
     fn copper_change_over_time(&mut self, state: BlockStateId, pos: BlockPos) {
         if self.random().next_float() >= 0.056_888_89 {
@@ -1099,6 +1227,26 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 }
 
+/// `Biome.Precipitation` at a position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrecipitationKind {
+    None,
+    Rain,
+    Snow,
+}
+/// Biome answers for one precipitation tick (`ServerLevel.tickPrecipitation`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Precipitation {
+    /// `getHeightmapPos(MOTION_BLOCKING, pos)`.
+    pub top: BlockPos,
+    /// `biome.shouldFreeze(level, top.below())`.
+    pub freezes_below: bool,
+    /// `biome.shouldSnow(level, top)`.
+    pub snows_at_top: bool,
+    /// `biome.getPrecipitationAt(top.below(), seaLevel)`.
+    pub kind: PrecipitationKind,
+}
+
 impl Behaviours {
     /// Run due scheduled ticks for the level's current game time, in vanilla
     /// order: block ticks then fluid ticks (65536 each at most).
@@ -1149,6 +1297,14 @@ impl Behaviours {
             return;
         }
         let (min_x, min_z) = (chunk.x * 16, chunk.z * 16);
+        for _ in 0..speed {
+            if level.random().next_int_bound(48).unwrap_or(1) == 0 {
+                let pos = ticks.block_random_pos(min_x, 0, min_z, 15);
+                if let Some(info) = level.precipitation(pos) {
+                    self.sim(level, ticks).precipitation_tick(info);
+                }
+            }
+        }
         for min_y in sections {
             for _ in 0..speed {
                 let pos = ticks.block_random_pos(min_x, min_y, min_z, 15);

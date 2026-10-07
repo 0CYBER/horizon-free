@@ -73,6 +73,7 @@ pub use falling::Landing;
 pub use place::{PlaceContext, PlaceOutcome};
 pub use interact::{InteractionResult, PlayerContext, PlayerEffect};
 pub use states::{BlockId, PropKey, StateTable};
+pub use tick::{Precipitation, PrecipitationKind};
 pub use ticks::Ticks;
 
 /// `Block.UPDATE_*` flags accepted by [`Behaviours::set_block`].
@@ -259,6 +260,11 @@ pub trait LevelAccess {
     /// openers); other sources are evaluated by the library.
     fn block_entity_signal(&self, _pos: BlockPos, _state: BlockStateId, _direction: Direction) -> i32 {
         0
+    }
+    /// Biome answers for a precipitation tick at the column of `pos` (see
+    /// [`Precipitation`]); None skips snow/ice formation and cauldron filling.
+    fn precipitation(&self, _pos: BlockPos) -> Option<Precipitation> {
+        None
     }
     /// Count of entities intersecting `area` that trigger pressure plates or
     /// tripwires under `query`.
