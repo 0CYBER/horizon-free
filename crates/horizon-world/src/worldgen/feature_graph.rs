@@ -79,6 +79,8 @@ pub enum FeatureDefinition {
     RootSystem(Box<super::root_system::RootSystemFeature>),
     SpeleothemCluster(Box<super::dripstone::SpeleothemClusterFeature>),
     LargeDripstone(Box<super::dripstone::LargeDripstoneFeature>),
+    ProjectedPatchySquare(Box<super::projected::ProjectedPatchySquareFeature>),
+    SteppedColumnCluster(Box<super::projected::SteppedColumnClusterFeature>),
     FallenTree(Box<super::tree::FallenTreeFeature>),
     NoOp,
     WeightedChoice(OptionalWeightedList<PlacedFeatureDefinition>),
@@ -628,6 +630,24 @@ impl FeatureDefinition {
                 remaining,
             )
             .map(|f| Self::LargeDripstone(Box::new(f))),
+            "minecraft:projected_random_patchy_square" => {
+                super::projected::ProjectedPatchySquareFeature::decode(
+                    json,
+                    blocks.ok_or(DecodeError::Field("patchy square bindings"))?,
+                    depth,
+                    remaining,
+                )
+                .map(|f| Self::ProjectedPatchySquare(Box::new(f)))
+            }
+            "minecraft:stepped_column_cluster" => {
+                super::projected::SteppedColumnClusterFeature::decode(
+                    json,
+                    blocks.ok_or(DecodeError::Field("column cluster bindings"))?,
+                    depth,
+                    remaining,
+                )
+                .map(|f| Self::SteppedColumnCluster(Box::new(f)))
+            }
             "minecraft:iceberg" => super::iceberg::IcebergFeature::decode(
                 json,
                 blocks.ok_or(DecodeError::Field("iceberg bindings"))?,
@@ -982,6 +1002,8 @@ impl FeatureDefinition {
             Self::Iceberg(feature) => feature.place(world, random, origin),
             Self::SpeleothemCluster(feature) => feature.place(world, random, origin),
             Self::LargeDripstone(feature) => feature.place(world, random, origin),
+            Self::ProjectedPatchySquare(feature) => feature.place(world, random, origin),
+            Self::SteppedColumnCluster(feature) => feature.place(world, random, origin),
             Self::RootSystem(feature) => {
                 feature.place(world, random, origin, &mut |f, w, r, p| {
                     f.place_in(&mut placer, w, r, p, run)
