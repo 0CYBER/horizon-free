@@ -107,3 +107,5 @@ pub mod player_equipment;
 
 pub mod living_use_flags;
 pub mod synced_values;
+
+pub mod inventory_use;

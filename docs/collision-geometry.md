@@ -1765,3 +1765,20 @@ failures. The [float regression](../benchmarks/rust-synced-bytes-2026-10-07/floa
 retains **554,909 matching lines per JAR**. Targeted Clippy passes. Mixed-serializer
 storage, entity schemas, wire codecs and full item-use/gameplay integration remain
 pending.
+
+
+`inventory_use` binds living item-use ticks, completion, release and stop to
+actual player inventory/hands, shared stack references and synchronized byte
+flags. Equipment storage changes precede equip callbacks; synchronized flag
+writes retain their value/callback/dirty ordering. Effects receive the same
+mutable inventory, flag storage and active-use state.
+
+`python3 tools/test_inventory_use_parity.py` compares inherited native lifecycle
+methods composed with real Inventory, PlayerEquipment and SynchedEntityData. The
+[combined report](../benchmarks/rust-inventory-use-2026-10-07/scoped-parity.json)
+records **349,310 matching lines per JAR**, including live count mutations,
+selection/offhand changes, equipment callbacks, flag dirty prefixes, completion
+replacement and failed callbacks. Targeted Clippy passes. Item/level effects and
+the equip/synchronized observers are controlled; starting use, default observer
+reactions, consumables, kinetic combat, remainders/cooldowns and complete gameplay
+integration remain pending.
