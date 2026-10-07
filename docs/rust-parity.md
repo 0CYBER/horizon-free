@@ -1114,3 +1114,23 @@ failure prefixes. Alternate constructors, custom default return values,
 compute/merge/bulk APIs and external structural mutation combined with iterator
 removal remain outside this scope. Effect-modifier and full gameplay integration
 remain unfinished.
+
+## Effect attribute templates and permanent modifiers
+
+Effect modifier definitions now scale their amount with vanilla's wrapping
+amplifier addition and create a fresh modifier identity on each application.
+Application looks up the attribute instance, removes the current definition's
+modifier, then reads the indexed definition again before creating and adding a
+permanent modifier. This preserves callback changes between those operations.
+Missing attribute instances skip template access, and failures retain preceding
+map and attribute writes.
+
+The [modifier comparison](../benchmarks/rust-effect-attribute-modifiers-2026-10-07/scoped-parity.json)
+matches **1,421,730 lines per reference JAR** across **3,317 fixtures**. It executes
+native effect modifier methods with real attribute instances, including cached
+values, permanent membership, dirty observers, nonfinite arithmetic, identity,
+map rehashes and callback failures. Library and fixture Clippy pass. The fixture
+asserts actual holder hashes when constructing collision cases. Attribute-map
+lookup and dirty callback receivers remain controlled. Registered effect
+definitions, pending queue ownership, entity bindings and complete gameplay/
+platform builds remain unfinished.
