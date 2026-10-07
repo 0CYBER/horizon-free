@@ -1832,3 +1832,19 @@ counts, changed prototypes, component removals, aliasing and validation rollback
 Targeted Clippy passes. Contained components and bundle-weight validation are
 not exercised by this corpus; their schema implementation, codecs, use-remainder
 integration and complete gameplay integration remain pending.
+
+
+`use_remainder` converts a consumed stack using the validated item-template
+factory. Infinite materials and unchanged visible counts retain the original
+reference. An exhausted stack returns the created remainder; otherwise an extra
+item callback runs and the captured original reference is returned. Callback
+mutations and failures retain their native prefix.
+
+`python3 tools/test_use_remainder_parity.py` compares actual UseRemainder with
+native template creation. The
+[remainder report](../benchmarks/rust-use-remainder-2026-10-07/scoped-parity.json)
+records **353,264 matching lines per JAR**, including canonical EMPTY creation,
+empty-but-distinct inputs, reference replacement and callback failures. Targeted
+Clippy passes. The concrete actor inventory/drop handler, contained-component
+validation, finish-use side effects and complete gameplay integration remain
+pending.
