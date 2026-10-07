@@ -68,7 +68,9 @@ impl ChunkGenerator for TestTerrain {
         Box::new(self.generate(w, x, z))
     }
     fn finish(&self, proto: crate::streaming::Proto) -> Chunk {
-        *proto.downcast::<Chunk>().expect("test terrain proto")
+        let mut chunk = *proto.downcast::<Chunk>().expect("test terrain proto");
+        chunk.fresh = true;
+        chunk
     }
 }
 impl TestTerrain {

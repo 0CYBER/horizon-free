@@ -28,6 +28,9 @@ pub struct ItemInfo {
     pub tool_default_speed: f32,
     pub food: Option<(u32, f32)>,
     pub model: String,
+    /// Main-hand `attack_damage` / `attack_speed` modifier amounts.
+    pub attack_damage: f32,
+    pub attack_speed: f32,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ItemStack {
@@ -121,6 +124,15 @@ impl Items {
                     correct: r["correct_for_drops"].as_bool(),
                 })
                 .collect();
+            let modifier = |kind: &str| -> f32 {
+                c["minecraft:attribute_modifiers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|m| m["type"].as_str() == Some(kind) && m["operation"].as_str() == Some("add_value"))
+                    .filter_map(|m| m["amount"].as_f64())
+                    .sum::<f64>() as f32
+            };
             let food = c.get("minecraft:food").map(|f| {
                 (
                     f["nutrition"].as_u64().unwrap_or(0) as u32,
@@ -140,16 +152,22 @@ impl Items {
                         .unwrap_or(1.0) as f32,
                     food,
                     model: c["minecraft:item_model"].as_str().unwrap_or(name).to_owned(),
+                    attack_damage: modifier("minecraft:attack_damage"),
+                    attack_speed: modifier("minecraft:attack_speed"),
                 },
             );
             order.push(id);
         }
         let mut loot = HashMap::new();
-        let dir = root.join("data/minecraft/loot_table/blocks");
-        for entry in fs::read_dir(&dir)?.flatten() {
-            let p = entry.path();
-            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                loot.insert(format!("minecraft:blocks/{stem}"), serde_json::from_slice(&fs::read(&p)?)?);
+        for kind in ["blocks", "entities"] {
+            let dir = root.join(format!("data/minecraft/loot_table/{kind}"));
+            for entry in fs::read_dir(&dir)?.flatten() {
+                let p = entry.path();
+                if p.extension().is_some_and(|e| e == "json")
+                    && let Some(stem) = p.file_stem().and_then(|s| s.to_str())
+                {
+                    loot.insert(format!("minecraft:{kind}/{stem}"), serde_json::from_slice(&fs::read(&p)?)?);
+                }
             }
         }
         Ok(Self {
@@ -221,7 +239,30 @@ impl Items {
             block: &block.name,
             properties: &block.properties,
             held,
+            killed_by_player: false,
         };
+        ctx.evaluate(table, random)
+    }
+    /// Evaluate an entity's loot table (`minecraft:entities/<name>`).
+    pub fn entity_drops(&self, entity: &str, killed_by_player: bool, held: Option<&ItemStack>, random: &mut LegacyRandom) -> Vec<ItemStack> {
+        let name = entity.trim_start_matches("minecraft:");
+        let Some(table) = self.loot.get(&format!("minecraft:entities/{name}")) else {
+            return vec![];
+        };
+        let empty = BTreeMap::new();
+        let ctx = LootContext {
+            items: self,
+            block: "",
+            properties: &empty,
+            held,
+            killed_by_player,
+        };
+        ctx.evaluate(table, random)
+    }
+}
+impl LootContext<'_> {
+    fn evaluate(&self, table: &Value, random: &mut LegacyRandom) -> Vec<ItemStack> {
+        let ctx = self;
         let mut out = Vec::new();
         for pool in table["pools"].as_array().into_iter().flatten() {
             if !ctx.conditions(pool, random) {
@@ -248,6 +289,7 @@ struct LootContext<'a> {
     block: &'a str,
     properties: &'a BTreeMap<String, String>,
     held: Option<&'a ItemStack>,
+    killed_by_player: bool,
 }
 impl LootContext<'_> {
     fn number(&self, v: &Value, random: &mut LegacyRandom) -> f32 {
@@ -336,7 +378,13 @@ impl LootContext<'_> {
                     _ => false,
                 }
             }
-            "minecraft:entity_properties" => true,
+            "minecraft:killed_by_player" => self.killed_by_player,
+            "minecraft:random_chance_with_enchanted_bonus" => {
+                random.next_float() < c["unenchanted_chance"].as_f64().unwrap_or(0.0) as f32
+            }
+            // Entity flags, equipment and damage-source predicates: none hold
+            // for an unenchanted player kill without fire or lightning.
+            "minecraft:entity_properties" | "minecraft:damage_source_properties" => false,
             _ => true,
         }
     }

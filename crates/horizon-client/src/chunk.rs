@@ -94,6 +94,8 @@ pub struct Chunk {
     /// Highest non-air, light-blocking-or-fluid Y per column (MOTION_BLOCKING-like), for rain/sky.
     pub heights: Arc<[i16; 256]>,
     pub lit: bool,
+    /// Newly generated (not loaded from a save): eligible for generation-time spawns.
+    pub fresh: bool,
 }
 impl Chunk {
     pub fn empty(x: i32, z: i32) -> Self {
@@ -104,6 +106,7 @@ impl Chunk {
             biomes: Arc::new(vec![0; 16 * (HEIGHT as usize / 4)]),
             heights: Arc::new([MIN_Y as i16; 256]),
             lit: false,
+            fresh: false,
         }
     }
     #[inline]

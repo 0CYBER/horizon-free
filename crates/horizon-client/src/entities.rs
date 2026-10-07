@@ -98,3 +98,52 @@ impl ItemEntity {
         self.age < 6000 && self.position.y > -128.0
     }
 }
+/// Arrows (`AbstractArrow.tick`): 0.99 drag, 0.05 gravity, sticking in blocks.
+#[derive(Clone, Debug)]
+pub struct Arrow {
+    pub position: Vec3,
+    pub previous: Vec3,
+    pub velocity: Vec3,
+    pub stuck: bool,
+    pub age: u32,
+    pub base_damage: f64,
+}
+pub enum ArrowHit {
+    None,
+    Player(f32),
+}
+impl Arrow {
+    pub fn tick(&mut self, world: &World, facts: &BlockFacts, player: Option<Aabb>) -> (bool, ArrowHit) {
+        self.previous = self.position;
+        self.age += 1;
+        if self.stuck {
+            return (self.age < 1200, ArrowHit::None);
+        }
+        let steps = 4;
+        for _ in 0..steps {
+            let next = Vec3::new(
+                self.position.x + self.velocity.x / f64::from(steps),
+                self.position.y + self.velocity.y / f64::from(steps),
+                self.position.z + self.velocity.z / f64::from(steps),
+            );
+            if let Some(b) = player {
+                let (min, max) = (b.min_position(), b.max_position());
+                if next.x >= min.x && next.x <= max.x && next.y >= min.y && next.y <= max.y && next.z >= min.z && next.z <= max.z {
+                    let speed = (self.velocity.x.powi(2) + self.velocity.y.powi(2) + self.velocity.z.powi(2)).sqrt();
+                    // AbstractArrow.onHitEntity: ceil(speed * baseDamage).
+                    let damage = (speed * self.base_damage).ceil().max(0.0) as f32;
+                    return (false, ArrowHit::Player(damage));
+                }
+            }
+            let block = world.block(next.x.floor() as i32, next.y.floor() as i32, next.z.floor() as i32);
+            if facts.get(block).full_collision {
+                self.stuck = true;
+                self.age = 0;
+                return (true, ArrowHit::None);
+            }
+            self.position = next;
+        }
+        self.velocity = Vec3::new(self.velocity.x * 0.99, self.velocity.y * 0.99 - 0.05, self.velocity.z * 0.99);
+        (self.position.y > -128.0 && self.age < 1200, ArrowHit::None)
+    }
+}

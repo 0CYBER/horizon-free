@@ -8,7 +8,8 @@ use horizon_client::{
     blocks::{BlockFacts, Fluid},
     chunk::{HEIGHT, MIN_Y},
     clock::FixedStep,
-    entities::ItemEntity,
+    entities::{Arrow, ArrowHit, ItemEntity},
+    mobs::{Mob, MobEvent, MobType, MobTypes, MobWorld},
     particles::Particle,
     crafting::Recipes,
     collisions,
@@ -152,6 +153,7 @@ pub struct Resources {
     atlas: HudAtlas,
     icons: HashMap<String, Option<Icon>>,
     layer_names: HashMap<u32, String>,
+    mob_types: HashMap<String, Arc<MobType>>,
 }
 struct Game<'a> {
     res: &'a mut Resources,
@@ -203,6 +205,10 @@ struct Game<'a> {
     next_entity: u32,
     particles: Vec<Particle>,
     spawn_search: u32,
+    mobs: Vec<Mob>,
+    arrows: Vec<Arrow>,
+    attack_ticks: u32,
+    last_hurt_by_player: HashSet<u32>,
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -919,6 +925,7 @@ impl Game<'_> {
         }
         self.tick_mining()?;
         self.tick_items();
+        self.tick_mobs()?;
         let facts = &self.res.facts;
         let world = &self.world;
         self.particles.retain_mut(|p| p.tick(world, |id| facts.states[id as usize].full_collision));
@@ -1454,6 +1461,38 @@ impl Game<'_> {
                 }
             }
         }
+        // Mobs.
+        for mob in &self.mobs {
+            let d = glam::DVec3::new(mob.position.x, mob.position.y, mob.position.z) - camera;
+            if d.length_squared() > 128.0 * 128.0 {
+                continue;
+            }
+            let Some(r) = self.res.atlas.sprites.get(&mob.kind.texture).copied() else { continue };
+            let light = self.world.light(mob.position.x.floor() as i32, (mob.position.y + mob.kind.eye_height).floor() as i32, mob.position.z.floor() as i32);
+            let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+            horizon_client::mobs::render(mob, alpha as f32, camera, [r.u0, r.v0, r.u1, r.v1], packed, &mut out);
+        }
+        // Arrows: two crossed quads along the flight direction.
+        if let Some(r) = self.res.atlas.sprites.get("entity/projectiles/arrow").copied() {
+            for a in &self.arrows {
+                let p = glam::DVec3::new(
+                    a.previous.x + (a.position.x - a.previous.x) * alpha,
+                    a.previous.y + (a.position.y - a.previous.y) * alpha,
+                    a.previous.z + (a.position.z - a.previous.z) * alpha,
+                ) - camera;
+                let dir = glam::Vec3::new(a.velocity.x as f32, a.velocity.y as f32, a.velocity.z as f32).normalize_or(glam::Vec3::X);
+                let side = dir.cross(glam::Vec3::Y).normalize_or(glam::Vec3::Z) * 0.08;
+                let up = dir.cross(side).normalize_or(glam::Vec3::Y) * 0.08;
+                let c = p.as_vec3();
+                let (u1, v1) = (r.u0 + (r.u1 - r.u0) * 0.5, r.v0 + (r.v1 - r.v0) * (5.0 / 32.0));
+                for off in [side, up] {
+                    let q = [c - dir * 0.25 - off, c + dir * 0.25 - off, c + dir * 0.25 + off, c - dir * 0.25 + off];
+                    for (v, uv) in q.iter().zip([[r.u0, v1], [u1, v1], [u1, r.v0], [r.u0, r.v0]]) {
+                        out.push(Vertex { pos: v.to_array(), uv, layer: 0, color: 0xFFFF_FFFF, light: 240 | 240 << 8 });
+                    }
+                }
+            }
+        }
         // Camera-facing particle quads.
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
         let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
@@ -1507,6 +1546,375 @@ impl Game<'_> {
             }
         }
         out
+    }
+
+    fn sky_darken(&self) -> i32 {
+        let sky = self.res.environment.sample(self.world.day_time, 0, 0);
+        // Level.updateSkyBrightness: darkening from the sky light level.
+        (15.0 - 15.0 * sky.sky_light_level).round() as i32
+    }
+    fn weighted<'b>(&mut self, entries: &'b [horizon_client::biome::SpawnEntry]) -> Option<&'b horizon_client::biome::SpawnEntry> {
+        let supported: Vec<&horizon_client::biome::SpawnEntry> =
+            entries.iter().filter(|e| self.res.mob_types.contains_key(&e.entity)).collect();
+        let total: u32 = supported.iter().map(|e| e.weight).sum();
+        if total == 0 {
+            return None;
+        }
+        let mut r = self.world.random.next_int_bound(total as i32).ok()? as u32;
+        supported.into_iter().find(|e| {
+            if r < e.weight {
+                true
+            } else {
+                r -= e.weight;
+                false
+            }
+        })
+    }
+    fn add_mob(&mut self, kind: &str, x: f64, y: f64, z: f64, persistent: bool) {
+        let Some(t) = self.res.mob_types.get(kind).cloned() else { return };
+        self.next_entity += 1;
+        let yaw = self.world.random.next_float() * 360.0;
+        let mut mob = Mob::new(self.next_entity, t, Vec3::new(x, y, z), yaw);
+        mob.persistent = persistent;
+        self.mobs.push(mob);
+    }
+    /// NaturalSpawner.spawnMobsForChunkGeneration for the creature category.
+    fn spawn_chunk_creatures(&mut self, cx: i32, cz: i32) {
+        let Some(chunk) = self.world.chunks.get(&(cx, cz)).cloned() else { return };
+        let biome = self.res.biomes.get(chunk.biome(8, 64, 8)).clone();
+        let Some(entries) = biome.spawns.get("creature").cloned() else { return };
+        while self.world.random.next_float() < biome.creature_probability {
+            let Some(entry) = self.weighted(&entries).cloned() else { return };
+            let count = entry.min + self.world.random.next_int_bound((entry.max - entry.min + 1) as i32).unwrap_or(0) as u32;
+            let mut x = cx * 16 + self.world.random.next_int_bound(16).unwrap_or(0);
+            let mut z = cz * 16 + self.world.random.next_int_bound(16).unwrap_or(0);
+            for _ in 0..count {
+                if let Some(y) = self.land_column(x, z) {
+                    let below = self.world.block(x, y - 1, z);
+                    if self.res.facts.get(below).name.contains("grass") {
+                        self.add_mob(&entry.entity, f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5, true);
+                    }
+                }
+                x = (x + self.world.random.next_int_bound(5).unwrap_or(0) - self.world.random.next_int_bound(5).unwrap_or(0)).clamp(cx * 16, cx * 16 + 15);
+                z = (z + self.world.random.next_int_bound(5).unwrap_or(0) - self.world.random.next_int_bound(5).unwrap_or(0)).clamp(cz * 16, cz * 16 + 15);
+            }
+        }
+    }
+    /// NaturalSpawner.spawnCategoryForPosition for monsters near the player.
+    fn spawn_monsters(&mut self) {
+        let Some(p) = self.player.as_ref().map(|p| p.position) else { return };
+        if self.creative && false {
+            return;
+        }
+        let monsters = self.mobs.iter().filter(|m| m.hostile()).count();
+        if monsters >= 70 {
+            return;
+        }
+        let r = &mut self.world.random;
+        let cx = (p.x.floor() as i32 >> 4) + r.next_int_bound(17).unwrap_or(8) - 8;
+        let cz = (p.z.floor() as i32 >> 4) + r.next_int_bound(17).unwrap_or(8) - 8;
+        let Some(chunk) = self.world.chunks.get(&(cx, cz)).cloned() else { return };
+        let x = cx * 16 + r.next_int_bound(16).unwrap_or(0);
+        let z = cz * 16 + r.next_int_bound(16).unwrap_or(0);
+        let top = self.land_column(x, z).unwrap_or(MIN_Y + 1).max(MIN_Y + 1);
+        let y = MIN_Y + self.world.random.next_int_bound((top - MIN_Y + 1).max(1)).unwrap_or(0);
+        let biome = self.res.biomes.get(chunk.biome(x, y, z)).clone();
+        let Some(entries) = biome.spawns.get("monster").cloned() else { return };
+        let Some(entry) = self.weighted(&entries).cloned() else { return };
+        let darken = self.sky_darken();
+        let pack = entry.min + self.world.random.next_int_bound((entry.max - entry.min + 1) as i32).unwrap_or(0) as u32;
+        let (mut sx, mut sz) = (x, z);
+        for _ in 0..pack.min(4) {
+            sx += self.world.random.next_int_bound(6).unwrap_or(0) - self.world.random.next_int_bound(6).unwrap_or(0);
+            sz += self.world.random.next_int_bound(6).unwrap_or(0) - self.world.random.next_int_bound(6).unwrap_or(0);
+            let (fx, fy, fz) = (f64::from(sx) + 0.5, f64::from(y), f64::from(sz) + 0.5);
+            let d2 = (fx - p.x).powi(2) + (fy - p.y).powi(2) + (fz - p.z).powi(2);
+            if d2 < 24.0 * 24.0 || d2 > 128.0 * 128.0 {
+                continue;
+            }
+            let free = |g: &Self, yy: i32| {
+                let f = g.res.facts.get(g.world.block(sx, yy, sz));
+                !f.full_collision && f.fluid == Fluid::None
+            };
+            let below = self.res.facts.get(self.world.block(sx, y - 1, sz));
+            if !below.full_collision || below.fluid != Fluid::None || !free(self, y) || !free(self, y + 1) {
+                continue;
+            }
+            // Monster.isDarkEnoughToSpawn: sky light vs random(32), then
+            // block light 0 and darkened brightness within uniform(0, 7).
+            let light = self.world.light(sx, y, sz);
+            let (sky, block) = (i32::from(light >> 4), i32::from(light & 15));
+            if sky > self.world.random.next_int_bound(32).unwrap_or(0) || block > 0 {
+                continue;
+            }
+            if (sky - darken).max(0) > self.world.random.next_int_bound(8).unwrap_or(0) {
+                continue;
+            }
+            self.add_mob(&entry.entity, fx, fy, fz, false);
+        }
+    }
+    fn mob_hit(&self) -> Option<(usize, f64)> {
+        let eye = self.eye_position()?;
+        let dir = view_vector(self.yaw, self.pitch);
+        let reach: f64 = if self.creative { 5.0 } else { 3.0 };
+        let mut best: Option<(usize, f64)> = None;
+        for (i, m) in self.mobs.iter().enumerate() {
+            if !m.alive() {
+                continue;
+            }
+            let b = m.bounds();
+            let (min, max) = (b.min_position(), b.max_position());
+            let (lo, hi) = ([min.x, min.y, min.z], [max.x, max.y, max.z]);
+            let (mut t0, mut t1) = (0.0f64, reach);
+            let mut hit = true;
+            for a in 0..3 {
+                if dir[a].abs() < 1e-9 {
+                    if eye[a] < lo[a] || eye[a] > hi[a] {
+                        hit = false;
+                    }
+                    continue;
+                }
+                let (mut ta, mut tb) = ((lo[a] - eye[a]) / dir[a], (hi[a] - eye[a]) / dir[a]);
+                if ta > tb {
+                    std::mem::swap(&mut ta, &mut tb);
+                }
+                t0 = t0.max(ta);
+                t1 = t1.min(tb);
+            }
+            if hit && t0 <= t1 && best.is_none_or(|b| t0 < b.1) {
+                best = Some((i, t0));
+            }
+        }
+        best
+    }
+    /// Player.attack with the attack-strength charge, crits and knockback.
+    fn attack(&mut self) -> bool {
+        let Some((index, distance)) = self.mob_hit() else { return false };
+        if let Some(hit) = self.pick() {
+            let eye = self.eye_position().unwrap_or_default();
+            let d = ((hit.point[0] - eye[0]).powi(2) + (hit.point[1] - eye[1]).powi(2) + (hit.point[2] - eye[2]).powi(2)).sqrt();
+            if d < distance {
+                return false;
+            }
+        }
+        let held = self.held().cloned();
+        let modifiers = held.as_ref().and_then(|h| self.res.items.get(&h.item)).map(|i| (i.attack_damage, i.attack_speed)).unwrap_or((0.0, 0.0));
+        let damage = 1.0 + modifiers.0;
+        let speed = (4.0 + modifiers.1).max(0.1);
+        let delay = 20.0 / speed;
+        let scale = ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0);
+        let mut amount = damage * (0.2 + scale * scale * 0.8);
+        let player = self.player.as_ref();
+        let falling = player.is_some_and(|p| !p.ground.on_ground && p.velocity.y < 0.0 && !p.sprinting);
+        let crit = scale > 0.9 && falling;
+        if crit {
+            amount *= 1.5;
+        }
+        self.attack_ticks = 0;
+        let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
+        let mob = &mut self.mobs[index];
+        let center = [mob.position.x, mob.position.y + mob.kind.height / 2.0, mob.position.z];
+        if mob.hurt(amount, from, &mut self.world.random) {
+            self.last_hurt_by_player.insert(mob.id);
+            let kind = mob.kind.clone();
+            let dead = !mob.alive();
+            let sound = if crit { "minecraft:entity.player.attack.crit" } else if scale > 0.9 { "minecraft:entity.player.attack.strong" } else { "minecraft:entity.player.attack.weak" };
+            self.audio.play(sound, Some(center), 1.0, 1.0);
+            let event = format!("minecraft:{}", kind.sounds[if dead { 2 } else { 1 }]);
+            let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
+            self.audio.play(&event, Some(center), 1.0, pitch);
+            if let Some(stack) = self.inventory[self.selected].as_mut()
+                && let Some(info) = self.res.items.get(&stack.item)
+                && info.max_damage > 0
+            {
+                stack.damage += 1;
+                if stack.damage >= info.max_damage {
+                    self.inventory[self.selected] = None;
+                }
+            }
+        }
+        true
+    }
+    /// ServerExplosion: rays from a 16^3 grid lose (resistance + 0.3) * 0.3 per step.
+    fn explode(&mut self, center: [f64; 3], radius: f32) -> Result<()> {
+        let mut destroyed = HashSet::new();
+        for j in 0..16 {
+            for k in 0..16 {
+                for l in 0..16 {
+                    if !(j == 0 || j == 15 || k == 0 || k == 15 || l == 0 || l == 15) {
+                        continue;
+                    }
+                    let mut d = [f64::from(j) / 15.0 * 2.0 - 1.0, f64::from(k) / 15.0 * 2.0 - 1.0, f64::from(l) / 15.0 * 2.0 - 1.0];
+                    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    d = d.map(|v| v / len);
+                    let mut h = radius * (0.7 + self.world.random.next_float() * 0.6);
+                    let mut p = center;
+                    while h > 0.0 {
+                        let b = [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32];
+                        let state = self.world.block(b[0], b[1], b[2]);
+                        if !self.res.facts.is_air(state) {
+                            let f = self.res.facts.get(state);
+                            let resistance = if f.fluid != Fluid::None && !f.waterlogged { 100.0 } else { f.explosion_resistance };
+                            h -= (resistance + 0.3) * 0.3;
+                            if h > 0.0 && f.hardness >= 0.0 {
+                                destroyed.insert(b);
+                            }
+                        }
+                        p = [p[0] + d[0] * 0.3, p[1] + d[1] * 0.3, p[2] + d[2] * 0.3];
+                        h -= 0.225_000_01;
+                    }
+                }
+            }
+        }
+        for b in destroyed {
+            let state = self.world.block(b[0], b[1], b[2]);
+            if self.res.facts.is_air(state) {
+                continue;
+            }
+            // Explosion decay: each drop survives with probability 1 / radius.
+            if self.world.random.next_float() < 1.0 / radius {
+                let drops = self.res.items.block_drops(&self.res.assets.registry, state, None, &mut self.world.random);
+                for d in drops {
+                    self.pop_resource(b, d);
+                }
+            }
+            self.world.set(b[0], b[1], b[2], self.world.air)?;
+        }
+        self.audio.play("minecraft:entity.generic.explode", Some(center), 4.0, (1.0 + (self.world.random.next_float() - self.world.random.next_float()) * 0.2) * 0.7);
+        // Entity damage by distance (exposure approximated as unobstructed).
+        let diameter = f64::from(radius) * 2.0;
+        if let Some(player) = self.player.as_mut() {
+            let p = [player.position.x, player.position.y, player.position.z];
+            let dist = ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2) + (p[2] - center[2]).powi(2)).sqrt() / diameter;
+            if dist <= 1.0 {
+                let impact = 1.0 - dist;
+                let damage = ((impact * impact + impact) / 2.0 * 7.0 * diameter + 1.0) as f32;
+                if let Some(id) = self.motion.health.damage.id("minecraft:explosion") {
+                    let _ = player.hurt(&self.motion.health, self.world.health_rules, id, damage);
+                }
+                let (dx, dy, dz) = (p[0] - center[0], p[1] - center[1], p[2] - center[2]);
+                let l = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-4);
+                player.velocity = Vec3::new(player.velocity.x + dx / l * impact, player.velocity.y + dy / l * impact, player.velocity.z + dz / l * impact);
+            }
+        }
+        for m in &mut self.mobs {
+            let dist = ((m.position.x - center[0]).powi(2) + (m.position.y - center[1]).powi(2) + (m.position.z - center[2]).powi(2)).sqrt() / diameter;
+            if dist <= 1.0 && m.alive() {
+                let impact = 1.0 - dist;
+                m.hurt(((impact * impact + impact) / 2.0 * 7.0 * diameter + 1.0) as f32, Some(center), &mut self.world.random);
+            }
+        }
+        Ok(())
+    }
+    fn tick_mobs(&mut self) -> Result<()> {
+        self.attack_ticks = self.attack_ticks.saturating_add(1);
+        // Generation-time creature packs for newly generated chunks.
+        let fresh: Vec<(i32, i32)> = self.world.chunks.iter().filter(|(_, c)| c.fresh && c.lit).map(|(k, _)| *k).collect();
+        for key in fresh {
+            if let Some(c) = self.world.chunks.get_mut(&key) {
+                Arc::make_mut(c).fresh = false;
+            }
+            self.spawn_chunk_creatures(key.0, key.1);
+        }
+        if self.ticks % 2 == 0 {
+            self.spawn_monsters();
+        }
+        let player = self.player.as_ref().map(|p| ([p.position.x, p.position.y + 0.5, p.position.z], !p.health.dead_or_dying()));
+        let daylight = self.sky_darken() < 4;
+        let mut events = Vec::new();
+        let mut mobs = std::mem::take(&mut self.mobs);
+        {
+            let w = MobWorld { world: &self.world, facts: &self.res.facts, collision: self.collision, player, daylight };
+            let random = &mut self.world.random.clone();
+            let loaded = |m: &Mob| w.world.loaded(m.position.x.floor() as i32, m.position.z.floor() as i32);
+            let mut dead = Vec::new();
+            mobs.retain_mut(|m| {
+                if !loaded(m) {
+                    return !m.hostile() || m.persistent;
+                }
+                let keep = m.tick(&w, random, &mut events);
+                if !keep && !m.alive() {
+                    dead.push((m.kind.id.clone(), [m.position.x, m.position.y, m.position.z], m.id));
+                }
+                keep
+            });
+            self.world.random = random.clone();
+            for (kind, pos, id) in dead {
+                let by_player = self.last_hurt_by_player.remove(&id);
+                let held = self.held().cloned();
+                let drops = self.res.items.entity_drops(&kind, by_player, held.as_ref(), &mut self.world.random);
+                for d in drops {
+                    self.spawn_item(d, [pos[0], pos[1] + 0.5, pos[2]], [0.0, 0.2, 0.0], 10);
+                }
+            }
+        }
+        self.mobs = mobs;
+        for e in events {
+            match e {
+                MobEvent::Sound(name, at, volume, pitch) => self.audio.play(&format!("minecraft:{name}"), Some(at), volume, pitch),
+                MobEvent::AttackPlayer(amount, from) => {
+                    if self.creative {
+                        continue;
+                    }
+                    if let Some(player) = self.player.as_mut()
+                        && let Some(id) = self.motion.health.damage.id("minecraft:mob_attack")
+                        && player.hurt(&self.motion.health, self.world.health_rules, id, amount).unwrap_or(false)
+                    {
+                        let (dx, dz) = (player.position.x - from[0], player.position.z - from[2]);
+                        let l = (dx * dx + dz * dz).sqrt().max(1e-4);
+                        player.velocity = Vec3::new(player.velocity.x / 2.0 + dx / l * 0.4, (player.velocity.y / 2.0 + 0.4).min(0.4), player.velocity.z / 2.0 + dz / l * 0.4);
+                        let at = [player.position.x, player.position.y, player.position.z];
+                        self.audio.play("minecraft:entity.player.hurt", Some(at), 1.0, 1.0);
+                    }
+                }
+                MobEvent::Shoot(from, target) => {
+                    // Skeleton.performRangedAttack: aim above by 20% of distance, inaccuracy 14 - 4 * difficulty(2).
+                    let (dx, dz) = (target[0] - from[0], target[2] - from[2]);
+                    let horizontal = (dx * dx + dz * dz).sqrt();
+                    let dy = target[1] + 0.5 - from[1] + horizontal * 0.2;
+                    let len = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-4);
+                    let spread = 0.0075 * 6.0;
+                    let r = &mut self.world.random;
+                    let mut gauss = || f64::from(r.next_float() + r.next_float() - 1.0) * spread;
+                    let v = [(dx / len + gauss()) * 1.6, (dy / len + gauss()) * 1.6, (dz / len + gauss()) * 1.6];
+                    let p = Vec3::new(from[0], from[1] - 0.1, from[2]);
+                    self.arrows.push(Arrow { position: p, previous: p, velocity: Vec3::new(v[0], v[1], v[2]), stuck: false, age: 0, base_damage: 2.0 });
+                    self.audio.play("minecraft:entity.skeleton.shoot", Some(from), 1.0, 1.0 / (self.world.random.next_float() * 0.4 + 0.8));
+                }
+                MobEvent::Explode(at, radius) => self.explode(at, radius)?,
+            }
+        }
+        // Arrows.
+        let bounds = self.player.as_ref().map(|p| {
+            let w = f64::from(p.dimensions.width) / 2.0;
+            horizon_core::geometry::Aabb::new(
+                Vec3::new(p.position.x - w, p.position.y, p.position.z - w),
+                Vec3::new(p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w),
+            )
+        });
+        let mut arrows = std::mem::take(&mut self.arrows);
+        let mut hits = Vec::new();
+        arrows.retain_mut(|a| {
+            let (keep, hit) = a.tick(&self.world, &self.res.facts, bounds);
+            if let ArrowHit::Player(d) = hit {
+                hits.push(d);
+            }
+            keep
+        });
+        self.arrows = arrows;
+        for d in hits {
+            if self.creative {
+                continue;
+            }
+            if let Some(player) = self.player.as_mut()
+                && let Some(id) = self.motion.health.damage.id("minecraft:arrow")
+            {
+                let _ = player.hurt(&self.motion.health, self.world.health_rules, id, d);
+                let at = [player.position.x, player.position.y, player.position.z];
+                self.audio.play("minecraft:entity.arrow.hit_player", Some(at), 1.0, 1.0);
+            }
+        }
+        Ok(())
     }
     fn save_game(&mut self) -> Result<()> {
         let chunks: Vec<_> = self
@@ -1714,6 +2122,9 @@ impl ApplicationHandler for Game<'_> {
                             }
                             match button {
                                 MouseButton::Left => {
+                                    if pressed && self.attack() {
+                                        return Ok(());
+                                    }
                                     self.left = pressed;
                                     if pressed {
                                         self.destroy_delay = 0;
@@ -1980,6 +2391,7 @@ pub fn run() -> Result<()> {
         atlas,
         icons: HashMap::new(),
         layer_names,
+        mob_types: MobTypes::load(&root)?.types.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
     };
     let mut inventory = vec![None; 36];
     for (slot, id, count, damage) in &level.inventory {
@@ -2044,6 +2456,10 @@ pub fn run() -> Result<()> {
         next_entity: 0,
         particles: Vec::new(),
         spawn_search: 0,
+        mobs: Vec::new(),
+        arrows: Vec::new(),
+        attack_ticks: 100,
+        last_hurt_by_player: HashSet::new(),
     };
     EventLoop::new()?.run_app(&mut game)?;
     if let Some(path) = &game.options.report {

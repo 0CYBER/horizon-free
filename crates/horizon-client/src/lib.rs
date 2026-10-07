@@ -21,6 +21,7 @@ pub mod items;
 pub mod landing;
 pub mod light;
 pub mod mesher;
+pub mod mobs;
 pub mod models;
 pub mod motion;
 pub mod particles;

@@ -12,7 +12,17 @@ pub enum GrassModifier {
     Swamp,
 }
 #[derive(Clone, Debug)]
+pub struct SpawnEntry {
+    pub entity: String,
+    pub weight: u32,
+    pub min: u32,
+    pub max: u32,
+}
+#[derive(Clone, Debug)]
 pub struct BiomeInfo {
+    /// `natural_mob_spawns` by category (creature, monster, ...).
+    pub spawns: HashMap<String, Vec<SpawnEntry>>,
+    pub creature_probability: f32,
     pub name: String,
     pub temperature: f32,
     pub downfall: f32,
@@ -96,7 +106,37 @@ impl Biomes {
                 Some("swamp") => GrassModifier::Swamp,
                 _ => GrassModifier::None,
             };
+            let mut spawns: HashMap<String, Vec<SpawnEntry>> = HashMap::new();
+            let categories = &attributes["minecraft:gameplay/natural_mob_spawns"]["argument"]["spawns_by_category"];
+            for (category, entries) in categories.as_object().into_iter().flatten() {
+                let list = entries
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| {
+                        let (min, max) = match &e["count"] {
+                            Value::Number(n) => {
+                                let n = n.as_u64().unwrap_or(1) as u32;
+                                (n, n)
+                            }
+                            c => (
+                                c["min_inclusive"].as_u64().unwrap_or(1) as u32,
+                                c["max_inclusive"].as_u64().unwrap_or(1) as u32,
+                            ),
+                        };
+                        Some(SpawnEntry {
+                            entity: e["type"].as_str()?.to_owned(),
+                            weight: e["weight"].as_u64().unwrap_or(1) as u32,
+                            min,
+                            max,
+                        })
+                    })
+                    .collect();
+                spawns.insert(category.clone(), list);
+            }
             list.push(BiomeInfo {
+                spawns,
+                creature_probability: v["creature_spawn_probability"].as_f64().unwrap_or(0.1) as f32,
                 temperature,
                 downfall,
                 precipitation: v["has_precipitation"].as_bool().unwrap_or(true),

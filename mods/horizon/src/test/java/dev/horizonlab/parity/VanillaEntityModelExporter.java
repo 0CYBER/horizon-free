@@ -31,11 +31,9 @@ public final class VanillaEntityModelExporter {
                 var p = new JsonArray();
                 for (ModelPart.Vertex v : polygon.vertices()) {
                     var vertex = new JsonArray();
-                    vertex.add(v.x());
-                    vertex.add(v.y());
-                    vertex.add(v.z());
-                    vertex.add(v.u());
-                    vertex.add(v.v());
+                    // Degenerate (zero-size) faces have NaN UVs: write them as 0.
+                    for (float f : new float[] {v.x(), v.y(), v.z(), v.u(), v.v()})
+                        vertex.add(Float.isFinite(f) ? f : 0.0F);
                     p.add(vertex);
                 }
                 polygons.add(p);

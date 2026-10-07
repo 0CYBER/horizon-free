@@ -43,7 +43,7 @@ pub trait ChunkGenerator: Send + Sync + 'static {
 enum Job {
     Generate(i32, i32),
     Decorate(i32, i32, Box<[Proto; 9]>),
-    Finish(i32, i32, Proto),
+    Finish(Proto),
     Light(i32, i32, Box<Region>, u64),
     Mesh(i32, i32, i32, Box<Region>, u64),
 }
@@ -159,7 +159,7 @@ impl Streaming {
                                     generator.decorate(&mut worker, &mut region);
                                     Done::Decorated(x, z, region)
                                 }
-                                Job::Finish(_, _, proto) => Done::Generated(generator.finish(proto)),
+                                Job::Finish(proto) => Done::Generated(generator.finish(proto)),
                                 Job::Light(x, z, region, seq) => {
                                     Done::Lit(x, z, light_chunk(&borrow(&region), &context.light), seq)
                                 }
@@ -336,7 +336,7 @@ impl Streaming {
             if ready && let Some(Some(_)) = self.protos.get(&(x, z)) {
                 let proto = self.protos.remove(&(x, z)).flatten().expect("present proto");
                 self.finishing.insert((x, z));
-                self.submit(self.distance(x, z) * 4, Job::Finish(x, z, proto));
+                self.submit(self.distance(x, z) * 4, Job::Finish(proto));
             }
         }
         // Decorate chunks whose 3x3 proto neighbourhood is available.

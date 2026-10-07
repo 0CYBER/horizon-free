@@ -346,17 +346,13 @@ impl Mob {
         }
         let mut forward = 0.0f32;
         let player = w.player.filter(|(_, alive)| *alive).map(|(p, _)| p);
-        let distance_to = |p: [f64; 3]| {
-            let d = [p[0] - self.position.x, p[1] - self.position.y, p[2] - self.position.z];
-            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
-        };
         let aggressive = match self.kind.brain {
             Brain::Zombie | Brain::Skeleton | Brain::Creeper => true,
             Brain::Spider => !w.daylight,
             _ => false,
         };
         let chase = if aggressive {
-            player.filter(|p| distance_to(*p) < self.kind.follow_range.min(24.0))
+            player.filter(|p| self.distance_to(*p) < self.kind.follow_range.min(24.0))
         } else {
             None
         };
@@ -364,7 +360,7 @@ impl Mob {
             self.attack_cooldown -= 1;
         }
         if let Some(p) = chase {
-            let d = distance_to(p);
+            let d = self.distance_to(p);
             self.face(p, 30.0);
             match self.kind.brain {
                 Brain::Creeper => {
@@ -431,7 +427,7 @@ impl Mob {
                     forward = 1.0;
                 }
             } else if let Some(p) = player
-                && distance_to(p) < 8.0
+                && self.distance_to(p) < 8.0
                 && random.next_float() < 0.02
             {
                 // LookAtPlayerGoal.
@@ -463,12 +459,16 @@ impl Mob {
         if self.hostile() && !self.persistent
             && let Some(p) = player
         {
-            let d = distance_to(p);
+            let d = self.distance_to(p);
             if d > 128.0 || (d > 32.0 && self.idle > 600 && random.next_int_bound(800).unwrap_or(1) == 0) {
                 return false;
             }
         }
         self.position.y > -128.0
+    }
+    fn distance_to(&self, p: [f64; 3]) -> f64 {
+        let d = [p[0] - self.position.x, p[1] - self.position.y, p[2] - self.position.z];
+        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
     }
     fn face(&mut self, p: [f64; 3], max: f32) {
         let dx = p[0] - self.position.x;

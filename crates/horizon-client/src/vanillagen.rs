@@ -121,6 +121,7 @@ impl ChunkGenerator for VanillaTerrain {
         for s in &mut out.sections {
             Arc::make_mut(s).compact();
         }
+        out.fresh = true;
         out
     }
 }
