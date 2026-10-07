@@ -60,6 +60,8 @@ pub struct Assets {
     pub model_placements: Vec<(horizon_core::position::BlockPos, BlockStateId)>,
     pub model_gallery: Vec<Value>,
     pub animations: Vec<crate::sprites::SpriteAnimation>,
+    pub sprite_layers: std::collections::BTreeMap<String, u32>,
+    pub translucent_layers: Vec<bool>,
 }
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -177,6 +179,14 @@ impl Assets {
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
         let models = crate::models::prepare(root, &registry, &mut sprites)?;
+        // Fluids are drawn by the fluid renderer, not block models; breaking
+        // progress uses the destroy-stage overlays.
+        for name in ["water_still", "water_flow", "water_overlay", "lava_still", "lava_flow"] {
+            sprites.insert(root, &format!("minecraft:block/{name}"))?;
+        }
+        for stage in 0..10 {
+            sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
+        }
         Ok(Self {
             registry,
             properties,
@@ -188,6 +198,8 @@ impl Assets {
             model_placements: models.placements,
             model_gallery: models.states,
             animations: sprites.animations,
+            sprite_layers: sprites.layers,
+            translucent_layers: sprites.translucent,
         })
     }
 }

@@ -39,6 +39,7 @@ struct State {
 }
 /// Prepared face geometry and a bounded cache shared across state pairs. Geometry
 /// is deduplicated by the imported immutable shape, not copied for every state.
+#[derive(Clone)]
 pub struct FaceVisibility {
     states: Vec<State>,
     faces: Vec<VoxelShape>,
@@ -155,6 +156,18 @@ impl FaceVisibility {
                     && (vertical || (a.connections & bit != 0 && b.connections & opposite != 0))
             }
         }
+    }
+    /// Whether the state's occlusion face toward `direction` is the full square.
+    pub fn full_face(&self, state: BlockStateId, direction: Direction) -> bool {
+        self.states
+            .get(state.0 as usize)
+            .is_some_and(|s| s.faces[direction as usize] == 1)
+    }
+    /// Whether the state's occlusion face toward `direction` is empty.
+    pub fn empty_face(&self, state: BlockStateId, direction: Direction) -> bool {
+        self.states
+            .get(state.0 as usize)
+            .is_none_or(|s| s.faces[direction as usize] == 0)
     }
     pub fn skip_rendering(
         &self,

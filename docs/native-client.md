@@ -1,94 +1,77 @@
-# Horizon native development client
+# Horizon native client
 
-`horizon-client` opens a native Rust window and renders a controlled block scene
-stored in Horizon's resident chunks. Every occupied cell selects models from its
-registry state, including the terrain and sixteen featured placements. It loads
-block definitions, cuboid models, sprites and occlusion grids from pinned Java
-Edition 26.3 resources. Model selection uses the default block position seed;
-neighbor visibility uses the validated Rust face rules across chunk boundaries.
-The default camera is an inspection tool. F4 enables a standing-sized collision
-volume that queries the rendered resident chunks through the shared world
-collision implementation. The camera can still fly; it does not simulate a player.
-F5 switches to a dry walking test with gravity, ground support, stepping and
-held-jump timing over the same resident chunks. Its movement runs at 20 ticks/s;
-the camera interpolates between tick positions. Landing damage now updates stored
-health, absorption and hurt cooldown state. Hunger and regeneration tick after
-movement. Left Shift crouches, with pose-dependent collision bounds and eye height.
-F3 diagnostics include health, food, sprinting and pose.
+`horizon-client` is the playable Rust client for Minecraft Java Edition 26.3.
+It streams a world around the player on worker threads, renders every vanilla
+block model with smooth lighting and biome tints, and runs the validated player
+physics, health and hunger at 20 ticks per second. You can mine with vanilla
+hardness/tool rules, collect drops from the block loot tables, place blocks,
+craft in the 2x2 inventory grid or on a crafting table, and save and reload worlds
+in vanilla's Anvil format.
 
-Eligible opaque unit-cube faces use greedy rectangles only when texture layer,
-UV rotation/mirroring and shading match. Each rectangle retains its signed UV
-basis, so weighted texture variation survives merging. Other baked geometry and
-binary-alpha cutouts use the separate model-face instance pipeline. Geometry
-with nonintegral UV-lock rounding also stays on that path.
-
-This checkpoint has partial player movement, landing damage and hunger. Vanilla world generation, block
-interaction, inventory, sound, networking and world save/load remain unbound in
-the native client. It does not meet
-the [playable-build acceptance criteria](rust-parity.md#completion-criteria-and-playable-builds).
-The controlled chunk scene now uses blockstate dispatch, weighted variants,
-multipart conditions and transformed baking. Full block-catalog material support,
-fractional transparency, tinting, lighting, resource packs, chunk streaming and
-full visual parity remain unfinished.
-
-The resource gallery sits beside the pyramid and includes oak stairs, a slab,
-an anvil, a torch, a lantern, connected fences and iron bars, a cobweb, a wall
-grindstone, a ladder, a sideways amethyst cluster and four weighted stone
-placements. Registry state properties select the models: the stairs are an
-upside-down inner corner, the slab is a top slab and the fence gate is open.
-These are resident chunk states; simulation callbacks remain unfinished. Binary-alpha cutouts are rendered;
-the lantern's three frames advance every eight inspection ticks at 20 ticks/s.
-The animation metadata codec and frame selection now use the shared
-`horizon-assets` implementation checked against the pinned client. GPU
-interpolation and synchronization with the eventual game loop remain unfinished.
-Sprites currently require matching square frame dimensions.
+**Status:** playable, not yet at parity. Terrain currently comes from a simple
+test generator until the vanilla overworld generator (already byte-identical
+to vanilla up to the carver stage in `horizon-world`) is bound to streaming.
+There are no mobs, block behaviours (fluid spreading, redstone, crop growth),
+structures, furnaces/containers or multiplayer yet. See
+[Rust rewrite status](rust-parity.md).
 
 ## Run from a checkout
 
-Use current stable Rust (the locked client dependencies require Rust 1.90 or
-newer), Python 3.10+ and JDK 25. A native desktop display and compatible graphics
-driver are required. Resource preparation verifies the pinned game artifacts,
-exports the registry using the reference server and property schemas using the
-reference client, and extracts selected client
-resources into ignored `.local/horizon-client/26.3/`.
+Use current stable Rust (1.90+), Python 3.10+ and JDK 25. Resource preparation
+verifies the pinned game artifacts, runs vanilla's data generator and small
+exporters against the reference jars, and extracts the jar's assets and data
+into ignored `.local/horizon-client/26.3/`. Sounds come from Mojang's asset
+index (about 380 MB). Prepared resources are private; never commit them.
 
 ```sh
 python3 tools/prepare_native_client.py --prepare
-cargo +stable run --locked -p horizon-client
+python3 tools/fetch_sounds.py
+cargo run --release -p horizon-client -- --render-distance 12
 ```
 
-Java is used during preparation. The native executable itself runs without a
-JVM. Prepared resources stay private; do not commit or publish the extracted game
-files. Final distributable builds still need resource provisioning and packaging.
+Development builds that link quickly: `cargo build --profile fast -p horizon-client`.
 
-Use `--resources PATH` for a prepared resource directory. The executable also
-looks for a sibling `resources/` directory before the checkout default. Use
-`--radius N` to select 1–16 chunks around the origin; this is a finite test scene,
-not a render-distance or world-streaming implementation.
+| Option | Meaning |
+| --- | --- |
+| `--world NAME` | World folder under `saves/` (default "New World"); reopened if it exists |
+| `--seed N` | Seed for a new world (numbers or text, like vanilla) |
+| `--creative` | Creative mode (instant breaking, pick block) |
+| `--render-distance N` | Chunks, 2..64 (default 12) |
+| `--resources PATH` | Prepared resource directory |
 
 | Control | Action |
 | --- | --- |
-| WASD | Move horizontally |
-| Space / either Shift | Rise / descend in inspection mode; Space jumps in walking mode |
-| Either Ctrl | Boost inspection speed |
-| Left Shift | Crouch in walking mode |
-| Left Ctrl while moving forward, or double-tap W | Start sprinting in walking mode when eligible |
-| Arrow keys | Rotate camera |
-| Left click | Capture mouse for camera rotation |
-| Escape | Release mouse |
-| F3 | Toggle FPS/chunk/mesh/health/food/sprint/pose diagnostics in the window title |
-| F4 | Toggle inspection camera collisions; enabling requires an unobstructed position |
-| F5 | Toggle walking test at the current camera position; enabling requires an unobstructed position |
-| Ctrl+Q or window close | Exit |
+| Mouse | Look (vanilla default sensitivity) |
+| WASD / Space / Left Shift / Left Ctrl | Move, jump, sneak, sprint |
+| Left / right click | Break (hold) / place or use; right click opens crafting tables |
+| Middle click | Pick block (creative) |
+| 1–9, scroll | Select hotbar slot |
+| E | Inventory and 2x2 crafting (shift-click to quick-move or craft all) |
+| Q / Ctrl+Q | Drop one / drop stack |
+| F3 | Debug overlay (position, chunk, light, biome, FPS) |
+| Esc | Pause menu (Save and Quit) |
 
-Controls bind physical keyboard positions. Losing focus clears held keys and
-releases the mouse. Walking pauses while unfocused and resets partial tick time
-on focus changes. Sprinting continues after releasing Left Ctrl while forward
-input remains held; hunger and collisions can stop it. Walking currently has no flight, item use or block interaction. F5 returns to inspection mode; the finite scene has no
-streaming or boundary wall. `--trace-input` logs keyboard, mouse-button and focus events
-for diagnosis. On headless Linux use `vscreen run ./target/debug/horizon-client`,
-then `vscreen shot`. The `wtype` tool's default generated keymap does not preserve
-physical key positions; typing the character W can report physical Escape.
+Worlds autosave every 6000 ticks (5 minutes), when chunks unload and on quit.
+On headless Linux use `vscreen start ./target/release/horizon-client` and
+`vscreen shot`.
+
+## How it fits together
+
+- `streaming.rs`: worker pool that generates or loads, lights and meshes chunk
+  columns closest-first; stale results are discarded by sequence number.
+- `light.rs`: vanilla sky/block light rules (sky sources down to the first
+  occluding edge, `max(1, dampening)` falloff) over a 3x3 chunk region.
+- `mesher.rs`: blockstate models with neighbour culling, `ModelBlockRenderer`
+  smooth lighting/ambient occlusion, `BlockTintSources` tints with 5x5 biome
+  blending, and `FluidRenderer` water/lava surfaces.
+- `gfx.rs` + `terrain.wgsl`: camera-relative section rendering with frustum
+  culling, the vanilla lightmap formula, timeline-driven sky/fog, and
+  solid/cutout/translucent passes; `entity.wgsl` draws dropped items.
+- `environment.rs`: the data-driven day timeline (sky colour, light factor,
+  celestial angles) sampled with vanilla's keyframe/easing rules.
+- `items.rs`, `crafting.rs`: item components from vanilla's reports, tool
+  mining rules, loot tables and crafting recipes from the data pack.
+- `save.rs`: Anvil region files and `level.dat`.
 
 ## Validation
 

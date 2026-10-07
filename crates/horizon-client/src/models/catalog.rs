@@ -35,6 +35,7 @@ pub struct BakedFace {
     pub translucent: bool,
 }
 pub struct BakedModel {
+    pub ambient_occlusion: bool,
     pub faces: Vec<BakedFace>,
     pub cube: Option<[super::cube::CubeStyle; 6]>,
 }
@@ -59,6 +60,14 @@ impl StateModels {
         let mut choices = Vec::new();
         let mut states = BTreeMap::new();
         let mut variants = BTreeSet::new();
+        let mut by_name: std::collections::HashMap<&str, Vec<BlockStateId>> =
+            std::collections::HashMap::new();
+        for i in 0..registry.len() {
+            let id = BlockStateId(i as u32);
+            if let Some(state) = registry.state(id) {
+                by_name.entry(state.name.as_str()).or_default().push(id);
+            }
+        }
         for block in blocks.iter().copied().collect::<BTreeSet<_>>() {
             let name = format!("minecraft:{block}");
             let facts = facts.get(&name).ok_or("missing block model state schema")?;
@@ -103,12 +112,12 @@ impl StateModels {
             )?;
             let definition = BlockStateDefinition::from_json(&resource)?;
             let bound = definition.bind(&schema, &possible)?;
-            let native_order: Vec<_> = (0..registry.len())
-                .filter_map(|i| {
-                    let id = BlockStateId(i as u32);
-                    let state = registry.state(id)?;
-                    (state.name == name).then_some((id, &state.properties))
-                })
+            let native_order: Vec<_> = by_name
+                .get(name.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .map(|&id| (id, &registry.state(id).expect("indexed state").properties))
                 .collect();
             if native_order.len() != possible.len()
                 || native_order
@@ -181,7 +190,14 @@ impl StateModels {
                     })
                     .collect::<Result<_>>()?;
             let cube = super::cube::cube_styles(&faces);
-            baked.insert((name, turns, lock), BakedModel { faces, cube });
+            baked.insert(
+                (name, turns, lock),
+                BakedModel {
+                    ambient_occlusion: model.ambient_occlusion,
+                    faces,
+                    cube,
+                },
+            );
         }
         Ok(Self {
             choices,

@@ -1,5 +1,5 @@
 //! A blockstate-driven inspection gallery, separate from gameplay simulation.
-mod catalog;
+pub mod catalog;
 mod cube;
 use crate::{Result, sprites::Sprites};
 pub use catalog::StateModels;

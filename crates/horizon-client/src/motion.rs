@@ -1,7 +1,7 @@
 //! Stored movement state for the resident scene. This binds the validated air,
 //! jump, collision, support, restitution and stored health bindings. Entity lifecycle,
 //! block-inside effects and audiovisual event consumers remain separate work.
-use crate::{Result, assets::Assets, collisions::SceneCollisions, world::TestWorld};
+use crate::{Result, assets::Assets, collisions::SceneCollisions, world::World};
 use horizon_core::{
     geometry::{Aabb, Vec3, VoxelShape, traverse_blocks},
     position::BlockPos,
@@ -300,7 +300,7 @@ impl PlayerMotion {
 
 pub struct MotionWorld<'p, 'w, 'r> {
     pub player: &'p mut PlayerMotion,
-    pub scene: &'w mut TestWorld<'r>,
+    pub scene: &'w mut World,
     pub assets: &'r Assets,
     pub collision_binding: &'w BlockCollisionRegistry<'r>,
     pub resources: &'w MotionResources,

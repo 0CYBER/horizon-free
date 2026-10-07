@@ -1,110 +1,93 @@
-//! A controlled blockstate scene for exercising the native renderer. This is
-//! not the vanilla world generator or an authoritative gameplay simulation.
-use crate::{
-    Result,
-    assets::{Assets, Properties},
+//! Resident client world: streamed chunk columns plus the bookkeeping the game
+//! loop needs to relight and remesh after edits.
+use crate::chunk::{Chunk, MIN_Y, SECTIONS};
+use horizon_core::random::LegacyRandom;
+use horizon_world::registry::BlockStateId;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
 };
-use horizon_core::{position::ChunkPos, random::LegacyRandom};
-use horizon_world::{registry::BlockStateId, worldgen::terrain::TerrainChunk};
-use std::collections::BTreeMap;
 
-pub struct TestWorld<'a> {
-    pub chunks: BTreeMap<(i32, i32), TerrainChunk<'a, Properties>>,
+pub struct World {
+    pub chunks: HashMap<(i32, i32), Arc<Chunk>>,
     pub random: LegacyRandom,
     pub revision: u64,
     pub health_rules: crate::health::HealthRules,
-    air: BlockStateId,
+    pub air: BlockStateId,
+    /// Sections whose geometry changed and need remeshing.
+    pub dirty_sections: HashSet<(i32, i32, i32)>,
+    /// Chunks whose light must be recomputed.
+    pub dirty_light: HashSet<(i32, i32)>,
+    /// Chunks changed since the last save.
+    pub modified: HashSet<(i32, i32)>,
+    pub game_time: i64,
+    pub day_time: i64,
 }
-impl<'a> TestWorld<'a> {
-    pub fn new(assets: &'a Assets, radius: i32) -> Result<Self> {
-        let air = assets
-            .registry
-            .default_state("minecraft:air")
-            .ok_or("missing air state")?;
-        let mut world = Self {
-            chunks: BTreeMap::new(),
-            random: LegacyRandom::new(0),
+impl World {
+    pub fn new(air: BlockStateId, seed: i64) -> Self {
+        Self {
+            chunks: HashMap::new(),
+            random: LegacyRandom::new(seed),
             revision: 0,
             health_rules: crate::health::HealthRules::default(),
             air,
-        };
-        for cz in -radius..=radius {
-            for cx in -radius..=radius {
-                let mut chunk = TerrainChunk::new(
-                    ChunkPos::new(cx, cz),
-                    0,
-                    16,
-                    &assets.registry,
-                    assets.properties.clone(),
-                )?;
-                for z in 0..16 {
-                    for x in 0..16 {
-                        for y in 0..4 {
-                            let layer = match y {
-                                0 => 0,
-                                1 | 2 => 1,
-                                _ => {
-                                    if (cx + cz) & 1 == 0 {
-                                        2
-                                    } else {
-                                        3
-                                    }
-                                }
-                            };
-                            chunk.set_block_worldgen(
-                                cx * 16 + x,
-                                y,
-                                cz * 16 + z,
-                                assets.material_states[layer],
-                            )?;
-                        }
-                    }
-                }
-                world.chunks.insert((cx, cz), chunk);
-            }
+            dirty_sections: HashSet::new(),
+            dirty_light: HashSet::new(),
+            modified: HashSet::new(),
+            game_time: 0,
+            day_time: 1000,
         }
-        for y in 4..11 {
-            for z in -10_i32..=10 {
-                for x in -10_i32..=10 {
-                    if x.abs().max(z.abs()) <= 10 - (y - 4) {
-                        world.set(
-                            x,
-                            y,
-                            z,
-                            assets.material_states[if y & 1 == 0 { 4 } else { 5 }],
-                        )?;
-                    }
-                }
-            }
-        }
-        for (position, state) in &assets.model_placements {
-            world.set(position.x, position.y, position.z, *state)?;
-        }
-        world.revision = 0;
-        Ok(world)
     }
-    /// Resident storage write. Neighbor updates, drops and block-entity
-    /// lifecycle must be dispatched by the owning gameplay runtime.
-    pub fn set(&mut self, x: i32, y: i32, z: i32, state: BlockStateId) -> Result<()> {
-        let chunk = self
-            .chunks
-            .get_mut(&(x >> 4, z >> 4))
-            .ok_or("test scene exceeds resident chunks")?;
-        if y < chunk.min_y() || y >= chunk.min_y() + chunk.height() {
-            return Err("test scene write exceeds resident height".into());
+    /// Resident storage write; marks the touched sections (and neighbours on
+    /// section borders) for remeshing and the surrounding chunks for relighting.
+    /// Neighbour updates, drops and block entities belong to the gameplay layer.
+    pub fn set(&mut self, x: i32, y: i32, z: i32, state: BlockStateId) -> crate::Result<()> {
+        let Some(chunk) = self.chunks.get_mut(&(x >> 4, z >> 4)) else {
+            return Err("write outside resident chunks".into());
+        };
+        if y < MIN_Y || y >= MIN_Y + (SECTIONS as i32) * 16 {
+            return Err("write outside world height".into());
         }
-        let previous = chunk.set_block_worldgen(x, y, z, state)?;
-        if previous != state {
+        let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0 as u16);
+        if u32::from(previous) != state.0 {
             self.revision = self.revision.wrapping_add(1);
+            self.modified.insert((x >> 4, z >> 4));
+            let sy = (y - MIN_Y) >> 4;
+            for dz in -1..=1 {
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let (bx, by, bz) = (x + dx, y + dy, z + dz);
+                        let s = (by - MIN_Y) >> 4;
+                        if !(0..SECTIONS as i32).contains(&s) {
+                            continue;
+                        }
+                        self.dirty_sections.insert((bx >> 4, s, bz >> 4));
+                    }
+                }
+            }
+            let _ = sy;
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    self.dirty_light.insert(((x >> 4) + dx, (z >> 4) + dz));
+                }
+            }
         }
         Ok(())
     }
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         self.chunks
             .get(&(x >> 4, z >> 4))
-            .map_or(self.air, |chunk| chunk.block(x, y, z))
+            .map_or(self.air, |chunk| chunk.block(x & 15, y, z & 15))
+    }
+    pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
+        self.chunks
+            .get(&(x >> 4, z >> 4))
+            .map_or(0xF0, |chunk| chunk.light(x & 15, y, z & 15))
     }
     pub fn is_air(&self, state: BlockStateId) -> bool {
         state == self.air
+    }
+    pub fn loaded(&self, x: i32, z: i32) -> bool {
+        self.chunks.contains_key(&(x >> 4, z >> 4))
     }
 }

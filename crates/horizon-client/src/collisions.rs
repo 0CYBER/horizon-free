@@ -1,7 +1,7 @@
 //! Collision queries against the same resident chunks used by the renderer.
 //! The development scene has no entities, block entities or world border.
 //! Entity-dependent block rules fail explicitly until an entity runtime exists.
-use crate::{Result, world::TestWorld};
+use crate::{Result, world::World};
 use horizon_core::{
     geometry::{Aabb, Vec3, VoxelShape},
     position::{BlockPos, ChunkPos},
@@ -40,7 +40,7 @@ pub fn load<'r>(root: &Path, registry: &'r BlockRegistry) -> Result<BlockCollisi
 }
 
 pub struct SceneCollisions<'w, 'r> {
-    pub world: &'w TestWorld<'r>,
+    pub world: &'w World,
     pub binding: &'w BlockCollisionRegistry<'r>,
 }
 impl SceneCollisions<'_, '_> {

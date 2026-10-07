@@ -207,6 +207,20 @@ def main():
         (root / 'biome-parameters').mkdir(exist_ok=True)
         for f in (reports / 'biome_parameters' / 'minecraft').glob('*.json'):
             (root / 'biome-parameters' / f.name).write_bytes(f.read_bytes())
+    entity_models = root / 'entity-models.json'
+    entity_oracle = oracle.with_name('VanillaEntityModelExporter.java')
+    entity_sources = base.source_hashes([entity_oracle])
+    if not (previous.get('entity_model_exporters_sha256') == entity_sources and entity_models.exists()
+            and previous.get('client_sha256') == origin['client_sha256']):
+        classes = lab.LOCAL / 'entity-models' / 'classes'; classes.mkdir(parents=True, exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['client'], *baking.client_libraries()]))
+        with (root / 'entity-model-export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(entity_oracle)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
+                            'dev.horizonlab.parity.VanillaEntityModelExporter', str(entity_models)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
     lab.write_json(manifest, {'schema': 7, **origin,
                              'health_exporters_sha256': health_sources,
                              'health_files_sha256': {name: lab.digest(root/name, 'sha256') for name in health_files},
@@ -218,6 +232,7 @@ def main():
                              'render_files_sha256': {name: lab.digest(root/name, 'sha256') for name in render_files},
                              'model_state_exporters_sha256': binding_sources,
                              'gameplay_exporters_sha256': gameplay_sources,
+                             'entity_model_exporters_sha256': entity_sources,
                              'model_states_sha256': lab.digest(model_states, 'sha256'), 'data_version': version['world_version'],
                              'facts_sha256': lab.digest(facts, 'sha256'),
                              'block_tags_sha256': lab.digest(root / 'block-tags.json', 'sha256'), 'resource_files': count})
