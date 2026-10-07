@@ -12,6 +12,7 @@ pub struct TestWorld<'a> {
     pub chunks: BTreeMap<(i32, i32), TerrainChunk<'a, Properties>>,
     pub random: LegacyRandom,
     pub revision: u64,
+    pub health_rules: crate::health::HealthRules,
     air: BlockStateId,
 }
 impl<'a> TestWorld<'a> {
@@ -24,6 +25,7 @@ impl<'a> TestWorld<'a> {
             chunks: BTreeMap::new(),
             random: LegacyRandom::new(0),
             revision: 0,
+            health_rules: crate::health::HealthRules::default(),
             air,
         };
         for cz in -radius..=radius {

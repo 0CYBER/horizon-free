@@ -1,6 +1,6 @@
 //! Stored player health and empty-equipment server damage for the resident scene.
 //! World/audio/network consumers are queued explicitly; full death and tick
-//! lifecycles (drops, respawn, regeneration, effects) remain separate work.
+//! lifecycles (drops, respawn, effects) remain separate work.
 use crate::{
     Result,
     motion::{MotionEvent, PlayerMotion},
@@ -22,9 +22,22 @@ use horizon_world::{
     synced_floats::{FloatValue, Observer, SyncedFloats},
 };
 use std::{fs, io, path::Path};
-type Attributes = LiveAttributes<Box<dyn FnMut() -> i32>>;
-type State = HurtState<DamageTypeId>;
+pub(crate) type Attributes = LiveAttributes<Box<dyn FnMut() -> i32>>;
+pub(crate) type State = HurtState<DamageTypeId>;
 
+#[derive(Clone, Copy, Debug)]
+pub struct HealthRules {
+    pub difficulty: Difficulty,
+    pub natural_regeneration: bool,
+}
+impl Default for HealthRules {
+    fn default() -> Self {
+        Self {
+            difficulty: Difficulty::Normal,
+            natural_regeneration: true,
+        }
+    }
+}
 pub struct HealthResources {
     pub damage: Catalog,
     pub ids: PlayerFloatIds,
@@ -41,7 +54,7 @@ impl HealthResources {
             )?)
         };
         let damage = Catalog::from_json(&read("damage-catalog.json")?, &read("damage-tags.json")?)?;
-        for name in ["minecraft:fall", "minecraft:stalagmite"] {
+        for name in ["minecraft:fall", "minecraft:stalagmite", "minecraft:starve"] {
             if damage.id(name).is_none() {
                 return Err(format!("missing damage type {name}").into());
             }
@@ -65,6 +78,7 @@ impl HealthResources {
 }
 #[derive(Clone, Copy, Debug)]
 pub enum HealthEvent {
+    StarvationDamage(f32),
     Updated {
         id: u8,
         value: f32,
@@ -88,6 +102,7 @@ pub enum HealthEvent {
 impl HealthEvent {
     pub fn trace(self) -> String {
         match self {
+            Self::StarvationDamage(amount) => format!("damage starve {:08x}", amount.to_bits()),
             Self::Updated { id, value, dirty } => {
                 format!("updated {id} {:08x} {dirty}", value.to_bits())
             }
@@ -100,7 +115,7 @@ impl HealthEvent {
         }
     }
 }
-struct Updates<'a>(&'a mut Vec<MotionEvent>);
+pub(crate) struct Updates<'a>(pub(crate) &'a mut Vec<MotionEvent>);
 impl Observer for Updates<'_> {
     type Error = io::Error;
     fn updated(&mut self, data: &mut SyncedFloats, id: u8) -> io::Result<()> {
@@ -120,6 +135,7 @@ pub struct PlayerHealth {
     pub dead: bool,
     pub sync_velocity: bool,
     pub game_time: i64,
+    pub tick_count: i32,
 }
 impl PlayerHealth {
     pub fn new(resources: &HealthResources, attributes: &mut Attributes) -> Result<Self> {
@@ -164,6 +180,7 @@ impl PlayerHealth {
             dead: false,
             sync_velocity: false,
             game_time: 0,
+            tick_count: 0,
         })
     }
     pub fn health(&self) -> f32 {
@@ -183,6 +200,7 @@ impl PlayerHealth {
     /// The complete enclosing ticks, including death removal, are not yet bound.
     pub fn advance_clock(&mut self) {
         self.game_time = self.game_time.wrapping_add(1);
+        self.tick_count = self.tick_count.wrapping_add(1);
         if self.hurt.cooldown > 0 {
             self.hurt.cooldown -= 1;
         }
@@ -195,6 +213,7 @@ impl PlayerMotion {
     pub fn hurt(
         &mut self,
         resources: &HealthResources,
+        rules: HealthRules,
         source: DamageTypeId,
         amount: f32,
     ) -> Result<bool> {
@@ -204,6 +223,7 @@ impl PlayerMotion {
             .ok_or("unknown resident damage source")?;
         let h = &mut self.health;
         let mut environment = Environment {
+            rules,
             source,
             events: &mut self.events,
             dead: &mut h.dead,
@@ -237,12 +257,13 @@ impl PlayerMotion {
         Ok(())
     }
 }
-struct Environment<'a> {
-    source: DamageSource<'a, ()>,
-    events: &'a mut Vec<MotionEvent>,
-    dead: &'a mut bool,
-    sync_velocity: &'a mut bool,
-    game_time: i64,
+pub(crate) struct Environment<'a> {
+    pub(crate) rules: HealthRules,
+    pub(crate) source: DamageSource<'a, ()>,
+    pub(crate) events: &'a mut Vec<MotionEvent>,
+    pub(crate) dead: &'a mut bool,
+    pub(crate) sync_velocity: &'a mut bool,
+    pub(crate) game_time: i64,
 }
 impl Environment<'_> {
     fn event(&mut self, event: HealthEvent) {
@@ -516,7 +537,7 @@ impl PlayerHurtWorld for Environment<'_> {
         Ok(self.source.definition().scaling == Scaling::Always)
     } // no causing entity
     fn difficulty(&mut self, _: &mut State) -> io::Result<Difficulty> {
-        Ok(Difficulty::Normal)
+        Ok(self.rules.difficulty)
     }
 }
 impl ServerPlayerHurtWorld for Environment<'_> {

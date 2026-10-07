@@ -65,7 +65,7 @@ impl Options {
             }
             if argument == "--help" || argument == "-h" {
                 println!(
-                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions; F5 toggles walking test.\nWalking test: WASD move; Space jumps; gravity and collisions at 20 ticks/s.\n\nThis is a controlled development scene. Walking includes landing damage and stored health. Sprint/crouch, full death/respawn, interaction, saving and complete gameplay remain unfinished."
+                    "Horizon native development client\n\n  --resources PATH       Prepared pinned resources\n  --radius CHUNKS        Controlled scene radius, 1..16 (default 4)\n  --frames COUNT         Exit after this many presented frames\n  --smoke-report PATH    Write a runtime report on exit\n  --timeout-seconds N    Deadline for a frame-limited run (default 90)\n  --trace-input          Log received keyboard, mouse-button and focus events\n\nControls: click to capture mouse; WASD move; Space/Shift rise/descend;\nCtrl boosts speed; arrow keys rotate; Esc releases mouse; Ctrl+Q quits; F3 shows diagnostics; F4 toggles camera collisions; F5 toggles walking test.\nWalking test: WASD move; Space jumps; gravity and collisions at 20 ticks/s.\n\nThis is a controlled development scene. Walking includes landing damage, stored health, hunger and regeneration. Sprint/crouch, full death/respawn, interaction, saving and complete gameplay remain unfinished."
                 );
                 return Ok(None);
             }
@@ -172,7 +172,6 @@ impl App<'_> {
         );
         for _ in 0..self.motion_clock.advance(elapsed) {
             self.previous_player_position = player.position;
-            player.health.advance_clock();
             player.yaw = (-self.camera.yaw.to_degrees()) as f32;
             MotionWorld {
                 player,
@@ -181,7 +180,7 @@ impl App<'_> {
                 collision_binding: self.collision_binding,
                 resources: self.motion_resources,
             }
-            .player_movement_tick(direction, self.keys.contains(&KeyCode::Space))?;
+            .simulation_tick(direction, self.keys.contains(&KeyCode::Space))?;
             // Health is already updated synchronously during landing. These
             // counters expose incoming requests; delivery consumers remain pending.
             for event in player.events.drain(..) {
@@ -251,7 +250,7 @@ impl App<'_> {
             let size = window.inner_size();
             [size.width, size.height]
         });
-        let report = serde_json::json!({
+        let mut report = serde_json::json!({
             "schema": 1,
             "project": "Horizon",
             "scope": "Native resident-scene renderer with inspection camera and optional fixed-rate dry walking test; full gameplay remains unfinished",
@@ -294,6 +293,13 @@ impl App<'_> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             fs::create_dir_all(parent)?;
         }
+        report["player_food"] = serde_json::json!(self.player.as_ref().map(|p| p.health.food.food));
+        report["player_saturation"] =
+            serde_json::json!(self.player.as_ref().map(|p| p.health.food.saturation));
+        report["player_exhaustion"] =
+            serde_json::json!(self.player.as_ref().map(|p| p.health.food.exhaustion));
+        report["player_food_timer"] =
+            serde_json::json!(self.player.as_ref().map(|p| p.health.food.timer));
         fs::write(path, serde_json::to_vec_pretty(&report)?)?;
         Ok(())
     }
@@ -474,8 +480,9 @@ impl ApplicationHandler for App<'_> {
                                 / self.title_at.elapsed().as_secs_f64();
                             let health = self.player.as_ref().map_or_else(String::new, |p| {
                                 format!(
-                                    " | Health {}{}",
+                                    " | Health {} | Food {}{}",
                                     p.health.health(),
+                                    p.health.food.food,
                                     if p.health.dead_or_dying() {
                                         " (dead)"
                                     } else {

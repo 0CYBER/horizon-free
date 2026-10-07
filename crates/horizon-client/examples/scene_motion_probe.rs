@@ -135,6 +135,7 @@ fn main() -> Result<()> {
     let mut out = std::io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);
     for line in std::io::BufReader::new(fs::File::open(dir.join("inputs.txt"))?).lines() {
         let f: Value = serde_json::from_str(&line?)?;
+        scene.health_rules = horizon_client::health::HealthRules::default();
         let mut player = PlayerMotion::new(&resources, vector(&f["position"]))?;
         for op in f["ops"].as_array().unwrap() {
             let mut world = MotionWorld {
@@ -145,6 +146,50 @@ fn main() -> Result<()> {
                 resources: &resources,
             };
             match op["mode"].as_str().unwrap() {
+                "tick_count" => {
+                    world.player.health.tick_count = op["value"].as_i64().unwrap() as i32
+                }
+                "rules" => {
+                    world.scene.health_rules = horizon_client::health::HealthRules {
+                        difficulty: [
+                            horizon_world::food::Difficulty::Peaceful,
+                            horizon_world::food::Difficulty::Easy,
+                            horizon_world::food::Difficulty::Normal,
+                            horizon_world::food::Difficulty::Hard,
+                        ][op["difficulty"].as_u64().unwrap() as usize],
+                        natural_regeneration: op["regenerate"].as_bool().unwrap(),
+                    };
+                }
+                "food" => {
+                    world.player.health.food = horizon_world::food::FoodData {
+                        food: op["food"].as_i64().unwrap() as i32,
+                        saturation: single(&op["saturation"]),
+                        exhaustion: single(&op["exhaustion"]),
+                        timer: op["timer"].as_i64().unwrap() as i32,
+                    };
+                }
+                "exhaust" => world
+                    .player
+                    .health
+                    .food
+                    .add_exhaustion(single(&op["value"])),
+                "eat" => world.player.health.food.eat(
+                    op["nutrition"].as_i64().unwrap() as i32,
+                    single(&op["value"]),
+                ),
+                "food_tick" => world
+                    .player
+                    .food_tick(&resources.health, world.scene.health_rules)?,
+                "peaceful" => world
+                    .player
+                    .peaceful_regeneration(world.scene.health_rules)?,
+                "simulation_tick" => {
+                    let v = vector(&op["value"]);
+                    world.simulation_tick(
+                        [v.x as f32, v.z as f32],
+                        op["jumping"].as_bool().unwrap(),
+                    )?;
+                }
                 "clock" => world.player.health.advance_clock(),
                 "health" | "absorption" => world
                     .player
@@ -169,7 +214,12 @@ fn main() -> Result<()> {
                             amount,
                         },
                     ));
-                    world.player.hurt(&resources.health, source, amount)?;
+                    world.player.hurt(
+                        &resources.health,
+                        world.scene.health_rules,
+                        source,
+                        amount,
+                    )?;
                 }
                 "seed" => world.scene.random.set_seed(op["value"].as_i64().unwrap()),
                 "impulse" => world.player.impulse.set_ignore_fall_damage(
@@ -336,6 +386,16 @@ fn main() -> Result<()> {
                 h.data.item_dirty(h.ids.health).unwrap(),
                 h.data.item_dirty(h.ids.absorption).unwrap(),
                 h.game_time
+            )?;
+            writeln!(
+                out,
+                "food {} {:08x} {} {} {} {}",
+                h.food.food,
+                canonical(h.food.saturation),
+                h.food.timer,
+                h.tick_count,
+                scene.health_rules.difficulty as u8,
+                scene.health_rules.natural_regeneration
             )?;
             player.events.clear();
         }

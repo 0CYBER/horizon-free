@@ -348,11 +348,20 @@ impl MotionWorld<'_, '_, '_> {
         if self.player.jump_trigger_time > 0 {
             self.player.jump_trigger_time -= 1;
         }
+        self.player.peaceful_regeneration(self.scene.health_rules)?;
         self.dry_tick(TickInput::PreparedLocal { direction, jumping })?;
         self.player.head_yaw = self.player.yaw;
         // Player.aiStep refreshes speed after movement, not before travel.
         self.player.speed = self.player.attribute("minecraft:movement_speed")? as f32;
         Ok(())
+    }
+    /// Resident simulation phases in native order. Enclosing entity/world tick
+    /// services are still incomplete; this composes clocks, movement and hunger.
+    pub fn simulation_tick(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
+        self.player.health.advance_clock();
+        self.player_movement_tick(direction, jumping)?;
+        self.player
+            .food_tick(&self.resources.health, self.scene.health_rules)
     }
     fn dry_tick(&mut self, input: TickInput) -> Result<()> {
         if self.player.no_jump_delay > 0 {

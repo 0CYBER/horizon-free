@@ -12,7 +12,8 @@ collision implementation. The camera can still fly; it does not simulate a playe
 F5 switches to a dry walking test with gravity, ground support, stepping and
 held-jump timing over the same resident chunks. Its movement runs at 20 ticks/s;
 the camera interpolates between tick positions. Landing damage now updates stored
-health, absorption and hurt cooldown state. F3 diagnostics include health.
+health, absorption and hurt cooldown state. Hunger and regeneration tick after
+movement. F3 diagnostics include health and food level.
 
 Eligible opaque unit-cube faces use greedy rectangles only when texture layer,
 UV rotation/mirroring and shading match. Each rectangle retains its signed UV
@@ -20,7 +21,7 @@ basis, so weighted texture variation survives merging. Other baked geometry and
 binary-alpha cutouts use the separate model-face instance pipeline. Geometry
 with nonintegral UV-lock rounding also stays on that path.
 
-This checkpoint has partial player movement and landing damage. Vanilla world generation, block
+This checkpoint has partial player movement, landing damage and hunger. Vanilla world generation, block
 interaction, inventory, sound, networking and world save/load remain unbound in
 the native client. It does not meet
 the [playable-build acceptance criteria](rust-parity.md#completion-criteria-and-playable-builds).
@@ -72,7 +73,7 @@ not a render-distance or world-streaming implementation.
 | Arrow keys | Rotate camera |
 | Left click | Capture mouse for camera rotation |
 | Escape | Release mouse |
-| F3 | Toggle FPS/chunk/mesh/health diagnostics in the window title |
+| F3 | Toggle FPS/chunk/mesh/health/food diagnostics in the window title |
 | F4 | Toggle inspection camera collisions; enabling requires an unobstructed position |
 | F5 | Toggle walking test at the current camera position; enabling requires an unobstructed position |
 | Ctrl+Q or window close | Exit |
@@ -426,7 +427,8 @@ query. Dead-or-dying state disables movement input and jumping. Server-player ju
 add the native exhaustion amount and queue a jump statistic, including when
 jump strength prevents upward motion. The damage-clock fields advance at 20 Hz;
 clock operations in the comparison establish elapsed-time state rather than
-invoking complete native tick methods. Hunger regeneration remains unfinished.
+invoking complete native tick methods. That checkpoint preceded the hunger
+integration below.
 
 The scene loads native-decoded damage definitions, damage tags and health field
 IDs from the pinned private resources. Statistics, combat records, sound,
@@ -443,3 +445,24 @@ with 110 movement ticks and no error. The ground view was visually inspected.
 The [startup check](../benchmarks/rust-native-health-2026-10-07/startup-smoke.json)
 also passes with the additional health resources. These are Linux development
 checks, not release acceptance or a hardware performance comparison.
+
+The [hunger integration comparison](../benchmarks/rust-native-hunger-2026-10-07/scene-motion.json)
+checks 196,489 operations in 2,837 scenarios against both pinned references.
+The resident simulation now ticks hunger after movement. It binds actual food,
+saturation, exhaustion and timer fields to the same live health and attribute
+storage, including regeneration and starvation through registered damage sources.
+The damage callback borrows the FoodData currently being ticked, so exhaustion
+writes remain visible before its timer resets. Peaceful recovery also runs in
+the native Player.aiStep phase before movement. Difficulty and natural
+regeneration settings live with the resident world.
+
+The reference executes actual `FoodData.tick`, `ServerPlayer.tickRegeneration`,
+health setters, armor/absorption and hurt methods. Cases cover all four
+difficulties, starvation health limits, absorption during starvation, changing
+regeneration rules, fast/slow healing timers, timer overflow, signed zero,
+nonfinite food state and combined falling/movement/food ticks. Explicit clock
+setup supplies elapsed-time fields; complete enclosing `tick`/`doTick` methods
+remain outside this comparison. The default walking scene uses Normal
+difficulty with natural regeneration enabled. Food item use, movement-distance
+exhaustion, effect ticks, full death/respawn services and save integration remain
+unfinished.
