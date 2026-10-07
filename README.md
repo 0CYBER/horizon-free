@@ -8,7 +8,7 @@ The Rust rewrite’s final deliverables include **playable native builds for mac
 
 ## Play on your Mac
 
-Download **horizon-mac-starter-0.21.0.zip** from [Releases](https://github.com/ludovic111/Horizon/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
+Download **horizon-mac-starter-0.21.0.zip** from [Releases](https://github.com/ludovic111/horizon/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
 
 Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on your 16 GB M2 Pro. Prism can download Java automatically. Start at 1280×800 or 1920×1200; full Retina resolution is a larger GPU workload. [START-HERE.txt](packs/START-HERE.txt) has details. The same `.mrpack` files import into Prism on Windows and Linux.
 
@@ -51,6 +51,8 @@ The latter adds only the pinned core performance mods and leaves every original
 controller disabled. Then test balanced separately for its additional distant
 terrain. Matching captured settings does not prove pixel-identical rendering.
 [Core comparison protocol and selected observations](docs/core-performance.md)
+include three repeated matched-view software-rendered pairs with 14–21% higher
+FPS in this workload; M2 performance remains unmeasured.
 
 [Heap budget experiment](docs/heap-budget.md): three pairs with 3 GiB versus
 1.5 GiB maximum heap show variable RAM savings and GC/frame-time tradeoffs;
@@ -59,8 +61,6 @@ playable defaults remain unchanged.
 [Matched graphics API comparison](docs/graphics-api-comparison.md): Vulkan adds
 about 1.5% average FPS but about 12% CPU in three Linux software-rendered pairs;
 backend defaults remain unchanged and physical Mac performance is unmeasured.
-include three repeated matched-view software-rendered pairs with 14–21% higher
-FPS in this workload; M2 performance remains unmeasured.
 
 The optional `queue-wait` pack yields during pending distant-terrain debounce retries; `adaptive-queue` combines it with the existing controllers. [Queue experiment and measurement limits](docs/debounce-queue.md).
 
@@ -182,8 +182,8 @@ this launcher correction is not a measured graphics performance improvement.
 Game JARs, decompiled Java, libraries, inventories, worlds and logs live **inside this checkout** under gitignored **`.local/`**. No game code is in Git history or release downloads. Fresh clones regenerate the inspection workspace from official downloads; Microsoft credentials are not needed for this step.
 
 ```sh
-git clone https://github.com/ludovic111/Horizon.git
-cd Horizon
+git clone https://github.com/ludovic111/horizon.git
+cd horizon
 git config core.hooksPath .githooks
 python3 tools/lab.py prepare
 python3 tools/lab.py decompile
