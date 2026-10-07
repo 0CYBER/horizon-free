@@ -1577,3 +1577,20 @@ UseEffects/KineticWeapon presence and clearing a populated kinetic-enemy map.
 Targeted Clippy passes; all 20 existing horizon-world library tests pass with
 these changes. Synchronized flag storage, packet encoding/delivery, kinetic
 combat and complete inventory/game-tick integration remain pending.
+
+
+`item_use_catalog` imports all 1,658 pinned item identities and a typed projection
+of their default components for stack size, durability and use-duration/release
+queries. Component-driven use preserves consumable precedence over blocking and
+kinetic weapons. Registered duration overrides remain separate; consumables
+truncate float ticks while instruments floor them. Empty stacks query air
+behavior and hide their stored components.
+
+`python3 tools/test_item_use_catalog_parity.py` binds vanilla's actual component
+initializers and confirms both JARs export equivalent defaults. The
+[registered item-use report](../benchmarks/rust-item-use-catalog-2026-10-07/scoped-parity.json)
+records **246,715 matching lines per JAR**, covering every item default, count
+changes and component mutation sequences, override behavior, stackability,
+durability and integer/float extremes. Targeted Clippy passes. The imported
+projection does not implement all item components or their codecs; full inventory,
+enchantment effects and stored gameplay integration remain pending.
