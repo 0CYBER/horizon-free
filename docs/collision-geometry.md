@@ -2057,3 +2057,19 @@ subsequent random state, height overflow, float edges, attempt exhaustion,
 captured/live positions and callback mutation/failure prefixes. Targeted Clippy
 passes. Destination validation and teleporting, passenger links and world event
 delivery remain controlled services; full gameplay integration remains pending.
+
+
+`status_effect` also implements server/client ticking and client blend updates.
+Hidden instances count down with their parent. When the active duration reaches
+zero, the hidden details are restored before the server downgrade callback.
+Infinite effects use the actor's tick count for scheduling. Blend updates retain
+native callback/read ordering, duration-dependent steps and interpolation.
+
+`python3 tools/test_status_tick_parity.py` compares actual MobEffectInstance
+ticks, skipBlending and getBlendFactor with controlled MobEffect callbacks. The
+[status tick report](../benchmarks/rust-status-tick-2026-10-07/scoped-parity.json)
+records **412,552 matching lines per JAR**, including shared hidden chains,
+zero/negative/infinite durations, raw amplifiers, early application failures,
+downgrade notifications, blend float edge cases, removed actors and callback
+mutation/failure prefixes. Targeted Clippy passes. Registered effect behaviors,
+entity effect maps, UI rendering and full gameplay remain pending.

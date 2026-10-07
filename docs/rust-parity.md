@@ -18,7 +18,10 @@ item templates, remainders, checked bundle weights and cooldown expiry have
 native comparisons. Item completion composes stack copies with remainder and
 cooldown effects and server inventory delivery. Consumable start/completion now
 composes food storage, native random streams and eating particles, with exact
-sound parameters and effect ordering checked against both pinned JARs. These
+sound parameters and effect ordering checked against both pinned JARs. Consume
+effect bodies now cover status application/removal/clearing, sounds and random
+teleport attempts. Shared status instances implement hidden-chain updates,
+server/client countdown and client blending with native comparisons. These
 kernels still need complete entity/world lifecycle bindings. All pinned block-survival
 families now have native differential coverage. Full simulation callbacks,
 complete chunk generation, entity behavior, networking, rendering and playable
