@@ -1383,3 +1383,22 @@ precedence, virtual flag mutations and callback failures. Targeted Clippy passes
 Source/rule queries and virtual flags are controlled; registered source/rule
 bindings, nonempty enchantment immunity and full pipeline integration remain
 pending.
+
+
+`server_player_combat` binds server/player/living outer hurt to the checked
+registered-attribute, synchronized-health/absorption and hunger inner damage
+path. Dead-or-dying reads live health and the direct death flag; the outer
+cooldown/animation state is shared across hits. PvP, blocking, effects,
+attribution, knockback, death and other world services remain explicit.
+
+`python3 tools/test_server_player_combat_parity.py` compares the actual native
+ServerPlayer hurt chain through actual inner reduction and player storage. The
+[server-player combat report](../benchmarks/rust-server-player-combat-2026-10-07/scoped-parity.json)
+records **561,528 matching lines per JAR**, including repeated hits, death
+rejection, modified attributes, cooldown differences, packet drains, numeric
+edges and failures after partial writes. Some fixtures explicitly reset cooldown
+between hits; they do not claim entity-tick coverage. Targeted Clippy passes.
+Invulnerability answers, blocking amounts, armor-durability callbacks, effects,
+PvP permission, combat/event/knockback/death services and criterion listeners are
+controlled. Enchanted items, registered sources, actual lifecycle services and
+playable integration remain pending.

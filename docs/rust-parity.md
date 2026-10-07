@@ -9,7 +9,10 @@ complete game server or gameplay simulation.
 The Rust workspace implements core arithmetic/random streams, world data and
 resident sections, scheduled tick ordering, geometry, contained fluid states,
 noise/density evaluation, biome and terrain generation kernels, material rules,
-and parts of feature placement and decoration. All pinned block-survival
+and parts of feature placement and decoration. Movement/fluid interactions,
+registered attributes, hunger storage/ticks, synchronized player health and
+absorption, damage reduction and outer hurt gates have scoped native comparisons.
+These kernels still need complete entity/world lifecycle bindings. All pinned block-survival
 families now have native differential coverage. Full simulation callbacks,
 complete chunk generation, entity behavior, networking, rendering and playable
 integration remain unfinished. The linked subsystem documents and hashed reports
@@ -320,21 +323,22 @@ encoding plus malformed-property fallback. Block gameplay remains pending.
 | Registries, block states, items and data components | Block-state IDs, property descriptors and defaults imported and checked; items/components absent | Registry lifecycle, remaining registries, data components and behavior |
 | World/chunk storage, NBT and region files | Bounded NBT, four codecs, region export, saved and resident section palettes | Generated-save integration, entity/POI integration, upgrades, live saves and crash recovery |
 | Terrain, biomes, structures and lighting | Seeded noise/density graphs, bundled registry and router loading, climate sampling/search and imported-table multi-noise biome resolution, aquifer decisions, noise-stage filling and surface-stage application implemented; complete terrain generation absent | Remaining terrain/biome codecs and world fields, seeded generated-chunk comparisons, biome/feature/structure placement, chunk lifecycle and light propagation |
-| Tick scheduling, blocks, fluids and redstone | Scheduled queues, eligibility, callback mutations and saved tick data implemented; block/fluid/redstone behavior absent | Actual block/fluid state transitions, neighbor updates, world integration and end-to-end ordered traces |
-| Entities, AI, movement and combat | Bounding-box and voxel collision geometry implemented; live entities absent | Context-dependent collision/physics and tick traces, spawning, pathfinding, damage, equipment and lifecycle |
-| Survival, inventory, crafting and progression | Not implemented | Recipes, item transitions, hunger/health, effects, experience and advancement behavior |
+| Tick scheduling, blocks, fluids and redstone | Scheduled queues and saved ticks, block survival families, fluid geometry/flow and entity immersion kernels checked; complete live block/fluid/redstone simulation absent | Actual block/fluid state transitions, neighbor updates, world integration and end-to-end ordered traces |
+| Entities, AI, movement and combat | Collision, movement/fluid kernels, registered attributes, damage reduction, hurt gates and immunity predicates checked; complete live entity simulation absent | Context-dependent collision/physics and tick traces, spawning, pathfinding, damage, equipment and lifecycle |
+| Survival, inventory, crafting and progression | Hunger ticks/storage and synchronized health/absorption implemented and checked; inventory/crafting/progression absent | Recipes, item transitions, hunger/health, effects, experience and advancement behavior |
 | Dimensions, portals, weather and game rules | Not implemented | Cross-dimension state, transitions, time/weather and rule-dependent behavior |
 | Multiplayer, protocol, authentication and commands | Not implemented | Packet/codec fixtures, vanilla interoperability, reconnects and command behavior |
-| Rendering, resources, sound, UI and input | Not implemented | Resource compatibility, render/culling correctness, controls and playable interaction tests |
-| Performance and platform support | Not measured for a Rust game | Repeated matched gameplay workloads, frame/tick distributions, memory and physical GPU tests |
+| Rendering, resources, sound, UI and input | Native inspection client with selected block models, neighbor visibility, greedy meshing and a free camera; gameplay rendering/audio/UI incomplete | Resource compatibility, render/culling correctness, controls and playable interaction tests |
+| Performance and platform support | Registered-attribute allocation reduction measured on Linux; whole-game performance and playable platform packages pending | Repeated matched gameplay workloads, frame/tick distributions, memory and physical GPU tests |
 
 The next simulation milestone is integrating the checked scheduler and
 registry-backed sections with actual block behavior and neighbor updates. World
 generation now has noise-stage filling, aquifers and surface-stage application;
 biome assignment and remaining generation stages need work,
-followed by complete seeded-world comparisons. A renderer needs
-actual block models, neighboring sections and light data. Simplified geometry
-alone cannot establish vanilla behavior. Performance tuning must preserve the
+followed by complete seeded-world comparisons. The inspection renderer needs
+complete material/lighting support, chunk streaming and a simulated world.
+Movement, health and combat kernels need shared live player/entity state and
+world services. Scoped comparisons alone cannot establish complete gameplay parity. Performance tuning must preserve the
 validated simulation and use measured workloads; changing render distance,
 simulation distance or terrain detail invalidates an equal-workload speed claim.
 
