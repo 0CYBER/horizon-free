@@ -1717,3 +1717,18 @@ prefixes. The client comparison uses an actual allocated ClientLevel for the
 non-server branch; the dedicated JAR uses null because ClientLevel is absent.
 Targeted Clippy passes. Registered items' individual tick effects, full entity
 and world ticking and complete gameplay integration remain pending.
+
+
+`player_equipment` binds the main hand to the selected inventory slot and other
+equipment to the shared entity map. Hand/slot writes capture the previous item,
+store the new reference and then invoke the equip callback. Clearing the base
+equipment map does not clear the selected stack; clearing the inventory does.
+
+`python3 tools/test_player_equipment_parity.py` compares actual PlayerEquipment
+and inherited LivingEntity hand/slot access over a real native Inventory. The
+[equipment report](../benchmarks/rust-player-equipment-2026-10-07/scoped-parity.json)
+records **408,852 matching lines per JAR**, including selection changes, callback
+mutations/failures, old/new aliases, raw enum-map main-hand entries and the
+selected main-hand override. Targeted Clippy passes. Full onEquipItem effects,
+synchronized flags, active-use integration and complete gameplay integration
+remain pending.

@@ -102,3 +102,5 @@ pub mod player_inventory;
 pub mod inventory_pickup;
 
 pub mod inventory_tick;
+
+pub mod player_equipment;
