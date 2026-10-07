@@ -29,12 +29,26 @@ pub(crate) const SOLID: u32 = 1 << 14;
 pub(crate) const LAVA_FLUID: u32 = 1 << 15;
 pub(crate) const ANY_FLUID: u32 = 1 << 16;
 pub(crate) const FULL_AXIS: u32 = 1 << 17;
+pub(crate) const MUSHROOM_REPLACEABLE: u32 = 1 << 18;
+pub(crate) const FIRE: u32 = 1 << 19;
+pub(crate) const SCULK_BLOCKER: u32 = 1 << 20;
+pub(crate) const SCULK_VEIN: u32 = 1 << 21;
+pub(crate) const LIQUID: u32 = 1 << 22;
+pub(crate) const FEATURES_CANNOT_REPLACE: u32 = 1 << 23;
+pub(crate) const CHEST: u32 = 1 << 24;
+pub(crate) const SPAWNER: u32 = 1 << 25;
+/// Any source fluid state (water or lava), including waterlogged blocks.
+pub(crate) const FLUID_SOURCE: u32 = 1 << 26;
+/// Fluid amount 8 (sources and falling fluids).
+pub(crate) const FLUID_FULL: u32 = 1 << 27;
 
 /// Immutable per-state facts. Missing tags or blocks are empty classifications.
 pub struct TreeBlocks {
     flags: Vec<u32>,
     /// Native LeavesBlock DISTANCE (1..=7) values; 0 when absent.
     distance: Vec<u8>,
+    /// Block identity (index of the block name) per state.
+    block: Vec<u32>,
     pub(crate) properties: Arc<StateProperties>,
     defaults: BTreeMap<String, BlockStateId>,
 }
@@ -45,7 +59,15 @@ impl std::fmt::Debug for TreeBlocks {
             .finish_non_exhaustive()
     }
 }
-const DEFAULTS: [&str; 12] = [
+const DEFAULTS: [&str; 20] = [
+    "minecraft:cobblestone",
+    "minecraft:mossy_cobblestone",
+    "minecraft:chest",
+    "minecraft:spawner",
+    "minecraft:ice",
+    "minecraft:packed_ice",
+    "minecraft:glow_lichen",
+    "minecraft:sculk_vein",
     "minecraft:vine",
     "minecraft:cocoa",
     "minecraft:bee_nest",
@@ -79,6 +101,10 @@ impl TreeBlocks {
             bindings,
             BlockProperty::Solid,
         )?;
+        let liquid = super::block_predicate::PredicateBlockResolver::predicate_property(
+            bindings,
+            BlockProperty::Liquid,
+        )?;
         let mut flags = vec![0u32; registry.len()];
         let mut distance = vec![0u8; registry.len()];
         let mark_tag = |tag: &str, flag: u32, flags: &mut Vec<u32>| {
@@ -100,10 +126,27 @@ impl TreeBlocks {
             PREVENTS_LEAF_DECAY,
             &mut flags,
         );
+        mark_tag(
+            "minecraft:replaceable_by_mushrooms",
+            MUSHROOM_REPLACEABLE,
+            &mut flags,
+        );
+        mark_tag("minecraft:fire", FIRE, &mut flags);
+        mark_tag(
+            "minecraft:features_cannot_replace",
+            FEATURES_CANNOT_REPLACE,
+            &mut flags,
+        );
         for (name, flag) in [
             ("minecraft:vine", VINE),
             ("minecraft:water", WATER_BLOCK),
             ("minecraft:shelf_mushroom", SHELF_MUSHROOM),
+            ("minecraft:sculk", SCULK_BLOCKER),
+            ("minecraft:sculk_catalyst", SCULK_BLOCKER),
+            ("minecraft:moving_piston", SCULK_BLOCKER),
+            ("minecraft:sculk_vein", SCULK_VEIN),
+            ("minecraft:chest", CHEST),
+            ("minecraft:spawner", SPAWNER),
         ] {
             if let Some(states) = bindings.blocks.get(name) {
                 for state in states.iter() {
@@ -126,12 +169,21 @@ impl TreeBlocks {
             if solid.contains(id) {
                 *flag |= SOLID;
             }
+            if liquid.contains(id) {
+                *flag |= LIQUID;
+            }
             if let Some(fluid) = bindings.fluids.state(id) {
                 match fluid.kind() {
                     FluidKind::Water => *flag |= WATER_SOURCE | WATER_FLUID | ANY_FLUID,
                     FluidKind::FlowingWater => *flag |= WATER_FLUID | ANY_FLUID,
                     FluidKind::Lava | FluidKind::FlowingLava => *flag |= LAVA_FLUID | ANY_FLUID,
                     FluidKind::Empty => {}
+                }
+                if fluid.is_source() {
+                    *flag |= FLUID_SOURCE;
+                }
+                if fluid.amount() == 8 {
+                    *flag |= FLUID_FULL;
                 }
             }
             if properties.value(id, "persistent") == Some("true") {
@@ -159,6 +211,14 @@ impl TreeBlocks {
                 }
             }
         }
+        let mut names = BTreeMap::new();
+        let block = (0..registry.len())
+            .map(|i| {
+                let name = &registry.state(BlockStateId(i as u32)).unwrap().name;
+                let next = names.len() as u32;
+                *names.entry(name.clone()).or_insert(next)
+            })
+            .collect();
         let defaults = DEFAULTS
             .iter()
             .filter_map(|name| {
@@ -170,6 +230,7 @@ impl TreeBlocks {
         Ok(Self {
             flags,
             distance,
+            block,
             properties,
             defaults,
         })
@@ -178,6 +239,10 @@ impl TreeBlocks {
         self.flags
             .get(state.0 as usize)
             .is_some_and(|value| value & flag != 0)
+    }
+    /// BlockState.is(Block): same block, any properties.
+    pub(crate) fn same_block(&self, a: BlockStateId, b: BlockStateId) -> bool {
+        self.block.get(a.0 as usize) == self.block.get(b.0 as usize)
     }
     pub(crate) fn is_air(&self, state: BlockStateId) -> bool {
         self.has(state, AIR)

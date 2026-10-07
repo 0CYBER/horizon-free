@@ -234,6 +234,15 @@ impl FeatureCatalog {
                     object.insert("cap_feature".into(), raw(expanded)?);
                 }
             }
+            "minecraft:vegetation_patch" | "minecraft:waterlogged_vegetation_patch" => {
+                let expanded =
+                    self.expand_placed(required(&object, "vegetation_feature")?, depth + 1, work)?;
+                object.insert("vegetation_feature".into(), raw(expanded)?);
+            }
+            "minecraft:coral_tree" | "minecraft:coral_claw" | "minecraft:root_system" => {
+                let expanded = self.expand_placed(required(&object, "feature")?, depth + 1, work)?;
+                object.insert("feature".into(), raw(expanded)?);
+            }
             "minecraft:tree" => {
                 // PaleMossDecorator places the registry's pale_moss_patch by key.
                 let pale_moss = super::optional(&object, "decorators")

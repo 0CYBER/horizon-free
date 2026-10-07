@@ -66,6 +66,7 @@ pub struct TerrainRegion<'r, B: TerrainBlockStates> {
     game_time: i64,
     next_tick_order: i64,
     block_queries: Option<RegionBlockQueries>,
+    world_seed: Option<i64>,
 }
 impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn new(
@@ -95,6 +96,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
             game_time: 0,
             next_tick_order: 0,
             block_queries: None,
+            world_seed: None,
             min_y,
             height,
             generation: WorldGenerationContext::with_generator(
@@ -123,6 +125,11 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
             tags: bindings.tags.clone(),
         });
         Ok(self)
+    }
+    /// Supply the world seed (WorldGenLevel.getSeed) for seed-derived features.
+    pub fn with_world_seed(mut self, seed: i64) -> Self {
+        self.world_seed = Some(seed);
+        self
     }
     /// Supply the owning world's current time and region-local next tick order.
     pub fn with_tick_clock(mut self, game_time: i64, next_tick_order: i64) -> Self {
@@ -319,6 +326,9 @@ impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
 
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
         Ok(self.sea_level)
+    }
+    fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
+        self.world_seed.ok_or(PlacementQueryError::Unavailable)
     }
 
     fn mark_postprocessing(&mut self, [x, y, z]: [i32; 3]) -> Result<(), PlacementQueryError> {
@@ -537,6 +547,9 @@ where
 
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
         self.region.sea_level()
+    }
+    fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
+        self.region.world_seed()
     }
 
     fn mark_postprocessing(&mut self, position: [i32; 3]) -> Result<(), PlacementQueryError> {

@@ -68,6 +68,15 @@ pub enum FeatureDefinition {
     ScatteredOre(ScatteredOreFeature),
     Ore(super::ore_feature::OreFeature),
     Tree(Box<super::tree::TreeFeature>),
+    VegetationPatch(Box<super::vegetation::VegetationPatchFeature>),
+    Coral(Box<super::vegetation::CoralFeature>),
+    HugeMushroom(Box<super::vegetation::HugeMushroomFeature>),
+    MultifaceGrowth(Box<super::vegetation::MultifaceGrowthFeature>),
+    Lake(Box<super::cave::LakeFeature>),
+    MonsterRoom(Box<super::cave::MonsterRoomFeature>),
+    Geode(Box<super::cave::GeodeFeature>),
+    Iceberg(Box<super::iceberg::IcebergFeature>),
+    RootSystem(Box<super::root_system::RootSystemFeature>),
     FallenTree(Box<super::tree::FallenTreeFeature>),
     NoOp,
     WeightedChoice(OptionalWeightedList<PlacedFeatureDefinition>),
@@ -549,6 +558,70 @@ impl FeatureDefinition {
                 remaining,
             )
             .map(Self::ScatteredOre),
+            "minecraft:vegetation_patch" | "minecraft:waterlogged_vegetation_patch" => {
+                let bindings = blocks.ok_or(DecodeError::Field("vegetation patch bindings"))?;
+                let nested = |json: &str, depth: usize, remaining: &mut usize| {
+                    PlacedFeatureDefinition::decode(json, depth, remaining, empty_tags, blocks)
+                };
+                super::vegetation::VegetationPatchFeature::decode(
+                    json, bindings, depth, remaining, &nested,
+                )
+                .map(|f| Self::VegetationPatch(Box::new(f)))
+            }
+            "minecraft:root_system" => {
+                let bindings = blocks.ok_or(DecodeError::Field("root system bindings"))?;
+                let nested = |json: &str, depth: usize, remaining: &mut usize| {
+                    PlacedFeatureDefinition::decode(json, depth, remaining, empty_tags, blocks)
+                };
+                super::root_system::RootSystemFeature::decode(
+                    json, bindings, depth, remaining, &nested,
+                )
+                .map(|f| Self::RootSystem(Box::new(f)))
+            }
+            "minecraft:coral_tree" | "minecraft:coral_claw" => {
+                let nested = |json: &str, depth: usize, remaining: &mut usize| {
+                    PlacedFeatureDefinition::decode(json, depth, remaining, empty_tags, blocks)
+                };
+                super::vegetation::CoralFeature::decode(json, depth, remaining, &nested)
+                    .map(|f| Self::Coral(Box::new(f)))
+            }
+            "minecraft:huge_red_mushroom" | "minecraft:huge_brown_mushroom" => {
+                super::vegetation::HugeMushroomFeature::decode(
+                    json,
+                    blocks.ok_or(DecodeError::Field("huge mushroom bindings"))?,
+                    depth,
+                    remaining,
+                )
+                .map(|f| Self::HugeMushroom(Box::new(f)))
+            }
+            "minecraft:lake" => super::cave::LakeFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("lake bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(|f| Self::Lake(Box::new(f))),
+            "minecraft:monster_room" => super::cave::MonsterRoomFeature::new(
+                blocks.ok_or(DecodeError::Field("monster room bindings"))?,
+            )
+            .map(|f| Self::MonsterRoom(Box::new(f))),
+            "minecraft:geode" => super::cave::GeodeFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("geode bindings"))?,
+                depth,
+                remaining,
+            )
+            .map(|f| Self::Geode(Box::new(f))),
+            "minecraft:iceberg" => super::iceberg::IcebergFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("iceberg bindings"))?,
+            )
+            .map(|f| Self::Iceberg(Box::new(f))),
+            "minecraft:multiface_growth" => super::vegetation::MultifaceGrowthFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("multiface bindings"))?,
+            )
+            .map(|f| Self::MultifaceGrowth(Box::new(f))),
             "minecraft:tree" | "minecraft:fallen_tree" => {
                 let bindings = blocks.ok_or(DecodeError::Field("tree bindings"))?;
                 let nested = |json: &str, depth: usize, remaining: &mut usize| {
@@ -877,6 +950,25 @@ impl FeatureDefinition {
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::Basic),
             Self::Ore(feature) => feature.place(world, random, origin),
+            Self::VegetationPatch(feature) => {
+                feature.place(world, random, origin, &mut |f, w, r, p| {
+                    f.place_in(&mut placer, w, r, p, run)
+                })
+            }
+            Self::Coral(feature) => feature.place(world, random, origin, &mut |f, w, r, p| {
+                f.place_in(&mut placer, w, r, p, run)
+            }),
+            Self::HugeMushroom(feature) => feature.place(world, random, origin),
+            Self::MultifaceGrowth(feature) => feature.place(world, random, origin),
+            Self::Lake(feature) => feature.place(world, random, origin),
+            Self::MonsterRoom(feature) => feature.place(world, random, origin),
+            Self::Geode(feature) => feature.place(world, random, origin),
+            Self::Iceberg(feature) => feature.place(world, random, origin),
+            Self::RootSystem(feature) => {
+                feature.place(world, random, origin, &mut |f, w, r, p| {
+                    f.place_in(&mut placer, w, r, p, run)
+                })
+            }
             Self::Tree(feature) => {
                 feature.place(world, random, origin, &mut |f, w, r, p| {
                     f.place_inner(w, r, p, run)

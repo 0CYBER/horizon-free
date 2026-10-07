@@ -61,6 +61,19 @@ pub trait PlacementContext {
     ) -> Result<(), PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
     }
+    /// WorldGenLevel.getSeed: the world seed for seed-derived feature noise.
+    fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    /// Set the entity type of the spawner block entity at `position`, when one
+    /// exists. The caller has already drawn the native entity choice.
+    fn configure_spawner(
+        &mut self,
+        _position: [i32; 3],
+        _entity: &str,
+    ) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
     /// Store worldgen beehive occupants (ticks in hive per bee) in the nest
     /// block entity at `position`. Worlds without block-entity storage drop them.
     fn store_beehive_occupants(
