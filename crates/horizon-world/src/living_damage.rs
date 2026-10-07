@@ -61,6 +61,14 @@ pub fn actually_hurt<W: DamageWorld>(
     if world.invulnerable()? {
         return Ok(());
     }
+    actually_hurt_after_immunity_check(world, damage, player)
+}
+/// Caller must have performed this hit's native invulnerability query.
+pub(crate) fn actually_hurt_after_immunity_check<W: DamageWorld>(
+    world: &mut W,
+    damage: f32,
+    player: bool,
+) -> Result<(), W::Error> {
     let damage = world.after_armor(damage)?;
     let damage = world.after_magic(damage)?;
     let remaining = positive(damage - world.absorption()?);

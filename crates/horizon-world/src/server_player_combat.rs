@@ -2,6 +2,7 @@
 use crate::{
     attributes::entity::EntityAttributes,
     combat_rules::ArmorWorld,
+    damage_immunity::{self, ImmunityWorld},
     food::{Difficulty, FoodData},
     living_hurt::{HurtState, HurtTag, HurtWorld},
     player_health::PlayerFloatIds,
@@ -14,7 +15,9 @@ use crate::{
 use std::io;
 type Error<E> = <E as ArmorWorld>::Error;
 pub trait CombatEnvironment:
-    ServerDamageEnvironment + ServerPlayerHurtWorld<Error = <Self as ArmorWorld>::Error>
+    ServerDamageEnvironment
+    + ServerPlayerHurtWorld<Error = <Self as ArmorWorld>::Error>
+    + ImmunityWorld<Error = <Self as ArmorWorld>::Error>
 {
     /// Direct death flag, read only after health fails the native <= zero test.
     fn dead_flag(&self) -> bool;
@@ -75,6 +78,11 @@ impl<E: CombatEnvironment> HurtWorld for ServerPlayerCombat<'_, E> {
         _: &mut HurtState<Self::Source>,
         damage: f32,
     ) -> Result<(), Self::Error> {
+        if damage_immunity::server_player_immunity(self.environment)
+            .map_err(ServerDamageError::Environment)?
+        {
+            return Ok(());
+        }
         ServerPlayerDamage::new(
             self.attributes,
             self.data,
@@ -83,13 +91,14 @@ impl<E: CombatEnvironment> HurtWorld for ServerPlayerCombat<'_, E> {
             self.environment,
         )
         .expect("validated immutable player schema")
-        .apply(damage)
+        .apply_after_immunity_check(damage)
     }
     fn blocking_component(&mut self, item: Self::UseItem) -> Option<Self::Blocking> {
         self.environment.blocking_component(item)
     }
-    fn invulnerable(&mut self, state: &mut HurtState<Self::Source>) -> Result<bool, Self::Error> {
-        HurtWorld::invulnerable(self.environment, state).map_err(ServerDamageError::Environment)
+    fn invulnerable(&mut self, _: &mut HurtState<Self::Source>) -> Result<bool, Self::Error> {
+        damage_immunity::server_player_immunity(self.environment)
+            .map_err(ServerDamageError::Environment)
     }
     fn tag(
         &mut self,

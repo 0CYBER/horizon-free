@@ -1,3 +1,4 @@
+use horizon_world::damage_immunity::{DamageRule, ImmunityTag, ImmunityWorld};
 use horizon_world::living_hurt::{HurtState, HurtTag, HurtWorld};
 use horizon_world::{
     attributes::{
@@ -59,6 +60,11 @@ struct Env<'a> {
     dead: bool,
 }
 impl Env<'_> {
+    fn query(&mut self, event: &str, key: &str) -> io::Result<bool> {
+        self.event(event)?;
+        Ok(self.flag(key))
+    }
+
     fn flag(&self, n: &str) -> bool {
         self.op[n].as_bool().unwrap()
     }
@@ -519,4 +525,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+impl ImmunityWorld for Env<'_> {
+    type Error = io::Error;
+    fn removed(&self) -> bool {
+        self.flag("removed")
+    }
+    fn permanently_invulnerable(&mut self) -> io::Result<bool> {
+        self.query("permanent", "permanent")
+    }
+    fn temporarily_invulnerable(&mut self) -> io::Result<bool> {
+        self.query("temporary", "temporary")
+    }
+    fn tag(&mut self, t: ImmunityTag) -> io::Result<bool> {
+        let n = match t {
+            ImmunityTag::BypassesInvulnerability => "bypasses_invulnerability",
+            ImmunityTag::Fire => "fire",
+            ImmunityTag::Fall => "fall",
+            ImmunityTag::Drowning => "drowning",
+            ImmunityTag::Freezing => "freezing",
+        };
+        self.query(&format!("tag {n}"), n)
+    }
+    fn creative_source(&mut self) -> io::Result<bool> {
+        self.query("creative", "creative")
+    }
+    fn fire_immune(&mut self) -> io::Result<bool> {
+        self.query("fire-immune", "fire_immune")
+    }
+    fn fall_immune(&mut self) -> io::Result<bool> {
+        self.query("fall-immune", "fall_immune")
+    }
+    fn enchantment_immunity(&mut self) -> io::Result<bool> {
+        for s in self.slots {
+            self.event(&format!("slot {}", s.as_u64().unwrap()))?;
+        }
+        Ok(false)
+    }
+    fn damage_rule(&mut self, r: DamageRule) -> io::Result<bool> {
+        let n = match r {
+            DamageRule::Drowning => "drowning",
+            DamageRule::Fall => "fall",
+            DamageRule::Fire => "fire",
+            DamageRule::Freeze => "freeze",
+        };
+        self.event("rules")?;
+        self.query(&format!("rule {n}"), &format!("rule_{n}"))
+    }
+    fn changing_dimension(&mut self) -> io::Result<bool> {
+        self.query("changing", "changing")
+    }
+    fn ender_pearl(&mut self) -> io::Result<bool> {
+        self.query("pearl", "pearl")
+    }
+    fn client_loaded(&mut self) -> io::Result<bool> {
+        self.query("loaded", "loaded")
+    }
 }

@@ -116,6 +116,12 @@ impl<'a, E: ServerDamageEnvironment> ServerPlayerDamage<'a, E> {
     pub fn apply(&mut self, damage: f32) -> Result<(), ServerDamageError<EnvError<E>>> {
         living_damage::actually_hurt(self, damage, true)
     }
+    pub(crate) fn apply_after_immunity_check(
+        &mut self,
+        damage: f32,
+    ) -> Result<(), ServerDamageError<EnvError<E>>> {
+        living_damage::actually_hurt_after_immunity_check(self, damage, true)
+    }
 }
 impl<E: ServerDamageEnvironment> ArmorWorld for ServerPlayerDamage<'_, E> {
     type Error = ServerDamageError<EnvError<E>>;

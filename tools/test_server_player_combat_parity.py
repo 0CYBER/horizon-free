@@ -17,7 +17,7 @@ except ImportError:
     import test_player_hurt_parity as hurt
 
 
-def corpus(catalog):
+def storage_corpus(catalog):
     import copy
     def bits(v):return struct.pack('>f',v).hex()
     def double(v):return struct.pack('>d',v).hex()
@@ -44,6 +44,17 @@ def corpus(catalog):
     for fail in range(-1,66):
         for absorption in [0,4,40]:
             f=copy.deepcopy(template);f.update(absorption=bits(absorption),cooldown=0,last_hurt=bits(0));f['ops']=[dict(clean,fail=fail,pack_callback=True,break_armor=True,resistance=True,amplifier=0),dict(clean,damage=bits(25),pack=True)];yield f
+
+
+def corpus(catalog):
+    rng=random.Random(0x494d4d554e45434f)
+    for i,f in enumerate(storage_corpus(catalog)):
+        for o in f['ops']:
+            o.update(removed=False,permanent=o['invulnerable'],temporary=False,creative=False,fire_immune=False,fall_immune=False,fall=False,drowning=False,rule_drowning=True,rule_fall=True,rule_fire=True,rule_freeze=True,changing=False,pearl=False,loaded=True)
+            if i%3==0:
+                for k in ['removed','temporary','creative','fire_immune','fall_immune','fall','drowning','changing','pearl']:o[k]=rng.randrange(8)==0
+                for k in ['rule_drowning','rule_fall','rule_fire','rule_freeze','loaded']:o[k]=rng.randrange(4)!=0
+        yield f
 
 
 def main():
@@ -75,7 +86,7 @@ def main():
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched})
         print(f'{side}: {matched:,} server player combat output lines match Rust',flush=True)
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixture_paths,tested_fixtures)
-    report={'schema':1,'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'fixtures':len(fixtures),'sources_sha256':tested_sources,'fixtures_sha256':tested_fixtures,'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,'scope':'Actual ServerPlayer outer hurt through Player/LivingEntity gates and actual Player inner damage, native armor/resistance reduction, registered modified attributes, synchronized health/absorption and FoodData exhaustion. Repeated hits, cooldown/state writes, death rejection, callbacks and numeric edges. Invulnerability predicate, blocking amount, durability, effects, PvP permission, attribution, knockback, death services and criterion listeners remain controlled; enchanted items, registered sources and complete entity/game lifecycle remain pending.'}
+    report={'schema':1,'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'fixtures':len(fixtures),'sources_sha256':tested_sources,'fixtures_sha256':tested_fixtures,'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,'scope':'Actual ServerPlayer outer hurt through Player/LivingEntity gates and actual Player inner damage, native armor/resistance reduction, registered modified attributes, synchronized health/absorption and FoodData exhaustion. Repeated hits, cooldown/state writes, death rejection, callbacks and numeric edges. Actual inherited invulnerability predicates include virtual flags, empty-equipment enchantment immunity, damage gamerules and client-loading/dimension guards; blocking amount, durability, effects, PvP permission, attribution, knockback, death services and criterion listeners remain controlled; enchanted items, registered sources and complete entity/game lifecycle remain pending.'}
     lab.write_json(report_path,report);print(f'Scoped server player combat parity passed: {report_path}')
 
 

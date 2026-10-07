@@ -1402,3 +1402,19 @@ Invulnerability answers, blocking amounts, armor-durability callbacks, effects,
 PvP permission, combat/event/knockback/death services and criterion listeners are
 controlled. Enchanted items, registered sources, actual lifecycle services and
 playable integration remain pending.
+
+
+The stored-player combat binding now executes the verified server-player
+invulnerability predicates at every outer and inner query. Its inner damage body
+is shared with standalone living/player damage after the required predicate has
+run. Native integration retains inherited Entity/LivingEntity/Player/ServerPlayer
+immunity methods, including empty-equipment enchantment iteration, gamerule
+precedence, dimension changes and client-loading guards.
+
+The [combat immunity integration report](../benchmarks/rust-server-player-combat-immunity-2026-10-07/scoped-parity.json)
+records **1,176,994 matching lines per JAR**. The standalone inner-damage
+[regression report](../benchmarks/rust-server-player-combat-immunity-2026-10-07/inner-damage-regression.json)
+retains **161,198 matching lines per JAR** after extracting the shared body.
+Targeted Clippy passes. Virtual flags, source tags/rule values and the other
+world services listed above remain controlled; the fixture now executes the
+immunity decisions themselves instead of supplying their final result.
