@@ -66,6 +66,7 @@ pub struct TerrainRegion<'r, B: TerrainBlockStates> {
     game_time: i64,
     next_tick_order: i64,
     block_queries: Option<RegionBlockQueries>,
+    world_seed: Option<i64>,
 }
 impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn new(
@@ -95,6 +96,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
             game_time: 0,
             next_tick_order: 0,
             block_queries: None,
+            world_seed: None,
             min_y,
             height,
             generation: WorldGenerationContext::with_generator(
@@ -123,6 +125,11 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
             tags: bindings.tags.clone(),
         });
         Ok(self)
+    }
+    /// Supply the world seed (WorldGenLevel.getSeed) for seed-derived features.
+    pub fn with_world_seed(mut self, seed: i64) -> Self {
+        self.world_seed = Some(seed);
+        self
     }
     /// Supply the owning world's current time and region-local next tick order.
     pub fn with_tick_clock(mut self, game_time: i64, next_tick_order: i64) -> Self {
@@ -324,6 +331,9 @@ impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
         Ok(self.sea_level)
     }
+    fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
+        self.world_seed.ok_or(PlacementQueryError::Unavailable)
+    }
 
     fn mark_postprocessing(&mut self, [x, y, z]: [i32; 3]) -> Result<(), PlacementQueryError> {
         self.chunk_mut(x >> 4, z >> 4)?.mark_postprocessing(x, y, z);
@@ -429,6 +439,15 @@ where
         state: BlockStateId,
         flags: i32,
     ) -> Result<bool, RegionError> {
+        if !self.can_write(position)? {
+            return Ok(false);
+        }
+        (self.write)(self.region, position, state, flags)
+    }
+}
+impl<'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'_, 'r, B, F> {
+    /// WorldGenRegion.ensureCanWrite without its diagnostic logging.
+    fn can_write(&mut self, position: [i32; 3]) -> Result<bool, RegionError> {
         if self.write_zone.is_some_and(|zone| {
             !zone.contains_block(BlockPos::new(position[0], position[1], position[2]))
         }) {
@@ -445,10 +464,7 @@ where
                 })
             }
         };
-        if height.is_some_and(|height| !height.contains(position[1])) {
-            return Ok(false);
-        }
-        (self.write)(self.region, position, state, flags)
+        Ok(!height.is_some_and(|height| !height.contains(position[1])))
     }
 }
 impl<'r, B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, 'r, B, F>
@@ -480,6 +496,31 @@ where
     ) -> Result<crate::fluid::FluidState, PlacementQueryError> {
         self.region.fluid_state(position)
     }
+    fn ensure_can_write(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
+        self.can_write(position).map_err(Into::into)
+    }
+    fn section_block(
+        &mut self,
+        position: [i32; 3],
+    ) -> Result<Option<BlockStateId>, PlacementQueryError> {
+        if position[1] < self.region.min_y
+            || position[1] >= self.region.min_y.wrapping_add(self.region.height)
+        {
+            return Ok(None);
+        }
+        self.region.block(position).map(Some).map_err(Into::into)
+    }
+    fn set_section_block(
+        &mut self,
+        [x, y, z]: [i32; 3],
+        state: BlockStateId,
+    ) -> Result<(), PlacementQueryError> {
+        self.region
+            .chunk_mut(x >> 4, z >> 4)?
+            .set_block_raw(x, y, z, state)
+            .map_err(RegionError::from)?;
+        Ok(())
+    }
     fn water_at(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
         self.region.water_at(position)
     }
@@ -510,6 +551,9 @@ where
 
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
         self.region.sea_level()
+    }
+    fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
+        self.region.world_seed()
     }
 
     fn mark_postprocessing(&mut self, position: [i32; 3]) -> Result<(), PlacementQueryError> {

@@ -8,8 +8,21 @@ use serde_json::value::RawValue;
 #[derive(Clone, Debug)]
 pub enum FloatProvider {
     Constant(f32),
-    Uniform { min: f32, max: f32 },
-    Trapezoid { min: f32, max: f32, plateau: f32 },
+    Uniform {
+        min: f32,
+        max: f32,
+    },
+    Trapezoid {
+        min: f32,
+        max: f32,
+        plateau: f32,
+    },
+    ClampedNormal {
+        mean: f32,
+        deviation: f32,
+        min: f32,
+        max: f32,
+    },
 }
 impl FloatProvider {
     pub fn from_json(json: &str) -> Result<Self, DecodeError> {
@@ -38,13 +51,27 @@ impl FloatProvider {
                 }
                 Ok(Self::Trapezoid { min, max, plateau })
             }
+            "minecraft:clamped_normal" => {
+                let (min, max) = (field("min")?, field("max")?);
+                if max < min {
+                    return Err(DecodeError::Field("clamped normal float bounds"));
+                }
+                Ok(Self::ClampedNormal {
+                    mean: field("mean")?,
+                    deviation: field("deviation")?,
+                    min,
+                    max,
+                })
+            }
             _ => Err(DecodeError::Field("float provider type")),
         }
     }
     pub fn bounds(&self) -> [f32; 2] {
         match *self {
             Self::Constant(value) => [value; 2],
-            Self::Uniform { min, max } | Self::Trapezoid { min, max, .. } => [min, max],
+            Self::Uniform { min, max }
+            | Self::Trapezoid { min, max, .. }
+            | Self::ClampedNormal { min, max, .. } => [min, max],
         }
     }
     pub fn sample(&self, random: &mut impl RandomSource) -> f32 {
@@ -56,6 +83,15 @@ impl FloatProvider {
                 let slope = (range - plateau) / 2.;
                 let middle = range - slope;
                 (min + random.next_float() * middle) + random.next_float() * slope
+            }
+            Self::ClampedNormal {
+                mean,
+                deviation,
+                min,
+                max,
+            } => {
+                let value = mean + random.next_gaussian() as f32 * deviation;
+                if value < min { min } else { value.min(max) }
             }
         }
     }
@@ -84,6 +120,12 @@ pub enum IntProvider {
     },
     Clamped {
         source: Box<Self>,
+        min: i32,
+        max: i32,
+    },
+    ClampedNormal {
+        mean: f32,
+        deviation: f32,
         min: i32,
         max: i32,
     },
@@ -134,6 +176,12 @@ impl IntProvider {
                 }
                 Ok(Self::Trapezoid { min, max, plateau })
             }
+            "minecraft:clamped_normal" => Ok(Self::ClampedNormal {
+                mean: required(&object, "mean").and_then(float)?,
+                deviation: required(&object, "deviation").and_then(float)?,
+                min,
+                max,
+            }),
             "minecraft:clamped" => Ok(Self::Clamped {
                 source: Box::new(Self::decode(
                     required(&object, "source")?,
@@ -160,7 +208,8 @@ impl IntProvider {
             Self::Uniform { min, max }
             | Self::BiasedToBottom { min, max }
             | Self::VeryBiasedToBottom { min, max }
-            | Self::Trapezoid { min, max, .. } => [*min, *max],
+            | Self::Trapezoid { min, max, .. }
+            | Self::ClampedNormal { min, max, .. } => [*min, *max],
             Self::Clamped { source, min, max } => {
                 let bounds = source.bounds();
                 [(*min).max(bounds[0]), (*max).min(bounds[1])]
@@ -199,6 +248,17 @@ impl IntProvider {
             Self::Clamped { source, min, max } => {
                 let value = source.sample(random)?;
                 Ok(if value < *min { *min } else { value.min(*max) })
+            }
+            // Mth.normal, then float Mth.clamp and a saturating int cast.
+            Self::ClampedNormal {
+                mean,
+                deviation,
+                min,
+                max,
+            } => {
+                let value = mean + random.next_gaussian() as f32 * deviation;
+                let (min, max) = (*min as f32, *max as f32);
+                Ok((if value < min { min } else { value.min(max) }) as i32)
             }
         }
     }

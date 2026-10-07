@@ -21,7 +21,7 @@ struct Block {
     properties: Vec<Property>,
 }
 #[derive(Debug)]
-pub(super) struct StateProperties {
+pub(crate) struct StateProperties {
     blocks: Vec<Block>,
     addresses: Vec<Address>,
 }
@@ -171,6 +171,34 @@ impl StateProperties {
         let index = property.numeric.as_ref()?.get(&value)?;
         let previous = (address.local / property.stride) % property.values.len();
         block
+            .states
+            .get(address.local - previous * property.stride + index * property.stride)
+            .copied()
+    }
+
+    fn property(&self, state: BlockStateId, name: &str) -> Option<(Address, &Property)> {
+        let address = *self.addresses.get(state.0 as usize)?;
+        let property = self.blocks[address.block]
+            .properties
+            .iter()
+            .find(|p| p.name == name)?;
+        Some((address, property))
+    }
+    /// The state's value for a named property, or None when it has no such property.
+    pub fn value(&self, state: BlockStateId, name: &str) -> Option<&str> {
+        let (address, property) = self.property(state, name)?;
+        Some(&property.values[(address.local / property.stride) % property.values.len()])
+    }
+    /// All values of the state's named property in registry encounter order.
+    pub fn values(&self, state: BlockStateId, name: &str) -> Option<&[String]> {
+        self.property(state, name).map(|(_, p)| p.values.as_slice())
+    }
+    /// Replace one property value, or None for a missing property or value.
+    pub fn with_value(&self, state: BlockStateId, name: &str, value: &str) -> Option<BlockStateId> {
+        let (address, property) = self.property(state, name)?;
+        let index = *property.lookup.get(value)?;
+        let previous = (address.local / property.stride) % property.values.len();
+        self.blocks[address.block]
             .states
             .get(address.local - previous * property.stride + index * property.stride)
             .copied()
