@@ -100,3 +100,5 @@ pub mod simple_container;
 pub mod player_inventory;
 
 pub mod inventory_pickup;
+
+pub mod inventory_tick;

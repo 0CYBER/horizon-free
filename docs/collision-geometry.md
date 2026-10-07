@@ -1700,3 +1700,20 @@ copy-and-clear that happens before slot validation. Targeted Clippy passes.
 Native crash-report wrapping is represented as an error; diagnostic text is not
 compared. Item-entity pickup events, networking, inventory ticks, menus, full
 components and complete gameplay integration remain pending.
+
+
+`inventory_tick` composes inventory/equipment iteration with ItemStack's pop-time
+update and ServerLevel-only item dispatch. It retains stack arguments across
+level callbacks, reads hotbar selection at the native point and observes changes
+to later equipment entries during the same tick. Aliased stacks can be visited
+more than once, with each visit updating their shared pop-time counter.
+
+`python3 tools/test_inventory_tick_parity.py` compares actual Inventory.tick,
+EntityEquipment.tick and ItemStack.inventoryTick with custom item handlers. The
+[tick report](../benchmarks/rust-inventory-tick-2026-10-07/scoped-parity.json)
+records **195,957 matching lines per JAR**, including empty stacks, callbacks
+that mutate later slots, weakly consistent equipment iteration and failure
+prefixes. The client comparison uses an actual allocated ClientLevel for the
+non-server branch; the dedicated JAR uses null because ClientLevel is absent.
+Targeted Clippy passes. Registered items' individual tick effects, full entity
+and world ticking and complete gameplay integration remain pending.
