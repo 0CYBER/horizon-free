@@ -72,6 +72,7 @@ impl HudAtlas {
         walk(&textures.join("misc"), &mut files);
         walk(&textures.join("entity"), &mut files);
         walk(&textures.join("particle"), &mut files);
+        walk(&textures.join("mob_effect"), &mut files);
         files.retain(|p| {
             let s = p.to_string_lossy();
             (!s.contains("title/background") || s.contains("panorama_")) && !s.contains("realms") && !s.contains("presets")

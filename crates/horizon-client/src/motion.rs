@@ -152,6 +152,8 @@ pub struct PlayerMotion {
     pub attributes: LiveAttributes<Box<dyn FnMut() -> i32>>,
     pub impulse: ImpulseContext,
     pub health: crate::health::PlayerHealth,
+    /// Status effects and armor protection seen by movement and damage.
+    pub status: crate::effects::StatusFlags,
 }
 fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
@@ -189,6 +191,7 @@ impl PlayerMotion {
         .map_err(attribute_error)?;
         Ok(Self {
             health: crate::health::PlayerHealth::new(&resources.health, &mut attributes)?,
+            status: crate::effects::StatusFlags::default(),
             impulse: ImpulseContext::default(),
             position,
             velocity: Vec3::ZERO,
@@ -920,7 +923,7 @@ impl LivingAirWorld for MotionWorld<'_, '_, '_> {
         Ok(false)
     }
     fn levitation_amplifier(&mut self) -> Result<Option<i32>> {
-        Ok(None)
+        Ok(self.player.status.levitation)
     }
     fn is_client_side(&mut self) -> Result<bool> {
         Ok(false)
@@ -970,10 +973,10 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
         )?)
     }
     fn has_jump_boost(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.status.jump_boost.is_some())
     }
     fn jump_boost_amplifier(&mut self) -> Result<i32> {
-        Err("absent jump boost".into())
+        self.player.status.jump_boost.ok_or_else(|| "absent jump boost".into())
     }
     fn sprinting(&mut self) -> Result<bool> {
         Ok(self.player.sprinting)
@@ -991,7 +994,7 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
         self.player.attribute("minecraft:gravity")
     }
     fn has_slow_falling(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.status.slow_falling)
     }
     fn controlling_passenger_is_player(&mut self) -> Result<bool> {
         Ok(false)

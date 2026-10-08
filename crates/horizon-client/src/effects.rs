@@ -1,0 +1,303 @@
+//! Player status effects (`MobEffectInstance` / `LivingEntity.activeEffects`):
+//! add/update with hidden effects, per-tick application of the periodic
+//! effects (regeneration, poison, wither, hunger, saturation, instant
+//! effects), and the derived flags the movement and damage code read.
+use crate::brewing;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectInstance {
+    /// Effect id without namespace (`speed`, `poison`, ...).
+    pub id: &'static str,
+    /// Remaining ticks; -1 is infinite.
+    pub duration: i32,
+    pub amplifier: i32,
+    pub ambient: bool,
+    pub visible: bool,
+    pub hidden: Option<Box<EffectInstance>>,
+}
+impl EffectInstance {
+    pub fn new(id: &'static str, duration: i32, amplifier: i32) -> Self {
+        Self { id, duration, amplifier: amplifier.clamp(0, 255), ambient: false, visible: true, hidden: None }
+    }
+    fn infinite(&self) -> bool {
+        self.duration == -1
+    }
+    fn shorter_than(&self, other: &Self) -> bool {
+        !self.infinite() && (self.duration < other.duration || other.infinite())
+    }
+    /// `MobEffectInstance.update`.
+    pub fn update(&mut self, take: &Self) -> bool {
+        let mut changed = false;
+        if take.amplifier > self.amplifier {
+            if take.shorter_than(self) {
+                let previous = self.hidden.take();
+                let mut copy = self.clone();
+                copy.hidden = previous;
+                self.hidden = Some(Box::new(copy));
+            }
+            self.amplifier = take.amplifier;
+            self.duration = take.duration;
+            changed = true;
+        } else if self.shorter_than(take) {
+            if take.amplifier == self.amplifier {
+                self.duration = take.duration;
+                changed = true;
+            } else if let Some(h) = self.hidden.as_mut() {
+                h.update(take);
+            } else {
+                self.hidden = Some(Box::new(EffectInstance { hidden: None, ..take.clone() }));
+            }
+        }
+        if !take.ambient && self.ambient || changed {
+            self.ambient = take.ambient;
+            changed = true;
+        }
+        if take.visible != self.visible {
+            self.visible = take.visible;
+            changed = true;
+        }
+        changed
+    }
+    fn tick_down(&mut self) {
+        if let Some(h) = self.hidden.as_mut() {
+            h.tick_down();
+        }
+        if !self.infinite() {
+            self.duration -= 1;
+        }
+    }
+    fn downgrade(&mut self) {
+        if self.duration == 0
+            && let Some(h) = self.hidden.take()
+        {
+            let h = *h;
+            self.duration = h.duration;
+            self.amplifier = h.amplifier;
+            self.ambient = h.ambient;
+            self.visible = h.visible;
+            self.hidden = h.hidden;
+        }
+    }
+}
+/// What an effect tick asks the game to do to the player.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EffectAction {
+    Heal(f32),
+    /// Damage with a damage type id (`minecraft:magic`, `minecraft:wither`).
+    Hurt(&'static str, f32),
+    Exhaust(f32),
+    /// FoodData.eat(nutrition, saturation modifier).
+    Eat(i32, f32),
+}
+/// `shouldApplyEffectTickThisTick` + `applyEffectTick` for the periodic effects.
+fn periodic(id: &str, tick: i32, amp: i32) -> Option<EffectAction> {
+    let every = |base: i32| {
+        let interval = base >> amp;
+        interval <= 0 || tick % interval == 0
+    };
+    match id {
+        "regeneration" if every(50) => Some(EffectAction::Heal(1.0)),
+        "poison" if every(25) => Some(EffectAction::Hurt("minecraft:magic", 1.0)),
+        "wither" if every(40) => Some(EffectAction::Hurt("minecraft:wither", 1.0)),
+        "hunger" => Some(EffectAction::Exhaust(0.005 * (amp + 1) as f32)),
+        "saturation" if tick >= 1 => Some(EffectAction::Eat(amp + 1, 1.0)),
+        "instant_health" if tick >= 1 => Some(EffectAction::Heal((4 << amp.min(30)) as f32)),
+        "instant_damage" if tick >= 1 => Some(EffectAction::Hurt("minecraft:magic", (6 << amp.min(30)) as f32)),
+        _ => None,
+    }
+}
+/// `InstantenousMobEffect.applyInstantenousEffect` (potions apply these directly).
+pub fn instant(id: &str, amp: i32, scale: f64) -> Option<EffectAction> {
+    match id {
+        "instant_health" => Some(EffectAction::Heal((scale * f64::from(4 << amp.min(30))) as i32 as f32)),
+        "instant_damage" => Some(EffectAction::Hurt("minecraft:magic", (scale * f64::from(6 << amp.min(30))) as i32 as f32)),
+        "saturation" => Some(EffectAction::Eat(amp + 1, 1.0)),
+        _ => None,
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct PlayerEffects {
+    pub list: Vec<EffectInstance>,
+    pub tick_count: i32,
+}
+impl PlayerEffects {
+    pub fn get(&self, id: &str) -> Option<&EffectInstance> {
+        self.list.iter().find(|e| e.id == id)
+    }
+    pub fn amplifier(&self, id: &str) -> Option<i32> {
+        self.get(id).map(|e| e.amplifier)
+    }
+    /// `LivingEntity.addEffect`; returns whether anything changed.
+    pub fn add(&mut self, effect: EffectInstance) -> bool {
+        match self.list.iter_mut().find(|e| e.id == effect.id) {
+            Some(existing) => existing.update(&effect),
+            None => {
+                self.list.push(effect);
+                true
+            }
+        }
+    }
+    pub fn clear(&mut self) {
+        self.list.clear();
+    }
+    /// `LivingEntity.tickEffects` (server part): actions to apply, in order.
+    pub fn tick(&mut self) -> Vec<EffectAction> {
+        self.tick_count = self.tick_count.wrapping_add(1);
+        let mut actions = Vec::new();
+        let tick_count = self.tick_count;
+        self.list.retain_mut(|e| {
+            if !(e.infinite() || e.duration > 0) {
+                return false;
+            }
+            let t = if e.infinite() { tick_count } else { e.duration };
+            if let Some(a) = periodic(e.id, t, e.amplifier) {
+                actions.push(a);
+            }
+            e.tick_down();
+            e.downgrade();
+            e.infinite() || e.duration > 0
+        });
+        actions
+    }
+    /// Effects applied by drinking a potion (`PotionContents.applyToLivingEntity`).
+    pub fn potion_effects(potion: Option<&str>, scale: f32) -> (Vec<EffectInstance>, Vec<EffectAction>) {
+        let mut lasting = Vec::new();
+        let mut now = Vec::new();
+        if let Some(def) = potion.and_then(brewing::potion) {
+            for (id, duration, amp) in def.effects {
+                let id = brewing::effect(id).map_or("speed", |e| e.id);
+                if brewing::effect(id).is_some_and(|e| e.instant) {
+                    now.extend(instant(id, *amp, 1.0));
+                } else {
+                    // withScaledDuration: max(floor(d * scale), 1).
+                    let d = ((*duration as f32) * scale).floor() as i32;
+                    lasting.push(EffectInstance::new(id, d.max(1), *amp));
+                }
+            }
+        }
+        (lasting, now)
+    }
+    /// Flags for movement and damage code.
+    pub fn status(&self) -> StatusFlags {
+        StatusFlags {
+            jump_boost: self.amplifier("jump_boost"),
+            slow_falling: self.get("slow_falling").is_some(),
+            levitation: self.amplifier("levitation"),
+            resistance: self.amplifier("resistance"),
+            fire_resistance: self.get("fire_resistance").is_some(),
+            water_breathing: self.get("water_breathing").is_some() || self.get("conduit_power").is_some(),
+            protection: Vec::new(),
+        }
+    }
+    /// Attribute modifiers of active effects: (attribute, id, amount, operation).
+    pub fn modifiers(&self) -> Vec<(&'static str, &'static str, f64, &'static str)> {
+        let mut out = Vec::new();
+        for e in &self.list {
+            let level = f64::from(e.amplifier + 1);
+            let m = match e.id {
+                "speed" => Some(("minecraft:movement_speed", "minecraft:effect.speed", 0.2, "add_multiplied_total")),
+                "slowness" => Some(("minecraft:movement_speed", "minecraft:effect.slowness", -0.15, "add_multiplied_total")),
+                "haste" => Some(("minecraft:attack_speed", "minecraft:effect.haste", 0.1, "add_multiplied_total")),
+                "mining_fatigue" => Some(("minecraft:attack_speed", "minecraft:effect.mining_fatigue", -0.1, "add_multiplied_total")),
+                "strength" => Some(("minecraft:attack_damage", "minecraft:effect.strength", 3.0, "add_value")),
+                "weakness" => Some(("minecraft:attack_damage", "minecraft:effect.weakness", -4.0, "add_value")),
+                "jump_boost" => Some(("minecraft:safe_fall_distance", "minecraft:effect.jump_boost", 1.0, "add_value")),
+                "health_boost" => Some(("minecraft:max_health", "minecraft:effect.health_boost", 4.0, "add_value")),
+                "luck" => Some(("minecraft:luck", "minecraft:effect.luck", 1.0, "add_value")),
+                "unluck" => Some(("minecraft:luck", "minecraft:effect.unluck", -1.0, "add_value")),
+                _ => None,
+            };
+            if let Some((a, id, amount, op)) = m {
+                out.push((a, id, amount * level, op));
+            }
+        }
+        out
+    }
+    /// `Player.getDestroySpeed` effect factors (haste/conduit, mining fatigue).
+    pub fn mining_speed_factor(&self) -> f32 {
+        let mut f = 1.0;
+        let haste = self.amplifier("haste").max(self.amplifier("conduit_power"));
+        if let Some(a) = haste {
+            f *= 1.0 + (a + 1) as f32 * 0.2;
+        }
+        if let Some(a) = self.amplifier("mining_fatigue") {
+            f *= match a {
+                0 => 0.3,
+                1 => 0.09,
+                2 => 0.0027,
+                _ => 8.1e-4,
+            };
+        }
+        f
+    }
+}
+/// Effect and equipment facts the movement and damage kernels query.
+#[derive(Clone, Debug, Default)]
+pub struct StatusFlags {
+    pub jump_boost: Option<i32>,
+    pub slow_falling: bool,
+    pub levitation: Option<i32>,
+    pub resistance: Option<i32>,
+    pub fire_resistance: bool,
+    pub water_breathing: bool,
+    /// Armor enchantment protection per damage type id (`EnchantmentHelper.getDamageProtection`).
+    pub protection: Vec<(String, f32)>,
+}
+impl StatusFlags {
+    pub fn protection(&self, damage_type: &str) -> f32 {
+        self.protection.iter().find(|(t, _)| *t == damage_type).map_or(0.0, |(_, p)| *p)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_keeps_stronger_and_hides_longer() {
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("speed", 9600, 0));
+        // A stronger but shorter effect takes over and hides the long one.
+        fx.add(EffectInstance::new("speed", 1800, 1));
+        let e = fx.get("speed").unwrap();
+        assert_eq!((e.amplifier, e.duration), (1, 1800));
+        assert_eq!(e.hidden.as_ref().map(|h| (h.amplifier, h.duration)), Some((0, 9600)));
+        for _ in 0..1800 {
+            fx.tick();
+        }
+        let e = fx.get("speed").unwrap();
+        assert_eq!((e.amplifier, e.duration), (0, 7800));
+        // Weaker and shorter: ignored.
+        assert!(!fx.add(EffectInstance::new("speed", 100, 0)));
+    }
+
+    #[test]
+    fn regeneration_and_poison_intervals() {
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("regeneration", 900, 0));
+        let heals = (0..900).flat_map(|_| fx.tick()).filter(|a| *a == EffectAction::Heal(1.0)).count();
+        // Duration 900..1 divisible by 50: 18 heals.
+        assert_eq!(heals, 18);
+        assert!(fx.get("regeneration").is_none());
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("poison", 432, 1));
+        let hurts = (0..432).flat_map(|_| fx.tick()).filter(|a| matches!(a, EffectAction::Hurt(..))).count();
+        // Interval 25 >> 1 = 12: 432/12 = 36 hits.
+        assert_eq!(hurts, 36);
+    }
+
+    #[test]
+    fn potions_split_instant_and_lasting() {
+        let (lasting, now) = PlayerEffects::potion_effects(Some("minecraft:strong_healing"), 1.0);
+        assert!(lasting.is_empty());
+        assert_eq!(now, vec![EffectAction::Heal(8.0)]);
+        let (lasting, _) = PlayerEffects::potion_effects(Some("minecraft:long_swiftness"), 0.25);
+        assert_eq!((lasting[0].id, lasting[0].duration), ("speed", 2400));
+        let (lasting, _) = PlayerEffects::potion_effects(Some("minecraft:turtle_master"), 1.0);
+        assert_eq!(lasting.len(), 2);
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("haste", 100, 1));
+        assert!((fx.mining_speed_factor() - 1.4).abs() < 1e-6);
+        assert_eq!(fx.modifiers().len(), 1);
+    }
+}

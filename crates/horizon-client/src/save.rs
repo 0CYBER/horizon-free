@@ -277,6 +277,15 @@ pub fn encode_items(slots: &[Option<crate::items::ItemStack>]) -> Tag {
             .filter_map(|(i, s)| {
                 let mut entries = vec![("Slot", Tag::Byte(i as i8))];
                 entries.extend(encode_item(s.as_ref()?));
+                let s = s.as_ref()?;
+                let mut entries = vec![
+                    ("Slot", Tag::Byte(i as i8)),
+                    ("id", string(&s.item)),
+                    ("count", Tag::Int(s.count as i32)),
+                ];
+                if let Some(components) = crate::item_data::encode_components(s) {
+                    entries.push(("components", components));
+                }
                 Some(Tag::compound(entries))
             })
             .collect(),
@@ -289,6 +298,16 @@ pub fn decode_items(tag: Option<&Tag>, size: usize) -> Vec<Option<crate::items::
             let slot = number(it.get("Slot")).unwrap_or(0) as u8 as usize;
             if let Some(cell) = slots.get_mut(slot) {
                 *cell = item_from_nbt(it);
+            let Some(Tag::Byte(slot)) = it.get("Slot") else { continue };
+            let Some(Tag::String(id)) = it.get("id") else { continue };
+            let count = match it.get("count") {
+                Some(Tag::Int(c)) => *c as u32,
+                Some(Tag::Byte(c)) => *c as u32,
+                _ => 1,
+            };
+            let (damage, extra) = crate::item_data::decode_components(it.get("components"));
+            if let Some(cell) = slots.get_mut(*slot as u8 as usize) {
+                *cell = Some(crate::items::ItemStack { item: Arc::from(id.to_string_lossy().as_str()), count, damage, extra });
             }
         }
     }
@@ -323,6 +342,14 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
             entries.push(("speed_multiplier", Tag::Float(f.speed.to_bits())));
             entries.push(("RecipesUsed", Tag::Compound(Compound::new())));
         }
+        BlockEntity::Brewing(b) => {
+            entries.push(("Items", encode_items(&b.items)));
+            entries.push(("BrewTime", Tag::Int(b.brew_time)));
+            entries.push(("total_brew_time", Tag::Int(b.total_brew_time)));
+            entries.push(("Fuel", Tag::Int(b.fuel)));
+            entries.push(("total_fuel", Tag::Int(b.total_fuel)));
+            entries.push(("speed_multiplier", Tag::Float(b.speed.to_bits())));
+        }
     }
     Tag::compound(entries)
 }
@@ -344,6 +371,21 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             if let Some(speed) = float(tag.get("speed_multiplier")) {
                 f.speed = speed as f32;
             }
+        }
+        BlockEntity::Brewing(b) => {
+            let items = decode_items(tag.get("Items"), 5);
+            b.items = [items[0].clone(), items[1].clone(), items[2].clone(), items[3].clone(), items[4].clone()];
+            b.brew_time = int("BrewTime").unwrap_or(0);
+            b.total_brew_time = int("total_brew_time").unwrap_or(400);
+            if b.brew_time > 0 {
+                b.ingredient = b.items[3].as_ref().map(|s| s.item.clone());
+            }
+            b.fuel = int("Fuel").unwrap_or(0);
+            b.total_fuel = int("total_fuel").unwrap_or(20);
+            b.speed = match tag.get("speed_multiplier") {
+                Some(Tag::Float(f)) => f32::from_bits(*f),
+                _ => 1.0,
+            };
         }
     }
     Some((pos, entity))
@@ -921,6 +963,12 @@ pub struct Level {
     pub saturation: f32,
     /// (slot, item, count, damage): 0..36 inventory, 100..103 armor (feet..head), 150 offhand.
     pub inventory: Vec<(u8, String, u32, u32)>,
+    /// Extra item components of `inventory` entries, by slot.
+    pub inventory_components: HashMap<u8, Box<crate::item_data::StackData>>,
+    /// Player.XpSeed: the enchanting table seed.
+    pub xp_seed: i32,
+    /// Player.active_effects: (id, duration, amplifier, ambient, show_icon).
+    pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
@@ -1088,6 +1136,71 @@ impl Level {
             }
         }
         self.inventory = inventory;
+        let mut inventory_components = HashMap::new();
+        if let Some(Tag::List(items)) = player.and_then(|p| p.get("Inventory")) {
+            for it in items {
+                let slot = if let Some(Tag::Byte(s)) = it.get("Slot") { *s as u8 } else { continue };
+                let id = if let Some(Tag::String(s)) = it.get("id") { s.to_string_lossy() } else { continue };
+                let count = long(it.get("count")).max(1) as u32;
+                let damage = it
+                    .get("components")
+                    .and_then(|c| c.get("minecraft:damage"))
+                    .map_or(0, |d| long(Some(d)) as u32);
+                if let (_, Some(extra)) = crate::item_data::decode_components(it.get("components")) {
+                    inventory_components.insert(slot, extra);
+                }
+                inventory.push((slot, id, count, damage));
+            }
+        }
+        let rotation = match player.and_then(|p| p.get("Rotation")) {
+            Some(Tag::List(r)) if r.len() == 2 => [float(r.first()), float(r.get(1))],
+            _ => [0.0; 2],
+        };
+        Some(Self {
+            name: match data.get("LevelName") {
+                Some(Tag::String(s)) => s.to_string_lossy(),
+                _ => "World".into(),
+            },
+            seed: long(data.get("WorldGenSettings").and_then(|w| w.get("seed"))),
+            creative: long(data.get("GameType")) == 1,
+            time: long(data.get("Time")),
+            day_time: long(data.get("DayTime")),
+            spawn: Some([long(data.get("SpawnX")) as f64, long(data.get("SpawnY")) as f64, long(data.get("SpawnZ")) as f64]),
+            position: doubles(player.and_then(|p| p.get("Pos"))),
+            rotation,
+            health: player.map_or(20.0, |p| float(p.get("Health"))),
+            food: player.map_or(20, |p| long(p.get("foodLevel")) as i32),
+            saturation: player.map_or(5.0, |p| float(p.get("foodSaturationLevel"))),
+            dimension: match player.and_then(|p| p.get("Dimension")) {
+                Some(Tag::String(s)) => s.to_string_lossy(),
+                _ => "minecraft:overworld".into(),
+            },
+            weather: crate::world::Weather {
+                clear_time: long(data.get("clearWeatherTime")) as i32,
+                rain_time: long(data.get("rainTime")) as i32,
+                thunder_time: long(data.get("thunderTime")) as i32,
+                raining: long(data.get("raining")) != 0,
+                thundering: long(data.get("thundering")) != 0,
+                rain_level: if long(data.get("raining")) != 0 { (1.0, 1.0) } else { (0.0, 0.0) },
+                thunder_level: if long(data.get("thundering")) != 0 { (1.0, 1.0) } else { (0.0, 0.0) },
+            },
+            xp_level: player.map_or(0, |p| long(p.get("XpLevel")) as i32),
+            xp_progress: player.map_or(0.0, |p| float(p.get("XpP"))),
+            xp_total: player.map_or(0, |p| long(p.get("XpTotal")) as i32),
+            xp_seed: player.map_or(0, |p| long(p.get("XpSeed")) as i32),
+            active_effects: match player.and_then(|p| p.get("active_effects")) {
+                Some(Tag::List(list)) => list
+                    .iter()
+                    .filter_map(|e| {
+                        let Some(Tag::String(id)) = e.get("id") else { return None };
+                        Some((id.to_string_lossy(), long(e.get("duration")) as i32, long(e.get("amplifier")) as i32, long(e.get("ambient")) != 0, e.get("show_icon").is_none_or(|v| long(Some(v)) != 0)))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
+            inventory,
+            inventory_components,
+        })
     }
     /// The player compound: the loaded one with Horizon's state written over it.
     fn player_tag(&self) -> Tag {
@@ -1147,6 +1260,25 @@ impl Level {
             ("XpP", Tag::Float(self.xp_progress.to_bits())),
             ("XpTotal", Tag::Int(self.xp_total)),
             ("SelectedItemSlot", Tag::Int(self.selected_slot)),
+            ("XpSeed", Tag::Int(self.xp_seed)),
+            (
+                "active_effects",
+                Tag::List(
+                    self.active_effects
+                        .iter()
+                        .map(|(id, duration, amplifier, ambient, icon)| {
+                            Tag::compound([
+                                ("id", string(id)),
+                                ("duration", Tag::Int(*duration)),
+                                ("amplifier", Tag::Byte(*amplifier as i8)),
+                                ("ambient", Tag::Byte(i8::from(*ambient))),
+                                ("show_particles", Tag::Byte(1)),
+                                ("show_icon", Tag::Byte(i8::from(*icon))),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
             ("playerGameType", Tag::Int(i32::from(self.creative))),
             ("Inventory", Tag::List(inventory)),
             ("abilities", abilities),
@@ -1253,6 +1385,23 @@ impl Level {
                     ("yaw", Tag::Float(0f32.to_bits())),
                     ("pitch", Tag::Float(0f32.to_bits())),
                 ]),
+                "Inventory",
+                Tag::List(
+                    self.inventory
+                        .iter()
+                        .map(|(slot, id, count, damage)| {
+                            let mut entries = vec![
+                                ("Slot", Tag::Byte(*slot as i8)),
+                                ("id", string(id)),
+                                ("count", Tag::Int(*count as i32)),
+                            ];
+                            if let Some(components) = crate::item_data::components_tag(*damage, self.inventory_components.get(slot).map(|d| &**d)) {
+                                entries.push(("components", components));
+                            }
+                            Tag::compound(entries)
+                        })
+                        .collect(),
+                ),
             ),
             ("difficulty_settings", difficulty),
             ("initialized", Tag::Byte(1)),

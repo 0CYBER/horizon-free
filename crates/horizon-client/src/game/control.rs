@@ -65,7 +65,7 @@ impl Game<'_> {
         };
         let ok = || Ok(Some(json!({ "ok": true })));
         match words[0] {
-            "help" => Ok(Some(json!({ "commands": HELP }))),
+            "help" => Ok(Some(json!({ "commands": HELP.iter().chain(super::station_control::HELP).collect::<Vec<_>>() }))),
             "status" => Ok(Some(self.control_status())),
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
@@ -174,6 +174,7 @@ impl Game<'_> {
                             item: item.as_str().into(),
                             count: n,
                             damage: 0,
+                            extra: None,
                         })
                         .map_or(0, |r| r.count);
                     given += n - rest;
@@ -252,7 +253,10 @@ impl Game<'_> {
                 event_loop.exit();
                 ok()
             }
-            other => Err(format!("unknown command {other}; try help").into()),
+            other => match self.station_command(&words)? {
+                Some(value) => Ok(Some(value)),
+                None => Err(format!("unknown command {other}; try help").into()),
+            },
         }
     }
 
