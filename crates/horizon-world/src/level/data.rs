@@ -825,7 +825,11 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             "baseBlock",
         ]
         .into_iter()
-        .find_map(block_field);
+        .find_map(block_field)
+        .or_else(|| {
+            let state = field("blockToGrowOn")?.get("state")?.as_u64()?;
+            (state < table.state_count() as u64).then(|| table.block(BlockStateId(state as u32)))
+        });
         let link2 = ["attachedStem", "stem"].into_iter().find_map(block_field);
         let support_tag = ["stemSupportBlocks", "supportBlocks"]
             .into_iter()

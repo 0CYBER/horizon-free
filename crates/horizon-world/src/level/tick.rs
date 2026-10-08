@@ -51,6 +51,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::BigDripleaf => self.big_dripleaf_tick(pos, state),
+                Class::AbstractCauldron => self.cauldron_tick(state, pos),
                 Class::BubbleColumn => {
                     let below_state = self.below_state(pos);
                     self.bubble_column_update(pos, state, below_state);
@@ -266,6 +267,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.pitcher_grow(state, pos, 1);
                     }
                 }
+                Class::Speleothem => self.speleothem_random_tick(state, pos),
                 Class::RedStoneOre => {
                     if b.table.bool(state, p.lit) {
                         self.set_block_and_update(pos, b.table.set_bool(state, p.lit, false));

@@ -617,3 +617,23 @@ fn pistons_pop_fragile_blocks_and_refuse_obsidian() {
     assert_eq!(w.prop(BlockPos::new(0, 1, 0), "extended"), "false");
     assert_eq!(w.get(BlockPos::new(1, 1, 0)), obsidian);
 }
+
+#[test]
+fn dripstone_fills_cauldrons() {
+    let mut w = world!();
+    let block = w.id("dripstone_block", &[]);
+    let water = w.id("water", &[]);
+    let tip = w.id("pointed_dripstone", &[("vertical_direction", "down"), ("thickness", "tip")]);
+    let cauldron = w.id("cauldron", &[]);
+    w.put(BlockPos::new(0, 11, 0), water);
+    w.put(BlockPos::new(0, 10, 0), block);
+    w.put(BlockPos::new(0, 9, 0), tip);
+    w.put(BlockPos::new(0, 5, 0), cauldron);
+    for _ in 0..100 {
+        w.b().random_tick(&mut w.level, &mut w.ticks, BlockPos::new(0, 9, 0));
+    }
+    for _ in 0..80 {
+        w.tick();
+    }
+    assert_eq!(w.name(BlockPos::new(0, 5, 0)), "water_cauldron[level=1]");
+}
