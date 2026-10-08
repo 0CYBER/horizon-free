@@ -33,9 +33,15 @@ impl VanillaTerrain {
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             eprintln!(
-                "Horizon: {} placed features are not implemented yet and will be skipped",
+                "Horizon: {} placed features cannot run and will be skipped",
                 unsupported.len()
             );
+            if !dir.join("blocks/block-properties.nbt").exists() {
+                eprintln!(
+                    "Horizon: the worldgen bundle lacks the block behavior exports (worldgen/blocks/*.nbt); \
+                     run python3 tools/prepare_native_client.py to add them"
+                );
+            }
         }
         Ok(Self { generator, biome_map })
     }
