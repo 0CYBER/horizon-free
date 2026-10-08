@@ -61,7 +61,17 @@ fn main() -> Result<(), Error> {
             }
         }
         let mut region: [ProtoChunk; 9] = region.try_into().map_err(|_| "region size")?;
-        worker.decorate(&mut region)?;
+        let stats = if std::env::var_os("HORIZON_TERRAIN_ONLY").is_some() {
+            Default::default()
+        } else {
+            worker.decorate(&mut region)?
+        };
+        if stats.failed > 0 {
+            eprintln!(
+                "chunk {cx} {cz}: {} structure placements failed",
+                stats.failed
+            );
+        }
         let chunk = &region[4];
         println!("chunk {cx} {cz}");
         let (min, height) = (chunk.terrain.min_y(), chunk.terrain.height());

@@ -52,7 +52,9 @@ def parse(lines):
         elif t[0] == 'y' and current:
             chunks[current]['rows'][int(t[1])] = t[2:]
         elif t[0] == 'be' and current:
-            chunks[current]['be'].append(' '.join(t[1:]))
+            # Position, loot table and seed; the block entity type follows
+            # from the (separately compared) block state.
+            chunks[current]['be'].append(' '.join(t[1:4] + t[5:]))
     return chunks
 
 
@@ -77,6 +79,7 @@ def main():
                    check=True, cwd=lab.ROOT)
     rust_out = subprocess.run([str(lab.ROOT/'target/fast/examples/structure_blocks'), resources, seed, dimension, *targets],
                               check=True, capture_output=True, text=True).stdout
+    (build_dir()/'rust.txt').write_text(rust_out)
     rust = parse(rust_out.splitlines())
     names = state_names(resources)
     failed = 0

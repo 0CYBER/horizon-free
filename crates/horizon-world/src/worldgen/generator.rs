@@ -180,6 +180,9 @@ pub struct GeneratorData {
     /// Templates, processor lists and per-state template transforms.
     pub(super) structures: Option<Arc<super::structure::StructureResources>>,
     pub(super) structure_resources: Option<StructureBundles>,
+    /// Block shape-update behaviour (`block-behaviours.json` next to the
+    /// worldgen directory) for template placement's neighbor updates.
+    pub(super) behaviours: Option<Arc<crate::level::Behaviours>>,
 }
 type Bundle = BTreeMap<String, String>;
 fn read_bundle(dir: &Path, name: &str) -> Result<Bundle, GeneratorError> {
@@ -425,7 +428,13 @@ impl GeneratorData {
             }),
             _ => None,
         };
+        let behaviours = dir
+            .parent()
+            .filter(|root| root.join("block-behaviours.json").exists())
+            .and_then(|root| crate::level::Behaviours::load(registry, root).ok())
+            .map(Arc::new);
         Ok(Arc::new(Self {
+            behaviours,
             structure_resources,
             structures,
             registry,

@@ -45,6 +45,26 @@ import net.minecraft.world.level.storage.LevelStorageSource;
 public final class VanillaStructurePlacementOracle {
     private static final class Ignored extends RuntimeException {}
 
+    /**
+     * Allocated without a constructor: no feature flags are enabled, so
+     * EntityType.create returns null and structure entities are skipped as
+     * Horizon skips them, while block placement continues.
+     */
+    private static final class NoEntityLevel extends net.minecraft.server.level.ServerLevel {
+        private NoEntityLevel() {
+            super(null, null, null, null, null, null, false, 0L, null, false);
+        }
+        static long seed;
+        @Override
+        public net.minecraft.world.flag.FeatureFlagSet enabledFeatures() {
+            return net.minecraft.world.flag.FeatureFlagSet.of();
+        }
+        @Override
+        public long getSeed() {
+            return seed;
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         SharedConstants.tryDetectVersion();Bootstrap.bootStrap();
         Path out=Path.of(args[0]);long seed=Long.parseLong(args[1]);String dimension=args[2];
@@ -76,6 +96,9 @@ public final class VanillaStructurePlacementOracle {
         var climate=randomState.createClimateSampler(net.minecraft.world.level.levelgen.densityfunction.SamplerContext.builder().enableCaches().build());
         var structures=world.lookupOrThrow(Registries.STRUCTURE);
         var factory=PalettedContainerFactory.create(access);
+        var unsafeField=Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe");unsafeField.setAccessible(true);Object unsafe=unsafeField.get(null);
+        NoEntityLevel.seed=seed;
+        var noEntities=(net.minecraft.server.level.ServerLevel)unsafe.getClass().getMethod("allocateInstance",Class.class).invoke(unsafe,NoEntityLevel.class);
         try(var w=new PrintWriter(Files.newBufferedWriter(out,StandardCharsets.UTF_8))) {
             for(int t=3;t<args.length;t++) {
                 String[] xz=args[t].split(",");int cx=Integer.parseInt(xz[0]),cz=Integer.parseInt(xz[1]);
@@ -168,7 +191,7 @@ public final class VanillaStructurePlacementOracle {
                         case "setCurrentlyGenerating","scheduleTick","blockUpdated","updateNeighborsAt","gameEvent","playSound","levelEvent","addParticle":return null;
                         case "addFreshEntity":return true;
                         case "addFreshEntityWithPassengers":return null;
-                        case "getLevel":throw new Ignored();
+                        case "getLevel":return noEntities;
                         case "isClientSide":return false;
                         case "enabledFeatures":return net.minecraft.world.flag.FeatureFlags.DEFAULT_FLAGS;
                         case "dimensionType":return world.lookupOrThrow(Registries.DIMENSION_TYPE).getOrThrow(switch(dimension){case "the_nether"->net.minecraft.world.level.dimension.BuiltinDimensionTypes.NETHER;case "the_end"->net.minecraft.world.level.dimension.BuiltinDimensionTypes.END;default->net.minecraft.world.level.dimension.BuiltinDimensionTypes.OVERWORLD;}).value();
@@ -223,6 +246,7 @@ public final class VanillaStructurePlacementOracle {
                 for(var e:entities.values()) {
                     var p=e.getBlockPos();String table="-",lootSeed="-";
                     if(e instanceof RandomizableContainer rc&&rc.getLootTable()!=null){table=rc.getLootTable().identifier().toString();lootSeed=Long.toString(rc.getLootTableSeed());}
+                    if(e instanceof net.minecraft.world.level.block.entity.BrushableBlockEntity){try{var f=e.getClass().getDeclaredField("lootTable");f.setAccessible(true);var key=(net.minecraft.resources.ResourceKey<?>)f.get(e);var s=e.getClass().getDeclaredField("lootTableSeed");s.setAccessible(true);if(key!=null){table=key.identifier().toString();lootSeed=Long.toString(s.getLong(e));}}catch(ReflectiveOperationException ex){throw new RuntimeException(ex);}}
                     w.println("be "+p.getX()+" "+p.getY()+" "+p.getZ()+" "+BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(e.getType())+" "+table+" "+lootSeed);
                 }
             }
