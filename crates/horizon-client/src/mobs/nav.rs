@@ -134,7 +134,7 @@ impl Mob {
         if self.ai.target.is_none() {
             return 3;
         }
-        let mut sacrifice = (self.health - self.kind.max_health * 0.33) as i32;
+        let mut sacrifice = (self.health - self.attrs.max_health * 0.33) as i32;
         sacrifice -= (3 - 2) * 4;
         sacrifice.max(0) + 3
     }
@@ -145,7 +145,7 @@ impl Mob {
         self.ai.malus[t as usize] = Some(v);
     }
     fn max_path_length(&self) -> f32 {
-        (self.kind.follow_range as f32).max(self.ai.nav.required_path_length)
+        (self.attrs.follow_range as f32).max(self.ai.nav.required_path_length)
     }
     fn can_update_path(&self) -> bool {
         match self.ai.nav.kind {
@@ -237,7 +237,7 @@ impl Mob {
             return Some(path.clone());
         }
         let pm = self.path_mob();
-        let max_visited = ((self.kind.follow_range * 16.0).floor() as f32
+        let max_visited = ((self.attrs.follow_range * 16.0).floor() as f32
             * self.ai.nav.max_visited_multiplier) as i32;
         let finder = Finder::new(w, &pm, self.ai.nav.evaluator());
         let path = finder.find(targets, max_len, reach, max_visited);

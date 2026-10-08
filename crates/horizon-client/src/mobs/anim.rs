@@ -70,20 +70,19 @@ pub struct AnimState {
     pub flapping: f32,
     /// Generic per-species keyframe animation states.
     pub states: [AnimationState; 4],
-    /// Smoothed values (tail wag, interest, squid tentacles...).
-    pub a: f32,
-    pub a_o: f32,
-    pub b: f32,
-    pub b_o: f32,
-    pub c: f32,
-    pub c_o: f32,
+    /// Per-species animation values (tail wag, squid tentacles, squish...)
+    /// with their previous-tick copies for interpolation.
+    pub v: [f32; 8],
+    pub vo: [f32; 8],
 }
 impl AnimState {
     pub fn begin_tick(&mut self) {
         self.attack_anim_o = self.attack_anim;
-        self.a_o = self.a;
-        self.b_o = self.b;
-        self.c_o = self.c;
+        self.vo = self.v;
+    }
+    /// Interpolated value `i` at the render partial tick.
+    pub fn lerp(&self, i: usize, partial: f32) -> f32 {
+        self.vo[i] + (self.v[i] - self.vo[i]) * partial
     }
     pub fn end_tick(&mut self, _swinging: bool) {}
 }
@@ -326,6 +325,7 @@ pub fn setup(
 ) {
     let _ = w_anims;
     match m.kind.anim {
+        Anim::Squid | Anim::Fish | Anim::Pufferfish | Anim::Dolphin => super::aquatic::anim(m, s, p),
         Anim::Quadruped | Anim::PolarBear | Anim::Panda | Anim::Goat => quadruped(p, s),
         Anim::Sheep => {
             quadruped(p, s);

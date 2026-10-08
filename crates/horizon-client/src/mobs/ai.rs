@@ -2,7 +2,7 @@
 //! `LivingEntity.baseTick/tick/aiStep`, `Mob.serverAiStep`) and the
 //! dispatch to each species family's goals and special behaviour.
 use super::{
-    Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
+    Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who, aquatic,
     control::{BodyRotation, LookControl, MoveControl},
     farm,
     goals::{Cx, GoalSelector},
@@ -57,20 +57,50 @@ impl Mob {
         }
     }
 }
-pub fn register(m: &mut Mob) {
+/// The module implementing a species' behaviour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Family {
+    Farm,
+    Undead,
+    Hostile,
+    Aquatic,
+    Generic,
+}
+pub fn family(s: Species) -> Family {
     use Species as S;
-    match m.species() {
-        S::Pig | S::Cow | S::Mooshroom | S::Sheep | S::Chicken => farm::register(m),
-        S::Zombie
-        | S::Husk
-        | S::Drowned
-        | S::ZombieVillager
-        | S::Skeleton
-        | S::Stray
-        | S::Bogged
-        | S::WitherSkeleton => undead::register(m),
-        S::Creeper | S::Spider | S::CaveSpider => hostile::register(m),
-        _ => generic(m),
+    match s {
+        S::Pig | S::Cow | S::Mooshroom | S::Sheep | S::Chicken => Family::Farm,
+        S::Zombie | S::Husk | S::Drowned | S::ZombieVillager | S::Skeleton | S::Stray | S::Bogged | S::WitherSkeleton => Family::Undead,
+        S::Creeper | S::Spider | S::CaveSpider => Family::Hostile,
+        S::Squid | S::GlowSquid | S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish | S::Dolphin => Family::Aquatic,
+        _ => Family::Generic,
+    }
+}
+pub fn register(m: &mut Mob) {
+    match family(m.species()) {
+        Family::Farm => farm::register(m),
+        Family::Undead => undead::register(m),
+        Family::Hostile => hostile::register(m),
+        Family::Aquatic => aquatic::register(m),
+        Family::Generic => generic(m),
+    }
+}
+/// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
+fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    match family(m.species()) {
+        Family::Hostile => {
+            if m.species() == Species::Creeper {
+                hostile::creeper_tick(m, events)
+            }
+        }
+        Family::Aquatic => aquatic::tick(m, events),
+        _ => {}
+    }
+}
+/// Move controls implemented by the species (MoveKind::Custom).
+pub fn custom_move_control(m: &mut Mob) {
+    if family(m.species()) == Family::Aquatic {
+        aquatic::fish_move_control(m)
     }
 }
 /// A fallback for species without bespoke goals yet: animals stroll and
@@ -113,10 +143,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
         m.ai.last_hurt_by_player -= 1;
     }
     // Mob.tick pre-update hooks (Creeper.tick swells before super.tick).
-    match m.species() {
-        Species::Creeper => hostile::creeper_tick(m, events),
-        _ => {}
-    }
+    pre_tick(m, events);
     if m.removed {
         return false;
     }
@@ -218,6 +245,7 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.damage(1.0, Damage::of(DamageKind::Drown));
         }
     }
+    tick_effects(m);
     if m.hurt_time > 0 {
         m.hurt_time -= 1;
     }
@@ -245,7 +273,7 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Enderman if m.ai.target.is_some() => "entity.enderman.scream",
         Species::Wolf if m.ai.target.is_some() => "entity.wolf.growl",
         Species::Wolf if m.random.next_int_bound(3).unwrap_or(1) == 0 => {
-            if m.extra.tame && m.health < m.kind.max_health / 2.0 {
+            if m.extra.tame && m.health < m.attrs.max_health / 2.0 {
                 "entity.wolf.whine"
             } else {
                 "entity.wolf.pant"
@@ -388,6 +416,9 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     }
 }
 fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if family(m.species()) == Family::Aquatic {
+        aquatic::ai_step(m, w, events);
+    }
     match m.species() {
         Species::Chicken => farm::chicken_ai_step(m, w, events),
         Species::Sheep => {
@@ -493,7 +524,7 @@ pub fn after_hurt(m: &mut Mob, _source: &Damage) {
 }
 /// Mob.doHurtTarget: attack damage (+ species extras) to the target.
 pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
-    let mut amount = m.kind.attack_damage;
+    let mut amount = m.attrs.attack_damage;
     let from = [m.position.x, m.position.y, m.position.z];
     let source = Damage::mob(m.id, from);
     match m.species() {
@@ -547,6 +578,31 @@ pub fn ate(m: &mut Mob) {
 }
 /// Species-specific travel (fish, squid, dolphins swim with their own rules).
 pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
-    let _ = (m, w, input, events);
-    false
+    match family(m.species()) {
+        Family::Aquatic => aquatic::travel(m, w, input, events),
+        _ => false,
+    }
+}
+
+/// MobEffect ticking for the effects mobs receive (poison, wither, regeneration).
+fn tick_effects(m: &mut Mob) {
+    let mut effects = std::mem::take(&mut m.extra.effects);
+    for (effect, ticks, amp) in &mut effects {
+        let interval = |base: i32| (base >> (*amp).max(0)).max(1);
+        match *effect {
+            "minecraft:poison" if *ticks % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 => {
+                m.damage(1.0, Damage::of(DamageKind::Magic));
+            }
+            "minecraft:wither" if *ticks % interval(40) == 0 => {
+                m.damage(1.0, Damage::of(DamageKind::Magic));
+            }
+            "minecraft:regeneration" if *ticks % interval(50) == 0 && !m.kind.flags.undead && m.alive() => {
+                m.health = (m.health + 1.0).min(m.attrs.max_health);
+            }
+            _ => {}
+        }
+        *ticks -= 1;
+    }
+    effects.retain(|e| e.1 > 0);
+    m.extra.effects = effects;
 }

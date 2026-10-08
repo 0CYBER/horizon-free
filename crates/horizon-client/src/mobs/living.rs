@@ -99,7 +99,10 @@ impl Mob {
                 super::species::Baby::None => {}
             }
         }
-        if self.extra.size > 0 {
+        if self.kind.species == super::Species::Pufferfish {
+            let s = super::aquatic::puff_scale(self.extra.size);
+            (w, h, e) = (w * s, h * s, e * s);
+        } else if self.extra.size > 0 {
             let s = f64::from(self.extra.size);
             (w, h, e) = (w * s, h * s, e * s);
         }

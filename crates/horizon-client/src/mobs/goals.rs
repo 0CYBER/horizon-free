@@ -530,6 +530,8 @@ pub struct Stroll {
     pub check_no_action: bool,
     /// WaterAvoidingRandomStrollGoal probability of a plain stroll.
     pub water_avoiding: Option<f32>,
+    /// RandomSwimmingGoal: BehaviorUtils.getRandomSwimmablePos.
+    pub swim: bool,
     pub force: bool,
     wanted: [f64; 3],
 }
@@ -540,6 +542,7 @@ impl Stroll {
             interval: 120,
             check_no_action: true,
             water_avoiding: None,
+            swim: false,
             force: false,
             wanted: [0.0; 3],
         }
@@ -553,6 +556,10 @@ impl Stroll {
     pub fn interval(mut self, i: i32) -> Self {
         self.interval = i;
         self
+    }
+    /// RandomSwimmingGoal(speed, interval)
+    pub fn swimming(speed: f64, interval: i32) -> Self {
+        Self { swim: true, ..Self::new(speed).interval(interval) }
     }
 }
 impl Goal for Stroll {
@@ -579,6 +586,19 @@ impl Goal for Stroll {
                 } else {
                     m.default_random_pos(cx.w, 10, 7)
                 }
+            }
+            None if self.swim => {
+                let mut p = m.default_random_pos(cx.w, 10, 7);
+                let mut count = 0;
+                while let Some(q) = p {
+                    let s = cx.w.world.block(q[0].floor() as i32, q[1].floor() as i32, q[2].floor() as i32);
+                    if cx.w.data.state(s).flags & super::data::WATER != 0 || count >= 10 {
+                        break;
+                    }
+                    count += 1;
+                    p = m.default_random_pos(cx.w, 10, 7);
+                }
+                p
             }
             None => m.default_random_pos(cx.w, 10, 7),
         };
@@ -934,7 +954,7 @@ pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &m
     if !t.alive || t.is_player && t.creative {
         return false;
     }
-    if m.distance_sqr(t.position) > m.kind.follow_range * m.kind.follow_range {
+    if m.distance_sqr(t.position) > m.attrs.follow_range * m.attrs.follow_range {
         return false;
     }
     if must_see {
@@ -980,7 +1000,7 @@ impl Goal for NearestTarget {
         {
             return false;
         }
-        let range = m.kind.follow_range;
+        let range = m.attrs.follow_range;
         self.found = None;
         match &self.prey {
             Prey::Player => {
@@ -1113,7 +1133,7 @@ impl Goal for HurtByTarget {
         if self.alert
             && let Some(by) = m.ai.target
         {
-            let range = m.kind.follow_range;
+            let range = m.attrs.follow_range;
             let species = m.species();
             let id = m.id;
             let pos = m.position;
@@ -1634,5 +1654,80 @@ impl Goal for EatBlock {
                 super::ai::ate(m);
             }
         }
+    }
+}
+
+/// BreathAirGoal: swim up to air when the air supply runs low.
+#[derive(Clone, Debug, Default)]
+pub struct BreathAir;
+impl BreathAir {
+    fn find_air(m: &mut Mob, cx: &mut Cx) {
+        let (x, y, z) = (m.position.x.floor() as i32, m.position.y.floor() as i32, m.position.z.floor() as i32);
+        let mut dest = None;
+        for yy in y..=y + 8 {
+            let s = cx.w.world.block(x, yy, z);
+            let f = cx.w.facts.get(s);
+            if (f.fluid == crate::blocks::Fluid::None || &*f.name == "minecraft:bubble_column") && cx.w.data.state(s).flags & super::data::LAND != 0 {
+                dest = Some([x, yy, z]);
+                break;
+            }
+        }
+        let d = dest.unwrap_or([x, (m.position.y + 8.0).floor() as i32, z]);
+        m.nav_move_to(cx.w, [f64::from(d[0]), f64::from(d[1] + 1), f64::from(d[2])], 1.0);
+    }
+}
+impl Goal for BreathAir {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        m.air < 140
+    }
+    fn interruptable(&self) -> bool {
+        false
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_stop();
+        Self::find_air(m, cx);
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        Self::find_air(m, cx);
+        let input = Vec3::new(f64::from(m.ai.xxa), f64::from(m.ai.yya), f64::from(m.ai.zza));
+        m.move_relative(0.02, input);
+        let mut ev = Vec::new();
+        m.do_move(cx.w, &mut ev);
+        cx.events.extend(ev);
+    }
+}
+/// TryFindLiquidGoal (water): head for nearby water when stranded on land.
+#[derive(Clone, Debug, Default)]
+pub struct TryFindWater {
+    wanted: [f64; 3],
+}
+impl Goal for TryFindWater {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !m.on_ground || m.fluids.in_water {
+            return false;
+        }
+        let (bx, by, bz) = (m.position.x.floor() as i32, m.position.y.floor() as i32, m.position.z.floor() as i32);
+        for _ in 0..10 {
+            let p = [bx + m.random.next_int_bound(20).unwrap_or(0) - 10, by + 2 - m.random.next_int_bound(8).unwrap_or(0), bz + m.random.next_int_bound(20).unwrap_or(0) - 10];
+            if cx.w.fluid(p[0], p[1], p[2]) == crate::blocks::Fluid::Water {
+                self.wanted = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])];
+                return true;
+            }
+        }
+        false
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.ai.nav.is_done()
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_move_to(cx.w, self.wanted, 1.0);
     }
 }

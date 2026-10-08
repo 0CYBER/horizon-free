@@ -7,6 +7,7 @@
 //! behaviour, models, animations and sounds.
 pub mod ai;
 pub mod anim;
+pub mod aquatic;
 pub mod data;
 pub mod control;
 pub mod farm;
@@ -310,6 +311,14 @@ impl Damage {
         matches!(self.kind, DamageKind::Arrow | DamageKind::Thrown | DamageKind::Fireball)
     }
 }
+/// Per-mob attribute base values (the type's defaults unless changed).
+#[derive(Clone, Copy, Debug)]
+pub struct Attrs {
+    pub speed: f64,
+    pub attack_damage: f32,
+    pub max_health: f32,
+    pub follow_range: f64,
+}
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
@@ -350,6 +359,8 @@ pub struct Extra {
     pub home: Option<[i32; 3]>,
     pub point: Option<[f64; 3]>,
     pub vector: [f64; 3],
+    /// Active status effects: (effect id, ticks left, amplifier).
+    pub effects: Vec<(&'static str, i32, i32)>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -398,6 +409,8 @@ pub struct Mob {
     pub removed: bool,
     /// Client-side animation clocks (attack swing, eating, shaking...).
     pub anim: anim::AnimState,
+    /// Attribute values that differ per mob (slime size, babies, effects).
+    pub attrs: Attrs,
 }
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
@@ -538,6 +551,7 @@ impl Mob {
             last_damage: None,
             removed: false,
             anim: anim::AnimState::default(),
+            attrs: Attrs { speed: kind.speed, attack_damage: kind.attack_damage, max_health: kind.max_health, follow_range: kind.follow_range },
             kind,
         };
         ai::register(&mut mob);
@@ -652,6 +666,29 @@ impl Mob {
         (p.x - self.position.x).powi(2) + (p.y - self.position.y).powi(2) + (p.z - self.position.z).powi(2)
     }
     /// Movement speed attribute bonus (baby zombies, sprinting modifiers).
+    /// MOVEMENT_SPEED including effects (speed +20%/level, slowness -15%/level).
+    pub fn movement_speed(&self) -> f64 {
+        let mut v = self.attrs.speed * self.speed_bonus();
+        for (e, _, amp) in &self.extra.effects {
+            match *e {
+                "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),
+                "minecraft:slowness" => v *= (1.0 - 0.15 * f64::from(amp + 1)).max(0.0),
+                _ => {}
+            }
+        }
+        v
+    }
+    pub fn has_effect(&self, effect: &str) -> bool {
+        self.extra.effects.iter().any(|e| e.0 == effect)
+    }
+    pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
+        if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
+            e.1 = e.1.max(ticks);
+            e.2 = e.2.max(amplifier);
+        } else {
+            self.extra.effects.push((effect, ticks, amplifier));
+        }
+    }
     pub fn speed_bonus(&self) -> f64 {
         ai::speed_bonus(self)
     }

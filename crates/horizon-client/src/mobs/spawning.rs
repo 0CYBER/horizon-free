@@ -124,17 +124,11 @@ pub fn spawn_rules_ok(
             // Swamp at night by moon brightness, or slime chunks below y 40.
             y < 40 && random.next_int_bound(10).unwrap_or(1) == 0
         }
-        S::Squid
-        | S::GlowSquid
-        | S::Cod
-        | S::Salmon
-        | S::TropicalFish
-        | S::Pufferfish
-        | S::Dolphin => {
-            // WaterAnimal.checkSurfaceWaterAnimalSpawnRules: between sea level - 13 and sea level.
-            let in_band = (50..=62).contains(&y);
-            in_band && w.fluid(x, y - 1, z) == Fluid::Water && w.fluid(x, y + 1, z) == Fluid::Water
-                || matches!(species, S::GlowSquid) && y < 30
+        // GlowSquid.checkGlowSquidSpawnRules: deep, pitch dark water.
+        S::GlowSquid => y <= 63 - 33 && light == 0 && w.block_name(x, y, z) == "minecraft:water",
+        S::Squid | S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish | S::Dolphin => {
+            // WaterAnimal.checkSurfaceWaterAnimalSpawnRules: sea level - 13 ..= sea level.
+            (50..=63).contains(&y) && w.fluid(x, y - 1, z) == Fluid::Water && w.block_name(x, y + 1, z) == "minecraft:water"
         }
         S::Axolotl => w.block_name(x, y - 1, z) == "minecraft:clay",
         S::Strider => w.fluid(x, y, z) == Fluid::Lava,
@@ -204,6 +198,7 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts) {
         S::Villager => {
             m.extra.variant = villager_type(biome);
         }
+        S::TropicalFish => super::aquatic::finalize(m),
         _ => {}
     }
 }
