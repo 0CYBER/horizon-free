@@ -118,6 +118,14 @@ pub fn tiled(batch: &mut HudBatch, atlas: &HudAtlas, sprite: &str, x: f32, y: f3
         yy += size;
     }
 }
+/// Text drawn at `scale` times its size (a scaled pose).
+pub fn text_scaled(batch: &mut HudBatch, atlas: &HudAtlas, text: &Text, x: f32, y: f32, scale: f32, color: u32) {
+    let start = batch.vertices.len();
+    batch.text_styled(atlas, text, 0.0, 0.0, color, true);
+    for v in &mut batch.vertices[start..] {
+        v.pos = [x + v.pos[0] * scale, y + v.pos[1] * scale];
+    }
+}
 pub fn hovered(cursor: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {
     cursor.0 >= x && cursor.0 < x + w && cursor.1 >= y && cursor.1 < y + h
 }

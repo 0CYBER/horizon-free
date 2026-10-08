@@ -74,6 +74,9 @@ pub struct UiState {
     pub options: horizon_client::options_ui::OptionsUi,
     /// The prepared resources before resource packs are layered on.
     pub vanilla_root: std::path::PathBuf,
+    /// Death screen cause and when the player died (buttons wait 20 ticks).
+    pub death_text: Option<Text>,
+    pub died_at: Option<std::time::Instant>,
 }
 
 impl Game<'_> {
@@ -397,6 +400,8 @@ impl Game<'_> {
     /// cause is known to the client).
     pub(super) fn death_message(&mut self) {
         let cause = self.ui.death_cause.take();
+        self.ui.died_at = Some(std::time::Instant::now());
+        self.ui.death_text = None;
         if !self.ui.rules.bool("show_death_messages") {
             return;
         }
@@ -414,7 +419,9 @@ impl Game<'_> {
                 "death.attack.generic".into()
             }
         });
-        self.system_message(Text::translate(&key, &[Text::literal(PLAYER_NAME)]));
+        let message = Text::translate(&key, &[Text::literal(PLAYER_NAME)]);
+        self.ui.death_text = Some(message.clone());
+        self.system_message(message);
     }
     /// F1 hides the HUD (and hand); the screenshot key still works.
     pub(super) fn toggle_hide_gui(&mut self) {

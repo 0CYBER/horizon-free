@@ -5,6 +5,7 @@ mod commands;
 mod control;
 mod options;
 mod packs;
+mod screens;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -1699,31 +1700,8 @@ impl Game<'_> {
             batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 32, a));
         }
         match self.screen {
-            Screen::Paused => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 16, 160));
-                let title = "Game Menu";
-                let tw = HudBatch::text_width(atlas, title);
-                batch.text(atlas, title, (w - tw) / 2.0, 40.0, u32::MAX, true);
-                for (i, label) in ["Back to Game", "Options...", "Save and Quit to Title"].iter().enumerate() {
-                    let (bx, by) = (w / 2.0 - 100.0, h / 4.0 + 24.0 + i as f32 * 24.0 + 16.0);
-                    let hover = self.cursor.0 >= bx && self.cursor.0 < bx + 200.0 && self.cursor.1 >= by && self.cursor.1 < by + 20.0;
-                    let sprite = if hover { "gui/sprites/widget/button_highlighted" } else { "gui/sprites/widget/button" };
-                    batch.sprite_scaled(atlas, sprite, bx, by, 200.0, 20.0, u32::MAX);
-                    let tw = HudBatch::text_width(atlas, label);
-                    batch.text(atlas, label, bx + (200.0 - tw) / 2.0, by + 6.0, u32::MAX, true);
-                }
-            }
-            Screen::Dead => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(80, 0, 0, 120));
-                let title = "You Died!";
-                let tw = HudBatch::text_width(atlas, title);
-                batch.text(atlas, title, (w - tw) / 2.0, 60.0, u32::MAX, true);
-                let (bx, by) = (w / 2.0 - 100.0, h / 4.0 + 72.0);
-                batch.sprite_scaled(atlas, "gui/sprites/widget/button", bx, by, 200.0, 20.0, u32::MAX);
-                let label = "Respawn";
-                let tw = HudBatch::text_width(atlas, label);
-                batch.text(atlas, label, bx + (200.0 - tw) / 2.0, by + 6.0, u32::MAX, true);
-            }
+            Screen::Paused => self.draw_pause_menu(&mut batch),
+            Screen::Dead => self.draw_death_screen(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
             }
@@ -4505,29 +4483,8 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
                         }
-                        Screen::Paused if pressed => {
-                            let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
-                            let b = HudBatch::new(size);
-                            for i in 0..3 {
-                                let (bx, by) = (b.width / 2.0 - 100.0, b.height / 4.0 + 24.0 + i as f32 * 24.0 + 16.0);
-                                if self.cursor.0 >= bx && self.cursor.0 < bx + 200.0 && self.cursor.1 >= by && self.cursor.1 < by + 20.0 {
-                                    if i == 0 {
-                                        self.screen = Screen::Playing;
-                                        self.capture(true);
-                                    } else if i == 1 {
-                                        self.open_options(false);
-                                    } else {
-                                        self.close_world()?;
-                                    }
-                                }
-                            }
-                        }
-                        Screen::Dead if pressed => {
-                            self.player = None;
-                            self.screen = Screen::Playing;
-                            self.spawn_player()?;
-                            self.capture(true);
-                        }
+                        Screen::Paused if pressed => self.pause_click()?,
+                        Screen::Dead if pressed => self.death_click()?,
                         _ => {}
                     }
                 }
