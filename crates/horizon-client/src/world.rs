@@ -21,6 +21,8 @@ pub struct World {
     /// Edits on lit chunks (position, old state, new state), relit
     /// incrementally by streaming.
     pub light_edits: Vec<((i32, i32, i32), u16, u16)>,
+    /// Saved entities of chunks that just loaded, spawned by the game.
+    pub loaded_entities: Vec<((i32, i32), Vec<horizon_world::nbt::Tag>)>,
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
     pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
@@ -94,6 +96,7 @@ impl World {
             dirty_sections: HashSet::new(),
             dirty_light: HashSet::new(),
             light_edits: Vec::new(),
+            loaded_entities: Vec::new(),
             modified: HashSet::new(),
             block_entities: HashMap::new(),
             game_time: 0,

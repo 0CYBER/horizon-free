@@ -277,6 +277,10 @@ impl Streaming {
                 Done::Generated(mut chunk) => {
                     let key = (chunk.x, chunk.z);
                     world.block_entities.extend(std::mem::take(&mut chunk.block_entities));
+                    let entities = std::mem::take(&mut chunk.entities);
+                    if !entities.is_empty() {
+                        world.loaded_entities.push(((chunk.x, chunk.z), entities));
+                    }
                     self.generating.remove(&key);
                     self.finishing.remove(&key);
                     self.decorated.insert(key);
