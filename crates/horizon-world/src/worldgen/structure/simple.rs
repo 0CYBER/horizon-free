@@ -197,6 +197,12 @@ impl LegacyPiece for TemplatePiece {
     fn bounding_box(&self) -> BoundingBox {
         self.bounding_box
     }
+    fn after_place(&self, c: &mut PieceContext<'_>, pieces: &[BoundingBox]) -> Result<()> {
+        match self.handler {
+            TemplateHandler::Mansion => super::mansion::after_place(c, pieces),
+            _ => Ok(()),
+        }
+    }
     fn type_name(&self) -> &'static str {
         self.type_name
     }
@@ -311,6 +317,12 @@ impl LegacyPiece for TemplatePiece {
             }
             TemplateHandler::OceanRuin { .. } => {
                 super::ocean_ruin::post_process(self, c)?;
+            }
+            TemplateHandler::RuinedPortal(_) => {
+                super::ruined_portal::post_process(self, c)?;
+            }
+            TemplateHandler::Mansion => {
+                super::mansion::post_process(self, c)?;
             }
         }
         Ok(())

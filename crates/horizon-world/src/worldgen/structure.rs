@@ -2,12 +2,16 @@
 //! and structure pieces.
 pub mod features;
 pub mod jigsaw;
+pub mod mansion;
+pub mod monument;
 pub mod legacy;
 pub mod ocean_ruin;
 pub mod processor;
+pub mod ruined_portal;
 pub mod simple;
 pub mod start;
 pub mod template;
+pub mod temple;
 
 use crate::{
     nbt::{self, Limits},

@@ -62,6 +62,12 @@ pub enum StructureKind {
     BuriedTreasure,
     Igloo,
     SwampHut,
+    DesertPyramid,
+    JungleTemple,
+    RuinedPortal(Vec<super::ruined_portal::Setup>),
+    Mansion,
+    /// The biomes allowed around a monument (#required_ocean_monument_surrounding).
+    Monument(BTreeSet<BiomeId>),
     Shipwreck {
         beached: bool,
     },
@@ -175,6 +181,20 @@ impl StructureRegistry {
                 "minecraft:buried_treasure" => StructureKind::BuriedTreasure,
                 "minecraft:igloo" => StructureKind::Igloo,
                 "minecraft:swamp_hut" => StructureKind::SwampHut,
+                "minecraft:desert_pyramid" => StructureKind::DesertPyramid,
+                "minecraft:jungle_temple" => StructureKind::JungleTemple,
+                "minecraft:woodland_mansion" => StructureKind::Mansion,
+                "minecraft:ocean_monument" => StructureKind::Monument(biome_set(
+                    &serde_json::json!("#minecraft:required_ocean_monument_surrounding"),
+                )?),
+                "minecraft:ruined_portal" => StructureKind::RuinedPortal(
+                    v["setups"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(super::ruined_portal::Setup::decode)
+                        .collect(),
+                ),
                 "minecraft:shipwreck" => StructureKind::Shipwreck {
                     beached: v["is_beached"].as_bool().unwrap_or(false),
                 },
@@ -395,6 +415,11 @@ pub struct StructureStart {
 /// Biome and height queries for one structure generation attempt.
 pub trait StartContext: JigsawContext {
     fn seed(&self) -> i64;
+    fn sea_level(&self) -> i32;
+    /// ChunkGenerator.getBaseColumn as heightmap opacity, indexed from min_y.
+    fn base_column(&mut self, x: i32, z: i32, kind: HeightmapType) -> Vec<bool>;
+    /// Biome.coldEnoughToSnow at a position.
+    fn cold_enough_to_snow(&mut self, biome: BiomeId, pos: [i32; 3]) -> bool;
     fn generation(&self) -> WorldGenerationContext;
     /// Noise biome at a quart position (caching resolver, no zoom).
     fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId;
@@ -529,6 +554,81 @@ fn try_generate(
             let stub = top_of_chunk_center(context, chunk, HeightmapType::WorldSurfaceWg)?;
             let piece = super::simple::SwampHutPiece::new(&mut random, chunk.x * 16, chunk.z * 16);
             (stub, legacy(vec![piece]))
+        }
+        StructureKind::DesertPyramid | StructureKind::JungleTemple => {
+            let desert = matches!(def.kind, StructureKind::DesertPyramid);
+            let (width, depth) = if desert { (21, 21) } else { (12, 15) };
+            let (x, z) = (chunk.x * 16, chunk.z * 16);
+            if !context.column_has_valid_biome(x + 8, z + 8, context.min_y() - 1, context.max_y()) {
+                return None;
+            }
+            let lowest = corner_heights(context, x, width, z, depth)
+                .into_iter()
+                .min()
+                .unwrap_or(0);
+            if lowest < context.sea_level() {
+                return None;
+            }
+            let stub = [x + 8, first_occupied(context, x + 8, z + 8), z + 8];
+            let piece: Box<dyn LegacyPiece> = if desert {
+                Box::new(super::temple::DesertPyramidPiece::new(&mut random, x, z))
+            } else {
+                Box::new(super::temple::JungleTemplePiece::new(&mut random, x, z))
+            };
+            (stub, vec![Piece::Legacy(piece)])
+        }
+        StructureKind::Monument(surrounding) => {
+            let (x, z) = (chunk.x * 16 + 9, chunk.z * 16 + 9);
+            let (y, r) = (context.sea_level(), 29);
+            for qz in (z - r) >> 2..=(z + r) >> 2 {
+                for qx in (x - r) >> 2..=(x + r) >> 2 {
+                    for qy in (y - r) >> 2..=(y + r) >> 2 {
+                        if !surrounding.contains(&context.noise_biome([qx, qy, qz])) {
+                            return None;
+                        }
+                    }
+                }
+            }
+            let stub = top_of_chunk_center(context, chunk, HeightmapType::OceanFloorWg)?;
+            let direction = super::legacy::random_horizontal(&mut random);
+            let piece = super::monument::MonumentBuilding::new(
+                &mut random,
+                chunk.x * 16 - 29,
+                chunk.z * 16 - 29,
+                direction,
+            );
+            (stub, legacy(vec![piece]))
+        }
+        StructureKind::Mansion => {
+            let (x, z) = (chunk.x * 16 + 7, chunk.z * 16 + 7);
+            if !context.column_has_valid_biome(x, z, context.min_y() - 1, context.max_y()) {
+                return None;
+            }
+            let rotation = super::Rotation::random(&mut random);
+            let (sx, sz) = match rotation {
+                super::Rotation::None => (5, 5),
+                super::Rotation::Clockwise90 => (-5, 5),
+                super::Rotation::Clockwise180 => (-5, -5),
+                super::Rotation::Counterclockwise90 => (5, -5),
+            };
+            let y = corner_heights(context, x, sx, z, sz).into_iter().min().unwrap_or(0);
+            if y < 60 {
+                return None;
+            }
+            let start = [x, y, z];
+            let pieces = super::mansion::pieces(resources, start, rotation, &mut random)?;
+            (start, legacy(pieces))
+        }
+        StructureKind::RuinedPortal(setups) => {
+            let (position, piece) = super::ruined_portal::start(
+                context,
+                resources,
+                bindings,
+                &mut random,
+                chunk,
+                setups,
+            )?;
+            (position, legacy(vec![piece]))
         }
         StructureKind::Shipwreck { beached } => {
             let kind = if *beached {
@@ -770,6 +870,18 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
                 }
             }
         }
+    }
+    if let Piece::Legacy(p) = first {
+        let boxes: Vec<BoundingBox> = start.pieces.iter().map(Piece::bounding_box).collect();
+        let mut context = PieceContext {
+            world,
+            resources,
+            random,
+            chunk_box,
+            chunk: ChunkPos::new(chunk_box.min[0] >> 4, chunk_box.min[2] >> 4),
+            reference,
+        };
+        p.after_place(&mut context, &boxes)?;
     }
     Ok(())
 }
