@@ -86,6 +86,8 @@ pub enum FeatureDefinition {
     SteppedColumnCluster(Box<super::projected::SteppedColumnClusterFeature>),
     FallenTree(Box<super::tree::FallenTreeFeature>),
     NoOp,
+    Template(Box<super::structure::features::TemplateFeature>),
+    Fossil(Box<super::structure::features::FossilFeature>),
     WeightedChoice(OptionalWeightedList<PlacedFeatureDefinition>),
     Sequence(Vec<PlacedFeatureDefinition>),
     Overlay(Vec<PlacedFeatureDefinition>),
@@ -312,6 +314,16 @@ impl FeatureDefinition {
         )?)?;
         match kind.as_str() {
             "minecraft:no_op" => Ok(Self::NoOp),
+            "minecraft:template" => super::structure::features::TemplateFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("template bindings"))?,
+            )
+            .map(|f| Self::Template(Box::new(f))),
+            "minecraft:fossil" => super::structure::features::FossilFeature::decode(
+                json,
+                blocks.ok_or(DecodeError::Field("fossil bindings"))?,
+            )
+            .map(|f| Self::Fossil(Box::new(f))),
             "minecraft:freeze_top_layer" => super::snow_freeze::SnowAndFreezeFeature::new(
                 blocks.ok_or(DecodeError::Field("snow and freeze bindings"))?,
             )
@@ -843,6 +855,12 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
+            Self::Template(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::Query),
+            Self::Fossil(feature) => feature
+                .place(world, random, origin)
+                .map_err(FeatureExecutionError::Query),
             Self::SnowAndFreeze(feature) => feature
                 .place(world, origin)
                 .map_err(FeatureExecutionError::SnowAndFreeze),

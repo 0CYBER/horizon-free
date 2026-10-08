@@ -170,6 +170,8 @@ pub struct GeneratorData {
     pub(super) block_tags: BTreeMap<String, Vec<String>>,
     pub(super) biome_tags: BTreeMap<String, Vec<String>>,
     pub(super) feature_resources: Option<FeatureResources>,
+    /// Templates, processor lists and per-state template transforms.
+    pub(super) structures: Option<Arc<super::structure::StructureResources>>,
 }
 type Bundle = BTreeMap<String, String>;
 fn read_bundle(dir: &Path, name: &str) -> Result<Bundle, GeneratorError> {
@@ -393,7 +395,18 @@ impl GeneratorData {
             }
             _ => None,
         };
+        let structures = match fs::read_to_string(dir.join("blocks/structure-blocks.json")) {
+            Ok(json) => Some(Arc::new(super::structure::StructureResources::new(
+                registry,
+                super::structure::StateTransforms::from_json(&json, registry.len())?,
+                &dir.join("structure"),
+                read_optional_bundle(dir, "processor_lists")?.unwrap_or_default(),
+                &block_tags,
+            ))),
+            Err(_) => None,
+        };
         Ok(Arc::new(Self {
+            structures,
             registry,
             states: GenBlockStates(states.into()),
             integers,
@@ -452,6 +465,9 @@ pub struct ProtoChunk {
     biomes: BiomeChunk<BiomeId>,
     data: Arc<GeneratorData>,
     decorated: bool,
+    /// Block-entity data placed by structures and template features, in
+    /// placement order (positions are absolute block coordinates).
+    pub block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
 }
 impl ProtoChunk {
     pub fn position(&self) -> ChunkPos {
@@ -919,6 +935,7 @@ where
             biomes: center,
             data: data.clone(),
             decorated: false,
+            block_entities: Vec::new(),
         })
     }
 }

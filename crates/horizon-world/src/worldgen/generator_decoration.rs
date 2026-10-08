@@ -125,6 +125,9 @@ impl Decoration {
             FeatureBlockBindings::with_tags(registry, data.integers().clone(), &data.block_tags)?
                 .with_fluid_tags(&resources.fluid_tags)?
                 .with_biomes(biomes.clone());
+        if let Some(structures) = &data.structures {
+            bindings = bindings.with_structures(structures.clone());
+        }
         if let Some(blocks) = &resources.blocks {
             bindings = bindings
                 .with_block_properties(&blocks.properties)?
@@ -268,7 +271,12 @@ impl Decoration {
             Err(e) => return Err(resource(e.to_string())),
         };
         let mut next_boolean = next_boolean;
+        let mut block_entities = Vec::new();
+        for chunk in region.iter_mut() {
+            block_entities.append(&mut chunk.block_entities);
+        }
         let mut world = World {
+            block_entities,
             next_boolean: &mut next_boolean,
             blocks: data
                 .feature_resources
@@ -309,6 +317,14 @@ impl Decoration {
                 Ok(placed.unwrap_or(false))
             },
         );
+        for (pos, nbt) in std::mem::take(&mut world.block_entities) {
+            let index = ((pos[2] >> 4).wrapping_sub(center.z) + 1) * 3
+                + (pos[0] >> 4).wrapping_sub(center.x)
+                + 1;
+            if let Some(chunk) = usize::try_from(index).ok().and_then(|i| region.get_mut(i)) {
+                chunk.block_entities.push((pos, nbt));
+            }
+        }
         for terrain in world.region.into_chunks() {
             let p = terrain.position();
             let index = (p.z.wrapping_sub(center.z) + 1) * 3 + p.x.wrapping_sub(center.x) + 1;
@@ -326,6 +342,7 @@ impl Decoration {
 /// WorldGenRegion-style view: reads anywhere in the 3×3 region, writes within
 /// the FEATURES step's write radius, biome lookups through the biome zoom.
 struct World<'a> {
+    block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
     next_boolean: &'a mut dyn FnMut() -> bool,
     blocks: Option<&'a BlockBehavior>,
     region: TerrainRegion<'static, GenBlockStates>,
@@ -370,6 +387,7 @@ impl FeatureWorld for World<'_> {
             return Ok(false);
         }
         self.region.set_block_worldgen(position, state)?;
+        self.block_entities.retain(|(p, _)| *p != position);
         Ok(true)
     }
 }
@@ -496,6 +514,15 @@ impl PlacementContext for World<'_> {
             && (0..nx).all(|x| {
                 (0..ny).all(|y| (0..nz).all(|z| shape.is_full(x as i32, y as i32, z as i32)))
             }))
+    }
+    fn set_block_entity(
+        &mut self,
+        position: [i32; 3],
+        nbt: crate::nbt::Compound,
+    ) -> Result<(), PlacementQueryError> {
+        self.block_entities.retain(|(p, _)| *p != position);
+        self.block_entities.push((position, nbt));
+        Ok(())
     }
     fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
         self.region.world_seed()
