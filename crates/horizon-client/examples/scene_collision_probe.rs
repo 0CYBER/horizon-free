@@ -35,7 +35,7 @@ fn main() -> Result<()> {
         return Err("radius must be 1..16".into());
     }
     let assets = assets::Assets::load(&resources)?;
-    let world = world::TestWorld::new(&assets, radius)?;
+    let world = world::World::test_scene(&assets, radius)?;
     let binding = collisions::load(&resources, &assets.registry)?;
     let mut scene = collisions::SceneCollisions {
         world: &world,

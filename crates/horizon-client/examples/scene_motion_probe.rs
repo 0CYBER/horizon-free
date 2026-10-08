@@ -5,7 +5,7 @@ use horizon_client::{
     assets::Assets,
     collisions,
     motion::{MotionEvent, MotionResources, MotionWorld, PlayerMotion},
-    world::TestWorld,
+    world::World,
 };
 use horizon_core::geometry::Vec3;
 use horizon_core::{position::BlockPos, random::RandomSource};
@@ -185,7 +185,7 @@ fn main() -> Result<()> {
     let root = PathBuf::from(&args[0]);
     let dir = PathBuf::from(&args[1]);
     let assets = Assets::load(&root)?;
-    let mut scene = TestWorld::new(&assets, 1)?;
+    let mut scene = World::test_scene(&assets, 1)?;
     let binding = collisions::load(&root, &assets.registry)?;
     let resources = MotionResources::load(&root, &assets)?;
     fs::write(

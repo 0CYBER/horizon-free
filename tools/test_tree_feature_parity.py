@@ -2,6 +2,7 @@
 """Compare vanilla tree, fallen-tree and ore features block-for-block with vanilla."""
 import argparse
 import json
+import re
 import os
 from pathlib import Path
 import platform
@@ -42,10 +43,18 @@ def corpus(facts,resources):
     seeds=[0,1,-1,0x5DEECE66D,0x123456789abcdef,-8070450532247928832]
     origins=[[8,65,8],[15,65,0],[0,65,15],[-1,65,-17],[31,65,-16],[100003,65,-4097]]
     trees,ores,others=[],[],[]
+    def needs_level(text,seen=frozenset()):
+        # Pale moss needs the level's feature registry and server level; templates need structure
+        # resources. Both are excluded directly or through named features.
+        if 'pale_moss' in text or '"minecraft:template"' in text:return True
+        for ref in set(re.findall(r'"(minecraft:[a-z0-9_/]+)"',text))-seen:
+            for table in ('features','placed'):
+                if ref in resources.get(table,{}) and needs_level(resources[table][ref],seen|{ref}):return True
+        return False
     for name,text in resources['features'].items():
         value=json.loads(text);kind=value['type'].removeprefix('minecraft:')
+        if needs_level(text):continue
         if kind in ('tree','fallen_tree'):
-            if 'pale_moss' in text:continue  # needs the level's feature registry and server level
             trees.append(name)
         elif kind in ('ore','scattered_ore'):ores.append(name)
         elif kind not in ('freeze_top_layer','template','fossil'):others.append(name)  # templates need structure resources

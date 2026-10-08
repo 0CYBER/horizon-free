@@ -104,6 +104,44 @@ impl World {
             weather: Weather::default(),
         }
     }
+    /// A controlled blockstate scene for the native scene probes: material
+    /// layers, a stepped pyramid and the model gallery. Not generated terrain.
+    pub fn test_scene(assets: &crate::assets::Assets, radius: i32) -> crate::Result<Self> {
+        let air = assets.registry.default_state("minecraft:air").ok_or("missing air state")?;
+        let mut world = Self::new(air, 0);
+        for cz in -radius..=radius {
+            for cx in -radius..=radius {
+                world.chunks.insert((cx, cz), Arc::new(Chunk::empty(cx, cz)));
+                for z in 0..16 {
+                    for x in 0..16 {
+                        for y in 0..4 {
+                            let layer = match y {
+                                0 => 0,
+                                1 | 2 => 1,
+                                _ if (cx + cz) & 1 == 0 => 2,
+                                _ => 3,
+                            };
+                            world.set(cx * 16 + x, y, cz * 16 + z, assets.material_states[layer])?;
+                        }
+                    }
+                }
+            }
+        }
+        for y in 4..11 {
+            for z in -10_i32..=10 {
+                for x in -10_i32..=10 {
+                    if x.abs().max(z.abs()) <= 10 - (y - 4) {
+                        world.set(x, y, z, assets.material_states[if y & 1 == 0 { 4 } else { 5 }])?;
+                    }
+                }
+            }
+        }
+        for (position, state) in &assets.model_placements {
+            world.set(position.x, position.y, position.z, *state)?;
+        }
+        world.revision = 0;
+        Ok(world)
+    }
     /// Resident storage write; marks the touched sections (and neighbours on
     /// section borders) for remeshing and the surrounding chunks for relighting.
     /// Neighbour updates, drops and block entities belong to the gameplay layer.

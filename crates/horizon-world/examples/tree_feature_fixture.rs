@@ -126,6 +126,12 @@ struct World<'a, 'r, W> {
     chest: BlockStateId,
     world_random: LegacyRandom,
     water_mask: u8,
+    /// A vine without faces and air: the only fixture obstacle that changes
+    /// under a shape update (VineBlock.updateShape).
+    faceless_vine: Option<BlockStateId>,
+    /// VegetationBlock obstacles (short grass, fern): air once unsupported.
+    vegetation: BTreeSet<BlockStateId>,
+    air: BlockStateId,
 }
 impl<W: Write> World<'_, '_, W> {
     fn get(&self, p: [i32; 3]) -> BlockStateId {
@@ -190,6 +196,33 @@ impl<W: Write> SurvivalWorld for World<'_, '_, W> {
     }
 }
 impl<W: Write> PlacementContext for World<'_, '_, W> {
+    /// StructureTemplate.updateShapeAtEdge: the state, then its neighbour.
+    /// VineBlock.updateShape drops a vine left without faces on any update
+    /// but from below; the other fixture states keep their shape.
+    fn update_shape_at_face(
+        &mut self,
+        position: [i32; 3],
+        direction: Direction,
+        flags: i32,
+    ) -> Result<(), PlacementQueryError> {
+        let n = direction.normal();
+        let neighbor = [position[0] + n[0], position[1] + n[1], position[2] + n[2]];
+        for (p, from) in [(position, direction), (neighbor, direction.opposite())] {
+            let state = self.get(p);
+            let drop = if Some(state) == self.faceless_vine {
+                from != Direction::Down
+            } else if self.vegetation.contains(&state) {
+                let survival = self.survival;
+                !survival.can_survive(self, state, p).map_err(query)?
+            } else {
+                false
+            };
+            if drop {
+                self.set_block(p, self.air, flags & !1).map_err(query)?;
+            }
+        }
+        Ok(())
+    }
     fn collision_full_block(
         &mut self,
         state: BlockStateId,
@@ -569,6 +602,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &fluid_tags.tags,
     )?;
     let chest = registry.default_state("minecraft:chest").unwrap();
+    let vegetation: BTreeSet<BlockStateId> = ["minecraft:short_grass", "minecraft:fern"]
+        .iter()
+        .filter_map(|n| by_name.get(*n))
+        .flatten()
+        .copied()
+        .collect();
+    let faceless_vine = by_name.get("minecraft:vine").and_then(|ids| {
+        ids.iter()
+            .copied()
+            .find(|id| registry.state(*id).is_some_and(|s| s.properties.values().all(|v| v == "false")))
+    });
     let water_mask = fluid_tags.tags["minecraft:water"]
         .iter()
         .fold(0, |mask, name| {
@@ -594,6 +638,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             chest,
             world_random: LegacyRandom::new(0),
             water_mask,
+            faceless_vine,
+            vegetation: vegetation.clone(),
+            air: BlockStateId(air),
         };
         let seed = f["seed"].as_i64().unwrap();
         if f["legacy"].as_bool().unwrap() {
