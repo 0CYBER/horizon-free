@@ -66,6 +66,8 @@ pub struct Frame<'a> {
     pub celestial: &'a [Vertex],
     /// First-person hand and held item, drawn after clearing depth.
     pub hand: &'a [Vertex],
+    /// Full-screen camera effects drawn over the world and hand, under the HUD.
+    pub screen: &'a [crate::screen_effects::ScreenQuad],
     pub game_time: f32,
     pub ticks: u64,
 }
@@ -84,6 +86,10 @@ pub struct Renderer {
     entity_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
+    /// Screen effects: alpha-blended and vignette (`dst * (1 - src)`) pipelines.
+    screen_pipelines: [wgpu::RenderPipeline; 2],
+    screen_buffer: wgpu::Buffer,
+    screen_capacity: u64,
     entity_group: wgpu::BindGroup,
     entity_buffer: wgpu::Buffer,
     entity_capacity: u64,
@@ -653,6 +659,62 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let screen_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Horizon screen effects"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("screen.wgsl").into()),
+        });
+        let screen_attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Float32x4,3=>Float32x4];
+        let screen_vertex = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &screen_attributes,
+        })];
+        let vignette_blend = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::OneMinusSrc,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let screen_pipelines = [("fs_screen", alpha_blend), ("fs_vignette", vignette_blend)].map(|(entry, blend)| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Screen effects"),
+                layout: Some(&entity_layout),
+                vertex: wgpu::VertexState {
+                    module: &screen_shader,
+                    entry_point: Some("vs_screen"),
+                    compilation_options: Default::default(),
+                    buffers: &screen_vertex,
+                },
+                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &screen_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format.remove_srgb_suffix(),
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        });
+        let screen_capacity = 64;
+        let screen_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Screen effect vertices"),
+            size: screen_capacity * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let celestial_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Celestial vertices"),
             size: 2048 * 4 * std::mem::size_of::<Vertex>() as u64,
@@ -681,6 +743,9 @@ impl Renderer {
             entity_pipeline,
             celestial_pipeline,
             celestial_buffer,
+            screen_pipelines,
+            screen_buffer,
+            screen_capacity,
             entity_group,
             entity_buffer,
             entity_capacity,
@@ -1284,6 +1349,41 @@ impl Renderer {
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
             pass.draw_indexed(0..hand_quads * 6, (entity_quads * 4) as i32, 0..1);
+        }
+        if !frame.screen.is_empty() {
+            let vertices: Vec<crate::screen_effects::ScreenVertex> = frame.screen.iter().flat_map(|q| q.vertices).collect();
+            if vertices.len() as u64 > self.screen_capacity {
+                self.screen_capacity = (vertices.len() as u64).next_power_of_two();
+                self.screen_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Screen effect vertices"),
+                    size: self.screen_capacity * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.queue.write_buffer(&self.screen_buffer, 0, bytemuck::cast_slice(&vertices));
+            let attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &view_target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Screen effects"),
+                color_attachments: &attachments,
+                ..Default::default()
+            });
+            pass.set_bind_group(0, &self.entity_group, &[]);
+            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_vertex_buffer(0, self.screen_buffer.slice(..));
+            for (i, quad) in frame.screen.iter().enumerate() {
+                let pipeline = match quad.blend {
+                    crate::screen_effects::Blend::Alpha => &self.screen_pipelines[0],
+                    crate::screen_effects::Blend::Vignette => &self.screen_pipelines[1],
+                };
+                pass.set_pipeline(pipeline);
+                pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
+            }
         }
         self.hud.draw(
             &self.device,

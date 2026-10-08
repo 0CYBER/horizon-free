@@ -281,6 +281,7 @@ pub struct Resources {
     block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer,
     animate: horizon_client::animate_tick::AnimateTables,
     fog: horizon_client::fog::FogRenderer,
+    screen_fx: horizon_client::screen_effects::ScreenEffects,
     nether_environment: Environment,
     behaviours: Behaviours,
     names: Names,
@@ -4134,6 +4135,7 @@ impl Game<'_> {
             Vec::new()
         };
         let hand = if title || self.screen == Screen::Inventory { Vec::new() } else { self.hand_geometry(alpha) };
+        let screen = if title { Vec::new() } else { self.screen_quads(alpha as f32, size) };
         let mut entities = entities;
         if !title && self.dim == Dim::Overworld {
             self.cloud_geometry(&sky, camera, alpha, &mut entities);
@@ -4170,6 +4172,7 @@ impl Game<'_> {
             entities: &entities,
             celestial: &celestial,
             hand: &hand,
+            screen: &screen,
             game_time: self.world.game_time as f32,
             ticks: self.ticks,
         };
@@ -4662,6 +4665,7 @@ pub fn run() -> Result<()> {
         block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(&root, &registry_owner.registry)?,
         animate,
         fog,
+        screen_fx: Default::default(),
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         behaviours: Behaviours::load(registry_owner.registry, &root)?,
         names: Names::load(&root),
