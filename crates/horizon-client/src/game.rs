@@ -31,6 +31,7 @@ mod station_control;
 mod stations;
 mod titles;
 mod tnt;
+mod totem;
 mod trading;
 use horizon_client::{
     Result,
@@ -1923,6 +1924,8 @@ impl Game<'_> {
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
+        self.apply_totem();
+        self.update_totem_ready();
         if self.riding.is_some() && self.player.is_some() {
             let playing = self.screen == Screen::Playing;
             let held = |k| playing && self.keys.contains(&k);
@@ -2043,6 +2046,7 @@ impl Game<'_> {
                 _ => {}
             }
         }
+        self.apply_totem();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };

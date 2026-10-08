@@ -136,6 +136,10 @@ pub struct PlayerHealth {
     pub sync_velocity: bool,
     pub game_time: i64,
     pub tick_count: i32,
+    /// A death-protection item (totem) is in either hand.
+    pub totem_ready: bool,
+    /// The totem saved the player this tick; the game applies its effects.
+    pub totem_used: bool,
 }
 impl PlayerHealth {
     pub fn new(resources: &HealthResources, attributes: &mut Attributes) -> Result<Self> {
@@ -181,6 +185,8 @@ impl PlayerHealth {
             sync_velocity: false,
             game_time: 0,
             tick_count: 0,
+            totem_ready: false,
+            totem_used: false,
         })
     }
     pub fn health(&self) -> f32 {
@@ -233,6 +239,7 @@ impl PlayerMotion {
             .damage
             .source::<()>(source, None, None, None)
             .ok_or("unknown resident damage source")?;
+        let totem_ready = self.health.totem_ready;
         let h = &mut self.health;
         let mut environment = Environment {
             rules,
@@ -245,6 +252,8 @@ impl PlayerMotion {
             blocking,
             blocked: 0.0,
             block_sound: false,
+            totem: totem_ready,
+            totem_fired: false,
         };
         let hurt = ServerPlayerCombat::new(
             &mut self.attributes,
@@ -254,11 +263,16 @@ impl PlayerMotion {
             &mut environment,
         )?
         .hurt(&mut h.hurt, amount)?;
-        Ok(BlockOutcome {
+        let outcome = BlockOutcome {
             hurt,
             blocked: environment.blocked,
             sound: environment.block_sound,
-        })
+        };
+        if environment.totem_fired {
+            self.health.totem_used = true;
+            self.health.totem_ready = false;
+        }
+        Ok(outcome)
     }
     pub fn set_health(&mut self, value: f32, absorption: bool) -> Result<()> {
         let h = &mut self.health;
@@ -291,6 +305,9 @@ pub(crate) struct Environment<'a> {
     pub(crate) blocking: Option<Blocking>,
     pub(crate) blocked: f32,
     pub(crate) block_sound: bool,
+    /// LivingEntity.checkTotemDeathProtection: a totem is held / was used.
+    pub(crate) totem: bool,
+    pub(crate) totem_fired: bool,
 }
 /// `LivingEntity.applyItemBlocking` inputs for a raised `BlocksAttacks` item:
 /// reductions whose damage-type sets are already matched against the source.
@@ -540,8 +557,16 @@ impl HurtWorld for Environment<'_> {
         Ok(())
     } // no entity or position on these sources
     fn death_protection(&mut self, _: &mut State) -> io::Result<bool> {
-        Ok(false)
-    } // empty hands
+        if !self.totem
+            || self
+                .source
+                .immunity_tag(ImmunityTag::BypassesInvulnerability)
+        {
+            return Ok(false);
+        }
+        self.totem_fired = true;
+        Ok(true)
+    }
     fn death_sound(&mut self, _: &mut State) -> io::Result<()> {
         Ok(())
     }

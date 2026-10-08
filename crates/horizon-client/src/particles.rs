@@ -730,8 +730,21 @@ impl ParticleEngine {
         width: f64,
         height: f64,
     ) {
+        self.tracking_emitter_for(options, feet, width, height, 3);
+    }
+    /// `createTrackingEmitter(entity, type, lifetime)`.
+    pub fn tracking_emitter_for(
+        &mut self,
+        options: ParticleOptions,
+        feet: [f64; 3],
+        width: f64,
+        height: f64,
+        life: u32,
+    ) {
         self.emit(&options, feet, width, height);
-        self.emitters.push((options, feet, width, height, 2));
+        if life > 1 {
+            self.emitters.push((options, feet, width, height, life - 1));
+        }
     }
     fn emit(&mut self, options: &ParticleOptions, feet: [f64; 3], width: f64, height: f64) {
         for _ in 0..16 {
