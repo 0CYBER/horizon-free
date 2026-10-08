@@ -5,6 +5,9 @@ use super::{Brain, Flags, anim::Anim};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Species {
+    ZombieHorse,
+    SkeletonHorse,
+    Giant,
     Pig,
     Cow,
     Mooshroom,
@@ -177,6 +180,44 @@ pub const ALL: &[Def] = &[
         ],
         None,
         Baby::Abs(0.24, 0.4, 0.39)
+    ),
+    def!(
+        ZombieHorse,
+        "zombie_horse",
+        "zombie_horse#main",
+        "entity/horse/horse_zombie",
+        A::Horse,
+        [
+            "entity.zombie_horse.ambient",
+            "entity.zombie_horse.hurt",
+            "entity.zombie_horse.death"
+        ],
+        Some("entity.horse.step"),
+        Baby::Scale(0.7, None)
+    ),
+    def!(
+        SkeletonHorse,
+        "skeleton_horse",
+        "skeleton_horse#main",
+        "entity/horse/horse_skeleton",
+        A::Horse,
+        [
+            "entity.skeleton_horse.ambient",
+            "entity.skeleton_horse.hurt",
+            "entity.skeleton_horse.death"
+        ],
+        Some("entity.horse.step"),
+        Baby::Scale(0.7, None)
+    ),
+    def!(
+        Giant,
+        "giant",
+        "giant#main",
+        "entity/zombie/zombie",
+        A::Humanoid { zombie_arms: true },
+        ["", "entity.generic.hurt", "entity.generic.death"],
+        None,
+        Baby::None
     ),
     def!(
         Horse,
@@ -1026,6 +1067,8 @@ impl Def {
                 | S::Stray
                 | S::Bogged
                 | S::WitherSkeleton
+                | S::ZombieHorse
+                | S::SkeletonHorse
                 | S::Phantom
                 | S::ZombifiedPiglin
                 | S::Zoglin

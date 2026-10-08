@@ -65,6 +65,8 @@ pub enum Family {
     Hostile,
     Aquatic,
     Generic,
+    /// No goals at all (Giant).
+    Inert,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -86,6 +88,7 @@ pub fn family(s: Species) -> Family {
         | S::TropicalFish
         | S::Pufferfish
         | S::Dolphin => Family::Aquatic,
+        S::Giant => Family::Inert,
         _ => Family::Generic,
     }
 }
@@ -96,6 +99,7 @@ pub fn register(m: &mut Mob) {
         Family::Hostile => hostile::register(m),
         Family::Aquatic => aquatic::register(m),
         Family::Generic => generic(m),
+        Family::Inert => {}
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
