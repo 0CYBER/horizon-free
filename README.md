@@ -11,32 +11,44 @@ Horizon is a Rust rewrite of Minecraft Java **26.3** targeting one-to-one vanill
 - passive and hostile mobs with combat;
 - Anvil saves.
 
-Parity is **not** complete. Still missing: multiplayer, the End, most structures (jigsaw starts and five piece-based structures exist), about half the placed features (127 of 273 are skipped), most mob types, chat and commands, enchanting, anvils, brewing, smithing and trading, and sapling growth. Fluids, redstone, pistons, crop growth, random and scheduled ticks and the Nether run in the client. See [Rust rewrite status](docs/rust-parity.md).
+Parity is **not** complete. Still missing: the ender dragon fight, boats, minecarts, item frames, paintings and armor stands, the warden, shields, maps, books, fireworks, beacons, the loom and cartography table, `/execute` and most other commands beyond the basic set, field-of-view effects (sprint, bow, spyglass) and the sculk family. Multiplayer joins vanilla servers but Horizon cannot host one. See [Rust rewrite status](docs/rust-parity.md).
 
-### Java parity: 55%
+### Java parity: 71%
 
 Each subsystem scores 0 (absent), 0.25 (started, not playable), 0.5 (playable,
 major vanilla features missing), 0.75 (playable, mostly complete) or 1 (complete
 and verified against vanilla by differential tests). The percentage is the
 average; `tests/test_parity.py` keeps it in sync with this table. Last audited
-2026-10-08 against the code, not the docs.
+2026-10-09 against the code, not the docs: 214 of 215 `tools/test_*_parity.py`
+differential harnesses pass (the tree feature harness diverges), and the client
+joins a vanilla 26.3 server.
 
 | Subsystem | Score | Main gaps |
 | --- | ---: | --- |
-| Window, input and game loop | 0.75 | No controls screen or fullscreen toggle |
-| Assets and resources | 0.75 | Heuristic item icons; no language files or resource packs |
-| Network protocol and multiplayer | 0 | No networking at all |
+| Window, input and game loop | 0.75 | No field-of-view effects (sprint, speed, bow, underwater, death) |
+| Assets and resources | 0.75 | Heuristic item icons for some items |
+| Network protocol and multiplayer | 0.5 | Joins vanilla servers (chunks, entities, chat); cannot host or open to LAN |
 | Chunk storage and palettes | 0.75 | Client uses plain arrays; palettes only on save |
 | Section meshing | 0.75 | Whole-mesh output not compared with vanilla |
-| Rendering | 0.5 | Few particles; chest is the only block-entity model; 9 mob models |
+| Rendering | 0.75 | No item frames, paintings, armor stands, vehicles or beacon beams |
 | Lighting | 0.75 | Slabs/stairs light wrong; light not saved or tested against vanilla |
-| World generation | 0.5 | No End; 127 of 273 placed features skipped; few structures |
-| Region files and saves | 0.5 | Mobs, dropped items, scheduled ticks and light not saved |
-| Entities and physics | 0.5 | 9 mob types with simple AI |
-| Interaction and inventory | 0.5 | No enchanting, anvil, brewing, smithing or trading |
-| Menus, HUD and chat | 0.5 | No chat, commands, controls screen or recipe book |
-| Audio | 0.5 | No music or ambient sounds |
-| Block behaviours and ticking | 0.5 | Saplings never grow; TNT has no fuse; hoppers/dispensers don't move items |
+| World generation | 0.75 | Tree feature output diverges from vanilla; whole chunks not compared end to end |
+| Region files and saves | 0.75 | Light not saved; some block entities kept as raw NBT |
+| Entities and physics | 0.5 | No ender dragon, warden, boats, minecarts or decorative entities |
+| Interaction and inventory | 0.75 | No shields, loom, cartography table, beacon, crafter, maps or books |
+| Menus, HUD and chat | 0.75 | About 30 commands; no `/execute`, `/tellraw`, `/title`, scoreboards or recipe book |
+| Audio | 0.75 | Music and ambience not verified by ear; no subtitles |
+| Block behaviours and ticking | 0.75 | No sculk, lightning or creaking hearts; dispensers lack most item behaviours |
+
+### Next steps
+
+1. Fix the tree feature divergence (`python3 tools/test_tree_feature_parity.py`) so all differential harnesses pass.
+2. Field-of-view modifiers and the spyglass (`AbstractClientPlayer.getFieldOfViewModifier`, `Camera.tickFov`).
+3. Shields and blocking: wire the existing `horizon-world` blocking kernels into player and mob damage.
+4. `/execute` with a real command source (position, rotation, executor, dimension), then `/tellraw` and `/title`.
+5. Decorative entities (item frames, paintings, armor stands), then boats and minecarts.
+6. The ender dragon fight and the warden.
+7. Hosting: an integrated server so Horizon worlds can be opened to LAN.
 
 ```sh
 python3 tools/prepare_native_client.py --prepare   # needs JDK 25; extracts private vanilla resources
