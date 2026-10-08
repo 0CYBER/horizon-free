@@ -72,7 +72,9 @@ quads identical (46%); 7,685 fluid quads missing, 9,231 extra quads, and
 light/colour differences on most of the rest.
 
 After: all 841,775 quads of the 94 scenes match and are identical, and all
-per-state facts match.
+per-state facts match. Meshing cost is unchanged within noise: the fixture
+meshes the 94 (dense) corpus sections in about 3 ms each with both the old and
+the ported mesher (`--profile fast`, loaded 24-thread desktop).
 
 What was ported to get there:
 
