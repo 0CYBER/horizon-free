@@ -52,6 +52,8 @@ pub struct Frame<'a> {
     pub entities: &'a [Vertex],
     /// Camera-relative sun, moon and stars (drawn behind everything, additive).
     pub celestial: &'a [Vertex],
+    /// First-person hand and held item, drawn after clearing depth.
+    pub hand: &'a [Vertex],
     pub game_time: f32,
     pub ticks: u64,
 }
@@ -1054,7 +1056,17 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
         }
-        let entity_vertices = frame.entities.len() as u64;
+        let mut combined;
+        let all_entities: &[Vertex] = if frame.hand.is_empty() {
+            frame.entities
+        } else {
+            combined = Vec::with_capacity(frame.entities.len() + frame.hand.len());
+            combined.extend_from_slice(frame.entities);
+            combined.extend_from_slice(frame.hand);
+            &combined
+        };
+        let hand_quads = (frame.hand.len() / 4) as u32;
+        let entity_vertices = all_entities.len() as u64;
         if entity_vertices > self.entity_capacity {
             self.entity_capacity = entity_vertices.next_power_of_two();
             self.entity_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1066,7 +1078,7 @@ impl Renderer {
         }
         if entity_vertices > 0 {
             self.queue
-                .write_buffer(&self.entity_buffer, 0, bytemuck::cast_slice(frame.entities));
+                .write_buffer(&self.entity_buffer, 0, bytemuck::cast_slice(all_entities));
         }
         let celestial_vertices = frame.celestial.len().min(2048 * 4);
         if celestial_vertices > 0 {
@@ -1076,9 +1088,9 @@ impl Renderer {
                 bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
             );
         }
-        let entity_quads = (entity_vertices / 4) as u32;
-        if entity_quads > self.index_quads {
-            self.index_quads = entity_quads.next_power_of_two();
+        let entity_quads = (entity_vertices / 4) as u32 - hand_quads;
+        if entity_quads + hand_quads > self.index_quads {
+            self.index_quads = (entity_quads + hand_quads).next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         let view_target = surface_frame.texture.create_view(&wgpu::TextureViewDescriptor {
@@ -1177,6 +1189,35 @@ impl Renderer {
                     i as u32..i as u32 + 1,
                 );
             }
+        }
+        if hand_quads > 0 {
+            let attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &view_target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("First-person hand"),
+                color_attachments: &attachments,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.entity_pipeline);
+            pass.set_bind_group(0, &self.entity_group, &[]);
+            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+            pass.draw_indexed(0..hand_quads * 6, (entity_quads * 4) as i32, 0..1);
         }
         self.hud.draw(
             &self.device,

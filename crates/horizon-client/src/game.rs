@@ -171,6 +171,9 @@ pub struct Resources {
     clouds: (u32, u32, Vec<bool>),
     context: Arc<WorkerContext>,
     threads: usize,
+    player_arm: Option<horizon_client::mobs::Part>,
+    /// firstperson_righthand display transforms per item: (rotation, translation, scale).
+    displays: HashMap<String, Option<([f32; 3], [f32; 3], [f32; 3])>>,
 }
 struct Game<'a> {
     res: &'a mut Resources,
@@ -240,6 +243,12 @@ struct Game<'a> {
     orbs: Vec<ExperienceOrb>,
     xp_delay: u32,
     last_level_up: u64,
+    /// Arm swing: ticks into the 6-tick swing (None when idle), previous/current progress.
+    swing: Option<u32>,
+    swing_anim: (f32, f32),
+    /// Main-hand equip height (previous, current) and the item it shows.
+    hand_height: (f32, f32),
+    hand_item: Option<ItemStack>,
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -725,6 +734,7 @@ impl Game<'_> {
             }
         }
         self.world.set(target[0], target[1], target[2], state)?;
+        self.swing_arm();
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
             self.world.block_entities.insert((target[0], target[1], target[2]), entity);
         }
@@ -860,6 +870,7 @@ impl Game<'_> {
             speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
         };
         let hit_sound = facts.sounds.clone();
+        self.swing_arm();
         let m = self.mining.as_mut().ok_or("mining")?;
         m.progress += progress;
         m.ticks += 1;
@@ -1072,6 +1083,7 @@ impl Game<'_> {
         self.tick_items();
         self.tick_mobs()?;
         self.tick_experience();
+        self.tick_hand();
         self.tick_block_entities()?;
         let facts = &self.res.facts;
         let world = &self.world;
@@ -2072,6 +2084,7 @@ impl Game<'_> {
         }
         let player = self.player.as_ref();
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
+        self.swing_arm();
         let mob = &mut self.mobs[index];
         let center = [mob.position.x, mob.position.y + mob.kind.height / 2.0, mob.position.z];
         if mob.hurt(amount, from, &mut self.world.random) {
@@ -2931,6 +2944,181 @@ impl Game<'_> {
         }
         self.damage_held(1);
     }
+    /// LivingEntity.swing: restart the 6-tick arm swing.
+    fn swing_arm(&mut self) {
+        if self.swing.is_none_or(|t| t >= 3) {
+            self.swing = Some(0);
+        }
+    }
+    /// LivingEntity.updateSwingTime and ItemInHandRenderer.tick (equip height).
+    fn tick_hand(&mut self) {
+        self.swing_anim.0 = self.swing_anim.1;
+        if let Some(t) = self.swing {
+            let t = t + 1;
+            if t >= 6 {
+                self.swing = None;
+                self.swing_anim.1 = 0.0;
+            } else {
+                self.swing = Some(t);
+                self.swing_anim.1 = t as f32 / 6.0;
+            }
+        }
+        self.hand_height.0 = self.hand_height.1;
+        let held = self.inventory[self.selected].clone();
+        let same = match (&held, &self.hand_item) {
+            (Some(a), Some(b)) => a.item == b.item,
+            (None, None) => true,
+            _ => false,
+        };
+        let target = if same { 1.0 } else { 0.0 };
+        self.hand_height.1 += (target - self.hand_height.1).clamp(-0.4, 0.4);
+        if self.hand_height.1 < 0.1 {
+            self.hand_item = held;
+        }
+    }
+    fn display_transform(&mut self, item: &str) -> Option<([f32; 3], [f32; 3], [f32; 3])> {
+        if let Some(d) = self.res.displays.get(item) {
+            return *d;
+        }
+        let root = &self.options.resources;
+        let name = item.trim_start_matches("minecraft:");
+        let model_name = self.res.items.get(item).map_or(name.to_owned(), |i| i.model.trim_start_matches("minecraft:").to_owned());
+        let mut found = None;
+        let def: Option<serde_json::Value> = std::fs::read(root.join(format!("assets/minecraft/items/{model_name}.json"))).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        let mut current = def.and_then(|d| {
+            fn first(v: &serde_json::Value) -> Option<String> {
+                match v {
+                    serde_json::Value::Object(o) => {
+                        if o.get("type").and_then(|t| t.as_str()) == Some("minecraft:model") {
+                            return o.get("model").and_then(|m| m.as_str()).map(str::to_owned);
+                        }
+                        o.values().find_map(first)
+                    }
+                    serde_json::Value::Array(a) => a.iter().find_map(first),
+                    _ => None,
+                }
+            }
+            first(&d["model"])
+        });
+        for _ in 0..16 {
+            let Some(m) = current.take() else { break };
+            let path = m.trim_start_matches("minecraft:").to_owned();
+            let Some(model) = std::fs::read(root.join(format!("assets/minecraft/models/{path}.json"))).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) else { break };
+            let d = &model["display"]["firstperson_righthand"];
+            if d.is_object() {
+                let v = |k: &str, default: f32| -> [f32; 3] {
+                    let a = d[k].as_array();
+                    std::array::from_fn(|i| a.and_then(|a| a.get(i)).and_then(|x| x.as_f64()).map_or(default, |x| x as f32))
+                };
+                found = Some((v("rotation", 0.0), v("translation", 0.0), v("scale", 1.0)));
+                break;
+            }
+            current = model["parent"].as_str().map(str::to_owned);
+        }
+        self.res.displays.insert(item.to_owned(), found);
+        found
+    }
+    /// FirstPersonHandsAndItemsRenderer: the right arm or held item in view
+    /// space, converted to camera-relative world space.
+    fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        if self.player.as_ref().is_none_or(|p| p.health.dead_or_dying()) || self.screen == Screen::Dead {
+            return out;
+        }
+        let a = alpha as f32;
+        let attack = self.swing_anim.0 + (self.swing_anim.1 - self.swing_anim.0) * a;
+        let attack = if self.swing.is_none() && self.swing_anim.1 == 0.0 { 0.0 } else { attack };
+        let height = self.hand_height.0 + (self.hand_height.1 - self.hand_height.0) * a;
+        let inverse_height = 1.0 - height;
+        let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
+        let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
+        let view = glam::Mat4::look_to_rh(glam::Vec3::ZERO, forward, glam::Vec3::Y);
+        let to_world = view.inverse();
+        let eye = self.eye_position().unwrap_or_default();
+        let light = self.world.light(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32);
+        let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+        let deg = |d: f32| d.to_radians();
+        let sqrt_attack = attack.sqrt();
+        match self.hand_item.clone() {
+            None => {
+                let Some(arm) = self.res.player_arm.clone() else { return out };
+                let Some(r) = self.res.atlas.sprites.get("entity/player/wide/steve").copied() else { return out };
+                // renderPlayerArm (right arm)
+                let x_swing = -0.3 * (sqrt_attack * std::f32::consts::PI).sin();
+                let y_swing = 0.4 * (sqrt_attack * std::f32::consts::TAU).sin();
+                let z_swing = -0.4 * (attack * std::f32::consts::PI).sin();
+                let z_rot = (attack * attack * std::f32::consts::PI).sin();
+                let y_rot = (sqrt_attack * std::f32::consts::PI).sin();
+                let m = to_world
+                    * glam::Mat4::from_translation(glam::Vec3::new(x_swing + 0.64, y_swing - 0.6 + inverse_height * -0.6, z_swing - 0.72))
+                    * glam::Mat4::from_rotation_y(deg(45.0))
+                    * glam::Mat4::from_rotation_y(deg(y_rot * 70.0))
+                    * glam::Mat4::from_rotation_z(deg(z_rot * -20.0))
+                    * glam::Mat4::from_translation(glam::Vec3::new(-1.0, 3.6, 3.5))
+                    * glam::Mat4::from_rotation_z(deg(120.0))
+                    * glam::Mat4::from_rotation_x(deg(200.0))
+                    * glam::Mat4::from_rotation_y(deg(-135.0))
+                    * glam::Mat4::from_translation(glam::Vec3::new(5.6, 0.0, 0.0));
+                let pose = |p: &horizon_client::mobs::Part| {
+                    let mut pose = p.pose;
+                    pose[3] = 0.0;
+                    pose[4] = 0.0;
+                    pose[5] = 0.0;
+                    pose
+                };
+                horizon_client::mobs::render_model(&arm, m, &pose, [r.u0, r.v0, r.u1, r.v1], packed, 0, &mut out);
+            }
+            Some(stack) => {
+                let display = self.display_transform(&stack.item).unwrap_or(([0.0; 3], [0.0; 3], [1.0; 3]));
+                let icon = self.icon(&stack.item);
+                // applyItemArmTransform + swingArm (applyItemArmAttackTransform)
+                let x = -0.4 * (sqrt_attack * std::f32::consts::PI).sin();
+                let y = 0.2 * (sqrt_attack * std::f32::consts::TAU).sin();
+                let z = -0.2 * (attack * std::f32::consts::PI).sin();
+                let y_swing_rot = (attack * attack * std::f32::consts::PI).sin();
+                let xz_swing_rot = (sqrt_attack * std::f32::consts::PI).sin();
+                let (rot, trans, scale) = display;
+                let m = to_world
+                    * glam::Mat4::from_translation(glam::Vec3::new(0.56, -0.52 + inverse_height * -0.6, -0.72))
+                    * glam::Mat4::from_translation(glam::Vec3::new(x, y, z))
+                    * glam::Mat4::from_rotation_y(deg(45.0 + y_swing_rot * -20.0))
+                    * glam::Mat4::from_rotation_z(deg(xz_swing_rot * -20.0))
+                    * glam::Mat4::from_rotation_x(deg(xz_swing_rot * -80.0))
+                    * glam::Mat4::from_rotation_y(deg(-45.0))
+                    // ItemTransform.apply: translation is in sixteenths, rotation XYZ, then scale.
+                    * glam::Mat4::from_translation(glam::Vec3::from(trans) / 16.0)
+                    * glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::XYZ, deg(rot[0]), deg(rot[1]), deg(rot[2])))
+                    * glam::Mat4::from_scale(glam::Vec3::from(scale))
+                    * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
+                let atlas = &self.res.atlas;
+                let quad = |corners: [glam::Vec3; 4], name: &str, shade: f32, tint: u32, out: &mut Vec<Vertex>| {
+                    let Some(r) = atlas.sprites.get(name).copied() else { return };
+                    let uv = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
+                    let c = |sft: u32| (((tint >> sft) & 255) as f32 * shade) as u32;
+                    let color = 0xFF00_0000 | c(0) << 16 | c(8) << 8 | c(16);
+                    for (p, uv) in corners.iter().zip(uv) {
+                        out.push(Vertex { pos: m.transform_point3(*p).to_array(), uv, layer: 0, color, light: packed });
+                    }
+                };
+                let v = glam::Vec3::new;
+                match icon {
+                    Some(Icon::Cube { top, left, right, tint }) => {
+                        quad([v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)], &top, 1.0, tint, &mut out);
+                        quad([v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)], &left, 0.8, 0xFFFFFF, &mut out);
+                        quad([v(1., 0., 0.), v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.)], &left, 0.8, 0xFFFFFF, &mut out);
+                        quad([v(1., 0., 1.), v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.)], &right, 0.6, 0xFFFFFF, &mut out);
+                        quad([v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)], &right, 0.6, 0xFFFFFF, &mut out);
+                    }
+                    Some(Icon::Flat(name)) => {
+                        // Generated item models are a sprite on the z = 8/16 plane.
+                        quad([v(0., 0., 0.5), v(1., 0., 0.5), v(1., 1., 0.5), v(0., 1., 0.5)], &name, 1.0, 0xFFFFFF, &mut out);
+                    }
+                    None => {}
+                }
+            }
+        }
+        out
+    }
     fn save_game(&mut self) -> Result<()> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys
@@ -3012,6 +3200,7 @@ impl Game<'_> {
         let title = self.title.is_some();
         let entities = if title { Vec::new() } else { self.entity_geometry(camera, alpha) };
         let celestial = if title { self.panorama_geometry() } else { self.celestial_geometry(&sky) };
+        let hand = if title || self.screen == Screen::Inventory { Vec::new() } else { self.hand_geometry(alpha) };
         let mut entities = entities;
         if !title {
             self.cloud_geometry(&sky, camera, alpha, &mut entities);
@@ -3038,6 +3227,7 @@ impl Game<'_> {
             hud: &hud,
             entities: &entities,
             celestial: &celestial,
+            hand: &hand,
             game_time: self.world.game_time as f32,
             ticks: self.ticks,
         };
@@ -3447,6 +3637,9 @@ pub fn run() -> Result<()> {
         mob_types: MobTypes::load(&root)?.types.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
         context,
         threads,
+        player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
+            .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
+        displays: HashMap::new(),
     };
     let inventory = vec![None; 36];
     let now = Instant::now();
@@ -3516,6 +3709,10 @@ pub fn run() -> Result<()> {
         orbs: Vec::new(),
         xp_delay: 0,
         last_level_up: 0,
+        swing: None,
+        swing_anim: (0.0, 0.0),
+        hand_height: (1.0, 1.0),
+        hand_item: None,
     };
     match game.options.world.clone() {
         Some(folder) => {
