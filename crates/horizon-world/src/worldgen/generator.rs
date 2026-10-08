@@ -1264,6 +1264,11 @@ trait SeededPipeline: Send + Sync {
     ) -> Result<DecorateStats, GeneratorError>;
     fn data(&self) -> &Arc<GeneratorData>;
     fn sea_level(&self) -> i32;
+    fn structure_starts(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+    ) -> Vec<Arc<super::structure::start::StructureStart>>;
     fn unsupported_features(&self) -> Vec<(String, String)>;
 }
 impl<R: RandomSource + 'static> SeededPipeline for Pipeline<R>
@@ -1313,6 +1318,25 @@ where
     }
     fn sea_level(&self) -> i32 {
         self.settings.sea_level
+    }
+    fn structure_starts(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+    ) -> Vec<Arc<super::structure::start::StructureStart>> {
+        match &self.structures {
+            Some(structures) => structures
+                .starts_at(
+                    &mut StructureQueries {
+                        pipeline: self,
+                        worker,
+                        valid: BTreeSet::new(),
+                    },
+                    pos,
+                )
+                .to_vec(),
+            None => Vec::new(),
+        }
     }
     fn unsupported_features(&self) -> Vec<(String, String)> {
         self.decoration
@@ -1451,6 +1475,13 @@ impl GeneratorWorker {
         let result = self.pipeline.generate(&mut self.state, pos);
         self.state.timings.chunks += 1;
         result
+    }
+    /// STRUCTURE_STARTS: the structure starts owned by a chunk (cached).
+    pub fn structure_starts(
+        &mut self,
+        pos: ChunkPos,
+    ) -> Vec<Arc<super::structure::start::StructureStart>> {
+        self.pipeline.structure_starts(&mut self.state, pos)
     }
     pub fn stage_timings(&self) -> StageTimings {
         self.state.timings

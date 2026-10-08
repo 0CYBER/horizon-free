@@ -66,14 +66,17 @@ pub(super) fn read_state(registry: &BlockRegistry, tag: &Tag) -> BlockStateId {
     let Tag::Compound(compound) = tag else {
         return air;
     };
-    let Some(name) = string(get(compound, "Name")) else {
+    // 26.3 writes `id`/`properties`; older templates use `Name`/`Properties`.
+    let Some(name) = string(get(compound, "id")).or_else(|| string(get(compound, "Name"))) else {
         return air;
     };
     let Some(default) = registry.default_state(&name) else {
         return air;
     };
     let mut state = registry.state(default).unwrap().clone();
-    if let Some(Tag::Compound(properties)) = get(compound, "Properties") {
+    if let Some(Tag::Compound(properties)) =
+        get(compound, "properties").or_else(|| get(compound, "Properties"))
+    {
         for (key, value) in properties {
             let (Tag::String(value), key) = (value, key.to_string_lossy()) else {
                 continue;

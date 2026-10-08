@@ -345,9 +345,16 @@ impl Pools {
             let value: Value = serde_json::from_str(json).ok()?;
             let mut templates = Vec::new();
             for entry in value["elements"].as_array()? {
-                let element = Arc::new(
-                    PoolElement::decode(&entry["element"], resources, bindings, None).ok()?,
-                );
+                let element =
+                    match PoolElement::decode(&entry["element"], resources, bindings, None) {
+                        Ok(element) => Arc::new(element),
+                        Err(error) => {
+                            if std::env::var_os("HORIZON_JIGSAW_DEBUG").is_some() {
+                                eprintln!("pool {name}: {error}");
+                            }
+                            return None;
+                        }
+                    };
                 for _ in 0..entry["weight"].as_i64().unwrap_or(1) {
                     templates.push(element.clone());
                 }
@@ -687,12 +694,13 @@ impl Placer<'_, '_> {
         let source_rigid = source_element.projection() == Projection::Rigid;
         let mut source_free: Option<Rc<RefCell<Free>>> = None;
         let source_y = source_box.min[1];
-        'jigsaws: for jigsaw in source_element.shuffled_jigsaws(
+        let jigsaws = source_element.shuffled_jigsaws(
             self.resources,
             source_position,
             source_rotation,
             random,
-        ) {
+        );
+        'jigsaws: for jigsaw in jigsaws {
             let direction = jigsaw.front;
             let s = step(direction);
             let target_pos: [i32; 3] = std::array::from_fn(|i| jigsaw.pos[i] + s[i]);
