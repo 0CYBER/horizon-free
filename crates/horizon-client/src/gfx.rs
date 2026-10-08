@@ -9,7 +9,7 @@ use crate::{
     sprites::SpriteAnimation,
 };
 use glam::{DVec3, Mat4, Vec3, Vec4};
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
@@ -104,6 +104,10 @@ pub struct Renderer {
     pub drawn_sections: usize,
     pub uploaded_bytes: u64,
     started: Instant,
+    /// Write the next presented frame to this PNG path (control socket).
+    pub screenshot: Option<PathBuf>,
+    /// Outcome of the last screenshot: frame size, or the error.
+    pub screenshot_result: Option<std::result::Result<[u32; 2], String>>,
 }
 fn mip_chain(pixels: &[u8], size: u32, layers: u32) -> (Vec<u8>, u32) {
     let levels = size.trailing_zeros() + 1;
@@ -196,6 +200,10 @@ impl Renderer {
             .find(|f| !f.is_srgb())
             .unwrap_or(config.format);
         config.view_formats = vec![config.format.remove_srgb_suffix()];
+        // Screenshots copy the presented frame back from the swapchain.
+        if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+            config.usage |= wgpu::TextureUsages::COPY_SRC;
+        }
         config.present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
             wgpu::PresentMode::Mailbox
         } else {
@@ -688,6 +696,8 @@ impl Renderer {
             drawn_sections: 0,
             uploaded_bytes: 0,
             started: Instant::now(),
+            screenshot: None,
+            screenshot_result: None,
         })
     }
     fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
@@ -1243,7 +1253,11 @@ impl Renderer {
             frame.hud,
             [self.config.width, self.config.height],
         );
+        let readback = self.screenshot.take().map(|path| (path, self.copy_frame(&mut encoder, &surface_frame.texture)));
         self.queue.submit([encoder.finish()]);
+        if let Some((path, buffer)) = readback {
+            self.screenshot_result = Some(self.write_screenshot(&path, &buffer).map_err(|e| e.to_string()));
+        }
         self.window.pre_present_notify();
         self.queue.present(surface_frame);
         if reconfigure {
@@ -1251,6 +1265,61 @@ impl Renderer {
         }
         let _ = self.started;
         Ok(true)
+    }
+}
+impl Renderer {
+    fn padded_row(&self) -> u32 {
+        (self.config.width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+    }
+    fn copy_frame(&self, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) -> wgpu::Buffer {
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Horizon screenshot"),
+            size: u64::from(self.padded_row()) * u64::from(self.config.height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.padded_row()),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d { width: self.config.width, height: self.config.height, depth_or_array_layers: 1 },
+        );
+        buffer
+    }
+    fn write_screenshot(&self, path: &std::path::Path, buffer: &wgpu::Buffer) -> Result<[u32; 2]> {
+        if !self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
+            return Err("this surface does not support frame readback".into());
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+            let _ = sender.send(r);
+        });
+        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
+        receiver.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+        let (width, height, row) = (self.config.width, self.config.height, self.padded_row() as usize);
+        let bgra = matches!(self.config.format.remove_srgb_suffix(), wgpu::TextureFormat::Bgra8Unorm);
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        {
+            let data = buffer.get_mapped_range(..).map_err(|e| e.to_string())?;
+            for y in 0..height as usize {
+                for px in data[y * row..y * row + width as usize * 4].as_chunks::<4>().0 {
+                    let (r, b) = if bgra { (px[2], px[0]) } else { (px[0], px[2]) };
+                    pixels.extend_from_slice(&[r, px[1], b, 255]);
+                }
+            }
+        }
+        buffer.unmap();
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(path)?), width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header()?.write_image_data(&pixels)?;
+        Ok([width, height])
     }
 }
 fn frustum(m: Mat4) -> [Vec4; 6] {

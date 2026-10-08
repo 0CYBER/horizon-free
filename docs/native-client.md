@@ -54,6 +54,32 @@ Worlds autosave every 6000 ticks (5 minutes), when chunks unload and on quit.
 On headless Linux use `vscreen start ./target/release/horizon-client` and
 `vscreen shot`.
 
+### Drive the game from scripts (`horizon-ctl`)
+
+`--control` opens a local Unix socket (`$XDG_RUNTIME_DIR/horizon-control.sock`,
+or `--control-socket PATH`). `horizon-ctl` sends it one command per line and
+prints one JSON reply per command; the exit status is 1 when the reply holds an
+`error`. Under control, losing window focus does not pause the game or release
+held keys, so a script can play while you use other windows.
+
+```sh
+cargo build --release -p horizon-client --bins
+C=target/release/horizon-ctl
+$C launch --world Bench --seed 12345 --render-distance 32   # starts the game, waits for the socket
+$C wait-ready                     # player spawned, no chunks pending
+$C look 90 10; $C hold w 2        # face west, walk for two seconds
+$C screenshot /tmp/view.png       # PNG of the next presented frame
+$C bench 10                       # avg/1%-low FPS and p50/p95/p99/max frame times
+$C quit                           # save and exit
+```
+
+Other commands: `status`, `key KEY down|up|tap`, `mouse left|right|middle
+down|up|click`, `turn`, `tp X Y Z`, `hotbar N`, `give ITEM [COUNT]`,
+`render-distance N`, `time TICKS`, `resume`, `stats [reset]`, `open WORLD [SEED]
+[creative]` and `save`; `horizon-ctl help` lists them from the running game.
+`horizon-ctl -` reads a script from standard input, where `sleep S` waits locally.
+Frame times include waits for presentation, so `bench` reports what is on screen.
+
 ### Play on another of your machines
 
 Horizon targets Linux on ludodesktop (Ubuntu 26.04, RTX 4080); macOS and Windows

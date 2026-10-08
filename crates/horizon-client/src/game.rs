@@ -1,5 +1,6 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
+mod control;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -71,6 +72,8 @@ struct Options {
     time: Option<i64>,
     weather: Option<String>,
     dimension: Option<String>,
+    /// Control socket path (`--control`), for `horizon-ctl`.
+    control: Option<PathBuf>,
 }
 impl Options {
     fn read() -> Result<Option<Self>> {
@@ -98,18 +101,20 @@ impl Options {
             time: None,
             weather: None,
             dimension: None,
+            control: None,
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (tools/prepare_native_client.py)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
+                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (tools/prepare_native_client.py)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
                     );
                     return Ok(None);
                 }
                 "--creative" => o.creative = true,
                 "--test-terrain" => o.test_terrain = true,
+                "--control" => o.control = Some(horizon_client::control::default_path()),
                 _ => {
                     let value = args.next().ok_or_else(|| format!("missing value after {arg}"))?;
                     match arg.as_str() {
@@ -135,6 +140,7 @@ impl Options {
                         "--smoke-report" => o.report = Some(value.into()),
                         "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
                         "--world" => o.world = Some(value),
+                        "--control-socket" => o.control = Some(value.into()),
                         "--time" => o.time = Some(value.parse()?),
                         "--weather" => o.weather = Some(value),
                         "--dimension" => o.dimension = Some(if value.contains(':') { value } else { format!("minecraft:{value}") }),
@@ -368,6 +374,11 @@ struct Game<'a> {
     tick_chunks: HashSet<(i32, i32)>,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
+    control: Option<horizon_client::control::Server>,
+    frame_stats: horizon_client::control::FrameStats,
+    /// Control replies waiting for a rendered frame or a benchmark deadline.
+    pending_screenshot: Option<std::sync::mpsc::Sender<String>>,
+    pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -4010,6 +4021,91 @@ impl Game<'_> {
         };
         self.renderer.as_mut().ok_or("renderer")?.render(&frame)
     }
+    /// A key press while a world is open (keyboard or control socket).
+    fn key_pressed(&mut self, key: KeyCode) -> Result<()> {
+        match key {
+            KeyCode::Escape => match self.screen {
+                Screen::Options => {
+                    self.settings.save(&std::env::current_dir()?.join("options.txt"));
+                    self.screen = if self.options_from_title { Screen::Playing } else { Screen::Paused };
+                }
+                Screen::Playing => {
+                    self.screen = Screen::Paused;
+                    self.capture(false);
+                }
+                Screen::Paused | Screen::Inventory => {
+                    self.close_container();
+                    self.screen = Screen::Playing;
+                    self.capture(true);
+                }
+                Screen::Dead => {}
+            },
+            KeyCode::KeyE => match self.screen {
+                Screen::Playing => {
+                    self.screen = Screen::Inventory;
+                    self.capture(false);
+                }
+                Screen::Inventory => {
+                    self.close_container();
+                    self.screen = Screen::Playing;
+                    self.capture(true);
+                }
+                _ => {}
+            },
+            KeyCode::F3 => self.debug = !self.debug,
+            KeyCode::KeyQ if self.screen == Screen::Playing => {
+                let all = self.keys.contains(&KeyCode::ControlLeft);
+                self.drop_held(all);
+            }
+            KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 | KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
+                self.selected = match key {
+                    KeyCode::Digit1 => 0,
+                    KeyCode::Digit2 => 1,
+                    KeyCode::Digit3 => 2,
+                    KeyCode::Digit4 => 3,
+                    KeyCode::Digit5 => 4,
+                    KeyCode::Digit6 => 5,
+                    KeyCode::Digit7 => 6,
+                    KeyCode::Digit8 => 7,
+                    _ => 8,
+                };
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    /// A mouse button while playing (window or control socket).
+    fn play_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
+        match button {
+            MouseButton::Left => {
+                if pressed && self.attack() {
+                    return Ok(());
+                }
+                self.left = pressed;
+                if pressed {
+                    self.destroy_delay = 0;
+                }
+            }
+            MouseButton::Right => {
+                self.right = pressed;
+                if pressed {
+                    self.use_item()?;
+                    self.use_delay = 4;
+                }
+            }
+            MouseButton::Middle if pressed && self.creative => {
+                if let Some(hit) = self.pick() {
+                    let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+                    let item = self.res.facts.get(state).item.clone();
+                    if &*item != "minecraft:air" {
+                        self.inventory[self.selected] = Some(ItemStack { item, count: 1, damage: 0 });
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
     fn update_world(&mut self) {
         if let Some(p) = &self.player {
             self.streaming.center = ((p.position.x.floor() as i32) >> 4, (p.position.z.floor() as i32) >> 4);
@@ -4096,7 +4192,7 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;
-                    if !focused {
+                    if !focused && self.control.is_none() {
                         self.keys.clear();
                         self.left = false;
                         self.right = false;
@@ -4164,34 +4260,7 @@ impl ApplicationHandler for Game<'_> {
                                 self.capture(true);
                                 return Ok(());
                             }
-                            match button {
-                                MouseButton::Left => {
-                                    if pressed && self.attack() {
-                                        return Ok(());
-                                    }
-                                    self.left = pressed;
-                                    if pressed {
-                                        self.destroy_delay = 0;
-                                    }
-                                }
-                                MouseButton::Right => {
-                                    self.right = pressed;
-                                    if pressed {
-                                        self.use_item()?;
-                                        self.use_delay = 4;
-                                    }
-                                }
-                                MouseButton::Middle if pressed && self.creative => {
-                                    if let Some(hit) = self.pick() {
-                                        let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-                                        let item = self.res.facts.get(state).item.clone();
-                                        if &*item != "minecraft:air" {
-                                            self.inventory[self.selected] = Some(ItemStack { item, count: 1, damage: 0 });
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
+                            self.play_mouse(button, pressed)?;
                         }
                         Screen::Inventory if pressed => {
                             self.click_inventory(button == MouseButton::Right);
@@ -4249,55 +4318,7 @@ impl ApplicationHandler for Game<'_> {
                     if event.repeat {
                         return Ok(());
                     }
-                    match key {
-                        KeyCode::Escape => match self.screen {
-                            Screen::Options => {
-                                self.settings.save(&std::env::current_dir()?.join("options.txt"));
-                                self.screen = if self.options_from_title { Screen::Playing } else { Screen::Paused };
-                            }
-                            Screen::Playing => {
-                                self.screen = Screen::Paused;
-                                self.capture(false);
-                            }
-                            Screen::Paused | Screen::Inventory => {
-                                self.close_container();
-                                self.screen = Screen::Playing;
-                                self.capture(true);
-                            }
-                            Screen::Dead => {}
-                        },
-                        KeyCode::KeyE => match self.screen {
-                            Screen::Playing => {
-                                self.screen = Screen::Inventory;
-                                self.capture(false);
-                            }
-                            Screen::Inventory => {
-                                self.close_container();
-                                self.screen = Screen::Playing;
-                                self.capture(true);
-                            }
-                            _ => {}
-                        },
-                        KeyCode::F3 => self.debug = !self.debug,
-                        KeyCode::KeyQ if self.screen == Screen::Playing => {
-                            let all = self.keys.contains(&KeyCode::ControlLeft);
-                            self.drop_held(all);
-                        }
-                        KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 | KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
-                            self.selected = match key {
-                                KeyCode::Digit1 => 0,
-                                KeyCode::Digit2 => 1,
-                                KeyCode::Digit3 => 2,
-                                KeyCode::Digit4 => 3,
-                                KeyCode::Digit5 => 4,
-                                KeyCode::Digit6 => 5,
-                                KeyCode::Digit7 => 6,
-                                KeyCode::Digit8 => 7,
-                                _ => 8,
-                            };
-                        }
-                        _ => {}
-                    }
+                    self.key_pressed(key)?;
                 }
                 WindowEvent::RedrawRequested => {
                     let now = Instant::now();
@@ -4318,7 +4339,17 @@ impl ApplicationHandler for Game<'_> {
                             self.tick()?;
                         }
                     }
-                    if self.render()? {
+                    let rendered = self.render()?;
+                    if let Some(result) = self.renderer.as_mut().and_then(|r| r.screenshot_result.take())
+                        && let Some(reply) = self.pending_screenshot.take()
+                    {
+                        let _ = reply.send(match result {
+                            Ok([w, h]) => serde_json::json!({ "ok": true, "width": w, "height": h }),
+                            Err(e) => serde_json::json!({ "error": e }),
+                        }.to_string());
+                    }
+                    if rendered {
+                        self.frame_stats.record(elapsed.as_secs_f32() * 1000.0);
                         self.frames += 1;
                         self.fps_frames += 1;
                         if self.fps_at.elapsed() >= Duration::from_secs(1) {
@@ -4354,6 +4385,7 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.poll_control(event_loop);
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
             event_loop.exit();
@@ -4540,7 +4572,17 @@ pub fn run() -> Result<()> {
         tick_chunks: HashSet::new(),
         level_events: Vec::new(),
         falling: Vec::new(),
+        control: None,
+        frame_stats: Default::default(),
+        pending_screenshot: None,
+        pending_bench: None,
     };
+    if let Some(path) = &game.options.control {
+        let server = horizon_client::control::Server::start(path)
+            .map_err(|e| format!("control socket {}: {e}", path.display()))?;
+        eprintln!("Horizon: control socket {}", server.path().display());
+        game.control = Some(server);
+    }
     match game.options.world.clone() {
         Some(folder) => {
             let (seed, creative) = (game.options.seed, game.options.creative);
