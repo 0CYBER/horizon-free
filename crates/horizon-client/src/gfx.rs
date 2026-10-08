@@ -49,6 +49,8 @@ pub struct Frame<'a> {
     pub title: bool,
     /// Dimensions without a skybox (the Nether) clear to the fog colour.
     pub skybox: bool,
+    /// The End: clear to black and draw `celestial` (the End sky box) behind the world.
+    pub end_sky: bool,
     /// Environmental fog start/end (Nether 10..96), if any.
     pub environment_fog: Option<(f32, f32)>,
     pub water_fog: [f32; 3],
@@ -1134,7 +1136,7 @@ impl Renderer {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(if frame.title {
+                    load: wgpu::LoadOp::Clear(if frame.title || (frame.end_sky && !frame.underwater) {
                         wgpu::Color::BLACK
                     } else {
                         wgpu::Color {
@@ -1161,8 +1163,8 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group, &[]);
-            if !frame.underwater && frame.skybox {
-                if !frame.title {
+            if !frame.underwater && (frame.skybox || frame.end_sky) {
+                if !frame.title && frame.skybox {
                     pass.set_pipeline(&self.sky);
                     pass.draw(0..3, 0..1);
                 }

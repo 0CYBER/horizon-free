@@ -221,8 +221,7 @@ fn main() -> Result<(), Error> {
     }
     let registry = registry(&resources)?;
     let data = GeneratorData::load(&resources.join("worldgen"), registry)?;
-    let generator =
-        OverworldGenerator::for_dimension(data, seed, "minecraft:normal", &dimension)?;
+    let generator = OverworldGenerator::for_dimension(data, seed, "minecraft:normal", &dimension)?;
     let unsupported = generator.unsupported_features();
     println!("unsupported placed features: {}", unsupported.len());
 
@@ -337,7 +336,10 @@ fn main() -> Result<(), Error> {
             };
             let rust = chunks.get(((cz - z0) * full + cx - x0) as usize);
             if size == 1 {
-                println!("vanilla structures: {:?}", theirs.root().tag.get("structures"));
+                println!(
+                    "vanilla structures: {:?}",
+                    theirs.root().tag.get("structures")
+                );
                 if let Some(rust) = rust {
                     println!("rust structures: {:?}", rust.structures());
                 }

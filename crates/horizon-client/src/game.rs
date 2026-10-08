@@ -1,6 +1,7 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
 mod control;
+mod end;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -213,10 +214,10 @@ impl LevelAccess for GameLevel<'_> {
         self.world.loaded(pos.x, pos.z)
     }
     fn min_y(&self) -> i32 {
-        if self.dimension == LevelDimension::Nether { 0 } else { MIN_Y }
+        if self.dimension != LevelDimension::Overworld { 0 } else { MIN_Y }
     }
     fn max_y(&self) -> i32 {
-        if self.dimension == LevelDimension::Nether { 255 } else { MIN_Y + HEIGHT - 1 }
+        if self.dimension != LevelDimension::Overworld { 255 } else { MIN_Y + HEIGHT - 1 }
     }
     fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
         &mut self.world.random
@@ -278,6 +279,7 @@ pub struct Resources {
     providers: Providers,
     chest_model: Option<horizon_client::mobs::Part>,
     nether_environment: Environment,
+    end_environment: Environment,
     behaviours: Behaviours,
     names: Names,
     /// clouds.png: (width, height, filled cells).
@@ -377,6 +379,11 @@ struct Game<'a> {
     travelling: Option<(PlayerMotion, Vec3)>,
     portal_ticks: u32,
     portal_cooldown: u32,
+    /// The pending travel goes through an End portal (EndPortalBlock destinations).
+    end_travel: bool,
+    /// The next enter_dimension call comes from an End portal.
+    end_portal_travel: bool,
+    end: end::EndState,
     block_ticks: Ticks,
     tick_chunks: HashSet<(i32, i32)>,
     level_events: Vec<LevelEvent>,
@@ -392,22 +399,29 @@ struct Game<'a> {
 enum Dim {
     Overworld,
     Nether,
+    End,
 }
 impl Dim {
     fn id(self) -> &'static str {
         match self {
             Self::Overworld => "minecraft:overworld",
             Self::Nether => "minecraft:the_nether",
+            Self::End => "minecraft:the_end",
         }
     }
     fn from_id(id: &str) -> Self {
-        if id == "minecraft:the_nether" { Self::Nether } else { Self::Overworld }
+        match id {
+            "minecraft:the_nether" => Self::Nether,
+            "minecraft:the_end" => Self::End,
+            _ => Self::Overworld,
+        }
     }
     /// Region folder inside the world (vanilla's DIM-1 for the Nether).
     fn folder(self) -> Option<&'static str> {
         match self {
             Self::Overworld => None,
             Self::Nether => Some("DIM-1"),
+            Self::End => Some("DIM1"),
         }
     }
 }
@@ -676,7 +690,11 @@ impl Game<'_> {
             let w = f64::from(p.dimensions.width) / 2.0;
             ([p.position.x - w, p.position.y, p.position.z - w], [p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w])
         });
-        let dimension = if self.dim == Dim::Nether { LevelDimension::Nether } else { LevelDimension::Overworld };
+        let dimension = match self.dim {
+            Dim::Overworld => LevelDimension::Overworld,
+            Dim::Nether => LevelDimension::Nether,
+            Dim::End => LevelDimension::End,
+        };
         let mut level = GameLevel {
             world: &mut self.world,
             facts: &self.res.facts,
@@ -984,6 +1002,9 @@ impl Game<'_> {
         if self.use_tool(&stack)? {
             return Ok(());
         }
+        if self.use_ender_eye(&stack)? {
+            return Ok(());
+        }
         let Some(hit) = self.pick() else { return Ok(()) };
         if info.block.is_none() {
             return Ok(());
@@ -1219,7 +1240,11 @@ impl Game<'_> {
             self.streaming.center = (cx, cz);
             if (-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
                 let (player, target) = self.travelling.take().ok_or("travel")?;
-                self.place_after_travel(player, target)?;
+                if self.end_travel {
+                    self.place_after_end_travel(player, target)?;
+                } else {
+                    self.place_after_travel(player, target)?;
+                }
             }
             return Ok(());
         }
@@ -1379,6 +1404,7 @@ impl Game<'_> {
         self.tick_hand();
         self.tick_sleep();
         self.tick_portal()?;
+        self.tick_end()?;
         self.tick_blocks()?;
         self.tick_falling()?;
         if let Some(p) = &self.player {
@@ -2271,6 +2297,10 @@ impl Game<'_> {
         if self.dim == Dim::Nether {
             return 11;
         }
+        if self.dim == Dim::End {
+            let sky = self.res.end_environment.sample(self.world.day_time, 0, 0);
+            return (15.0 - 15.0 * sky.sky_light_level).round() as i32;
+        }
         let mut sky = self.res.environment.sample(self.world.day_time, 0, 0);
         let (rain, thunder) = self.world.weather.levels(1.0);
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
@@ -2940,7 +2970,7 @@ impl Game<'_> {
             r.clear_sections();
         }
         self.apply_settings();
-        self.streaming.sky_light = dim == Dim::Overworld;
+        self.streaming.sky_light = dim != Dim::Nether;
         self.streaming.nether_shading = dim == Dim::Nether;
         // New worlds get their level.dat right away.
         if !save_root.join("level.dat").exists() {
@@ -2966,7 +2996,7 @@ impl Game<'_> {
             Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
         };
         streaming.radius = self.settings.render_distance;
-        streaming.sky_light = dim == Dim::Overworld;
+        streaming.sky_light = dim != Dim::Nether;
         streaming.nether_shading = dim == Dim::Nether;
         Ok((streaming, save))
     }
@@ -2982,9 +3012,11 @@ impl Game<'_> {
         let scale = match (self.dim, target) {
             (Dim::Overworld, Dim::Nether) => 1.0 / 8.0,
             (Dim::Nether, Dim::Overworld) => 8.0,
+            (Dim::End, Dim::Nether) => 1.0 / 8.0,
             _ => 1.0,
         };
-        let destination = Vec3::new(player.position.x * scale, player.position.y, player.position.z * scale);
+        let destination = self.end_destination(target).unwrap_or(Vec3::new(player.position.x * scale, player.position.y, player.position.z * scale));
+        let from_end = self.dim == Dim::End;
         let (streaming, save) = self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
         let mut world = World::new(self.res.facts.air, self.level.seed);
         world.game_time = self.world.game_time;
@@ -3006,6 +3038,7 @@ impl Game<'_> {
         self.mining = None;
         self.travelling = Some((player, destination));
         self.portal_cooldown = 300;
+        self.end_travel = (target == Dim::End || from_end) && self.end_portal_travel;
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -3180,7 +3213,9 @@ impl Game<'_> {
         let wait = if self.creative { 1 } else { 80 };
         if self.portal_ticks >= wait {
             self.portal_ticks = 0;
-            let target = if self.dim == Dim::Overworld { Dim::Nether } else { Dim::Overworld };
+            // NetherPortalBlock: the Nether leads to the Overworld, anywhere else to the Nether.
+            let target = if self.dim == Dim::Nether { Dim::Overworld } else { Dim::Nether };
+            self.end_portal_travel = false;
             self.enter_dimension(target)?;
         }
         Ok(())
@@ -4142,7 +4177,7 @@ impl Game<'_> {
             .map(|c| c.biome(block[0], block[1], block[2]))
             .unwrap_or(0);
         let info = self.res.biomes.get(biome).clone();
-        let environment = if self.dim == Dim::Nether { &self.res.nether_environment } else { &self.res.environment };
+        let environment = self.dim_environment();
         let mut sky = environment.sample(self.world.day_time, info.sky, info.fog);
         let (rain, thunder) = if self.dim == Dim::Overworld { self.world.weather.levels(alpha as f32) } else { (0.0, 0.0) };
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
@@ -4166,11 +4201,16 @@ impl Game<'_> {
             self.panorama_geometry()
         } else if self.dim == Dim::Overworld {
             self.celestial_geometry(&sky)
+        } else if self.dim == Dim::End {
+            self.end_sky_geometry()
         } else {
             Vec::new()
         };
         let hand = if title || self.screen == Screen::Inventory { Vec::new() } else { self.hand_geometry(alpha) };
         let mut entities = entities;
+        if !title {
+            self.end_geometry(camera, &mut entities);
+        }
         if !title && self.dim == Dim::Overworld {
             self.cloud_geometry(&sky, camera, alpha, &mut entities);
             self.weather_geometry(camera, alpha, &mut entities);
@@ -4195,6 +4235,7 @@ impl Game<'_> {
             underwater,
             title,
             skybox: self.dim == Dim::Overworld,
+            end_sky: self.dim == Dim::End,
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
             // The camera inside an opaque block sees nothing through it: disable.
             cave_culling: !self.res.facts.get(self.world.block(block[0], block[1], block[2])).solid_render,
@@ -4492,6 +4533,7 @@ impl ApplicationHandler for Game<'_> {
                             }
                         }
                         Screen::Dead if pressed => {
+                            self.respawn_out_of_end()?;
                             self.player = None;
                             self.screen = Screen::Playing;
                             self.spawn_player()?;
@@ -4693,6 +4735,7 @@ pub fn run() -> Result<()> {
         providers: Providers::load(&root),
         chest_model: horizon_client::mobs::load_model(&root, "minecraft:chest#main"),
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
+        end_environment: Environment::load_dimension(&root, "the_end", false)?,
         behaviours: Behaviours::load(registry_owner.registry, &root)?,
         names: Names::load(&root),
         clouds: horizon_client::hud::decode(&root.join("assets/minecraft/textures/environment/clouds.png"))
@@ -4794,6 +4837,9 @@ pub fn run() -> Result<()> {
         travelling: None,
         portal_ticks: 0,
         portal_cooldown: 0,
+        end_travel: false,
+        end_portal_travel: false,
+        end: Default::default(),
         block_ticks: Ticks::new(0),
         tick_chunks: HashSet::new(),
         level_events: Vec::new(),
