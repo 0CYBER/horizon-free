@@ -15,6 +15,7 @@ pub mod chunk;
 pub mod clock;
 pub mod collisions;
 pub mod command;
+pub mod component;
 pub mod containers;
 pub mod control;
 pub mod crafting;

@@ -25,6 +25,7 @@ mod shield;
 mod sign_edit;
 mod station_control;
 mod stations;
+mod titles;
 mod tnt;
 mod trading;
 use horizon_client::{
@@ -479,6 +480,7 @@ struct Game<'a> {
     shield_cooldown: u32,
     /// The source of a command run through /execute (the player otherwise).
     command_source: Option<commands::execute::Source>,
+    titles: titles::Titles,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
     orbs: Vec<ExperienceOrb>,
@@ -2031,6 +2033,7 @@ impl Game<'_> {
         self.tick_effects();
         self.tick_burning();
         self.tick_using();
+        self.titles.tick();
         self.tick_mining()?;
         self.tick_items();
         self.spawn_loaded_entities();
@@ -2397,6 +2400,8 @@ impl Game<'_> {
             }
         }
         self.draw_effect_icons(&mut batch);
+        // Hud: the action bar and titles draw over the hotbar (nextStratum).
+        self.draw_titles(&mut batch);
         let atlas = &self.res.atlas;
         if !self.creative
             && let Some(p) = &self.player
@@ -6949,6 +6954,7 @@ pub fn run() -> Result<()> {
         offhand: None,
         shield_cooldown: 0,
         command_source: None,
+        titles: Default::default(),
         applied_modifiers: Vec::new(),
         experience: Experience::default(),
         orbs: Vec::new(),

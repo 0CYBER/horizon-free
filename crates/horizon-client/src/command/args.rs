@@ -111,6 +111,8 @@ pub enum ArgType {
     Anchor,
     /// SwizzleArgument: a set of `x`, `y` and `z` (kept as text).
     Swizzle,
+    /// ComponentArgument: an SNBT/JSON text component (kept as JSON text).
+    Component,
     /// CompoundTagArgument (kept as SNBT text).
     Nbt,
 }
@@ -1402,6 +1404,14 @@ impl ArgType {
                 }
                 Arg::Str(read_braced(reader, '{', '}')?)
             }
+            ArgType::Component => {
+                let (value, used) =
+                    crate::component::parse_snbt(reader.remaining()).map_err(|e| {
+                        CommandError::tr_at("argument.component.invalid", &[&e], reader)
+                    })?;
+                reader.cursor += used;
+                Arg::Str(value.to_string())
+            }
             ArgType::Swizzle => {
                 let mut axes = String::new();
                 while reader.can_read() && reader.peek() != ' ' {
@@ -1493,7 +1503,7 @@ impl ArgType {
             }
             ArgType::GameMode => builder.suggest_matching(GameMode::ALL.map(GameMode::name)),
             ArgType::Anchor => builder.suggest_matching(["eyes", "feet"]),
-            ArgType::Swizzle => {}
+            ArgType::Swizzle | ArgType::Component => {}
             ArgType::Message => {
                 // MessageArgument suggests selectors and names for the last word.
                 let rem = builder.remaining();

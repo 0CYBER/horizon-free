@@ -314,6 +314,32 @@ pub fn build() -> Dispatcher {
     let uuids = d.literal(list, "uuids");
     d.executes(uuids, "list");
 
+    // tellraw <targets> <message>
+    let tellraw = d.literal(root, "tellraw");
+    d.requires(tellraw, GAMEMASTERS);
+    let t = d.argument(tellraw, "targets", PLAYERS);
+    let m = d.argument(t, "message", ArgType::Component);
+    d.executes(m, "tellraw");
+
+    // title <targets> clear|reset|title|subtitle|actionbar <title>|times <in> <stay> <out>
+    let title = d.literal(root, "title");
+    d.requires(title, GAMEMASTERS);
+    let t = d.argument(title, "targets", PLAYERS);
+    for mode in ["clear", "reset"] {
+        let l = d.literal(t, mode);
+        d.executes(l, "title");
+    }
+    for mode in ["title", "subtitle", "actionbar"] {
+        let l = d.literal(t, mode);
+        let c = d.argument(l, "title", ArgType::Component);
+        d.executes(c, "title");
+    }
+    let times = d.literal(t, "times");
+    let fade_in = d.argument(times, "fadeIn", ArgType::Time { min: 0 });
+    let stay = d.argument(fade_in, "stay", ArgType::Time { min: 0 });
+    let fade_out = d.argument(stay, "fadeOut", ArgType::Time { min: 0 });
+    d.executes(fade_out, "title");
+
     execute(&mut d, root);
     d
 }

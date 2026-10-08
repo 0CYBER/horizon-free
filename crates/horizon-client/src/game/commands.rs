@@ -2,6 +2,7 @@
 //! entity selectors resolved against the game, vanilla feedback and errors.
 mod effects;
 pub(super) mod execute;
+mod text_commands;
 
 use super::{Dim, Game, Screen, chat::PLAYER_NAME};
 use horizon_client::{
@@ -423,6 +424,8 @@ impl Game<'_> {
             "effect.give" => self.cmd_effect_give(ctx),
             "effect.clear" => self.cmd_effect_clear(ctx),
             "enchant" => self.cmd_enchant(ctx),
+            "tellraw" => self.cmd_tellraw(ctx),
+            "title" => self.cmd_title(ctx),
             "setblock" => self.cmd_setblock(ctx),
             "fill" => self.cmd_fill(ctx),
             "clone" => self.cmd_clone(ctx),
