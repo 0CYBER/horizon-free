@@ -2396,6 +2396,15 @@ impl Game<'_> {
         let mob = &mut self.mobs[index];
         let center = [mob.position.x, mob.position.y + mob.kind.height / 2.0, mob.position.z];
         if mob.hurt(amount, from, &mut self.world.random) {
+            // Player.attack: crit emitter and damage indicator hearts.
+            let (feet, width, height) = ([mob.position.x, mob.position.y, mob.position.z], mob.kind.width, mob.kind.height);
+            if crit {
+                self.particles.tracking_emitter(horizon_client::particles::ParticleOptions::simple(horizon_client::particles::ParticleType::Crit), feet, width, height);
+            }
+            if amount > 2.0 {
+                let indicator = horizon_client::particles::ParticleOptions::simple(horizon_client::particles::ParticleType::DamageIndicator);
+                self.particles.send_particles(&indicator, [feet[0], feet[1] + height * 0.5, feet[2]], [0.1, 0.0, 0.1], 0.2, (amount * 0.5) as u32);
+            }
             self.last_hurt_by_player.insert(mob.id);
             let kind = mob.kind.clone();
             let dead = !mob.alive();
@@ -2447,6 +2456,7 @@ impl Game<'_> {
                 }
             }
         }
+        let destroyed_count = destroyed.len();
         for b in destroyed {
             let state = self.world.block(b[0], b[1], b[2]);
             if self.res.facts.is_air(state) {
@@ -2461,6 +2471,8 @@ impl Game<'_> {
             }
             self.world.set(b[0], b[1], b[2], self.world.air)?;
         }
+        let (world, facts) = (&self.world, &self.res.facts);
+        self.particles.explosion(center, radius, destroyed_count, &|b| facts.is_air(world.block(b[0], b[1], b[2])));
         self.audio.play("minecraft:entity.generic.explode", Some(center), 4.0, (1.0 + (self.world.random.next_float() - self.world.random.next_float()) * 0.2) * 0.7);
         // Entity damage by distance (exposure approximated as unobstructed).
         let diameter = f64::from(radius) * 2.0;

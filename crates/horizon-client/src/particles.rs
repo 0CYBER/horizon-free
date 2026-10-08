@@ -575,6 +575,8 @@ pub struct ParticleEngine {
     atlas: HashMap<String, Rect>,
     sets: HashMap<ParticleType, u32>,
     set_sprites: Vec<Vec<u32>>,
+    /// `TrackingEmitter`s: particle type, entity feet position, width, height, ticks left.
+    emitters: Vec<(ParticleOptions, [f64; 3], f64, f64, u32)>,
     /// Camera position for the 32-block spawn limiter.
     pub camera: [f64; 3],
     /// Local sounds requested by particles (dripstone drips): (event, position, volume, pitch).
@@ -593,6 +595,7 @@ impl ParticleEngine {
             atlas: atlas.clone(),
             sets: HashMap::new(),
             set_sprites: Vec::new(),
+            emitters: Vec::new(),
             camera: [0.0; 3],
             sounds: Vec::new(),
         };
@@ -638,6 +641,7 @@ impl ParticleEngine {
         self.particles.is_empty()
     }
     pub fn clear(&mut self) {
+        self.emitters.clear();
         self.particles.clear();
         self.pending.clear();
     }
@@ -658,6 +662,121 @@ impl ParticleEngine {
             return;
         }
         self.create(options, p, v);
+    }
+    /// `ClientPacketListener.handleExplosion` + `ClientExplosionTracker`: the
+    /// explosion particle (emitter for radius >= 2) and up to 512 poof/smoke
+    /// particles thrown from air inside the radius.
+    pub fn explosion(
+        &mut self,
+        center: [f64; 3],
+        radius: f32,
+        block_count: usize,
+        is_air: &dyn Fn([i32; 3]) -> bool,
+    ) {
+        let ty = if radius < 2.0 {
+            ParticleType::Explosion
+        } else {
+            ParticleType::ExplosionEmitter
+        };
+        self.add(&ParticleOptions::simple(ty), center, [1.0, 0.0, 0.0]);
+        for _ in 0..block_count.min(512) {
+            let r = &mut self.random;
+            let d = Vec3::new(
+                f64::from(r.next_float() * 2.0 - 1.0),
+                f64::from(r.next_float() * 2.0 - 1.0),
+                f64::from(r.next_float() * 2.0 - 1.0),
+            )
+            .normalize();
+            let distance = r.next_float().cbrt() * radius;
+            let local = [
+                d.x * f64::from(distance),
+                d.y * f64::from(distance),
+                d.z * f64::from(distance),
+            ];
+            let at = [
+                center[0] + local[0],
+                center[1] + local[1],
+                center[2] + local[2],
+            ];
+            if !is_air(ParticleLevel::block_at(at)) {
+                continue;
+            }
+            let speed = 0.5 / (distance / radius + 0.1) * r.next_float() * r.next_float() + 0.3;
+            // Level.DEFAULT_EXPLOSION_BLOCK_PARTICLES: poof (scaling 0.5) or smoke, equally weighted.
+            let (ty, scaling) = if r.next_int_bound(2).unwrap_or(0) == 0 {
+                (ParticleType::Poof, 0.5)
+            } else {
+                (ParticleType::Smoke, 1.0)
+            };
+            let p = [
+                center[0] + local[0] * scaling,
+                center[1] + local[1] * scaling,
+                center[2] + local[2] * scaling,
+            ];
+            let v = [
+                d.x * f64::from(speed),
+                d.y * f64::from(speed),
+                d.z * f64::from(speed),
+            ];
+            self.add(&ParticleOptions::simple(ty), p, v);
+        }
+    }
+    /// `ParticleEngine.createTrackingEmitter` (crits): 16 tries per tick for
+    /// three ticks inside a quarter of the entity's box, ticked once at creation.
+    pub fn tracking_emitter(
+        &mut self,
+        options: ParticleOptions,
+        feet: [f64; 3],
+        width: f64,
+        height: f64,
+    ) {
+        self.emit(&options, feet, width, height);
+        self.emitters.push((options, feet, width, height, 2));
+    }
+    fn emit(&mut self, options: &ParticleOptions, feet: [f64; 3], width: f64, height: f64) {
+        for _ in 0..16 {
+            let r = &mut self.random;
+            let xa = f64::from(r.next_float() * 2.0 - 1.0);
+            let ya = f64::from(r.next_float() * 2.0 - 1.0);
+            let za = f64::from(r.next_float() * 2.0 - 1.0);
+            if xa * xa + ya * ya + za * za <= 1.0 {
+                let p = [
+                    feet[0] + width * xa / 4.0,
+                    feet[1] + height * (0.5 + ya / 4.0),
+                    feet[2] + width * za / 4.0,
+                ];
+                self.add(options, p, [xa, ya + 0.2, za]);
+            }
+        }
+    }
+    /// `ClientPacketListener.handleParticleEvent` for `ServerLevel.sendParticles`.
+    pub fn send_particles(
+        &mut self,
+        options: &ParticleOptions,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: u32,
+    ) {
+        if count == 0 {
+            let v = [speed * spread[0], speed * spread[1], speed * spread[2]];
+            self.add(options, at, v);
+            return;
+        }
+        for _ in 0..count {
+            let r = &mut self.random;
+            let p = [
+                at[0] + r.next_gaussian() * spread[0],
+                at[1] + r.next_gaussian() * spread[1],
+                at[2] + r.next_gaussian() * spread[2],
+            ];
+            let v = [
+                r.next_gaussian() * speed,
+                r.next_gaussian() * speed,
+                r.next_gaussian() * speed,
+            ];
+            self.add(options, p, v);
+        }
     }
     /// `ParticleEngine.createParticle`: always spawned.
     pub fn create(&mut self, options: &ParticleOptions, p: [f64; 3], v: [f64; 3]) {
@@ -1517,6 +1636,12 @@ impl ParticleEngine {
 
     /// `ParticleEngine.tick`: tick live particles, then admit queued ones.
     pub fn tick(&mut self, level: &ParticleLevel) {
+        for (options, feet, width, height, life) in std::mem::take(&mut self.emitters) {
+            self.emit(&options, feet, width, height);
+            if life > 1 {
+                self.emitters.push((options, feet, width, height, life - 1));
+            }
+        }
         let mut particles = std::mem::take(&mut self.particles);
         for p in &mut particles {
             self.tick_particle(p, level);
