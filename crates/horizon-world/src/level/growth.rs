@@ -23,6 +23,9 @@ impl Behaviours {
     }
 }
 
+/// The four (state, position) pairs of a 2x2 sapling square.
+type Saplings = [(BlockStateId, BlockPos); 4];
+
 /// `TreeGrower` (vanilla's registered growers, by name).
 pub(crate) struct TreeGrower {
     pub name: &'static str,
@@ -206,7 +209,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         &self,
         state: BlockStateId,
         pos: BlockPos,
-    ) -> Option<(i32, i32, [(BlockStateId, BlockPos); 4])> {
+    ) -> Option<(i32, i32, Saplings)> {
         let block = self.b.block(state);
         for dx in [0, -1] {
             for dz in [0, -1] {

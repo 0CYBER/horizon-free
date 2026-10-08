@@ -206,7 +206,7 @@ impl Game<'_> {
                 (t.position.y + 0.5).floor() as i32,
                 t.position.z.floor() as i32,
             );
-            let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             let v = |x: f32, y: f32, z: f32| o + glam::Vec3::new(x - 0.5, y - 0.5, z - 0.5) * scale;
             let faces = [
                 (

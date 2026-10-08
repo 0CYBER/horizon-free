@@ -372,7 +372,7 @@ impl Game<'_> {
         let is_tnt = &*name == "minecraft:tnt";
         if !is_tnt {
             let drops = self.res.items.block_drops(
-                &self.res.assets.registry,
+                self.res.assets.registry,
                 state,
                 None,
                 &mut self.world.random,

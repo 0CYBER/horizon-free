@@ -445,24 +445,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             Kind::BambooSapling => self.bamboo_sapling_grow(pos),
             Kind::Bamboo => {
-                let mut height_above = self.bamboo_height_above(pos);
+                let height_above = self.bamboo_height_above(pos);
                 let height_below = self.bamboo_height_below(pos);
-                let mut total = height_above + height_below + 1;
+                let total = height_above + height_below + 1;
                 let count = 1 + self.next_int(2);
-                for _ in 0..count {
-                    let top = pos.offset(0, height_above, 0);
+                for i in 0..count {
+                    let top = pos.offset(0, height_above + i, 0);
                     let top_state = self.state(top);
                     let growth = above(top);
-                    if total >= 16
+                    if total + i >= 16
                         || b.table.int(top_state, p.stage) == 1
                         || !self.is_empty_block(growth)
                         || !self.is_inside_build_height(growth.y)
                     {
                         return;
                     }
-                    self.bamboo_grow(top_state, top, total);
-                    height_above += 1;
-                    total += 1;
+                    self.bamboo_grow(top_state, top, total + i);
                 }
             }
             Kind::Cocoa => {
