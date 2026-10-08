@@ -1037,13 +1037,20 @@ where
     /// ChunkGenerator.getBaseColumn: opacity of each noise-column state for
     /// a heightmap type, indexed from the minimum Y.
     fn base_column(&self, x: i32, z: i32, kind: HeightmapType) -> Vec<bool> {
+        self.base_columns(x, z, &[kind]).pop().unwrap_or_default()
+    }
+    /// One noise-column pass, as opacities for each heightmap kind.
+    fn base_columns(&self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>> {
         let (min, height) = (self.settings.min_y, self.settings.height);
-        let mut column = vec![false; height as usize];
+        let mut columns = vec![vec![false; height as usize]; kinds.len()];
         self.noise_column(x, z, &mut |y, state| {
-            column[(y - min) as usize] = kind.is_opaque(self.data.states.get(state));
+            let state = self.data.states.get(state);
+            for (column, kind) in columns.iter_mut().zip(kinds) {
+                column[(y - min) as usize] = kind.is_opaque(state);
+            }
             false
         });
-        column
+        columns
     }
     /// iterateNoiseColumn from the top down until `visit` returns true.
     fn noise_column(&self, x: i32, z: i32, visit: &mut dyn FnMut(i32, BlockStateId) -> bool) {
@@ -1148,6 +1155,9 @@ where
     }
     fn base_column(&mut self, x: i32, z: i32, kind: HeightmapType) -> Vec<bool> {
         self.pipeline.base_column(x, z, kind)
+    }
+    fn base_columns(&mut self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>> {
+        self.pipeline.base_columns(x, z, kinds)
     }
     fn cold_enough_to_snow(&mut self, biome: BiomeId, pos: [i32; 3]) -> bool {
         let sea = self.pipeline.settings.sea_level;

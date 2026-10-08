@@ -30,7 +30,8 @@ import net.minecraft.world.level.storage.LevelStorageSource;
 /**
  * Original oracle: runs vanilla structure placement checks, start selection
  * and Structure.generate (as ChunkGenerator.createStructures does for a fresh
- * chunk) for a rectangle of overworld chunks and prints every valid start.
+ * chunk) for a rectangle of chunks (overworld, or HORIZON_DIMENSION=the_nether /
+ * the_end) and prints every valid start.
  */
 public final class VanillaStructureStartOracle {
     public static void main(String[] args) throws Exception {
@@ -45,15 +46,21 @@ public final class VanillaStructureStartOracle {
         RegistryAccess.Frozen world=RegistryDataLoader.load(resources,context,RegistryDataLoader.WORLD_REGISTRIES,Runnable::run).join();
         staticTags.forEach(Registry.PendingTags::apply);
         RegistryAccess access=layers.replaceFrom(RegistryLayer.WORLD,world).compositeAccess();
-        var settings=world.lookupOrThrow(Registries.NOISE_SETTINGS).getOrThrow(NoiseGeneratorSettings.OVERWORLD);
+        String dimension=System.getenv().getOrDefault("HORIZON_DIMENSION","overworld");
+        var settings=world.lookupOrThrow(Registries.NOISE_SETTINGS).getOrThrow(switch(dimension){case "the_nether"->NoiseGeneratorSettings.NETHER;case "the_end"->NoiseGeneratorSettings.END;default->NoiseGeneratorSettings.OVERWORLD;});
         var randomState=RandomState.create(world.lookupOrThrow(Registries.NOISE),seed,settings.value());
-        var biomeSource=MultiNoiseBiomeSource.createFromPreset(world.lookupOrThrow(Registries.MULTI_NOISE_BIOME_SOURCE_PARAMETER_LIST).getOrThrow(MultiNoiseBiomeSourceParameterLists.OVERWORLD));
+        var presets=world.lookupOrThrow(Registries.MULTI_NOISE_BIOME_SOURCE_PARAMETER_LIST);
+        net.minecraft.world.level.biome.BiomeSource biomeSource=switch(dimension){
+            case "the_nether"->MultiNoiseBiomeSource.createFromPreset(presets.getOrThrow(MultiNoiseBiomeSourceParameterLists.NETHER));
+            case "the_end"->net.minecraft.world.level.biome.TheEndBiomeSource.create(world.lookupOrThrow(Registries.BIOME));
+            default->MultiNoiseBiomeSource.createFromPreset(presets.getOrThrow(MultiNoiseBiomeSourceParameterLists.OVERWORLD));};
+        var levelKey=switch(dimension){case "the_nether"->Level.NETHER;case "the_end"->Level.END;default->Level.OVERWORLD;};
         var generator=new NoiseBasedChunkGenerator(biomeSource,settings);
         var state=ChunkGeneratorStructureState.createForNormal(randomState,seed,new ChunkPos(0,0),biomeSource,world.lookupOrThrow(Registries.STRUCTURE_SET));
         Path tmp=Files.createTempDirectory("horizon-structures");
         var storage=LevelStorageSource.createDefault(tmp).createAccess("oracle");
         var templates=new StructureTemplateManager(resources,storage,DataFixers.getDataFixer(),BuiltInRegistries.BLOCK);
-        LevelHeightAccessor height=LevelHeightAccessor.create(-64,384);
+        LevelHeightAccessor height=dimension.equals("overworld")?LevelHeightAccessor.create(-64,384):LevelHeightAccessor.create(0,256);
         var climate=randomState.createClimateSampler(net.minecraft.world.level.levelgen.densityfunction.SamplerContext.builder().enableCaches().build());
         var structures=world.lookupOrThrow(Registries.STRUCTURE);
         try(var w=new PrintWriter(Files.newBufferedWriter(out,StandardCharsets.UTF_8))) {
@@ -83,7 +90,7 @@ public final class VanillaStructureStartOracle {
                         if(entries.size()==1){selected=options.get(0);}
                         else{int choice=random.nextInt(total);for(var o:options){choice-=o.weight();if(choice<0)break;index++;}selected=options.get(index);}
                         var structure=selected.structure();
-                        StructureStart start=structure.value().generate(structure,Level.OVERWORLD,access,generator,biomeSource,climate,randomState,templates,seed,pos,0,height,structure.value().biomes()::contains);
+                        StructureStart start=structure.value().generate(structure,levelKey,access,generator,biomeSource,climate,randomState,templates,seed,pos,0,height,structure.value().biomes()::contains);
                         if(System.getenv("HORIZON_PLACED")!=null){
                             w.println("generate "+structure.unwrapKey().get().identifier()+" "+start.isValid());
                             var ctx=new Structure.GenerationContext(access,generator,biomeSource,climate,randomState,templates,seed,pos,height,structure.value().biomes()::contains);

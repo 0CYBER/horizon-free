@@ -82,6 +82,8 @@ pub enum StructureKind {
         blocking: Arc<BTreeSet<BiomeId>>,
     },
     Stronghold,
+    Fortress,
+    NetherFossil(HeightProvider),
     /// A structure type whose generator is not implemented yet.
     Unsupported(String),
 }
@@ -223,6 +225,10 @@ impl StructureRegistry {
                     ))?),
                 },
                 "minecraft:stronghold" => StructureKind::Stronghold,
+                "minecraft:fortress" => StructureKind::Fortress,
+                "minecraft:nether_fossil" => StructureKind::NetherFossil(
+                    HeightProvider::from_json(&v["height"].to_string())?,
+                ),
                 other => StructureKind::Unsupported(other.to_owned()),
             };
             defs.push(StructureDef {
@@ -471,6 +477,8 @@ pub trait StartContext: JigsawContext {
     fn sea_level(&self) -> i32;
     /// ChunkGenerator.getBaseColumn as heightmap opacity, indexed from min_y.
     fn base_column(&mut self, x: i32, z: i32, kind: HeightmapType) -> Vec<bool>;
+    /// base_column for several heightmap kinds from one noise-column pass.
+    fn base_columns(&mut self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>>;
     /// Biome.coldEnoughToSnow at a position.
     fn cold_enough_to_snow(&mut self, biome: BiomeId, pos: [i32; 3]) -> bool;
     fn generation(&self) -> WorldGenerationContext;
@@ -752,6 +760,35 @@ fn try_generate(
             let pieces =
                 super::stronghold::generate(&mut random, seed, [chunk.x, chunk.z], sea, min);
             ([chunk.x * 16, 0, chunk.z * 16], legacy(pieces))
+        }
+        StructureKind::Fortress => {
+            let pieces = super::fortress::generate(&mut random, [chunk.x, chunk.z]);
+            ([chunk.x * 16, 64, chunk.z * 16], legacy(pieces))
+        }
+        StructureKind::NetherFossil(height) => {
+            let x = chunk.x * 16 + random.next_int_bound(16).unwrap_or(0);
+            let z = chunk.z * 16 + random.next_int_bound(16).unwrap_or(0);
+            let sea = context.sea_level();
+            let y = height.sample(&mut random, context.generation()).ok()?;
+            let columns = context.base_columns(
+                x,
+                z,
+                &[HeightmapType::WorldSurfaceWg, HeightmapType::OceanFloorWg],
+            );
+            let y = super::nether_fossil::find_floor(
+                &columns[0],
+                &columns[1],
+                context.min_y(),
+                y,
+                sea,
+            )?;
+            let position = [x, y, z];
+            let quart = position.map(|v| v >> 2);
+            if !def.biomes.contains(&context.noise_biome(quart)) {
+                return None;
+            }
+            let piece = super::nether_fossil::piece(resources, &mut random, position)?;
+            (position, legacy(vec![piece]))
         }
         StructureKind::Unsupported(_) => return None,
     };
