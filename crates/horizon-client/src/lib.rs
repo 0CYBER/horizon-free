@@ -41,6 +41,7 @@ pub mod sprint;
 pub mod sprites;
 pub mod stations;
 pub mod streaming;
+pub mod structure_blocks;
 pub mod testgen;
 pub mod title;
 pub mod vanillagen;

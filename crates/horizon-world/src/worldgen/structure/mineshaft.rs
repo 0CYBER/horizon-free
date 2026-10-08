@@ -187,7 +187,7 @@ impl Builder {
     fn add_children(&mut self, r: &mut impl RandomSource, index: usize) {
         let p = &self.pieces[index];
         let (b, depth, orientation) = (p.frame.bounding_box, p.depth, p.frame.orientation);
-        let ([x0, y0, z0], [x1, y1, z1]) = (b.min, b.max);
+        let ([x0, y0, z0], [x1, _y1, z1]) = (b.min, b.max);
         use Direction::*;
         match &p.kind {
             Kind::Room(_) => {

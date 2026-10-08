@@ -3,6 +3,7 @@
 //! chunkgen_bench <client resource dir> [--seed S] [--size N] [--threads T]
 //!     [--center CX CZ] [--verify <material-stage parity dir>] [--no-decorate]
 //!     [--dimension minecraft:the_nether|minecraft:the_end]
+//!     [--dimension overworld|the_nether|the_end]
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     DATA_VERSION,
@@ -277,6 +278,7 @@ fn main() -> Result<(), Error> {
     let mut decorate = true;
     let mut dimension = String::from("minecraft:overworld");
     let mut starts: Option<(i32, i32, i32, i32, PathBuf)> = None;
+    let mut dimension = "minecraft:overworld".to_owned();
     while let Some(arg) = args.next() {
         let mut next = || args.next().expect("argument value");
         match arg.as_str() {
@@ -287,6 +289,7 @@ fn main() -> Result<(), Error> {
             "--verify" => parity = Some(PathBuf::from(next())),
             "--no-decorate" => decorate = false,
             "--dimension" => dimension = next(),
+            "--dimension" => dimension = format!("minecraft:{}", next()),
             "--starts" => {
                 starts = Some((
                     next().parse()?,
@@ -464,6 +467,22 @@ fn main() -> Result<(), Error> {
         .map(|c| c.block_entities.len())
         .sum();
     println!("block entities: {block_entities}");
+    if std::env::var_os("HORIZON_BLOCK_ENTITIES").is_some() {
+        for chunk in chunks.iter().flatten() {
+            for ([x, y, z], nbt) in &chunk.block_entities {
+                let text = |key: &str| match nbt.get(&key.into()) {
+                    Some(Tag::String(s)) => s.to_string_lossy(),
+                    _ => "-".into(),
+                };
+                println!(
+                    "block_entity {x} {y} {z} {} {} {}",
+                    chunk.block_name(*x, *y, *z),
+                    text("id"),
+                    text("LootTable")
+                );
+            }
+        }
+    }
     let mut legend = BTreeMap::<char, BTreeMap<String, usize>>::new();
     let step = (size * 16 / 96).max(1);
     for bz in (0..size * 16).step_by(step as usize) {

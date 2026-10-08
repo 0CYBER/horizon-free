@@ -483,9 +483,12 @@ fn place_element<W: FeatureWorld + PlacementContext, R: RandomSource>(
                 })
             };
             let mut settings = PlaceSettings::new(rotation);
+            settings.known_shape = true;
             settings.bounding_box = Some(chunk_box);
             settings.waterlogging = override_liquid.unwrap_or(waterlogging);
-            settings.processors.push(ignore);
+            if !*legacy {
+                settings.processors.push(ignore);
+            }
             settings.processors.push(&Processor::JigsawReplacement);
             settings.processors.extend(processors.0.iter());
             if *projection == Projection::TerrainMatching {
@@ -495,6 +498,11 @@ fn place_element<W: FeatureWorld + PlacementContext, R: RandomSource>(
                         heightmap: HeightmapType::WorldSurfaceWg,
                         offset: -1,
                     }));
+            }
+            // LegacySinglePoolElement pops the structure-block ignore and
+            // appends STRUCTURE_AND_AIR last, after jigsaw replacement.
+            if *legacy {
+                settings.processors.push(ignore);
             }
             place_in_world(
                 world,

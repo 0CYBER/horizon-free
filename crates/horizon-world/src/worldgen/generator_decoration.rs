@@ -309,6 +309,7 @@ impl Decoration {
             Ok(terrain) => terrain,
             Err(e) => return Err(resource(e.to_string())),
         };
+        let structures_only = worker.structures_only;
         let mut block_entities = Vec::new();
         for chunk in region.iter_mut() {
             block_entities.append(&mut chunk.block_entities);
@@ -326,6 +327,8 @@ impl Decoration {
             zone: GenerationWriteZone::new(center, 1),
             decoration: self,
             temperatures: &mut worker.temperatures,
+            behaviours: data.behaviours.as_deref(),
+            build: (generation.min_y, generation.min_y + generation.height),
         };
         let mut stats = DecorateStats::default();
         let blocks = self.blocks;
@@ -383,6 +386,9 @@ impl Decoration {
                 Ok(())
             },
             |world, placer, random, id, origin| {
+                if structures_only {
+                    return Ok(false);
+                }
                 let Ok(feature) = &self.features[id.0 as usize] else {
                     stats.unsupported += 1;
                     stats.skipped.insert(self.names[id.0 as usize].clone());
@@ -438,6 +444,68 @@ struct World<'a> {
     zone: GenerationWriteZone,
     decoration: &'a Decoration,
     temperatures: &'a mut [BiomeTemperature],
+    behaviours: Option<&'a crate::level::Behaviours>,
+    /// Inclusive minimum and exclusive maximum build height.
+    build: (i32, i32),
+}
+/// Read-only `LevelAccess` view of the decoration region for
+/// `BlockState.updateShape` (writes go through `World::set_block`).
+struct ShapeLevel<'w, 'a> {
+    world: &'w World<'a>,
+    random: horizon_core::random::LegacyRandom,
+}
+impl crate::level::LevelAccess for ShapeLevel<'_, '_> {
+    fn block_state(&self, pos: BlockPos) -> BlockStateId {
+        self.world
+            .region
+            .block([pos.x, pos.y, pos.z])
+            .unwrap_or(BlockStateId(0))
+    }
+    fn set_raw(&mut self, _: BlockPos, _: BlockStateId) -> Option<BlockStateId> {
+        None
+    }
+    fn is_loaded(&self, pos: BlockPos) -> bool {
+        self.world.region.block([pos.x, pos.y, pos.z]).is_ok()
+    }
+    fn min_y(&self) -> i32 {
+        self.world.build.0
+    }
+    fn max_y(&self) -> i32 {
+        self.world.build.1
+    }
+    fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
+        &mut self.random
+    }
+    fn game_time(&self) -> i64 {
+        0
+    }
+}
+impl World<'_> {
+    /// `BlockState.updateShape` of the state at `pos` against `neighbor`.
+    fn shape_update(
+        &self,
+        behaviours: &crate::level::Behaviours,
+        state: BlockStateId,
+        pos: [i32; 3],
+        direction: Direction,
+        neighbor_pos: [i32; 3],
+        neighbor: BlockStateId,
+    ) -> BlockStateId {
+        let mut level = ShapeLevel {
+            world: self,
+            random: horizon_core::random::LegacyRandom::new(0),
+        };
+        let mut ticks = crate::level::Ticks::new(0);
+        behaviours.update_shape(
+            &mut level,
+            &mut ticks,
+            state,
+            BlockPos::new(pos[0], pos[1], pos[2]),
+            direction,
+            BlockPos::new(neighbor_pos[0], neighbor_pos[1], neighbor_pos[2]),
+            neighbor,
+        )
+    }
 }
 impl DecorationWorld for World<'_> {
     type Error = RegionError;
@@ -580,6 +648,15 @@ impl PlacementContext for World<'_> {
         state: BlockStateId,
         position: [i32; 3],
     ) -> Result<bool, PlacementQueryError> {
+        if let (None, Some(behaviours)) = (self.blocks, self.behaviours) {
+            let mut level = ShapeLevel {
+                world: self,
+                random: horizon_core::random::LegacyRandom::new(0),
+            };
+            let mut ticks = crate::level::Ticks::new(0);
+            let pos = BlockPos::new(position[0], position[1], position[2]);
+            return Ok(behaviours.can_survive(&mut level, &mut ticks, pos, state));
+        }
         let blocks = self.blocks()?;
         blocks
             .survival
@@ -600,6 +677,11 @@ impl PlacementContext for World<'_> {
         position: [i32; 3],
         direction: Direction,
     ) -> Result<bool, PlacementQueryError> {
+        // Without the exported support tables, fall back to the gameplay
+        // behaviour's empty-level sturdiness cache.
+        if let (None, Some(behaviours)) = (self.blocks, self.behaviours) {
+            return Ok(behaviours.is_face_sturdy(state, direction));
+        }
         let support = self.blocks()?.support.clone();
         support
             .is_face_sturdy(self, state, position, direction, SupportType::Full)
@@ -611,6 +693,9 @@ impl PlacementContext for World<'_> {
         direction: Direction,
     ) -> Result<bool, PlacementQueryError> {
         let state = self.region.block_state(position)?;
+        if let (None, Some(behaviours)) = (self.blocks, self.behaviours) {
+            return Ok(behaviours.is_face_sturdy_center(state, direction));
+        }
         let support = self.blocks()?.support.clone();
         support
             .is_face_sturdy(self, state, position, direction, SupportType::Center)
@@ -669,6 +754,81 @@ impl PlacementContext for World<'_> {
     }
     fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
         self.region.world_seed()
+    }
+    fn update_shape_at_face(
+        &mut self,
+        position: [i32; 3],
+        direction: Direction,
+        flags: i32,
+    ) -> Result<(), PlacementQueryError> {
+        let Some(behaviours) = self.behaviours else {
+            return Ok(());
+        };
+        let n = direction.normal();
+        let neighbor_pos = [position[0] + n[0], position[1] + n[1], position[2] + n[2]];
+        let state = self.region.block(position).map_err(query)?;
+        let neighbor = self.region.block(neighbor_pos).map_err(query)?;
+        let new_state = self.shape_update(
+            behaviours,
+            state,
+            position,
+            direction,
+            neighbor_pos,
+            neighbor,
+        );
+        if new_state != state {
+            self.set_block(position, new_state, flags & !1)
+                .map_err(query)?;
+        }
+        let new_neighbor = self.shape_update(
+            behaviours,
+            neighbor,
+            neighbor_pos,
+            direction.opposite(),
+            position,
+            new_state,
+        );
+        if new_neighbor != neighbor {
+            self.set_block(neighbor_pos, new_neighbor, flags & !1)
+                .map_err(query)?;
+        }
+        Ok(())
+    }
+    fn update_from_neighbour_shapes(
+        &mut self,
+        position: [i32; 3],
+        flags: i32,
+    ) -> Result<(), PlacementQueryError> {
+        let Some(behaviours) = self.behaviours else {
+            return Ok(());
+        };
+        let state = self.region.block(position).map_err(query)?;
+        // Block.UPDATE_SHAPE_ORDER.
+        let mut new_state = state;
+        for direction in [
+            Direction::West,
+            Direction::East,
+            Direction::North,
+            Direction::South,
+            Direction::Down,
+            Direction::Up,
+        ] {
+            let n = direction.normal();
+            let neighbor_pos = [position[0] + n[0], position[1] + n[1], position[2] + n[2]];
+            let neighbor = self.region.block(neighbor_pos).map_err(query)?;
+            new_state = self.shape_update(
+                behaviours,
+                new_state,
+                position,
+                direction,
+                neighbor_pos,
+                neighbor,
+            );
+        }
+        if new_state != state {
+            self.set_block(position, new_state, flags).map_err(query)?;
+        }
+        Ok(())
     }
     fn ensure_can_write(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
         Ok(self
