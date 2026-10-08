@@ -488,7 +488,8 @@ impl Renderer {
             atlas_pixels,
         );
         let atlas_view = atlas.create_view(&Default::default());
-        let hud = HudRenderer::new(&device, config.format.remove_srgb_suffix(), &atlas_view)?;
+        let mut hud = HudRenderer::new(&device, config.format.remove_srgb_suffix(), &atlas_view)?;
+        hud.atlas_texture = Some(atlas.clone());
         let entity_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon entities"),
             source: wgpu::ShaderSource::Wgsl(include_str!("entity.wgsl").into()),

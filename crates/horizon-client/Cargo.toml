@@ -20,3 +20,4 @@ png = "0.18"
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 cpal = "0.16"
 symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
+miniz_oxide = "0.8"
