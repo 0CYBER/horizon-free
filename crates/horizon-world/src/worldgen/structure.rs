@@ -2,7 +2,10 @@
 //! and structure pieces.
 pub mod features;
 pub mod jigsaw;
+pub mod legacy;
+pub mod ocean_ruin;
 pub mod processor;
+pub mod simple;
 pub mod start;
 pub mod template;
 

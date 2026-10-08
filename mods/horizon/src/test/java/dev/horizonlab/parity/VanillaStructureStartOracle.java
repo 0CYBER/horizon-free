@@ -58,11 +58,20 @@ public final class VanillaStructureStartOracle {
         var structures=world.lookupOrThrow(Registries.STRUCTURE);
         try(var w=new PrintWriter(Files.newBufferedWriter(out,StandardCharsets.UTF_8))) {
             structures.listElements().forEach(h->w.println("registry "+h.key().identifier()+" "+h.value().step().ordinal()));
+            if(System.getenv("HORIZON_HEIGHTS")!=null)for(String p:System.getenv("HORIZON_HEIGHTS").split(";")){
+                String[] xz=p.split(",");int x=Integer.parseInt(xz[0]),z=Integer.parseInt(xz[1]);
+                int floor=generator.getBaseHeight(x,z,Heightmap.Types.OCEAN_FLOOR_WG,height,randomState),surface=generator.getBaseHeight(x,z,Heightmap.Types.WORLD_SURFACE_WG,height,randomState);
+                var resolver=biomeSource.createResolver(climate);
+                StringBuilder biomes=new StringBuilder();
+                for(int qy=(floor-12)>>2;qy<=(floor+8)>>2;qy++)biomes.append(" "+qy+":"+resolver.getNoiseBiome(x>>2,qy,z>>2).unwrapKey().get().identifier().getPath());
+                w.println("height "+x+" "+z+" "+floor+" "+surface+biomes);
+            }
             for(int cx=x0;cx<=x1;cx++)for(int cz=z0;cz<=z1;cz++) {
                 ChunkPos pos=new ChunkPos(cx,cz);
                 for(var set:state.possibleStructureSets()) {
                     var placement=set.value().placement();var entries=set.value().structures();
                     if(!placement.isStructureChunk(state,cx,cz))continue;
+                    if(System.getenv("HORIZON_PLACED")!=null)w.println("placed "+cx+" "+cz+" "+set.unwrapKey().get().identifier());
                     var options=new ArrayList<>(entries);
                     WorldgenRandom random=new WorldgenRandom(new LegacyRandomSource(0L));random.setLargeFeatureSeed(seed,cx,cz);
                     int total=0;for(var o:options)total+=o.weight();
@@ -72,6 +81,13 @@ public final class VanillaStructureStartOracle {
                         else{int choice=random.nextInt(total);for(var o:options){choice-=o.weight();if(choice<0)break;index++;}selected=options.get(index);}
                         var structure=selected.structure();
                         StructureStart start=structure.value().generate(structure,Level.OVERWORLD,access,generator,biomeSource,climate,randomState,templates,seed,pos,0,height,structure.value().biomes()::contains);
+                        if(System.getenv("HORIZON_PLACED")!=null){
+                            w.println("generate "+structure.unwrapKey().get().identifier()+" "+start.isValid());
+                            var ctx=new Structure.GenerationContext(access,generator,biomeSource,climate,randomState,templates,seed,pos,height,structure.value().biomes()::contains);
+                            try{var m=Structure.class.getDeclaredMethod("findGenerationPoint",Structure.GenerationContext.class);m.setAccessible(true);
+                            var stub=(java.util.Optional<?>)m.invoke(structure.value(),ctx);
+                            stub.ifPresent(st->{var sp=((Structure.GenerationStub)st).position();w.println("stub "+sp+" "+ctx.biomeResolver().getNoiseBiome(sp.getX()>>2,sp.getY()>>2,sp.getZ()>>2).unwrapKey().get().identifier());});}catch(Exception e){w.println("err "+e);}
+                        }
                         if(start.isValid()) {
                             var b=start.getBoundingBox();
                             w.println("start "+cx+" "+cz+" "+structure.unwrapKey().get().identifier()+" "+b.minX()+" "+b.minY()+" "+b.minZ()+" "+b.maxX()+" "+b.maxY()+" "+b.maxZ()+" "+start.getPieces().size());

@@ -3,6 +3,7 @@
 use super::{
     BoundingBox, StructureResources,
     jigsaw::{JigsawConfig, JigsawContext, PoolPiece, Pools, Projection, assemble},
+    legacy::{LegacyPiece, PieceContext},
 };
 use crate::{
     heightmap::HeightmapType,
@@ -58,6 +59,17 @@ pub struct JigsawDef {
 #[derive(Debug)]
 pub enum StructureKind {
     Jigsaw(JigsawDef),
+    BuriedTreasure,
+    Igloo,
+    SwampHut,
+    Shipwreck {
+        beached: bool,
+    },
+    OceanRuin {
+        warm: bool,
+        large: f32,
+        cluster: f32,
+    },
     /// A structure type whose generator is not implemented yet.
     Unsupported(String),
 }
@@ -160,6 +172,17 @@ impl StructureRegistry {
                     padding: pair(v.get("dimension_padding"), "bottom", "top", 0),
                     waterlogging: v["liquid_settings"].as_str() != Some("ignore_waterlogging"),
                 }),
+                "minecraft:buried_treasure" => StructureKind::BuriedTreasure,
+                "minecraft:igloo" => StructureKind::Igloo,
+                "minecraft:swamp_hut" => StructureKind::SwampHut,
+                "minecraft:shipwreck" => StructureKind::Shipwreck {
+                    beached: v["is_beached"].as_bool().unwrap_or(false),
+                },
+                "minecraft:ocean_ruin" => StructureKind::OceanRuin {
+                    warm: v["biome_temp"].as_str() == Some("warm"),
+                    large: v["large_probability"].as_f64().unwrap_or(0.) as f32,
+                    cluster: v["cluster_probability"].as_f64().unwrap_or(0.) as f32,
+                },
                 other => StructureKind::Unsupported(other.to_owned()),
             };
             defs.push(StructureDef {
@@ -312,13 +335,52 @@ fn reduce(method: Reduction, seed: i64, salt: i32, x: i32, z: i32, probability: 
 #[derive(Debug)]
 pub enum Piece {
     Pool(PoolPiece),
+    Legacy(Box<dyn LegacyPiece>),
 }
 impl Piece {
     pub fn bounding_box(&self) -> BoundingBox {
         match self {
             Self::Pool(p) => p.bounding_box,
+            Self::Legacy(p) => p.bounding_box(),
         }
     }
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::Pool(_) => "minecraft:jigsaw",
+            Self::Legacy(p) => p.type_name(),
+        }
+    }
+}
+fn legacy(pieces: Vec<impl LegacyPiece + 'static>) -> Vec<Piece> {
+    pieces
+        .into_iter()
+        .map(|p| Piece::Legacy(Box::new(p)))
+        .collect()
+}
+/// Structure.onTopOfChunkCenter: the start position, or None when no valid
+/// biome can exist in the chunk-center column.
+fn top_of_chunk_center(
+    context: &mut impl StartContext,
+    chunk: ChunkPos,
+    kind: HeightmapType,
+) -> Option<[i32; 3]> {
+    let (x, z) = (chunk.x * 16 + 8, chunk.z * 16 + 8);
+    let (min, max) = (context.min_y(), context.max_y());
+    if !context.column_has_valid_biome(x, z, min - 1, max) {
+        return None;
+    }
+    Some([x, context.base_height(x, z, kind) - 1, z])
+}
+fn first_occupied(context: &mut impl StartContext, x: i32, z: i32) -> i32 {
+    context.base_height(x, z, HeightmapType::WorldSurfaceWg) - 1
+}
+fn corner_heights(context: &mut impl StartContext, x: i32, sx: i32, z: i32, sz: i32) -> [i32; 4] {
+    [
+        first_occupied(context, x, z),
+        first_occupied(context, x, z + sz),
+        first_occupied(context, x + sx, z),
+        first_occupied(context, x + sx, z + sz),
+    ]
 }
 #[derive(Debug)]
 pub struct StructureStart {
@@ -445,6 +507,80 @@ fn try_generate(
                 pieces.into_iter().map(Piece::Pool).collect::<Vec<_>>(),
             )
         }
+        StructureKind::BuriedTreasure => {
+            let stub = top_of_chunk_center(context, chunk, HeightmapType::OceanFloorWg)?;
+            let piece = super::simple::BuriedTreasurePiece {
+                position: [chunk.x * 16 + 9, 90, chunk.z * 16 + 9],
+            };
+            (stub, legacy(vec![piece]))
+        }
+        StructureKind::Igloo => {
+            let stub = top_of_chunk_center(context, chunk, HeightmapType::WorldSurfaceWg)?;
+            let rotation = super::Rotation::random(&mut random);
+            let pieces = super::simple::igloo_pieces(
+                resources,
+                [chunk.x * 16, 90, chunk.z * 16],
+                rotation,
+                &mut random,
+            )?;
+            (stub, legacy(pieces))
+        }
+        StructureKind::SwampHut => {
+            let stub = top_of_chunk_center(context, chunk, HeightmapType::WorldSurfaceWg)?;
+            let piece = super::simple::SwampHutPiece::new(&mut random, chunk.x * 16, chunk.z * 16);
+            (stub, legacy(vec![piece]))
+        }
+        StructureKind::Shipwreck { beached } => {
+            let kind = if *beached {
+                HeightmapType::WorldSurfaceWg
+            } else {
+                HeightmapType::OceanFloorWg
+            };
+            let stub = top_of_chunk_center(context, chunk, kind)?;
+            let rotation = super::Rotation::random(&mut random);
+            let piece = super::simple::shipwreck_piece(
+                resources,
+                [chunk.x * 16, 90, chunk.z * 16],
+                rotation,
+                &mut random,
+                *beached,
+            )?;
+            if super::simple::shipwreck_too_big(&piece.template) {
+                let b = piece.bounding_box;
+                let [sx, _, sz] = b.span();
+                let heights = corner_heights(context, b.min[0], sx, b.min[2], sz);
+                let height = if *beached {
+                    let min = heights.into_iter().min().unwrap_or(0);
+                    min - piece.template.size[1] / 2 - random.next_int_bound(3).unwrap_or(0)
+                } else {
+                    heights.iter().sum::<i32>() / 4
+                };
+                *piece.state.lock().unwrap() = Some(height);
+            }
+            (stub, legacy(vec![piece]))
+        }
+        StructureKind::OceanRuin {
+            warm,
+            large,
+            cluster,
+        } => {
+            let stub = top_of_chunk_center(context, chunk, HeightmapType::OceanFloorWg)?;
+            let rotation = super::Rotation::random(&mut random);
+            let config = super::ocean_ruin::OceanRuinConfig {
+                warm: *warm,
+                large_probability: *large,
+                cluster_probability: *cluster,
+            };
+            let pieces = super::ocean_ruin::pieces(
+                resources,
+                bindings,
+                [chunk.x * 16, 90, chunk.z * 16],
+                rotation,
+                &mut random,
+                &config,
+            )?;
+            (stub, legacy(pieces))
+        }
         StructureKind::Unsupported(_) => return None,
     };
     let quart = position.map(|v| v >> 2);
@@ -544,7 +680,15 @@ pub fn beardifier(
             if !near {
                 continue;
             }
-            let Piece::Pool(pool) = piece;
+            let Piece::Pool(pool) = piece else {
+                rigids.push(RigidPiece {
+                    bounds: StructureBounds::new(b.min, b.max)?,
+                    adjustment,
+                    ground_level_delta: 0,
+                });
+                include(b, &mut any);
+                continue;
+            };
             if pool.element.projection() == Projection::Rigid {
                 rigids.push(RigidPiece {
                     bounds: StructureBounds::new(b.min, b.max)?,
@@ -581,7 +725,7 @@ pub fn beardifier(
 
 /// StructureStart.placeInChunk for pieces intersecting the chunk's writable box.
 #[allow(clippy::too_many_arguments)]
-pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource>(
+pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'static>(
     start: &StructureStart,
     world: &mut W,
     resources: &StructureResources,
@@ -612,6 +756,17 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource>(
                         reference,
                         place_feature,
                     )?;
+                }
+                Piece::Legacy(p) => {
+                    let mut context = PieceContext {
+                        world,
+                        resources,
+                        random,
+                        chunk_box,
+                        chunk: ChunkPos::new(chunk_box.min[0] >> 4, chunk_box.min[2] >> 4),
+                        reference,
+                    };
+                    p.post_process(&mut context)?;
                 }
             }
         }

@@ -174,7 +174,20 @@ fn dump_starts(
                     s.pieces.len()
                 ));
                 for piece in &s.pieces {
-                    let Piece::Pool(p) = piece;
+                    let Piece::Pool(p) = piece else {
+                        let b = piece.bounding_box();
+                        lines.push(format!(
+                            "piece {} {} {} {} {} {} {}",
+                            piece.type_name(),
+                            b.min[0],
+                            b.min[1],
+                            b.min[2],
+                            b.max[0],
+                            b.max[1],
+                            b.max[2]
+                        ));
+                        continue;
+                    };
                     let b = p.bounding_box;
                     let rotation = match p.rotation {
                         Rotation::None => "NONE",

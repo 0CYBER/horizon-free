@@ -21,8 +21,10 @@ def main():
     classes = build/'classes'
     classes.mkdir(parents=True, exist_ok=True)
     dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
-    subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-cp', dependencies,
-                    '-d', str(classes), str(source)], check=True)
+    compiled = subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-cp', dependencies,
+                               '-d', str(classes), str(source)], capture_output=True, text=True)
+    if compiled.returncode:
+        raise SystemExit('javac failed:\n' + compiled.stderr[-3000:])
     result = subprocess.run(['java', '-Xmx2G', '-cp', str(classes)+os.pathsep+dependencies,
                              'dev.horizonlab.parity.VanillaStructureStartOracle', out, seed, x0, z0, x1, z1],
                             capture_output=True, text=True)
