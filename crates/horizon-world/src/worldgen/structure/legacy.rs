@@ -1,0 +1,818 @@
+//! Piece-based ("legacy") structure support: the StructurePiece helpers,
+//! object-safe world/random access and template pieces.
+use super::{
+    BlockInfo, BoundingBox, Mirror, Rotation, StructureResources, StructureTemplate,
+    processor::{PlaceSettings, Processor, ProcessorList, ProcessorRandom, place_in_world},
+};
+use crate::{
+    chunk::BlockState,
+    fluid::FluidState,
+    heightmap::HeightmapType,
+    nbt::{Compound, JavaString, Tag},
+    registry::BlockStateId,
+    worldgen::{
+        feature::FeatureWorld,
+        placement::{PlacementContext, PlacementQueryError},
+    },
+};
+use horizon_core::{
+    geometry::Direction,
+    position::{BlockPos, ChunkPos},
+    random::{LegacyRandom, RandomSource, position_seed},
+};
+use std::sync::{Arc, Mutex};
+
+pub type Result<T> = std::result::Result<T, PlacementQueryError>;
+
+/// The random draws legacy pieces make.
+pub trait PieceRandom: ProcessorRandom {
+    fn boolean(&mut self) -> bool;
+    fn double(&mut self) -> f64;
+}
+impl<R: RandomSource> PieceRandom for R {
+    fn boolean(&mut self) -> bool {
+        self.next_boolean()
+    }
+    fn double(&mut self) -> f64 {
+        self.next_double()
+    }
+}
+
+/// Object-safe world access for piece post-processing.
+pub trait PieceWorld {
+    fn block(&mut self, pos: [i32; 3]) -> Result<BlockStateId>;
+    fn set(&mut self, pos: [i32; 3], state: BlockStateId, flags: i32) -> Result<bool>;
+    fn fluid(&mut self, pos: [i32; 3]) -> Result<FluidState>;
+    fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Result<i32>;
+    fn min_y(&mut self) -> Result<i32>;
+    fn max_y(&mut self) -> Result<i32>;
+    fn block_entity(&mut self, pos: [i32; 3], nbt: Compound) -> Result<()>;
+    fn post_process(&mut self, pos: [i32; 3]) -> Result<()>;
+    fn place_template(
+        &mut self,
+        resources: &StructureResources,
+        template: &StructureTemplate,
+        position: [i32; 3],
+        reference: [i32; 3],
+        settings: &mut PlaceSettings<'_>,
+        random: &mut dyn ProcessorRandom,
+        flags: i32,
+    ) -> Result<bool>;
+}
+impl<W: FeatureWorld + PlacementContext> PieceWorld for W {
+    fn block(&mut self, pos: [i32; 3]) -> Result<BlockStateId> {
+        self.block_state(pos)
+    }
+    fn set(&mut self, pos: [i32; 3], state: BlockStateId, flags: i32) -> Result<bool> {
+        self.set_block(pos, state, flags)
+            .map_err(|_| PlacementQueryError::Failed("piece write".into()))
+    }
+    fn fluid(&mut self, pos: [i32; 3]) -> Result<FluidState> {
+        self.fluid_state(pos)
+    }
+    fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Result<i32> {
+        PlacementContext::height(self, kind, x, z)
+    }
+    fn min_y(&mut self) -> Result<i32> {
+        PlacementContext::min_y(self)
+    }
+    fn max_y(&mut self) -> Result<i32> {
+        PlacementContext::max_y(self)
+    }
+    fn block_entity(&mut self, pos: [i32; 3], nbt: Compound) -> Result<()> {
+        self.set_block_entity(pos, nbt)
+    }
+    fn post_process(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.mark_postprocessing(pos)
+    }
+    fn place_template(
+        &mut self,
+        resources: &StructureResources,
+        template: &StructureTemplate,
+        position: [i32; 3],
+        reference: [i32; 3],
+        settings: &mut PlaceSettings<'_>,
+        random: &mut dyn ProcessorRandom,
+        flags: i32,
+    ) -> Result<bool> {
+        place_in_world(
+            self,
+            resources,
+            template,
+            position,
+            reference,
+            settings,
+            Some(random),
+            flags,
+        )
+    }
+}
+
+/// Everything a piece needs while post-processing one chunk.
+pub struct PieceContext<'a> {
+    pub world: &'a mut dyn PieceWorld,
+    pub resources: &'a StructureResources,
+    pub random: &'a mut dyn PieceRandom,
+    pub chunk_box: BoundingBox,
+    pub chunk: ChunkPos,
+    pub reference: [i32; 3],
+}
+impl PieceContext<'_> {
+    pub fn state(&self, name: &str) -> BlockStateId {
+        state(self.resources, name, &[])
+    }
+    pub fn state_with(&self, name: &str, properties: &[(&str, &str)]) -> BlockStateId {
+        state(self.resources, name, properties)
+    }
+    pub fn name(&self, state: BlockStateId) -> &str {
+        self.resources
+            .registry
+            .state(state)
+            .map(|s| s.name.as_str())
+            .unwrap_or("")
+    }
+    pub fn is_block(&mut self, pos: [i32; 3], name: &str) -> Result<bool> {
+        let state = self.world.block(pos)?;
+        Ok(self.name(state) == name)
+    }
+    pub fn is_air(&self, state: BlockStateId) -> bool {
+        matches!(
+            self.name(state),
+            "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+        )
+    }
+    /// BlockState.liquid(): water and lava blocks.
+    pub fn is_liquid(&self, state: BlockStateId) -> bool {
+        matches!(self.name(state), "minecraft:water" | "minecraft:lava")
+    }
+    pub fn property<'s>(&'s self, state: BlockStateId, key: &str) -> Option<&'s str> {
+        self.resources
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get(key))
+            .map(String::as_str)
+    }
+    pub fn with_property(&self, state: BlockStateId, key: &str, value: &str) -> BlockStateId {
+        let Some(mut descriptor) = self.resources.registry.state(state).cloned() else {
+            return state;
+        };
+        if let Some(slot) = descriptor.properties.get_mut(key) {
+            *slot = value.to_owned();
+        }
+        self.resources.registry.id(&descriptor).unwrap_or(state)
+    }
+    /// Store a loot-table container's block entity (RandomizableContainer.setLootTable).
+    pub fn loot_table(&mut self, pos: [i32; 3], kind: &str, table: &str) -> Result<()> {
+        let seed = self.random.long();
+        let mut nbt = Compound::new();
+        nbt.insert("id".into(), Tag::String(kind.into()));
+        nbt.insert("LootTable".into(), Tag::String(table.into()));
+        nbt.insert("LootTableSeed".into(), Tag::Long(seed));
+        self.world.block_entity(pos, nbt)
+    }
+}
+/// A state by block name and properties (missing properties keep defaults).
+pub fn state(
+    resources: &StructureResources,
+    name: &str,
+    properties: &[(&str, &str)],
+) -> BlockStateId {
+    let registry = resources.registry;
+    let mut descriptor = BlockState {
+        name: if name.contains(':') {
+            name.to_owned()
+        } else {
+            format!("minecraft:{name}")
+        },
+        properties: Default::default(),
+    };
+    for (k, v) in properties {
+        descriptor
+            .properties
+            .insert((*k).to_owned(), (*v).to_owned());
+    }
+    registry
+        .resolve(&descriptor)
+        .ok()
+        .or_else(|| registry.default_state(&descriptor.name))
+        .unwrap_or_else(|| registry.default_state("minecraft:air").unwrap())
+}
+
+/// A placed structure piece.
+pub trait LegacyPiece: std::fmt::Debug + Send + Sync {
+    fn bounding_box(&self) -> BoundingBox;
+    /// The vanilla StructurePieceType id, for diagnostics and comparisons.
+    fn type_name(&self) -> &'static str;
+    fn post_process(&self, context: &mut PieceContext<'_>) -> Result<()>;
+}
+
+/// StructurePiece's orientation transform and block helpers.
+#[derive(Clone, Copy, Debug)]
+pub struct PieceFrame {
+    pub bounding_box: BoundingBox,
+    pub orientation: Option<Direction>,
+    pub mirror: Mirror,
+    pub rotation: Rotation,
+}
+pub const HORIZONTAL: [Direction; 4] = [
+    Direction::North,
+    Direction::East,
+    Direction::South,
+    Direction::West,
+];
+/// Direction.Plane.HORIZONTAL.getRandomDirection.
+pub fn random_horizontal(random: &mut impl RandomSource) -> Direction {
+    HORIZONTAL[random.next_int_bound(4).unwrap_or(0) as usize]
+}
+pub fn make_bounding_box(
+    x: i32,
+    y: i32,
+    z: i32,
+    direction: Direction,
+    width: i32,
+    height: i32,
+    depth: i32,
+) -> BoundingBox {
+    if matches!(direction, Direction::North | Direction::South) {
+        BoundingBox::new([x, y, z], [x + width - 1, y + height - 1, z + depth - 1])
+    } else {
+        BoundingBox::new([x, y, z], [x + depth - 1, y + height - 1, z + width - 1])
+    }
+}
+impl PieceFrame {
+    pub fn new(bounding_box: BoundingBox, orientation: Option<Direction>) -> Self {
+        let (mirror, rotation) = match orientation {
+            Some(Direction::South) => (Mirror::LeftRight, Rotation::None),
+            Some(Direction::West) => (Mirror::LeftRight, Rotation::Clockwise90),
+            Some(Direction::East) => (Mirror::None, Rotation::Clockwise90),
+            _ => (Mirror::None, Rotation::None),
+        };
+        Self {
+            bounding_box,
+            orientation,
+            mirror,
+            rotation,
+        }
+    }
+    pub fn world_x(&self, x: i32, z: i32) -> i32 {
+        match self.orientation {
+            Some(Direction::North | Direction::South) => self.bounding_box.min[0] + x,
+            Some(Direction::West) => self.bounding_box.max[0] - z,
+            Some(Direction::East) => self.bounding_box.min[0] + z,
+            _ => x,
+        }
+    }
+    pub fn world_y(&self, y: i32) -> i32 {
+        if self.orientation.is_none() {
+            y
+        } else {
+            y + self.bounding_box.min[1]
+        }
+    }
+    pub fn world_z(&self, x: i32, z: i32) -> i32 {
+        match self.orientation {
+            Some(Direction::North) => self.bounding_box.max[2] - z,
+            Some(Direction::South) => self.bounding_box.min[2] + z,
+            Some(Direction::West | Direction::East) => self.bounding_box.min[2] + x,
+            _ => z,
+        }
+    }
+    pub fn world_pos(&self, x: i32, y: i32, z: i32) -> [i32; 3] {
+        [self.world_x(x, z), self.world_y(y), self.world_z(x, z)]
+    }
+    /// StructurePiece.placeBlock (canBeReplaced is always true here).
+    pub fn place(
+        &self,
+        c: &mut PieceContext<'_>,
+        state: BlockStateId,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> Result<()> {
+        let pos = self.world_pos(x, y, z);
+        if !c.chunk_box.is_inside(pos) {
+            return Ok(());
+        }
+        let mut state = state;
+        if self.mirror != Mirror::None {
+            state = c.resources.transforms.mirror(state, self.mirror);
+        }
+        if self.rotation != Rotation::None {
+            state = c.resources.transforms.rotate(state, self.rotation);
+        }
+        c.world.set(pos, state, 2)?;
+        let fluid = c.world.fluid(pos)?;
+        if fluid.kind() != crate::fluid::FluidKind::Empty {
+            // scheduleTick(pos, fluid, 0) is a no-op for generation output.
+        }
+        if matches!(
+            c.name(state),
+            "minecraft:nether_brick_fence"
+                | "minecraft:torch"
+                | "minecraft:wall_torch"
+                | "minecraft:oak_fence"
+                | "minecraft:spruce_fence"
+                | "minecraft:dark_oak_fence"
+                | "minecraft:pale_oak_fence"
+                | "minecraft:acacia_fence"
+                | "minecraft:birch_fence"
+                | "minecraft:jungle_fence"
+                | "minecraft:ladder"
+                | "minecraft:iron_bars"
+        ) {
+            c.world.post_process(pos)?;
+        }
+        Ok(())
+    }
+    pub fn get(&self, c: &mut PieceContext<'_>, x: i32, y: i32, z: i32) -> Result<BlockStateId> {
+        let pos = self.world_pos(x, y, z);
+        if c.chunk_box.is_inside(pos) {
+            c.world.block(pos)
+        } else {
+            Ok(c.state("air"))
+        }
+    }
+    pub fn is_interior(&self, c: &mut PieceContext<'_>, x: i32, y: i32, z: i32) -> Result<bool> {
+        let pos = self.world_pos(x, y + 1, z);
+        if !c.chunk_box.is_inside(pos) {
+            return Ok(false);
+        }
+        Ok(pos[1]
+            < c.world
+                .height(HeightmapType::OceanFloorWg, pos[0], pos[2])?)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn generate_box(
+        &self,
+        c: &mut PieceContext<'_>,
+        [x0, y0, z0]: [i32; 3],
+        [x1, y1, z1]: [i32; 3],
+        edge: BlockStateId,
+        fill: BlockStateId,
+        skip_air: bool,
+    ) -> Result<()> {
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                for z in z0..=z1 {
+                    if skip_air {
+                        let s = self.get(c, x, y, z)?;
+                        if c.is_air(s) {
+                            continue;
+                        }
+                    }
+                    let interior = y != y0 && y != y1 && x != x0 && x != x1 && z != z0 && z != z1;
+                    self.place(c, if interior { fill } else { edge }, x, y, z)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    /// generateBox with a block selector called as (random, x, y, z, edge).
+    pub fn generate_box_selector(
+        &self,
+        c: &mut PieceContext<'_>,
+        [x0, y0, z0]: [i32; 3],
+        [x1, y1, z1]: [i32; 3],
+        skip_air: bool,
+        selector: &mut dyn FnMut(&mut PieceContext<'_>, i32, i32, i32, bool) -> BlockStateId,
+    ) -> Result<()> {
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                for z in z0..=z1 {
+                    if skip_air {
+                        let s = self.get(c, x, y, z)?;
+                        if c.is_air(s) {
+                            continue;
+                        }
+                    }
+                    let edge = y == y0 || y == y1 || x == x0 || x == x1 || z == z0 || z == z1;
+                    let state = selector(c, x, y, z, edge);
+                    self.place(c, state, x, y, z)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn generate_maybe_box(
+        &self,
+        c: &mut PieceContext<'_>,
+        probability: f32,
+        [x0, y0, z0]: [i32; 3],
+        [x1, y1, z1]: [i32; 3],
+        edge: BlockStateId,
+        fill: BlockStateId,
+        skip_air: bool,
+        inside: bool,
+    ) -> Result<()> {
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                for z in z0..=z1 {
+                    if c.random.float() > probability {
+                        continue;
+                    }
+                    if skip_air {
+                        let s = self.get(c, x, y, z)?;
+                        if c.is_air(s) {
+                            continue;
+                        }
+                    }
+                    if inside && !self.is_interior(c, x, y, z)? {
+                        continue;
+                    }
+                    let interior = y != y0 && y != y1 && x != x0 && x != x1 && z != z0 && z != z1;
+                    self.place(c, if interior { fill } else { edge }, x, y, z)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn maybe_block(
+        &self,
+        c: &mut PieceContext<'_>,
+        probability: f32,
+        x: i32,
+        y: i32,
+        z: i32,
+        state: BlockStateId,
+    ) -> Result<()> {
+        if c.random.float() < probability {
+            self.place(c, state, x, y, z)?;
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn upper_half_sphere(
+        &self,
+        c: &mut PieceContext<'_>,
+        [x0, y0, z0]: [i32; 3],
+        [x1, y1, z1]: [i32; 3],
+        fill: BlockStateId,
+        skip_air: bool,
+    ) -> Result<()> {
+        let dx = (x1 - x0 + 1) as f32;
+        let dy = (y1 - y0 + 1) as f32;
+        let dz = (z1 - z0 + 1) as f32;
+        let cx = x0 as f32 + dx / 2.;
+        let cz = z0 as f32 + dz / 2.;
+        for y in y0..=y1 {
+            let ny = (y - y0) as f32 / dy;
+            for x in x0..=x1 {
+                let nx = (x as f32 - cx) / (dx * 0.5);
+                for z in z0..=z1 {
+                    let nz = (z as f32 - cz) / (dz * 0.5);
+                    if skip_air {
+                        let s = self.get(c, x, y, z)?;
+                        if c.is_air(s) {
+                            continue;
+                        }
+                    }
+                    if nx * nx + ny * ny + nz * nz <= 1.05 {
+                        self.place(c, fill, x, y, z)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    pub fn fill_column_down(
+        &self,
+        c: &mut PieceContext<'_>,
+        state: BlockStateId,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> Result<()> {
+        let mut pos = self.world_pos(x, y, z);
+        if !c.chunk_box.is_inside(pos) {
+            return Ok(());
+        }
+        let min = c.world.min_y()?;
+        loop {
+            let current = c.world.block(pos)?;
+            let replaceable = c.is_air(current)
+                || c.is_liquid(current)
+                || matches!(
+                    c.name(current),
+                    "minecraft:glow_lichen" | "minecraft:seagrass" | "minecraft:tall_seagrass"
+                );
+            if !replaceable || pos[1] <= min + 1 {
+                break;
+            }
+            c.world.set(pos, state, 2)?;
+            pos[1] -= 1;
+        }
+        Ok(())
+    }
+    /// StructurePiece.createChest at piece coordinates.
+    pub fn create_chest(
+        &self,
+        c: &mut PieceContext<'_>,
+        x: i32,
+        y: i32,
+        z: i32,
+        table: &str,
+    ) -> Result<bool> {
+        let pos = self.world_pos(x, y, z);
+        create_chest(c, pos, table, None)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_dispenser(
+        &self,
+        c: &mut PieceContext<'_>,
+        x: i32,
+        y: i32,
+        z: i32,
+        facing: Direction,
+        table: &str,
+    ) -> Result<bool> {
+        let pos = self.world_pos(x, y, z);
+        if !c.chunk_box.is_inside(pos) || c.is_block(pos, "minecraft:dispenser")? {
+            return Ok(false);
+        }
+        let state = c.state_with("dispenser", &[("facing", direction_name(facing))]);
+        self.place(c, state, x, y, z)?;
+        c.loot_table(pos, "minecraft:dispenser", table)?;
+        Ok(true)
+    }
+}
+pub fn direction_name(d: Direction) -> &'static str {
+    match d {
+        Direction::Down => "down",
+        Direction::Up => "up",
+        Direction::North => "north",
+        Direction::South => "south",
+        Direction::West => "west",
+        Direction::East => "east",
+    }
+}
+pub fn offset(pos: [i32; 3], d: Direction, n: i32) -> [i32; 3] {
+    let s = d.normal();
+    [pos[0] + s[0] * n, pos[1] + s[1] * n, pos[2] + s[2] * n]
+}
+fn solid_render(c: &PieceContext<'_>, state: BlockStateId) -> bool {
+    c.resources.transforms.full_block(state) && !c.is_liquid(state)
+}
+/// StructurePiece.createChest with an absolute position.
+pub fn create_chest(
+    c: &mut PieceContext<'_>,
+    pos: [i32; 3],
+    table: &str,
+    state: Option<BlockStateId>,
+) -> Result<bool> {
+    if !c.chunk_box.is_inside(pos) || c.is_block(pos, "minecraft:chest")? {
+        return Ok(false);
+    }
+    let state = match state {
+        Some(s) => s,
+        None => reorient(c, pos, c.state("chest"))?,
+    };
+    c.world.set(pos, state, 2)?;
+    c.loot_table(pos, "minecraft:chest", table)?;
+    Ok(true)
+}
+/// StructurePiece.reorient for chests (solid-render approximated by the
+/// full collision cube of non-liquid blocks).
+fn reorient(c: &mut PieceContext<'_>, pos: [i32; 3], state: BlockStateId) -> Result<BlockStateId> {
+    let mut solid: Option<Direction> = None;
+    for d in HORIZONTAL {
+        let n = c.world.block(offset(pos, d, 1))?;
+        if c.name(n) == "minecraft:chest" {
+            return Ok(state);
+        }
+        if solid_render(c, n) {
+            if solid.is_some() {
+                solid = None;
+                break;
+            }
+            solid = Some(d);
+        }
+    }
+    if let Some(d) = solid {
+        return Ok(c.with_property(state, "facing", direction_name(opposite(d))));
+    }
+    let mut facing = match c.property(state, "facing") {
+        Some("south") => Direction::South,
+        Some("east") => Direction::East,
+        Some("west") => Direction::West,
+        _ => Direction::North,
+    };
+    let solid_at = |c: &mut PieceContext<'_>, d: Direction| -> Result<bool> {
+        let s = c.world.block(offset(pos, d, 1))?;
+        Ok(solid_render(c, s))
+    };
+    if solid_at(c, facing)? {
+        facing = opposite(facing);
+    }
+    if solid_at(c, facing)? {
+        facing = clockwise(facing);
+    }
+    if solid_at(c, facing)? {
+        facing = opposite(facing);
+    }
+    Ok(c.with_property(state, "facing", direction_name(facing)))
+}
+pub fn opposite(d: Direction) -> Direction {
+    match d {
+        Direction::Down => Direction::Up,
+        Direction::Up => Direction::Down,
+        Direction::North => Direction::South,
+        Direction::South => Direction::North,
+        Direction::West => Direction::East,
+        Direction::East => Direction::West,
+    }
+}
+pub fn clockwise(d: Direction) -> Direction {
+    match d {
+        Direction::North => Direction::East,
+        Direction::East => Direction::South,
+        Direction::South => Direction::West,
+        Direction::West => Direction::North,
+        other => other,
+    }
+}
+pub fn counter_clockwise(d: Direction) -> Direction {
+    match d {
+        Direction::North => Direction::West,
+        Direction::West => Direction::South,
+        Direction::South => Direction::East,
+        Direction::East => Direction::North,
+        other => other,
+    }
+}
+
+/// TemplateStructurePiece: one template with fixed settings; data markers
+/// are handed to the owning structure.
+#[derive(Debug)]
+pub struct TemplatePiece {
+    pub type_name: &'static str,
+    pub template_name: String,
+    pub template: Arc<StructureTemplate>,
+    pub position: [i32; 3],
+    pub rotation: Rotation,
+    pub mirror: Mirror,
+    pub pivot: [i32; 3],
+    pub processors: Arc<ProcessorList>,
+    pub waterlogging: bool,
+    /// Ignore structure blocks (and air, for ocean ruins) before processors.
+    pub ignore: Vec<String>,
+    pub bounding_box: BoundingBox,
+    pub handler: TemplateHandler,
+    /// Per-piece state mutated by vanilla post-processing (e.g. ruined
+    /// portals record nothing; shipwrecks/igloos re-place at a height).
+    pub state: Mutex<Option<i32>>,
+}
+#[derive(Clone, Copy, Debug)]
+pub enum TemplateHandler {
+    Igloo,
+    Shipwreck {
+        beached: bool,
+    },
+    OceanRuin {
+        warm: bool,
+        large: bool,
+        integrity: f32,
+    },
+    Plain,
+}
+impl TemplatePiece {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        type_name: &'static str,
+        template_name: &str,
+        template: Arc<StructureTemplate>,
+        position: [i32; 3],
+        rotation: Rotation,
+        mirror: Mirror,
+        pivot: [i32; 3],
+        processors: Arc<ProcessorList>,
+        waterlogging: bool,
+        ignore: Vec<String>,
+        handler: TemplateHandler,
+    ) -> Self {
+        Self {
+            bounding_box: template.bounding_box(position, rotation, pivot, mirror),
+            type_name,
+            template_name: template_name.to_owned(),
+            template,
+            position,
+            rotation,
+            mirror,
+            pivot,
+            processors,
+            waterlogging,
+            ignore,
+            handler,
+            state: Mutex::new(None),
+        }
+    }
+    pub fn settings(&self) -> PlaceSettings<'_> {
+        let mut s = PlaceSettings::new(self.rotation);
+        s.mirror = self.mirror;
+        s.pivot = self.pivot;
+        s.waterlogging = self.waterlogging;
+        s
+    }
+    /// TemplateStructurePiece.postProcess at a (possibly shifted) position;
+    /// returns the data markers (metadata, absolute position) on success.
+    pub fn place_at(
+        &self,
+        c: &mut PieceContext<'_>,
+        position: [i32; 3],
+        extra: &[Processor],
+    ) -> Result<Option<Vec<(String, [i32; 3])>>> {
+        let ignore = Processor::BlockIgnore(self.ignore.iter().cloned().collect());
+        let mut settings = self.settings();
+        settings.bounding_box = Some(c.chunk_box);
+        settings.processors.push(&ignore);
+        settings.processors.extend(extra.iter());
+        settings.processors.extend(self.processors.0.iter());
+        let resources = c.resources;
+        let reference = c.reference;
+        if !c.world.place_template(
+            resources,
+            &self.template,
+            position,
+            reference,
+            &mut settings,
+            &mut *c.random,
+            2,
+        )? {
+            return Ok(None);
+        }
+        let mut markers = Vec::new();
+        let mut jigsaws = Vec::new();
+        for info in filter_blocks(resources, &self.template, position, &settings) {
+            let name = c.name(info.state).to_owned();
+            let Some(nbt) = &info.nbt else { continue };
+            let text = |key: &str| match nbt.get(&JavaString::from(key)) {
+                Some(Tag::String(s)) => s.to_string_lossy(),
+                _ => String::new(),
+            };
+            if name == "minecraft:structure_block" && text("mode").eq_ignore_ascii_case("data") {
+                markers.push((text("metadata"), info.pos));
+            } else if name == "minecraft:jigsaw" {
+                let final_state = nbt
+                    .get(&JavaString::from("final_state"))
+                    .map(|_| text("final_state"))
+                    .unwrap_or_else(|| "minecraft:air".into());
+                jigsaws.push((info.pos, final_state));
+            }
+        }
+        for (pos, final_state) in jigsaws {
+            let state = super::template::parse_state_string(resources.registry, &final_state)
+                .unwrap_or_else(|| c.state("air"));
+            c.world.set(pos, state, 3)?;
+        }
+        Ok(Some(markers))
+    }
+}
+/// StructureTemplate.filterBlocks for structure and jigsaw blocks (palette
+/// chosen by settings' random or a position seed), within the settings box.
+fn filter_blocks(
+    resources: &StructureResources,
+    template: &StructureTemplate,
+    position: [i32; 3],
+    settings: &PlaceSettings<'_>,
+) -> Vec<BlockInfo> {
+    if template.palettes().is_empty() {
+        return Vec::new();
+    }
+    let palette = LegacyRandom::new(position_seed(BlockPos::new(
+        position[0],
+        position[1],
+        position[2],
+    )))
+    .next_int_bound(template.palettes().len() as i32)
+    .unwrap_or(0) as usize;
+    template.palettes()[palette]
+        .blocks()
+        .iter()
+        .filter(|b| {
+            let name = resources
+                .registry
+                .state(b.state)
+                .map(|s| s.name.as_str())
+                .unwrap_or("");
+            name == "minecraft:structure_block" || name == "minecraft:jigsaw"
+        })
+        .filter_map(|b| {
+            let relative = StructureTemplate::transform(
+                b.pos,
+                settings.mirror,
+                settings.rotation,
+                settings.pivot,
+            );
+            let pos: [i32; 3] = std::array::from_fn(|i| relative[i] + position[i]);
+            settings
+                .bounding_box
+                .is_none_or(|bb| bb.is_inside(pos))
+                .then(|| BlockInfo {
+                    pos,
+                    state: resources.transforms.rotate(b.state, settings.rotation),
+                    nbt: b.nbt.clone(),
+                })
+        })
+        .collect()
+}

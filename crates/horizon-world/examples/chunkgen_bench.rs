@@ -96,7 +96,7 @@ fn verify(data: &std::sync::Arc<GeneratorData>, parity: &Path) -> Result<(), Err
     ];
     let mut expected = Vec::new();
     for (seed, x, z) in cases {
-        let generator = OverworldGenerator::new(data.clone(), seed)?;
+        let generator = OverworldGenerator::without_structures(data.clone(), seed)?;
         let lines = dump(&generator.worker().generate_proto(ChunkPos::new(x, z))?);
         if let Ok(path) = std::env::var("HORIZON_VERIFY_DUMP") {
             fs::write(format!("{path}{seed}.txt"), lines.join("\n") + "\n")?;
@@ -146,6 +146,82 @@ fn verify(data: &std::sync::Arc<GeneratorData>, parity: &Path) -> Result<(), Err
     }
 }
 
+/// Structure starts in the oracle's line format (VanillaStructureStartOracle).
+fn dump_starts(
+    generator: &OverworldGenerator,
+    seed: i64,
+    [x0, z0, x1, z1]: [i32; 4],
+    out: &Path,
+) -> Result<(), Error> {
+    use horizon_world::worldgen::structure::{Rotation, start::Piece};
+    let _ = seed;
+    let mut worker = generator.worker();
+    let mut lines = Vec::new();
+    let start = Instant::now();
+    for cx in x0..=x1 {
+        for cz in z0..=z1 {
+            for s in worker.structure_starts(ChunkPos::new(cx, cz)) {
+                let b = s.bounding_box;
+                lines.push(format!(
+                    "start {cx} {cz} {} {} {} {} {} {} {} {}",
+                    s.name,
+                    b.min[0],
+                    b.min[1],
+                    b.min[2],
+                    b.max[0],
+                    b.max[1],
+                    b.max[2],
+                    s.pieces.len()
+                ));
+                for piece in &s.pieces {
+                    let Piece::Pool(p) = piece else {
+                        let b = piece.bounding_box();
+                        lines.push(format!(
+                            "piece {} {} {} {} {} {} {}",
+                            piece.type_name(),
+                            b.min[0],
+                            b.min[1],
+                            b.min[2],
+                            b.max[0],
+                            b.max[1],
+                            b.max[2]
+                        ));
+                        continue;
+                    };
+                    let b = p.bounding_box;
+                    let rotation = match p.rotation {
+                        Rotation::None => "NONE",
+                        Rotation::Clockwise90 => "CLOCKWISE_90",
+                        Rotation::Clockwise180 => "CLOCKWISE_180",
+                        Rotation::Counterclockwise90 => "COUNTERCLOCKWISE_90",
+                    };
+                    lines.push(format!(
+                        "piece minecraft:jigsaw {} {} {} {} {} {} {} {} {} {rotation} {} {}",
+                        b.min[0],
+                        b.min[1],
+                        b.min[2],
+                        b.max[0],
+                        b.max[1],
+                        b.max[2],
+                        p.position[0],
+                        p.position[1],
+                        p.position[2],
+                        p.ground_level_delta,
+                        p.junctions.len()
+                    ));
+                }
+            }
+        }
+    }
+    println!(
+        "structure starts for {} chunks in {:.2?}",
+        (x1 - x0 + 1) * (z1 - z0 + 1),
+        start.elapsed()
+    );
+    fs::write(out, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
 /// Process CPU seconds (Linux), robust against other load on shared machines.
 fn cpu_seconds() -> f64 {
     fs::read_to_string("/proc/self/stat")
@@ -165,6 +241,11 @@ fn glyph(name: &str) -> char {
     match name {
         "water" => '~',
         "lava" => '!',
+        "dirt_path" => '_',
+        "cobblestone" | "mossy_cobblestone" => 'o',
+        "hay_block" => 'h',
+        _ if name.ends_with("planks") || name.ends_with("stairs") || name.ends_with("slab") => 'P',
+        _ if name.contains("glass") => 'g',
         "grass_block" => '"',
         "sand" | "suspicious_sand" => '.',
         "red_sand" => ',',
@@ -193,6 +274,7 @@ fn main() -> Result<(), Error> {
     let (mut seed, mut size, mut threads, mut center) = (0i64, 16i32, 2usize, (0, 0));
     let mut parity = None;
     let mut decorate = true;
+    let mut starts: Option<(i32, i32, i32, i32, PathBuf)> = None;
     while let Some(arg) = args.next() {
         let mut next = || args.next().expect("argument value");
         match arg.as_str() {
@@ -202,6 +284,15 @@ fn main() -> Result<(), Error> {
             "--center" => center = (next().parse()?, next().parse()?),
             "--verify" => parity = Some(PathBuf::from(next())),
             "--no-decorate" => decorate = false,
+            "--starts" => {
+                starts = Some((
+                    next().parse()?,
+                    next().parse()?,
+                    next().parse()?,
+                    next().parse()?,
+                    PathBuf::from(next()),
+                ))
+            }
             _ => return Err(format!("unknown argument {arg}").into()),
         }
     }
@@ -215,6 +306,10 @@ fn main() -> Result<(), Error> {
     let start = Instant::now();
     let generator = OverworldGenerator::new(data.clone(), seed)?;
     println!("seeded generator in {:.2?}", start.elapsed());
+    if let Some((x0, z0, x1, z1, out)) = starts {
+        dump_starts(&generator, seed, [x0, z0, x1, z1], &out)?;
+        return Ok(());
+    }
     let (x0, z0) = (center.0 - size / 2, center.1 - size / 2);
     let count = (size * size) as usize;
     let next = AtomicUsize::new(0);
@@ -350,6 +445,21 @@ fn main() -> Result<(), Error> {
             );
         }
     }
+    let mut structures = BTreeMap::<(String, i32, i32), [[i32; 3]; 2]>::new();
+    for chunk in chunks.iter().flatten() {
+        for (name, start, min, max) in chunk.structures() {
+            structures.insert((name.to_owned(), start.x, start.z), [min, max]);
+        }
+    }
+    for ((name, x, z), [min, max]) in &structures {
+        println!("structure {name} start chunk ({x}, {z}) box {min:?}..{max:?}");
+    }
+    let block_entities: usize = chunks
+        .iter()
+        .flatten()
+        .map(|c| c.block_entities.len())
+        .sum();
+    println!("block entities: {block_entities}");
     let mut legend = BTreeMap::<char, BTreeMap<String, usize>>::new();
     let step = (size * 16 / 96).max(1);
     for bz in (0..size * 16).step_by(step as usize) {

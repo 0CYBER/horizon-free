@@ -285,6 +285,15 @@ pub trait PlacementContext {
     fn layer_block(&mut self, _position: [i32; 3]) -> Result<LayerBlock, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
     }
+    /// Store block-entity data loaded at a just-placed block (structure
+    /// templates). Worlds without block-entity storage drop it.
+    fn set_block_entity(
+        &mut self,
+        _position: [i32; 3],
+        _nbt: crate::nbt::Compound,
+    ) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
     fn generation(&self) -> WorldGenerationContext;
     /// Recreate the generation bounds for a block-predicate invocation. World
     /// adapters may perform fallible level/generator queries here; ordinary

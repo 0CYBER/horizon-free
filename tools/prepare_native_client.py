@@ -21,13 +21,44 @@ WORLDGEN_BUNDLES = {
     'biomes': 'worldgen/biome', 'world_presets': 'worldgen/world_preset', 'features': 'worldgen/feature',
     'placed_features': 'worldgen/placed_feature', 'state_providers': 'worldgen/block_state_provider',
     'biome_tags': 'tags/worldgen/biome', 'feature_tags': 'tags/worldgen/feature', 'block_tags': 'tags/block',
-    'fluid_tags': 'tags/fluid'}
+    'fluid_tags': 'tags/fluid', 'processor_lists': 'worldgen/processor_list',
+    'template_pools': 'worldgen/template_pool', 'structures': 'worldgen/structure',
+    'structure_sets': 'worldgen/structure_set'}
 
 
-def prepare_worldgen(root, jars, local):
+def export_structure_blocks(target, jars, libraries):
+    """Run the vanilla exporter of per-state rotate/mirror results and template flags."""
+    lock = json.loads((lab.ROOT/'research-lock.json').read_text())
+    source = lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaStructureBlockExporter.java'
+    export = lab.LOCAL/'horizon-client-structures'
+    classes = export/'classes'
+    classes.mkdir(parents=True, exist_ok=True)
+    dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+    with (export/'export.log').open('w') as log:
+        subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-cp', dependencies,
+                        '-d', str(classes), str(source)], check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+        subprocess.run(['java', '-Xmx1G', '-cp', str(classes)+os.pathsep+dependencies,
+                        'dev.horizonlab.parity.VanillaStructureBlockExporter', str(target)],
+                       check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+
+
+def prepare_worldgen(root, jars, local, libraries=None):
     """Write the chunk generator's resource bundle to root/worldgen (see GeneratorData::load)."""
     out = root / 'worldgen'
     out.mkdir(exist_ok=True)
+    # Structure templates: gzip NBT files under structure/<namespace>/<path>.nbt.
+    with zipfile.ZipFile(jars['server']) as server:
+        prefix = 'data/minecraft/structure/'
+        for name in server.namelist():
+            if name.startswith(prefix) and name.endswith('.nbt'):
+                relative = Path(name[len(prefix):])
+                if relative.is_absolute() or '..' in relative.parts:
+                    raise ValueError('Invalid structure path')
+                target = out/'structure'/'minecraft'/relative
+                data = server.read(name)
+                if not target.exists() or target.read_bytes() != data:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(data)
     with zipfile.ZipFile(jars['server']) as server, zipfile.ZipFile(jars['client']) as client:
         for name, path in WORLDGEN_BUNDLES.items():
             prefix = f'data/minecraft/{path}/'
@@ -60,6 +91,9 @@ def prepare_worldgen(root, jars, local):
         blocks.mkdir(exist_ok=True)
         for name in names:
             (blocks/name).write_bytes((behavior/name).read_bytes())
+    if libraries is not None:
+        blocks.mkdir(exist_ok=True)
+        export_structure_blocks(blocks/'structure-blocks.json', jars, libraries)
     else:
         print('Feature block behavior exports missing; run tools/test_simple_block_parity.py for full decoration')
     if presets is None:
@@ -294,7 +328,7 @@ def main():
         for f in (reports / 'biome_parameters' / 'minecraft').glob('*.json'):
             (root / 'biome-parameters' / f.name).write_bytes(f.read_bytes())
     # Biome parameter tables come from the data generator reports above.
-    prepare_worldgen(root, jars, lab.LOCAL)
+    prepare_worldgen(root, jars, lab.LOCAL, libraries)
     entity_models = root / 'entity-models.json'
     entity_oracle = oracle.with_name('VanillaEntityModelExporter.java')
     entity_sources = base.source_hashes([entity_oracle])

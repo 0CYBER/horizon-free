@@ -147,6 +147,13 @@ pub(super) struct FeatureResources {
     pub(super) blocks: Option<super::generator_blocks::BlockBehavior>,
 }
 
+/// Raw structure, structure-set and template-pool resources.
+pub(super) struct StructureBundles {
+    pub(super) structures: BTreeMap<String, String>,
+    pub(super) sets: BTreeMap<String, String>,
+    pub(super) pools: BTreeMap<String, String>,
+}
+
 /// Seed-independent generation resources, loaded once and shared by every
 /// generator. Biome identities are indices into the sorted biome registry.
 pub struct GeneratorData {
@@ -170,6 +177,9 @@ pub struct GeneratorData {
     pub(super) block_tags: BTreeMap<String, Vec<String>>,
     pub(super) biome_tags: BTreeMap<String, Vec<String>>,
     pub(super) feature_resources: Option<FeatureResources>,
+    /// Templates, processor lists and per-state template transforms.
+    pub(super) structures: Option<Arc<super::structure::StructureResources>>,
+    pub(super) structure_resources: Option<StructureBundles>,
 }
 type Bundle = BTreeMap<String, String>;
 fn read_bundle(dir: &Path, name: &str) -> Result<Bundle, GeneratorError> {
@@ -393,7 +403,31 @@ impl GeneratorData {
             }
             _ => None,
         };
+        let structures = match fs::read_to_string(dir.join("blocks/structure-blocks.json")) {
+            Ok(json) => Some(Arc::new(super::structure::StructureResources::new(
+                registry,
+                super::structure::StateTransforms::from_json(&json, registry.len())?,
+                &dir.join("structure"),
+                read_optional_bundle(dir, "processor_lists")?.unwrap_or_default(),
+                &block_tags,
+            ))),
+            Err(_) => None,
+        };
+        let structure_resources = match (
+            read_optional_bundle(dir, "structures")?,
+            read_optional_bundle(dir, "structure_sets")?,
+            read_optional_bundle(dir, "template_pools")?,
+        ) {
+            (Some(structures), Some(sets), Some(pools)) => Some(StructureBundles {
+                structures,
+                sets,
+                pools,
+            }),
+            _ => None,
+        };
         Ok(Arc::new(Self {
+            structure_resources,
+            structures,
             registry,
             states: GenBlockStates(states.into()),
             integers,
@@ -452,6 +486,11 @@ pub struct ProtoChunk {
     biomes: BiomeChunk<BiomeId>,
     data: Arc<GeneratorData>,
     decorated: bool,
+    /// Block-entity data placed by structures and template features, in
+    /// placement order (positions are absolute block coordinates).
+    pub block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
+    /// Structure starts referencing this chunk (STRUCTURE_REFERENCES).
+    pub(super) structure_starts: Vec<Arc<super::structure::start::StructureStart>>,
 }
 impl ProtoChunk {
     pub fn position(&self) -> ChunkPos {
@@ -481,6 +520,21 @@ impl ProtoChunk {
     }
     pub fn data(&self) -> &Arc<GeneratorData> {
         &self.data
+    }
+    /// Structure starts referencing this chunk: (structure id, start chunk,
+    /// inclusive bounding box min/max).
+    pub fn structures(&self) -> Vec<(&str, ChunkPos, [i32; 3], [i32; 3])> {
+        self.structure_starts
+            .iter()
+            .map(|s| {
+                (
+                    s.name.as_str(),
+                    s.chunk,
+                    s.bounding_box.min,
+                    s.bounding_box.max,
+                )
+            })
+            .collect()
     }
     pub fn is_decorated(&self) -> bool {
         self.decorated
@@ -527,6 +581,7 @@ struct Pipeline<R: RandomSource> {
     biome_cache: BiomeCache,
     carver_cache: Mutex<HashMap<(i32, i32), BiomeId>>,
     pub(super) decoration: Option<super::generator_decoration::Decoration>,
+    pub(super) structures: Option<super::generator_structures::StructureState>,
 }
 const CACHE_LIMIT: usize = 16384;
 type BiomeCache = Mutex<HashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>>;
@@ -567,6 +622,7 @@ where
         mut random: R,
         generator: &Value,
         settings_json: &Value,
+        with_structures: bool,
     ) -> Result<Self, GeneratorError> {
         let registry = data.registry;
         let noise = &settings_json["noise"];
@@ -691,9 +747,20 @@ where
             biome_cache: Mutex::new(HashMap::new()),
             carver_cache: Mutex::new(HashMap::new()),
             decoration: None,
+            structures: None,
         };
         pipeline.decoration =
             super::generator_decoration::Decoration::new(&pipeline.data, &pipeline.source)?;
+        if with_structures {
+            let possible = pipeline
+                .source
+                .possible_biomes()
+                .into_iter()
+                .filter_map(|name| pipeline.data.biome_id(name))
+                .collect();
+            pipeline.structures =
+                super::generator_structures::StructureState::new(&pipeline.data, &possible)?;
+        }
         Ok(pipeline)
     }
     fn generation(&self) -> WorldGenerationContext {
@@ -807,7 +874,31 @@ where
         let mut chunk = TerrainChunk::new(pos, min, height, data.registry, data.states.clone())
             .map_err(stage("noise"))?;
         chunk.set_generation_stage(PreLightChunkStage::Biomes);
+        let references = match &self.structures {
+            Some(structures) => structures.references(
+                &mut StructureQueries {
+                    pipeline: self,
+                    worker,
+                    valid: BTreeSet::new(),
+                },
+                pos,
+            ),
+            None => Vec::new(),
+        };
         let mut context = SamplerContext::cached();
+        if let Some(beard) = self
+            .structures
+            .as_ref()
+            .and_then(|s| s.beardifier(&references, pos))
+        {
+            context = context.with_world_fields(
+                horizon_core::density::WorldFields::default().with_field(
+                    horizon_core::density::WorldField::Beardifier,
+                    Arc::new(beard),
+                ),
+            );
+        }
+        worker.timings.structures += lap(&mut clock);
         let volume = DensityVolume::new(
             [16, height, 16],
             [pos.x.wrapping_shl(4), min, pos.z.wrapping_shl(4)],
@@ -919,7 +1010,132 @@ where
             biomes: center,
             data: data.clone(),
             decorated: false,
+            block_entities: Vec::new(),
+            structure_starts: references,
         })
+    }
+}
+
+impl<R: RandomSource> Pipeline<R>
+where
+    R::Positional: Clone + Send + Sync,
+{
+    /// ChunkGenerator.getBaseHeight: the first free Y above the noise column
+    /// (with aquifers, without terrain adaptation) for a heightmap type.
+    fn base_height(&self, x: i32, z: i32, kind: HeightmapType) -> i32 {
+        let (min, height) = (self.settings.min_y, self.settings.height);
+        let Ok(volume) = DensityVolume::new([1, height, 1], [x, min, z], [1; 3]) else {
+            return min;
+        };
+        let mut context = SamplerContext::cached();
+        let mut aquifer: Box<dyn TerrainAquifer> = match &self.aquifer {
+            Some(samplers) => match RegistryAquiferBlockStates::new(self.data.registry)
+                .ok()
+                .and_then(|blocks| {
+                    NoiseBasedAquifer::new(
+                        AquiferSamplers::new(samplers.clone()),
+                        self.picker,
+                        self.root
+                            .from_hash_of("minecraft:aquifer")
+                            .fork_positional(),
+                        blocks,
+                        volume,
+                        &mut context,
+                    )
+                    .ok()
+                }) {
+                Some(aquifer) => Box::new(aquifer),
+                None => return min,
+            },
+            None => Box::new(DisabledAquifer::new(
+                self.picker,
+                self.data.registry.default_state("minecraft:air").unwrap(),
+            )),
+        };
+        let mut density = vec![0.; height as usize];
+        if self
+            .router
+            .get(RouterField::FinalDensity)
+            .sample_volume(&mut context, &mut density, volume)
+            .is_err()
+        {
+            return min;
+        }
+        for y in (0..height).rev() {
+            let state = aquifer
+                .compute_substance(
+                    &mut context,
+                    [x, min + y, z],
+                    f64::from(density[y as usize]),
+                )
+                .ok()
+                .flatten()
+                .unwrap_or(self.settings.default_block);
+            if kind.is_opaque(self.data.states.get(state)) {
+                return min + y + 1;
+            }
+        }
+        min
+    }
+}
+/// Biome and height queries for structure generation on one worker.
+pub(super) struct StructureQueries<'a, R: RandomSource> {
+    pipeline: &'a Pipeline<R>,
+    worker: &'a mut WorkerState,
+    valid: BTreeSet<BiomeId>,
+}
+impl<R: RandomSource> super::structure::jigsaw::JigsawContext for StructureQueries<'_, R>
+where
+    R::Positional: Clone + Send + Sync,
+{
+    fn min_y(&self) -> i32 {
+        self.pipeline.settings.min_y
+    }
+    fn max_y(&self) -> i32 {
+        self.pipeline.settings.min_y + self.pipeline.settings.height - 1
+    }
+    fn base_height(&mut self, x: i32, z: i32, kind: HeightmapType) -> i32 {
+        if let Some(h) = self.worker.heights.get(&(x, z, kind as u8)) {
+            return *h;
+        }
+        let h = self.pipeline.base_height(x, z, kind);
+        if self.worker.heights.len() > 65536 {
+            self.worker.heights.clear();
+        }
+        self.worker.heights.insert((x, z, kind as u8), h);
+        h
+    }
+    fn column_has_valid_biome(&mut self, x: i32, z: i32, min_y: i32, max_y: i32) -> bool {
+        use super::structure::start::StartContext;
+        ((min_y >> 2)..=(max_y >> 2)).any(|qy| {
+            let id = self.noise_biome([x >> 2, qy, z >> 2]);
+            self.valid.contains(&id)
+        })
+    }
+}
+impl<R: RandomSource> super::structure::start::StartContext for StructureQueries<'_, R>
+where
+    R::Positional: Clone + Send + Sync,
+{
+    fn seed(&self) -> i64 {
+        self.pipeline.seed
+    }
+    fn generation(&self) -> WorldGenerationContext {
+        self.pipeline.generation()
+    }
+    fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId {
+        let mut resolver = self.pipeline.source.resolver(
+            &self.pipeline.climate,
+            self.pipeline.router.get(RouterField::Erosion).as_ref(),
+        );
+        resolver
+            .sample(&mut self.worker.carver_context, quart)
+            .ok()
+            .and_then(|name| self.pipeline.data.biome_id(name))
+            .unwrap_or(BiomeId(0))
+    }
+    fn set_valid_biomes(&mut self, biomes: &BTreeSet<BiomeId>) {
+        self.valid = biomes.clone();
     }
 }
 
@@ -1020,6 +1236,8 @@ pub struct StageTimings {
     /// Noise fill including aquifer setup.
     pub noise: std::time::Duration,
     pub surface: std::time::Duration,
+    /// Structure starts/references and terrain adaptation.
+    pub structures: std::time::Duration,
     /// Carving mask generation/application and final heightmap priming.
     pub carvers: std::time::Duration,
 }
@@ -1030,6 +1248,7 @@ pub(super) struct WorkerState {
     biome_context: SamplerContext,
     carver_context: SamplerContext,
     timings: StageTimings,
+    heights: HashMap<(i32, i32, u8), i32>,
 }
 
 trait SeededPipeline: Send + Sync {
@@ -1045,6 +1264,11 @@ trait SeededPipeline: Send + Sync {
     ) -> Result<DecorateStats, GeneratorError>;
     fn data(&self) -> &Arc<GeneratorData>;
     fn sea_level(&self) -> i32;
+    fn structure_starts(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+    ) -> Vec<Arc<super::structure::start::StructureStart>>;
     fn unsupported_features(&self) -> Vec<(String, String)>;
 }
 impl<R: RandomSource + 'static> SeededPipeline for Pipeline<R>
@@ -1083,6 +1307,7 @@ where
                     worker,
                     region,
                     || random.next_boolean(),
+                    self.structures.as_ref(),
                 )
             }
             None => Err(resource("decoration resources were not loaded")),
@@ -1093,6 +1318,25 @@ where
     }
     fn sea_level(&self) -> i32 {
         self.settings.sea_level
+    }
+    fn structure_starts(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+    ) -> Vec<Arc<super::structure::start::StructureStart>> {
+        match &self.structures {
+            Some(structures) => structures
+                .starts_at(
+                    &mut StructureQueries {
+                        pipeline: self,
+                        worker,
+                        valid: BTreeSet::new(),
+                    },
+                    pos,
+                )
+                .to_vec(),
+            None => Vec::new(),
+        }
     }
     fn unsupported_features(&self) -> Vec<(String, String)> {
         self.decoration
@@ -1126,12 +1370,26 @@ impl OverworldGenerator {
     pub fn new(data: Arc<GeneratorData>, seed: i64) -> Result<Self, GeneratorError> {
         Self::for_dimension(data, seed, "minecraft:normal", "minecraft:overworld")
     }
+    /// The overworld without structures (no starts, terrain adaptation or
+    /// structure pieces), as in a world with structure generation disabled.
+    pub fn without_structures(data: Arc<GeneratorData>, seed: i64) -> Result<Self, GeneratorError> {
+        Self::build(data, seed, "minecraft:normal", "minecraft:overworld", false)
+    }
     /// Any noise-generator dimension of a bundled world preset.
     pub fn for_dimension(
         data: Arc<GeneratorData>,
         seed: i64,
         preset: &str,
         dimension: &str,
+    ) -> Result<Self, GeneratorError> {
+        Self::build(data, seed, preset, dimension, true)
+    }
+    fn build(
+        data: Arc<GeneratorData>,
+        seed: i64,
+        preset: &str,
+        dimension: &str,
+        with_structures: bool,
     ) -> Result<Self, GeneratorError> {
         let preset_json: Value = serde_json::from_str(
             data.world_presets
@@ -1160,6 +1418,7 @@ impl OverworldGenerator {
                 LegacyRandom::new(seed),
                 &generator,
                 &settings_json,
+                with_structures,
             )?)
         } else {
             Arc::new(Pipeline::new(
@@ -1168,6 +1427,7 @@ impl OverworldGenerator {
                 XoroshiroRandom::new(seed),
                 &generator,
                 &settings_json,
+                with_structures,
             )?)
         };
         Ok(Self { pipeline })
@@ -1197,6 +1457,7 @@ impl OverworldGenerator {
                 biome_context: SamplerContext::cached(),
                 carver_context: SamplerContext::default(),
                 timings: StageTimings::default(),
+                heights: HashMap::new(),
             },
         }
     }
@@ -1214,6 +1475,13 @@ impl GeneratorWorker {
         let result = self.pipeline.generate(&mut self.state, pos);
         self.state.timings.chunks += 1;
         result
+    }
+    /// STRUCTURE_STARTS: the structure starts owned by a chunk (cached).
+    pub fn structure_starts(
+        &mut self,
+        pos: ChunkPos,
+    ) -> Vec<Arc<super::structure::start::StructureStart>> {
+        self.pipeline.structure_starts(&mut self.state, pos)
     }
     pub fn stage_timings(&self) -> StageTimings {
         self.state.timings

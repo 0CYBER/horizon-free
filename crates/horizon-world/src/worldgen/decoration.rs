@@ -75,6 +75,33 @@ impl FeatureDecorationPlan {
         world: &mut W,
         chunk: ChunkPos,
         world_seed: i64,
+        place: impl FnMut(
+            &mut W,
+            &mut FeaturePlacer,
+            &mut WorldgenRandom<XoroshiroRandom>,
+            FeatureIdentity,
+            [i32; 3],
+        ) -> Result<bool, W::Error>,
+    ) -> Result<(), DecorationError<W::Error>> {
+        self.decorate(world, chunk, world_seed, 0, |_, _, _, _| Ok(()), place)
+    }
+
+    /// Like `decorate_features`, running `structures` at the start of each of
+    /// `max(structure_steps, feature steps)` steps, before that step's
+    /// features (vanilla applyBiomeDecoration). It receives the shared random
+    /// and decoration seed; it seeds per structure itself.
+    pub fn decorate<W: DecorationWorld>(
+        &self,
+        world: &mut W,
+        chunk: ChunkPos,
+        world_seed: i64,
+        structure_steps: usize,
+        mut structures: impl FnMut(
+            &mut W,
+            &mut WorldgenRandom<XoroshiroRandom>,
+            i64,
+            usize,
+        ) -> Result<(), W::Error>,
         mut place: impl FnMut(
             &mut W,
             &mut FeaturePlacer,
@@ -114,7 +141,11 @@ impl FeatureDecorationPlan {
             }
         }
         let mut placer = FeaturePlacer::new();
-        for (step, data) in self.steps.iter().enumerate() {
+        for step in 0..structure_steps.max(self.steps.len()) {
+            structures(world, &mut random, seed, step).map_err(DecorationError::World)?;
+            let Some(data) = self.steps.get(step) else {
+                continue;
+            };
             let mut selected = BTreeSet::new();
             for biome in &present {
                 if let Some(features) = self.biomes[biome].get(step) {
