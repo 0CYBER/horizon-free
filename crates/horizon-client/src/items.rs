@@ -211,6 +211,10 @@ impl Items {
     pub fn get(&self, id: &str) -> Option<&ItemInfo> {
         self.items.get(id)
     }
+    /// Only the block and item tags, for tools that need tag membership.
+    pub fn tags_only(root: &Path) -> Result<Self> {
+        Ok(Self { items: HashMap::new(), order: Vec::new(), block_tags: load_tags(root, "block")?, item_tags: load_tags(root, "item")?, loot: HashMap::new() })
+    }
     /// An item table with only tags, for unit tests of item rules.
     #[cfg(test)]
     pub fn for_tests(item_tags: HashMap<String, HashSet<String>>) -> Self {
