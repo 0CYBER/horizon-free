@@ -2,7 +2,7 @@
 //! references, terrain adaptation and per-chunk piece placement.
 use super::{
     BoundingBox, StructureResources,
-    jigsaw::{JigsawConfig, JigsawContext, PoolPiece, Pools, Projection, assemble},
+    jigsaw::{JigsawConfig, JigsawContext, PlaceFeature, PoolPiece, Pools, Projection, assemble},
     legacy::{LegacyPiece, PieceContext},
 };
 use crate::{
@@ -731,12 +731,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
     resources: &StructureResources,
     random: &mut R,
     chunk_box: BoundingBox,
-    place_feature: &mut dyn FnMut(
-        &mut W,
-        &mut R,
-        &str,
-        [i32; 3],
-    ) -> Result<bool, PlacementQueryError>,
+    place_feature: &mut PlaceFeature<'_, W, R>,
 ) -> Result<(), PlacementQueryError> {
     let Some(first) = start.pieces.first() else {
         return Ok(());
