@@ -1,6 +1,8 @@
 //! `BlockBehaviour.useWithoutItem` (right-click with an empty hand or an item
 //! that does not handle the block itself).
-use super::{Behaviours, LevelAccess, LevelEvent, Sim, Ticks, classes::Class, query::axis_of, update::below};
+use super::{
+    Behaviours, LevelAccess, LevelEvent, Sim, Ticks, classes::Class, query::axis_of, update::below,
+};
 use crate::registry::BlockStateId;
 use horizon_core::{
     geometry::{Axis, Direction, Vec3},
@@ -61,7 +63,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.emit(LevelEvent::Player { pos, state, effect });
     }
 
-    pub(crate) fn use_without_item(&mut self, pos: BlockPos, face: Direction, hit: Vec3, player: PlayerContext) -> InteractionResult {
+    pub(crate) fn use_without_item(
+        &mut self,
+        pos: BlockPos,
+        face: Direction,
+        hit: Vec3,
+        player: PlayerContext,
+    ) -> InteractionResult {
         let b = self.b;
         let p = b.props;
         let table = &b.table;
@@ -79,7 +87,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     self.set_block(pos, next, 10);
                     let open = table.bool(next, p.open);
                     self.door_sound(pos, next, open);
-                    self.game_event(pos, if open { "minecraft:block_open" } else { "minecraft:block_close" });
+                    self.game_event(
+                        pos,
+                        if open {
+                            "minecraft:block_open"
+                        } else {
+                            "minecraft:block_close"
+                        },
+                    );
                     Success
                 }
                 Class::TrapDoor => {
@@ -107,12 +122,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     };
                     self.set_block(pos, next, 10);
                     let opens = table.bool(next, p.open);
-                    let sound = if opens { data.gate_open.clone() } else { data.gate_close.clone() };
+                    let sound = if opens {
+                        data.gate_open.clone()
+                    } else {
+                        data.gate_close.clone()
+                    };
                     let pitch = self.random().next_float() * 0.1 + 0.9;
                     if let Some(sound) = sound {
                         self.sound(pos, &sound, 1.0, pitch);
                     }
-                    self.game_event(pos, if opens { "minecraft:block_open" } else { "minecraft:block_close" });
+                    self.game_event(
+                        pos,
+                        if opens {
+                            "minecraft:block_open"
+                        } else {
+                            "minecraft:block_close"
+                        },
+                    );
                     Success
                 }
                 Class::Button => {
@@ -138,7 +164,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         return Pass;
                     }
                     let next = table.cycle(state, p.mode);
-                    let pitch = if table.text(next, p.mode) == "subtract" { 0.55 } else { 0.5 };
+                    let pitch = if table.text(next, p.mode) == "subtract" {
+                        0.55
+                    } else {
+                        0.5
+                    };
                     self.emit(LevelEvent::Sound {
                         pos,
                         sound: "minecraft:block.comparator.click".into(),
@@ -197,7 +227,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     if table.int(state, p.level) != 8 {
                         return Pass;
                     }
-                    self.player_effect(pos, state, PlayerEffect::DropItem("minecraft:bone_meal".into()));
+                    self.player_effect(
+                        pos,
+                        state,
+                        PlayerEffect::DropItem("minecraft:bone_meal".into()),
+                    );
                     self.set_block_and_update(pos, table.set_int(state, p.level, 0));
                     self.game_event(pos, "minecraft:block_change");
                     self.emit(LevelEvent::Sound {
@@ -212,7 +246,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     if !table.bool(state, p.berries) {
                         return Pass;
                     }
-                    self.player_effect(pos, state, PlayerEffect::InteractLoot("minecraft:harvest/cave_vine"));
+                    self.player_effect(
+                        pos,
+                        state,
+                        PlayerEffect::InteractLoot("minecraft:harvest/cave_vine"),
+                    );
                     let pitch = self.random().next_float() * 0.4 + 0.8;
                     self.emit(LevelEvent::Sound {
                         pos,
@@ -229,7 +267,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     if table.int(state, p.age) <= 1 {
                         return Pass;
                     }
-                    self.player_effect(pos, state, PlayerEffect::InteractLoot("minecraft:harvest/sweet_berry_bush"));
+                    self.player_effect(
+                        pos,
+                        state,
+                        PlayerEffect::InteractLoot("minecraft:harvest/sweet_berry_bush"),
+                    );
                     let pitch = 0.8 + self.random().next_float() * 0.4;
                     self.emit(LevelEvent::Sound {
                         pos,
@@ -261,10 +303,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::AbstractBed => {
                     let part = table.text(state, p.part).to_owned();
                     let facing = b.facing(state);
-                    let other_dir = if part == "foot" { facing } else { facing.opposite() };
+                    let other_dir = if part == "foot" {
+                        facing
+                    } else {
+                        facing.opposite()
+                    };
                     let other = self.state(super::update::rel(pos, other_dir));
                     if b.is_block(other, block) && table.text(other, p.part) != part {
-                        let head = if part == "head" { pos } else { super::update::rel(pos, facing) };
+                        let head = if part == "head" {
+                            pos
+                        } else {
+                            super::update::rel(pos, facing)
+                        };
                         let head_state = self.state(head);
                         self.player_effect(head, head_state, PlayerEffect::Sleep);
                         Success
@@ -350,7 +400,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 
     /// `RedstoneWireBlock.useWithoutItem`: toggle between dot and cross.
-    fn wire_use(&mut self, pos: BlockPos, state: BlockStateId, player: PlayerContext) -> InteractionResult {
+    fn wire_use(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        player: PlayerContext,
+    ) -> InteractionResult {
         let b = self.b;
         if !player.may_build {
             return InteractionResult::Pass;
@@ -364,7 +419,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         let power = b.table.int(state, b.props.power);
         let base = if cross {
-            b.table.set_int(b.default_of(b.named.redstone_wire), b.props.power, power)
+            b.table
+                .set_int(b.default_of(b.named.redstone_wire), b.props.power, power)
         } else {
             self.wire_cross_state(power)
         };
@@ -375,7 +431,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.set_block_and_update(pos, next);
         for direction in horizontal {
             let relative = super::update::rel(pos, direction);
-            if connected(state, direction) != connected(next, direction) && self.is_redstone_conductor(self.state(relative), relative) {
+            if connected(state, direction) != connected(next, direction)
+                && self.is_redstone_conductor(self.state(relative), relative)
+            {
                 let block = b.block(next);
                 self.update_neighbors_at_except(relative, block, direction.opposite());
             }
@@ -387,11 +445,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn dragon_egg_teleport(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         for _ in 0..1000 {
-            let dx = self.random().next_int_bound(16).unwrap_or(0) - self.random().next_int_bound(16).unwrap_or(0);
-            let dy = self.random().next_int_bound(8).unwrap_or(0) - self.random().next_int_bound(8).unwrap_or(0);
-            let dz = self.random().next_int_bound(16).unwrap_or(0) - self.random().next_int_bound(16).unwrap_or(0);
+            let dx = self.random().next_int_bound(16).unwrap_or(0)
+                - self.random().next_int_bound(16).unwrap_or(0);
+            let dy = self.random().next_int_bound(8).unwrap_or(0)
+                - self.random().next_int_bound(8).unwrap_or(0);
+            let dz = self.random().next_int_bound(16).unwrap_or(0)
+                - self.random().next_int_bound(16).unwrap_or(0);
             let test = pos.offset(dx, dy, dz);
-            if b.is_air(self.state(test)) && !b.is_air(self.below_state(test)) && self.is_inside_build_height(test.y) {
+            if b.is_air(self.state(test))
+                && !b.is_air(self.below_state(test))
+                && self.is_inside_build_height(test.y)
+            {
                 // BlockUtil.packDifferenceInPosition(pos, test, 16, 8, 16)
                 let packed = ((dx + 16) << 16) | ((dy + 8) << 8) | (dz + 16);
                 self.level_event(2015, pos, packed);
@@ -415,6 +479,7 @@ impl Behaviours {
         hit: Vec3,
         player: PlayerContext,
     ) -> InteractionResult {
-        self.sim(level, ticks).use_without_item(pos, face, hit, player)
+        self.sim(level, ticks)
+            .use_without_item(pos, face, hit, player)
     }
 }

@@ -57,8 +57,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let case: Value = serde_json::from_str(&line?)?;
         let mut cells = HashMap::new();
         for cell in case["cells"].as_array().unwrap() {
-            let c: Vec<i64> = cell.as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
-            cells.insert(BlockPos::new(c[0] as i32, c[1] as i32, c[2] as i32), BlockStateId(c[3] as u32));
+            let c: Vec<i64> = cell
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap())
+                .collect();
+            cells.insert(
+                BlockPos::new(c[0] as i32, c[1] as i32, c[2] as i32),
+                BlockStateId(c[3] as u32),
+            );
         }
         let mut level = Cells {
             cells,
@@ -72,31 +80,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ticks.add_empty_chunk(ChunkPos::new(x, z))?;
             }
         }
-        let p: Vec<i32> = case["pos"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap() as i32).collect();
+        let p: Vec<i32> = case["pos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_i64().unwrap() as i32)
+            .collect();
         let pos = BlockPos::new(p[0], p[1], p[2]);
         let direction = Direction::ALL[case["dir"].as_u64().unwrap() as usize];
         let [dx, dy, dz] = direction.normal();
         let neighbour_pos = pos.offset(dx, dy, dz);
         let state = level.block_state(pos);
         let neighbour = level.block_state(neighbour_pos);
-        let shape = behaviours.update_shape(&mut level, &mut ticks, state, pos, direction, neighbour_pos, neighbour);
+        let shape = behaviours.update_shape(
+            &mut level,
+            &mut ticks,
+            state,
+            pos,
+            direction,
+            neighbour_pos,
+            neighbour,
+        );
         let mut scheduled = BTreeSet::new();
         for x in -2..=2 {
             for z in -2..=2 {
                 let chunk = ChunkPos::new(x, z);
-                for tick in ticks.blocks.chunk(chunk).map(|c| c.queued()).unwrap_or_default() {
-                    let name = &behaviours.table.info(horizon_world::level::BlockId(tick.kind.0 as u16)).name;
-                    scheduled.insert(format!("{name}@{},{},{}+{}p{}", tick.pos.x, tick.pos.y, tick.pos.z, tick.trigger_tick, tick.priority as i32));
+                for tick in ticks
+                    .blocks
+                    .chunk(chunk)
+                    .map(|c| c.queued())
+                    .unwrap_or_default()
+                {
+                    let name = &behaviours
+                        .table
+                        .info(horizon_world::level::BlockId(tick.kind.0 as u16))
+                        .name;
+                    scheduled.insert(format!(
+                        "{name}@{},{},{}+{}p{}",
+                        tick.pos.x, tick.pos.y, tick.pos.z, tick.trigger_tick, tick.priority as i32
+                    ));
                 }
-                for tick in ticks.fluids.chunk(chunk).map(|c| c.queued()).unwrap_or_default() {
+                for tick in ticks
+                    .fluids
+                    .chunk(chunk)
+                    .map(|c| c.queued())
+                    .unwrap_or_default()
+                {
                     let name = horizon_world::fluid::FluidKind::ALL[tick.kind.0 as usize].name();
-                    scheduled.insert(format!("{name}@{},{},{}+{}p{}", tick.pos.x, tick.pos.y, tick.pos.z, tick.trigger_tick, tick.priority as i32));
+                    scheduled.insert(format!(
+                        "{name}@{},{},{}+{}p{}",
+                        tick.pos.x, tick.pos.y, tick.pos.z, tick.trigger_tick, tick.priority as i32
+                    ));
                 }
             }
         }
         let survive = behaviours.can_survive(&mut level, &mut ticks, pos, state);
         let scheduled: Vec<String> = scheduled.into_iter().collect();
-        writeln!(out, "shape {} ticks {} survive {survive}", shape.0, scheduled.join(" "))?;
+        writeln!(
+            out,
+            "shape {} ticks {} survive {survive}",
+            shape.0,
+            scheduled.join(" ")
+        )?;
     }
     Ok(())
 }

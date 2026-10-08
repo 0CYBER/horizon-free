@@ -10,7 +10,10 @@ use super::{
     states::BlockId,
     update::{above, rel},
 };
-use crate::{java_hash_map::{JavaHashMap, JavaKey}, registry::BlockStateId};
+use crate::{
+    java_hash_map::{JavaHashMap, JavaKey},
+    registry::BlockStateId,
+};
 use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource};
 use std::cmp::Ordering;
 
@@ -29,7 +32,11 @@ pub struct MovingPiston {
 }
 impl MovingPiston {
     pub fn movement_direction(&self) -> Direction {
-        if self.extending { self.direction } else { self.direction.opposite() }
+        if self.extending {
+            self.direction
+        } else {
+            self.direction.opposite()
+        }
     }
 }
 
@@ -46,11 +53,19 @@ pub struct BlockEventData {
 struct PosKey(BlockPos);
 impl JavaKey for PosKey {
     fn java_hash(&self) -> i32 {
-        (self.0.y.wrapping_add(self.0.z.wrapping_mul(31))).wrapping_mul(31).wrapping_add(self.0.x)
+        (self.0.y.wrapping_add(self.0.z.wrapping_mul(31)))
+            .wrapping_mul(31)
+            .wrapping_add(self.0.x)
     }
     fn comparable_compare(&self, other: &Self) -> Option<Ordering> {
         // Vec3i implements Comparable: y, then z, then x.
-        Some(self.0.y.cmp(&other.0.y).then(self.0.z.cmp(&other.0.z)).then(self.0.x.cmp(&other.0.x)))
+        Some(
+            self.0
+                .y
+                .cmp(&other.0.y)
+                .then(self.0.z.cmp(&other.0.z))
+                .then(self.0.x.cmp(&other.0.x)),
+        )
     }
     fn tie_break(&self, _other: &Self) -> Ordering {
         Ordering::Less
@@ -74,8 +89,19 @@ fn rel_n(pos: BlockPos, direction: Direction, n: i32) -> BlockPos {
 
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     // ---- block events ----
-    pub(crate) fn block_event(&mut self, pos: BlockPos, block: BlockId, param_a: i32, param_b: i32) {
-        let event = BlockEventData { pos, block, param_a, param_b };
+    pub(crate) fn block_event(
+        &mut self,
+        pos: BlockPos,
+        block: BlockId,
+        param_a: i32,
+        param_b: i32,
+    ) {
+        let event = BlockEventData {
+            pos,
+            block,
+            param_a,
+            param_b,
+        };
         if !self.ticks.block_events.contains(&event) {
             self.ticks.block_events.push(event);
         }
@@ -92,7 +118,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     // ---- moving piston block entities ----
     pub(crate) fn moving_piston(&self, pos: BlockPos) -> Option<MovingPiston> {
-        self.ticks.moving_pistons.iter().find(|(p, _)| *p == pos).map(|(_, m)| *m)
+        self.ticks
+            .moving_pistons
+            .iter()
+            .find(|(p, _)| *p == pos)
+            .map(|(_, m)| *m)
     }
     fn set_moving_piston(&mut self, pos: BlockPos, mut piston: MovingPiston) {
         self.ticks.moving_pistons.retain(|(p, _)| *p != pos);
@@ -101,7 +131,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.ticks.moving_pistons.push((pos, piston));
     }
     pub(crate) fn remove_moving_piston(&mut self, pos: BlockPos) -> Option<MovingPiston> {
-        let index = self.ticks.moving_pistons.iter().position(|(p, _)| *p == pos)?;
+        let index = self
+            .ticks
+            .moving_pistons
+            .iter()
+            .position(|(p, _)| *p == pos)?;
         Some(self.ticks.moving_pistons.remove(index).1)
     }
     /// `PistonMovingBlockEntity.finalTick`.
@@ -115,7 +149,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.remove_moving_piston(pos);
         let b = self.b;
         if b.is_block(self.state(pos), b.named.moving_piston) {
-            let new = if piston.source { b.air() } else { self.update_from_neighbour_shapes(piston.moved_state, pos) };
+            let new = if piston.source {
+                b.air()
+            } else {
+                self.update_from_neighbour_shapes(piston.moved_state, pos)
+            };
             self.set_block_and_update(pos, new);
             let block = b.block(new);
             self.neighbor_changed_at(pos, block);
@@ -135,7 +173,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let mut new = self.update_from_neighbour_shapes(piston.moved_state, pos);
                 if b.is_air(new) {
                     self.set_block(pos, piston.moved_state, 340);
-                    self.update_or_destroy(piston.moved_state, new, pos, 3, super::flags::UPDATE_LIMIT);
+                    self.update_or_destroy(
+                        piston.moved_state,
+                        new,
+                        pos,
+                        3,
+                        super::flags::UPDATE_LIMIT,
+                    );
                 } else {
                     if b.is_waterlogged(new) {
                         new = b.table.set_bool(new, b.props.waterlogged, false);
@@ -147,7 +191,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         } else {
             piston.progress = (piston.progress + 0.5).min(1.0);
-            if let Some(entry) = self.ticks.moving_pistons.iter_mut().find(|(p, _)| *p == pos) {
+            if let Some(entry) = self
+                .ticks
+                .moving_pistons
+                .iter_mut()
+                .find(|(p, _)| *p == pos)
+            {
                 entry.1 = piston;
             }
         }
@@ -167,9 +216,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return true;
         }
         let up = above(pos);
-        Direction::ALL
-            .into_iter()
-            .any(|direction| direction != Direction::Down && self.has_signal(rel(up, direction), direction))
+        Direction::ALL.into_iter().any(|direction| {
+            direction != Direction::Down && self.has_signal(rel(up, direction), direction)
+        })
     }
     /// `PistonBaseBlock.checkIfExtend`.
     pub(crate) fn piston_check_if_extend(&mut self, pos: BlockPos, state: BlockStateId) {
@@ -189,7 +238,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if b.is_block(pushed, b.named.moving_piston) && b.facing(pushed) == direction {
                 if let Some(piston) = self.moving_piston(pushed_pos) {
                     if piston.extending
-                        && (piston.progress_o < 0.5 || self.level.game_time() == piston.last_ticked || self.ticks.handling_tick)
+                        && (piston.progress_o < 0.5
+                            || self.level.game_time() == piston.last_ticked
+                            || self.ticks.handling_tick)
                     {
                         event = 2;
                     }
@@ -199,7 +250,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
     /// `PistonBaseBlock.isPushable`.
-    fn is_pushable(&self, state: BlockStateId, pos: BlockPos, direction: Direction, allow_destroyable: bool, connection: Direction) -> bool {
+    fn is_pushable(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+        allow_destroyable: bool,
+        connection: Direction,
+    ) -> bool {
         let b = self.b;
         let (min_y, max_y) = (self.level.min_y(), self.level.max_y() - 1);
         if pos.y < min_y || pos.y > max_y {
@@ -214,7 +272,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if direction == Direction::Up && pos.y == max_y {
             return false;
         }
-        let is_piston = b.is_block(state, b.named.piston) || b.is_block(state, b.named.sticky_piston);
+        let is_piston =
+            b.is_block(state, b.named.piston) || b.is_block(state, b.named.sticky_piston);
         if !is_piston {
             if b.facts(state).hardness == -1.0 {
                 return false;
@@ -231,24 +290,44 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         !b.has_flag(state, super::data::state_flags::BLOCK_ENTITY)
     }
     fn is_slime_or_honey(&self, state: BlockStateId) -> bool {
-        self.b.is_block(state, self.b.named.slime_block) || self.b.is_block(state, self.b.named.honey_block)
+        self.b.is_block(state, self.b.named.slime_block)
+            || self.b.is_block(state, self.b.named.honey_block)
     }
     fn can_stick(&self, first: BlockStateId, second: BlockStateId) -> bool {
         let n = self.b.named;
-        let (honey1, slime1) = (self.b.is_block(first, n.honey_block), self.b.is_block(first, n.slime_block));
-        let (honey2, slime2) = (self.b.is_block(second, n.honey_block), self.b.is_block(second, n.slime_block));
+        let (honey1, slime1) = (
+            self.b.is_block(first, n.honey_block),
+            self.b.is_block(first, n.slime_block),
+        );
+        let (honey2, slime2) = (
+            self.b.is_block(second, n.honey_block),
+            self.b.is_block(second, n.slime_block),
+        );
         if (honey1 && slime2) || (slime1 && honey2) {
             return false;
         }
         self.is_slime_or_honey(first) || self.is_slime_or_honey(second)
     }
     /// `PistonStructureResolver.resolve`; None when the structure cannot move.
-    fn piston_resolve(&self, piston_pos: BlockPos, direction: Direction, extending: bool) -> Option<(Vec<BlockPos>, Vec<BlockPos>, Direction)> {
+    fn piston_resolve(
+        &self,
+        piston_pos: BlockPos,
+        direction: Direction,
+        extending: bool,
+    ) -> Option<(Vec<BlockPos>, Vec<BlockPos>, Direction)> {
         let mut r = Resolver {
             piston_pos,
             extending,
-            start: if extending { rel(piston_pos, direction) } else { rel_n(piston_pos, direction, 2) },
-            push_direction: if extending { direction } else { direction.opposite() },
+            start: if extending {
+                rel(piston_pos, direction)
+            } else {
+                rel_n(piston_pos, direction, 2)
+            },
+            push_direction: if extending {
+                direction
+            } else {
+                direction.opposite()
+            },
             piston_direction: direction,
             to_push: Vec::new(),
             to_destroy: Vec::new(),
@@ -281,7 +360,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if self.b.is_air(next) {
             return true;
         }
-        if !self.is_pushable(next, start, r.push_direction, false, direction) || start == r.piston_pos || r.to_push.contains(&start) {
+        if !self.is_pushable(next, start, r.push_direction, false, direction)
+            || start == r.piston_pos
+            || r.to_push.contains(&start)
+        {
             return true;
         }
         let mut count = 1;
@@ -294,7 +376,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             next = self.state(pos);
             if self.b.is_air(next)
                 || !self.can_stick(previous, next)
-                || !self.is_pushable(next, pos, r.push_direction, false, r.push_direction.opposite())
+                || !self.is_pushable(
+                    next,
+                    pos,
+                    r.push_direction,
+                    false,
+                    r.push_direction.opposite(),
+                )
                 || pos == r.piston_pos
             {
                 break;
@@ -306,7 +394,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         let mut added = 0;
         for i in (0..count).rev() {
-            r.to_push.push(rel_n(start, r.push_direction.opposite(), i as i32));
+            r.to_push
+                .push(rel_n(start, r.push_direction.opposite(), i as i32));
             added += 1;
         }
         let mut i = 1;
@@ -316,7 +405,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.reorder_at_collision(r, added, collision);
                 for j in 0..=collision + added {
                     let block_pos = r.to_push[j];
-                    if self.is_slime_or_honey(self.state(block_pos)) && !self.add_branching_blocks(r, block_pos) {
+                    if self.is_slime_or_honey(self.state(block_pos))
+                        && !self.add_branching_blocks(r, block_pos)
+                    {
                         return false;
                     }
                 }
@@ -326,7 +417,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if self.b.is_air(next) {
                 return true;
             }
-            if !self.is_pushable(next, pos, r.push_direction, true, r.push_direction) || pos == r.piston_pos {
+            if !self.is_pushable(next, pos, r.push_direction, true, r.push_direction)
+                || pos == r.piston_pos
+            {
                 return false;
             }
             if self.b.facts(next).push == PushReaction::Popped {
@@ -357,7 +450,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if super::query::axis_of(direction) != super::query::axis_of(r.push_direction) {
                 let neighbour = rel(from, direction);
                 let neighbour_state = self.state(neighbour);
-                if self.can_stick(neighbour_state, from_state) && !self.add_block_line(r, neighbour, direction) {
+                if self.can_stick(neighbour_state, from_state)
+                    && !self.add_block_line(r, neighbour, direction)
+                {
                     return false;
                 }
             }
@@ -366,17 +461,33 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     fn moving_piston_state(&self, direction: Direction, sticky: bool) -> BlockStateId {
         let b = self.b;
-        let state = b.table.set_dir(b.default_of(b.named.moving_piston), b.props.facing, direction);
-        b.table.set_text(state, b.props.kind, if sticky { "sticky" } else { "normal" })
+        let state = b.table.set_dir(
+            b.default_of(b.named.moving_piston),
+            b.props.facing,
+            direction,
+        );
+        b.table.set_text(
+            state,
+            b.props.kind,
+            if sticky { "sticky" } else { "normal" },
+        )
     }
     /// `PistonBaseBlock.moveBlocks`.
-    fn piston_move_blocks(&mut self, piston_pos: BlockPos, direction: Direction, extending: bool, sticky: bool) -> bool {
+    fn piston_move_blocks(
+        &mut self,
+        piston_pos: BlockPos,
+        direction: Direction,
+        extending: bool,
+        sticky: bool,
+    ) -> bool {
         let b = self.b;
         let arm = rel(piston_pos, direction);
         if !extending && b.is_block(self.state(arm), b.named.piston_head) {
             self.set_block(arm, b.air(), 276);
         }
-        let Some((to_push, to_destroy, push_direction)) = self.piston_resolve(piston_pos, direction, extending) else {
+        let Some((to_push, to_destroy, push_direction)) =
+            self.piston_resolve(piston_pos, direction, extending)
+        else {
             return false;
         };
         let mut delete_after: JavaHashMap<PosKey, BlockStateId> = JavaHashMap::default();
@@ -387,7 +498,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             delete_after.put(PosKey(*pos), state);
         }
         let mut to_update = Vec::with_capacity(to_push.len() + to_destroy.len());
-        let move_direction = if extending { direction } else { direction.opposite() };
+        let move_direction = if extending {
+            direction
+        } else {
+            direction.opposite()
+        };
         for pos in to_destroy.iter().rev() {
             let state = self.state(*pos);
             self.drop_resources(state, *pos);
@@ -399,7 +514,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let state = self.state(*pos);
             let target = rel(*pos, move_direction);
             delete_after.remove(&PosKey(target));
-            let moving = b.table.set_dir(b.default_of(b.named.moving_piston), b.props.facing, direction);
+            let moving = b.table.set_dir(
+                b.default_of(b.named.moving_piston),
+                b.props.facing,
+                direction,
+            );
             self.set_block(target, moving, 324);
             self.set_moving_piston(
                 target,
@@ -418,7 +537,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         if extending {
             let head = b.table.set_text(
-                b.table.set_dir(b.default_of(b.named.piston_head), b.props.facing, direction),
+                b.table
+                    .set_dir(b.default_of(b.named.piston_head), b.props.facing, direction),
                 b.props.kind,
                 if sticky { "sticky" } else { "normal" },
             );
@@ -440,7 +560,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             );
         }
         let air = b.air();
-        let entries: Vec<(BlockPos, BlockStateId)> = delete_after.entries().map(|(k, v)| (k.0, *v)).collect();
+        let entries: Vec<(BlockPos, BlockStateId)> =
+            delete_after.entries().map(|(k, v)| (k.0, *v)).collect();
         for (pos, _) in &entries {
             self.set_block(*pos, air, 82);
         }
@@ -470,7 +591,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         true
     }
     /// `PistonBaseBlock.triggerEvent`.
-    fn piston_trigger_event(&mut self, pos: BlockPos, state: BlockStateId, a: i32, param_b: i32) -> bool {
+    fn piston_trigger_event(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        a: i32,
+        param_b: i32,
+    ) -> bool {
         let b = self.b;
         let p = b.props;
         let direction = b.facing(state);
@@ -501,7 +628,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.moving_piston_final_tick(rel(pos, direction));
             let moving = self.moving_piston_state(direction, sticky);
             self.set_block(pos, moving, 276);
-            let piston_default = b.table.set_dir(b.default_of(b.block(state)), p.facing, Direction::ALL[(param_b & 7).min(5) as usize]);
+            let piston_default = b.table.set_dir(
+                b.default_of(b.block(state)),
+                p.facing,
+                Direction::ALL[(param_b & 7).min(5) as usize],
+            );
             self.set_moving_piston(
                 pos,
                 MovingPiston {
@@ -530,10 +661,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 if !piston_piece {
-                    let is_piston = b.is_block(moving_state, b.named.piston) || b.is_block(moving_state, b.named.sticky_piston);
+                    let is_piston = b.is_block(moving_state, b.named.piston)
+                        || b.is_block(moving_state, b.named.sticky_piston);
                     if a != 1
                         || b.is_air(moving_state)
-                        || !self.is_pushable(moving_state, two, direction.opposite(), false, direction)
+                        || !self.is_pushable(
+                            moving_state,
+                            two,
+                            direction.opposite(),
+                            false,
+                            direction,
+                        )
                         || (b.facts(moving_state).push != PushReaction::PushPull && !is_piston)
                     {
                         self.remove_block(rel(pos, direction), false);
@@ -559,13 +697,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     // ---- PistonHeadBlock ----
     pub(crate) fn piston_head_fitting_base(&self, head: BlockStateId, base: BlockStateId) -> bool {
         let b = self.b;
-        let expected = if b.table.text(head, b.props.kind) == "sticky" { b.named.sticky_piston } else { b.named.piston };
-        b.is_block(base, expected) && b.table.bool(base, b.props.extended) && b.facing(base) == b.facing(head)
+        let expected = if b.table.text(head, b.props.kind) == "sticky" {
+            b.named.sticky_piston
+        } else {
+            b.named.piston
+        };
+        b.is_block(base, expected)
+            && b.table.bool(base, b.props.extended)
+            && b.facing(base) == b.facing(head)
     }
     pub(crate) fn piston_head_can_survive(&self, head: BlockStateId, pos: BlockPos) -> bool {
         let b = self.b;
         let base = self.rel_state(pos, b.facing(head).opposite());
-        self.piston_head_fitting_base(head, base) || (b.is_block(base, b.named.moving_piston) && b.facing(base) == b.facing(head))
+        self.piston_head_fitting_base(head, base)
+            || (b.is_block(base, b.named.moving_piston) && b.facing(base) == b.facing(head))
     }
 }
 
@@ -596,9 +741,18 @@ impl Behaviours {
     /// whose ticking changes blocks). Entries added during the pass wait for
     /// the next tick, as vanilla's pending tickers do.
     pub fn tick_block_entities<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks) {
-        let tickers: Vec<(BlockPos, u64)> = ticks.moving_pistons.iter().map(|(p, m)| (*p, m.id)).collect();
+        let tickers: Vec<(BlockPos, u64)> = ticks
+            .moving_pistons
+            .iter()
+            .map(|(p, m)| (*p, m.id))
+            .collect();
         for (pos, id) in tickers {
-            if !level.is_ticking_chunk(pos.chunk()) || !ticks.moving_pistons.iter().any(|(p, m)| *p == pos && m.id == id) {
+            if !level.is_ticking_chunk(pos.chunk())
+                || !ticks
+                    .moving_pistons
+                    .iter()
+                    .any(|(p, m)| *p == pos && m.id == id)
+            {
                 continue;
             }
             self.sim(level, ticks).moving_piston_tick(pos);

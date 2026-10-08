@@ -28,7 +28,7 @@ import net.minecraft.world.ticks.TickPriority;
  * through ScheduledTickAccess are recorded instead of queued.
  */
 public final class VanillaLevelShapeOracle {
-    private static void bindFluidTags(Path dir) throws Exception {
+    static void bindFluidTags(Path dir) throws Exception {
         var registry = BuiltInRegistries.FLUID;
         var loader = new TagLoader<Holder<Fluid>>((id, required) -> registry.get(id).map(value -> (Holder<Fluid>) value), "tags/fluid");
         var definitions = new HashMap<Identifier, List<TagLoader.EntryWithSource>>();

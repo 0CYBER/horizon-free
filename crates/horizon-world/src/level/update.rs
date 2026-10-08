@@ -27,7 +27,12 @@ pub(crate) const UPDATE_SHAPE_ORDER: [Direction; 6] = [
     Direction::Down,
     Direction::Up,
 ];
-pub(crate) const HORIZONTAL: [Direction; 4] = [Direction::North, Direction::East, Direction::South, Direction::West];
+pub(crate) const HORIZONTAL: [Direction; 4] = [
+    Direction::North,
+    Direction::East,
+    Direction::South,
+    Direction::West,
+];
 
 /// `MinecraftServer.getMaxChainedNeighborUpdates` default.
 const MAX_CHAINED_NEIGHBOR_UPDATES: i32 = 1_000_000;
@@ -126,7 +131,12 @@ impl Update {
                 },
                 false,
             ),
-            Self::Full { state, pos, block, moved } => (
+            Self::Full {
+                state,
+                pos,
+                block,
+                moved,
+            } => (
                 Step::Neighbor {
                     state: Some(state),
                     pos,
@@ -201,11 +211,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub fn schedule_tick(&mut self, pos: BlockPos, block: BlockId, delay: i32) -> ScheduleResult {
         self.schedule_tick_priority(pos, block, delay, TickPriority::Normal)
     }
-    pub fn schedule_tick_priority(&mut self, pos: BlockPos, block: BlockId, delay: i32, priority: TickPriority) -> ScheduleResult {
+    pub fn schedule_tick_priority(
+        &mut self,
+        pos: BlockPos,
+        block: BlockId,
+        delay: i32,
+        priority: TickPriority,
+    ) -> ScheduleResult {
         let time = self.level.game_time();
         self.ticks.schedule_block(time, pos, block, delay, priority)
     }
-    pub fn schedule_fluid_tick(&mut self, pos: BlockPos, fluid: crate::fluid::FluidKind, delay: i32) -> ScheduleResult {
+    pub fn schedule_fluid_tick(
+        &mut self,
+        pos: BlockPos,
+        fluid: crate::fluid::FluidKind,
+        delay: i32,
+    ) -> ScheduleResult {
         let time = self.level.game_time();
         self.ticks.schedule_fluid(time, pos, fluid, delay)
     }
@@ -217,7 +238,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub fn set_block_and_update(&mut self, pos: BlockPos, state: BlockStateId) -> bool {
         self.set_block(pos, state, flags::UPDATE_ALL)
     }
-    pub fn set_block_limit(&mut self, pos: BlockPos, state: BlockStateId, update_flags: i32, limit: i32) -> bool {
+    pub fn set_block_limit(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        update_flags: i32,
+        limit: i32,
+    ) -> bool {
         if !self.is_in_valid_bounds(pos) || !self.level.is_loaded(pos) {
             return false;
         }
@@ -229,13 +256,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if update_flags & flags::UPDATE_NEIGHBORS != 0 {
                 let old_block = self.block_of(old);
                 self.update_neighbors_at(pos, old_block);
-                if self.b.has_flag(state, super::data::state_flags::ANALOG_OUTPUT) {
+                if self
+                    .b
+                    .has_flag(state, super::data::state_flags::ANALOG_OUTPUT)
+                {
                     let block = self.block_of(state);
                     self.update_neighbour_for_output_signal(pos, block);
                 }
             }
             if update_flags & flags::UPDATE_KNOWN_SHAPE == 0 && limit > 0 {
-                let neighbour_flags = update_flags & !(flags::UPDATE_NEIGHBORS | flags::UPDATE_SUPPRESS_DROPS);
+                let neighbour_flags =
+                    update_flags & !(flags::UPDATE_NEIGHBORS | flags::UPDATE_SUPPRESS_DROPS);
                 self.update_indirect_neighbour_shapes(old, pos, neighbour_flags, limit - 1);
                 self.update_neighbour_shapes(state, pos, neighbour_flags, limit - 1);
                 self.update_indirect_neighbour_shapes(state, pos, neighbour_flags, limit - 1);
@@ -244,7 +275,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         true
     }
     /// `LevelChunk.setBlockState`: the previous state when the write happened.
-    fn chunk_set_block_state(&mut self, pos: BlockPos, state: BlockStateId, update_flags: i32) -> Option<BlockStateId> {
+    fn chunk_set_block_state(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        update_flags: i32,
+    ) -> Option<BlockStateId> {
         let current = self.state(pos);
         if current == state {
             return None;
@@ -261,7 +297,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.remove_moving_piston(pos);
         }
         let moved = update_flags & flags::UPDATE_MOVE_BY_PISTON != 0;
-        if (block_changed || self.b.block_data(new_block).is(super::classes::Class::BaseRail))
+        if (block_changed
+            || self
+                .b
+                .block_data(new_block)
+                .is(super::classes::Class::BaseRail))
             && (update_flags & flags::UPDATE_NEIGHBORS != 0 || moved)
         {
             self.affect_neighbors_after_removal(old, pos, moved);
@@ -304,17 +344,33 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
     /// `Block.updateOrDestroy`.
-    pub fn update_or_destroy(&mut self, old: BlockStateId, new: BlockStateId, pos: BlockPos, update_flags: i32, limit: i32) {
+    pub fn update_or_destroy(
+        &mut self,
+        old: BlockStateId,
+        new: BlockStateId,
+        pos: BlockPos,
+        update_flags: i32,
+        limit: i32,
+    ) {
         if new != old {
             if self.b.is_air(new) {
                 self.destroy_block(pos, update_flags & flags::UPDATE_SUPPRESS_DROPS == 0, limit);
             } else {
-                self.set_block_limit(pos, new, update_flags & !flags::UPDATE_SUPPRESS_DROPS, limit);
+                self.set_block_limit(
+                    pos,
+                    new,
+                    update_flags & !flags::UPDATE_SUPPRESS_DROPS,
+                    limit,
+                );
             }
         }
     }
     /// `Block.updateFromNeighbourShapes`.
-    pub fn update_from_neighbour_shapes(&mut self, state: BlockStateId, pos: BlockPos) -> BlockStateId {
+    pub fn update_from_neighbour_shapes(
+        &mut self,
+        state: BlockStateId,
+        pos: BlockPos,
+    ) -> BlockStateId {
         let mut new = state;
         for direction in UPDATE_SHAPE_ORDER {
             let neighbour = rel(pos, direction);
@@ -324,10 +380,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         new
     }
     /// `BlockStateBase.updateNeighbourShapes`.
-    pub fn update_neighbour_shapes(&mut self, state: BlockStateId, pos: BlockPos, update_flags: i32, limit: i32) {
+    pub fn update_neighbour_shapes(
+        &mut self,
+        state: BlockStateId,
+        pos: BlockPos,
+        update_flags: i32,
+        limit: i32,
+    ) {
         for direction in UPDATE_SHAPE_ORDER {
             let neighbour = rel(pos, direction);
-            self.neighbor_shape_changed(direction.opposite(), neighbour, pos, state, update_flags, limit);
+            self.neighbor_shape_changed(
+                direction.opposite(),
+                neighbour,
+                pos,
+                state,
+                update_flags,
+                limit,
+            );
         }
     }
 
@@ -352,8 +421,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub fn neighbor_changed_at(&mut self, pos: BlockPos, block: BlockId) {
         self.add_and_run(Update::Simple { pos, block });
     }
-    pub fn neighbor_changed_full(&mut self, state: BlockStateId, pos: BlockPos, block: BlockId, moved: bool) {
-        self.add_and_run(Update::Full { state, pos, block, moved });
+    pub fn neighbor_changed_full(
+        &mut self,
+        state: BlockStateId,
+        pos: BlockPos,
+        block: BlockId,
+        moved: bool,
+    ) {
+        self.add_and_run(Update::Full {
+            state,
+            pos,
+            block,
+            moved,
+        });
     }
     pub fn neighbor_shape_changed(
         &mut self,
@@ -429,11 +509,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 if update_flags & flags::UPDATE_SKIP_SHAPE_UPDATE_ON_WIRE == 0
                     || !self.b.table.is(current, self.b.named.redstone_wire)
                 {
-                    let new = self.update_shape(current, pos, direction, neighbor_pos, neighbor_state);
+                    let new =
+                        self.update_shape(current, pos, direction, neighbor_pos, neighbor_state);
                     self.update_or_destroy(current, new, pos, update_flags, limit);
                 }
             }
-            Step::Neighbor { state, pos, block, moved } => {
+            Step::Neighbor {
+                state,
+                pos,
+                block,
+                moved,
+            } => {
                 let state = state.unwrap_or_else(|| self.state(pos));
                 self.neighbor_changed(state, pos, block, moved);
             }

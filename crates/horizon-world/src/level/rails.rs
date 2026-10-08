@@ -56,7 +56,10 @@ impl RailShape {
         }
     }
     fn is_slope(self) -> bool {
-        matches!(self, Self::AscendingEast | Self::AscendingWest | Self::AscendingNorth | Self::AscendingSouth)
+        matches!(
+            self,
+            Self::AscendingEast | Self::AscendingWest | Self::AscendingNorth | Self::AscendingSouth
+        )
     }
 }
 
@@ -79,7 +82,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.is_rail(self.state(pos))
     }
     fn rail_connections(pos: BlockPos, shape: RailShape) -> Vec<BlockPos> {
-        let (n, s, w, e) = (rel(pos, Direction::North), rel(pos, Direction::South), rel(pos, Direction::West), rel(pos, Direction::East));
+        let (n, s, w, e) = (
+            rel(pos, Direction::North),
+            rel(pos, Direction::South),
+            rel(pos, Direction::West),
+            rel(pos, Direction::East),
+        );
         match shape {
             RailShape::NorthSouth => vec![n, s],
             RailShape::EastWest => vec![w, e],
@@ -112,7 +120,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         None
     }
     fn rail_has_connection(rail: &Rail, pos: BlockPos) -> bool {
-        rail.connections.iter().any(|c| c.x == pos.x && c.z == pos.z)
+        rail.connections
+            .iter()
+            .any(|c| c.x == pos.x && c.z == pos.z)
     }
     fn rail_remove_soft_connections(&self, rail: &mut Rail) {
         let mut i = 0;
@@ -150,7 +160,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             .count() as i32
     }
     fn rail_slopes(&self, pos: BlockPos, shape: Option<RailShape>) -> Option<RailShape> {
-        let (n, s, w, e) = (rel(pos, Direction::North), rel(pos, Direction::South), rel(pos, Direction::West), rel(pos, Direction::East));
+        let (n, s, w, e) = (
+            rel(pos, Direction::North),
+            rel(pos, Direction::South),
+            rel(pos, Direction::West),
+            rel(pos, Direction::East),
+        );
         let mut shape = shape;
         if shape == Some(RailShape::NorthSouth) {
             if self.is_rail_at(above(n)) {
@@ -171,7 +186,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         shape
     }
     fn rail_set_shape(&self, state: BlockStateId, shape: RailShape) -> BlockStateId {
-        self.b.table.set_text(state, self.b.props.shape, shape.name())
+        self.b
+            .table
+            .set_text(state, self.b.props.shape, shape.name())
     }
     fn rail_connect_to(&mut self, rail: &mut Rail, other_pos: BlockPos) {
         rail.connections.push(other_pos);
@@ -201,12 +218,21 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 shape = Some(RailShape::NorthEast);
             }
         }
-        let shape = self.rail_slopes(pos, shape).unwrap_or(RailShape::NorthSouth);
+        let shape = self
+            .rail_slopes(pos, shape)
+            .unwrap_or(RailShape::NorthSouth);
         rail.state = self.rail_set_shape(rail.state, shape);
         self.set_block_and_update(pos, rail.state);
     }
     /// `RailState.place`; returns the resulting state.
-    fn rail_place(&mut self, pos: BlockPos, state: BlockStateId, has_signal: bool, first: bool, default: RailShape) -> BlockStateId {
+    fn rail_place(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        has_signal: bool,
+        first: bool,
+        default: RailShape,
+    ) -> BlockStateId {
         let mut rail = self.rail_new(pos, state);
         let n = self.rail_has_neighbor_rail(&rail, rel(pos, Direction::North));
         let s = self.rail_has_neighbor_rail(&rail, rel(pos, Direction::South));
@@ -292,7 +318,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.rail_place(pos, state, signal, first, current)
     }
     /// `BaseRailBlock.updateState(state, level, pos, movedByPiston)`.
-    pub(crate) fn rail_update_state(&mut self, pos: BlockPos, state: BlockStateId, moved: bool) -> BlockStateId {
+    pub(crate) fn rail_update_state(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        moved: bool,
+    ) -> BlockStateId {
         let state = self.rail_update_dir(pos, state, true);
         if !self.b.data(state).is(Class::Rail) {
             let block = self.b.block(state);
@@ -300,7 +331,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         state
     }
-    pub(crate) fn rail_neighbor_changed(&mut self, pos: BlockPos, state: BlockStateId, changed: BlockId, moved: bool) {
+    pub(crate) fn rail_neighbor_changed(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        changed: BlockId,
+        moved: bool,
+    ) {
         let b = self.b;
         if !b.is_block(self.state(pos), b.block(state)) {
             return;
@@ -325,18 +362,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.powered_rail_update(pos, state);
         } else if data.is(Class::Rail) {
             let changed_default = b.default_of(changed);
-            if self.is_signal_source_default(changed_default) && self.rail_count_potential_connections(pos) == 3 {
+            if self.is_signal_source_default(changed_default)
+                && self.rail_count_potential_connections(pos) == 3
+            {
                 self.rail_update_dir(pos, state, false);
             }
         }
     }
     fn is_signal_source_default(&self, state: BlockStateId) -> bool {
-        self.b.has_flag(state, super::data::state_flags::SIGNAL_SOURCE)
+        self.b
+            .has_flag(state, super::data::state_flags::SIGNAL_SOURCE)
     }
     fn powered_rail_update(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         let powered = b.table.bool(state, b.props.powered);
-        let should = self.has_neighbor_signal(pos) || self.powered_rail_find(pos, state, true, 0) || self.powered_rail_find(pos, state, false, 0);
+        let should = self.has_neighbor_signal(pos)
+            || self.powered_rail_find(pos, state, true, 0)
+            || self.powered_rail_find(pos, state, false, 0);
         if should != powered {
             self.set_block_and_update(pos, b.table.set_bool(state, b.props.powered, should));
             let block = b.block(state);
@@ -346,7 +388,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         }
     }
-    fn powered_rail_find(&self, pos: BlockPos, state: BlockStateId, forward: bool, depth: i32) -> bool {
+    fn powered_rail_find(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+        forward: bool,
+        depth: i32,
+    ) -> bool {
         if depth >= 8 {
             return false;
         }
@@ -400,19 +448,43 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         let block = self.b.block(state);
         self.powered_rail_same_with_power(BlockPos::new(x, y, z), block, forward, depth, shape)
-            || (check_below && self.powered_rail_same_with_power(BlockPos::new(x, y - 1, z), block, forward, depth, shape))
+            || (check_below
+                && self.powered_rail_same_with_power(
+                    BlockPos::new(x, y - 1, z),
+                    block,
+                    forward,
+                    depth,
+                    shape,
+                ))
     }
-    fn powered_rail_same_with_power(&self, pos: BlockPos, block: BlockId, forward: bool, depth: i32, dir: RailShape) -> bool {
+    fn powered_rail_same_with_power(
+        &self,
+        pos: BlockPos,
+        block: BlockId,
+        forward: bool,
+        depth: i32,
+        dir: RailShape,
+    ) -> bool {
         let b = self.b;
         let state = self.state(pos);
         if !b.is_block(state, block) {
             return false;
         }
         let mine = RailShape::parse(self.rail_shape(state));
-        if dir == RailShape::EastWest && matches!(mine, RailShape::NorthSouth | RailShape::AscendingNorth | RailShape::AscendingSouth) {
+        if dir == RailShape::EastWest
+            && matches!(
+                mine,
+                RailShape::NorthSouth | RailShape::AscendingNorth | RailShape::AscendingSouth
+            )
+        {
             return false;
         }
-        if dir == RailShape::NorthSouth && matches!(mine, RailShape::EastWest | RailShape::AscendingEast | RailShape::AscendingWest) {
+        if dir == RailShape::NorthSouth
+            && matches!(
+                mine,
+                RailShape::EastWest | RailShape::AscendingEast | RailShape::AscendingWest
+            )
+        {
             return false;
         }
         if !b.table.bool(state, b.props.powered) {
@@ -455,12 +527,27 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let state = self.state(pos);
         let was = b.table.bool(state, b.props.powered);
-        let top = if b.table.bool(state, b.props.attached) { 2.5 / 16.0 } else { 8.0 / 16.0 };
+        let top = if b.table.bool(state, b.props.attached) {
+            2.5 / 16.0
+        } else {
+            8.0 / 16.0
+        };
         let area = Aabb::new(
-            Vec3::new(f64::from(pos.x), f64::from(pos.y) + 1.0 / 16.0, f64::from(pos.z)),
-            Vec3::new(f64::from(pos.x) + 1.0, f64::from(pos.y) + top, f64::from(pos.z) + 1.0),
+            Vec3::new(
+                f64::from(pos.x),
+                f64::from(pos.y) + 1.0 / 16.0,
+                f64::from(pos.z),
+            ),
+            Vec3::new(
+                f64::from(pos.x) + 1.0,
+                f64::from(pos.y) + top,
+                f64::from(pos.z) + 1.0,
+            ),
         );
-        let pressed = self.level.count_entities(area, super::EntityQuery::Everything) > 0;
+        let pressed = self
+            .level
+            .count_entities(area, super::EntityQuery::Everything)
+            > 0;
         let block = b.block(state);
         if pressed != was {
             let next = b.table.set_bool(state, b.props.powered, pressed);
@@ -478,16 +565,43 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.update_neighbors_at(pos, block);
         self.update_neighbors_at(rel(pos, front), block);
     }
-    fn tripwire_emit(&mut self, pos: BlockPos, attached: bool, powered: bool, was_attached: bool, was_powered: bool) {
+    fn tripwire_emit(
+        &mut self,
+        pos: BlockPos,
+        attached: bool,
+        powered: bool,
+        was_attached: bool,
+        was_powered: bool,
+    ) {
         let (sound, volume, pitch, event) = if powered && !was_powered {
-            ("minecraft:block.tripwire.click_on", 0.4, 0.6, "minecraft:block_activate")
+            (
+                "minecraft:block.tripwire.click_on",
+                0.4,
+                0.6,
+                "minecraft:block_activate",
+            )
         } else if !powered && was_powered {
-            ("minecraft:block.tripwire.click_off", 0.4, 0.5, "minecraft:block_deactivate")
+            (
+                "minecraft:block.tripwire.click_off",
+                0.4,
+                0.5,
+                "minecraft:block_deactivate",
+            )
         } else if attached && !was_attached {
-            ("minecraft:block.tripwire.attach", 0.4, 0.7, "minecraft:block_attach")
+            (
+                "minecraft:block.tripwire.attach",
+                0.4,
+                0.7,
+                "minecraft:block_attach",
+            )
         } else if !attached && was_attached {
             let pitch = 1.2 / (self.random().next_float() * 0.2 + 0.9);
-            ("minecraft:block.tripwire.detach", 0.4, pitch, "minecraft:block_detach")
+            (
+                "minecraft:block.tripwire.detach",
+                0.4,
+                pitch,
+                "minecraft:block_detach",
+            )
         } else {
             return;
         };
@@ -550,7 +664,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         attached &= receiver > 1;
         powered &= attached;
-        let new_state = b.table.set_bool(b.table.set_bool(b.default_of(block), p.attached, attached), p.powered, powered);
+        let new_state = b.table.set_bool(
+            b.table.set_bool(b.default_of(block), p.attached, attached),
+            p.powered,
+            powered,
+        );
         if receiver > 0 {
             let test = pos.offset(dx * receiver, dy * receiver, dz * receiver);
             let opposite = direction.opposite();
@@ -574,8 +692,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let test = pos.offset(dx * i, dy * i, dz * i);
                 if let Some(wire) = wires[i as usize] {
                     let current = self.state(test);
-                    if b.is_block(current, b.named.tripwire) || b.is_block(current, b.named.tripwire_hook) {
-                        let next = b.table.with_bool(wire, p.attached, attached).unwrap_or(wire);
+                    if b.is_block(current, b.named.tripwire)
+                        || b.is_block(current, b.named.tripwire_hook)
+                    {
+                        let next = b
+                            .table
+                            .with_bool(wire, p.attached, attached)
+                            .unwrap_or(wire);
                         self.set_block_and_update(test, next);
                     }
                 }

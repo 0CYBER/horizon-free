@@ -133,8 +133,15 @@ pub(crate) fn analyse_shape(shape: &VoxelShape) -> io::Result<ShapeInfo> {
         (0.0, 7.0, 9.0, 9.0),
     ];
     for (bit, (x0, z0, x1, z1)) in tests.into_iter().enumerate() {
-        let test = VoxelShape::from_box(Aabb::new(Vec3::new(px(x0), 0.0, px(z0)), Vec3::new(px(x1), 1.0, px(z1)))).map_err(err)?;
-        if !test.join_is_not_empty(&above, ShapeOp::ONLY_FIRST).map_err(err)? {
+        let test = VoxelShape::from_box(Aabb::new(
+            Vec3::new(px(x0), 0.0, px(z0)),
+            Vec3::new(px(x1), 1.0, px(z1)),
+        ))
+        .map_err(err)?;
+        if !test
+            .join_is_not_empty(&above, ShapeOp::ONLY_FIRST)
+            .map_err(err)?
+        {
             info.wall_cover |= 1 << bit;
         }
     }
@@ -222,6 +229,9 @@ pub struct ItemBinding {
     /// StandingAndWallBlockItem.attachmentDirection (DOWN for torches/signs, UP for hanging signs).
     pub attachment: Option<Direction>,
     pub kind: ItemKind,
+    /// GameMasterBlockItem (command/structure/jigsaw blocks): only placeable
+    /// by players that can use game master blocks.
+    pub game_master: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ItemKind {
@@ -563,7 +573,10 @@ fn read_json(path: &Path) -> io::Result<Value> {
 }
 
 fn interned(cache: &mut HashMap<String, Arc<str>>, text: &str) -> Arc<str> {
-    cache.entry(text.to_owned()).or_insert_with(|| Arc::from(text)).clone()
+    cache
+        .entry(text.to_owned())
+        .or_insert_with(|| Arc::from(text))
+        .clone()
 }
 
 fn set_type(value: &Value, cache: &mut HashMap<String, Arc<str>>) -> Option<SetType> {
@@ -592,7 +605,12 @@ pub fn load_registry(root: &Path) -> io::Result<BlockRegistry> {
     fn tag(value: &Value) -> io::Result<Tag> {
         Ok(match value {
             Value::String(value) => Tag::String(value.as_str().into()),
-            Value::Number(value) => Tag::Int(value.as_i64().and_then(|v| i32::try_from(v).ok()).ok_or_else(|| fail("invalid registry number"))?),
+            Value::Number(value) => Tag::Int(
+                value
+                    .as_i64()
+                    .and_then(|v| i32::try_from(v).ok())
+                    .ok_or_else(|| fail("invalid registry number"))?,
+            ),
             Value::Array(values) => Tag::List(values.iter().map(tag).collect::<io::Result<_>>()?),
             Value::Object(values) => Tag::Compound(
                 values
@@ -604,10 +622,20 @@ pub fn load_registry(root: &Path) -> io::Result<BlockRegistry> {
         })
     }
     let facts = read_json(&root.join("facts.json"))?;
-    let states = facts["states"].as_array().ok_or_else(|| fail("missing registry state facts"))?;
+    let states = facts["states"]
+        .as_array()
+        .ok_or_else(|| fail("missing registry state facts"))?;
     BlockRegistry::from_nbt(&Tag::compound([
         ("DataVersion", Tag::Int(DATA_VERSION)),
-        ("states", Tag::List(states.iter().map(|state| tag(&state[4])).collect::<io::Result<_>>()?)),
+        (
+            "states",
+            Tag::List(
+                states
+                    .iter()
+                    .map(|state| tag(&state[4]))
+                    .collect::<io::Result<_>>()?,
+            ),
+        ),
         ("defaults", tag(&facts["defaults"])?),
     ]))
 }
@@ -618,9 +646,15 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
     let named = Named::resolve(&table)?;
     let behaviour = read_json(&root.join("block-behaviours.json"))?;
     let gameplay = read_json(&root.join("gameplay-facts.json"))?;
-    let blocks_json = behaviour["blocks"].as_array().ok_or_else(|| fail("missing behaviour blocks"))?;
-    let states_json = behaviour["states"].as_array().ok_or_else(|| fail("missing behaviour states"))?;
-    let gameplay_states = gameplay["states"].as_array().ok_or_else(|| fail("missing gameplay states"))?;
+    let blocks_json = behaviour["blocks"]
+        .as_array()
+        .ok_or_else(|| fail("missing behaviour blocks"))?;
+    let states_json = behaviour["states"]
+        .as_array()
+        .ok_or_else(|| fail("missing behaviour states"))?;
+    let gameplay_states = gameplay["states"]
+        .as_array()
+        .ok_or_else(|| fail("missing gameplay states"))?;
     if blocks_json.len() != table.block_count()
         || states_json.len() != table.state_count()
         || gameplay_states.len() != table.state_count()
@@ -634,16 +668,28 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    if fluids.iter().copied().ne(FluidKind::ALL.iter().map(|k| k.name())) {
+    if fluids
+        .iter()
+        .copied()
+        .ne(FluidKind::ALL.iter().map(|k| k.name()))
+    {
         return Err(fail("fluid registry order differs from Horizon's"));
     }
 
     // Tags.
     let bundle = read_json(&root.join("block-tags.json"))?;
     let mut definitions = TagDefinitions::default();
-    for (name, text) in bundle.as_object().ok_or_else(|| fail("invalid block tag bundle"))? {
+    for (name, text) in bundle
+        .as_object()
+        .ok_or_else(|| fail("invalid block tag bundle"))?
+    {
         definitions
-            .apply_json(name, "vanilla", text.as_str().ok_or_else(|| fail("invalid block tag text"))?)
+            .apply_json(
+                name,
+                "vanilla",
+                text.as_str()
+                    .ok_or_else(|| fail("invalid block tag text"))?,
+            )
             .map_err(|e| invalid(e.to_string()))?;
     }
     let built = definitions
@@ -661,14 +707,19 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
     }
     let tags = Tags::resolve(&all_tags);
     let tag = |name: &str| -> Option<Arc<BlockSet>> {
-        all_tags.get(name.strip_prefix('#').unwrap_or(name)).cloned()
+        all_tags
+            .get(name.strip_prefix('#').unwrap_or(name))
+            .cloned()
     };
 
     // Collision shapes.
-    let collision_tag = nbt::read_named(&fs::read(root.join("cached-collision.nbt"))?, Limits::default())
-        .map_err(|e| invalid(e.to_string()))?
-        .0
-        .tag;
+    let collision_tag = nbt::read_named(
+        &fs::read(root.join("cached-collision.nbt"))?,
+        Limits::default(),
+    )
+    .map_err(|e| invalid(e.to_string()))?
+    .0
+    .tag;
     let cached = CachedCollisionRegistry::from_nbt(&collision_tag, registry)?;
     let mut shapes: Vec<VoxelShape> = Vec::new();
     let mut shape_ids = Vec::with_capacity(table.state_count());
@@ -687,7 +738,10 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
         shape_ids.push(index as i32);
     }
 
-    let shape_info = shapes.iter().map(analyse_shape).collect::<io::Result<Vec<_>>>()?;
+    let shape_info = shapes
+        .iter()
+        .map(analyse_shape)
+        .collect::<io::Result<Vec<_>>>()?;
 
     // Fluid tags.
     let mut fluid_definitions = TagDefinitions::default();
@@ -698,7 +752,11 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             continue;
         };
         fluid_definitions
-            .apply_json(&format!("minecraft:{stem}"), "vanilla", &fs::read_to_string(&path)?)
+            .apply_json(
+                &format!("minecraft:{stem}"),
+                "vanilla",
+                &fs::read_to_string(&path)?,
+            )
             .map_err(|e| invalid(e.to_string()))?;
     }
     let fluid_built = fluid_definitions
@@ -724,7 +782,9 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
     // Per-state facts.
     let mut facts = Vec::with_capacity(table.state_count());
     for (id, (exported, game)) in states_json.iter().zip(gameplay_states).enumerate() {
-        let row = exported.as_array().ok_or_else(|| fail("invalid behaviour state row"))?;
+        let row = exported
+            .as_array()
+            .ok_or_else(|| fail("invalid behaviour state row"))?;
         let int = |i: usize| row.get(i).and_then(Value::as_i64).unwrap_or(0);
         let gb = |key: &str| game.get(key).and_then(Value::as_bool).unwrap_or(false);
         let mut flags = int(1) as u32 & 0x7f;
@@ -749,7 +809,11 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             .get(int(2) as usize)
             .copied()
             .ok_or_else(|| fail("invalid exported fluid"))?;
-        let fluid = FluidState::new(fluid_kind, int(3) as u8, row.get(4).and_then(Value::as_bool).unwrap_or(false));
+        let fluid = FluidState::new(
+            fluid_kind,
+            int(3) as u8,
+            row.get(4).and_then(Value::as_bool).unwrap_or(false),
+        );
         facts.push(StateFacts {
             flags,
             sturdy: int(0) as u32,
@@ -759,7 +823,11 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             emission: game.get("emission").and_then(Value::as_u64).unwrap_or(0) as u8,
             dampening: game.get("dampening").and_then(Value::as_u64).unwrap_or(0) as u8,
             hardness: game.get("hardness").and_then(Value::as_f64).unwrap_or(0.0) as f32,
-            push: match game.get("push").and_then(Value::as_str).unwrap_or("PUSH_PULL") {
+            push: match game
+                .get("push")
+                .and_then(Value::as_str)
+                .unwrap_or("PUSH_PULL")
+            {
                 "PUSH" => PushReaction::Push,
                 "POPPED" => PushReaction::Popped,
                 "IMMOVEABLE" => PushReaction::Immoveable,
@@ -774,19 +842,29 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
     // Per-block data.
     let fire = &behaviour["fire"];
     let odds = |key: &str, name: &str| -> i32 {
-        fire.get(key).and_then(|m| m.get(name)).and_then(Value::as_i64).unwrap_or(0) as i32
+        fire.get(key)
+            .and_then(|m| m.get(name))
+            .and_then(Value::as_i64)
+            .unwrap_or(0) as i32
     };
     let mut strings = HashMap::new();
     let mut blocks = Vec::with_capacity(table.block_count());
     for (index, json) in blocks_json.iter().enumerate() {
         let block = BlockId(index as u16);
-        let name = json["name"].as_str().ok_or_else(|| fail("block without name"))?;
+        let name = json["name"]
+            .as_str()
+            .ok_or_else(|| fail("block without name"))?;
         if name != &*table.info(block).name {
             return Err(fail("behaviour block order differs from registry"));
         }
         let mut classes = ClassSet::default();
         let mut chain = Vec::new();
-        for java in json["class"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        for java in json["class"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
             if let Some(c) = Class::from_java(java) {
                 classes.insert(c);
                 chain.push(c);
@@ -794,14 +872,23 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
         }
         let class = chain.first().copied().unwrap_or(Class::Block);
         let mut interfaces = 0;
-        for java in json["interfaces"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        for java in json["interfaces"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
             if let Some(i) = Interface::from_java(java) {
                 interfaces |= i.mask();
             }
         }
         let fields = &json["fields"];
         let field = |key: &str| fields.get(key);
-        let block_field = |key: &str| field(key).and_then(Value::as_str).and_then(|n| table.block_by_name(n));
+        let block_field = |key: &str| {
+            field(key)
+                .and_then(Value::as_str)
+                .and_then(|n| table.block_by_name(n))
+        };
         let wood = field("type").filter(|t| t.get("setType").is_some());
         let set_type = match wood {
             Some(wood) => set_type(&wood["setType"], &mut strings),
@@ -836,10 +923,16 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             .into_iter()
             .find_map(|k| field(k).and_then(Value::as_str))
             .and_then(tag);
-        let support_tag2 = field("fruitSupportBlocks").and_then(Value::as_str).and_then(tag);
+        let support_tag2 = field("fruitSupportBlocks")
+            .and_then(Value::as_str)
+            .and_then(tag);
         let feature = field("feature")
             .and_then(Value::as_str)
-            .or_else(|| field("treeGrower").and_then(|g| g.get("name")).and_then(Value::as_str))
+            .or_else(|| {
+                field("treeGrower")
+                    .and_then(|g| g.get("name"))
+                    .and_then(Value::as_str)
+            })
             .map(|s| interned(&mut strings, s));
         let growth_direction = match field("growthDirection").and_then(Value::as_str) {
             Some("DOWN") => Direction::Down,
@@ -848,7 +941,14 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
         let default = table.default_state(block);
         let sound = &gameplay_states[default.0 as usize]["sound"];
         let sound_id = |key: &str, strings: &mut HashMap<String, Arc<str>>| {
-            interned(strings, sound.get(key).and_then(|s| s.get("id")).and_then(Value::as_str).unwrap_or(""))
+            interned(
+                strings,
+                sound
+                    .get(key)
+                    .and_then(|s| s.get("id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+            )
         };
         let sounds = Arc::new(Sounds {
             volume: sound.get("volume").and_then(Value::as_f64).unwrap_or(1.0) as f32,
@@ -867,16 +967,22 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             gate_close,
             open_sound,
             close_sound,
-            ticks_to_stay_pressed: field("ticksToStayPressed").and_then(Value::as_i64).unwrap_or(0) as i32,
+            ticks_to_stay_pressed: field("ticksToStayPressed")
+                .and_then(Value::as_i64)
+                .unwrap_or(0) as i32,
             max_weight: field("maxWeight").and_then(Value::as_i64).unwrap_or(0) as i32,
             link,
             link2,
             support_tag,
             support_tag2,
             feature,
-            grow_probability: field("growPerTickProbability").and_then(Value::as_f64).unwrap_or(0.0),
+            grow_probability: field("growPerTickProbability")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
             growth_direction,
-            schedule_fluid_ticks: field("scheduleFluidTicks").and_then(Value::as_bool).unwrap_or(false),
+            schedule_fluid_ticks: field("scheduleFluidTicks")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             weather: match field("weatherState").and_then(Value::as_str) {
                 Some("EXPOSED") => 1,
                 Some("WEATHERED") => 2,
@@ -886,19 +992,34 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             ignite_odds: odds("igniteOdds", name),
             burn_odds: odds("burnOdds", name),
             sounds,
-            item: interned(&mut strings, json["item"].as_str().unwrap_or("minecraft:air")),
+            item: interned(
+                &mut strings,
+                json["item"].as_str().unwrap_or("minecraft:air"),
+            ),
             dynamic_shape: json["dynamic_shape"].as_bool().unwrap_or(false),
         });
     }
 
     // Item bindings.
     let mut items = HashMap::new();
-    for (item, binding) in behaviour["items"].as_object().ok_or_else(|| fail("missing item bindings"))? {
+    for (item, binding) in behaviour["items"]
+        .as_object()
+        .ok_or_else(|| fail("missing item bindings"))?
+    {
         let fields = &binding["fields"];
-        let Some(block) = fields.get("block").and_then(Value::as_str).and_then(|n| table.block_by_name(n)) else {
+        let Some(block) = fields
+            .get("block")
+            .and_then(Value::as_str)
+            .and_then(|n| table.block_by_name(n))
+        else {
             continue;
         };
-        let classes: Vec<&str> = binding["class"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        let classes: Vec<&str> = binding["class"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
         let has = |name: &str| classes.contains(&name);
         let kind = if has("HangingSignItem") {
             ItemKind::HangingSign
@@ -921,13 +1042,17 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             item.clone(),
             ItemBinding {
                 block,
-                wall_block: fields.get("wallBlock").and_then(Value::as_str).and_then(|n| table.block_by_name(n)),
+                wall_block: fields
+                    .get("wallBlock")
+                    .and_then(Value::as_str)
+                    .and_then(|n| table.block_by_name(n)),
                 attachment: match fields.get("attachmentDirection").and_then(Value::as_str) {
                     Some("UP") => Some(Direction::Up),
                     Some("DOWN") => Some(Direction::Down),
                     _ => None,
                 },
                 kind,
+                game_master: has("GameMasterBlockItem"),
             },
         );
     }
@@ -937,7 +1062,9 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
     for (id, fact) in facts.iter().enumerate() {
         if fact.shape < 0 {
             let state = BlockStateId(id as u32);
-            if let Some(support) = crate::dynamic_support::DynamicSupport::from_state(registry.state(state).unwrap())? {
+            if let Some(support) =
+                crate::dynamic_support::DynamicSupport::from_state(registry.state(state).unwrap())?
+            {
                 dynamic.insert(state, support);
             }
         }

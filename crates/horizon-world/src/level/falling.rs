@@ -22,10 +22,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `FallingBlockEntity.fall`.
     pub(crate) fn falling_block_fall(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
-        let carried = b.table.with_bool(state, b.props.waterlogged, false).unwrap_or(state);
+        let carried = b
+            .table
+            .with_bool(state, b.props.waterlogged, false)
+            .unwrap_or(state);
         let legacy = b.legacy_block(b.fluid(state));
         self.set_block_and_update(pos, legacy);
-        self.emit(LevelEvent::FallingBlock { pos, state: carried });
+        self.emit(LevelEvent::FallingBlock {
+            pos,
+            state: carried,
+        });
     }
     /// `FallingBlock.tick` (and `SpeleothemBlock`'s falling stalactites).
     pub(crate) fn falling_block_tick(&mut self, pos: BlockPos, state: BlockStateId) {
@@ -38,7 +44,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let p = b.props;
         let is_stalactite = |s: BlockStateId| {
-            b.tag("minecraft:speleothems").is_some_and(|tag| b.in_set(s, tag)) && b.table.dir(s, p.vertical_direction) == Some(Direction::Down)
+            b.tag("minecraft:speleothems")
+                .is_some_and(|tag| b.in_set(s, tag))
+                && b.table.dir(s, p.vertical_direction) == Some(Direction::Down)
         };
         let mut fall_pos = pos;
         let mut fall_state = state;
@@ -77,7 +85,11 @@ impl Behaviours {
             pos,
             hit_pos: pos,
             face: Direction::Up,
-            hit: horizon_core::geometry::Vec3::new(f64::from(pos.x) + 0.5, f64::from(pos.y), f64::from(pos.z) + 0.5),
+            hit: horizon_core::geometry::Vec3::new(
+                f64::from(pos.x) + 0.5,
+                f64::from(pos.y),
+                f64::from(pos.z) + 0.5,
+            ),
             inside: false,
             yaw: 0.0,
             pitch: 90.0,
@@ -95,7 +107,9 @@ impl Behaviours {
             return Landing::Broken;
         }
         let mut placed = state;
-        if self.table.has(placed, self.props.waterlogged) && self.is_water_fluid(sim.fluid_at(pos).kind()) {
+        if self.table.has(placed, self.props.waterlogged)
+            && self.is_water_fluid(sim.fluid_at(pos).kind())
+        {
             placed = self.table.set_bool(placed, self.props.waterlogged, true);
         }
         if !sim.set_block_and_update(pos, placed) {

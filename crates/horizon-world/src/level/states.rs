@@ -108,7 +108,9 @@ impl StateTable {
         while index < registry.len() {
             let first = registry.state(BlockStateId(index as u32)).unwrap();
             let mut end = index + 1;
-            while end < registry.len() && registry.state(BlockStateId(end as u32)).unwrap().name == first.name {
+            while end < registry.len()
+                && registry.state(BlockStateId(end as u32)).unwrap().name == first.name
+            {
                 end += 1;
             }
             let count = (end - index) as u32;
@@ -121,7 +123,11 @@ impl StateTable {
                 // first states with stride steps give each value in order.
                 let mut seen = Vec::<&str>::new();
                 for offset in 0..count {
-                    let value = registry.state(BlockStateId(index as u32 + offset)).unwrap().properties[*name].as_str();
+                    let value = registry
+                        .state(BlockStateId(index as u32 + offset))
+                        .unwrap()
+                        .properties[*name]
+                        .as_str();
                     if !seen.contains(&value) {
                         seen.push(value);
                     }
@@ -131,7 +137,11 @@ impl StateTable {
                     values.push(PropValue::new(value));
                 }
                 let key = table.key_or_insert(name);
-                slots.push(Slot { key, stride, values });
+                slots.push(Slot {
+                    key,
+                    stride,
+                    values,
+                });
             }
             if stride != 1 {
                 return Err(invalid("block state count is not a property product"));
@@ -143,12 +153,16 @@ impl StateTable {
                 slot.values = (0..len)
                     .map(|i| {
                         PropValue::new(
-                            &registry.state(BlockStateId(index as u32 + i * slot.stride)).unwrap().properties[name],
+                            &registry
+                                .state(BlockStateId(index as u32 + i * slot.stride))
+                                .unwrap()
+                                .properties[name],
                         )
                     })
                     .collect();
             }
-            let block = BlockId(u16::try_from(table.blocks.len()).map_err(|_| invalid("too many blocks"))?);
+            let block =
+                BlockId(u16::try_from(table.blocks.len()).map_err(|_| invalid("too many blocks"))?);
             let default = registry
                 .default_state(&first.name)
                 .ok_or_else(|| invalid("block without default state"))?;
@@ -162,9 +176,12 @@ impl StateTable {
             for offset in 0..count {
                 let state = registry.state(BlockStateId(index as u32 + offset)).unwrap();
                 for slot in &info.slots {
-                    let value = &slot.values[((offset / slot.stride) % slot.values.len() as u32) as usize];
+                    let value =
+                        &slot.values[((offset / slot.stride) % slot.values.len() as u32) as usize];
                     if *value.text != *state.properties[&table.key_names[slot.key.0 as usize]] {
-                        return Err(invalid("registry state order differs from vanilla's state definition"));
+                        return Err(invalid(
+                            "registry state order differs from vanilla's state definition",
+                        ));
                     }
                 }
                 table.state_block.push(block.0);
@@ -216,7 +233,10 @@ impl StateTable {
         self.state_block[state.0 as usize] == block.0
     }
     fn slot(&self, state: BlockStateId, key: PropKey) -> Option<&Slot> {
-        self.info(self.block(state)).slots.iter().find(|slot| slot.key == key)
+        self.info(self.block(state))
+            .slots
+            .iter()
+            .find(|slot| slot.key == key)
     }
     pub fn has(&self, state: BlockStateId, key: PropKey) -> bool {
         self.slot(state, key).is_some()
@@ -234,7 +254,9 @@ impl StateTable {
     }
     /// Missing boolean properties read as false.
     pub fn bool(&self, state: BlockStateId, key: PropKey) -> bool {
-        self.value(state, key).and_then(|v| v.boolean).unwrap_or(false)
+        self.value(state, key)
+            .and_then(|v| v.boolean)
+            .unwrap_or(false)
     }
     /// Missing integer properties read as 0.
     pub fn int(&self, state: BlockStateId, key: PropKey) -> i32 {
@@ -271,12 +293,22 @@ impl StateTable {
         let index = slot.values.iter().position(|v| v.int == Some(value))?;
         Some(self.with_index(state, slot, index as u32))
     }
-    pub fn with_bool(&self, state: BlockStateId, key: PropKey, value: bool) -> Option<BlockStateId> {
+    pub fn with_bool(
+        &self,
+        state: BlockStateId,
+        key: PropKey,
+        value: bool,
+    ) -> Option<BlockStateId> {
         let slot = self.slot(state, key)?;
         let index = slot.values.iter().position(|v| v.boolean == Some(value))?;
         Some(self.with_index(state, slot, index as u32))
     }
-    pub fn with_dir(&self, state: BlockStateId, key: PropKey, value: Direction) -> Option<BlockStateId> {
+    pub fn with_dir(
+        &self,
+        state: BlockStateId,
+        key: PropKey,
+        value: Direction,
+    ) -> Option<BlockStateId> {
         self.with_text(state, key, direction_name(value))
     }
     /// Vanilla `setValue` callers always pass legal values; when Horizon's port
@@ -313,6 +345,9 @@ impl StateTable {
         result
     }
     pub fn property_names(&self, block: BlockId) -> impl Iterator<Item = &str> {
-        self.info(block).slots.iter().map(|slot| self.key_names[slot.key.0 as usize].as_str())
+        self.info(block)
+            .slots
+            .iter()
+            .map(|slot| self.key_names[slot.key.0 as usize].as_str())
     }
 }

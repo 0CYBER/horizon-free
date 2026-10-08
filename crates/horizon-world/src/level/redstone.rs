@@ -10,7 +10,9 @@ use super::{
     update::{HORIZONTAL, above, below, rel},
 };
 use crate::registry::BlockStateId;
-use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource, ticks::TickPriority};
+use horizon_core::{
+    geometry::Direction, position::BlockPos, random::RandomSource, ticks::TickPriority,
+};
 
 const SIGNAL_ORDER: [Direction; 6] = [
     Direction::Down,
@@ -32,7 +34,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.b.has_flag(state, state_flags::SIGNAL_SOURCE)
     }
     /// `BlockState.getSignal(level, pos, direction)`.
-    pub(crate) fn state_signal(&self, state: BlockStateId, pos: BlockPos, direction: Direction) -> i32 {
+    pub(crate) fn state_signal(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+    ) -> i32 {
         let b = self.b;
         if !b.has_flag(state, state_flags::SIGNAL_SOURCE) {
             return 0;
@@ -52,7 +59,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
     /// `BlockState.getDirectSignal(level, pos, direction)`.
-    pub(crate) fn state_direct_signal(&self, state: BlockStateId, pos: BlockPos, direction: Direction) -> i32 {
+    pub(crate) fn state_direct_signal(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+    ) -> i32 {
         let b = self.b;
         if !b.has_flag(state, state_flags::SIGNAL_SOURCE) {
             return 0;
@@ -77,7 +89,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
     pub(crate) fn comparator_output(&self, pos: BlockPos) -> i32 {
-        self.ticks.comparator_outputs.get(&pos).copied().unwrap_or(0)
+        self.ticks
+            .comparator_outputs
+            .get(&pos)
+            .copied()
+            .unwrap_or(0)
     }
     fn wire_signal(&self, state: BlockStateId, pos: BlockPos, direction: Direction) -> i32 {
         if self.wire_signal_off.get() || direction == Direction::Down {
@@ -89,7 +105,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         if direction != Direction::Up {
             let connected = self.wire_connection_state(state, pos);
-            if self.b.table.text(connected, self.direction_prop(direction.opposite())) == "none" {
+            if self
+                .b
+                .table
+                .text(connected, self.direction_prop(direction.opposite()))
+                == "none"
+            {
                 return 0;
             }
         }
@@ -125,7 +146,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `SignalGetter.hasNeighborSignal`.
     pub fn has_neighbor_signal(&self, pos: BlockPos) -> bool {
-        SIGNAL_ORDER.into_iter().any(|direction| self.signal(rel(pos, direction), direction) > 0)
+        SIGNAL_ORDER
+            .into_iter()
+            .any(|direction| self.signal(rel(pos, direction), direction) > 0)
     }
     /// `SignalGetter.getBestNeighborSignal`.
     pub fn best_neighbor_signal(&self, pos: BlockPos) -> i32 {
@@ -144,7 +167,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let state = self.state(pos);
         if only_diodes {
-            if b.instance_of(state, Class::Diode) { self.direct_signal(pos, direction) } else { 0 }
+            if b.instance_of(state, Class::Diode) {
+                self.direct_signal(pos, direction)
+            } else {
+                0
+            }
         } else if b.is_block(state, b.named.redstone_block) {
             15
         } else if b.is_block(state, b.named.redstone_wire) {
@@ -173,18 +200,30 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn wire_can_survive_on(&self, state: BlockStateId) -> bool {
         self.b.is_face_sturdy(state, Direction::Up) || self.b.is_block(state, self.b.named.hopper)
     }
-    fn wire_connecting_side(&self, pos: BlockPos, direction: Direction, can_connect_up: bool) -> &'static str {
+    fn wire_connecting_side(
+        &self,
+        pos: BlockPos,
+        direction: Direction,
+        can_connect_up: bool,
+    ) -> &'static str {
         let b = self.b;
         let relative_pos = rel(pos, direction);
         let relative = self.state(relative_pos);
         if can_connect_up {
-            let placeable_above = b.instance_of(relative, Class::TrapDoor) || self.wire_can_survive_on(relative);
-            if placeable_above && self.should_wire_connect_to(self.state(above(relative_pos)), None) {
-                return if b.is_face_sturdy(relative, direction.opposite()) { "up" } else { "side" };
+            let placeable_above =
+                b.instance_of(relative, Class::TrapDoor) || self.wire_can_survive_on(relative);
+            if placeable_above && self.should_wire_connect_to(self.state(above(relative_pos)), None)
+            {
+                return if b.is_face_sturdy(relative, direction.opposite()) {
+                    "up"
+                } else {
+                    "side"
+                };
             }
         }
         if !self.should_wire_connect_to(relative, Some(direction))
-            && (self.is_redstone_conductor(relative, relative_pos) || !self.should_wire_connect_to(self.state(below(relative_pos)), None))
+            && (self.is_redstone_conductor(relative, relative_pos)
+                || !self.should_wire_connect_to(self.state(below(relative_pos)), None))
         {
             "none"
         } else {
@@ -198,16 +237,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.b.table.text(state, self.direction_prop(direction)) != "none"
     }
     fn wire_is_cross(&self, state: BlockStateId) -> bool {
-        HORIZONTAL.into_iter().all(|d| self.wire_connected(state, d))
+        HORIZONTAL
+            .into_iter()
+            .all(|d| self.wire_connected(state, d))
     }
     fn wire_is_dot(&self, state: BlockStateId) -> bool {
-        !HORIZONTAL.into_iter().any(|d| self.wire_connected(state, d))
+        !HORIZONTAL
+            .into_iter()
+            .any(|d| self.wire_connected(state, d))
     }
     pub(crate) fn wire_cross_state(&self, power: i32) -> BlockStateId {
         let b = self.b;
         let mut state = b.default_of(b.named.redstone_wire);
         for direction in HORIZONTAL {
-            state = b.table.set_text(state, self.direction_prop(direction), "side");
+            state = b
+                .table
+                .set_text(state, self.direction_prop(direction), "side");
         }
         b.table.set_int(state, b.props.power, power)
     }
@@ -216,7 +261,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let table = &b.table;
         let was_dot = self.wire_is_dot(state);
-        let mut result = table.set_int(b.default_of(b.named.redstone_wire), b.props.power, table.int(state, b.props.power));
+        let mut result = table.set_int(
+            b.default_of(b.named.redstone_wire),
+            b.props.power,
+            table.int(state, b.props.power),
+        );
         let can_up = self.wire_can_connect_up(pos);
         for direction in HORIZONTAL {
             if !self.wire_connected(result, direction) {
@@ -268,7 +317,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             _ => {
                 let side = self.wire_connecting_side(pos, direction, self.wire_can_connect_up(pos));
                 let key = self.direction_prop(direction);
-                if (side != "none") == self.wire_connected(state, direction) && !self.wire_is_cross(state) {
+                if (side != "none") == self.wire_connected(state, direction)
+                    && !self.wire_is_cross(state)
+                {
                     b.table.set_text(state, key, side)
                 } else {
                     let power = b.table.int(state, b.props.power);
@@ -279,22 +330,44 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
     /// `RedstoneWireBlock.updateIndirectNeighbourShapes`.
-    pub(crate) fn wire_update_indirect(&mut self, state: BlockStateId, pos: BlockPos, flags: i32, limit: i32) {
+    pub(crate) fn wire_update_indirect(
+        &mut self,
+        state: BlockStateId,
+        pos: BlockPos,
+        flags: i32,
+        limit: i32,
+    ) {
         let b = self.b;
         let wire = b.named.redstone_wire;
         for direction in HORIZONTAL {
-            if b.table.text(state, self.direction_prop(direction)) != "none" && !b.is_block(self.rel_state(pos, direction), wire) {
+            if b.table.text(state, self.direction_prop(direction)) != "none"
+                && !b.is_block(self.rel_state(pos, direction), wire)
+            {
                 let down = below(rel(pos, direction));
                 if b.is_block(self.state(down), wire) {
                     let neighbour = rel(down, direction.opposite());
                     let neighbour_state = self.state(neighbour);
-                    self.neighbor_shape_changed(direction.opposite(), down, neighbour, neighbour_state, flags, limit);
+                    self.neighbor_shape_changed(
+                        direction.opposite(),
+                        down,
+                        neighbour,
+                        neighbour_state,
+                        flags,
+                        limit,
+                    );
                 }
                 let up = above(rel(pos, direction));
                 if b.is_block(self.state(up), wire) {
                     let neighbour = rel(up, direction.opposite());
                     let neighbour_state = self.state(neighbour);
-                    self.neighbor_shape_changed(direction.opposite(), up, neighbour, neighbour_state, flags, limit);
+                    self.neighbor_shape_changed(
+                        direction.opposite(),
+                        up,
+                        neighbour,
+                        neighbour_state,
+                        flags,
+                        limit,
+                    );
                 }
             }
         }
@@ -319,7 +392,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let neighbour = self.state(neighbour_pos);
             signal = signal.max(self.wire_power_of(neighbour));
             let above_pos = above(pos);
-            if self.is_redstone_conductor(neighbour, neighbour_pos) && !self.is_redstone_conductor(self.state(above_pos), above_pos) {
+            if self.is_redstone_conductor(neighbour, neighbour_pos)
+                && !self.is_redstone_conductor(self.state(above_pos), above_pos)
+            {
                 signal = signal.max(self.wire_power_of(self.state(above(neighbour_pos))));
             } else if !self.is_redstone_conductor(neighbour, neighbour_pos) {
                 signal = signal.max(self.wire_power_of(self.state(below(neighbour_pos))));
@@ -343,7 +418,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             // Vanilla iterates a HashSet of the position and its six
             // neighbours; BlockPos hash order is reproduced below.
             let wire = self.b.named.redstone_wire;
-            let mut targets: Vec<BlockPos> = std::iter::once(pos).chain(Direction::ALL.map(|d| rel(pos, d))).collect();
+            let mut targets: Vec<BlockPos> = std::iter::once(pos)
+                .chain(Direction::ALL.map(|d| rel(pos, d)))
+                .collect();
             java_hash_set_order(&mut targets);
             for target_pos in targets {
                 self.update_neighbors_at(target_pos, wire);
@@ -425,7 +502,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 return false;
             }
             let side = self.diode_alternate_signal(pos, state);
-            input > side || (input == side && self.b.table.text(state, self.b.props.mode) == "compare")
+            input > side
+                || (input == side && self.b.table.text(state, self.b.props.mode) == "compare")
         } else {
             self.diode_input_signal(pos, state) > 0
         }
@@ -463,8 +541,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if !self.ticks.will_block_tick_this_tick(pos, block) {
                 let output = self.comparator_calculate_output(pos, state);
                 let old = self.comparator_output(pos);
-                if output != old || self.b.table.bool(state, self.b.props.powered) != self.diode_should_turn_on(pos, state) {
-                    let priority = if self.diode_should_prioritize(pos, state) { TickPriority::High } else { TickPriority::Normal };
+                if output != old
+                    || self.b.table.bool(state, self.b.props.powered)
+                        != self.diode_should_turn_on(pos, state)
+                {
+                    let priority = if self.diode_should_prioritize(pos, state) {
+                        TickPriority::High
+                    } else {
+                        TickPriority::Normal
+                    };
                     self.schedule_tick_priority(pos, block, 2, priority);
                 }
             }
@@ -512,7 +597,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub(crate) fn comparator_refresh(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         let output = self.comparator_calculate_output(pos, state);
-        let old = self.ticks.comparator_outputs.insert(pos, output).unwrap_or(0);
+        let old = self
+            .ticks
+            .comparator_outputs
+            .insert(pos, output)
+            .unwrap_or(0);
         if old != output || b.table.text(state, b.props.mode) == "compare" {
             let should = self.diode_should_turn_on(pos, state);
             let on = b.table.bool(state, b.props.powered);
@@ -542,7 +631,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 
     /// `getAnalogOutputSignal` for state-only sources; others ask the caller.
-    pub(crate) fn analog_output(&self, state: BlockStateId, pos: BlockPos, direction: Direction) -> i32 {
+    pub(crate) fn analog_output(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+    ) -> i32 {
         let b = self.b;
         let p = b.props;
         match b.data(state).class {
@@ -571,7 +665,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             Class::CopperGolemStatue => {
                 let pose = b.table.text(state, p.copper_golem_pose);
-                ["standing", "sitting", "running", "star"].iter().position(|p| *p == pose).map_or(1, |i| i as i32 + 1)
+                ["standing", "sitting", "running", "star"]
+                    .iter()
+                    .position(|p| *p == pose)
+                    .map_or(1, |i| i as i32 + 1)
             }
             _ => self.level.block_entity_analog_signal(pos, state, direction),
         }
@@ -606,13 +703,24 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let time = self.level.game_time();
             self.ticks.torch_toggles.push((pos, time));
         }
-        self.ticks.torch_toggles.iter().filter(|(p, _)| *p == pos).take(8).count() >= 8
+        self.ticks
+            .torch_toggles
+            .iter()
+            .filter(|(p, _)| *p == pos)
+            .take(8)
+            .count()
+            >= 8
     }
     pub(crate) fn torch_tick(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         let signal = self.torch_has_neighbor_signal(pos, state);
         let time = self.level.game_time();
-        while self.ticks.torch_toggles.first().is_some_and(|(_, when)| time - when > 60) {
+        while self
+            .ticks
+            .torch_toggles
+            .first()
+            .is_some_and(|(_, when)| time - when > 60)
+        {
             self.ticks.torch_toggles.remove(0);
         }
         if b.table.bool(state, b.props.lit) {
@@ -681,13 +789,25 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         use horizon_core::geometry::{Aabb, Vec3};
         let b = self.b;
         let area = Aabb::new(
-            Vec3::new(f64::from(pos.x) + 0.0625, f64::from(pos.y), f64::from(pos.z) + 0.0625),
-            Vec3::new(f64::from(pos.x) + 0.9375, f64::from(pos.y) + 0.25, f64::from(pos.z) + 0.9375),
+            Vec3::new(
+                f64::from(pos.x) + 0.0625,
+                f64::from(pos.y),
+                f64::from(pos.z) + 0.0625,
+            ),
+            Vec3::new(
+                f64::from(pos.x) + 0.9375,
+                f64::from(pos.y) + 0.25,
+                f64::from(pos.z) + 0.9375,
+            ),
         );
         let data = b.data(state);
         if data.is(Class::WeightedPressurePlate) {
             let max = data.max_weight.max(1);
-            let count = (self.level.count_entities(area, super::EntityQuery::Everything) as i32).min(max);
+            let count = (self
+                .level
+                .count_entities(area, super::EntityQuery::Everything)
+                as i32)
+                .min(max);
             if count > 0 {
                 (count.min(max) as f32 / max as f32 * 15.0).ceil() as i32
             } else {
@@ -699,11 +819,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             } else {
                 super::EntityQuery::Everything
             };
-            if self.level.count_entities(area, query) > 0 { 15 } else { 0 }
+            if self.level.count_entities(area, query) > 0 {
+                15
+            } else {
+                0
+            }
         }
     }
     /// `BasePressurePlateBlock.checkPressed`.
-    pub(crate) fn plate_check_pressed(&mut self, pos: BlockPos, state: BlockStateId, old_signal: i32) {
+    pub(crate) fn plate_check_pressed(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        old_signal: i32,
+    ) {
         let b = self.b;
         let signal = self.plate_signal_strength(pos, state);
         let was = old_signal > 0;
@@ -728,7 +857,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         }
         if is {
-            let delay = if b.instance_of(state, Class::WeightedPressurePlate) { 10 } else { 20 };
+            let delay = if b.instance_of(state, Class::WeightedPressurePlate) {
+                10
+            } else {
+                20
+            };
             self.schedule_tick(pos, block, delay);
         }
     }
@@ -770,38 +903,78 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             volume: 0.3,
             pitch: if powered { 0.6 } else { 0.5 },
         });
-        self.game_event(pos, if powered { "minecraft:block_activate" } else { "minecraft:block_deactivate" });
+        self.game_event(
+            pos,
+            if powered {
+                "minecraft:block_activate"
+            } else {
+                "minecraft:block_deactivate"
+            },
+        );
     }
 
     // ---- consumers ----
 
-    pub(crate) fn door_neighbor_changed(&mut self, pos: BlockPos, state: BlockStateId, changed: BlockId) {
+    pub(crate) fn door_neighbor_changed(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        changed: BlockId,
+    ) {
         let b = self.b;
         let p = b.props;
-        let other = if b.table.text(state, p.half) == "lower" { Direction::Up } else { Direction::Down };
+        let other = if b.table.text(state, p.half) == "lower" {
+            Direction::Up
+        } else {
+            Direction::Down
+        };
         let signal = self.has_neighbor_signal(pos) || self.has_neighbor_signal(rel(pos, other));
         if b.block(state) != changed && signal != b.table.bool(state, p.powered) {
             if signal != b.table.bool(state, p.open) {
                 self.door_sound(pos, state, signal);
-                self.game_event(pos, if signal { "minecraft:block_open" } else { "minecraft:block_close" });
+                self.game_event(
+                    pos,
+                    if signal {
+                        "minecraft:block_open"
+                    } else {
+                        "minecraft:block_close"
+                    },
+                );
             }
-            let next = b.table.set_bool(b.table.set_bool(state, p.powered, signal), p.open, signal);
+            let next = b
+                .table
+                .set_bool(b.table.set_bool(state, p.powered, signal), p.open, signal);
             self.set_block(pos, next, 2);
         }
     }
     pub(crate) fn door_sound(&mut self, pos: BlockPos, state: BlockStateId, open: bool) {
         if let Some(set) = self.b.data(state).set_type.clone() {
             let pitch = self.random().next_float() * 0.1 + 0.9;
-            let sound = if open { set.door_open.clone() } else { set.door_close.clone() };
+            let sound = if open {
+                set.door_open.clone()
+            } else {
+                set.door_close.clone()
+            };
             self.sound(pos, &sound, 1.0, pitch);
         }
     }
     pub(crate) fn trapdoor_sound(&mut self, pos: BlockPos, state: BlockStateId, open: bool) {
         if let Some(set) = self.b.data(state).set_type.clone() {
             let pitch = self.random().next_float() * 0.1 + 0.9;
-            let sound = if open { set.trapdoor_open.clone() } else { set.trapdoor_close.clone() };
+            let sound = if open {
+                set.trapdoor_open.clone()
+            } else {
+                set.trapdoor_close.clone()
+            };
             self.sound(pos, &sound, 1.0, pitch);
-            self.game_event(pos, if open { "minecraft:block_open" } else { "minecraft:block_close" });
+            self.game_event(
+                pos,
+                if open {
+                    "minecraft:block_open"
+                } else {
+                    "minecraft:block_close"
+                },
+            );
         }
     }
     pub(crate) fn trapdoor_neighbor_changed(&mut self, pos: BlockPos, state: BlockStateId) {
@@ -825,16 +998,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let p = b.props;
         let power = self.has_neighbor_signal(pos);
         if b.table.bool(state, p.powered) != power {
-            let next = b.table.set_bool(b.table.set_bool(state, p.powered, power), p.open, power);
+            let next = b
+                .table
+                .set_bool(b.table.set_bool(state, p.powered, power), p.open, power);
             self.set_block(pos, next, 2);
             if b.table.bool(state, p.open) != power {
                 let data = b.data(state);
-                let sound = if power { data.gate_open.clone() } else { data.gate_close.clone() };
+                let sound = if power {
+                    data.gate_open.clone()
+                } else {
+                    data.gate_close.clone()
+                };
                 let pitch = self.random().next_float() * 0.1 + 0.9;
                 if let Some(sound) = sound {
                     self.sound(pos, &sound, 1.0, pitch);
                 }
-                self.game_event(pos, if power { "minecraft:block_open" } else { "minecraft:block_close" });
+                self.game_event(
+                    pos,
+                    if power {
+                        "minecraft:block_open"
+                    } else {
+                        "minecraft:block_close"
+                    },
+                );
             }
         }
     }
@@ -883,10 +1069,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub(crate) fn note_play(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         let instrument = b.table.text(state, b.props.instrument).to_owned();
-        let mob_head = super::data::INSTRUMENTS.iter().position(|n| *n == instrument).is_some_and(|i| super::data::instrument_works_above(i as u8));
+        let mob_head = super::data::INSTRUMENTS
+            .iter()
+            .position(|n| *n == instrument)
+            .is_some_and(|i| super::data::instrument_works_above(i as u8));
         if mob_head || b.is_air(self.above_state(pos)) {
             let note = b.table.int(state, b.props.note);
-            let pitch = if mob_head { 1.0 } else { 2f64.powf(f64::from(note - 12) / 12.0) as f32 };
+            let pitch = if mob_head {
+                1.0
+            } else {
+                2f64.powf(f64::from(note - 12) / 12.0) as f32
+            };
             let sound = match instrument.as_str() {
                 "custom_head" => "minecraft:ui.button.click".to_owned(),
                 "dragon" => "minecraft:block.note_block.imitate.ender_dragon".to_owned(),
@@ -968,7 +1161,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.schedule_tick(pos, b.block(state), 4);
             self.set_block(pos, b.table.set_bool(state, b.props.triggered, true), 2);
         } else if !trigger && triggered {
-            let next = b.table.set_bool(b.table.set_bool(state, b.props.triggered, false), b.props.crafting, false);
+            let next = b.table.set_bool(
+                b.table.set_bool(state, b.props.triggered, false),
+                b.props.crafting,
+                false,
+            );
             self.set_block(pos, next, 2);
         }
     }
@@ -979,7 +1176,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 fn java_hash_set_order(positions: &mut Vec<BlockPos>) {
     fn hash(pos: BlockPos) -> i32 {
         // Vec3i.hashCode: (y + z * 31) * 31 + x
-        (pos.y.wrapping_add(pos.z.wrapping_mul(31))).wrapping_mul(31).wrapping_add(pos.x)
+        (pos.y.wrapping_add(pos.z.wrapping_mul(31)))
+            .wrapping_mul(31)
+            .wrapping_add(pos.x)
     }
     let mut unique: Vec<BlockPos> = Vec::new();
     for pos in positions.iter() {
@@ -992,7 +1191,11 @@ fn java_hash_set_order(positions: &mut Vec<BlockPos>) {
         let h = hash(pos);
         ((h ^ ((h as u32) >> 16) as i32) & (buckets - 1)) as usize
     };
-    let mut ordered: Vec<(usize, usize, BlockPos)> = unique.iter().enumerate().map(|(i, p)| (bucket(*p), i, *p)).collect();
+    let mut ordered: Vec<(usize, usize, BlockPos)> = unique
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (bucket(*p), i, *p))
+        .collect();
     ordered.sort_by_key(|(b, i, _)| (*b, *i));
     *positions = ordered.into_iter().map(|(_, _, p)| p).collect();
 }

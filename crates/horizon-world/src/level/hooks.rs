@@ -11,7 +11,13 @@ use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource
 
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `BlockState.handleNeighborChanged`.
-    pub fn neighbor_changed(&mut self, state: BlockStateId, pos: BlockPos, changed: BlockId, moved: bool) {
+    pub fn neighbor_changed(
+        &mut self,
+        state: BlockStateId,
+        pos: BlockPos,
+        changed: BlockId,
+        moved: bool,
+    ) {
         let b = self.b;
         let block = b.block(state);
         let chain = &b.data(state).chain;
@@ -32,7 +38,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Door => self.door_neighbor_changed(pos, state, changed),
                 Class::FenceGate => self.gate_neighbor_changed(pos, state),
                 Class::FrostedIce => {
-                    if b.block_data(changed).is(Class::FrostedIce) && self.frosted_ice_fewer_neighbours_than(pos, 2) {
+                    if b.block_data(changed).is(Class::FrostedIce)
+                        && self.frosted_ice_fewer_neighbours_than(pos, 2)
+                    {
                         self.frosted_ice_melt(pos, state);
                     }
                 }
@@ -98,10 +106,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.copper_bulb_check(pos, state);
                     }
                 }
-                Class::CoralFan | Class::CoralPlant | Class::CoralWallFan => self.coral_try_schedule_die_tick(state, pos),
+                Class::CoralFan | Class::CoralPlant | Class::CoralWallFan => {
+                    self.coral_try_schedule_die_tick(state, pos)
+                }
                 Class::Diode => self.diode_update_neighbors_in_front(pos, state),
                 Class::FallingBlock => {
-                    let delay = if b.data(state).is(Class::DragonEgg) { 5 } else { 2 };
+                    let delay = if b.data(state).is(Class::DragonEgg) {
+                        5
+                    } else {
+                        2
+                    };
                     self.schedule_tick(pos, block, delay);
                 }
                 Class::Frogspawn => {
@@ -109,7 +123,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     self.schedule_tick(pos, block, delay);
                 }
                 Class::FrostedIce => {
-                    let delay = self.random().next_int_between_inclusive(60, 120).unwrap_or(60);
+                    let delay = self
+                        .random()
+                        .next_int_between_inclusive(60, 120)
+                        .unwrap_or(60);
                     self.schedule_tick(pos, block, delay);
                 }
                 Class::Hopper => {
@@ -118,7 +135,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::LightningRod => {
-                    if !same && b.table.bool(state, b.props.powered) && !self.ticks.has_block_tick(pos, block) {
+                    if !same
+                        && b.table.bool(state, b.props.powered)
+                        && !self.ticks.has_block_tick(pos, block)
+                    {
                         self.schedule_tick(pos, block, 8);
                     }
                 }
@@ -129,7 +149,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Observer => {
-                    if !same && b.table.bool(state, b.props.powered) && !self.ticks.has_block_tick(pos, block) {
+                    if !same
+                        && b.table.bool(state, b.props.powered)
+                        && !self.ticks.has_block_tick(pos, block)
+                    {
                         let next = b.table.set_bool(state, b.props.powered, false);
                         self.set_block(pos, next, 18);
                         self.observer_update_in_front(pos, next);
@@ -149,7 +172,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     self.schedule_tick(pos, block, 1);
                 }
                 Class::SculkSensor => {
-                    if !same && b.table.int(state, b.props.power) > 0 && !self.ticks.has_block_tick(pos, block) {
+                    if !same
+                        && b.table.int(state, b.props.power) > 0
+                        && !self.ticks.has_block_tick(pos, block)
+                    {
                         self.set_block(pos, b.table.set_int(state, b.props.power, 0), 18);
                     }
                 }
@@ -172,7 +198,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Target => {
-                    if !same && b.table.int(state, b.props.power) > 0 && !self.ticks.has_block_tick(pos, block) {
+                    if !same
+                        && b.table.int(state, b.props.power) > 0
+                        && !self.ticks.has_block_tick(pos, block)
+                    {
                         self.set_block(pos, b.table.set_int(state, b.props.power, 0), 18);
                     }
                 }
@@ -198,7 +227,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 
     /// `BlockState.affectNeighborsAfterRemoval`.
-    pub fn affect_neighbors_after_removal(&mut self, state: BlockStateId, pos: BlockPos, moved: bool) {
+    pub fn affect_neighbors_after_removal(
+        &mut self,
+        state: BlockStateId,
+        pos: BlockPos,
+        moved: bool,
+    ) {
         let b = self.b;
         let block = b.block(state);
         let chain = &b.data(state).chain;
@@ -263,7 +297,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Observer => {
-                    if b.table.bool(state, b.props.powered) && self.ticks.has_block_tick(pos, block) {
+                    if b.table.bool(state, b.props.powered) && self.ticks.has_block_tick(pos, block)
+                    {
                         let off = b.table.set_bool(state, b.props.powered, false);
                         self.observer_update_in_front(pos, off);
                     }
@@ -306,7 +341,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 
     /// `BlockState.updateIndirectNeighbourShapes` (only redstone wire overrides it).
-    pub fn update_indirect_neighbour_shapes(&mut self, state: BlockStateId, pos: BlockPos, flags: i32, limit: i32) {
+    pub fn update_indirect_neighbour_shapes(
+        &mut self,
+        state: BlockStateId,
+        pos: BlockPos,
+        flags: i32,
+        limit: i32,
+    ) {
         if self.b.is_block(state, self.b.named.redstone_wire) {
             self.wire_update_indirect(state, pos, flags, limit);
         }
@@ -322,11 +363,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return false;
         }
         let data = b.data(state);
-        if creative && (data.is(Class::DoublePlant) || data.is(Class::Door)) && b.table.text(state, p.half) == "upper" {
+        if creative
+            && (data.is(Class::DoublePlant) || data.is(Class::Door))
+            && b.table.text(state, p.half) == "upper"
+        {
             let bottom = below(pos);
             let bottom_state = self.state(bottom);
-            if b.is_block(bottom_state, b.block(state)) && b.table.text(bottom_state, p.half) == "lower" {
-                let replacement = if b.is_water_fluid(b.fluid(bottom_state).kind()) { b.default_of(b.named.water) } else { b.air() };
+            if b.is_block(bottom_state, b.block(state))
+                && b.table.text(bottom_state, p.half) == "lower"
+            {
+                let replacement = if b.is_water_fluid(b.fluid(bottom_state).kind()) {
+                    b.default_of(b.named.water)
+                } else {
+                    b.air()
+                };
                 self.set_block(bottom, replacement, 35);
                 self.level_event(2001, bottom, bottom_state.0 as i32);
             }
@@ -353,7 +403,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if signal == 0 {
                 self.plate_check_pressed(pos, state, signal);
             }
-        } else if data.is(Class::TripWire) && !b.table.bool(state, b.props.powered) && !self.ticks.has_block_tick(pos, b.block(state)) {
+        } else if data.is(Class::TripWire)
+            && !b.table.bool(state, b.props.powered)
+            && !self.ticks.has_block_tick(pos, b.block(state))
+        {
             self.tripwire_check_pressed(pos);
         }
     }
@@ -403,7 +456,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     } else {
                         let n = b.named;
                         let block = b.block(state);
-                        if block != n.kelp && block != n.kelp_plant && block != n.seagrass && block != n.tall_seagrass {
+                        if block != n.kelp
+                            && block != n.kelp_plant
+                            && block != n.seagrass
+                            && block != n.tall_seagrass
+                        {
                             continue;
                         }
                         self.drop_resources(state, pos);
@@ -430,7 +487,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn frosted_ice_fewer_neighbours_than(&self, pos: BlockPos, limit: i32) -> bool {
         let mut count = 0;
         for direction in Direction::ALL {
-            if self.b.data(self.rel_state(pos, direction)).is(Class::FrostedIce) {
+            if self
+                .b
+                .data(self.rel_state(pos, direction))
+                .is(Class::FrostedIce)
+            {
                 count += 1;
                 if count >= limit {
                     return false;

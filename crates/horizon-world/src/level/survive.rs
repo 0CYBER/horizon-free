@@ -24,7 +24,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         true
     }
-    fn can_survive_class(&self, class: Class, depth: usize, state: BlockStateId, pos: BlockPos) -> Option<bool> {
+    fn can_survive_class(
+        &self,
+        class: Class,
+        depth: usize,
+        state: BlockStateId,
+        pos: BlockPos,
+    ) -> Option<bool> {
         let b = self.b;
         let p = &b.props;
         let t = &b.tags;
@@ -35,8 +41,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let facing = b.facing(state);
                 self.sturdy(rel(pos, facing.opposite()), facing)
             }
-            Class::BambooSapling | Class::BambooStalk => b.in_set(self.below_state(pos), &t.supports_bamboo),
-            Class::Banner | Class::Cake | Class::CandleCake | Class::StandingSign => b.is_solid(self.below_state(pos)),
+            Class::BambooSapling | Class::BambooStalk => {
+                b.in_set(self.below_state(pos), &t.supports_bamboo)
+            }
+            Class::Banner | Class::Cake | Class::CandleCake | Class::StandingSign => {
+                b.is_solid(self.below_state(pos))
+            }
             Class::BaseCoralPlantType | Class::LeafLitter => self.sturdy(below(pos), Direction::Up),
             Class::BasePressurePlate => {
                 let below = below(pos);
@@ -54,7 +64,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             Class::BigDripleaf => {
                 let below = self.below_state(pos);
-                b.is_block(below, block) || b.is_block(below, n.big_dripleaf_stem) || b.in_set(below, &t.supports_big_dripleaf)
+                b.is_block(below, block)
+                    || b.is_block(below, n.big_dripleaf_stem)
+                    || b.in_set(below, &t.supports_big_dripleaf)
             }
             Class::BigDripleafStem => {
                 let below = self.below_state(pos);
@@ -76,10 +88,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 let below = self.below_state(pos);
-                (b.is_block(below, block) || b.in_set(below, &t.supports_cactus)) && !b.liquid(self.above_state(pos))
+                (b.is_block(below, block) || b.in_set(below, &t.supports_cactus))
+                    && !b.liquid(self.above_state(pos))
             }
             Class::Carpet => !self.is_empty_block(below(pos)),
-            Class::CeilingHangingSign => b.is_face_sturdy_center(self.above_state(pos), Direction::Down),
+            Class::CeilingHangingSign => {
+                b.is_face_sturdy_center(self.above_state(pos), Direction::Down)
+            }
             Class::ChorusFlower => {
                 let below = self.below_state(pos);
                 if b.is_block(below, n.chorus_plant) || b.in_set(below, &t.supports_chorus_flower) {
@@ -120,7 +135,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 b.is_block(below_state, block) || b.in_set(below_state, &t.supports_chorus_plant)
             }
             Class::Cocoa => b.in_set(self.rel_state(pos, b.facing(state)), &t.supports_cocoa),
-            Class::Crop => self.raw_brightness(pos, 0) >= 8 && self.can_survive_at(depth + 1, state, pos),
+            Class::Crop => {
+                self.raw_brightness(pos, 0) >= 8 && self.can_survive_at(depth + 1, state, pos)
+            }
             Class::Diode => b.is_face_sturdy_rigid(self.below_state(pos), Direction::Up),
             Class::Door => {
                 let below_state = self.below_state(pos);
@@ -147,13 +164,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::TallSeagrass => {
                 if b.table.text(state, p.half) == "upper" {
                     let below_state = self.below_state(pos);
-                    return Some(b.is_block(below_state, block) && b.table.text(below_state, p.half) == "lower");
+                    return Some(
+                        b.is_block(below_state, block)
+                            && b.table.text(below_state, p.half) == "lower",
+                    );
                 }
                 let fluid = self.fluid_at(pos);
-                self.can_survive_at(depth + 1, state, pos) && b.is_water_fluid(fluid.kind()) && fluid.is_full()
+                self.can_survive_at(depth + 1, state, pos)
+                    && b.is_water_fluid(fluid.kind())
+                    && fluid.is_full()
             }
             Class::PitcherCrop => {
-                let lower = b.is_block(state, n.pitcher_crop) && b.table.text(state, p.half) == "lower";
+                let lower =
+                    b.is_block(state, n.pitcher_crop) && b.table.text(state, p.half) == "lower";
                 if lower && self.raw_brightness(pos, 0) < 8 {
                     false
                 } else {
@@ -170,7 +193,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let above = self.above_state(pos);
                 !b.is_solid(above) || b.in_set(above, &t.maintains_farmland)
             }
-            Class::Fire => self.sturdy(below(pos), Direction::Up) || self.is_valid_fire_location(pos),
+            Class::Fire => {
+                self.sturdy(below(pos), Direction::Up) || self.is_valid_fire_location(pos)
+            }
             Class::SoulFire => b.in_set(self.below_state(pos), &t.soul_fire_base_blocks),
             Class::Frogspawn => self.frogspawn_may_place_on(below(pos)),
             Class::GrowingPlant => {
@@ -182,7 +207,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     return Some(false);
                 }
                 let (head, body) = self.growing_plant_pair(block);
-                b.is_block(attached, head) || b.is_block(attached, body) || b.is_face_sturdy(attached, growth)
+                b.is_block(attached, head)
+                    || b.is_block(attached, body)
+                    || b.is_face_sturdy(attached, growth)
             }
             Class::HangingMoss => {
                 let neighbour = self.above_state(pos);
@@ -194,12 +221,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.sturdy(rel(pos, facing.opposite()), facing)
             }
             Class::Lantern => {
-                let direction = if b.table.bool(state, p.hanging) { Direction::Up } else { Direction::Down };
+                let direction = if b.table.bool(state, p.hanging) {
+                    Direction::Up
+                } else {
+                    Direction::Down
+                };
                 self.can_support_center(rel(pos, direction), direction.opposite())
             }
             Class::MangrovePropagule => {
                 if b.table.bool(state, p.hanging) {
-                    b.in_set(self.above_state(pos), &t.supports_hanging_mangrove_propagule)
+                    b.in_set(
+                        self.above_state(pos),
+                        &t.supports_hanging_mangrove_propagule,
+                    )
                 } else {
                     self.can_survive_at(depth + 1, state, pos)
                 }
@@ -230,7 +264,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 if b.in_set(below_state, &t.overrides_mushroom_light_requirement) {
                     true
                 } else {
-                    self.raw_brightness(pos, 0) < 13 && self.may_place_on(state, below_state, below_pos)
+                    self.raw_brightness(pos, 0) < 13
+                        && self.may_place_on(state, below_state, below_pos)
                 }
             }
             Class::Path => {
@@ -257,15 +292,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 } else if b.in_set(below_state, &t.support_override_snow_layer) {
                     true
                 } else {
-                    self.shape_info_at(below_state, below(pos)).full_faces & (1 << Direction::Up as u8) != 0
-                        || (b.is_block(below_state, block) && b.table.int(below_state, p.layers) == 8)
+                    self.shape_info_at(below_state, below(pos)).full_faces
+                        & (1 << Direction::Up as u8)
+                        != 0
+                        || (b.is_block(below_state, block)
+                            && b.table.int(below_state, p.layers) == 8)
                 }
             }
             Class::Speleothem => {
-                let tip = b.table.dir(state, p.vertical_direction).unwrap_or(Direction::Up);
+                let tip = b
+                    .table
+                    .dir(state, p.vertical_direction)
+                    .unwrap_or(Direction::Up);
                 self.is_valid_speleothem_placement(block, pos, tip)
             }
-            Class::SporeBlossom => self.can_support_center(above(pos), Direction::Down) && !self.is_water_at(pos),
+            Class::SporeBlossom => {
+                self.can_support_center(above(pos), Direction::Down) && !self.is_water_at(pos)
+            }
             Class::SugarCane => {
                 let below_state = self.below_state(pos);
                 if b.is_block(below_state, block) {
@@ -297,32 +340,43 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let updated = self.vine_updated_state(state, pos);
                 self.vine_count_faces(updated) > 0
             }
-            Class::WallBanner | Class::WallSign => b.is_solid(self.rel_state(pos, b.facing(state).opposite())),
+            Class::WallBanner | Class::WallSign => {
+                b.is_solid(self.rel_state(pos, b.facing(state).opposite()))
+            }
             _ => return None,
         })
     }
 
     /// `VegetationBlock.mayPlaceOn` (virtual) for `state`'s block.
-    pub fn may_place_on(&self, state: BlockStateId, ground: BlockStateId, ground_pos: BlockPos) -> bool {
+    pub fn may_place_on(
+        &self,
+        state: BlockStateId,
+        ground: BlockStateId,
+        ground_pos: BlockPos,
+    ) -> bool {
         let b = self.b;
         let t = &b.tags;
         let data = b.data(state);
         for class in &data.chain {
             let result = match class {
                 Class::AttachedStem | Class::NetherFungus | Class::NetherRoots | Class::Stem => {
-                    data.support_tag.as_ref().is_some_and(|tag| b.in_set(ground, tag))
+                    data.support_tag
+                        .as_ref()
+                        .is_some_and(|tag| b.in_set(ground, tag))
                 }
                 Class::Azalea => b.in_set(ground, &t.supports_azalea),
                 Class::CactusFlower => {
                     let below = self.state(ground_pos);
-                    b.in_set(below, &t.support_override_cactus_flower) || b.is_face_sturdy_center(below, Direction::Up)
+                    b.in_set(below, &t.support_override_cactus_flower)
+                        || b.is_face_sturdy_center(below, Direction::Up)
                 }
                 Class::Crop | Class::PitcherCrop => b.in_set(ground, &t.supports_crops),
                 Class::DryVegetation => b.in_set(ground, &t.supports_dry_vegetation),
                 Class::LilyPad => {
                     let fluid = self.fluid_at(ground_pos);
                     let above = self.fluid_at(above(ground_pos));
-                    (b.fluid_in(fluid.kind(), b.fluid_tags.supports_lily_pad) || b.in_set(ground, &t.supports_lily_pad))
+                    (b.fluid_in(fluid.kind(), b.fluid_tags.supports_lily_pad)
+                        || b.in_set(ground, &t.supports_lily_pad))
                         && above.kind() == crate::fluid::FluidKind::Empty
                 }
                 Class::MangrovePropagule => b.in_set(ground, &t.supports_mangrove_propagule),
@@ -330,10 +384,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::NetherSprouts => b.in_set(ground, &t.supports_nether_sprouts),
                 Class::NetherWart => b.in_set(ground, &t.supports_nether_wart),
                 Class::SeaPickle => {
-                    self.shape_info_at(ground, ground_pos).nonempty_faces & (1 << Direction::Up as u8) != 0 || b.is_face_sturdy(ground, Direction::Up)
+                    self.shape_info_at(ground, ground_pos).nonempty_faces
+                        & (1 << Direction::Up as u8)
+                        != 0
+                        || b.is_face_sturdy(ground, Direction::Up)
                 }
                 Class::Seagrass | Class::TallSeagrass => {
-                    b.is_face_sturdy(ground, Direction::Up) && !b.in_set(ground, &t.cannot_support_seagrass)
+                    b.is_face_sturdy(ground, Direction::Up)
+                        && !b.in_set(ground, &t.cannot_support_seagrass)
                 }
                 Class::SmallDripleaf => {
                     b.in_set(ground, &t.supports_small_dripleaf)
@@ -353,7 +411,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let fluid = self.fluid_at(pos);
         let above = self.fluid_at(above(pos));
-        (b.fluid_in(fluid.kind(), b.fluid_tags.supports_frogspawn) || b.in_set(self.state(pos), &b.tags.supports_frogspawn))
+        (b.fluid_in(fluid.kind(), b.fluid_tags.supports_frogspawn)
+            || b.in_set(self.state(pos), &b.tags.supports_frogspawn))
             && above.kind() == crate::fluid::FluidKind::Empty
     }
 
@@ -387,11 +446,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
     /// Head and body blocks of a growing-plant family.
-    pub(crate) fn growing_plant_pair(&self, block: super::states::BlockId) -> (super::states::BlockId, super::states::BlockId) {
+    pub(crate) fn growing_plant_pair(
+        &self,
+        block: super::states::BlockId,
+    ) -> (super::states::BlockId, super::states::BlockId) {
         let name = &*self.b.table.info(block).name;
         let head = name.strip_suffix("_plant").unwrap_or(name);
         let head = self.b.table.block_by_name(head).unwrap_or(block);
-        let body = self.b.table.block_by_name(&format!("{}_plant", &*self.b.table.info(head).name)).unwrap_or(block);
+        let body = self
+            .b
+            .table
+            .block_by_name(&format!("{}_plant", &*self.b.table.info(head).name))
+            .unwrap_or(block);
         (head, body)
     }
     /// `GrowingPlantBlock.canAttachTo` (kelp refuses `cannot_support_kelp`).
@@ -405,7 +471,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `FireBlock.isValidFireLocation`.
     pub(crate) fn is_valid_fire_location(&self, pos: BlockPos) -> bool {
-        Direction::ALL.into_iter().any(|direction| self.can_burn(self.rel_state(pos, direction)))
+        Direction::ALL
+            .into_iter()
+            .any(|direction| self.can_burn(self.rel_state(pos, direction)))
     }
     /// `FireBlock.canBurn`: ignite odds above zero (waterlogged states never burn).
     pub(crate) fn can_burn(&self, state: BlockStateId) -> bool {
@@ -448,14 +516,24 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         distance
     }
     /// `SpeleothemBlock.isValidSpeleothemPlacement`.
-    pub(crate) fn is_valid_speleothem_placement(&self, block: super::states::BlockId, pos: BlockPos, tip: Direction) -> bool {
+    pub(crate) fn is_valid_speleothem_placement(
+        &self,
+        block: super::states::BlockId,
+        pos: BlockPos,
+        tip: Direction,
+    ) -> bool {
         let behind_pos = rel(pos, tip.opposite());
         let behind = self.state(behind_pos);
         self.b.is_face_sturdy(behind, tip)
-            || (self.b.is_block(behind, block) && self.b.table.dir(behind, self.b.props.vertical_direction) == Some(tip))
+            || (self.b.is_block(behind, block)
+                && self.b.table.dir(behind, self.b.props.vertical_direction) == Some(tip))
     }
     /// `VineBlock.getUpdatedState`.
-    pub(crate) fn vine_updated_state(&self, mut state: BlockStateId, pos: BlockPos) -> BlockStateId {
+    pub(crate) fn vine_updated_state(
+        &self,
+        mut state: BlockStateId,
+        pos: BlockPos,
+    ) -> BlockStateId {
         let b = self.b;
         let p = &b.props;
         let above_pos = above(pos);
@@ -477,7 +555,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         state
     }
-    fn vine_can_support_at_face(&self, state: BlockStateId, pos: BlockPos, direction: Direction) -> bool {
+    fn vine_can_support_at_face(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+    ) -> bool {
         let b = self.b;
         if direction == Direction::Down {
             return false;
@@ -492,9 +575,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         b.is_block(above, b.block(state)) && b.table.bool(above, self.direction_prop(direction))
     }
     pub(crate) fn vine_count_faces(&self, state: BlockStateId) -> usize {
-        [Direction::Up, Direction::North, Direction::East, Direction::South, Direction::West]
-            .into_iter()
-            .filter(|d| self.b.table.bool(state, self.direction_prop(*d)))
-            .count()
+        [
+            Direction::Up,
+            Direction::North,
+            Direction::East,
+            Direction::South,
+            Direction::West,
+        ]
+        .into_iter()
+        .filter(|d| self.b.table.bool(state, self.direction_prop(*d)))
+        .count()
     }
 }

@@ -11,10 +11,13 @@ use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource
 
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn speleothem_tag(&self, state: BlockStateId) -> bool {
-        self.b.tag("minecraft:speleothems").is_some_and(|tag| self.b.in_set(state, tag))
+        self.b
+            .tag("minecraft:speleothems")
+            .is_some_and(|tag| self.b.in_set(state, tag))
     }
     fn speleothem_with(&self, state: BlockStateId, direction: Direction) -> bool {
-        self.speleothem_tag(state) && self.b.table.dir(state, self.b.props.vertical_direction) == Some(direction)
+        self.speleothem_tag(state)
+            && self.b.table.dir(state, self.b.props.vertical_direction) == Some(direction)
     }
     fn speleothem_is_tip(&self, state: BlockStateId, include_merged: bool) -> bool {
         if !self.speleothem_tag(state) {
@@ -50,17 +53,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         None
     }
-    fn speleothem_find_tip(&self, state: BlockStateId, pos: BlockPos, max: i32, include_merged: bool) -> Option<BlockPos> {
+    fn speleothem_find_tip(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        max: i32,
+        include_merged: bool,
+    ) -> Option<BlockPos> {
         if self.speleothem_is_tip(state, include_merged) {
             return Some(pos);
         }
         let b = self.b;
-        let direction = b.table.dir(state, b.props.vertical_direction).unwrap_or(Direction::Up);
+        let direction = b
+            .table
+            .dir(state, b.props.vertical_direction)
+            .unwrap_or(Direction::Up);
         let block = b.block(state);
         self.find_block_vertical(
             pos,
             direction == Direction::Up,
-            |sim, _, s| sim.b.is_block(s, block) && sim.b.table.dir(s, sim.b.props.vertical_direction) == Some(direction),
+            |sim, _, s| {
+                sim.b.is_block(s, block)
+                    && sim.b.table.dir(s, sim.b.props.vertical_direction) == Some(direction)
+            },
             |sim, s| sim.speleothem_is_tip(s, include_merged),
             max,
         )
@@ -72,7 +87,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let value = self.random().next_float();
             self.dripstone_transfer_fluid(state, pos, value);
         }
-        let start = self.speleothem_with(state, Direction::Down) && !b.is_block(self.above_state(pos), b.block(state));
+        let start = self.speleothem_with(state, Direction::Down)
+            && !b.is_block(self.above_state(pos), b.block(state));
         if self.random().next_float() < 0.011_377_778 && start {
             self.speleothem_grow(state, pos);
         }
@@ -81,7 +97,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let block = b.block(state);
         let data = b.data(state);
-        let mut can_grow = data.link.is_some_and(|grow_on| b.is_block(self.above_state(pos), grow_on));
+        let mut can_grow = data
+            .link
+            .is_some_and(|grow_on| b.is_block(self.above_state(pos), grow_on));
         if data.is(Class::PointedDripstone) {
             let fluid = b.fluid(self.state(pos.offset(0, 2, 0)));
             can_grow &= fluid.kind() == FluidKind::Water;
@@ -94,7 +112,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return;
         };
         let tip = self.state(tip_pos);
-        if self.is_free_hanging_stalactite(tip) && self.speleothem_can_tip_grow(block, tip, tip_pos) {
+        if self.is_free_hanging_stalactite(tip) && self.speleothem_can_tip_grow(block, tip, tip_pos)
+        {
             if self.random().next_boolean() {
                 self.speleothem_grow_to(block, tip_pos, Direction::Down);
             } else {
@@ -102,11 +121,27 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         }
     }
-    fn speleothem_unmerged_tip(&self, block: BlockId, state: BlockStateId, direction: Direction) -> bool {
-        self.speleothem_is_tip(state, false) && self.b.table.dir(state, self.b.props.vertical_direction) == Some(direction) && self.b.is_block(state, block)
+    fn speleothem_unmerged_tip(
+        &self,
+        block: BlockId,
+        state: BlockStateId,
+        direction: Direction,
+    ) -> bool {
+        self.speleothem_is_tip(state, false)
+            && self.b.table.dir(state, self.b.props.vertical_direction) == Some(direction)
+            && self.b.is_block(state, block)
     }
-    fn speleothem_can_tip_grow(&self, block: BlockId, tip: BlockStateId, tip_pos: BlockPos) -> bool {
-        let direction = self.b.table.dir(tip, self.b.props.vertical_direction).unwrap_or(Direction::Up);
+    fn speleothem_can_tip_grow(
+        &self,
+        block: BlockId,
+        tip: BlockStateId,
+        tip_pos: BlockPos,
+    ) -> bool {
+        let direction = self
+            .b
+            .table
+            .dir(tip, self.b.props.vertical_direction)
+            .unwrap_or(Direction::Up);
         let grow = self.rel_state(tip_pos, direction);
         if self.b.fluid(grow).kind() != FluidKind::Empty {
             false
@@ -114,11 +149,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.b.is_air(grow) || self.speleothem_unmerged_tip(block, grow, direction.opposite())
         }
     }
-    fn speleothem_create(&mut self, block: BlockId, pos: BlockPos, direction: Direction, thickness: &str) {
+    fn speleothem_create(
+        &mut self,
+        block: BlockId,
+        pos: BlockPos,
+        direction: Direction,
+        thickness: &str,
+    ) {
         let b = self.b;
-        let state = b.table.set_dir(b.default_of(block), b.props.vertical_direction, direction);
+        let state = b
+            .table
+            .set_dir(b.default_of(block), b.props.vertical_direction, direction);
         let state = b.table.set_text(state, b.props.thickness, thickness);
-        let water = self.fluid_at(pos) == crate::fluid::FluidState::WATER || self.fluid_at(pos).kind() == FluidKind::Water;
+        let water = self.fluid_at(pos) == crate::fluid::FluidState::WATER
+            || self.fluid_at(pos).kind() == FluidKind::Water;
         self.set_block_and_update(pos, b.table.set_bool(state, b.props.waterlogged, water));
     }
     fn speleothem_grow_to(&mut self, block: BlockId, from: BlockPos, direction: Direction) {
@@ -126,11 +170,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let target = rel(from, direction);
         let existing = self.state(target);
         if self.speleothem_unmerged_tip(block, existing, direction.opposite()) {
-            let (stalactite, stalagmite) = if b.table.dir(existing, b.props.vertical_direction) == Some(Direction::Up) {
-                (above(target), target)
-            } else {
-                (target, below(target))
-            };
+            let (stalactite, stalagmite) =
+                if b.table.dir(existing, b.props.vertical_direction) == Some(Direction::Up) {
+                    (above(target), target)
+                } else {
+                    (target, below(target))
+                };
             self.speleothem_create(block, stalactite, Direction::Down, "tip_merge");
             self.speleothem_create(block, stalagmite, Direction::Up, "tip_merge");
         } else if b.is_air(existing) || b.is_block(existing, b.named.water) {
@@ -146,15 +191,21 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if b.fluid(state).kind() != FluidKind::Empty {
                 return;
             }
-            if self.speleothem_unmerged_tip(block, state, Direction::Up) && self.speleothem_can_tip_grow(block, state, pos) {
+            if self.speleothem_unmerged_tip(block, state, Direction::Up)
+                && self.speleothem_can_tip_grow(block, state, pos)
+            {
                 self.speleothem_grow_to(block, pos, Direction::Up);
                 return;
             }
-            if self.is_valid_speleothem_placement(block, pos, Direction::Up) && !self.is_water_at(below(pos)) {
+            if self.is_valid_speleothem_placement(block, pos, Direction::Up)
+                && !self.is_water_at(below(pos))
+            {
                 self.speleothem_grow_to(block, below(pos), Direction::Up);
                 return;
             }
-            if b.data(b.default_of(block)).is(Class::PointedDripstone) && !self.dripstone_can_drip_through(state) {
+            if b.data(b.default_of(block)).is(Class::PointedDripstone)
+                && !self.dripstone_can_drip_through(state)
+            {
                 return;
             }
         }
@@ -172,17 +223,27 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         match b.collision_shape(state) {
             None => true,
             Some(shape) => {
-                let column = horizon_core::geometry::VoxelShape::from_box(horizon_core::geometry::Aabb::new(
-                    horizon_core::geometry::Vec3::new(0.375, 0.0, 0.375),
-                    horizon_core::geometry::Vec3::new(0.625, 1.0, 0.625),
-                ));
-                column.is_ok_and(|column| !column.join_is_not_empty(shape, horizon_core::geometry::ShapeOp::AND).unwrap_or(true))
+                let column = horizon_core::geometry::VoxelShape::from_box(
+                    horizon_core::geometry::Aabb::new(
+                        horizon_core::geometry::Vec3::new(0.375, 0.0, 0.375),
+                        horizon_core::geometry::Vec3::new(0.625, 1.0, 0.625),
+                    ),
+                );
+                column.is_ok_and(|column| {
+                    !column
+                        .join_is_not_empty(shape, horizon_core::geometry::ShapeOp::AND)
+                        .unwrap_or(true)
+                })
             }
         }
     }
     /// `PointedDripstoneBlock.getFluidAboveStalactite`: (position above the
     /// root, fluid, state there).
-    fn dripstone_fluid_above(&self, state: BlockStateId, pos: BlockPos) -> Option<(BlockPos, FluidKind, BlockStateId)> {
+    fn dripstone_fluid_above(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+    ) -> Option<(BlockPos, FluidKind, BlockStateId)> {
         let b = self.b;
         if !self.speleothem_with(state, Direction::Down) {
             return None;
@@ -192,13 +253,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let root = self.find_block_vertical(
             pos,
             true,
-            |sim, _, s| sim.b.is_block(s, block) && sim.b.table.dir(s, sim.b.props.vertical_direction) == Some(direction),
+            |sim, _, s| {
+                sim.b.is_block(s, block)
+                    && sim.b.table.dir(s, sim.b.props.vertical_direction) == Some(direction)
+            },
             |sim, s| !sim.b.is_block(s, block),
             11,
         )?;
         let above_pos = above(root);
         let above_state = self.state(above_pos);
-        let fluid = if b.is_block(above_state, b.named.mud) && self.level.dimension() != super::Dimension::Nether {
+        let fluid = if b.is_block(above_state, b.named.mud)
+            && self.level.dimension() != super::Dimension::Nether
+        {
             FluidKind::Water
         } else {
             b.fluid(above_state).kind()
@@ -210,7 +276,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if value > 0.175_781_25 {
             return;
         }
-        if !(self.speleothem_with(state, Direction::Down) && !b.is_block(self.above_state(pos), b.block(state))) {
+        if !(self.speleothem_with(state, Direction::Down)
+            && !b.is_block(self.above_state(pos), b.block(state)))
+        {
             return;
         }
         let Some((source_pos, fluid, source_state)) = self.dripstone_fluid_above(state, pos) else {
@@ -281,7 +349,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         let data = b.data(state);
         if data.is(Class::Cauldron) {
-            let (next, event) = if fluid == FluidKind::Water { (b.named.water_cauldron, 1047) } else { (b.named.lava_cauldron, 1046) };
+            let (next, event) = if fluid == FluidKind::Water {
+                (b.named.water_cauldron, 1047)
+            } else {
+                (b.named.lava_cauldron, 1046)
+            };
             self.set_block_and_update(pos, b.default_of(next));
             self.game_event(pos, "minecraft:block_change");
             self.level_event(event, pos, 0);

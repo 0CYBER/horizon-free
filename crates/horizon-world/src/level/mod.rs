@@ -78,7 +78,7 @@
 //!
 //! // Player actions:
 //! behaviours.place_block(&mut level, &mut ticks, &PlaceContext { clicked_pos, face, hit, inside: false,
-//!     yaw, pitch, sneaking, item: "minecraft:oak_stairs".into() });
+//!     yaw, pitch, sneaking, item: "minecraft:oak_stairs".into(), can_use_game_master_blocks: false });
 //! behaviours.use_without_item(&mut level, &mut ticks, pos, face, hit, player_context);
 //! behaviours.player_destroy_block(&mut level, &mut ticks, pos, creative);
 //! // Falling-block entity landed:
@@ -104,8 +104,8 @@ mod falling;
 mod fluids;
 mod hooks;
 mod interact;
-mod place;
 pub mod pistons;
+mod place;
 mod query;
 mod rails;
 mod redstone;
@@ -120,9 +120,9 @@ mod tests;
 
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
 pub use falling::Landing;
+pub use interact::{InteractionResult, PlayerContext, PlayerEffect};
 pub use pistons::{BlockEventData, MovingPiston};
 pub use place::{PlaceContext, PlaceOutcome};
-pub use interact::{InteractionResult, PlayerContext, PlayerEffect};
 pub use states::{BlockId, PropKey, StateTable};
 pub use tick::{Precipitation, PrecipitationKind};
 pub use ticks::Ticks;
@@ -304,12 +304,22 @@ pub trait LevelAccess {
     /// Comparator input from a block entity (`getAnalogOutputSignal` of
     /// containers, jukeboxes, lecterns, ...). State-only sources (cake,
     /// composter, cauldrons, beehives, ...) are evaluated by the library.
-    fn block_entity_analog_signal(&self, _pos: BlockPos, _state: BlockStateId, _direction: Direction) -> i32 {
+    fn block_entity_analog_signal(
+        &self,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        _direction: Direction,
+    ) -> i32 {
         0
     }
     /// Weak/strong signal of a block-entity-driven source (trapped chest
     /// openers); other sources are evaluated by the library.
-    fn block_entity_signal(&self, _pos: BlockPos, _state: BlockStateId, _direction: Direction) -> i32 {
+    fn block_entity_signal(
+        &self,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        _direction: Direction,
+    ) -> i32 {
         0
     }
     /// Biome answers for a precipitation tick at the column of `pos` (see
@@ -434,26 +444,58 @@ impl Behaviours {
     /// `Level.setBlock(pos, state, flags)` with vanilla's update limit (512).
     /// Returns false when nothing was written (unloaded, out of bounds, or
     /// the state was already present).
-    pub fn set_block<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, state: BlockStateId, flags: i32) -> bool {
+    pub fn set_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+        flags: i32,
+    ) -> bool {
         self.sim(level, ticks).set_block(pos, state, flags)
     }
     /// `Level.removeBlock(pos, movedByPiston)`: replace with the fluid's block.
-    pub fn remove_block<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, moved_by_piston: bool) -> bool {
+    pub fn remove_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        moved_by_piston: bool,
+    ) -> bool {
         self.sim(level, ticks).remove_block(pos, moved_by_piston)
     }
     /// `Level.destroyBlock(pos, dropResources)`: destroy particles (2001),
     /// optional drops, and replacement by the block's fluid.
-    pub fn destroy_block<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, drop: bool) -> bool {
-        self.sim(level, ticks).destroy_block(pos, drop, flags::UPDATE_LIMIT)
+    pub fn destroy_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        drop: bool,
+    ) -> bool {
+        self.sim(level, ticks)
+            .destroy_block(pos, drop, flags::UPDATE_LIMIT)
     }
     /// A player breaking a block (`playerWillDestroy` + `Level.destroyBlock`
     /// without drops; the caller handles the player's loot/tool). Double
     /// blocks (doors, tall plants, beds) remove their other half as vanilla.
-    pub fn player_destroy_block<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, creative: bool) -> bool {
+    pub fn player_destroy_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        creative: bool,
+    ) -> bool {
         self.sim(level, ticks).player_destroy(pos, creative)
     }
     /// `BlockState.canSurvive(level, pos)`.
-    pub fn can_survive<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, state: BlockStateId) -> bool {
+    pub fn can_survive<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) -> bool {
         self.sim(level, ticks).can_survive(state, pos)
     }
     /// `BlockState.updateShape(level, ticks, pos, direction, neighbourPos,
@@ -470,27 +512,56 @@ impl Behaviours {
         neighbour_pos: BlockPos,
         neighbour: BlockStateId,
     ) -> BlockStateId {
-        self.sim(level, ticks).update_shape(state, pos, direction, neighbour_pos, neighbour)
+        self.sim(level, ticks)
+            .update_shape(state, pos, direction, neighbour_pos, neighbour)
     }
     /// `Block.updateFromNeighbourShapes`: a state adjusted to its neighbours.
-    pub fn update_from_neighbour_shapes<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, state: BlockStateId) -> BlockStateId {
-        self.sim(level, ticks).update_from_neighbour_shapes(state, pos)
+    pub fn update_from_neighbour_shapes<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) -> BlockStateId {
+        self.sim(level, ticks)
+            .update_from_neighbour_shapes(state, pos)
     }
     /// `Level.updateNeighborsAt(pos, block)`: notify the six neighbours.
-    pub fn update_neighbors_at<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, block: BlockId) {
+    pub fn update_neighbors_at<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        block: BlockId,
+    ) {
         self.sim(level, ticks).update_neighbors_at(pos, block);
     }
     /// Entity collision with a block (`entityInside`) for the entity-sensing
     /// blocks: pressure plates, tripwires and buttons hit by arrows are
     /// re-evaluated through [`LevelAccess::count_entities`].
-    pub fn entity_inside<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos) {
+    pub fn entity_inside<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
         self.sim(level, ticks).entity_inside(pos);
     }
     /// Redstone signal queries (`SignalGetter`).
-    pub fn has_neighbor_signal<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos) -> bool {
+    pub fn has_neighbor_signal<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) -> bool {
         self.sim(level, ticks).has_neighbor_signal(pos)
     }
-    pub fn best_neighbor_signal<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos) -> i32 {
+    pub fn best_neighbor_signal<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) -> i32 {
         self.sim(level, ticks).best_neighbor_signal(pos)
     }
 }
@@ -505,7 +576,11 @@ pub(crate) struct Sim<'a, L: LevelAccess + ?Sized> {
     pub wire_signal_off: std::cell::Cell<bool>,
 }
 impl Behaviours {
-    pub(crate) fn sim<'a, L: LevelAccess + ?Sized>(&'a self, level: &'a mut L, ticks: &'a mut Ticks) -> Sim<'a, L> {
+    pub(crate) fn sim<'a, L: LevelAccess + ?Sized>(
+        &'a self,
+        level: &'a mut L,
+        ticks: &'a mut Ticks,
+    ) -> Sim<'a, L> {
         Sim {
             b: self,
             level,

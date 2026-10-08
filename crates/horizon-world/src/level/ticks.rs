@@ -4,7 +4,9 @@ use super::{states::BlockId, update::NeighborUpdater};
 use crate::fluid::FluidKind;
 use horizon_core::{
     position::{BlockPos, ChunkPos},
-    ticks::{ChunkTicks, LevelTicks, ScheduleResult, ScheduledTick, TickError, TickPriority, TickTypeId},
+    ticks::{
+        ChunkTicks, LevelTicks, ScheduleResult, ScheduledTick, TickError, TickPriority, TickTypeId,
+    },
 };
 
 /// Owned by the caller next to its chunk storage. Chunks must be registered
@@ -57,7 +59,12 @@ impl Ticks {
         }
     }
     /// Register a loaded chunk's saved block and fluid ticks.
-    pub fn add_chunk(&mut self, pos: ChunkPos, blocks: ChunkTicks, fluids: ChunkTicks) -> Result<(), TickError> {
+    pub fn add_chunk(
+        &mut self,
+        pos: ChunkPos,
+        blocks: ChunkTicks,
+        fluids: ChunkTicks,
+    ) -> Result<(), TickError> {
         self.blocks.add_chunk(pos, blocks)?;
         self.fluids.add_chunk(pos, fluids)
     }
@@ -91,7 +98,13 @@ impl Ticks {
         };
         self.blocks.schedule(tick)
     }
-    pub fn schedule_fluid(&mut self, game_time: i64, pos: BlockPos, fluid: FluidKind, delay: i32) -> ScheduleResult {
+    pub fn schedule_fluid(
+        &mut self,
+        game_time: i64,
+        pos: BlockPos,
+        fluid: FluidKind,
+        delay: i32,
+    ) -> ScheduleResult {
         let tick = ScheduledTick {
             kind: TickTypeId(fluid as u32),
             pos,
@@ -102,18 +115,27 @@ impl Ticks {
         self.fluids.schedule(tick)
     }
     pub fn has_block_tick(&self, pos: BlockPos, block: BlockId) -> bool {
-        self.blocks.has_scheduled(pos, TickTypeId(u32::from(block.0)))
+        self.blocks
+            .has_scheduled(pos, TickTypeId(u32::from(block.0)))
     }
     pub fn has_fluid_tick(&self, pos: BlockPos, fluid: FluidKind) -> bool {
         self.fluids.has_scheduled(pos, TickTypeId(fluid as u32))
     }
     pub fn will_block_tick_this_tick(&mut self, pos: BlockPos, block: BlockId) -> bool {
-        self.blocks.will_tick_this_tick(pos, TickTypeId(u32::from(block.0)))
+        self.blocks
+            .will_tick_this_tick(pos, TickTypeId(u32::from(block.0)))
     }
     /// `Level.getBlockRandomPos`.
     pub fn block_random_pos(&mut self, x: i32, y: i32, z: i32, y_mask: i32) -> BlockPos {
-        self.random_tick_value = self.random_tick_value.wrapping_mul(3).wrapping_add(1_013_904_223);
+        self.random_tick_value = self
+            .random_tick_value
+            .wrapping_mul(3)
+            .wrapping_add(1_013_904_223);
         let value = self.random_tick_value >> 2;
-        BlockPos::new(x + (value & 15), y + ((value >> 16) & y_mask), z + ((value >> 8) & 15))
+        BlockPos::new(
+            x + (value & 15),
+            y + ((value >> 16) & y_mask),
+            z + ((value >> 8) & 15),
+        )
     }
 }

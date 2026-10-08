@@ -41,7 +41,12 @@ pub(crate) fn axis_of(direction: Direction) -> horizon_core::geometry::Axis {
 }
 /// `Direction.from2DDataValue` (S, W, N, E).
 pub(crate) fn from_2d(value: i32) -> Direction {
-    [Direction::South, Direction::West, Direction::North, Direction::East][value.rem_euclid(4) as usize]
+    [
+        Direction::South,
+        Direction::West,
+        Direction::North,
+        Direction::East,
+    ][value.rem_euclid(4) as usize]
 }
 pub(crate) fn data_2d(direction: Direction) -> i32 {
     match direction {
@@ -89,7 +94,11 @@ impl Behaviours {
         self.shape_info(state).full_faces & (1 << direction as u8) != 0
     }
     /// `MultifaceBlock.canAttachTo(level, direction, neighbourPos, neighbourState)`.
-    pub(crate) fn multiface_can_attach(&self, neighbour: BlockStateId, direction: Direction) -> bool {
+    pub(crate) fn multiface_can_attach(
+        &self,
+        neighbour: BlockStateId,
+        direction: Direction,
+    ) -> bool {
         let face = direction.opposite();
         self.is_face_sturdy(neighbour, face) || self.collision_face_full(neighbour, face)
     }
@@ -109,7 +118,9 @@ impl Behaviours {
         self.table.bool(state, self.props.waterlogged)
     }
     pub(crate) fn facing(&self, state: BlockStateId) -> Direction {
-        self.table.dir(state, self.props.facing).unwrap_or(Direction::North)
+        self.table
+            .dir(state, self.props.facing)
+            .unwrap_or(Direction::North)
     }
     /// The boolean/enum property named after `direction` (`north`, `up`, ...).
     pub(crate) fn dir_prop(&self, direction: Direction) -> PropKey {
@@ -139,12 +150,18 @@ impl crate::dynamic_support::DynamicSupportWorld for NoBlockEntities {
     fn shulker_is_closed(&mut self, _position: [i32; 3]) -> Result<Option<bool>, Self::Error> {
         Ok(None)
     }
-    fn moving_piston_shape(&mut self, _position: [i32; 3]) -> Result<Option<horizon_core::geometry::VoxelShape>, Self::Error> {
+    fn moving_piston_shape(
+        &mut self,
+        _position: [i32; 3],
+    ) -> Result<Option<horizon_core::geometry::VoxelShape>, Self::Error> {
         Ok(None)
     }
 }
 impl crate::block_collision::DynamicCollisionWorld for NoBlockEntities {
-    fn shulker_collision_state(&mut self, _position: [i32; 3]) -> Result<Option<crate::block_collision::ShulkerCollisionState>, Self::Error> {
+    fn shulker_collision_state(
+        &mut self,
+        _position: [i32; 3],
+    ) -> Result<Option<crate::block_collision::ShulkerCollisionState>, Self::Error> {
         Ok(None)
     }
 }
@@ -152,7 +169,11 @@ impl crate::block_collision::DynamicCollisionWorld for NoBlockEntities {
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// Shape queries over `getCollisionShape(level, pos)`, including the
     /// position-dependent shapes (bamboo, speleothems, shulker boxes).
-    pub(crate) fn shape_info_at(&self, state: BlockStateId, pos: BlockPos) -> super::data::ShapeInfo {
+    pub(crate) fn shape_info_at(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+    ) -> super::data::ShapeInfo {
         if self.b.facts(state).shape >= 0 {
             return self.b.shape_info(state);
         }
@@ -175,7 +196,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `Block.canSupportCenter(level, pos, direction)`.
     pub fn can_support_center(&self, pos: BlockPos, direction: Direction) -> bool {
         let state = self.state(pos);
-        if direction == Direction::Down && self.b.in_set(state, &self.b.tags.unstable_bottom_center) {
+        if direction == Direction::Down && self.b.in_set(state, &self.b.tags.unstable_bottom_center)
+        {
             return false;
         }
         self.b.is_face_sturdy_center(state, direction)

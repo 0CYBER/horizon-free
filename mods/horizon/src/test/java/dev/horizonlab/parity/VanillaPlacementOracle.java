@@ -1,100 +1,159 @@
 package dev.horizonlab.parity;
+
 import com.google.gson.*;
-import com.mojang.serialization.JsonOps;
-import java.io.*;
-import java.lang.reflect.Proxy;
-import java.lang.reflect.InvocationHandler;
-import java.nio.charset.StandardCharsets;
+import java.io.PrintWriter;
+import java.lang.reflect.Method;
 import java.nio.file.*;
 import java.util.*;
 import net.minecraft.core.*;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
-import net.minecraft.world.level.*;
-import net.minecraft.world.level.biome.*;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.levelgen.*;
-import net.minecraft.world.level.levelgen.densityfunction.DensityFunctions;
-import net.minecraft.world.level.levelgen.material.rule.BlockRule;
-import net.minecraft.world.level.levelgen.placement.*;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.LegacyRandomSource;
+import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 
-/** Original transport invoking actual placement codecs and modifier callbacks. */
+/**
+ * Native BlockItem placement-state selection (BlockPlaceContext resolution,
+ * updatePlacementContext and getPlacementState) over generated neighbourhoods.
+ * Entities never obstruct; nothing is written to the world.
+ */
 public final class VanillaPlacementOracle {
-    private static final class Stop extends RuntimeException {}
-    private static PlacementContext context(JsonObject f) {return context(f,null);}
-    private static PlacementContext context(JsonObject f,PrintWriter out) {
-        var v=f.getAsJsonArray("context");int min=v.get(0).getAsInt(),height=v.get(1).getAsInt(),sea=v.get(2).getAsInt();
-        var zero=DensityFunctions.zero();
-        var settings=new NoiseGeneratorSettings(new NoiseSettings(min,height),Blocks.STONE.defaultBlockState(),Blocks.WATER.defaultBlockState(),new NoiseRouter(zero,zero,zero,zero,zero,zero,zero,zero),Holder.direct(new BlockRule(Blocks.STONE.defaultBlockState())),List.of(),sea,false,Optional.empty(),false,NoiseGeneratorSettings.DebugFunctions.EMPTY);
-        var biome=Holder.Reference.createStandAlone(new HolderOwner<Biome>(){},Biomes.PLAINS);
-        var generator=new NoiseBasedChunkGenerator(new FixedBiomeSource(biome),Holder.direct(settings));
-        int worldMin=f.has("world_min")?f.get("world_min").getAsInt():min;int mode=f.has("height_mode")?f.get("height_mode").getAsInt():0;int fail=f.has("query_fail")?f.get("query_fail").getAsInt():-1;int[] calls={0};boolean layerWorld=f.has("layer_world")&&f.get("layer_world").getAsBoolean();
-        var level=(WorldGenLevel)Proxy.newProxyInstance(WorldGenLevel.class.getClassLoader(),new Class<?>[]{WorldGenLevel.class},(proxy,method,args)->switch(method.getName()) {
-            case "isInsideBuildHeight"->{
-                if(args[0] instanceof BlockPos p) {
-                    if(out!=null)out.println("inside "+p.getX()+" "+p.getY()+" "+p.getZ());
-                    if(calls[0]++==fail)throw new IllegalArgumentException("bounds query failure");
-                    var result=InvocationHandler.invokeDefault(proxy,method,args);
-                    if(out!=null)out.println("bounds_result "+result);yield result;
-                }
-                yield InvocationHandler.invokeDefault(proxy,method,args);
-            }
-            case "isOutsideBuildHeight"->{
-                if(out!=null)out.println("outside "+args[0]);
-                if(calls[0]++==fail)throw new IllegalArgumentException("bounds query failure");
-                var result=InvocationHandler.invokeDefault(proxy,method,args);
-                if(out!=null)out.println("bounds_result "+result);yield result;
-            }
-            case "getMaxY"->InvocationHandler.invokeDefault(proxy,method,args);
-            case "getMinY"->worldMin;
-            case "getHeight"->{
-                if(args==null||args.length==0)yield height;
-                var kind=(Heightmap.Types)args[0];int x=(Integer)args[1],z=(Integer)args[2];
-                if(out!=null)out.println("height "+kind.name()+" "+x+" "+z);
-                if(calls[0]++==fail)throw new IllegalArgumentException("height query failure");
-                int result;
-                if(layerWorld)result=min+24+((x^z)&3);
-                else if(mode==0)result=min+Math.floorMod(x*31+z*17+kind.ordinal()*7,129)-64;
-                else {int[] values={Integer.MIN_VALUE,Integer.MAX_VALUE,0,-1,min,min+1};result=values[(kind.ordinal()+((x^z)&3))%6];}
-                if(out!=null)out.println("height_result "+result);yield result;
-            }
-            case "getBlockState"->{
-                var p=(BlockPos)args[0];if(out!=null)out.println("block "+p.getX()+" "+p.getY()+" "+p.getZ());
-                if(calls[0]++==fail)throw new IllegalArgumentException("block query failure");
-                var blocks=new net.minecraft.world.level.block.Block[]{Blocks.BEDROCK,Blocks.STONE,Blocks.AIR,Blocks.WATER,Blocks.DIRT,Blocks.CAVE_AIR,Blocks.LAVA,Blocks.BUBBLE_COLUMN,Blocks.VOID_AIR,Blocks.GRASS_BLOCK,Blocks.AIR,Blocks.WATER};
-                int index=p.getY()<=min?0:Math.floorMod(p.getY()-min+((p.getX()*31+p.getZ()*17)&3),12);
-                var block=blocks[index];if(out!=null)out.println("block_result "+net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block));yield block.defaultBlockState();
-            }
-            case "getSeaLevel"->sea;
-            default->throw new AssertionError("unexpected world method "+method);
-        });
-        var context=new PlacementContext(level,generator,Optional.empty());return context;
+    static Object unsafe;
+    static Method allocate;
+    static int errors;
+    static final Set<BlockItem> bound = new HashSet<>();
+
+    static <T> T make(Class<T> type) {
+        try {
+            return type.cast(allocate.invoke(unsafe, type));
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
     }
+
+    static final class FakePlayer extends ServerPlayer {
+        float yaw, pitch;
+        boolean sneak;
+        World world;
+        ItemStack held;
+        FakePlayer() {
+            super(null, null, null, null);
+        }
+        @Override public float getViewXRot(final float a) { return pitch; }
+        @Override public float getViewYRot(final float a) { return yaw; }
+        @Override public float getXRot() { return pitch; }
+        @Override public float getYRot() { return yaw; }
+        @Override public Direction getDirection() { return Direction.fromYRot(yaw); }
+        @Override public boolean isSecondaryUseActive() { return sneak; }
+        @Override public boolean isShiftKeyDown() { return sneak; }
+        @Override public boolean isDescending() { return sneak; }
+        @Override public ItemStack getMainHandItem() { return held; }
+        @Override public boolean canUseGameMasterBlocks() { return false; }
+        @Override public net.minecraft.server.level.ServerLevel level() { return world; }
+    }
+
+    static final class World extends net.minecraft.server.level.ServerLevel {
+        Map<BlockPos, BlockState> cells;
+        RandomSource random;
+        World() {
+            super(null, null, null, null, null, null, false, 0L, List.of(), false);
+        }
+        @Override public BlockState getBlockState(BlockPos p) { return cells.getOrDefault(p, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState()); }
+        @Override public FluidState getFluidState(BlockPos p) { return getBlockState(p).getFluidState(); }
+        @Override public net.minecraft.world.level.block.entity.BlockEntity getBlockEntity(BlockPos p) { return null; }
+        @Override public boolean isClientSide() { return false; }
+        @Override public RandomSource getRandom() { return random; }
+        @Override public int getMinY() { return -64; }
+        @Override public int getHeight() { return 384; }
+        @Override public boolean isUnobstructed(BlockState state, BlockPos pos, CollisionContext context) { return true; }
+        @Override public boolean isUnobstructed(Entity entity) { return true; }
+        @Override public void scheduleTick(BlockPos pos, Block block, int delay) { }
+        @Override public net.minecraft.core.RegistryAccess registryAccess() { return RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY); }
+        @Override public net.minecraft.world.flag.FeatureFlagSet enabledFeatures() { return net.minecraft.world.flag.FeatureFlags.DEFAULT_FLAGS; }
+        @Override public net.minecraft.world.level.border.WorldBorder getWorldBorder() { return new net.minecraft.world.level.border.WorldBorder(); }
+        @Override public void gameEvent(net.minecraft.core.Holder<net.minecraft.world.level.gameevent.GameEvent> e, BlockPos p, net.minecraft.world.level.gameevent.GameEvent.Context c) { }
+        @Override public int getSeaLevel() { return 63; }
+        @Override public int getBrightness(net.minecraft.world.level.LightLayer layer, BlockPos p) { return layer == net.minecraft.world.level.LightLayer.SKY ? 15 : 0; }
+        @Override public int getRawBrightness(BlockPos p, int darkening) { return 15 - darkening; }
+        @Override public int getSkyDarken() { return 0; }
+        @Override public List<Entity> getEntities(Entity except, net.minecraft.world.phys.AABB box, java.util.function.Predicate<? super Entity> filter) { return List.of(); }
+    }
+
     public static void main(String[] args) throws Exception {
-        net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();Path dir=Path.of(args[1]);
-        try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt"),StandardCharsets.UTF_8))) {
-            for(var line:Files.readAllLines(dir.resolve("inputs.txt"))) {
-                var f=JsonParser.parseString(line).getAsJsonObject();var context=context(f,out);long seed=f.get("seed").getAsLong();
-                RandomSource random=f.get("legacy").getAsBoolean()?new LegacyRandomSource(seed):new XoroshiroRandomSource(seed);
-                Optional<PlacementModifier> decoded;
-                try {decoded=PlacementModifier.CODEC.parse(JsonOps.INSTANCE,JsonParser.parseString(f.get("definition").getAsString())).result();}catch(IllegalArgumentException error){decoded=Optional.empty();}
-                if(decoded.isEmpty())out.println("decode error");else {
-                    out.println("decode ok");var provider=decoded.get();
-                    for(var value:f.getAsJsonArray("positions")) {
-                        var p=value.getAsJsonArray();var position=new BlockPos(p.get(0).getAsInt(),p.get(1).getAsInt(),p.get(2).getAsInt());
-                        if(f.has("count_only")&&f.get("count_only").getAsBoolean()) {
-                            try {out.println("count "+((RepeatingPlacement)provider).count(random,position));}catch(IllegalArgumentException error){out.println("count error");}
-                            out.println("next "+random.nextLong());continue;
+        net.minecraft.SharedConstants.tryDetectVersion();
+        net.minecraft.server.Bootstrap.bootStrap();
+        Path resources = Path.of(args[0]);
+        VanillaHeightmapOracle.bindTags(JsonParser.parseString(Files.readString(resources.resolve("block-tags.json"))).getAsJsonObject());
+        VanillaLevelShapeOracle.bindFluidTags(resources.resolve("data/minecraft/tags/fluid"));
+        var position = Entity.class.getDeclaredField("position");
+        position.setAccessible(true);
+        var allocator = Class.forName("sun.misc.Unsafe");
+        var field = allocator.getDeclaredField("theUnsafe");
+        field.setAccessible(true);
+        unsafe = field.get(null);
+        allocate = allocator.getMethod("allocateInstance", Class.class);
+        Method getPlacementState = BlockItem.class.getDeclaredMethod("getPlacementState", BlockPlaceContext.class);
+        getPlacementState.setAccessible(true);
+        try (var out = new PrintWriter(Files.newBufferedWriter(Path.of(args[2]))); var lines = Files.lines(Path.of(args[1]))) {
+            for (var line : (Iterable<String>) lines::iterator) {
+                var f = JsonParser.parseString(line).getAsJsonObject();
+                var world = make(World.class);
+                world.cells = new HashMap<>();
+                for (var cell : f.getAsJsonArray("cells")) {
+                    var c = cell.getAsJsonArray();
+                    world.cells.put(new BlockPos(c.get(0).getAsInt(), c.get(1).getAsInt(), c.get(2).getAsInt()), Block.stateById(c.get(3).getAsInt()));
+                }
+                world.random = new LegacyRandomSource(f.get("seed").getAsLong());
+                var player = make(FakePlayer.class);
+                player.world = world;
+                player.yaw = f.get("yaw").getAsFloat();
+                player.pitch = f.get("pitch").getAsFloat();
+                player.sneak = f.get("sneak").getAsBoolean();
+                position.set(player, Vec3.ZERO);
+                var item = (BlockItem) BuiltInRegistries.ITEM.getValue(Identifier.parse(f.get("item").getAsString()));
+                if (bound.add(item)) {
+                    item.builtInRegistryHolder().bindComponents(net.minecraft.core.component.DataComponentMap.EMPTY);
+                }
+                var h = f.getAsJsonArray("hit");
+                var p = f.getAsJsonArray("pos");
+                var hit = new BlockHitResult(new Vec3(h.get(0).getAsDouble(), h.get(1).getAsDouble(), h.get(2).getAsDouble()),
+                    Direction.from3DDataValue(f.get("face").getAsInt()), new BlockPos(p.get(0).getAsInt(), p.get(1).getAsInt(), p.get(2).getAsInt()), false);
+                String result;
+                try {
+                    player.held = new ItemStack(item);
+                    var context = new BlockPlaceContext(player, InteractionHand.MAIN_HAND, player.held, hit);
+                    if (!context.canPlace()) {
+                        result = "none";
+                    } else {
+                        var updated = item.updatePlacementContext(context);
+                        if (updated == null) {
+                            result = "none";
+                        } else {
+                            var state = (BlockState) getPlacementState.invoke(item, updated);
+                            var at = updated.getClickedPos();
+                            result = state == null ? "none" : at.getX() + "," + at.getY() + "," + at.getZ() + " " + Block.getId(state);
                         }
-                        int[] count={0};int fail=f.get("fail").getAsInt();boolean draw=f.get("draw").getAsBoolean();
-                        try {provider.modify(context,random,position,result->{
-                            if(count[0]++==fail)throw new Stop();
-                            out.println("position "+result.getX()+" "+result.getY()+" "+result.getZ());
-                            if(draw)out.println("consumer "+random.nextLong());
-                        });out.println("modify ok");}catch(Stop|IllegalArgumentException error){out.println("modify error");}
-                        out.println("next "+random.nextLong());
+                    }
+                } catch (Exception | AssertionError e) {
+                    Throwable cause = e instanceof java.lang.reflect.InvocationTargetException ite ? ite.getCause() : e;
+                    result = "error " + cause.getClass().getSimpleName();
+                    if (errors++ < 3) {
+                        cause.printStackTrace();
                     }
                 }
-                out.println("tail "+random.nextLong());
+                out.println("place " + result);
             }
         }
     }

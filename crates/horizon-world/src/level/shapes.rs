@@ -47,7 +47,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let chain_len = self.b.data(state).chain.len();
         for index in depth..chain_len {
             let class = self.b.data(state).chain[index];
-            if let Some(result) = self.update_shape_class(class, index, state, pos, direction, neighbour_pos, neighbour) {
+            if let Some(result) = self.update_shape_class(
+                class,
+                index,
+                state,
+                pos,
+                direction,
+                neighbour_pos,
+                neighbour,
+            ) {
                 return result;
             }
         }
@@ -80,13 +88,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         // `dir == X && !canSurvive ? AIR : super`.
         macro_rules! survive_or_air {
             ($cond:expr) => {{
-                if $cond && !self.can_survive(state, pos) { air } else { sup!() }
+                if $cond && !self.can_survive(state, pos) {
+                    air
+                } else {
+                    sup!()
+                }
             }};
         }
         Some(match class {
             Class::AbstractBed => {
                 if dir == self.bed_neighbour_direction(state) {
-                    if b.is_block(nstate, block) && table.text(nstate, p.part) != table.text(state, p.part) {
+                    if b.is_block(nstate, block)
+                        && table.text(nstate, p.part) != table.text(state, p.part)
+                    {
                         table.set_bool(state, p.occupied, table.bool(nstate, p.occupied))
                     } else {
                         air
@@ -102,7 +116,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 survive_or_air!(dir == b.facing(state).opposite())
             }
             Class::AttachedStem => {
-                if !b.data(state).link.is_some_and(|fruit| b.is_block(nstate, fruit)) && dir == b.facing(state) {
+                if !b
+                    .data(state)
+                    .link
+                    .is_some_and(|fruit| b.is_block(nstate, fruit))
+                    && dir == b.facing(state)
+                {
                     if let Some(stem) = b.data(state).link2 {
                         return Some(table.set_int(b.default_of(stem), p.age, 7));
                     }
@@ -122,7 +141,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 if !self.can_survive(state, pos) {
                     self.schedule_tick(pos, block, 1);
                 }
-                if dir == Direction::Up && b.is_block(nstate, n.bamboo) && table.int(nstate, p.age) > table.int(state, p.age) {
+                if dir == Direction::Up
+                    && b.is_block(nstate, n.bamboo)
+                    && table.int(nstate, p.age) > table.int(state, p.age)
+                {
                     table.cycle(state, p.age)
                 } else {
                     sup!()
@@ -165,13 +187,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             Class::BaseCoralWallFan => {
                 self.waterlogged_tick(state, pos);
-                if dir.opposite() == b.facing(state) && !self.can_survive(state, pos) { air } else { state }
+                if dir.opposite() == b.facing(state) && !self.can_survive(state, pos) {
+                    air
+                } else {
+                    state
+                }
             }
             Class::Beehive => sup!(),
             Class::Bell => {
                 let attachment = table.text(state, p.attachment);
                 let connected = self.bell_connected_direction(state).opposite();
-                if connected == dir && !self.can_survive(state, pos) && attachment != "double_wall" {
+                if connected == dir && !self.can_survive(state, pos) && attachment != "double_wall"
+                {
                     return Some(air);
                 }
                 if axis_of(dir) == axis_of(b.facing(state)) {
@@ -179,7 +206,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         let single = table.set_text(state, p.attachment, "single_wall");
                         return Some(table.set_dir(single, p.facing, dir.opposite()));
                     }
-                    if attachment == "single_wall" && connected.opposite() == dir && b.is_face_sturdy(nstate, b.facing(state)) {
+                    if attachment == "single_wall"
+                        && connected.opposite() == dir
+                        && b.is_face_sturdy(nstate, b.facing(state))
+                    {
                         return Some(table.set_text(state, p.attachment, "double_wall"));
                     }
                 }
@@ -211,7 +241,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.schedule_water_tick(pos);
                 if !self.can_survive(state, pos)
                     || dir == Direction::Down
-                    || (dir == Direction::Up && !b.is_block(nstate, block) && self.bubble_column_can_occupy(nstate))
+                    || (dir == Direction::Up
+                        && !b.is_block(nstate, block)
+                        && self.bubble_column_can_occupy(nstate))
                 {
                     self.schedule_tick(pos, block, 5);
                 }
@@ -227,12 +259,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.waterlogged_tick(state, pos);
                 if dir == Direction::Down {
                     let hay = table.block_by_name("minecraft:hay_block");
-                    table.set_bool(state, p.signal_fire, hay.is_some_and(|hay| b.is_block(nstate, hay)))
+                    table.set_bool(
+                        state,
+                        p.signal_fire,
+                        hay.is_some_and(|hay| b.is_block(nstate, hay)),
+                    )
                 } else {
                     sup!()
                 }
             }
-            Class::Carpet | Class::SnowLayer | Class::Vegetation | Class::Frogspawn => survive_or_air!(true),
+            Class::Carpet | Class::SnowLayer | Class::Vegetation | Class::Frogspawn => {
+                survive_or_air!(true)
+            }
             Class::SeaPickle => {
                 if !self.can_survive(state, pos) {
                     return Some(air);
@@ -240,7 +278,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.waterlogged_tick(state, pos);
                 sup!()
             }
-            Class::CeilingHangingSign | Class::SporeBlossom => survive_or_air!(dir == Direction::Up),
+            Class::CeilingHangingSign | Class::SporeBlossom => {
+                survive_or_air!(dir == Direction::Up)
+            }
             Class::Chest => {
                 self.waterlogged_tick(state, pos);
                 if self.chest_can_connect_to(state, nstate) && is_horizontal(dir) {
@@ -250,7 +290,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         && b.facing(state) == b.facing(nstate)
                         && self.chest_connected_direction(nstate) == dir.opposite()
                     {
-                        let opposite = if neighbour_type == "left" { "right" } else { "left" };
+                        let opposite = if neighbour_type == "left" {
+                            "right"
+                        } else {
+                            "left"
+                        };
                         return Some(table.set_text(state, p.kind, opposite));
                     }
                 } else if self.chest_connected_direction(state) == dir {
@@ -287,11 +331,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             Class::Cocoa => survive_or_air!(dir == b.facing(state)),
             Class::Comparator => {
-                if dir == Direction::Down && !b.is_face_sturdy_rigid(nstate, Direction::Up) { air } else { sup!() }
+                if dir == Direction::Down && !b.is_face_sturdy_rigid(nstate, Direction::Up) {
+                    air
+                } else {
+                    sup!()
+                }
             }
             Class::ConcretePowder => {
                 if self.concrete_touches_liquid(pos) {
-                    b.data(state).link.map_or(state, |concrete| b.default_of(concrete))
+                    b.data(state)
+                        .link
+                        .map_or(state, |concrete| b.default_of(concrete))
                 } else {
                     sup!()
                 }
@@ -326,8 +376,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::Door => {
                 let lower = table.text(state, p.half) == "lower";
                 if dir.normal()[1] == 0 || lower != (dir == Direction::Up) {
-                    if lower && dir == Direction::Down && !self.can_survive(state, pos) { air } else { sup!() }
-                } else if b.instance_of(nstate, Class::Door) && table.text(nstate, p.half) != table.text(state, p.half) {
+                    if lower && dir == Direction::Down && !self.can_survive(state, pos) {
+                        air
+                    } else {
+                        sup!()
+                    }
+                } else if b.instance_of(nstate, Class::Door)
+                    && table.text(nstate, p.half) != table.text(state, p.half)
+                {
                     table.set_text(nstate, p.half, table.text(state, p.half))
                 } else {
                     air
@@ -340,7 +396,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     || lower != (dir == Direction::Up)
                     || (b.is_block(nstate, block) && table.text(nstate, p.half) != half)
                 {
-                    if lower && dir == Direction::Down && !self.can_survive(state, pos) { air } else { sup!() }
+                    if lower && dir == Direction::Down && !self.can_survive(state, pos) {
+                        air
+                    } else {
+                        sup!()
+                    }
                 } else {
                     air
                 }
@@ -357,14 +417,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::FaceAttachedHorizontalDirectional | Class::Lantern => {
                 if class == Class::Lantern {
                     self.waterlogged_tick(state, pos);
-                    let connected = if table.bool(state, p.hanging) { Direction::Down } else { Direction::Up };
+                    let connected = if table.bool(state, p.hanging) {
+                        Direction::Down
+                    } else {
+                        Direction::Up
+                    };
                     survive_or_air!(connected.opposite() == dir)
                 } else {
                     survive_or_air!(self.face_attached_connected(state).opposite() == dir)
                 }
             }
             Class::FallingBlock => {
-                let delay = if class_is(b, block, Class::DragonEgg) { 5 } else { 2 };
+                let delay = if class_is(b, block, Class::DragonEgg) {
+                    5
+                } else {
+                    2
+                };
                 self.schedule_tick(pos, block, delay);
                 sup!()
             }
@@ -378,7 +446,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.waterlogged_tick(state, pos);
                 if is_horizontal(dir) {
                     let sturdy = b.is_face_sturdy(nstate, dir.opposite());
-                    table.set_bool(state, self.direction_prop(dir), self.fence_connects_to(state, nstate, sturdy, dir.opposite()))
+                    table.set_bool(
+                        state,
+                        self.direction_prop(dir),
+                        self.fence_connects_to(state, nstate, sturdy, dir.opposite()),
+                    )
                 } else {
                     sup!()
                 }
@@ -387,7 +459,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.waterlogged_tick(state, pos);
                 if is_horizontal(dir) {
                     let sturdy = b.is_face_sturdy(nstate, dir.opposite());
-                    table.set_bool(state, self.direction_prop(dir), self.bars_attach_to(nstate, sturdy))
+                    table.set_bool(
+                        state,
+                        self.direction_prop(dir),
+                        self.bars_attach_to(nstate, sturdy),
+                    )
                 } else {
                     sup!()
                 }
@@ -410,7 +486,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
             }
             Class::SoulFire => {
-                if self.can_survive(state, pos) { b.default_of(block) } else { air }
+                if self.can_survive(state, pos) {
+                    b.default_of(block)
+                } else {
+                    air
+                }
             }
             Class::GrowingPlantBody => {
                 let growth = b.data(state).growth_direction;
@@ -438,7 +518,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let to_body = |sim: &Self| {
                     let body_state = b.default_of(body);
                     if class_is(b, block, Class::CaveVines) {
-                        sim.b.table.set_bool(body_state, p.berries, table.bool(state, p.berries))
+                        sim.b
+                            .table
+                            .set_bool(body_state, p.berries, table.bool(state, p.berries))
                     } else {
                         body_state
                     }
@@ -464,7 +546,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             Class::HangingMoss => {
                 let above_state = self.above_state(pos);
-                if !(b.multiface_can_attach(above_state, Direction::Up) || b.is_block(above_state, block)) {
+                if !(b.multiface_can_attach(above_state, Direction::Up)
+                    || b.is_block(above_state, block))
+                {
                     self.schedule_tick(pos, block, 1);
                 }
                 table.set_bool(state, p.tip, !b.is_block(self.below_state(pos), block))
@@ -477,7 +561,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 sup!()
             }
             Class::HugeMushroom => {
-                if b.is_block(nstate, block) { table.set_bool(state, self.direction_prop(dir), false) } else { sup!() }
+                if b.is_block(nstate, block) {
+                    table.set_bool(state, self.direction_prop(dir), false)
+                } else {
+                    sup!()
+                }
             }
             Class::Ladder => {
                 if dir.opposite() == b.facing(state) && !self.can_survive(state, pos) {
@@ -514,22 +602,42 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     return Some(air);
                 }
                 let updated = self.mossy_carpet_updated_state(state, pos, false);
-                if self.mossy_carpet_has_faces(updated) { updated } else { air }
+                if self.mossy_carpet_has_faces(updated) {
+                    updated
+                } else {
+                    air
+                }
             }
             Class::Multiface => {
                 self.waterlogged_tick(state, pos);
-                if !Direction::ALL.into_iter().any(|d| self.multiface_has_face(state, d)) {
+                if !Direction::ALL
+                    .into_iter()
+                    .any(|d| self.multiface_has_face(state, d))
+                {
                     air
-                } else if self.multiface_has_face(state, dir) && !b.multiface_can_attach(nstate, dir) {
+                } else if self.multiface_has_face(state, dir)
+                    && !b.multiface_can_attach(nstate, dir)
+                {
                     let removed = table.set_bool(state, self.direction_prop(dir), false);
-                    if Direction::ALL.into_iter().any(|d| self.multiface_has_face(removed, d)) { removed } else { air }
+                    if Direction::ALL
+                        .into_iter()
+                        .any(|d| self.multiface_has_face(removed, d))
+                    {
+                        removed
+                    } else {
+                        air
+                    }
                 } else {
                     state
                 }
             }
             Class::PistonHead => survive_or_air!(dir.opposite() == b.facing(state)),
             Class::Note => {
-                if dir.normal()[1] != 0 { self.note_block_instrument(pos, state) } else { sup!() }
+                if dir.normal()[1] != 0 {
+                    self.note_block_instrument(pos, state)
+                } else {
+                    sup!()
+                }
             }
             Class::Observer => {
                 if b.facing(state) == dir && !table.bool(state, p.powered) {
@@ -537,7 +645,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 sup!()
             }
-            Class::RedstoneWallTorch | Class::WallTorch | Class::TripWireHook | Class::WallBanner | Class::WallSign => {
+            Class::RedstoneWallTorch
+            | Class::WallTorch
+            | Class::TripWireHook
+            | Class::WallBanner
+            | Class::WallSign => {
                 let attached = dir.opposite() == b.facing(state);
                 let fails = attached && !self.can_survive(state, pos);
                 match class {
@@ -581,14 +693,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 result
             }
             Class::Snowy => {
-                if dir == Direction::Up { table.set_bool(state, p.snowy, b.in_set(nstate, &t.snow)) } else { sup!() }
+                if dir == Direction::Up {
+                    table.set_bool(state, p.snowy, b.in_set(nstate, &t.snow))
+                } else {
+                    sup!()
+                }
             }
             Class::Speleothem => {
                 self.waterlogged_tick(state, pos);
                 if !matches!(dir, Direction::Up | Direction::Down) {
                     return Some(state);
                 }
-                let tip = table.dir(state, p.vertical_direction).unwrap_or(Direction::Up);
+                let tip = table
+                    .dir(state, p.vertical_direction)
+                    .unwrap_or(Direction::Up);
                 if tip == Direction::Down && self.ticks.has_block_tick(pos, block) {
                     return Some(state);
                 }
@@ -623,7 +741,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     sup!()
                 } else {
                     let updated = self.vine_updated_state(state, pos);
-                    if self.vine_count_faces(updated) == 0 { air } else { updated }
+                    if self.vine_count_faces(updated) == 0 {
+                        air
+                    } else {
+                        updated
+                    }
                 }
             }
             Class::Wall => {
@@ -631,15 +753,30 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 match dir {
                     Direction::Down => sup!(),
                     Direction::Up => {
-                        let sides = [Direction::North, Direction::East, Direction::South, Direction::West]
-                            .map(|d| table.text(state, self.direction_prop(d)) != "none");
+                        let sides = [
+                            Direction::North,
+                            Direction::East,
+                            Direction::South,
+                            Direction::West,
+                        ]
+                        .map(|d| table.text(state, self.direction_prop(d)) != "none");
                         self.wall_shape(state, npos, nstate, sides)
                     }
                     _ => {
                         let opposite = dir.opposite();
-                        let sides = [Direction::North, Direction::East, Direction::South, Direction::West].map(|d| {
+                        let sides = [
+                            Direction::North,
+                            Direction::East,
+                            Direction::South,
+                            Direction::West,
+                        ]
+                        .map(|d| {
                             if d == dir {
-                                self.wall_connects_to(nstate, b.is_face_sturdy(nstate, opposite), opposite)
+                                self.wall_connects_to(
+                                    nstate,
+                                    b.is_face_sturdy(nstate, opposite),
+                                    opposite,
+                                )
                             } else {
                                 table.text(state, self.direction_prop(d)) != "none"
                             }
@@ -689,12 +826,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     fn bed_neighbour_direction(&self, state: BlockStateId) -> Direction {
         let facing = self.b.facing(state);
-        if self.b.table.text(state, self.b.props.part) == "foot" { facing } else { facing.opposite() }
+        if self.b.table.text(state, self.b.props.part) == "foot" {
+            facing
+        } else {
+            facing.opposite()
+        }
     }
     pub(crate) fn chest_can_connect_to(&self, state: BlockStateId, other: BlockStateId) -> bool {
         let b = self.b;
         if b.instance_of(state, Class::CopperChest) {
-            b.tag("minecraft:copper_chests").is_some_and(|tag| b.in_set(other, tag)) && b.table.has(other, b.props.kind)
+            b.tag("minecraft:copper_chests")
+                .is_some_and(|tag| b.in_set(other, tag))
+                && b.table.has(other, b.props.kind)
         } else {
             b.block(state) == b.block(other)
         }
@@ -702,34 +845,68 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `ChestBlock.getConnectedDirection`.
     pub(crate) fn chest_connected_direction(&self, state: BlockStateId) -> Direction {
         let facing = self.b.facing(state);
-        if self.b.table.text(state, self.b.props.kind) == "left" { clockwise(facing) } else { counter_clockwise(facing) }
+        if self.b.table.text(state, self.b.props.kind) == "left" {
+            clockwise(facing)
+        } else {
+            counter_clockwise(facing)
+        }
     }
     /// `FenceBlock.connectsTo`.
-    pub(crate) fn fence_connects_to(&self, fence: BlockStateId, state: BlockStateId, face_solid: bool, direction: Direction) -> bool {
+    pub(crate) fn fence_connects_to(
+        &self,
+        fence: BlockStateId,
+        state: BlockStateId,
+        face_solid: bool,
+        direction: Direction,
+    ) -> bool {
         let b = self.b;
         let t = &b.tags;
-        let same_fence = b.in_set(state, &t.fences) && b.in_set(state, &t.wooden_fences) == b.in_set(fence, &t.wooden_fences);
-        let gate = b.instance_of(state, Class::FenceGate) && axis_of(b.facing(state)) == axis_of(clockwise(direction));
+        let same_fence = b.in_set(state, &t.fences)
+            && b.in_set(state, &t.wooden_fences) == b.in_set(fence, &t.wooden_fences);
+        let gate = b.instance_of(state, Class::FenceGate)
+            && axis_of(b.facing(state)) == axis_of(clockwise(direction));
         (!b.is_exception_for_connection(state) && face_solid) || same_fence || gate
     }
     /// `IronBarsBlock.attachsTo`.
     pub(crate) fn bars_attach_to(&self, state: BlockStateId, face_solid: bool) -> bool {
         let b = self.b;
-        (!b.is_exception_for_connection(state) && face_solid) || b.instance_of(state, Class::IronBars) || b.in_set(state, &b.tags.walls)
+        (!b.is_exception_for_connection(state) && face_solid)
+            || b.instance_of(state, Class::IronBars)
+            || b.in_set(state, &b.tags.walls)
     }
     /// `WallBlock.connectsTo`.
-    pub(crate) fn wall_connects_to(&self, state: BlockStateId, face_solid: bool, direction: Direction) -> bool {
+    pub(crate) fn wall_connects_to(
+        &self,
+        state: BlockStateId,
+        face_solid: bool,
+        direction: Direction,
+    ) -> bool {
         let b = self.b;
-        let gate = b.instance_of(state, Class::FenceGate) && axis_of(b.facing(state)) == axis_of(clockwise(direction));
-        b.in_set(state, &b.tags.walls) || (!b.is_exception_for_connection(state) && face_solid) || b.instance_of(state, Class::IronBars) || gate
+        let gate = b.instance_of(state, Class::FenceGate)
+            && axis_of(b.facing(state)) == axis_of(clockwise(direction));
+        b.in_set(state, &b.tags.walls)
+            || (!b.is_exception_for_connection(state) && face_solid)
+            || b.instance_of(state, Class::IronBars)
+            || gate
     }
     /// `WallBlock.updateShape(level, state, topPos, topNeighbour, n, e, s, w)`.
-    pub(crate) fn wall_shape(&self, state: BlockStateId, top_pos: BlockPos, top: BlockStateId, sides: [bool; 4]) -> BlockStateId {
+    pub(crate) fn wall_shape(
+        &self,
+        state: BlockStateId,
+        top_pos: BlockPos,
+        top: BlockStateId,
+        sides: [bool; 4],
+    ) -> BlockStateId {
         let b = self.b;
         let table = &b.table;
         let cover = self.shape_info_at(top, top_pos).wall_cover;
         let mut result = state;
-        let directions = [Direction::North, Direction::East, Direction::South, Direction::West];
+        let directions = [
+            Direction::North,
+            Direction::East,
+            Direction::South,
+            Direction::West,
+        ];
         for (i, direction) in directions.into_iter().enumerate() {
             let value = if !sides[i] {
                 "none"
@@ -742,11 +919,21 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         // shouldRaisePost
         let side = |d: Direction| table.text(result, self.direction_prop(d)).to_owned();
-        let (north, south, east, west) = (side(Direction::North), side(Direction::South), side(Direction::East), side(Direction::West));
+        let (north, south, east, west) = (
+            side(Direction::North),
+            side(Direction::South),
+            side(Direction::East),
+            side(Direction::West),
+        );
         let raise = if b.instance_of(top, Class::Wall) && table.bool(top, b.props.up) {
             true
         } else {
-            let (nn, sn, en, wn) = (north == "none", south == "none", east == "none", west == "none");
+            let (nn, sn, en, wn) = (
+                north == "none",
+                south == "none",
+                east == "none",
+                west == "none",
+            );
             if (nn && sn && wn && en) || nn != sn || wn != en {
                 true
             } else if (north == "tall" && south == "tall") || (east == "tall" && west == "tall") {
@@ -767,20 +954,37 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let behind = self.rel_state(pos, facing);
         if b.instance_of(behind, Class::Stair) && table.text(behind, p.half) == half {
             let behind_facing = b.facing(behind);
-            if axis_of(behind_facing) != axis_of(facing) && self.stairs_can_take_shape(state, pos, behind_facing.opposite()) {
-                return if behind_facing == counter_clockwise(facing) { "outer_left" } else { "outer_right" };
+            if axis_of(behind_facing) != axis_of(facing)
+                && self.stairs_can_take_shape(state, pos, behind_facing.opposite())
+            {
+                return if behind_facing == counter_clockwise(facing) {
+                    "outer_left"
+                } else {
+                    "outer_right"
+                };
             }
         }
         let front = self.rel_state(pos, facing.opposite());
         if b.instance_of(front, Class::Stair) && table.text(front, p.half) == half {
             let front_facing = b.facing(front);
-            if axis_of(front_facing) != axis_of(facing) && self.stairs_can_take_shape(state, pos, front_facing) {
-                return if front_facing == counter_clockwise(facing) { "inner_left" } else { "inner_right" };
+            if axis_of(front_facing) != axis_of(facing)
+                && self.stairs_can_take_shape(state, pos, front_facing)
+            {
+                return if front_facing == counter_clockwise(facing) {
+                    "inner_left"
+                } else {
+                    "inner_right"
+                };
             }
         }
         "straight"
     }
-    fn stairs_can_take_shape(&self, state: BlockStateId, pos: BlockPos, direction: Direction) -> bool {
+    fn stairs_can_take_shape(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+    ) -> bool {
         let b = self.b;
         let neighbour = self.rel_state(pos, direction);
         !b.instance_of(neighbour, Class::Stair)
@@ -788,7 +992,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             || b.table.text(neighbour, b.props.half) != b.table.text(state, b.props.half)
     }
     /// `TripWireBlock.shouldConnectTo`.
-    pub(crate) fn tripwire_should_connect_to(&self, state: BlockStateId, direction: Direction) -> bool {
+    pub(crate) fn tripwire_should_connect_to(
+        &self,
+        state: BlockStateId,
+        direction: Direction,
+    ) -> bool {
         let b = self.b;
         if b.is_block(state, b.named.tripwire_hook) {
             b.facing(state) == direction.opposite()
@@ -825,7 +1033,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         false
     }
     pub(crate) fn coral_scan_for_water(&self, pos: BlockPos) -> bool {
-        Direction::ALL.into_iter().any(|d| self.b.is_water_fluid(self.fluid_at(rel(pos, d)).kind()))
+        Direction::ALL
+            .into_iter()
+            .any(|d| self.b.is_water_fluid(self.fluid_at(rel(pos, d)).kind()))
     }
     /// `BaseCoralPlantTypeBlock.scanForWater(state, level, pos)`.
     pub(crate) fn coral_plant_scan_for_water(&self, state: BlockStateId, pos: BlockPos) -> bool {
@@ -854,11 +1064,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     pub(crate) fn should_bubble_column_occupy(&self, state: BlockStateId) -> bool {
         let fluid = self.b.fluid(state);
-        self.b.fluid_in(fluid.kind(), self.b.fluid_tags.bubble_column_can_occupy) && fluid.is_source() && fluid.is_full()
+        self.b
+            .fluid_in(fluid.kind(), self.b.fluid_tags.bubble_column_can_occupy)
+            && fluid.is_source()
+            && fluid.is_full()
     }
-    pub(crate) fn try_schedule_bubble_column(&mut self, pos: BlockPos, below_state: BlockStateId, block: BlockId) {
+    pub(crate) fn try_schedule_bubble_column(
+        &mut self,
+        pos: BlockPos,
+        below_state: BlockStateId,
+        block: BlockId,
+    ) {
         let t = &self.b.tags;
-        if self.b.in_set(below_state, &t.enables_bubble_column_drag_down) || self.b.in_set(below_state, &t.enables_bubble_column_push_up) {
+        if self
+            .b
+            .in_set(below_state, &t.enables_bubble_column_drag_down)
+            || self.b.in_set(below_state, &t.enables_bubble_column_push_up)
+        {
             self.schedule_tick(pos, block, 20);
         }
     }
@@ -870,29 +1092,52 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             above
         } else {
             let below = b.facts(self.below_state(pos)).instrument;
-            if super::data::instrument_works_above(below) { 0 } else { below }
+            if super::data::instrument_works_above(below) {
+                0
+            } else {
+                below
+            }
         };
-        b.table.set_text(state, b.props.instrument, super::data::INSTRUMENTS[name as usize])
+        b.table.set_text(
+            state,
+            b.props.instrument,
+            super::data::INSTRUMENTS[name as usize],
+        )
     }
     /// `SpeleothemBlock.calculateSpeleothemThickness`.
-    pub(crate) fn speleothem_thickness(&self, pos: BlockPos, tip: Direction, merge: bool) -> &'static str {
+    pub(crate) fn speleothem_thickness(
+        &self,
+        pos: BlockPos,
+        tip: Direction,
+        merge: bool,
+    ) -> &'static str {
         let b = self.b;
         let p = b.props;
         let base = tip.opposite();
         let is_with = |state: BlockStateId, direction: Direction| {
-            b.tag("minecraft:speleothems").is_some_and(|tag| b.in_set(state, tag)) && b.table.dir(state, p.vertical_direction) == Some(direction)
+            b.tag("minecraft:speleothems")
+                .is_some_and(|tag| b.in_set(state, tag))
+                && b.table.dir(state, p.vertical_direction) == Some(direction)
         };
         let front = self.rel_state(pos, tip);
         let block = b.block(self.state(pos));
         if is_with(front, base) && b.is_block(front, block) {
-            if !merge && b.table.text(front, p.thickness) != "tip_merge" { "tip" } else { "tip_merge" }
+            if !merge && b.table.text(front, p.thickness) != "tip_merge" {
+                "tip"
+            } else {
+                "tip_merge"
+            }
         } else if !is_with(front, tip) {
             "tip"
         } else {
             let front_thickness = b.table.text(front, p.thickness);
             if front_thickness != "tip" && front_thickness != "tip_merge" {
                 let behind = self.rel_state(pos, base);
-                if !is_with(behind, tip) { "base" } else { "middle" }
+                if !is_with(behind, tip) {
+                    "base"
+                } else {
+                    "middle"
+                }
             } else {
                 "frustum"
             }
@@ -902,7 +1147,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub(crate) fn fire_state_with_age(&self, pos: BlockPos, age: i32) -> BlockStateId {
         let b = self.b;
         let placement = self.fire_state_for(pos);
-        if b.is_block(placement, b.named.fire) { b.table.set_int(placement, b.props.age, age) } else { placement }
+        if b.is_block(placement, b.named.fire) {
+            b.table.set_int(placement, b.props.age, age)
+        } else {
+            placement
+        }
     }
     /// `BaseFireBlock.getState(level, pos)`.
     pub(crate) fn fire_state_for(&self, pos: BlockPos) -> BlockStateId {
@@ -920,7 +1169,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     continue;
                 }
                 let burn = self.can_burn(self.rel_state(pos, direction));
-                result = b.table.set_bool(result, self.direction_prop(direction), burn);
+                result = b
+                    .table
+                    .set_bool(result, self.direction_prop(direction), burn);
             }
             result
         } else {
@@ -928,7 +1179,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
     }
     /// `MossyCarpetBlock.getUpdatedState`.
-    pub(crate) fn mossy_carpet_updated_state(&self, mut state: BlockStateId, pos: BlockPos, create_sides: bool) -> BlockStateId {
+    pub(crate) fn mossy_carpet_updated_state(
+        &self,
+        mut state: BlockStateId,
+        pos: BlockPos,
+        create_sides: bool,
+    ) -> BlockStateId {
         let b = self.b;
         let table = &b.table;
         let block = b.block(state);
@@ -936,17 +1192,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let create_sides = create_sides || base;
         let mut above_state = None;
         let mut below_state = None;
-        for direction in [Direction::North, Direction::East, Direction::South, Direction::West] {
+        for direction in [
+            Direction::North,
+            Direction::East,
+            Direction::South,
+            Direction::West,
+        ] {
             let key = self.direction_prop(direction);
             let supported = b.multiface_can_attach(self.rel_state(pos, direction), direction);
             let mut side = if supported {
-                if create_sides { "low" } else { table.text(state, key) }
+                if create_sides {
+                    "low"
+                } else {
+                    table.text(state, key)
+                }
             } else {
                 "none"
             };
             if side == "low" {
                 let above = *above_state.get_or_insert_with(|| self.above_state(pos));
-                if b.is_block(above, block) && table.text(above, key) != "none" && !table.bool(above, b.props.bottom) {
+                if b.is_block(above, block)
+                    && table.text(above, key) != "none"
+                    && !table.bool(above, b.props.bottom)
+                {
                     side = "tall";
                 }
                 if !base {
@@ -964,9 +1232,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub(crate) fn mossy_carpet_has_faces(&self, state: BlockStateId) -> bool {
         let b = self.b;
         table_bool(b, state)
-            || [Direction::North, Direction::East, Direction::South, Direction::West]
-                .into_iter()
-                .any(|d| b.table.text(state, self.direction_prop(d)) != "none")
+            || [
+                Direction::North,
+                Direction::East,
+                Direction::South,
+                Direction::West,
+            ]
+            .into_iter()
+            .any(|d| b.table.text(state, self.direction_prop(d)) != "none")
     }
 }
 

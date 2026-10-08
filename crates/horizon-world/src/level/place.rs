@@ -34,6 +34,9 @@ pub struct PlaceContext {
     pub sneaking: bool,
     /// The item in hand (registry name, e.g. `minecraft:oak_stairs`).
     pub item: String,
+    /// `Player.canUseGameMasterBlocks` (creative operator); gates command,
+    /// structure, jigsaw and test blocks.
+    pub can_use_game_master_blocks: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,10 +78,24 @@ pub(crate) fn ordered_by_nearest(yaw: f32, pitch: f32) -> [Direction; 6] {
     let z_yaw = if z_pos { yaw_cos } else { -yaw_cos };
     let x_mag = x_yaw * pitch_cos;
     let z_mag = z_yaw * pitch_cos;
-    let ax = if x_pos { Direction::East } else { Direction::West };
-    let ay = if y_pos { Direction::Up } else { Direction::Down };
-    let az = if z_pos { Direction::South } else { Direction::North };
-    let make = |a: Direction, b: Direction, c: Direction| [a, b, c, c.opposite(), b.opposite(), a.opposite()];
+    let ax = if x_pos {
+        Direction::East
+    } else {
+        Direction::West
+    };
+    let ay = if y_pos {
+        Direction::Up
+    } else {
+        Direction::Down
+    };
+    let az = if z_pos {
+        Direction::South
+    } else {
+        Direction::North
+    };
+    let make = |a: Direction, b: Direction, c: Direction| {
+        [a, b, c, c.opposite(), b.opposite(), a.opposite()]
+    };
     if x_yaw > z_yaw {
         if y_mag > x_mag {
             make(ay, ax, az)
@@ -137,7 +154,11 @@ impl Ctx {
         ordered_by_nearest(self.yaw, self.pitch)[0]
     }
     fn nearest_looking_vertical(&self) -> Direction {
-        if self.pitch < 0.0 { Direction::Up } else { Direction::Down }
+        if self.pitch < 0.0 {
+            Direction::Up
+        } else {
+            Direction::Down
+        }
     }
     fn click_y(&self) -> f64 {
         self.hit.y - f64::from(self.pos.y)
@@ -159,21 +180,45 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let p = b.props;
         let block = b.block(state);
         let data = b.data(state);
-        let default = |sim: &Self| b.is_replaceable(state) && (ctx.item.is_empty() || !sim.item_is(ctx, block));
+        let default = |sim: &Self| {
+            b.is_replaceable(state) && (ctx.item.is_empty() || !sim.item_is(ctx, block))
+        };
         for class in &data.chain {
             return match class {
                 Class::Candle => {
-                    (!ctx.sneaking && self.item_is(ctx, block) && b.table.int(state, p.candles) < 4) || default(self)
+                    (!ctx.sneaking && self.item_is(ctx, block) && b.table.int(state, p.candles) < 4)
+                        || default(self)
                 }
-                Class::SeaPickle => (!ctx.sneaking && self.item_is(ctx, block) && b.table.int(state, p.pickles) < 4) || default(self),
-                Class::TurtleEgg => (!ctx.sneaking && self.item_is(ctx, block) && b.table.int(state, p.eggs) < 4) || default(self),
-                Class::FlowerBed => (!ctx.sneaking && self.item_is(ctx, block) && b.table.int(state, p.flower_amount) < 4) || default(self),
-                Class::LeafLitter => (!ctx.sneaking && self.item_is(ctx, block) && b.table.int(state, p.segment_amount) < 4) || default(self),
+                Class::SeaPickle => {
+                    (!ctx.sneaking && self.item_is(ctx, block) && b.table.int(state, p.pickles) < 4)
+                        || default(self)
+                }
+                Class::TurtleEgg => {
+                    (!ctx.sneaking && self.item_is(ctx, block) && b.table.int(state, p.eggs) < 4)
+                        || default(self)
+                }
+                Class::FlowerBed => {
+                    (!ctx.sneaking
+                        && self.item_is(ctx, block)
+                        && b.table.int(state, p.flower_amount) < 4)
+                        || default(self)
+                }
+                Class::LeafLitter => {
+                    (!ctx.sneaking
+                        && self.item_is(ctx, block)
+                        && b.table.int(state, p.segment_amount) < 4)
+                        || default(self)
+                }
                 Class::GrowingPlantBody => {
                     let (head, _) = self.growing_plant_pair(block);
                     default(self) && !self.item_is(ctx, head)
                 }
-                Class::Multiface => !self.item_is(ctx, block) || Direction::ALL.into_iter().any(|d| !self.multiface_has_face(state, d)),
+                Class::Multiface => {
+                    !self.item_is(ctx, block)
+                        || Direction::ALL
+                            .into_iter()
+                            .any(|d| !self.multiface_has_face(state, d))
+                }
                 Class::PitcherCrop => false,
                 Class::Scaffolding => self.item_is(ctx, block),
                 Class::Slab => {
@@ -223,7 +268,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 
     /// `Block.getStateForPlacement(context)` for `block`.
-    pub(crate) fn state_for_placement(&mut self, block: BlockId, ctx: &Ctx) -> Option<BlockStateId> {
+    pub(crate) fn state_for_placement(
+        &mut self,
+        block: BlockId,
+        ctx: &Ctx,
+    ) -> Option<BlockStateId> {
         self.placement_at(block, 0, ctx)
     }
 
@@ -239,7 +288,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 
     #[allow(clippy::option_option)]
-    fn placement_class(&mut self, class: Class, depth: usize, block: BlockId, ctx: &Ctx) -> Option<Option<BlockStateId>> {
+    fn placement_class(
+        &mut self,
+        class: Class,
+        depth: usize,
+        block: BlockId,
+        ctx: &Ctx,
+    ) -> Option<Option<BlockStateId>> {
         let b = self.b;
         let p = b.props;
         let t = &b.tags;
@@ -278,8 +333,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let locked = self.diode_is_locked(pos, state);
                 Some(table.set_bool(state, p.locked, locked))
             }
-            Class::EndPortalFrame => Some(table.set_bool(table.set_dir(default, p.facing, horizontal.opposite()), p.eye, false)),
-            Class::Lectern => Some(table.set_bool(table.set_dir(default, p.facing, horizontal.opposite()), p.has_book, false)),
+            Class::EndPortalFrame => Some(table.set_bool(
+                table.set_dir(default, p.facing, horizontal.opposite()),
+                p.eye,
+                false,
+            )),
+            Class::Lectern => Some(table.set_bool(
+                table.set_dir(default, p.facing, horizontal.opposite()),
+                p.has_book,
+                false,
+            )),
             Class::AbstractSkull => {
                 let signal = self.has_neighbor_signal(pos);
                 Some(table.set_bool(default, p.powered, signal))
@@ -312,7 +375,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 } else if b.is_block(below_state, n.bamboo_sapling) {
                     Some(table.set_int(default, p.age, 0))
                 } else if b.is_block(below_state, n.bamboo) {
-                    let age = if table.int(below_state, p.age) > 0 { 1 } else { 0 };
+                    let age = if table.int(below_state, p.age) > 0 {
+                        1
+                    } else {
+                        0
+                    };
                     Some(table.set_int(default, p.age, age))
                 } else {
                     let above_state = self.above_state(pos);
@@ -323,13 +390,31 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
             }
-            Class::Banner => Some(table.set_int(default, p.rotation, rotation_segment(ctx.yaw + 180.0))),
-            Class::StandingSign => Some(wl(table.set_int(default, p.rotation, rotation_segment(ctx.yaw + 180.0)))),
-            Class::Barrel | Class::Command | Class::Dispenser => {
-                Some(table.set_dir(default, p.facing, ctx.nearest_looking_direction().opposite()))
+            Class::Banner => {
+                Some(table.set_int(default, p.rotation, rotation_segment(ctx.yaw + 180.0)))
             }
-            Class::Observer => Some(table.set_dir(default, p.facing, ctx.nearest_looking_direction())),
-            Class::PistonBase => Some(table.set_bool(table.set_dir(default, p.facing, ctx.nearest_looking_direction().opposite()), p.extended, false)),
+            Class::StandingSign => Some(wl(table.set_int(
+                default,
+                p.rotation,
+                rotation_segment(ctx.yaw + 180.0),
+            ))),
+            Class::Barrel | Class::Command | Class::Dispenser => Some(table.set_dir(
+                default,
+                p.facing,
+                ctx.nearest_looking_direction().opposite(),
+            )),
+            Class::Observer => {
+                Some(table.set_dir(default, p.facing, ctx.nearest_looking_direction()))
+            }
+            Class::PistonBase => Some(table.set_bool(
+                table.set_dir(
+                    default,
+                    p.facing,
+                    ctx.nearest_looking_direction().opposite(),
+                ),
+                p.extended,
+                false,
+            )),
             Class::Barrier
             | Class::HeavyCore
             | Class::SculkSensor
@@ -337,7 +422,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             | Class::Chain
             | Class::MangroveRoots
             | Class::WaterloggedTransparent => {
-                let state = if class == Class::Chain || class == Class::MangroveRoots || class == Class::WaterloggedTransparent {
+                let state = if class == Class::Chain
+                    || class == Class::MangroveRoots
+                    || class == Class::WaterloggedTransparent
+                {
                     sup!()?
                 } else {
                     default
@@ -350,7 +438,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             Class::BaseCoralPlantType | Class::Conduit => {
                 let fluid = self.fluid_at(pos);
-                Some(table.set_bool(default, p.waterlogged, b.is_water_fluid(fluid.kind()) && fluid.is_full()))
+                Some(table.set_bool(
+                    default,
+                    p.waterlogged,
+                    b.is_water_fluid(fluid.kind()) && fluid.is_full(),
+                ))
             }
             Class::BaseCoralWallFan
             | Class::WallBanner
@@ -368,12 +460,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 let mut state = match class {
                     Class::BaseCoralWallFan => sup!()?,
-                    Class::TripWireHook => table.set_bool(table.set_bool(default, p.powered, false), p.attached, false),
+                    Class::TripWireHook => {
+                        table.set_bool(table.set_bool(default, p.powered, false), p.attached, false)
+                    }
                     _ => default,
                 };
                 for direction in ctx.nearest_looking_directions() {
                     if is_horizontal(direction) {
-                        let facing = if class == Class::Cocoa { direction } else { direction.opposite() };
+                        let facing = if class == Class::Cocoa {
+                            direction
+                        } else {
+                            direction.opposite()
+                        };
                         state = table.set_dir(state, p.facing, facing);
                         if self.can_survive(state, pos) {
                             return Some(Some(match class {
@@ -404,7 +502,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 for direction in ctx.nearest_looking_directions() {
                     if is_horizontal(direction) && axis_of(direction) != axis_of(ctx.face) {
                         state = table.set_dir(state, p.facing, direction.opposite());
-                        if self.can_survive(state, pos) && self.wall_hanging_sign_can_place(state, pos) {
+                        if self.can_survive(state, pos)
+                            && self.wall_hanging_sign_can_place(state, pos)
+                        {
                             return Some(Some(wl(state)));
                         }
                     }
@@ -414,9 +514,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::CeilingHangingSign => {
                 let above_pos = above(pos);
                 let above_state = self.state(above_pos);
-                let below_hanging = b.tag("minecraft:all_hanging_signs").is_some_and(|tag| b.in_set(above_state, tag));
+                let below_hanging = b
+                    .tag("minecraft:all_hanging_signs")
+                    .is_some_and(|tag| b.in_set(above_state, tag));
                 let direction = from_y_rot(f64::from(ctx.yaw));
-                let mut attached_to_middle = !b.collision_face_full(above_state, Direction::Down) || ctx.sneaking;
+                let mut attached_to_middle =
+                    !b.collision_face_full(above_state, Direction::Down) || ctx.sneaking;
                 if below_hanging && !ctx.sneaking {
                     if b.instance_of(above_state, Class::WallHangingSign) {
                         if axis_of(b.facing(above_state)) == axis_of(direction) {
@@ -441,24 +544,45 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 } else {
                     rotation_segment(ctx.yaw + 180.0)
                 };
-                Some(wl(table.set_int(table.set_bool(default, p.attached, attached_to_middle), p.rotation, segment)))
+                Some(wl(table.set_int(
+                    table.set_bool(default, p.attached, attached_to_middle),
+                    p.rotation,
+                    segment,
+                )))
             }
             Class::BaseFire | Class::Fire | Class::SoulFire => Some(self.fire_state_for(pos)),
             Class::BaseRail => {
                 let east_west = matches!(horizontal, Direction::East | Direction::West);
-                let shape = if east_west { "east_west" } else { "north_south" };
+                let shape = if east_west {
+                    "east_west"
+                } else {
+                    "north_south"
+                };
                 Some(wl(table.set_text(default, p.shape, shape)))
             }
             Class::Bell => {
                 let face = ctx.face;
                 if axis_of(face) == Axis::Y {
-                    let attachment = if face == Direction::Down { "ceiling" } else { "floor" };
-                    let state = table.set_dir(table.set_text(default, p.attachment, attachment), p.facing, horizontal);
-                    if self.can_survive(state, pos) { Some(state) } else { None }
+                    let attachment = if face == Direction::Down {
+                        "ceiling"
+                    } else {
+                        "floor"
+                    };
+                    let state = table.set_dir(
+                        table.set_text(default, p.attachment, attachment),
+                        p.facing,
+                        horizontal,
+                    );
+                    if self.can_survive(state, pos) {
+                        Some(state)
+                    } else {
+                        None
+                    }
                 } else {
                     let double = match axis_of(face) {
                         Axis::X => {
-                            self.sturdy(rel(pos, Direction::West), Direction::East) && self.sturdy(rel(pos, Direction::East), Direction::West)
+                            self.sturdy(rel(pos, Direction::West), Direction::East)
+                                && self.sturdy(rel(pos, Direction::East), Direction::West)
                         }
                         _ => {
                             self.sturdy(rel(pos, Direction::North), Direction::South)
@@ -474,20 +598,39 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         return Some(Some(state));
                     }
                     let floor = self.sturdy(below(pos), Direction::Up);
-                    state = table.set_text(state, p.attachment, if floor { "floor" } else { "ceiling" });
-                    if self.can_survive(state, pos) { Some(state) } else { None }
+                    state = table.set_text(
+                        state,
+                        p.attachment,
+                        if floor { "floor" } else { "ceiling" },
+                    );
+                    if self.can_survive(state, pos) {
+                        Some(state)
+                    } else {
+                        None
+                    }
                 }
             }
             Class::BigDripleaf => {
                 let below_state = self.below_state(pos);
-                let dripleaf_part = b.is_block(below_state, n.big_dripleaf) || b.is_block(below_state, n.big_dripleaf_stem);
-                let facing = if dripleaf_part { b.facing(below_state) } else { horizontal.opposite() };
+                let dripleaf_part = b.is_block(below_state, n.big_dripleaf)
+                    || b.is_block(below_state, n.big_dripleaf_stem);
+                let facing = if dripleaf_part {
+                    b.facing(below_state)
+                } else {
+                    horizontal.opposite()
+                };
                 let source = self.fluid_at(pos) == FluidState::WATER;
-                Some(table.set_dir(table.set_bool(default, p.waterlogged, source), p.facing, facing))
+                Some(table.set_dir(
+                    table.set_bool(default, p.waterlogged, source),
+                    p.facing,
+                    facing,
+                ))
             }
             Class::Campfire => {
                 let water = self.fluid_at(pos).kind() == crate::fluid::FluidKind::Water;
-                let hay = table.block_by_name("minecraft:hay_block").is_some_and(|hay| b.is_block(self.below_state(pos), hay));
+                let hay = table
+                    .block_by_name("minecraft:hay_block")
+                    .is_some_and(|hay| b.is_block(self.below_state(pos), hay));
                 let state = table.set_bool(default, p.waterlogged, water);
                 let state = table.set_bool(state, p.signal_fire, hay);
                 let state = table.set_bool(state, p.lit, !water);
@@ -505,7 +648,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::SeaPickle => {
                 let current = self.state(pos);
                 if b.is_block(current, block) {
-                    Some(table.set_int(current, p.pickles, (table.int(current, p.pickles) + 1).min(4)))
+                    Some(table.set_int(
+                        current,
+                        p.pickles,
+                        (table.int(current, p.pickles) + 1).min(4),
+                    ))
                 } else {
                     let state = sup!()?;
                     Some(wl(state))
@@ -522,14 +669,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::SnowLayer => {
                 let current = self.state(pos);
                 if b.is_block(current, block) {
-                    Some(table.set_int(current, p.layers, (table.int(current, p.layers) + 1).min(8)))
+                    Some(table.set_int(
+                        current,
+                        p.layers,
+                        (table.int(current, p.layers) + 1).min(8),
+                    ))
                 } else {
                     sup!()
                 }
             }
             Class::FlowerBed | Class::LeafLitter => {
                 let current = self.state(pos);
-                let key = if class == Class::FlowerBed { p.flower_amount } else { p.segment_amount };
+                let key = if class == Class::FlowerBed {
+                    p.flower_amount
+                } else {
+                    p.segment_amount
+                };
                 if b.is_block(current, block) {
                     Some(table.set_int(current, key, (table.int(current, key) + 1).min(4)))
                 } else {
@@ -541,21 +696,38 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let mut facing = horizontal.opposite();
                 let face = ctx.face;
                 if is_horizontal(face) && ctx.sneaking {
-                    if let Some(neighbour_facing) = self.chest_candidate_partner_facing(default, pos, face.opposite()) {
+                    if let Some(neighbour_facing) =
+                        self.chest_candidate_partner_facing(default, pos, face.opposite())
+                    {
                         if axis_of(neighbour_facing) != axis_of(face) {
                             facing = neighbour_facing;
-                            kind = if counter_clockwise(facing) == face.opposite() { "right" } else { "left" };
+                            kind = if counter_clockwise(facing) == face.opposite() {
+                                "right"
+                            } else {
+                                "left"
+                            };
                         }
                     }
                 }
                 if kind == "single" && !ctx.sneaking {
-                    if self.chest_candidate_partner_facing(default, pos, clockwise(facing)) == Some(facing) {
+                    if self.chest_candidate_partner_facing(default, pos, clockwise(facing))
+                        == Some(facing)
+                    {
                         kind = "left";
-                    } else if self.chest_candidate_partner_facing(default, pos, counter_clockwise(facing)) == Some(facing) {
+                    } else if self.chest_candidate_partner_facing(
+                        default,
+                        pos,
+                        counter_clockwise(facing),
+                    ) == Some(facing)
+                    {
                         kind = "right";
                     }
                 }
-                Some(wl(table.set_text(table.set_dir(default, p.facing, facing), p.kind, kind)))
+                Some(wl(table.set_text(
+                    table.set_dir(default, p.facing, facing),
+                    p.kind,
+                    kind,
+                )))
             }
             Class::ChorusPlant => Some(self.chorus_plant_with_connections(pos, default)),
             Class::ConcretePowder => {
@@ -588,14 +760,30 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     Direction::Up => horizontal,
                     _ => Direction::Up,
                 };
-                let orientation = format!("{}_{}", super::states::direction_name(front), super::states::direction_name(top));
+                let orientation = format!(
+                    "{}_{}",
+                    super::states::direction_name(front),
+                    super::states::direction_name(top)
+                );
                 let signal = self.has_neighbor_signal(pos);
-                Some(table.set_bool(table.set_text(default, p.orientation, &orientation), p.triggered, signal))
+                Some(table.set_bool(
+                    table.set_text(default, p.orientation, &orientation),
+                    p.triggered,
+                    signal,
+                ))
             }
             Class::Jigsaw => {
                 let front = ctx.face;
-                let top = if axis_of(front) == Axis::Y { horizontal.opposite() } else { Direction::Up };
-                let orientation = format!("{}_{}", super::states::direction_name(front), super::states::direction_name(top));
+                let top = if axis_of(front) == Axis::Y {
+                    horizontal.opposite()
+                } else {
+                    Direction::Up
+                };
+                let orientation = format!(
+                    "{}_{}",
+                    super::states::direction_name(front),
+                    super::states::direction_name(top)
+                );
                 Some(table.set_text(default, p.orientation, &orientation))
             }
             Class::CreakingHeart | Class::RotatedPillar | Class::InfestedRotatedPillar => {
@@ -606,19 +794,25 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Some(table.set_bool(wl(state), p.cracked, false))
             }
             Class::Door => {
-                if pos.y < self.level.max_y() - 1 && self.can_be_replaced(self.state(above(pos)), ctx) {
-                    let powered = self.has_neighbor_signal(pos) || self.has_neighbor_signal(above(pos));
+                if pos.y < self.level.max_y() - 1
+                    && self.can_be_replaced(self.state(above(pos)), ctx)
+                {
+                    let powered =
+                        self.has_neighbor_signal(pos) || self.has_neighbor_signal(above(pos));
                     let hinge = self.door_hinge(ctx);
                     let state = table.set_dir(default, p.facing, horizontal);
                     let state = table.set_text(state, p.hinge, hinge);
-                    let state = table.set_bool(table.set_bool(state, p.powered, powered), p.open, powered);
+                    let state =
+                        table.set_bool(table.set_bool(state, p.powered, powered), p.open, powered);
                     Some(table.set_text(state, p.half, "lower"))
                 } else {
                     None
                 }
             }
             Class::DoublePlant => {
-                if pos.y < self.level.max_y() - 1 && self.can_be_replaced(self.state(above(pos)), ctx) {
+                if pos.y < self.level.max_y() - 1
+                    && self.can_be_replaced(self.state(above(pos)), ctx)
+                {
                     sup!()
                 } else {
                     None
@@ -629,12 +823,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let state = sup!()?;
                 let state = table.set_dir(state, p.facing, horizontal.opposite());
                 let water = self.is_water_at(pos);
-                Some(table.with_bool(state, p.waterlogged, water).unwrap_or(state))
+                Some(
+                    table
+                        .with_bool(state, p.waterlogged, water)
+                        .unwrap_or(state),
+                )
             }
             Class::TallSeagrass => {
                 let state = sup!()?;
                 let fluid = self.fluid_at(above(pos));
-                if b.is_water_fluid(fluid.kind()) && fluid.is_full() { Some(state) } else { None }
+                if b.is_water_fluid(fluid.kind()) && fluid.is_full() {
+                    Some(state)
+                } else {
+                    None
+                }
             }
             Class::DriedGhast => {
                 let state = sup!()?;
@@ -653,10 +855,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::FaceAttachedHorizontalDirectional => {
                 for direction in ctx.nearest_looking_directions() {
                     let state = if axis_of(direction) == Axis::Y {
-                        let face = if direction == Direction::Up { "ceiling" } else { "floor" };
+                        let face = if direction == Direction::Up {
+                            "ceiling"
+                        } else {
+                            "floor"
+                        };
                         table.set_dir(table.set_text(default, p.face, face), p.facing, horizontal)
                     } else {
-                        table.set_dir(table.set_text(default, p.face, "wall"), p.facing, direction.opposite())
+                        table.set_dir(
+                            table.set_text(default, p.face, "wall"),
+                            p.facing,
+                            direction.opposite(),
+                        )
                     };
                     if self.can_survive(state, pos) {
                         return Some(Some(state));
@@ -683,24 +893,44 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 for direction in HORIZONTAL {
                     let neighbour = self.rel_state(pos, direction);
                     let sturdy = b.is_face_sturdy(neighbour, direction.opposite());
-                    let connect = self.fence_connects_to(default, neighbour, sturdy, direction.opposite());
+                    let connect =
+                        self.fence_connects_to(default, neighbour, sturdy, direction.opposite());
                     state = table.set_bool(state, self.direction_prop(direction), connect);
                 }
                 Some(wl(state))
             }
             Class::IronBars => {
                 let mut state = default;
-                for direction in [Direction::North, Direction::South, Direction::West, Direction::East] {
+                for direction in [
+                    Direction::North,
+                    Direction::South,
+                    Direction::West,
+                    Direction::East,
+                ] {
                     let neighbour = self.rel_state(pos, direction);
                     let sturdy = b.is_face_sturdy(neighbour, direction.opposite());
-                    state = table.set_bool(state, self.direction_prop(direction), self.bars_attach_to(neighbour, sturdy));
+                    state = table.set_bool(
+                        state,
+                        self.direction_prop(direction),
+                        self.bars_attach_to(neighbour, sturdy),
+                    );
                 }
                 Some(wl(state))
             }
             Class::Wall => {
-                let sides = [Direction::North, Direction::East, Direction::South, Direction::West].map(|direction| {
+                let sides = [
+                    Direction::North,
+                    Direction::East,
+                    Direction::South,
+                    Direction::West,
+                ]
+                .map(|direction| {
                     let neighbour = self.rel_state(pos, direction);
-                    self.wall_connects_to(neighbour, b.is_face_sturdy(neighbour, direction.opposite()), direction.opposite())
+                    self.wall_connects_to(
+                        neighbour,
+                        b.is_face_sturdy(neighbour, direction.opposite()),
+                        direction.opposite(),
+                    )
                 });
                 let top_pos = above(pos);
                 let top = self.state(top_pos);
@@ -734,11 +964,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             Class::Kelp => {
                 let fluid = self.fluid_at(pos);
-                if b.is_water_fluid(fluid.kind()) && fluid.is_full() { sup!() } else { None }
+                if b.is_water_fluid(fluid.kind()) && fluid.is_full() {
+                    sup!()
+                } else {
+                    None
+                }
             }
             Class::Seagrass => {
                 let fluid = self.fluid_at(pos);
-                if b.is_water_fluid(fluid.kind()) && fluid.is_full() { sup!() } else { None }
+                if b.is_water_fluid(fluid.kind()) && fluid.is_full() {
+                    sup!()
+                } else {
+                    None
+                }
             }
             Class::HangingRoots => {
                 let state = sup!()?;
@@ -746,7 +984,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             Class::Hopper => {
                 let direction = ctx.face.opposite();
-                let facing = if axis_of(direction) == Axis::Y { Direction::Down } else { direction };
+                let facing = if axis_of(direction) == Axis::Y {
+                    Direction::Down
+                } else {
+                    direction
+                };
                 Some(table.set_bool(table.set_dir(default, p.facing, facing), p.enabled, true))
             }
             Class::HugeMushroom => {
@@ -772,7 +1014,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let state = wl(table.set_bool(default, p.persistent, true));
                 let mut distance = 7;
                 for direction in Direction::ALL {
-                    distance = distance.min(self.leaf_distance_at(self.rel_state(pos, direction)) + 1);
+                    distance =
+                        distance.min(self.leaf_distance_at(self.rel_state(pos, direction)) + 1);
                     if distance == 1 {
                         break;
                     }
@@ -812,24 +1055,49 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::Slab => {
                 let replaced = self.state(pos);
                 if b.is_block(replaced, block) {
-                    return Some(Some(table.set_bool(table.set_text(replaced, p.kind, "double"), p.waterlogged, false)));
+                    return Some(Some(table.set_bool(
+                        table.set_text(replaced, p.kind, "double"),
+                        p.waterlogged,
+                        false,
+                    )));
                 }
                 let result = wl(table.set_text(default, p.kind, "bottom"));
-                if ctx.half_from_click() { Some(result) } else { Some(table.set_text(result, p.kind, "top")) }
+                if ctx.half_from_click() {
+                    Some(result)
+                } else {
+                    Some(table.set_text(result, p.kind, "top"))
+                }
             }
             Class::Stair => {
-                let half = if ctx.half_from_click() { "bottom" } else { "top" };
-                let state = wl(table.set_text(table.set_dir(default, p.facing, horizontal), p.half, half));
+                let half = if ctx.half_from_click() {
+                    "bottom"
+                } else {
+                    "top"
+                };
+                let state =
+                    wl(table.set_text(table.set_dir(default, p.facing, horizontal), p.half, half));
                 let shape = self.stairs_shape(state, pos);
                 Some(table.set_text(state, p.shape, shape))
             }
             Class::TrapDoor => {
                 let mut state = if !ctx.replace_clicked && is_horizontal(ctx.face) {
                     let top = ctx.hit.y - f64::from(pos.y) > 0.5;
-                    table.set_text(table.set_dir(default, p.facing, ctx.face), p.half, if top { "top" } else { "bottom" })
+                    table.set_text(
+                        table.set_dir(default, p.facing, ctx.face),
+                        p.half,
+                        if top { "top" } else { "bottom" },
+                    )
                 } else {
-                    let half = if ctx.face == Direction::Up { "bottom" } else { "top" };
-                    table.set_text(table.set_dir(default, p.facing, horizontal.opposite()), p.half, half)
+                    let half = if ctx.face == Direction::Up {
+                        "bottom"
+                    } else {
+                        "top"
+                    };
+                    table.set_text(
+                        table.set_dir(default, p.facing, horizontal.opposite()),
+                        p.half,
+                        half,
+                    )
                 };
                 if self.has_neighbor_signal(pos) {
                     state = table.set_bool(table.set_bool(state, p.open, true), p.powered, true);
@@ -856,7 +1124,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::TripWire => {
                 let mut state = default;
                 for direction in HORIZONTAL {
-                    let connect = self.tripwire_should_connect_to(self.rel_state(pos, direction), direction);
+                    let connect =
+                        self.tripwire_should_connect_to(self.rel_state(pos, direction), direction);
                     state = table.set_bool(state, self.direction_prop(direction), connect);
                 }
                 Some(state)
@@ -882,16 +1151,27 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         })
     }
 
-    fn chest_candidate_partner_facing(&self, chest: BlockStateId, pos: BlockPos, direction: Direction) -> Option<Direction> {
+    fn chest_candidate_partner_facing(
+        &self,
+        chest: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+    ) -> Option<Direction> {
         let state = self.rel_state(pos, direction);
-        if self.chest_can_connect_to(chest, state) && self.b.table.text(state, self.b.props.kind) == "single" {
+        if self.chest_can_connect_to(chest, state)
+            && self.b.table.text(state, self.b.props.kind) == "single"
+        {
             Some(self.b.facing(state))
         } else {
             None
         }
     }
     /// `ChorusPlantBlock.getStateWithConnections`.
-    pub(crate) fn chorus_plant_with_connections(&self, pos: BlockPos, state: BlockStateId) -> BlockStateId {
+    pub(crate) fn chorus_plant_with_connections(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) -> BlockStateId {
         let b = self.b;
         let block = b.block(state);
         let flower = b.named.chorus_flower;
@@ -902,7 +1182,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if direction == Direction::Down {
                 connect |= b.in_set(neighbour, &b.tags.supports_chorus_plant);
             }
-            result = b.table.with_bool(result, self.direction_prop(direction), connect).unwrap_or(result);
+            result = b
+                .table
+                .with_bool(result, self.direction_prop(direction), connect)
+                .unwrap_or(result);
         }
         result
     }
@@ -911,15 +1194,24 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let facing = b.facing(state);
         let attach = |side: Direction, face: Direction| {
             let attach_state = self.rel_state(pos, side);
-            if b.tag("minecraft:wall_hanging_signs").is_some_and(|tag| b.in_set(attach_state, tag)) {
+            if b.tag("minecraft:wall_hanging_signs")
+                .is_some_and(|tag| b.in_set(attach_state, tag))
+            {
                 axis_of(b.facing(attach_state)) == axis_of(facing)
             } else {
                 b.is_face_sturdy(attach_state, face)
             }
         };
-        attach(clockwise(facing), counter_clockwise(facing)) || attach(counter_clockwise(facing), clockwise(facing))
+        attach(clockwise(facing), counter_clockwise(facing))
+            || attach(counter_clockwise(facing), clockwise(facing))
     }
-    fn multiface_placement(&self, block: BlockId, old: BlockStateId, pos: BlockPos, direction: Direction) -> Option<BlockStateId> {
+    fn multiface_placement(
+        &self,
+        block: BlockId,
+        old: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+    ) -> Option<BlockStateId> {
         let b = self.b;
         if b.is_block(old, block) && self.multiface_has_face(old, direction) {
             return None;
@@ -930,11 +1222,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let state = if b.is_block(old, block) {
             old
         } else if b.fluid(old) == FluidState::WATER {
-            b.table.set_bool(b.default_of(block), b.props.waterlogged, true)
+            b.table
+                .set_bool(b.default_of(block), b.props.waterlogged, true)
         } else {
             b.default_of(block)
         };
-        Some(b.table.set_bool(state, self.direction_prop(direction), true))
+        Some(
+            b.table
+                .set_bool(state, self.direction_prop(direction), true),
+        )
     }
     fn vine_can_support_at(&self, vine: BlockStateId, pos: BlockPos, direction: Direction) -> bool {
         let b = self.b;
@@ -948,24 +1244,41 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return false;
         }
         let above_state = self.above_state(pos);
-        b.is_block(above_state, b.block(vine)) && b.table.bool(above_state, self.direction_prop(direction))
+        b.is_block(above_state, b.block(vine))
+            && b.table.bool(above_state, self.direction_prop(direction))
     }
-    fn speleothem_thickness_for(&self, block: BlockId, pos: BlockPos, tip: Direction, merge: bool) -> &'static str {
+    fn speleothem_thickness_for(
+        &self,
+        block: BlockId,
+        pos: BlockPos,
+        tip: Direction,
+        merge: bool,
+    ) -> &'static str {
         let b = self.b;
         let p = b.props;
         let base = tip.opposite();
         let is_with = |state: BlockStateId, direction: Direction| {
-            b.tag("minecraft:speleothems").is_some_and(|tag| b.in_set(state, tag)) && b.table.dir(state, p.vertical_direction) == Some(direction)
+            b.tag("minecraft:speleothems")
+                .is_some_and(|tag| b.in_set(state, tag))
+                && b.table.dir(state, p.vertical_direction) == Some(direction)
         };
         let front = self.rel_state(pos, tip);
         if is_with(front, base) && b.is_block(front, block) {
-            if !merge && b.table.text(front, p.thickness) != "tip_merge" { "tip" } else { "tip_merge" }
+            if !merge && b.table.text(front, p.thickness) != "tip_merge" {
+                "tip"
+            } else {
+                "tip_merge"
+            }
         } else if !is_with(front, tip) {
             "tip"
         } else {
             let thickness = b.table.text(front, p.thickness);
             if thickness != "tip" && thickness != "tip_merge" {
-                if !is_with(self.rel_state(pos, base), tip) { "base" } else { "middle" }
+                if !is_with(self.rel_state(pos, base), tip) {
+                    "base"
+                } else {
+                    "middle"
+                }
             } else {
                 "frustum"
             }
@@ -984,8 +1297,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let right_state = self.rel_state(pos, right);
         let right_above = self.rel_state(above_pos, right);
         let full = |s: BlockStateId| b.full_collision(s);
-        let balance = -i32::from(full(left_state)) - i32::from(full(left_above)) + i32::from(full(right_state)) + i32::from(full(right_above));
-        let lower_door = |s: BlockStateId| b.instance_of(s, Class::Door) && b.table.text(s, b.props.half) == "lower";
+        let balance = -i32::from(full(left_state)) - i32::from(full(left_above))
+            + i32::from(full(right_state))
+            + i32::from(full(right_above));
+        let lower_door = |s: BlockStateId| {
+            b.instance_of(s, Class::Door) && b.table.text(s, b.props.half) == "lower"
+        };
         let door_left = lower_door(left_state);
         let door_right = lower_door(right_state);
         if (door_left && !door_right) || balance > 0 {
@@ -998,7 +1315,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let step_z = place.normal()[2];
         let click_x = ctx.hit.x - f64::from(pos.x);
         let click_z = ctx.hit.z - f64::from(pos.z);
-        if (step_x >= 0 || click_z >= 0.5) && (step_x <= 0 || click_z <= 0.5) && (step_z >= 0 || click_x <= 0.5) && (step_z <= 0 || click_x >= 0.5) {
+        if (step_x >= 0 || click_z >= 0.5)
+            && (step_x <= 0 || click_z <= 0.5)
+            && (step_z >= 0 || click_x <= 0.5)
+            && (step_z <= 0 || click_x >= 0.5)
+        {
             "left"
         } else {
             "right"
@@ -1027,15 +1348,25 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         } else if data.is(Class::PitcherCrop) {
         } else if data.is(Class::SmallDripleaf) {
             let above_pos = above(pos);
-            let upper = b.table.set_dir(b.table.set_text(b.default_of(block), p.half, "upper"), p.facing, b.facing(state));
+            let upper = b.table.set_dir(
+                b.table.set_text(b.default_of(block), p.half, "upper"),
+                p.facing,
+                b.facing(state),
+            );
             let water = self.is_water_at(above_pos);
-            let upper = b.table.with_bool(upper, p.waterlogged, water).unwrap_or(upper);
+            let upper = b
+                .table
+                .with_bool(upper, p.waterlogged, water)
+                .unwrap_or(upper);
             self.set_block_and_update(above_pos, upper);
         } else if data.is(Class::DoublePlant) {
             let above_pos = above(pos);
             let upper = b.table.set_text(b.default_of(block), p.half, "upper");
             let water = self.is_water_at(above_pos);
-            let upper = b.table.with_bool(upper, p.waterlogged, water).unwrap_or(upper);
+            let upper = b
+                .table
+                .with_bool(upper, p.waterlogged, water)
+                .unwrap_or(upper);
             self.set_block_and_update(above_pos, upper);
         } else if data.is(Class::PistonBase) {
             self.piston_check_if_extend(pos, state);
@@ -1056,7 +1387,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let above_pos = above(pos);
         let above_state = self.state(above_pos);
         let is_carpet = b.is_block(above_state, block);
-        if (!is_carpet || !b.table.bool(above_state, p.bottom)) && (is_carpet || b.is_replaceable(above_state)) {
+        if (!is_carpet || !b.table.bool(above_state, p.bottom))
+            && (is_carpet || b.is_replaceable(above_state))
+        {
             let carpet = b.table.set_bool(b.default_of(block), p.bottom, false);
             let updated = self.mossy_carpet_updated_state(carpet, above_pos, true);
             let mut result = updated;
@@ -1074,11 +1407,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 
     /// `BlockItem.place` (and its subclasses' overrides).
-    pub(crate) fn place(&mut self, input: &PlaceContext) -> PlaceOutcome {
+    /// `BlockPlaceContext` resolution, `updatePlacementContext` and the item's
+    /// `getPlacementState` (survival and obstruction checks included).
+    pub(crate) fn placement(
+        &mut self,
+        input: &PlaceContext,
+    ) -> Option<(Ctx, super::data::ItemBinding, BlockStateId)> {
         let b = self.b;
-        let Some(binding) = b.item_binding(&input.item).cloned() else {
-            return PlaceOutcome::Failed;
-        };
+        let binding = b.item_binding(&input.item).cloned()?;
         let mut ctx = Ctx {
             pos: input.clicked_pos,
             hit_pos: input.clicked_pos,
@@ -1096,27 +1432,30 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             ctx.pos = rel(input.clicked_pos, input.face);
         }
         if !ctx.replace_clicked && !self.can_be_replaced(self.state(ctx.pos), &ctx) {
-            return PlaceOutcome::Failed;
+            return None;
         }
         if binding.kind == ItemKind::Scaffolding {
-            match self.scaffolding_update_context(&ctx, binding.block) {
-                Some(updated) => ctx = updated,
-                None => return PlaceOutcome::Failed,
-            }
+            ctx = self.scaffolding_update_context(&ctx, binding.block)?;
         }
-        if !self.is_in_valid_bounds(ctx.pos) {
-            return PlaceOutcome::Failed;
+        if binding.game_master && !input.can_use_game_master_blocks {
+            return None;
         }
         let state = match binding.kind {
             ItemKind::StandingAndWall | ItemKind::HangingSign => {
-                let wall = binding.wall_block.and_then(|wall| self.state_for_placement(wall, &ctx));
+                let wall = binding
+                    .wall_block
+                    .and_then(|wall| self.state_for_placement(wall, &ctx));
                 let attachment = binding.attachment.unwrap_or(Direction::Down);
                 let mut chosen = None;
                 for direction in ctx.nearest_looking_directions() {
                     if direction == attachment.opposite() {
                         continue;
                     }
-                    let candidate = if direction == attachment { self.state_for_placement(binding.block, &ctx) } else { wall };
+                    let candidate = if direction == attachment {
+                        self.state_for_placement(binding.block, &ctx)
+                    } else {
+                        wall
+                    };
                     if let Some(candidate) = candidate {
                         let hanging_ok = binding.kind != ItemKind::HangingSign
                             || !b.instance_of(candidate, Class::WallHangingSign)
@@ -1132,15 +1471,32 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             _ => {
                 let must_survive = binding.kind != ItemKind::Scaffolding;
                 self.state_for_placement(binding.block, &ctx)
-                    .filter(|state| (!must_survive || self.can_survive(*state, ctx.pos)) && self.level.is_unobstructed(ctx.pos, *state))
+                    .filter(|state| {
+                        (!must_survive || self.can_survive(*state, ctx.pos))
+                            && self.level.is_unobstructed(ctx.pos, *state)
+                    })
             }
         };
-        let Some(state) = state else {
+        state.map(|state| (ctx, binding, state))
+    }
+
+    /// `BlockItem.place` (and its subclasses' overrides).
+    pub(crate) fn place(&mut self, input: &PlaceContext) -> PlaceOutcome {
+        let b = self.b;
+        let Some((ctx, binding, state)) = self.placement(input) else {
             return PlaceOutcome::Failed;
         };
+        if !self.is_in_valid_bounds(ctx.pos) {
+            return PlaceOutcome::Failed;
+        }
+
         if binding.kind == ItemKind::DoubleHigh {
             let above_pos = above(ctx.pos);
-            let replacement = if self.is_water_at(above_pos) { b.default_of(b.named.water) } else { b.air() };
+            let replacement = if self.is_water_at(above_pos) {
+                b.default_of(b.named.water)
+            } else {
+                b.air()
+            };
             self.set_block(above_pos, replacement, 27);
         }
         if !self.set_block(ctx.pos, state, 11) {
@@ -1159,17 +1515,28 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             pitch: sounds.pitch * 0.8,
         });
         self.game_event(ctx.pos, "minecraft:block_place");
-        PlaceOutcome::Placed { pos: ctx.pos, state: placed }
+        PlaceOutcome::Placed {
+            pos: ctx.pos,
+            state: placed,
+        }
     }
     /// `ScaffoldingBlockItem.updatePlacementContext`.
     fn scaffolding_update_context(&self, ctx: &Ctx, block: BlockId) -> Option<Ctx> {
         let b = self.b;
         let pos = ctx.pos;
         if !b.is_block(self.state(pos), block) {
-            return if self.scaffolding_distance(pos) == 7 { None } else { Some(ctx.clone()) };
+            return if self.scaffolding_distance(pos) == 7 {
+                None
+            } else {
+                Some(ctx.clone())
+            };
         }
         let direction = if ctx.sneaking {
-            if ctx.inside { ctx.face.opposite() } else { ctx.face }
+            if ctx.inside {
+                ctx.face.opposite()
+            } else {
+                ctx.face
+            }
         } else if ctx.face == Direction::Up {
             ctx.horizontal_direction()
         } else {
@@ -1215,8 +1582,25 @@ impl Behaviours {
     /// position, computes `getStateForPlacement`, checks survival and entity
     /// obstruction, writes the block (flags 11), runs `setPlacedBy` (second
     /// halves of doors, beds, tall plants) and reports the place sound.
-    pub fn place_block<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, ctx: &PlaceContext) -> PlaceOutcome {
+    pub fn place_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        ctx: &PlaceContext,
+    ) -> PlaceOutcome {
         self.sim(level, ticks).place(ctx)
+    }
+    /// The position and state `BlockItem.place` would place for `ctx`, without
+    /// writing anything (None when vanilla's placement fails).
+    pub fn placement_state<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        ctx: &PlaceContext,
+    ) -> Option<(BlockPos, BlockStateId)> {
+        self.sim(level, ticks)
+            .placement(ctx)
+            .map(|(ctx, _, state)| (ctx.pos, state))
     }
     /// `getStateForPlacement` of `block` for `ctx` without placing anything
     /// (`None` when vanilla refuses the placement). The position is resolved

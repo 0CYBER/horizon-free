@@ -40,7 +40,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 Class::HangingMoss => {
                     let above_state = self.above_state(pos);
-                    if !(b.multiface_can_attach(above_state, Direction::Up) || b.is_block(above_state, block)) {
+                    if !(b.multiface_can_attach(above_state, Direction::Up)
+                        || b.is_block(above_state, block))
+                    {
                         self.destroy_block(pos, true, 512);
                     }
                 }
@@ -79,7 +81,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::CoralFan | Class::CoralPlant | Class::CoralWallFan => {
                     if !self.coral_plant_scan_for_water(state, pos) {
                         if let Some(dead) = b.data(state).link {
-                            let mut next = b.table.set_bool(b.default_of(dead), p.waterlogged, false);
+                            let mut next =
+                                b.table.set_bool(b.default_of(dead), p.waterlogged, false);
                             if class == Class::CoralWallFan {
                                 next = b.table.set_dir(next, p.facing, b.facing(state));
                             }
@@ -88,7 +91,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Dispenser | Class::Crafter => {
-                    self.emit(LevelEvent::BlockEvent { pos, state, kind: "dispense" });
+                    self.emit(LevelEvent::BlockEvent {
+                        pos,
+                        state,
+                        kind: "dispense",
+                    });
                 }
                 Class::FallingBlock => self.falling_block_tick(pos, state),
                 Class::Brushable => {
@@ -107,7 +114,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     if !self.can_survive(state, pos) {
                         self.destroy_block(pos, false, 512);
                     } else {
-                        self.emit(LevelEvent::BlockEvent { pos, state, kind: "hatch" });
+                        self.emit(LevelEvent::BlockEvent {
+                            pos,
+                            state,
+                            kind: "hatch",
+                        });
                         self.destroy_block(pos, false, 512);
                     }
                 }
@@ -146,7 +157,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::TripWire => self.tripwire_tick(pos),
-                Class::TripWireHook => self.tripwire_hook_calculate(pos, state, false, true, -1, None),
+                Class::TripWireHook => {
+                    self.tripwire_hook_calculate(pos, state, false, true, -1, None)
+                }
                 _ => continue,
             }
             return;
@@ -176,7 +189,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         for class in chain.iter().copied() {
             match class {
                 Class::BambooSapling => {
-                    if self.rand_int(3) == 0 && self.is_empty_block(above(pos)) && self.raw_brightness(above(pos), 0) >= 9 {
+                    if self.rand_int(3) == 0
+                        && self.is_empty_block(above(pos))
+                        && self.raw_brightness(above(pos), 0) >= 9
+                    {
                         self.bamboo_sapling_grow(pos);
                     }
                 }
@@ -211,7 +227,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 Class::Farmland => self.farmland_random_tick(state, pos),
                 Class::GrowingPlantHead => {
-                    if b.table.int(state, p.age) < 25 && self.random().next_double() < data.grow_probability {
+                    if b.table.int(state, p.age) < 25
+                        && self.random().next_double() < data.grow_probability
+                    {
                         let growth = rel(pos, data.growth_direction);
                         if self.growing_plant_can_grow_into(state, self.state(growth)) {
                             let next = self.growing_plant_grow_into_state(state);
@@ -231,7 +249,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Liquid => {
-                    if matches!(b.fluid(state).kind(), FluidKind::Lava | FluidKind::FlowingLava) {
+                    if matches!(
+                        b.fluid(state).kind(),
+                        FluidKind::Lava | FluidKind::FlowingLava
+                    ) {
                         self.lava_random_tick(pos);
                     }
                 }
@@ -333,7 +354,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `FallingBlock.isFree`.
     pub(crate) fn is_free(&self, state: BlockStateId) -> bool {
         let b = self.b;
-        b.is_air(state) || b.tag("minecraft:fire").is_some_and(|tag| b.in_set(state, tag)) || b.liquid(state) || b.is_replaceable(state)
+        b.is_air(state)
+            || b.tag("minecraft:fire")
+                .is_some_and(|tag| b.in_set(state, tag))
+            || b.liquid(state)
+            || b.is_replaceable(state)
     }
     fn leaves_update_distance(&self, state: BlockStateId, pos: BlockPos) -> BlockStateId {
         let mut distance = 7;
@@ -345,12 +370,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         self.b.table.set_int(state, self.b.props.distance, distance)
     }
-    fn bubble_column_update(&mut self, pos: BlockPos, state: BlockStateId, below_state: BlockStateId) {
+    fn bubble_column_update(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        below_state: BlockStateId,
+    ) {
         let column = self.b.block(state);
         self.bubble_column_update_for(column, pos, state, below_state);
     }
     /// `BubbleColumnBlock.updateColumn(column, level, pos, occupyState, belowState)`.
-    pub(crate) fn bubble_column_update_for(&mut self, column: super::states::BlockId, pos: BlockPos, occupy: BlockStateId, below_state: BlockStateId) {
+    pub(crate) fn bubble_column_update_for(
+        &mut self,
+        column: super::states::BlockId,
+        pos: BlockPos,
+        occupy: BlockStateId,
+        below_state: BlockStateId,
+    ) {
         let b = self.b;
         if !self.bubble_column_can_occupy(occupy) {
             return;
@@ -422,7 +458,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let distance = self.scaffolding_distance(pos);
         let bottom = self.scaffolding_is_bottom(pos, distance);
-        let next = b.table.set_bool(b.table.set_int(state, b.props.distance, distance), b.props.bottom, bottom);
+        let next = b.table.set_bool(
+            b.table.set_int(state, b.props.distance, distance),
+            b.props.bottom,
+            bottom,
+        );
         if distance == 7 {
             if b.table.int(state, b.props.distance) == 7 {
                 self.falling_block_fall(pos, next);
@@ -459,7 +499,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let infini = b.in_set(below_state, infiniburn);
         let age = b.table.int(state, p.age);
         let raining = self.level.is_raining();
-        if !infini && raining && self.fire_near_rain(pos) && self.random().next_float() < 0.2 + age as f32 * 0.03 {
+        if !infini
+            && raining
+            && self.fire_near_rain(pos)
+            && self.random().next_float() < 0.2 + age as f32 * 0.03
+        {
             self.remove_block(pos, false);
             return;
         }
@@ -510,7 +554,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         if burnout {
                             odds /= 2;
                         }
-                        if odds > 0 && self.rand_int(rate) <= odds && (!self.level.is_raining() || !self.fire_near_rain(test)) {
+                        if odds > 0
+                            && self.rand_int(rate) <= odds
+                            && (!self.level.is_raining() || !self.fire_near_rain(test))
+                        {
                             let spread_age = 15.min(age + self.rand_int(5) / 4);
                             let next = self.fire_state_with_age(test, spread_age);
                             self.set_block_and_update(test, next);
@@ -525,7 +572,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if !self.is_empty_block(pos) {
             return 0;
         }
-        Direction::ALL.into_iter().map(|d| self.ignite_odds(self.rel_state(pos, d))).max().unwrap_or(0)
+        Direction::ALL
+            .into_iter()
+            .map(|d| self.ignite_odds(self.rel_state(pos, d)))
+            .max()
+            .unwrap_or(0)
     }
     fn fire_near_rain(&self, pos: BlockPos) -> bool {
         self.level.is_raining_at(pos)
@@ -573,19 +624,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.max_local_raw_brightness(pos)
             };
             let age = b.table.int(state, b.props.age);
-            if brightness > 11 - age - i32::from(b.facts(state).dampening) && self.frosted_slightly_melt(pos, state) {
+            if brightness > 11 - age - i32::from(b.facts(state).dampening)
+                && self.frosted_slightly_melt(pos, state)
+            {
                 for direction in Direction::ALL {
                     let neighbour_pos = rel(pos, direction);
                     let neighbour = self.state(neighbour_pos);
-                    if b.is_block(neighbour, block) && !self.frosted_slightly_melt(neighbour_pos, neighbour) {
-                        let delay = self.random().next_int_between_inclusive(20, 40).unwrap_or(20);
+                    if b.is_block(neighbour, block)
+                        && !self.frosted_slightly_melt(neighbour_pos, neighbour)
+                    {
+                        let delay = self
+                            .random()
+                            .next_int_between_inclusive(20, 40)
+                            .unwrap_or(20);
                         self.schedule_tick(neighbour_pos, block, delay);
                     }
                 }
                 return;
             }
         }
-        let delay = self.random().next_int_between_inclusive(20, 40).unwrap_or(20);
+        let delay = self
+            .random()
+            .next_int_between_inclusive(20, 40)
+            .unwrap_or(20);
         self.schedule_tick(pos, block, delay);
     }
     fn frosted_slightly_melt(&mut self, pos: BlockPos, state: BlockStateId) -> bool {
@@ -624,10 +685,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         }
         let is = |at: BlockPos| b.is_block(self.state(at), block);
-        let (n, s, w, e) = (rel(pos, Direction::North), rel(pos, Direction::South), rel(pos, Direction::West), rel(pos, Direction::East));
+        let (n, s, w, e) = (
+            rel(pos, Direction::North),
+            rel(pos, Direction::South),
+            rel(pos, Direction::West),
+            rel(pos, Direction::East),
+        );
         let horizontal = is(w) || is(e);
         let vertical = is(n) || is(s);
-        let diagonal = is(rel(w, Direction::North)) || is(rel(e, Direction::North)) || is(rel(e, Direction::South)) || is(rel(w, Direction::South));
+        let diagonal = is(rel(w, Direction::North))
+            || is(rel(e, Direction::North))
+            || is(rel(e, Direction::South))
+            || is(rel(w, Direction::South));
         if (horizontal && vertical) || diagonal {
             speed /= 2.0;
         }
@@ -665,10 +734,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let relative = rel(pos, direction);
         let data = b.data(state);
         let below_state = self.below_state(relative);
-        if b.is_air(self.state(relative)) && data.support_tag2.as_ref().is_some_and(|tag| b.in_set(below_state, tag)) {
+        if b.is_air(self.state(relative))
+            && data
+                .support_tag2
+                .as_ref()
+                .is_some_and(|tag| b.in_set(below_state, tag))
+        {
             if let (Some(fruit), Some(stem)) = (data.link, data.link2) {
                 self.set_block_and_update(relative, b.default_of(fruit));
-                self.set_block_and_update(pos, b.table.set_dir(b.default_of(stem), b.props.facing, direction));
+                self.set_block_and_update(
+                    pos,
+                    b.table
+                        .set_dir(b.default_of(stem), b.props.facing, direction),
+                );
             }
         }
     }
@@ -679,7 +757,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let (lower_pos, lower) = if b.table.text(state, p.half) == "upper" {
             let below_pos = below(pos);
             let below_state = self.state(below_pos);
-            if !b.is_block(below_state, b.named.pitcher_crop) || b.table.text(below_state, p.half) != "lower" {
+            if !b.is_block(below_state, b.named.pitcher_crop)
+                || b.table.text(below_state, p.half) != "lower"
+            {
                 return;
             }
             (below_pos, below_state)
@@ -702,7 +782,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if new_age >= 3 {
             let upper_pos = above(lower_pos);
             let upper = b.table.set_text(grown, p.half, "upper");
-            let upper = b.table.with_bool(upper, p.waterlogged, self.is_water_at(upper_pos)).unwrap_or(upper);
+            let upper = b
+                .table
+                .with_bool(upper, p.waterlogged, self.is_water_at(upper_pos))
+                .unwrap_or(upper);
             self.set_block(upper_pos, upper, 3);
         }
     }
@@ -771,7 +854,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         if !near_water && !self.level.is_raining_at(above(pos)) {
             if moisture > 0 {
-                self.set_block(pos, b.table.set_int(state, b.props.moisture, moisture - 1), 2);
+                self.set_block(
+                    pos,
+                    b.table.set_int(state, b.props.moisture, moisture - 1),
+                    2,
+                );
             } else if !b.in_set(self.above_state(pos), &b.tags.maintains_farmland) {
                 self.turn_to_base_block(pos, state);
             }
@@ -828,7 +915,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `LightEngine.getLightDampeningInto(state, above, UP, above.dampening) < 15`.
     fn top_face_lets_light(&self, state: BlockStateId, above_state: BlockStateId) -> bool {
         let b = self.b;
-        let occluding = |s: BlockStateId| b.has_flag(s, state_flags::CAN_OCCLUDE) && b.has_flag(s, super::data::state_flags::SHAPE_OCCLUSION);
+        let occluding = |s: BlockStateId| {
+            b.has_flag(s, state_flags::CAN_OCCLUDE)
+                && b.has_flag(s, super::data::state_flags::SHAPE_OCCLUSION)
+        };
         let dampening = i32::from(b.facts(above_state).dampening);
         let from_full = occluding(state) && b.collision_face_full(state, Direction::Up);
         let to_full = occluding(above_state) && b.collision_face_full(above_state, Direction::Down);
@@ -889,23 +979,37 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let grow = rel(pos, direction);
         let relative = self.state(grow);
         let name = |n: &str| b.table.block_by_name(n);
-        let stages = ["minecraft:small_amethyst_bud", "minecraft:medium_amethyst_bud", "minecraft:large_amethyst_bud", "minecraft:amethyst_cluster"];
+        let stages = [
+            "minecraft:small_amethyst_bud",
+            "minecraft:medium_amethyst_bud",
+            "minecraft:large_amethyst_bud",
+            "minecraft:amethyst_cluster",
+        ];
         let fluid = b.fluid(relative);
-        let can_cluster_grow = b.is_air(relative) || (b.is_block(relative, b.named.water) && fluid.amount() == 8);
+        let can_cluster_grow =
+            b.is_air(relative) || (b.is_block(relative, b.named.water) && fluid.amount() == 8);
         let next = if can_cluster_grow {
             name(stages[0])
         } else {
             let mut found = None;
             for i in 0..3 {
-                if name(stages[i]).is_some_and(|s| b.is_block(relative, s)) && b.facing(relative) == direction {
+                if name(stages[i]).is_some_and(|s| b.is_block(relative, s))
+                    && b.facing(relative) == direction
+                {
                     found = name(stages[i + 1]);
                 }
             }
             found
         };
         if let Some(next) = next {
-            let state = b.table.set_dir(b.default_of(next), b.props.facing, direction);
-            let state = b.table.set_bool(state, b.props.waterlogged, fluid == crate::fluid::FluidState::WATER);
+            let state = b
+                .table
+                .set_dir(b.default_of(next), b.props.facing, direction);
+            let state = b.table.set_bool(
+                state,
+                b.props.waterlogged,
+                fluid == crate::fluid::FluidState::WATER,
+            );
             self.set_block_and_update(grow, state);
         }
     }
@@ -917,14 +1021,24 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     fn bamboo_height_below(&self, pos: BlockPos) -> i32 {
         let mut height = 0;
-        while height < 16 && self.b.is_block(self.state(pos.offset(0, -(height + 1), 0)), self.b.named.bamboo) {
+        while height < 16
+            && self.b.is_block(
+                self.state(pos.offset(0, -(height + 1), 0)),
+                self.b.named.bamboo,
+            )
+        {
             height += 1;
         }
         height
     }
     fn bamboo_height_above(&self, pos: BlockPos) -> i32 {
         let mut height = 0;
-        while height < 16 && self.b.is_block(self.state(pos.offset(0, height + 1, 0)), self.b.named.bamboo) {
+        while height < 16
+            && self.b.is_block(
+                self.state(pos.offset(0, height + 1, 0)),
+                self.b.named.bamboo,
+            )
+        {
             height += 1;
         }
         height
@@ -938,19 +1052,49 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let below_two_state = self.state(below_two);
         let mut leaves = "none";
         if height >= 1 {
-            if !b.is_block(below_state, b.named.bamboo) || b.table.text(below_state, p.leaves) == "none" {
+            if !b.is_block(below_state, b.named.bamboo)
+                || b.table.text(below_state, p.leaves) == "none"
+            {
                 leaves = "small";
-            } else if b.is_block(below_state, b.named.bamboo) && b.table.text(below_state, p.leaves) != "none" {
+            } else if b.is_block(below_state, b.named.bamboo)
+                && b.table.text(below_state, p.leaves) != "none"
+            {
                 leaves = "large";
                 if b.is_block(below_two_state, b.named.bamboo) {
-                    self.set_block(below(pos), b.table.set_text(below_state, p.leaves, "small"), 3);
-                    self.set_block(below_two, b.table.set_text(below_two_state, p.leaves, "none"), 3);
+                    self.set_block(
+                        below(pos),
+                        b.table.set_text(below_state, p.leaves, "small"),
+                        3,
+                    );
+                    self.set_block(
+                        below_two,
+                        b.table.set_text(below_two_state, p.leaves, "none"),
+                        3,
+                    );
                 }
             }
         }
-        let age = if b.table.int(state, p.age) != 1 && !b.is_block(below_two_state, b.named.bamboo) { 0 } else { 1 };
-        let stage = if (height < 11 || self.random().next_float() >= 0.25) && height != 15 { 0 } else { 1 };
-        let next = b.table.set_int(b.table.set_int(b.table.set_text(b.default_of(b.named.bamboo), p.leaves, leaves), p.age, age), p.stage, stage);
+        let age = if b.table.int(state, p.age) != 1 && !b.is_block(below_two_state, b.named.bamboo)
+        {
+            0
+        } else {
+            1
+        };
+        let stage = if (height < 11 || self.random().next_float() >= 0.25) && height != 15 {
+            0
+        } else {
+            1
+        };
+        let next = b.table.set_int(
+            b.table.set_int(
+                b.table
+                    .set_text(b.default_of(b.named.bamboo), p.leaves, leaves),
+                p.age,
+                age,
+            ),
+            p.stage,
+            stage,
+        );
         let _ = self.bamboo_height_above(pos);
         self.set_block(above(pos), next, 3);
     }
@@ -965,7 +1109,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let direction = Direction::ALL[self.rand_int(6) as usize];
         let above_pos = above(pos);
         let default = b.default_of(block);
-        if super::query::is_horizontal(direction) && !b.table.bool(state, self.direction_prop(direction)) {
+        if super::query::is_horizontal(direction)
+            && !b.table.bool(state, self.direction_prop(direction))
+        {
             if !self.vine_can_spread(pos, block) {
                 return;
             }
@@ -979,21 +1125,52 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let cw_test = rel(test, cw);
                 let ccw_test = rel(test, ccw);
                 if cw_face && b.multiface_can_attach(self.state(cw_test), cw) {
-                    self.set_block(test, b.table.set_bool(default, self.direction_prop(cw), true), 2);
+                    self.set_block(
+                        test,
+                        b.table.set_bool(default, self.direction_prop(cw), true),
+                        2,
+                    );
                 } else if ccw_face && b.multiface_can_attach(self.state(ccw_test), ccw) {
-                    self.set_block(test, b.table.set_bool(default, self.direction_prop(ccw), true), 2);
+                    self.set_block(
+                        test,
+                        b.table.set_bool(default, self.direction_prop(ccw), true),
+                        2,
+                    );
                 } else {
                     let opposite = direction.opposite();
-                    if cw_face && self.is_empty_block(cw_test) && b.multiface_can_attach(self.rel_state(pos, cw), opposite) {
-                        self.set_block(cw_test, b.table.set_bool(default, self.direction_prop(opposite), true), 2);
-                    } else if ccw_face && self.is_empty_block(ccw_test) && b.multiface_can_attach(self.rel_state(pos, ccw), opposite) {
-                        self.set_block(ccw_test, b.table.set_bool(default, self.direction_prop(opposite), true), 2);
-                    } else if self.random().next_float() < 0.05 && b.multiface_can_attach(self.state(above(test)), Direction::Up) {
+                    if cw_face
+                        && self.is_empty_block(cw_test)
+                        && b.multiface_can_attach(self.rel_state(pos, cw), opposite)
+                    {
+                        self.set_block(
+                            cw_test,
+                            b.table
+                                .set_bool(default, self.direction_prop(opposite), true),
+                            2,
+                        );
+                    } else if ccw_face
+                        && self.is_empty_block(ccw_test)
+                        && b.multiface_can_attach(self.rel_state(pos, ccw), opposite)
+                    {
+                        self.set_block(
+                            ccw_test,
+                            b.table
+                                .set_bool(default, self.direction_prop(opposite), true),
+                            2,
+                        );
+                    } else if self.random().next_float() < 0.05
+                        && b.multiface_can_attach(self.state(above(test)), Direction::Up)
+                    {
                         self.set_block(test, b.table.set_bool(default, p.up, true), 2);
                     }
                 }
             } else if b.multiface_can_attach(edge, direction) {
-                self.set_block(pos, b.table.set_bool(state, self.direction_prop(direction), true), 2);
+                self.set_block(
+                    pos,
+                    b.table
+                        .set_bool(state, self.direction_prop(direction), true),
+                    2,
+                );
             }
             return;
         }
@@ -1008,11 +1185,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 let mut above_state = state;
                 for d in HORIZONTAL {
-                    if self.random().next_boolean() || !b.multiface_can_attach(self.state(rel(above_pos, d)), d) {
+                    if self.random().next_boolean()
+                        || !b.multiface_can_attach(self.state(rel(above_pos, d)), d)
+                    {
                         above_state = b.table.set_bool(above_state, self.direction_prop(d), false);
                     }
                 }
-                if HORIZONTAL.into_iter().any(|d| b.table.bool(above_state, self.direction_prop(d))) {
+                if HORIZONTAL
+                    .into_iter()
+                    .any(|d| b.table.bool(above_state, self.direction_prop(d)))
+                {
                     self.set_block(above_pos, above_state, 2);
                 }
                 return;
@@ -1022,14 +1204,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let below_pos = below(pos);
             let below_state = self.state(below_pos);
             if b.is_air(below_state) || b.is_block(below_state, block) {
-                let before = if b.is_air(below_state) { default } else { below_state };
+                let before = if b.is_air(below_state) {
+                    default
+                } else {
+                    below_state
+                };
                 let mut after = before;
                 for d in HORIZONTAL {
                     if self.random().next_boolean() && b.table.bool(state, self.direction_prop(d)) {
                         after = b.table.set_bool(after, self.direction_prop(d), true);
                     }
                 }
-                if before != after && HORIZONTAL.into_iter().any(|d| b.table.bool(after, self.direction_prop(d))) {
+                if before != after
+                    && HORIZONTAL
+                        .into_iter()
+                        .any(|d| b.table.bool(after, self.direction_prop(d)))
+                {
                     self.set_block(below_pos, after, 2);
                 }
             }
@@ -1089,13 +1279,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             grow_up = true;
         }
         let all_empty = |sim: &Self, at: BlockPos, ignore: Option<Direction>| {
-            HORIZONTAL.into_iter().all(|d| Some(d) == ignore || sim.is_empty_block(rel(at, d)))
+            HORIZONTAL
+                .into_iter()
+                .all(|d| Some(d) == ignore || sim.is_empty_block(rel(at, d)))
         };
         let plant_state = b.default_of(plant);
         if grow_up && all_empty(self, above_pos, None) && self.is_empty_block(pos.offset(0, 2, 0)) {
             let connected = self.chorus_plant_with_connections(pos, plant_state);
             self.set_block(pos, connected, 2);
-            self.set_block(above_pos, b.table.set_int(b.default_of(block), p.age, age), 2);
+            self.set_block(
+                above_pos,
+                b.table.set_int(b.default_of(block), p.age, age),
+                2,
+            );
             self.level_event(1033, above_pos, 0);
         } else if age < 4 {
             let mut attempts = self.rand_int(4);
@@ -1106,8 +1302,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             for _ in 0..attempts {
                 let direction = HORIZONTAL[self.rand_int(4) as usize];
                 let target = rel(pos, direction);
-                if self.is_empty_block(target) && self.is_empty_block(below(target)) && all_empty(self, target, Some(direction.opposite())) {
-                    self.set_block(target, b.table.set_int(b.default_of(block), p.age, age + 1), 2);
+                if self.is_empty_block(target)
+                    && self.is_empty_block(below(target))
+                    && all_empty(self, target, Some(direction.opposite()))
+                {
+                    self.set_block(
+                        target,
+                        b.table.set_int(b.default_of(block), p.age, age + 1),
+                        2,
+                    );
                     self.level_event(1033, target, 0);
                     branched = true;
                 }
@@ -1159,13 +1362,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             };
             if data.is(Class::Cauldron) {
                 if self.random().next_float() < chance {
-                    let next = if info.kind == PrecipitationKind::Rain { b.named.water_cauldron } else { b.named.powder_snow_cauldron };
+                    let next = if info.kind == PrecipitationKind::Rain {
+                        b.named.water_cauldron
+                    } else {
+                        b.named.powder_snow_cauldron
+                    };
                     self.set_block_and_update(below_pos, b.default_of(next));
                     self.game_event(below_pos, "minecraft:block_change");
                 }
             } else if data.is(Class::LayeredCauldron) && self.random().next_float() < chance {
-                let matches = (info.kind == PrecipitationKind::Rain && b.is_block(below_state, b.named.water_cauldron))
-                    || (info.kind == PrecipitationKind::Snow && b.is_block(below_state, b.named.powder_snow_cauldron));
+                let matches = (info.kind == PrecipitationKind::Rain
+                    && b.is_block(below_state, b.named.water_cauldron))
+                    || (info.kind == PrecipitationKind::Snow
+                        && b.is_block(below_state, b.named.powder_snow_cauldron));
                 if b.table.int(below_state, p.level) != 3 && matches {
                     self.set_block_and_update(below_pos, b.table.cycle(below_state, p.level));
                     self.game_event(below_pos, "minecraft:block_change");
@@ -1257,7 +1466,13 @@ impl Behaviours {
         ticks.handling_tick = true;
         {
             let level_ref: &L = level;
-            if ticks.blocks.begin_tick(time, 65536, |chunk: ChunkPos| level_ref.is_ticking_chunk(chunk)).is_err() {
+            if ticks
+                .blocks
+                .begin_tick(time, 65536, |chunk: ChunkPos| {
+                    level_ref.is_ticking_chunk(chunk)
+                })
+                .is_err()
+            {
                 ticks.handling_tick = false;
                 return;
             }
@@ -1272,7 +1487,13 @@ impl Behaviours {
         let _ = ticks.blocks.finish_tick();
         {
             let level_ref: &L = level;
-            if ticks.fluids.begin_tick(time, 65536, |chunk: ChunkPos| level_ref.is_ticking_chunk(chunk)).is_err() {
+            if ticks
+                .fluids
+                .begin_tick(time, 65536, |chunk: ChunkPos| {
+                    level_ref.is_ticking_chunk(chunk)
+                })
+                .is_err()
+            {
                 ticks.handling_tick = false;
                 return;
             }
@@ -1319,17 +1540,32 @@ impl Behaviours {
         }
     }
     /// Random-tick a single position (block then fluid), as `tickChunk` does.
-    pub fn random_tick<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos) {
+    pub fn random_tick<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
         self.sim(level, ticks).random_tick_at(pos);
     }
     /// Run one scheduled block tick at `pos` immediately (no queue check).
-    pub fn scheduled_block_tick<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos) {
+    pub fn scheduled_block_tick<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
         let mut sim = self.sim(level, ticks);
         let state = sim.state(pos);
         sim.tick_block(state, pos);
     }
     /// Run one scheduled fluid tick at `pos` immediately.
-    pub fn scheduled_fluid_tick<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos) {
+    pub fn scheduled_fluid_tick<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
         self.sim(level, ticks).fluid_tick(pos);
     }
 }
