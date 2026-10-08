@@ -32,7 +32,15 @@ use horizon_client::{
     world::World,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
-use horizon_world::{block_collision::BlockCollisionRegistry, chunk::BlockState, registry::BlockStateId};
+use horizon_core::{geometry::Direction, position::BlockPos};
+use horizon_world::{
+    block_collision::BlockCollisionRegistry,
+    level::{
+        Behaviours, Dimension as LevelDimension, LevelAccess, LevelEvent, Landing, PlaceContext, PlaceOutcome, PlayerContext,
+        PlayerEffect, Ticks, flags as level_flags,
+    },
+    registry::BlockStateId,
+};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -165,6 +173,85 @@ struct Hit {
     face: [i32; 3],
     point: [f64; 3],
 }
+
+/// The client world as seen by the vanilla block-behaviour library.
+struct GameLevel<'w> {
+    world: &'w mut World,
+    facts: &'w BlockFacts,
+    events: &'w mut Vec<LevelEvent>,
+    dimension: LevelDimension,
+    darken: i32,
+    raining: bool,
+    thundering: bool,
+    player_box: Option<([f64; 3], [f64; 3])>,
+}
+impl LevelAccess for GameLevel<'_> {
+    fn block_state(&self, pos: BlockPos) -> BlockStateId {
+        self.world.block(pos.x, pos.y, pos.z)
+    }
+    fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+        if !self.world.loaded(pos.x, pos.z) || pos.y < MIN_Y || pos.y >= MIN_Y + HEIGHT {
+            return None;
+        }
+        let previous = self.world.block(pos.x, pos.y, pos.z);
+        self.world.set(pos.x, pos.y, pos.z, state).ok()?;
+        Some(previous)
+    }
+    fn is_loaded(&self, pos: BlockPos) -> bool {
+        self.world.loaded(pos.x, pos.z)
+    }
+    fn min_y(&self) -> i32 {
+        if self.dimension == LevelDimension::Nether { 0 } else { MIN_Y }
+    }
+    fn max_y(&self) -> i32 {
+        if self.dimension == LevelDimension::Nether { 255 } else { MIN_Y + HEIGHT - 1 }
+    }
+    fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
+        &mut self.world.random
+    }
+    fn game_time(&self) -> i64 {
+        self.world.game_time
+    }
+    fn block_light(&self, pos: BlockPos) -> i32 {
+        i32::from(self.world.light(pos.x, pos.y, pos.z) & 15)
+    }
+    fn sky_light(&self, pos: BlockPos) -> i32 {
+        i32::from(self.world.light(pos.x, pos.y, pos.z) >> 4)
+    }
+    fn sky_darken(&self) -> i32 {
+        self.darken
+    }
+    fn is_raining(&self) -> bool {
+        self.raining
+    }
+    fn is_thundering(&self) -> bool {
+        self.thundering
+    }
+    fn dimension(&self) -> LevelDimension {
+        self.dimension
+    }
+    /// Level.isUnobstructed against the player for full-collision blocks.
+    fn is_unobstructed(&self, pos: BlockPos, state: BlockStateId) -> bool {
+        let Some((lo, hi)) = self.player_box else { return true };
+        if !self.facts.get(state).full_collision {
+            return true;
+        }
+        let (x, y, z) = (f64::from(pos.x), f64::from(pos.y), f64::from(pos.z));
+        !(x < hi[0] - 1e-7 && x + 1.0 > lo[0] + 1e-7 && y < hi[1] - 1e-7 && y + 1.0 > lo[1] + 1e-7 && z < hi[2] - 1e-7 && z + 1.0 > lo[2] + 1e-7)
+    }
+    fn emit(&mut self, event: LevelEvent) {
+        self.events.push(event);
+    }
+}
+/// FallingBlockEntity carrying a block state.
+#[derive(Clone, Debug)]
+struct FallingBlock {
+    state: BlockStateId,
+    position: Vec3,
+    previous: Vec3,
+    velocity: Vec3,
+    age: u32,
+}
 pub struct Resources {
     assets: Arc<Assets>,
     facts: BlockFacts,
@@ -179,6 +266,7 @@ pub struct Resources {
     providers: Providers,
     chest_model: Option<horizon_client::mobs::Part>,
     nether_environment: Environment,
+    behaviours: Behaviours,
     /// clouds.png: (width, height, filled cells).
     clouds: (u32, u32, Vec<bool>),
     context: Arc<WorkerContext>,
@@ -276,6 +364,10 @@ struct Game<'a> {
     travelling: Option<(PlayerMotion, Vec3)>,
     portal_ticks: u32,
     portal_cooldown: u32,
+    block_ticks: Ticks,
+    tick_chunks: HashSet<(i32, i32)>,
+    level_events: Vec<LevelEvent>,
+    falling: Vec<FallingBlock>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -541,6 +633,205 @@ impl Game<'_> {
         }
         self.dropped = kept;
     }
+    /// Run vanilla block behaviour against the world through `LevelAccess`.
+    fn with_level<R>(&mut self, f: impl FnOnce(&Behaviours, &mut GameLevel<'_>, &mut Ticks) -> R) -> R {
+        let darken = self.sky_darken();
+        let (rain, thunder) = self.world.weather.levels(1.0);
+        let player_box = self.player.as_ref().map(|p| {
+            let w = f64::from(p.dimensions.width) / 2.0;
+            ([p.position.x - w, p.position.y, p.position.z - w], [p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w])
+        });
+        let dimension = if self.dim == Dim::Nether { LevelDimension::Nether } else { LevelDimension::Overworld };
+        let mut level = GameLevel {
+            world: &mut self.world,
+            facts: &self.res.facts,
+            events: &mut self.level_events,
+            dimension,
+            darken,
+            raining: rain > 0.2,
+            thundering: thunder > 0.9,
+            player_box,
+        };
+        f(&self.res.behaviours, &mut level, &mut self.block_ticks)
+    }
+    /// Level.setBlock(pos, state, UPDATE_ALL) with neighbour/shape updates.
+    fn level_set(&mut self, pos: [i32; 3], state: BlockStateId) -> Result<()> {
+        self.with_level(|b, level, ticks| {
+            b.set_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]), state, level_flags::UPDATE_ALL);
+        });
+        self.process_level_events()
+    }
+    /// Track which chunks are ticking (Ticks needs chunk load/unload).
+    fn sync_tick_chunks(&mut self) {
+        let loaded: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
+        for k in loaded.difference(&self.tick_chunks.clone()) {
+            let _ = self.block_ticks.add_empty_chunk(horizon_core::position::ChunkPos::new(k.0, k.1));
+        }
+        for k in self.tick_chunks.difference(&loaded) {
+            self.block_ticks.remove_chunk(horizon_core::position::ChunkPos::new(k.0, k.1));
+        }
+        self.tick_chunks = loaded;
+    }
+    /// ServerLevel.tick block phases: scheduled ticks, random ticks within the
+    /// simulation distance, block events and moving pistons.
+    fn tick_blocks(&mut self) -> Result<()> {
+        self.sync_tick_chunks();
+        let Some(p) = self.player.as_ref() else { return Ok(()) };
+        let (pcx, pcz) = ((p.position.x.floor() as i32) >> 4, (p.position.z.floor() as i32) >> 4);
+        let simulation = self.settings.render_distance.min(8);
+        let mut ticking = Vec::new();
+        for (&(x, z), chunk) in &self.world.chunks {
+            if (x - pcx).abs() > simulation || (z - pcz).abs() > simulation || !chunk.lit {
+                continue;
+            }
+            let sections: Vec<i32> = chunk
+                .sections
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| !s.is_uniform(0))
+                .map(|(i, _)| MIN_Y + i as i32 * 16)
+                .collect();
+            ticking.push((x, z, sections));
+        }
+        self.with_level(|b, level, ticks| {
+            b.tick_scheduled(level, ticks);
+            for (x, z, sections) in ticking {
+                b.tick_chunk_random(level, ticks, horizon_core::position::ChunkPos::new(x, z), sections);
+            }
+            b.run_block_events(level, ticks);
+            b.tick_block_entities(level, ticks);
+        });
+        self.process_level_events()
+    }
+    /// Side effects reported by the behaviour library, in vanilla order.
+    fn process_level_events(&mut self) -> Result<()> {
+        let events = std::mem::take(&mut self.level_events);
+        for event in events {
+            match event {
+                LevelEvent::LevelEvent { id: 2001, pos, data } => {
+                    // LevelRenderer: destroy particles and the block's break sound.
+                    let state = BlockStateId(data as u32);
+                    let p = [pos.x, pos.y, pos.z];
+                    self.destroy_particles(p, state);
+                    let sounds = self.res.facts.get(state).sounds.clone();
+                    let c = [f64::from(pos.x) + 0.5, f64::from(pos.y) + 0.5, f64::from(pos.z) + 0.5];
+                    self.audio.play(&sounds.break_sound, Some(c), (sounds.volume + 1.0) / 2.0, sounds.pitch * 0.8);
+                }
+                LevelEvent::LevelEvent { id, pos, .. } => {
+                    let c = Some([f64::from(pos.x) + 0.5, f64::from(pos.y) + 0.5, f64::from(pos.z) + 0.5]);
+                    let sound = match id {
+                        1501 => Some(("minecraft:block.lava.extinguish", 0.5)),
+                        1009 => Some(("minecraft:block.fire.extinguish", 0.5)),
+                        1502 => Some(("minecraft:block.redstone_torch.burnout", 0.5)),
+                        1030 => Some(("minecraft:block.anvil.use", 1.0)),
+                        1031 => Some(("minecraft:block.anvil.land", 0.3)),
+                        _ => None,
+                    };
+                    if let Some((name, volume)) = sound {
+                        self.audio.play(name, c, volume, 1.0);
+                    }
+                }
+                LevelEvent::Sound { pos, sound, volume, pitch } => {
+                    let c = [f64::from(pos.x) + 0.5, f64::from(pos.y) + 0.5, f64::from(pos.z) + 0.5];
+                    let name = if sound.contains(':') { sound.to_string() } else { format!("minecraft:{sound}") };
+                    self.audio.play(&name, Some(c), volume, pitch);
+                }
+                LevelEvent::DropResources { pos, state } => {
+                    let drops = self.res.items.block_drops(&self.res.assets.registry, state, None, &mut self.world.random);
+                    for d in drops {
+                        if &*d.item != "minecraft:air" {
+                            self.pop_resource([pos.x, pos.y, pos.z], d);
+                        }
+                    }
+                    if let Some(entity) = self.world.block_entities.remove(&(pos.x, pos.y, pos.z)) {
+                        for stack in entity.contents() {
+                            self.pop_resource([pos.x, pos.y, pos.z], stack);
+                        }
+                    }
+                }
+                LevelEvent::FallingBlock { pos, state } => {
+                    let p = Vec3::new(f64::from(pos.x) + 0.5, f64::from(pos.y), f64::from(pos.z) + 0.5);
+                    self.falling.push(FallingBlock { state, position: p, previous: p, velocity: Vec3::ZERO, age: 0 });
+                }
+                LevelEvent::Player { pos, effect, .. } => match effect {
+                    PlayerEffect::OpenMenu => self.open_menu([pos.x, pos.y, pos.z]),
+                    PlayerEffect::Sleep => self.try_sleep([pos.x, pos.y, pos.z]),
+                    PlayerEffect::GiveItem(item) => {
+                        if let Some(rest) = self.give(ItemStack { item, count: 1, damage: 0 }) {
+                            self.pop_resource([pos.x, pos.y, pos.z], rest);
+                        }
+                    }
+                    PlayerEffect::DropItem(item) => self.pop_resource([pos.x, pos.y + 1, pos.z], ItemStack { item, count: 1, damage: 0 }),
+                    PlayerEffect::EatCake => {
+                        if let Some(p) = self.player.as_mut() {
+                            let food = &mut p.health.food;
+                            food.food = (food.food + 2).min(20);
+                            food.saturation = (food.saturation + 0.4).min(food.food as f32);
+                        }
+                    }
+                    PlayerEffect::InteractLoot(_) | PlayerEffect::RespawnAnchor => {}
+                },
+                LevelEvent::PrimeTnt { pos } => {
+                    // Simplified: TNT explodes after its 80-tick fuse immediately.
+                    self.explode([f64::from(pos.x) + 0.5, f64::from(pos.y), f64::from(pos.z) + 0.5], 4.0)?;
+                }
+                LevelEvent::GrowTree { .. } | LevelEvent::PlaceFeature { .. } | LevelEvent::BlockEvent { .. } | LevelEvent::GameEvent { .. } => {}
+            }
+        }
+        Ok(())
+    }
+    /// Menus opened by PlayerEffect::OpenMenu.
+    fn open_menu(&mut self, pos: [i32; 3]) {
+        let name = self.res.facts.get(self.world.block(pos[0], pos[1], pos[2])).name.clone();
+        let key = (pos[0], pos[1], pos[2]);
+        if &*name == "minecraft:crafting_table" {
+            self.craft_size = 3;
+        } else if let Some(entity) = BlockEntity::for_block(&name) {
+            self.world.block_entities.entry(key).or_insert(entity);
+            self.container = Some(key);
+            let sound = if name.contains("chest") { Some("minecraft:block.chest.open") } else if &*name == "minecraft:barrel" { Some("minecraft:block.barrel.open") } else { None };
+            if let Some(sound) = sound {
+                self.audio.play(sound, Some([f64::from(key.0) + 0.5, f64::from(key.1) + 0.5, f64::from(key.2) + 0.5]), 0.5, 1.0);
+            }
+        } else {
+            self.message = Some((format!("{} is not available yet", name.trim_start_matches("minecraft:").replace('_', " ")), Instant::now()));
+            return;
+        }
+        self.screen = Screen::Inventory;
+        self.capture(false);
+        self.right = false;
+    }
+    /// FallingBlockEntity.tick: fall with 0.04 gravity and 0.98 drag, then land.
+    fn tick_falling(&mut self) -> Result<()> {
+        let mut falling = std::mem::take(&mut self.falling);
+        let mut landed = Vec::new();
+        falling.retain_mut(|f| {
+            f.previous = f.position;
+            f.age += 1;
+            f.velocity.y -= 0.04;
+            let next = Vec3::new(f.position.x + f.velocity.x, f.position.y + f.velocity.y, f.position.z + f.velocity.z);
+            let below = self.world.block(next.x.floor() as i32, next.y.floor() as i32, next.z.floor() as i32);
+            let solid = self.res.facts.get(below).full_collision;
+            if solid || f.age > 600 {
+                landed.push((f.state, [next.x.floor() as i32, next.y.floor() as i32 + 1, next.z.floor() as i32]));
+                return false;
+            }
+            f.position = next;
+            f.velocity = Vec3::new(f.velocity.x * 0.98, f.velocity.y * 0.98, f.velocity.z * 0.98);
+            true
+        });
+        self.falling = falling;
+        for (state, pos) in landed {
+            let landing = self.with_level(|b, level, ticks| b.falling_block_landed(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]), state, false));
+            if matches!(landing, Landing::Broken) {
+                let item = self.res.facts.get(state).item.clone();
+                if &*item != "minecraft:air" {
+                    self.pop_resource(pos, ItemStack { item, count: 1, damage: 0 });
+                }
+            }
+        }
+        self.process_level_events()
+    }
     fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
@@ -598,161 +889,42 @@ impl Game<'_> {
                 self.screen = Screen::Playing;
             }
         }
-        self.world.set(pos[0], pos[1], pos[2], replacement)?;
-        self.destroy_particles(pos, state);
-        let center = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
-        self.audio.play(&facts.sounds.break_sound, Some(center), (facts.sounds.volume + 1.0) / 2.0, facts.sounds.pitch * 0.8);
-        // Two-block plants and doors break their other half.
-        if let Some(props) = self.res.assets.registry.state(state).map(|s| s.properties.clone())
-            && let Some(half) = props.get("half")
-        {
-            let other = match half.as_str() {
-                "upper" => Some(pos[1] - 1),
-                "lower" => Some(pos[1] + 1),
-                _ => None,
-            };
-            if let Some(y) = other {
-                let o = self.world.block(pos[0], y, pos[2]);
-                if self.res.facts.get(o).name == facts.name {
-                    self.world.set(pos[0], y, pos[2], self.world.air)?;
-                }
-            }
-        }
-        // BedBlock: breaking one part removes the other.
-        if let Some(props) = self.res.assets.registry.state(state).map(|s| s.properties.clone())
-            && let (Some(part), Some(facing)) = (props.get("part"), props.get("facing"))
-        {
-            let d = facing_offset(facing);
-            let sign = if part == "foot" { 1 } else { -1 };
-            let other = [pos[0] + d[0] * sign, pos[1], pos[2] + d[2] * sign];
-            if self.res.facts.get(self.world.block(other[0], other[1], other[2])).name == facts.name {
-                self.world.set(other[0], other[1], other[2], self.world.air)?;
-            }
-        }
-        // Unsupported plants above fall (snow, flowers, grass): simple support rule.
-        let above = self.world.block(pos[0], pos[1] + 1, pos[2]);
-        let af = self.res.facts.get(above);
-        if !self.res.facts.is_air(above) && af.hardness == 0.0 && !af.full_collision && af.fluid == Fluid::None {
-            self.break_block([pos[0], pos[1] + 1, pos[2]])?;
-        }
+        let _ = replacement;
+        // Block.playerDestroy through the vanilla behaviour library: removal,
+        // neighbour and shape updates, and the destroy event (particles, sound).
+        let creative = self.creative;
+        self.with_level(|b, level, ticks| {
+            b.player_destroy_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]), creative);
+        });
+        self.process_level_events()?;
         Ok(())
-    }
-    /// `BlockItem.getPlacementState` for the common placement properties.
-    fn placement_state(&self, block: BlockStateId, hit: &Hit) -> BlockStateId {
-        let registry = &self.res.assets.registry;
-        let Some(state) = registry.state(block) else { return block };
-        let mut s = state.clone();
-        let yaw = self.yaw.rem_euclid(360.0);
-        let facing = match ((yaw + 45.0) / 90.0) as i32 % 4 {
-            0 => "south",
-            1 => "west",
-            2 => "north",
-            _ => "east",
-        };
-        let opposite = |d: &str| match d {
-            "north" => "south",
-            "south" => "north",
-            "east" => "west",
-            "west" => "east",
-            "up" => "down",
-            _ => "up",
-        };
-        let clicked = match hit.face {
-            [0, 1, 0] => "up",
-            [0, -1, 0] => "down",
-            [0, 0, -1] => "north",
-            [0, 0, 1] => "south",
-            [-1, 0, 0] => "west",
-            _ => "east",
-        };
-        let frac_y = hit.point[1] - hit.point[1].floor();
-        let top_half = hit.face == [0, -1, 0] || (hit.face[1] == 0 && frac_y > 0.5);
-        let name = s.name.clone();
-        let props = &mut s.properties;
-        if props.contains_key("axis") {
-            let axis = match hit.face {
-                [_, 0, 0] if hit.face[0] != 0 => "x",
-                [0, _, 0] if hit.face[1] != 0 => "y",
-                _ => "z",
-            };
-            if props.get("axis").is_some() {
-                props.insert("axis".into(), axis.into());
-            }
-        }
-        if let Some(f) = props.get("facing").cloned() {
-            let wants = if name.ends_with("_stairs") || name.contains("fence_gate") || name.ends_with("_door") || name.ends_with("_trapdoor") || name.ends_with("_bed") {
-                facing.to_owned()
-            } else if name.ends_with("torch") || name.ends_with("ladder") || name.contains("wall_") {
-                clicked.to_owned()
-            } else if name.contains("piston") || name.contains("observer") || name.contains("dispenser") || name.contains("dropper") || name.ends_with("rod") || name.contains("amethyst") {
-                clicked.to_owned()
-            } else {
-                opposite(facing).to_owned()
-            };
-            props.insert("facing".into(), wants);
-            let mut probe = BlockState { name: name.clone(), properties: props.clone() };
-            if registry.resolve(&probe).is_err() {
-                probe.properties.insert("facing".into(), f);
-                *props = probe.properties;
-            }
-        }
-        if name.ends_with("_slab") {
-            props.insert("type".into(), if top_half { "top" } else { "bottom" }.into());
-        }
-        if (name.ends_with("_stairs") || name.ends_with("_trapdoor")) && props.contains_key("half") {
-            props.insert("half".into(), if top_half { "top" } else { "bottom" }.into());
-        }
-        // Torches on walls become wall torches.
-        if name.ends_with("torch") && hit.face[1] == 0 {
-            let wall = name.replace("torch", "wall_torch");
-            if let Some(wall_state) = registry.default_state(&wall)
-                && let Some(ws) = registry.state(wall_state)
-            {
-                let mut w = ws.clone();
-                w.properties.insert("facing".into(), clicked.into());
-                if let Ok(id) = registry.resolve(&w) {
-                    return id;
-                }
-            }
-        }
-        if let Some(w) = props.get_mut("waterlogged") {
-            let target = [hit.pos[0] + hit.face[0], hit.pos[1] + hit.face[1], hit.pos[2] + hit.face[2]];
-            let existing = self.world.block(target[0], target[1], target[2]);
-            let f = self.res.facts.get(existing);
-            *w = (f.fluid == Fluid::Water && f.fluid_level == 8 && !f.fluid_falling).to_string();
-        }
-        registry.resolve(&s).unwrap_or(block)
     }
     fn use_item(&mut self) -> Result<()> {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
-        if !sneaking
+        // MultiPlayerGameMode.useItemOn: blocks react first unless sneaking with an item.
+        if !(sneaking && self.held().is_some())
             && let Some(hit) = self.pick()
         {
-            let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-            let name = self.res.facts.get(clicked).name.clone();
-            let key = (hit.pos[0], hit.pos[1], hit.pos[2]);
-            if name.ends_with("_bed") {
-                self.try_sleep(hit.pos);
-                self.right = false;
-                return Ok(());
-            }
-            if let Some(entity) = BlockEntity::for_block(&name) {
-                self.world.block_entities.entry(key).or_insert(entity);
-                self.container = Some(key);
-                self.screen = Screen::Inventory;
-                self.capture(false);
-                self.right = false;
-                let sound = if name.contains("chest") { Some("minecraft:block.chest.open") } else if &*name == "minecraft:barrel" { Some("minecraft:block.barrel.open") } else { None };
-                if let Some(sound) = sound {
-                    self.audio.play(sound, Some([f64::from(key.0) + 0.5, f64::from(key.1) + 0.5, f64::from(key.2) + 0.5]), 0.5, 1.0);
-                }
-                return Ok(());
-            }
-            if &*name == "minecraft:crafting_table" {
-                self.craft_size = 3;
-                self.screen = Screen::Inventory;
-                self.capture(false);
-                self.right = false;
+            let face = match hit.face {
+                [0, 1, 0] => Direction::Up,
+                [0, -1, 0] => Direction::Down,
+                [0, 0, -1] => Direction::North,
+                [0, 0, 1] => Direction::South,
+                [-1, 0, 0] => Direction::West,
+                _ => Direction::East,
+            };
+            let player = PlayerContext {
+                yaw: self.yaw,
+                pitch: self.pitch,
+                may_build: true,
+                can_eat: self.creative || self.player.as_ref().is_some_and(|p| p.health.food.food < 20),
+                game_master: false,
+            };
+            let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
+            let result = self.with_level(|b, level, ticks| b.use_without_item(level, ticks, BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]), face, at, player));
+            self.process_level_events()?;
+            if result.consumes_action() {
+                self.swing_arm();
                 return Ok(());
             }
         }
@@ -778,76 +950,43 @@ impl Game<'_> {
             return Ok(());
         }
         let Some(hit) = self.pick() else { return Ok(()) };
-        let Some(block) = info.block else { return Ok(()) };
-        let clicked_state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        let target = if self.res.facts.get(clicked_state).replaceable {
-            hit.pos
-        } else {
-            [hit.pos[0] + hit.face[0], hit.pos[1] + hit.face[1], hit.pos[2] + hit.face[2]]
+        if info.block.is_none() {
+            return Ok(());
+        }
+        let face = match hit.face {
+            [0, 1, 0] => Direction::Up,
+            [0, -1, 0] => Direction::Down,
+            [0, 0, -1] => Direction::North,
+            [0, 0, 1] => Direction::South,
+            [-1, 0, 0] => Direction::West,
+            _ => Direction::East,
         };
-        if target[1] < MIN_Y || target[1] >= MIN_Y + HEIGHT || !self.world.loaded(target[0], target[2]) {
+        // BlockItem.place through the vanilla placement rules.
+        let ctx = PlaceContext {
+            clicked_pos: BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
+            face,
+            hit: Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
+            inside: false,
+            yaw: self.yaw,
+            pitch: self.pitch,
+            sneaking: self.keys.contains(&KeyCode::ShiftLeft),
+            item: stack.item.to_string(),
+            can_use_game_master_blocks: false,
+        };
+        let outcome = self.with_level(|b, level, ticks| b.place_block(level, ticks, &ctx));
+        let PlaceOutcome::Placed { pos, state } = outcome else {
+            self.process_level_events()?;
             return Ok(());
-        }
-        let existing = self.world.block(target[0], target[1], target[2]);
-        if !self.res.facts.get(existing).replaceable {
-            return Ok(());
-        }
-        let state = self.placement_state(block, &hit);
-        // Do not place collidable blocks inside the player.
-        if self.res.facts.get(state).full_collision
-            && let Some(p) = &self.player
-        {
-            let w = f64::from(p.dimensions.width) / 2.0;
-            let (min, max) = (
-                [p.position.x - w, p.position.y, p.position.z - w],
-                [p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w],
-            );
-            let overlaps = (0..3).all(|i| {
-                f64::from(target[i]) < max[i] - 1e-7 && f64::from(target[i]) + 1.0 > min[i] + 1e-7
-            });
-            if overlaps {
-                return Ok(());
-            }
-        }
-        self.world.set(target[0], target[1], target[2], state)?;
-        self.swing_arm();
+        };
+        let target = [pos.x, pos.y, pos.z];
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
             self.world.block_entities.insert((target[0], target[1], target[2]), entity);
         }
+        self.swing_arm();
         let sounds = self.res.facts.get(state).sounds.clone();
         let center = [f64::from(target[0]) + 0.5, f64::from(target[1]) + 0.5, f64::from(target[2]) + 0.5];
         self.audio.play(&sounds.place, Some(center), (sounds.volume + 1.0) / 2.0, sounds.pitch * 0.8);
-        // BedItem: the head goes one block in the facing direction.
-        if let Some(s) = self.res.assets.registry.state(state)
-            && s.properties.get("part").map(String::as_str) == Some("foot")
-            && let Some(facing) = s.properties.get("facing")
-        {
-            let d = facing_offset(facing);
-            let head_pos = [target[0] + d[0], target[1], target[2] + d[2]];
-            let mut head = s.clone();
-            head.properties.insert("part".into(), "head".into());
-            if let Ok(h) = self.res.assets.registry.resolve(&head)
-                && self.res.facts.get(self.world.block(head_pos[0], head_pos[1], head_pos[2])).replaceable
-            {
-                self.world.set(head_pos[0], head_pos[1], head_pos[2], h)?;
-            } else {
-                // No room for the head: undo.
-                self.world.set(target[0], target[1], target[2], existing)?;
-                return Ok(());
-            }
-        }
-        // Two-block items place their upper half.
-        if let Some(s) = self.res.assets.registry.state(state)
-            && s.properties.get("half").map(String::as_str) == Some("lower")
-        {
-            let mut upper = s.clone();
-            upper.properties.insert("half".into(), "upper".into());
-            if let Ok(u) = self.res.assets.registry.resolve(&upper)
-                && self.res.facts.get(self.world.block(target[0], target[1] + 1, target[2])).replaceable
-            {
-                self.world.set(target[0], target[1] + 1, target[2], u)?;
-            }
-        }
+        self.process_level_events()?;
         self.consume_held();
         Ok(())
     }
@@ -1205,6 +1344,8 @@ impl Game<'_> {
         self.tick_hand();
         self.tick_sleep();
         self.tick_portal()?;
+        self.tick_blocks()?;
+        self.tick_falling()?;
         if let Some(p) = &self.player {
             // Player.aiStep bob and Entity.walkDist (0.6 per block).
             let (dx, dz) = (p.position.x - self.previous_position.x, p.position.z - self.previous_position.z);
@@ -1999,6 +2140,35 @@ impl Game<'_> {
                 }
             }
         }
+        // Falling blocks: a unit cube with the block's texture.
+        for f in self.falling.clone() {
+            let Some((sprite, tint)) = self.particle_sprite(f.state) else { continue };
+            let Some(r) = self.res.atlas.sprites.get(&sprite).copied() else { continue };
+            let p = glam::DVec3::new(
+                f.previous.x + (f.position.x - f.previous.x) * alpha - 0.5,
+                f.previous.y + (f.position.y - f.previous.y) * alpha,
+                f.previous.z + (f.position.z - f.previous.z) * alpha - 0.5,
+            ) - camera;
+            let o = p.as_vec3();
+            let light = self.world.light(f.position.x.floor() as i32, f.position.y.floor() as i32 + 1, f.position.z.floor() as i32);
+            let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+            let v = |x: f32, y: f32, z: f32| o + glam::Vec3::new(x, y, z);
+            let faces = [
+                ([v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)], 1.0),
+                ([v(0., 0., 0.), v(1., 0., 0.), v(1., 0., 1.), v(0., 0., 1.)], 0.5),
+                ([v(1., 0., 0.), v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.)], 0.8),
+                ([v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)], 0.8),
+                ([v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)], 0.6),
+                ([v(1., 0., 1.), v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.)], 0.6),
+            ];
+            for (corners, shade) in faces {
+                let c = |sft: u32| (((tint >> sft) & 255) as f32 * shade) as u32;
+                let color = 0xFF00_0000 | c(0) << 16 | c(8) << 8 | c(16);
+                for (p, uv) in corners.iter().zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]]) {
+                    out.push(Vertex { pos: p.to_array(), uv, layer: 0, color, light: packed });
+                }
+            }
+        }
         // Camera-facing particle quads.
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
         let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
@@ -2704,6 +2874,9 @@ impl Game<'_> {
         self.level = level;
         self.dim = dim;
         self.world_root = save_root.clone();
+        self.block_ticks = Ticks::new(self.level.seed as i32);
+        self.tick_chunks.clear();
+        self.falling.clear();
         self.travelling = None;
         self.player = None;
         self.spawn = None;
@@ -2779,6 +2952,9 @@ impl Game<'_> {
         self.save = save;
         self.dim = target;
         self.level.dimension = target.id().to_owned();
+        self.block_ticks = Ticks::new(self.level.seed as i32);
+        self.tick_chunks.clear();
+        self.falling.clear();
         self.mobs.clear();
         self.arrows.clear();
         self.dropped.clear();
@@ -3092,7 +3268,7 @@ impl Game<'_> {
             }
         }
         let id = registry.resolve(&state).unwrap_or(default);
-        self.world.set(pos[0], pos[1], pos[2], id)?;
+        self.level_set(pos, id)?;
         Ok(true)
     }
     fn damage_held(&mut self, amount: u32) {
@@ -4261,6 +4437,7 @@ pub fn run() -> Result<()> {
         providers: Providers::load(&root),
         chest_model: horizon_client::mobs::load_model(&root, "minecraft:chest#main"),
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
+        behaviours: Behaviours::load(registry_owner.registry, &root)?,
         clouds: horizon_client::hud::decode(&root.join("assets/minecraft/textures/environment/clouds.png"))
             .map(|(w, h, px)| (w, h, px.chunks_exact(4).map(|p| p[3] > 0).collect()))
             .unwrap_or((1, 1, vec![false])),
@@ -4359,6 +4536,10 @@ pub fn run() -> Result<()> {
         travelling: None,
         portal_ticks: 0,
         portal_cooldown: 0,
+        block_ticks: Ticks::new(0),
+        tick_chunks: HashSet::new(),
+        level_events: Vec::new(),
+        falling: Vec::new(),
     };
     match game.options.world.clone() {
         Some(folder) => {
