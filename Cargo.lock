@@ -685,6 +685,7 @@ dependencies = [
  "glam",
  "horizon-assets",
  "horizon-core",
+ "horizon-protocol",
  "horizon-world",
  "png",
  "pollster",

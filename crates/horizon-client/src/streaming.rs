@@ -111,6 +111,9 @@ pub struct Streaming {
     pub nether_shading: bool,
     pub generated_total: u64,
     pub meshed_total: u64,
+    /// Chunks come from a server (`insert_remote`/`forget`): nothing is
+    /// generated and columns are only unloaded when the server says so.
+    pub remote: bool,
 }
 pub struct WorkerContext {
     pub assets: Arc<crate::assets::Assets>,
@@ -205,7 +208,30 @@ impl Streaming {
             nether_shading: false,
             generated_total: 0,
             meshed_total: 0,
+            remote: false,
         }
+    }
+    /// A column received from a server: store it and relight it and its neighbours.
+    pub fn insert_remote(&mut self, world: &mut World, chunk: Chunk) {
+        let key = (chunk.x, chunk.z);
+        self.lit.remove(&key);
+        self.lighting.remove(&key);
+        world.chunks.insert(key, Arc::new(chunk));
+        self.generated_total += 1;
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                world.dirty_light.insert((key.0 + dx, key.1 + dz));
+            }
+        }
+    }
+    /// A column the server unloaded (ClientboundForgetLevelChunkPacket).
+    pub fn forget(&mut self, world: &mut World, x: i32, z: i32) -> Option<Arc<Chunk>> {
+        self.lit.remove(&(x, z));
+        self.meshed.remove(&(x, z));
+        self.lighting.remove(&(x, z));
+        self.meshing.retain(|k, _| (k.0, k.2) != (x, z));
+        world.dirty_sections.retain(|k| (k.0, k.2) != (x, z));
+        world.chunks.remove(&(x, z))
     }
     fn submit(&mut self, priority: i64, job: Job) {
         self.order += 1;
@@ -316,7 +342,7 @@ impl Streaming {
             .chunks
             .keys()
             .copied()
-            .filter(|&(x, z)| !self.in_range(x, z, 3))
+            .filter(|&(x, z)| !self.remote && !self.in_range(x, z, 3))
             .collect();
         for key in &far {
             self.decorated.remove(key);
@@ -390,7 +416,7 @@ impl Streaming {
         }
         // Generation (load or proto), closest first, bounded in flight.
         let margin = if self.decorates { 3 } else { 1 };
-        if self.generating.len() < workers * 3 {
+        if !self.remote && self.generating.len() < workers * 3 {
             let r = self.radius + margin;
             let mut wanted = Vec::new();
             for dz in -r..=r {
