@@ -53,8 +53,12 @@ struct Level {
     random: LegacyRandom,
     events: Vec<LevelEvent>,
     biome: &'static str,
+    day: i64,
 }
 impl LevelAccess for Level {
+    fn day_time(&self) -> i64 {
+        self.day
+    }
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.blocks.get(&pos).copied().unwrap_or(self.air)
     }
@@ -98,6 +102,7 @@ impl World {
                 random: LegacyRandom::new(seed),
                 events: Vec::new(),
                 biome: "minecraft:plains",
+                day: 6000,
             },
             f,
             ticks,
@@ -363,4 +368,49 @@ fn snowy_biomes_freeze_and_snow() {
         .unwrap();
     assert!(!rain.snows_at_top && !rain.freezes_below);
     assert_eq!(rain.kind, PrecipitationKind::Rain);
+}
+
+#[test]
+fn eyeblossoms_open_at_night_and_wake_neighbours() {
+    let Some(f) = fixture() else { return };
+    let mut w = World::new(f, 2);
+    w.floor("grass_block", 4);
+    let closed = w.id("closed_eyeblossom", &[]);
+    w.put(BlockPos::new(0, 64, 0), closed);
+    w.put(BlockPos::new(2, 64, 1), closed);
+    f.behaviours
+        .random_tick(&mut w.level, &mut w.ticks, BlockPos::new(0, 64, 0));
+    assert_eq!(
+        w.name(BlockPos::new(0, 64, 0)),
+        "minecraft:closed_eyeblossom",
+        "closed by day"
+    );
+    w.level.day = 13000;
+    f.behaviours
+        .random_tick(&mut w.level, &mut w.ticks, BlockPos::new(0, 64, 0));
+    assert_eq!(w.name(BlockPos::new(0, 64, 0)), "minecraft:open_eyeblossom");
+    let block = f.behaviours.block(closed);
+    assert!(
+        w.ticks.has_block_tick(BlockPos::new(2, 64, 1), block),
+        "neighbour scheduled"
+    );
+    assert!(w.level.events.iter().any(|e| matches!(e, LevelEvent::Sound { sound, .. } if &**sound == "minecraft:block.eyeblossom.open_long")));
+}
+#[test]
+fn turtle_eggs_crack_at_dawn_on_sand() {
+    let Some(f) = fixture() else { return };
+    let mut w = World::new(f, 3);
+    w.floor("sand", 1);
+    let egg = w.id("turtle_egg", &[]);
+    let pos = BlockPos::new(0, 64, 0);
+    w.put(pos, egg);
+    w.level.day = 21500;
+    f.behaviours.random_tick(&mut w.level, &mut w.ticks, pos);
+    assert_eq!(
+        w.level.block_state(pos),
+        w.id("turtle_egg", &[("hatch", "1")])
+    );
+    f.behaviours.random_tick(&mut w.level, &mut w.ticks, pos);
+    f.behaviours.random_tick(&mut w.level, &mut w.ticks, pos);
+    assert_eq!(w.name(pos), "minecraft:air", "hatched");
 }

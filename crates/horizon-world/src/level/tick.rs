@@ -140,6 +140,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Observer => self.observer_tick(pos, state),
+                Class::Eyeblossom => self.eyeblossom_tick(state, pos, false),
+                Class::DriedGhast => self.dried_ghast_tick(state, pos),
                 Class::RedstoneLamp => self.lamp_tick(pos, state),
                 Class::RedstoneTorch => self.torch_tick(pos, state),
                 Class::Scaffolding => self.scaffolding_tick(pos, state),
@@ -329,6 +331,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Vine => self.vine_random_tick(state, pos),
+                Class::Eyeblossom => self.eyeblossom_tick(state, pos, true),
+                Class::FlowerPot => self.potted_eyeblossom_tick(state, pos),
+                Class::TurtleEgg => self.turtle_egg_tick(state, pos),
+                Class::DriedGhast => self.dried_ghast_random_tick(state, pos),
                 Class::WeatheringCopperFull => self.copper_change_over_time(state, pos),
                 _ => continue,
             }

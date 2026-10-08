@@ -224,6 +224,9 @@ impl LevelAccess for GameLevel<'_> {
     fn world_seed(&self) -> i64 {
         self.seed
     }
+    fn day_time(&self) -> i64 {
+        self.world.day_time
+    }
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.world.block(pos.x, pos.y, pos.z)
     }
