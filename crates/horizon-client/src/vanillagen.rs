@@ -118,6 +118,17 @@ impl ChunkGenerator for VanillaTerrain {
                 }
             }
         }
+        let base_section = chunk.terrain.min_y() >> 4;
+        for (i, marks) in chunk.terrain.postprocessing().iter().enumerate() {
+            let sy = (base_section + i as i32) * 16;
+            for &packed in marks {
+                let p = i32::from(packed);
+                let y = sy + ((p >> 4) & 15);
+                if (lo..hi).contains(&y) {
+                    out.postprocess.push([bx + (p & 15), y, bz + ((p >> 8) & 15)]);
+                }
+            }
+        }
         let mut biomes = vec![0u16; 16 * (HEIGHT as usize / 4)];
         for qy in 0..HEIGHT / 4 {
             for qz in 0..4 {

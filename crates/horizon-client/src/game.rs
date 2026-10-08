@@ -2,6 +2,7 @@
 //! block interaction, inventory and HUD.
 mod control;
 mod end;
+mod postprocess;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -1405,6 +1406,7 @@ impl Game<'_> {
         self.tick_sleep();
         self.tick_portal()?;
         self.tick_end()?;
+        self.postprocess_chunks()?;
         self.tick_blocks()?;
         self.tick_falling()?;
         if let Some(p) = &self.player {

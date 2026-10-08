@@ -71,6 +71,10 @@ pub(super) struct Decoration {
     catalog: FeatureCatalog,
     /// Placed features referenced by name (feature pool elements), decoded lazily.
     named: std::sync::Mutex<HashMap<String, Option<Arc<PlacedFeatureDefinition>>>>,
+    /// BlockBehaviour.Properties.postProcess: states whose worldgen writes mark
+    /// their own position (mushrooms) or the one above (soul sand, magma).
+    postprocess_self: Vec<BlockStateId>,
+    postprocess_above: Vec<BlockStateId>,
 }
 fn resource(message: impl Into<String>) -> GeneratorError {
     GeneratorError::Resource(message.into())
@@ -214,7 +218,17 @@ impl Decoration {
         }
         let plan = FeatureDecorationPlan::new(plan).map_err(|e| resource(e.to_string()))?;
         let weather = BiomeWeatherBindings::new(&bindings).ok();
+        let states = |names: &[&str]| -> Vec<BlockStateId> {
+            names
+                .iter()
+                .filter_map(|n| registry.default_state(n))
+                .collect()
+        };
+        let postprocess_self = states(&["minecraft:brown_mushroom", "minecraft:red_mushroom"]);
+        let postprocess_above = states(&["minecraft:soul_sand", "minecraft:magma_block"]);
         Ok(Some(Self {
+            postprocess_self,
+            postprocess_above,
             plan,
             names,
             features,
@@ -452,7 +466,7 @@ impl FeatureWorld for World<'_> {
         &mut self,
         position: [i32; 3],
         state: BlockStateId,
-        _flags: i32,
+        flags: i32,
     ) -> Result<bool, RegionError> {
         if !self
             .zone
@@ -462,6 +476,20 @@ impl FeatureWorld for World<'_> {
         }
         self.region.set_block_worldgen(position, state)?;
         self.block_entities.retain(|(p, _)| *p != position);
+        // WorldGenRegion.setBlock: BlockState.getPostProcessPos unless UPDATE_KNOWN_SHAPE.
+        if flags & 16 == 0 {
+            let [x, y, z] = position;
+            let mark = if self.decoration.postprocess_self.contains(&state) {
+                Some(y)
+            } else if self.decoration.postprocess_above.contains(&state) {
+                Some(y.wrapping_add(1))
+            } else {
+                None
+            };
+            if let Some(y) = mark {
+                self.region.chunk_mut(x >> 4, z >> 4)?.mark_postprocessing(x, y, z);
+            }
+        }
         Ok(true)
     }
 }
