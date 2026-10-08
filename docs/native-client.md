@@ -57,7 +57,8 @@ On headless Linux use `vscreen start ./target/release/horizon-client` and
 
 ### Play on another of your machines
 
-Horizon targets Linux and macOS; Windows is out of scope. To play on a machine
+Horizon targets Linux on ludodesktop (Ubuntu 26.04, RTX 4080); macOS and Windows
+are out of scope. To play on another Linux machine
 without Rust, JDK or prepared resources, package a release build where they exist:
 
 ```sh
@@ -378,8 +379,8 @@ Initial local validation uses Linux x86_64, a headless Wayland compositor and
 Vulkan llvmpipe software rendering. Textured geometry and resizing were visually
 inspected; movement, arrow rotation and Ctrl+Q were exercised using virtual
 physical key codes. Captured relative mouse movement and Escape release were
-exercised through a virtual pointer. Native macOS/Metal and
-physical-GPU Linux runtime tests remain pending. Software-renderer frame rates
+exercised through a virtual pointer. Physical-GPU runtime tests on ludodesktop
+(RTX 4080) remain pending. Software-renderer frame rates
 are not evidence of a hardware speedup.
 
 The model gallery was also inspected at close range on Linux/Vulkan llvmpipe.
@@ -553,7 +554,7 @@ The Ctrl run recorded 71 sprint ticks and 1,948 sprint centimeters. The double-t
 run visibly showed `Sprint true` during the second press and `Sprint false`
 after releasing W. Both runs ended grounded and alive without an error, and
 their views were visually inspected. These are development client checks;
-macOS runtime acceptance and complete gameplay remain pending.
+ludodesktop release acceptance and complete gameplay remain pending.
 
 ## Crouching and dry pose transitions
 
@@ -592,7 +593,7 @@ visibly switched from crouching to standing after releasing Shift. It recorded
 without an error. Both views were inspected. The
 [renderer startup check](../benchmarks/rust-native-crouch-2026-10-07/startup-smoke.json),
 seven client tests and all-target client Clippy also passed. These checks do not
-establish full vanilla gameplay or final macOS/Linux release acceptance.
+establish full vanilla gameplay or final Linux release acceptance on ludodesktop.
 
 
 ## Pending attribute updates
@@ -631,4 +632,4 @@ recorded 36 sprinting ticks and 36 crouching ticks, ending grounded and alive
 without an error. Its view was inspected. The
 [startup check](../benchmarks/rust-native-attribute-updates-2026-10-07/startup-smoke.json),
 seven client tests and all-target client Clippy passed. Full gameplay parity and
-playable macOS/Linux release acceptance remain pending.
+playable Linux release acceptance on ludodesktop remain pending.
