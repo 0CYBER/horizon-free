@@ -4184,6 +4184,7 @@ impl Game<'_> {
         let mut sky = environment.sample(self.world.day_time, info.sky, info.fog);
         let (rain, thunder) = if self.dim == Dim::Overworld { self.world.weather.levels(alpha as f32) } else { (0.0, 0.0) };
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
+        self.end_flash_sky(&mut sky, alpha);
         if self.flash > 0 {
             // Lightning flash brightens the sky (LevelRenderer skyFlashTime).
             sky.sky_color = [0.9, 0.9, 1.0];
