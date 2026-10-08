@@ -55,6 +55,23 @@ Worlds autosave every 6000 ticks (5 minutes), when chunks unload and on quit.
 On headless Linux use `vscreen start ./target/release/horizon-client` and
 `vscreen shot`.
 
+### Play on another of your machines
+
+Horizon targets Linux and macOS; Windows is out of scope. To play on a machine
+without Rust, JDK or prepared resources, package a release build where they exist:
+
+```sh
+cargo build --release -p horizon-client
+python3 tools/package_native_client.py --out ~/builds/horizon
+```
+
+The archive holds the binary, the prepared resources and `horizon.sh`. Copy it
+to the target machine (same OS and architecture), unpack it and run
+`horizon/horizon.sh`; `horizon.sh --install` adds an application menu entry.
+Saves and `options.txt` go to `~/.local/share/horizon` (or `$HORIZON_HOME`), so
+unpacking an update keeps them. The archive contains Mojang assets: keep it
+private.
+
 ## How it fits together
 
 - `streaming.rs`: worker pool that generates or loads, lights and meshes chunk
@@ -362,7 +379,7 @@ Vulkan llvmpipe software rendering. Textured geometry and resizing were visually
 inspected; movement, arrow rotation and Ctrl+Q were exercised using virtual
 physical key codes. Captured relative mouse movement and Escape release were
 exercised through a virtual pointer. Native macOS/Metal and
-Windows/Direct3D 12 runtime tests remain pending. Software-renderer frame rates
+physical-GPU Linux runtime tests remain pending. Software-renderer frame rates
 are not evidence of a hardware speedup.
 
 The model gallery was also inspected at close range on Linux/Vulkan llvmpipe.
@@ -536,7 +553,7 @@ The Ctrl run recorded 71 sprint ticks and 1,948 sprint centimeters. The double-t
 run visibly showed `Sprint true` during the second press and `Sprint false`
 after releasing W. Both runs ended grounded and alive without an error, and
 their views were visually inspected. These are development client checks;
-macOS/Windows runtime acceptance and complete gameplay remain pending.
+macOS runtime acceptance and complete gameplay remain pending.
 
 ## Crouching and dry pose transitions
 
@@ -575,7 +592,7 @@ visibly switched from crouching to standing after releasing Shift. It recorded
 without an error. Both views were inspected. The
 [renderer startup check](../benchmarks/rust-native-crouch-2026-10-07/startup-smoke.json),
 seven client tests and all-target client Clippy also passed. These checks do not
-establish full vanilla gameplay or final macOS/Linux/Windows release acceptance.
+establish full vanilla gameplay or final macOS/Linux release acceptance.
 
 
 ## Pending attribute updates
@@ -614,4 +631,4 @@ recorded 36 sprinting ticks and 36 crouching ticks, ending grounded and alive
 without an error. Its view was inspected. The
 [startup check](../benchmarks/rust-native-attribute-updates-2026-10-07/startup-smoke.json),
 seven client tests and all-target client Clippy passed. Full gameplay parity and
-playable macOS/Linux/Windows release acceptance remain pending.
+playable macOS/Linux release acceptance remain pending.

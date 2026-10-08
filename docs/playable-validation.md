@@ -156,7 +156,7 @@ software-renderer workload establish a real-hardware optimization result.
 
 The local Linux host uses **Mesa llvmpipe software rendering**. It is useful for mod/mixin/startup/report validation, not for predicting M2 Pro, Windows GPU or Linux discrete-GPU performance. Warm-up/world loading on this host is slow. Demo credentials produce expected unavailable account-properties/Realms logs, and chat availability can be restricted; the independent F8 measurement shortcut avoids relying on chat.
 
-CI compiles/builds on Linux, Windows and Apple Silicon macOS. Successful compilation is not graphics, authentication, UI or Mac-driver runtime validation. macOS 27 and the user's actual M2 Pro have not been tested here. Optional cinematic shaders and Vulkan are experiments; the OpenGL balanced pack is the first manual test.
+CI compiles/builds on Linux and Apple Silicon macOS (Windows was dropped from scope on 2026-10-08; earlier Windows results below are historical). Successful compilation is not graphics, authentication, UI or Mac-driver runtime validation. macOS 27 and the user's actual M2 Pro have not been tested here. Optional cinematic shaders and Vulkan are experiments; the OpenGL balanced pack is the first manual test.
 
 The [core comparison](core-performance.md) records numerical observations for
 matched software-rendered workloads. They do not establish a Mac or hardware-GPU

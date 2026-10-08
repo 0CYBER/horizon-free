@@ -21,7 +21,7 @@ cargo run --release -p horizon-client
 
 **Java performance packs (separate track):** pinned Java performance packs, distant terrain, an original frame/tick recorder, and Mac/client/server starter downloads. The M2 Pro/16 GB Mac is the first testing target.
 
-The Rust rewrite’s final deliverables include **playable native builds for macOS, Linux and Windows**, with launch instructions and platform gameplay validation. Track implementation and acceptance criteria in [Rust rewrite status](docs/rust-parity.md).
+The Rust rewrite’s final deliverables include **playable native builds for macOS and Linux**, with launch instructions and platform gameplay validation. Track implementation and acceptance criteria in [Rust rewrite status](docs/rust-parity.md).
 
 ## Play on your Mac
 
@@ -289,7 +289,7 @@ python3 tools/check_public_tree.py
 python3 tools/check_public_tree.py --history
 ```
 
-CI checks offline tools/Rust and compiles the original mod/builds packs on Linux, Windows and Apple Silicon macOS. Game dependencies download to ephemeral `.local/`; CI uploads only our original JAR and packs. Compilation is not Mac GPU gameplay testing. Publication checks allow Java only under our original `dev/horizonlab` namespace; review diffs as well.
+CI checks offline tools/Rust and compiles the original mod/builds packs on Linux and Apple Silicon macOS. Game dependencies download to ephemeral `.local/`; CI uploads only our original JAR and packs. Compilation is not Mac GPU gameplay testing. Publication checks allow Java only under our original `dev/horizonlab` namespace; review diffs as well.
 
 [MIT](LICENSE) covers only our original tracked work. Dependencies retain their licenses. Mojang [removed obfuscation](https://www.minecraft.net/en-us/article/removing-obfuscation-in-java-edition) without changing [Minecraft's EULA](https://www.minecraft.net/en-us/eula). Decompiled game source remains local; published code implements independent tooling and instrumentation.
 

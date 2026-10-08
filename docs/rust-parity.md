@@ -59,11 +59,12 @@ The playable Java performance packs remain available during development.
 ## Completion criteria and playable builds
 
 The final deliverable is the complete Horizon Rust game with one-to-one parity
-with pinned Java Edition 26.3, plus playable builds for **macOS, Linux and
-Windows** that the user can download and test. Each platform must include a
-packaged native executable, required runtime resources, launch instructions,
-artifact checksums, and the tested OS/CPU/GPU configuration. The existing M2 Pro
-Mac is the first physical macOS target.
+with pinned Java Edition 26.3, plus playable builds for **macOS and Linux** that the user can download and
+test. Windows is out of scope. Each platform must include a packaged native
+executable, required runtime resources, launch instructions, artifact checksums,
+and the tested OS/CPU/GPU configuration. The existing M2 Pro Mac is the first
+physical macOS target; the Ubuntu 26.04 desktop (Intel i7-13700KF, NVIDIA RTX
+4080, GNOME on Wayland) is the first physical Linux target.
 
 A platform is complete only after its packaged Rust game is launched and tested:
 create/load a world, render terrain, use keyboard/mouse controls, move and interact,
@@ -1219,7 +1220,7 @@ This component assumes immutable registered defaults with no modifiers; the
 exporter verifies that assumption. Mutable custom suppliers and their internal
 caches use the separate generic storage interfaces. Combined entity health and
 dimension consequences, full gameplay, save/network codecs and playable native
-macOS, Linux and Windows builds remain unfinished.
+macOS and Linux builds remain unfinished.
 
 The production health binding now accepts the live component through computed
 attribute queries. Healing, health and base absorption limits, synchronized
@@ -1284,6 +1285,6 @@ The registered factories have no world access; the exporter verifies their
 inherited implementation and captured arguments. This permits an immutable map
 traversal during particle creation. Custom impure factories remain outside this
 binding. Rendering, transport, full entity lifecycle integration and playable
-macOS, Linux and Windows gameplay remain unfinished. In this pinned version,
+macOS and Linux gameplay remain unfinished. In this pinned version,
 `LivingEntity.updateDataBeforeSync` invokes dirty effect synchronization; it is a
 separate phase from `tickEffects`.
