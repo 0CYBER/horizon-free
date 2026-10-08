@@ -4640,7 +4640,7 @@ pub fn run() -> Result<()> {
     let visibility = models::load_visibility(&root, &assets.registry)?;
     eprintln!("load visibility: {:.2}s", started.elapsed().as_secs_f32());
     let tables = Arc::new(MeshTables::new(&assets, &facts, visibility)?);
-    let light = Arc::new(LightTables::new(&facts));
+    let light = Arc::new(LightTables::load(&root, &assets.registry, &facts)?);
     eprintln!("load tables: {:.2}s", started.elapsed().as_secs_f32());
     let atlas = HudAtlas::build(&root)?;
     eprintln!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
