@@ -1252,9 +1252,11 @@ impl Behaviours {
     /// order: block ticks then fluid ticks (65536 each at most).
     pub fn tick_scheduled<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks) {
         let time = level.game_time();
+        ticks.handling_tick = true;
         {
             let level_ref: &L = level;
             if ticks.blocks.begin_tick(time, 65536, |chunk: ChunkPos| level_ref.is_ticking_chunk(chunk)).is_err() {
+                ticks.handling_tick = false;
                 return;
             }
         }
@@ -1269,6 +1271,7 @@ impl Behaviours {
         {
             let level_ref: &L = level;
             if ticks.fluids.begin_tick(time, 65536, |chunk: ChunkPos| level_ref.is_ticking_chunk(chunk)).is_err() {
+                ticks.handling_tick = false;
                 return;
             }
         }
@@ -1280,6 +1283,7 @@ impl Behaviours {
             }
         }
         let _ = ticks.fluids.finish_tick();
+        ticks.handling_tick = false;
     }
     /// Random-tick one chunk (`ServerLevel.tickChunk` block part). `sections`
     /// yields the minimum block Y of every section the caller considers

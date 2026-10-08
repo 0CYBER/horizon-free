@@ -24,6 +24,14 @@ pub struct Ticks {
     pub comparator_outputs: std::collections::HashMap<BlockPos, i32>,
     /// `RedstoneTorchBlock.RECENT_TOGGLES` (position, game time).
     pub torch_toggles: Vec<(BlockPos, i64)>,
+    /// Moving-piston block entities in ticker order (render and collide
+    /// moving blocks from these; see `piston_shape`).
+    pub moving_pistons: Vec<(BlockPos, super::pistons::MovingPiston)>,
+    pub(crate) next_block_entity_id: u64,
+    /// `ServerLevel.blockEvents`, run by `Behaviours::run_block_events`.
+    pub block_events: Vec<super::pistons::BlockEventData>,
+    /// `ServerLevel.isHandlingTick` (true while scheduled ticks run).
+    pub(crate) handling_tick: bool,
 }
 impl Default for Ticks {
     fn default() -> Self {
@@ -42,6 +50,10 @@ impl Ticks {
             updater: NeighborUpdater::default(),
             comparator_outputs: Default::default(),
             torch_toggles: Vec::new(),
+            moving_pistons: Vec::new(),
+            next_block_entity_id: 0,
+            block_events: Vec::new(),
+            handling_tick: false,
         }
     }
     /// Register a loaded chunk's saved block and fluid ticks.

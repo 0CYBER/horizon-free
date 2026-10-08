@@ -255,6 +255,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         let new_block = self.block_of(state);
         let block_changed = self.block_of(old) != new_block;
+        if block_changed && self.block_of(old) == self.b.named.moving_piston {
+            // PistonMovingBlockEntity.preRemoveSideEffects -> finalTick; the
+            // block is already replaced, so only the entity goes away.
+            self.remove_moving_piston(pos);
+        }
         let moved = update_flags & flags::UPDATE_MOVE_BY_PISTON != 0;
         if (block_changed || self.b.block_data(new_block).is(super::classes::Class::BaseRail))
             && (update_flags & flags::UPDATE_NEIGHBORS != 0 || moved)

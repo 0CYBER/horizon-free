@@ -22,7 +22,10 @@
 //!    ticked. The caller decides which sections are randomly ticking (vanilla
 //!    counts randomly-ticking states per section); [`Behaviours::random_tick`]
 //!    ticks a single position.
-//! 3. Player actions call [`Behaviours::place_block`] /
+//! 3. [`Behaviours::run_block_events`] runs queued block events (pistons),
+//!    then (after entities) [`Behaviours::tick_block_entities`] advances
+//!    moving pistons ([`Ticks::moving_pistons`]).
+//! 4. Player actions call [`Behaviours::place_block`] /
 //!    [`Behaviours::use_without_item`] / [`Behaviours::destroy_block`].
 //!
 //! Every block mutation goes through [`Behaviours::set_block`] with vanilla's
@@ -68,6 +71,9 @@
 //! for chunk in ticking_chunks {
 //!     behaviours.tick_chunk_random(&mut level, &mut ticks, chunk, randomly_ticking_section_min_ys(chunk));
 //! }
+//! behaviours.run_block_events(&mut level, &mut ticks);
+//! /* tick entities */
+//! behaviours.tick_block_entities(&mut level, &mut ticks);
 //! for event in level.events.drain(..) { /* play sounds, spawn drops/falling blocks, grow trees */ }
 //!
 //! // Player actions:
@@ -99,6 +105,7 @@ mod fluids;
 mod hooks;
 mod interact;
 mod place;
+pub mod pistons;
 mod query;
 mod rails;
 mod redstone;
@@ -112,6 +119,7 @@ mod tests;
 
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
 pub use falling::Landing;
+pub use pistons::{BlockEventData, MovingPiston};
 pub use place::{PlaceContext, PlaceOutcome};
 pub use interact::{InteractionResult, PlayerContext, PlayerEffect};
 pub use states::{BlockId, PropKey, StateTable};

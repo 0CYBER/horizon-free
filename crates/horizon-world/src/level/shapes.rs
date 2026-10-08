@@ -527,6 +527,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     state
                 }
             }
+            Class::PistonHead => survive_or_air!(dir.opposite() == b.facing(state)),
             Class::Note => {
                 if dir.normal()[1] != 0 { self.note_block_instrument(pos, state) } else { sup!() }
             }

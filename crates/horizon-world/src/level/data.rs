@@ -46,11 +46,11 @@ pub mod state_flags {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PushReaction {
-    Normal,
-    Destroy,
-    Block,
-    Ignore,
-    PushOnly,
+    PushPull,
+    Push,
+    Popped,
+    Immoveable,
+    IgnoreEntity,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -758,12 +758,12 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             emission: game.get("emission").and_then(Value::as_u64).unwrap_or(0) as u8,
             dampening: game.get("dampening").and_then(Value::as_u64).unwrap_or(0) as u8,
             hardness: game.get("hardness").and_then(Value::as_f64).unwrap_or(0.0) as f32,
-            push: match game.get("push").and_then(Value::as_str).unwrap_or("NORMAL") {
-                "DESTROY" => PushReaction::Destroy,
-                "BLOCK" => PushReaction::Block,
-                "IGNORE" => PushReaction::Ignore,
-                "PUSH_ONLY" => PushReaction::PushOnly,
-                _ => PushReaction::Normal,
+            push: match game.get("push").and_then(Value::as_str).unwrap_or("PUSH_PULL") {
+                "PUSH" => PushReaction::Push,
+                "POPPED" => PushReaction::Popped,
+                "IMMOVEABLE" => PushReaction::Immoveable,
+                "IGNORE_ENTITY" => PushReaction::IgnoreEntity,
+                _ => PushReaction::PushPull,
             },
             instrument: instrument_index(row.get(8).and_then(Value::as_str).unwrap_or("HARP")),
             shape: shape_ids[id],

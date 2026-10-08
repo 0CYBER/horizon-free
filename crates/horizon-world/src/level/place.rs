@@ -329,6 +329,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Some(table.set_dir(default, p.facing, ctx.nearest_looking_direction().opposite()))
             }
             Class::Observer => Some(table.set_dir(default, p.facing, ctx.nearest_looking_direction())),
+            Class::PistonBase => Some(table.set_bool(table.set_dir(default, p.facing, ctx.nearest_looking_direction().opposite()), p.extended, false)),
             Class::Barrier
             | Class::HeavyCore
             | Class::SculkSensor
@@ -1035,6 +1036,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let water = self.is_water_at(above_pos);
             let upper = b.table.with_bool(upper, p.waterlogged, water).unwrap_or(upper);
             self.set_block_and_update(above_pos, upper);
+        } else if data.is(Class::PistonBase) {
+            self.piston_check_if_extend(pos, state);
         } else if data.is(Class::TripWireHook) {
             self.tripwire_hook_calculate(pos, state, false, false, -1, None);
         } else if data.is(Class::MossyCarpet) {

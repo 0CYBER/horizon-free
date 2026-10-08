@@ -39,6 +39,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Hopper => self.hopper_check_powered(pos, state),
                 Class::Liquid => self.liquid_block_changed(pos, state),
                 Class::Note => self.note_neighbor_changed(pos, state),
+                Class::PistonBase => self.piston_check_if_extend(pos, state),
+                Class::PistonHead => {
+                    if self.piston_head_can_survive(state, pos) {
+                        let base = rel(pos, b.facing(state).opposite());
+                        self.neighbor_changed_at(base, changed);
+                    }
+                }
                 Class::RedstoneLamp => self.lamp_neighbor_changed(pos, state),
                 Class::RedstoneTorch => self.torch_neighbor_changed(pos, state),
                 Class::RedstoneWire => {
@@ -116,6 +123,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Liquid => self.liquid_block_changed(pos, state),
+                Class::PistonBase => {
+                    if !same && self.moving_piston(pos).is_none() {
+                        self.piston_check_if_extend(pos, state);
+                    }
+                }
                 Class::Observer => {
                     if !same && b.table.bool(state, b.props.powered) && !self.ticks.has_block_tick(pos, block) {
                         let next = b.table.set_bool(state, b.props.powered, false);
@@ -231,6 +243,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     if b.table.bool(state, b.props.powered) {
                         let facing = b.facing(state);
                         self.update_neighbors_at(rel(pos, facing.opposite()), block);
+                    }
+                }
+                Class::PistonHead => {
+                    let base_pos = rel(pos, b.facing(state).opposite());
+                    let base = self.state(base_pos);
+                    if self.piston_head_fitting_base(state, base) {
+                        self.destroy_block(base_pos, true, super::flags::UPDATE_LIMIT);
                     }
                 }
                 Class::Lectern => {

@@ -165,6 +165,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.sturdy(rel(pos, direction), direction.opposite())
             }
             Class::Grindstone => true,
+            Class::PistonHead => self.piston_head_can_survive(state, pos),
             Class::Farmland => {
                 let above = self.above_state(pos);
                 !b.is_solid(above) || b.in_set(above, &t.maintains_farmland)

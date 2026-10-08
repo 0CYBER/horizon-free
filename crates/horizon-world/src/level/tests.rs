@@ -127,6 +127,12 @@ impl<'f> World<'f> {
         self.level.time += 1;
         self.f.behaviours.tick_scheduled(&mut self.level, &mut self.ticks);
     }
+    /// Scheduled ticks, block events and block entities, as `ServerLevel.tick`.
+    fn full_tick(&mut self) {
+        self.tick();
+        self.f.behaviours.run_block_events(&mut self.level, &mut self.ticks);
+        self.f.behaviours.tick_block_entities(&mut self.level, &mut self.ticks);
+    }
     fn floor(&mut self, y: i32, radius: i32, block: &str) {
         let state = self.id(block, &[]);
         for x in -radius..=radius {
@@ -555,4 +561,59 @@ fn levers_power_wire_through_interaction() {
         w.tick();
     }
     assert_eq!(w.prop(BlockPos::new(5, 1, 0), "powered"), "false");
+}
+
+#[test]
+fn pistons_push_and_sticky_pistons_pull() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    let piston = w.id("sticky_piston", &[("facing", "east")]);
+    let block = w.id("redstone_block", &[]);
+    let dirt = w.id("dirt", &[]);
+    let air = w.b().air();
+    w.set(BlockPos::new(0, 1, 0), piston);
+    w.set(BlockPos::new(1, 1, 0), dirt);
+    w.set(BlockPos::new(-1, 1, 0), block);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    assert_eq!(w.prop(BlockPos::new(0, 1, 0), "extended"), "true");
+    assert_eq!(w.name(BlockPos::new(1, 1, 0)), "piston_head[facing=east,short=false,type=sticky]");
+    assert_eq!(w.get(BlockPos::new(2, 1, 0)), dirt);
+    assert!(w.ticks.moving_pistons.is_empty());
+    w.set(BlockPos::new(-1, 1, 0), air);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    assert_eq!(w.prop(BlockPos::new(0, 1, 0), "extended"), "false");
+    assert_eq!(w.get(BlockPos::new(1, 1, 0)), dirt, "the sticky piston pulled the block back");
+    assert_eq!(w.get(BlockPos::new(2, 1, 0)), air);
+}
+
+#[test]
+fn pistons_pop_fragile_blocks_and_refuse_obsidian() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    let piston = w.id("piston", &[("facing", "east")]);
+    let block = w.id("redstone_block", &[]);
+    let torch = w.id("torch", &[]);
+    let obsidian = w.id("obsidian", &[]);
+    w.set(BlockPos::new(0, 1, 0), piston);
+    w.set(BlockPos::new(1, 1, 0), torch);
+    w.set(BlockPos::new(-1, 1, 0), block);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    assert_eq!(w.name(BlockPos::new(1, 1, 0)), "piston_head[facing=east,short=false,type=normal]");
+    assert!(w.level.events.iter().any(|e| matches!(e, LevelEvent::DropResources { state, .. } if *state == torch)));
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    w.set(BlockPos::new(0, 1, 0), piston);
+    w.set(BlockPos::new(1, 1, 0), obsidian);
+    w.set(BlockPos::new(-1, 1, 0), block);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    assert_eq!(w.prop(BlockPos::new(0, 1, 0), "extended"), "false");
+    assert_eq!(w.get(BlockPos::new(1, 1, 0)), obsidian);
 }
