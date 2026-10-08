@@ -2,6 +2,7 @@
 //!
 //! chunkgen_bench <client resource dir> [--seed S] [--size N] [--threads T]
 //!     [--center CX CZ] [--verify <material-stage parity dir>] [--no-decorate]
+//!     [--dimension minecraft:the_nether|minecraft:the_end]
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     DATA_VERSION,
@@ -274,6 +275,7 @@ fn main() -> Result<(), Error> {
     let (mut seed, mut size, mut threads, mut center) = (0i64, 16i32, 2usize, (0, 0));
     let mut parity = None;
     let mut decorate = true;
+    let mut dimension = String::from("minecraft:overworld");
     let mut starts: Option<(i32, i32, i32, i32, PathBuf)> = None;
     while let Some(arg) = args.next() {
         let mut next = || args.next().expect("argument value");
@@ -284,6 +286,7 @@ fn main() -> Result<(), Error> {
             "--center" => center = (next().parse()?, next().parse()?),
             "--verify" => parity = Some(PathBuf::from(next())),
             "--no-decorate" => decorate = false,
+            "--dimension" => dimension = next(),
             "--starts" => {
                 starts = Some((
                     next().parse()?,
@@ -304,7 +307,8 @@ fn main() -> Result<(), Error> {
         verify(&data, &parity)?;
     }
     let start = Instant::now();
-    let generator = OverworldGenerator::new(data.clone(), seed)?;
+    let generator =
+        OverworldGenerator::for_dimension(data.clone(), seed, "minecraft:normal", &dimension)?;
     println!("seeded generator in {:.2?}", start.elapsed());
     if let Some((x0, z0, x1, z1, out)) = starts {
         dump_starts(&generator, seed, [x0, z0, x1, z1], &out)?;

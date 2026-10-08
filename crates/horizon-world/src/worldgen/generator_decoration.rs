@@ -615,6 +615,30 @@ impl PlacementContext for World<'_> {
         self.block_entities.push((position, nbt));
         Ok(())
     }
+    /// WorldGenRegion.getBlockEntity creates the gateway's block entity when the
+    /// block is an End gateway; TheEndGatewayBlockEntity.setExitPosition.
+    fn configure_end_gateway(
+        &mut self,
+        position: [i32; 3],
+        exit: [i32; 3],
+        exact: bool,
+    ) -> Result<(), PlacementQueryError> {
+        let chunk = self.region.chunk(position[0] >> 4, position[2] >> 4)?;
+        let state = chunk.block(position[0], position[1], position[2]);
+        let registry = self.decoration.bindings.registry();
+        if registry.state(state).map(|s| s.name.as_str()) != Some("minecraft:end_gateway") {
+            return Ok(());
+        }
+        use crate::nbt::Tag;
+        let mut nbt = crate::nbt::Compound::new();
+        nbt.insert("id".into(), Tag::String("minecraft:end_gateway".into()));
+        nbt.insert("Age".into(), Tag::Long(0));
+        nbt.insert("exit_portal".into(), Tag::IntArray(exit.to_vec()));
+        if exact {
+            nbt.insert("ExactTeleport".into(), Tag::Byte(1));
+        }
+        self.set_block_entity(position, nbt)
+    }
     fn world_seed(&mut self) -> Result<i64, PlacementQueryError> {
         self.region.world_seed()
     }
