@@ -2909,6 +2909,7 @@ impl Game<'_> {
         let (yaw, pitch) = self.options.look.unwrap_or((level.rotation[0], level.rotation[1]));
         self.yaw = yaw;
         self.pitch = pitch;
+        self.selected = level.selected_slot.clamp(0, 8) as usize;
         self.streaming = streaming;
         self.world = world;
         self.inventory = inventory;

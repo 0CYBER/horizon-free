@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run the vanilla 26.3 dedicated server headless on a world folder, optionally
-send console commands (`sleep SECONDS` pauses between them), then stop it cleanly and report problems from its log.
+send console commands (`sleep SECONDS` pauses between them; `login NAME
+SECONDS` joins with tools/vanilla_login.py in the background), then stop it
+cleanly and report problems from its log.
 
   vanilla_world_check.py --jar server.jar --dir RUN_DIR [--world NAME]
                          [--seed N] [--port P] [--command CMD ...]
@@ -21,10 +23,10 @@ import threading
 import time
 
 SUSPICIOUS = re.compile(
-    r'(ERROR|Exception|Couldn\'t load|Failed to|Skipping|Invalid|Unknown|corrupt|'
+    r'(ERROR|login failed|Exception|Couldn\'t load|Failed to|Skipping|Invalid|Unknown|corrupt|'
     r'Recreating|upgrad|DataFix|out of bounds|missing|Mismatch)', re.IGNORECASE)
 # Benign lines the server prints on every start.
-BENIGN = re.compile(r'(OFFLINE/INSECURE|online-mode|authenticate usernames|hackers|'
+BENIGN = re.compile(r'(Unpacking |OFFLINE/INSECURE|online-mode|authenticate usernames|hackers|'
                     r'Failed to load properties|Failed to load eula)')
 
 
@@ -47,7 +49,7 @@ def main():
         'level-name': args.world, 'spawn-protection': '0', 'view-distance': '4',
         'simulation-distance': '4', 'sync-chunk-writes': 'true', 'enable-query': 'false',
         'enable-rcon': 'false', 'management-server-enabled': 'false',
-        'pause-when-empty-seconds': '-1',
+        'pause-when-empty-seconds': '-1', 'white-list': 'false', 'enforce-whitelist': 'false',
     }
     with open(os.path.join(args.dir, 'server.properties'), 'w') as f:
         f.writelines(f'{k}={v}\n' for k, v in props.items())
@@ -73,6 +75,19 @@ def main():
     for command in args.command:
         if command.startswith('sleep '):
             time.sleep(float(command.split()[1]))
+            continue
+        if command.startswith('login '):
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import vanilla_login
+            _, name, seconds = command.split()
+
+            def run(name=name, seconds=float(seconds)):
+                try:
+                    vanilla_login.join('127.0.0.1', int(args.port), name, seconds)
+                except Exception as e:  # reported in the log check below
+                    lines.append(f'login failed: {e}')
+
+            threading.Thread(target=run, daemon=True).start()
             continue
         proc.stdin.write(command + '\n')
         proc.stdin.flush()

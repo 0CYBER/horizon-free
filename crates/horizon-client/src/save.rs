@@ -1015,19 +1015,20 @@ impl Level {
         // file of a server world, or the legacy Data.Player.
         let uuid = uuid_from_tag(data.get("singleplayer_uuid"));
         let player_dir = dir.join("players").join("data");
-        let player = match uuid {
-            Some(u) => read_dat(&player_dir.join(format!("{}.dat", uuid_text(u)))),
-            None => fs::read_dir(&player_dir)
-                .ok()
-                .and_then(|d| {
-                    d.flatten()
-                        .filter(|e| e.path().extension().is_some_and(|x| x == "dat"))
-                        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
-                })
-                .and_then(|e| read_dat(&e.path())),
-        }
-        .or_else(|| data.get("Player").cloned());
-        level.player_uuid = uuid.or_else(|| uuid_from_tag(player.as_ref().and_then(|p| p.get("UUID"))));
+        let owner = uuid.and_then(|u| read_dat(&player_dir.join(format!("{}.dat", uuid_text(u)))));
+        let player = owner
+            .or_else(|| {
+                fs::read_dir(&player_dir)
+                    .ok()
+                    .and_then(|d| {
+                        d.flatten()
+                            .filter(|e| e.path().extension().is_some_and(|x| x == "dat"))
+                            .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+                    })
+                    .and_then(|e| read_dat(&e.path()))
+            })
+            .or_else(|| data.get("Player").cloned());
+        level.player_uuid = uuid_from_tag(player.as_ref().and_then(|p| p.get("UUID"))).or(uuid);
         let spawn = level.world_spawn.map(|s| [f64::from(s[0]), f64::from(s[1]), f64::from(s[2])]);
         level.spawn = spawn;
         if let Some(p) = &player {
@@ -1182,7 +1183,8 @@ impl Level {
         }
         p
     }
-    pub fn write(&self, dir: &Path) -> Result<()> {
+    /// Write every file; a world without a player UUID gets a random one.
+    pub fn write(&mut self, dir: &Path) -> Result<()> {
         fs::create_dir_all(dir)?;
         let existing = read_dat(&dir.join("level.dat")).and_then(|r| r.get("Data").cloned());
         let legacy = existing.as_ref().is_some_and(|d| d.get("Player").is_some() || d.get("WorldGenSettings").is_some());
@@ -1199,11 +1201,12 @@ impl Level {
                 map.remove(&JavaString::from(key));
             }
         }
-        let uuid = self.player_uuid.unwrap_or_else(random_uuid);
-        let spawn = self.world_spawn.unwrap_or_else(|| {
-            let s = self.spawn.unwrap_or([0.0, 64.0, 0.0]);
-            [s[0].floor() as i32, s[1].floor() as i32, s[2].floor() as i32]
-        });
+        let uuid = *self.player_uuid.get_or_insert_with(random_uuid);
+        // A new world's first spawn point is its world spawn.
+        if self.world_spawn.is_none() {
+            self.world_spawn = self.spawn.map(|s| [s[0].floor() as i32, s[1].floor() as i32, s[2].floor() as i32]);
+        }
+        let spawn = self.world_spawn.unwrap_or([0, 64, 0]);
         let mut history: Vec<Tag> = match data.get("version_history") {
             Some(Tag::List(l)) => l.clone(),
             _ => Vec::new(),
@@ -1325,8 +1328,7 @@ impl Level {
             }
             write_saved_data(dir, "game_rules", rules)?;
         }
-        let player_level = Self { player_uuid: Some(uuid), ..self.clone() };
-        write_dat(&dir.join("players").join("data").join(format!("{}.dat", uuid_text(uuid))), player_level.player_tag())?;
+        write_dat(&dir.join("players").join("data").join(format!("{}.dat", uuid_text(uuid))), self.player_tag())?;
         write_dat(&dir.join("level.dat"), Tag::compound([("Data", data)]))?;
         Ok(())
     }
@@ -1437,7 +1439,7 @@ mod tests {
         // Unknown player data survives another save.
         let mut extra = back.player_extra.clone().unwrap();
         put(&mut extra, "EnderItems", Tag::List(vec![Tag::compound([("Slot", Tag::Byte(0)), ("id", string("minecraft:diamond")), ("count", Tag::Int(2))])]));
-        let again = Level { player_extra: Some(extra), ..back };
+        let mut again = Level { player_extra: Some(extra), ..back };
         again.write(&dir).unwrap();
         let third = Level::read(&dir).unwrap();
         assert!(matches!(third.player_extra.as_ref().and_then(|p| p.get("EnderItems")), Some(Tag::List(l)) if l.len() == 1));
