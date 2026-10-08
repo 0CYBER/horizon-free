@@ -1386,6 +1386,13 @@ impl Game<'_> {
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
                 }
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Write { position, flags, .. }) => {
+                    // Landing rules (farmland trampling, turtle eggs) wrote the block raw.
+                    self.with_level(|b, level, ticks| b.notify_written(level, ticks, position, flags as i32));
+                }
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Destroy { position, .. }) => {
+                    self.with_level(|b, level, ticks| b.notify_written(level, ticks, position, level_flags::UPDATE_ALL));
+                }
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Damage { .. }) => {
                     self.audio.play("minecraft:entity.player.hurt", Some(feet), 1.0, 1.0);
                 }
