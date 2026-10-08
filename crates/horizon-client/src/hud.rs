@@ -101,7 +101,7 @@ impl HudAtlas {
                 }
                 return Some((name, 256, 256, small));
             }
-            (w <= 1024 && h <= 512).then_some((name, w, h, pixels))
+            (w <= 1024 && (h <= 512 || name.starts_with("font/"))).then_some((name, w, h, pixels))
         };
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
         let chunk = files.len().div_ceil(threads).max(1);

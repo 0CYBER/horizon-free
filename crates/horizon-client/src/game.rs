@@ -3,6 +3,8 @@
 mod chat;
 mod commands;
 mod control;
+mod options;
+mod packs;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -1570,7 +1572,7 @@ impl Game<'_> {
         let mut batch = HudBatch::new(size);
         let (w, h) = (batch.width, batch.height);
         if self.screen == Screen::Options {
-            self.settings.draw(&self.res.atlas, &mut batch, self.cursor);
+            self.draw_options(&mut batch);
             return batch;
         }
         if let Some(title) = &self.title {
@@ -3756,6 +3758,7 @@ impl Game<'_> {
         self.streaming.radius = self.settings.render_distance;
         self.audio.master = self.settings.master_volume;
         horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, std::sync::atomic::Ordering::Relaxed);
+        self.apply_ui_settings();
     }
     /// Whether precipitation at a column is snow (Biome.coldEnoughToSnow:
     /// base temperature lowered above y 80) or none (no precipitation).
@@ -4231,10 +4234,7 @@ impl Game<'_> {
     fn key_pressed(&mut self, key: KeyCode) -> Result<()> {
         match key {
             KeyCode::Escape => match self.screen {
-                Screen::Options => {
-                    self.settings.save(&std::env::current_dir()?.join("options.txt"));
-                    self.screen = if self.options_from_title { Screen::Playing } else { Screen::Paused };
-                }
+                Screen::Options => self.options_key(KeyCode::Escape, None)?,
                 Screen::Playing => {
                     self.screen = Screen::Paused;
                     self.capture(false);
@@ -4255,6 +4255,7 @@ impl Game<'_> {
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
             KeyCode::Slash if self.screen == Screen::Playing => self.open_chat("/"),
             KeyCode::F1 => self.toggle_hide_gui(),
+            KeyCode::F11 => self.toggle_fullscreen(),
             KeyCode::F2 => self.take_screenshot(),
             KeyCode::KeyE if self.screen == Screen::Creative && self.creative_screen.tab().search => {}
             KeyCode::KeyE => match self.screen {
@@ -4431,8 +4432,8 @@ impl ApplicationHandler for Game<'_> {
                         let b = HudBatch::new([r.config.width, r.config.height]);
                         self.cursor = (position.x as f32 / b.scale, position.y as f32 / b.scale);
                         if self.dragging && self.screen == Screen::Options {
-                            self.settings.click(self.cursor.0, self.cursor.1, (b.width, b.height), true);
-                            self.apply_settings();
+                            let _ = b;
+                            self.options_drag()?;
                         }
                     }
                 }
@@ -4444,6 +4445,9 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Chat && d != 0.0 {
                         self.chat_scroll(d);
                     }
+                    if self.screen == Screen::Options && d != 0.0 {
+                        self.options_scroll(d);
+                    }
                     if self.screen == Screen::Creative && d != 0.0 {
                         let rows = self.creative_screen.rows(&self.res.names).saturating_sub(5).max(1) as f32;
                         self.creative_screen.scroll = (self.creative_screen.scroll - d.signum() / rows).clamp(0.0, 1.0);
@@ -4452,17 +4456,11 @@ impl ApplicationHandler for Game<'_> {
                         self.selected = (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
                     }
                 }
-                WindowEvent::MouseInput { state, button: MouseButton::Left, .. } if self.screen == Screen::Options => {
-                    self.dragging = state == ElementState::Pressed;
-                    if self.dragging {
-                        let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
-                        let b = HudBatch::new(size);
-                        if self.settings.click(self.cursor.0, self.cursor.1, (b.width, b.height), false) {
-                            self.settings.save(&std::env::current_dir()?.join("options.txt"));
-                            self.screen = if self.options_from_title { Screen::Playing } else { Screen::Paused };
-                            self.dragging = false;
-                        }
-                        self.apply_settings();
+                WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
+                    if self.options_waiting_for_key() && state == ElementState::Pressed {
+                        self.options_bind_mouse(button)?;
+                    } else if matches!(button, MouseButton::Left | MouseButton::Right) {
+                        self.options_mouse(state == ElementState::Pressed, button == MouseButton::Right)?;
                     }
                 }
                 WindowEvent::MouseInput { state, button: MouseButton::Left, .. }
@@ -4473,10 +4471,7 @@ impl ApplicationHandler for Game<'_> {
                     let action = self.title.as_mut().map_or(Action::None, |t| t.click(self.cursor.0, self.cursor.1, (b.width, b.height)));
                     match action {
                         Action::Quit => event_loop.exit(),
-                        Action::Options => {
-                            self.screen = Screen::Options;
-                            self.options_from_title = true;
-                        }
+                        Action::Options => self.open_options(true),
                         Action::Play { folder } => self.open_world(&folder, None, None, false)?,
                         Action::Create { folder, name, seed, creative } => self.open_world(&folder, Some(&name), seed, creative)?,
                         Action::None => {}
@@ -4491,7 +4486,17 @@ impl ApplicationHandler for Game<'_> {
                                 self.capture(true);
                                 return Ok(());
                             }
-                            self.play_mouse(button, pressed)?;
+                            match self.settings.keys.translate_mouse(button) {
+                                Some(Err(b)) => self.play_mouse(b, pressed)?,
+                                Some(Ok(k)) if pressed => {
+                                    self.keys.insert(k);
+                                    self.key_pressed(k)?;
+                                }
+                                Some(Ok(k)) => {
+                                    self.keys.remove(&k);
+                                }
+                                None => {}
+                            }
                         }
                         Screen::Inventory if pressed => {
                             self.click_inventory(button == MouseButton::Right);
@@ -4510,8 +4515,7 @@ impl ApplicationHandler for Game<'_> {
                                         self.screen = Screen::Playing;
                                         self.capture(true);
                                     } else if i == 1 {
-                                        self.screen = Screen::Options;
-                                        self.options_from_title = false;
+                                        self.open_options(false);
                                     } else {
                                         self.close_world()?;
                                     }
@@ -4553,6 +4557,13 @@ impl ApplicationHandler for Game<'_> {
                     }
                     self.creative_screen.scroll = 0.0;
                 }
+                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Options => {
+                    if event.state == ElementState::Pressed
+                        && let PhysicalKey::Code(key) = event.physical_key
+                    {
+                        self.options_key(key, event.text.as_deref())?;
+                    }
+                }
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
                     if event.state == ElementState::Pressed
                         && let Some(title) = self.title.as_mut()
@@ -4571,6 +4582,17 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
                     let PhysicalKey::Code(key) = event.physical_key else { return Ok(()) };
+                    // Key binds: act as the default key of the bound mapping.
+                    let key = match self.settings.keys.translate(key) {
+                        Some(Ok(k)) => k,
+                        Some(Err(button)) => {
+                            if self.screen == Screen::Playing && !event.repeat {
+                                self.play_mouse(button, event.state == ElementState::Pressed)?;
+                            }
+                            return Ok(());
+                        }
+                        None => return Ok(()),
+                    };
                     if event.state != ElementState::Pressed {
                         self.keys.remove(&key);
                         return Ok(());
@@ -4658,6 +4680,10 @@ impl ApplicationHandler for Game<'_> {
             event_loop.exit();
             return;
         }
+        if let Some(due) = self.next_frame_due() {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(due));
+            return;
+        }
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -4665,8 +4691,11 @@ impl ApplicationHandler for Game<'_> {
     }
 }
 pub fn run() -> Result<()> {
-    let Some(options) = Options::read()? else { return Ok(()) };
+    let Some(mut options) = Options::read()? else { return Ok(()) };
     let started = Instant::now();
+    let vanilla_root = options.resources.clone();
+    let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
+    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs);
     let root = options.resources.clone();
     let assets = Arc::new(Assets::load(&root).map_err(|e| {
         format!("{e}\nPrepare resources with: python3 tools/prepare_native_client.py --prepare")
@@ -4687,7 +4716,7 @@ pub fn run() -> Result<()> {
     eprintln!("load tables: {:.2}s", started.elapsed().as_secs_f32());
     let atlas = HudAtlas::build(&root)?;
     horizon_client::ui::load_metadata(&root);
-    horizon_client::lang::set(horizon_client::lang::Language::load(&[&root], horizon_client::lang::DEFAULT));
+    horizon_client::lang::set(horizon_client::lang::Language::load(&[&root], &early_settings.language));
     eprintln!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
     let layer_names = assets
         .sprite_layers
@@ -4850,6 +4879,10 @@ pub fn run() -> Result<()> {
         pending_bench: None,
         ui: Default::default(),
     };
+    game.ui.vanilla_root = vanilla_root;
+    game.res.atlas.font.uniform = game.settings.force_unicode;
+    game.res.atlas.font.japanese = game.settings.japanese_glyphs;
+    game.ui.chat.options = game.settings.chat_options();
     if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)
             .map_err(|e| format!("control socket {}: {e}", path.display()))?;

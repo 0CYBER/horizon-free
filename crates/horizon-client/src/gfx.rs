@@ -108,6 +108,9 @@ pub struct Renderer {
     pub screenshot: Option<PathBuf>,
     /// Outcome of the last screenshot: frame size, or the error.
     pub screenshot_result: Option<std::result::Result<[u32; 2], String>>,
+    /// Brightness option (lightmap gamma), 0..1.
+    pub gamma: f32,
+    present_modes: Vec<wgpu::PresentMode>,
 }
 fn mip_chain(pixels: &[u8], size: u32, layers: u32) -> (Vec<u8>, u32) {
     let levels = size.trailing_zeros() + 1;
@@ -204,6 +207,7 @@ impl Renderer {
         if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
             config.usage |= wgpu::TextureUsages::COPY_SRC;
         }
+        let present_modes = caps.present_modes.clone();
         config.present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
             wgpu::PresentMode::Mailbox
         } else {
@@ -699,6 +703,8 @@ impl Renderer {
             started: Instant::now(),
             screenshot: None,
             screenshot_result: None,
+            gamma: 0.5,
+            present_modes,
         })
     }
     fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
@@ -731,6 +737,21 @@ impl Renderer {
                 view_formats: &[],
             })
             .create_view(&Default::default())
+    }
+    /// VSync on: tear-free presentation (Mailbox, else Fifo); off: Immediate when available.
+    pub fn set_vsync(&mut self, vsync: bool) {
+        let has = |m| self.present_modes.contains(&m);
+        let mode = match (vsync, has(wgpu::PresentMode::Mailbox), has(wgpu::PresentMode::Immediate)) {
+            (true, true, _) => wgpu::PresentMode::Mailbox,
+            (true, false, _) => wgpu::PresentMode::Fifo,
+            (false, _, true) => wgpu::PresentMode::Immediate,
+            (false, true, false) => wgpu::PresentMode::Mailbox,
+            _ => wgpu::PresentMode::Fifo,
+        };
+        if self.config.present_mode != mode {
+            self.config.present_mode = mode;
+            self.surface.configure(&self.device, &self.config);
+        }
     }
     pub fn resize(&mut self, width: u32, height: u32) {
         self.suspended = width == 0 || height == 0;
@@ -953,7 +974,7 @@ impl Renderer {
             }
         };
         self.animate(frame.ticks);
-        self.update_lightmap(&frame.sky, 0.0, 0.5);
+        self.update_lightmap(&frame.sky, 0.0, self.gamma);
         let view_proj = self.view_projection(frame);
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
         let (yaw, pitch) = (frame.yaw.to_radians(), frame.pitch.to_radians());

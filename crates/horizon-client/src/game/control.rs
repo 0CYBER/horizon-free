@@ -26,6 +26,7 @@ const HELP: &[&str] = &[
     "chat TEXT                      send a chat line or /command as if typed",
     "type TEXT                      type into the open chat box (key enter tap sends)",
     "chat-log [N]                   the newest N chat messages (default 10)",
+    "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs)",
     "stats [reset]                  frame-time summary since the last reset",
     "bench SECONDS                  reset stats, wait, then reply with the summary",
     "open WORLD [SEED] [creative]   open or create a world from the title screen",
@@ -73,6 +74,27 @@ impl Game<'_> {
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
                 self.require_world()?;
+                // Physical key presses follow the key binds like the keyboard does.
+                let key = if matches!(self.screen, Screen::Chat | Screen::Options) {
+                    key
+                } else {
+                    match self.settings.keys.translate(key) {
+                        Some(Ok(k)) => k,
+                        Some(Err(button)) => {
+                            let action = arg(2)?;
+                            if self.screen == Screen::Playing {
+                                if action != "up" {
+                                    self.play_mouse(button, true)?;
+                                }
+                                if action != "down" {
+                                    self.play_mouse(button, false)?;
+                                }
+                            }
+                            return ok();
+                        }
+                        None => return ok(),
+                    }
+                };
                 match arg(2)? {
                     "down" => self.control_key_down(key)?,
                     "up" => {
@@ -223,10 +245,34 @@ impl Game<'_> {
             "type" => {
                 self.require_world()?;
                 let text = line.trim_start().strip_prefix("type").unwrap_or("").strip_prefix(' ').unwrap_or("");
-                if self.screen != Screen::Chat {
-                    return Err("type needs the chat screen (key t tap)".into());
+                match self.screen {
+                    Screen::Chat => self.chat_type(text),
+                    Screen::Options => self.ui.options.type_text(text),
+                    _ => return Err("type needs the chat screen (key t tap) or the language search".into()),
                 }
-                self.chat_type(text);
+                ok()
+            }
+            "options" => {
+                use horizon_client::options_ui::Page;
+                let page = match words.get(1).copied().unwrap_or("main") {
+                    "main" => Page::Main,
+                    "video" => Page::Video,
+                    "sound" => Page::Sound,
+                    "controls" => Page::Controls,
+                    "keybinds" => Page::KeyBinds,
+                    "mouse" => Page::Mouse,
+                    "chat" => Page::Chat,
+                    "accessibility" => Page::Accessibility,
+                    "language" => Page::Language,
+                    "font" => Page::Font,
+                    "packs" => Page::Packs,
+                    other => return Err(format!("unknown options page {other}").into()),
+                };
+                if self.screen == Screen::Playing && self.title.is_none() {
+                    self.capture(false);
+                }
+                self.open_options(self.title.is_some());
+                self.ui.options.show(page);
                 ok()
             }
             "chat-log" => {
@@ -289,6 +335,9 @@ impl Game<'_> {
         if self.screen == Screen::Chat {
             self.chat_key_code(key, None);
             return Ok(());
+        }
+        if self.screen == Screen::Options {
+            return self.options_key(key, None);
         }
         if self.keys.insert(key) {
             self.key_pressed(key)?;

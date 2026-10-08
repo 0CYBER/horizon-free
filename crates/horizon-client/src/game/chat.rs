@@ -70,6 +70,10 @@ pub struct UiState {
     pub death_cause: Option<String>,
     /// File name of an F2 screenshot waiting for its frame.
     pub screenshot_message: Option<String>,
+    /// The options screens.
+    pub options: horizon_client::options_ui::OptionsUi,
+    /// The prepared resources before resource packs are layered on.
+    pub vanilla_root: std::path::PathBuf,
 }
 
 impl Game<'_> {
