@@ -15,6 +15,12 @@ mod growth;
 mod machines;
 mod tnt;
 mod remote;
+mod chat;
+mod commands;
+mod control;
+mod options;
+mod packs;
+mod screens;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -187,6 +193,7 @@ enum Screen {
     Playing,
     Paused,
     Options,
+    Chat,
     Creative,
     Inventory,
     Dead,
@@ -242,6 +249,11 @@ impl LevelAccess for GameLevel<'_> {
     }
     fn day_time(&self) -> i64 {
         self.world.day_time
+    rules: horizon_world::level::GameRules,
+}
+impl LevelAccess for GameLevel<'_> {
+    fn game_rules(&self) -> horizon_world::level::GameRules {
+        self.rules
     }
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.world.block(pos.x, pos.y, pos.z)
@@ -451,6 +463,7 @@ struct Game<'a> {
     persist: persist::EntityMemory,
     /// Connected to a server: the world comes from the network (game/remote.rs).
     remote: Option<remote::Remote>,
+    ui: chat::UiState,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -751,6 +764,8 @@ impl Game<'_> {
             Dim::Nether => LevelDimension::Nether,
             Dim::End => LevelDimension::End,
         };
+        let dimension = if self.dim == Dim::Nether { LevelDimension::Nether } else { LevelDimension::Overworld };
+        let rules = self.level_rules();
         let mut level = GameLevel {
             world: &mut self.world,
             facts: &self.res.facts,
@@ -765,6 +780,7 @@ impl Game<'_> {
             behaviours: &self.res.behaviours,
             items: &self.res.items,
             registry: self.res.assets.registry,
+            rules,
         };
         f(&self.res.behaviours, &mut level, &mut self.block_ticks)
     }
@@ -1391,12 +1407,14 @@ impl Game<'_> {
         }
         self.ticks += 1;
         self.world.game_time += 1;
-        self.world.weather.tick(&mut self.world.random);
+        if self.ui.rules.bool("advance_weather") {
+            self.world.weather.tick(&mut self.world.random);
+        }
         self.tick_weather_effects();
         if self.ticks % 6000 == 0 {
             self.save_game()?;
         }
-        self.world.day_time += 1;
+        self.advance_clock();
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
@@ -1469,7 +1487,8 @@ impl Game<'_> {
         if player.health.dead_or_dying() && self.screen != Screen::Dead {
             // Inventory.dropAll: every stack thrown in a random direction.
             let at = [player.position.x, player.position.y + 1.32, player.position.z];
-            if !self.creative {
+            self.death_message();
+            if !self.creative && !self.ui.rules.bool("keep_inventory") {
                 let stacks: Vec<ItemStack> = self.inventory.iter_mut().filter_map(Option::take).collect();
                 for stack in stacks {
                     let r = &mut self.world.random;
@@ -1678,7 +1697,7 @@ impl Game<'_> {
         let mut batch = HudBatch::new(size);
         let (w, h) = (batch.width, batch.height);
         if self.screen == Screen::Options {
-            self.settings.draw(&self.res.atlas, &mut batch, self.cursor);
+            self.draw_options(&mut batch);
             return batch;
         }
         if let Some(title) = &self.title {
@@ -1801,43 +1820,23 @@ impl Game<'_> {
             let tw = HudBatch::text_width(atlas, text);
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
+        self.draw_chat(&mut batch);
+        let atlas = &self.res.atlas;
         if let Some((_, ticks)) = self.sleeping {
             // Gui sleep overlay fading in over 100 ticks.
             let a = ((ticks as f32 / 100.0).min(1.0) * 204.0) as u8;
             batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 32, a));
         }
         match self.screen {
-            Screen::Paused => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 16, 160));
-                let title = "Game Menu";
-                let tw = HudBatch::text_width(atlas, title);
-                batch.text(atlas, title, (w - tw) / 2.0, 40.0, u32::MAX, true);
-                for (i, label) in ["Back to Game", "Options...", "Save and Quit to Title"].iter().enumerate() {
-                    let (bx, by) = (w / 2.0 - 100.0, h / 4.0 + 24.0 + i as f32 * 24.0 + 16.0);
-                    let hover = self.cursor.0 >= bx && self.cursor.0 < bx + 200.0 && self.cursor.1 >= by && self.cursor.1 < by + 20.0;
-                    let sprite = if hover { "gui/sprites/widget/button_highlighted" } else { "gui/sprites/widget/button" };
-                    batch.sprite_scaled(atlas, sprite, bx, by, 200.0, 20.0, u32::MAX);
-                    let tw = HudBatch::text_width(atlas, label);
-                    batch.text(atlas, label, bx + (200.0 - tw) / 2.0, by + 6.0, u32::MAX, true);
-                }
-            }
-            Screen::Dead => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(80, 0, 0, 120));
-                let title = "You Died!";
-                let tw = HudBatch::text_width(atlas, title);
-                batch.text(atlas, title, (w - tw) / 2.0, 60.0, u32::MAX, true);
-                let (bx, by) = (w / 2.0 - 100.0, h / 4.0 + 72.0);
-                batch.sprite_scaled(atlas, "gui/sprites/widget/button", bx, by, 200.0, 20.0, u32::MAX);
-                let label = "Respawn";
-                let tw = HudBatch::text_width(atlas, label);
-                batch.text(atlas, label, bx + (200.0 - tw) / 2.0, by + 6.0, u32::MAX, true);
-            }
+            Screen::Paused => self.draw_pause_menu(&mut batch),
+            Screen::Dead => self.draw_death_screen(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
             }
             Screen::Creative => {
                 self.draw_creative(&mut batch);
             }
+            Screen::Chat => self.draw_chat_screen(&mut batch),
             Screen::Playing | Screen::Options => {}
         }
         self.remote_hud(&mut batch);
@@ -3045,6 +3044,7 @@ impl Game<'_> {
         if !save_root.join("level.dat").exists() {
             self.level.write(&save_root)?;
         }
+        self.load_world_state();
         Ok(())
     }
     /// Streaming and region storage for one dimension of a world.
@@ -3856,6 +3856,7 @@ impl Game<'_> {
         self.streaming.radius = self.settings.render_distance;
         self.audio.master = self.settings.master_volume;
         horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, std::sync::atomic::Ordering::Relaxed);
+        self.apply_ui_settings();
     }
     /// Whether precipitation at a column is snow (Biome.coldEnoughToSnow:
     /// base temperature lowered above y 80) or none (no precipitation).
@@ -4237,6 +4238,7 @@ impl Game<'_> {
         level.dimension = self.dim.id().to_owned();
         level.active_effects = self.potions.effects.list.iter().map(|e| (format!("minecraft:{}", e.id), e.duration, e.amplifier, e.ambient, e.visible)).collect();
         level.write(&self.world_root)?;
+        self.save_world_state();
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())
     }
@@ -4350,10 +4352,7 @@ impl Game<'_> {
         }
         match key {
             KeyCode::Escape => match self.screen {
-                Screen::Options => {
-                    self.settings.save(&std::env::current_dir()?.join("options.txt"));
-                    self.screen = if self.options_from_title { Screen::Playing } else { Screen::Paused };
-                }
+                Screen::Options => self.options_key(KeyCode::Escape, None)?,
                 Screen::Playing => {
                     self.screen = Screen::Paused;
                     self.capture(false);
@@ -4369,7 +4368,13 @@ impl Game<'_> {
                     self.capture(true);
                 }
                 Screen::Dead => {}
+                Screen::Chat => self.close_chat(),
             },
+            KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
+            KeyCode::Slash if self.screen == Screen::Playing => self.open_chat("/"),
+            KeyCode::F1 => self.toggle_hide_gui(),
+            KeyCode::F11 => self.toggle_fullscreen(),
+            KeyCode::F2 => self.take_screenshot(),
             KeyCode::KeyE if self.screen == Screen::Creative && self.creative_screen.tab().search => {}
             KeyCode::KeyE => match self.screen {
                 Screen::Playing => {
@@ -4552,8 +4557,8 @@ impl ApplicationHandler for Game<'_> {
                         let b = HudBatch::new([r.config.width, r.config.height]);
                         self.cursor = (position.x as f32 / b.scale, position.y as f32 / b.scale);
                         if self.dragging && self.screen == Screen::Options {
-                            self.settings.click(self.cursor.0, self.cursor.1, (b.width, b.height), true);
-                            self.apply_settings();
+                            let _ = b;
+                            self.options_drag()?;
                         }
                     }
                 }
@@ -4562,6 +4567,12 @@ impl ApplicationHandler for Game<'_> {
                         MouseScrollDelta::LineDelta(_, y) => y,
                         MouseScrollDelta::PixelDelta(p) => p.y as f32,
                     };
+                    if self.screen == Screen::Chat && d != 0.0 {
+                        self.chat_scroll(d);
+                    }
+                    if self.screen == Screen::Options && d != 0.0 {
+                        self.options_scroll(d);
+                    }
                     if self.screen == Screen::Creative && d != 0.0 {
                         let rows = self.creative_screen.rows(&self.res.names).saturating_sub(5).max(1) as f32;
                         self.creative_screen.scroll = (self.creative_screen.scroll - d.signum() / rows).clamp(0.0, 1.0);
@@ -4573,17 +4584,11 @@ impl ApplicationHandler for Game<'_> {
                         self.selected = (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
                     }
                 }
-                WindowEvent::MouseInput { state, button: MouseButton::Left, .. } if self.screen == Screen::Options => {
-                    self.dragging = state == ElementState::Pressed;
-                    if self.dragging {
-                        let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
-                        let b = HudBatch::new(size);
-                        if self.settings.click(self.cursor.0, self.cursor.1, (b.width, b.height), false) {
-                            self.settings.save(&std::env::current_dir()?.join("options.txt"));
-                            self.screen = if self.options_from_title { Screen::Playing } else { Screen::Paused };
-                            self.dragging = false;
-                        }
-                        self.apply_settings();
+                WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
+                    if self.options_waiting_for_key() && state == ElementState::Pressed {
+                        self.options_bind_mouse(button)?;
+                    } else if matches!(button, MouseButton::Left | MouseButton::Right) {
+                        self.options_mouse(state == ElementState::Pressed, button == MouseButton::Right)?;
                     }
                 }
                 WindowEvent::MouseInput { state, button: MouseButton::Left, .. }
@@ -4594,10 +4599,7 @@ impl ApplicationHandler for Game<'_> {
                     let action = self.title.as_mut().map_or(Action::None, |t| t.click(self.cursor.0, self.cursor.1, (b.width, b.height)));
                     match action {
                         Action::Quit => event_loop.exit(),
-                        Action::Options => {
-                            self.screen = Screen::Options;
-                            self.options_from_title = true;
-                        }
+                        Action::Options => self.open_options(true),
                         Action::Play { folder } => self.open_world(&folder, None, None, false)?,
                         Action::Create { folder, name, seed, creative } => self.open_world(&folder, Some(&name), seed, creative)?,
                         Action::Connect { address } => self.connect_server(&address, &self.options.player_name.clone())?,
@@ -4613,7 +4615,17 @@ impl ApplicationHandler for Game<'_> {
                                 self.capture(true);
                                 return Ok(());
                             }
-                            self.play_mouse(button, pressed)?;
+                            match self.settings.keys.translate_mouse(button) {
+                                Some(Err(b)) => self.play_mouse(b, pressed)?,
+                                Some(Ok(k)) if pressed => {
+                                    self.keys.insert(k);
+                                    self.key_pressed(k)?;
+                                }
+                                Some(Ok(k)) => {
+                                    self.keys.remove(&k);
+                                }
+                                None => {}
+                            }
                         }
                         Screen::Inventory if pressed => {
                             self.click_inventory(button == MouseButton::Right);
@@ -4621,6 +4633,7 @@ impl ApplicationHandler for Game<'_> {
                                 self.container_changed(key);
                             }
                         }
+                        Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
                         }
@@ -4650,7 +4663,19 @@ impl ApplicationHandler for Game<'_> {
                             self.spawn_player()?;
                             self.capture(true);
                         }
+                        Screen::Paused if pressed => self.pause_click()?,
+                        Screen::Dead if pressed => self.death_click()?,
                         _ => {}
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Chat && self.title.is_none() => {
+                    if let PhysicalKey::Code(key) = event.physical_key {
+                        if event.state == ElementState::Pressed {
+                            self.keys.insert(key);
+                            self.chat_key(&event);
+                        } else {
+                            self.keys.remove(&key);
+                        }
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. }
@@ -4678,6 +4703,13 @@ impl ApplicationHandler for Game<'_> {
                     self.station_text(event.text.as_deref(), backspace);
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => self.remote_chat_key(&event),
+                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Options => {
+                    if event.state == ElementState::Pressed
+                        && let PhysicalKey::Code(key) = event.physical_key
+                    {
+                        self.options_key(key, event.text.as_deref())?;
+                    }
+                }
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
                     if event.state == ElementState::Pressed
                         && let Some(title) = self.title.as_mut()
@@ -4696,6 +4728,17 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
                     let PhysicalKey::Code(key) = event.physical_key else { return Ok(()) };
+                    // Key binds: act as the default key of the bound mapping.
+                    let key = match self.settings.keys.translate(key) {
+                        Some(Ok(k)) => k,
+                        Some(Err(button)) => {
+                            if self.screen == Screen::Playing && !event.repeat {
+                                self.play_mouse(button, event.state == ElementState::Pressed)?;
+                            }
+                            return Ok(());
+                        }
+                        None => return Ok(()),
+                    };
                     if event.state != ElementState::Pressed {
                         self.keys.remove(&key);
                         return Ok(());
@@ -4726,7 +4769,13 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     let rendered = self.render()?;
-                    if let Some(result) = self.renderer.as_mut().and_then(|r| r.screenshot_result.take())
+                    let finished = self.renderer.as_mut().and_then(|r| r.screenshot_result.take());
+                    if let Some(result) = &finished
+                        && self.ui.screenshot_message.is_some()
+                    {
+                        self.finish_screenshot(result);
+                    }
+                    if let Some(result) = finished
                         && let Some(reply) = self.pending_screenshot.take()
                     {
                         let _ = reply.send(match result {
@@ -4777,6 +4826,10 @@ impl ApplicationHandler for Game<'_> {
             event_loop.exit();
             return;
         }
+        if let Some(due) = self.next_frame_due() {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(due));
+            return;
+        }
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -4784,8 +4837,11 @@ impl ApplicationHandler for Game<'_> {
     }
 }
 pub fn run() -> Result<()> {
-    let Some(options) = Options::read()? else { return Ok(()) };
+    let Some(mut options) = Options::read()? else { return Ok(()) };
     let started = Instant::now();
+    let vanilla_root = options.resources.clone();
+    let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
+    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs);
     let root = options.resources.clone();
     let assets = Arc::new(Assets::load(&root).map_err(|e| {
         format!("{e}\nPrepare resources with: python3 tools/prepare_native_client.py --prepare")
@@ -4805,6 +4861,8 @@ pub fn run() -> Result<()> {
     let light = Arc::new(LightTables::load(&root, &assets.registry, &facts)?);
     eprintln!("load tables: {:.2}s", started.elapsed().as_secs_f32());
     let atlas = HudAtlas::build(&root)?;
+    horizon_client::ui::load_metadata(&root);
+    horizon_client::lang::set(horizon_client::lang::Language::load(&[&root], &early_settings.language));
     eprintln!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
     let layer_names = assets
         .sprite_layers
@@ -4977,7 +5035,12 @@ pub fn run() -> Result<()> {
         pending_bench: None,
         persist: Default::default(),
         remote: None,
+        ui: Default::default(),
     };
+    game.ui.vanilla_root = vanilla_root;
+    game.res.atlas.font.uniform = game.settings.force_unicode;
+    game.res.atlas.font.japanese = game.settings.japanese_glyphs;
+    game.ui.chat.options = game.settings.chat_options();
     if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)
             .map_err(|e| format!("control socket {}: {e}", path.display()))?;

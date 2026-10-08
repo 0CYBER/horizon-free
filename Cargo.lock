@@ -687,6 +687,7 @@ dependencies = [
  "horizon-core",
  "horizon-protocol",
  "horizon-world",
+ "miniz_oxide 0.8.9",
  "png",
  "pollster",
  "serde_json",

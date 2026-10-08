@@ -18,19 +18,17 @@ pub struct Rect {
     pub w: u32,
     pub h: u32,
 }
-#[derive(Clone, Copy)]
-struct Glyph {
-    rect: Rect,
-    advance: f32,
-}
 pub struct HudAtlas {
     pub pixels: Vec<u8>,
     pub width: u32,
     pub height: u32,
     pub sprites: HashMap<String, Rect>,
-    glyphs: HashMap<char, Glyph>,
+    /// The default font (bitmap sheets in this atlas, unifont rasterized on demand).
+    pub font: crate::font::Font,
     white: Rect,
 }
+/// Atlas rows reserved for glyphs rasterized at run time.
+pub const GLYPH_ROWS: u32 = 512;
 pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
     let mut decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(path)?));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
@@ -104,7 +102,7 @@ impl HudAtlas {
                 }
                 return Some((name, 256, 256, small));
             }
-            (w <= 1024 && h <= 512).then_some((name, w, h, pixels))
+            (w <= 1024 && (h <= 512 || name.starts_with("font/"))).then_some((name, w, h, pixels))
         };
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
         let chunk = files.len().div_ceil(threads).max(1);
@@ -130,7 +128,8 @@ impl HudAtlas {
             x += w + 1;
             row = row.max(*h);
         }
-        let height = (y + row + 1).next_power_of_two();
+        let glyph_region = y + row + 1;
+        let height = (glyph_region + GLYPH_ROWS).next_power_of_two();
         let mut pixels = vec![0u8; (width * height * 4) as usize];
         let mut sprites = HashMap::new();
         for ((name, w, h, data), (px, py)) in images.iter().zip(placements) {
@@ -152,91 +151,15 @@ impl HudAtlas {
             );
         }
         let white = sprites["horizon/white"];
-        let mut atlas = Self {
+        let font = crate::font::Font::load(root, &sprites, &pixels, (width, height), (glyph_region, height - glyph_region), white);
+        Ok(Self {
             pixels,
             width,
             height,
             sprites,
-            glyphs: HashMap::new(),
+            font,
             white,
-        };
-        atlas.load_font(root)?;
-        Ok(atlas)
-    }
-    fn load_font(&mut self, root: &Path) -> Result<()> {
-        let text = fs::read_to_string(root.join("assets/minecraft/font/include/default.json"))?;
-        let value: serde_json::Value = serde_json::from_str(&text)?;
-        for provider in value["providers"].as_array().into_iter().flatten() {
-            if provider["type"] != "bitmap" {
-                continue;
-            }
-            let file = provider["file"].as_str().unwrap_or("");
-            let name = file
-                .trim_start_matches("minecraft:")
-                .trim_end_matches(".png")
-                .to_owned();
-            let Some(rect) = self.sprites.get(&name).copied() else {
-                continue;
-            };
-            let rows: Vec<Vec<char>> = provider["chars"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|r| r.as_str().map(|s| s.chars().collect()))
-                .collect();
-            if rows.is_empty() {
-                continue;
-            }
-            let columns = rows[0].len() as u32;
-            let cell_w = rect.w / columns;
-            let cell_h = rect.h / rows.len() as u32;
-            let height = provider["height"].as_f64().unwrap_or(8.0) as f32;
-            let scale = height / cell_h as f32;
-            let (ax, ay) = (
-                (rect.u0 * self.width as f32) as u32,
-                (rect.v0 * self.height as f32) as u32,
-            );
-            for (r, row) in rows.iter().enumerate() {
-                for (c, ch) in row.iter().enumerate() {
-                    if *ch == '\0' || self.glyphs.contains_key(ch) {
-                        continue;
-                    }
-                    let (cx, cy) = (ax + c as u32 * cell_w, ay + r as u32 * cell_h);
-                    // Glyph width: rightmost column containing an opaque pixel.
-                    let mut used = 0;
-                    for x in (0..cell_w).rev() {
-                        if (0..cell_h).any(|y| {
-                            self.pixels[(((cy + y) * self.width + cx + x) * 4 + 3) as usize] != 0
-                        }) {
-                            used = x + 1;
-                            break;
-                        }
-                    }
-                    self.glyphs.insert(
-                        *ch,
-                        Glyph {
-                            rect: Rect {
-                                u0: cx as f32 / self.width as f32,
-                                v0: cy as f32 / self.height as f32,
-                                u1: (cx + cell_w) as f32 / self.width as f32,
-                                v1: (cy + cell_h) as f32 / self.height as f32,
-                                w: cell_w,
-                                h: cell_h,
-                            },
-                            advance: (used as f32 * scale + 0.5).floor() + 1.0,
-                        },
-                    );
-                }
-            }
-        }
-        self.glyphs.insert(
-            ' ',
-            Glyph {
-                rect: self.white,
-                advance: 4.0,
-            },
-        );
-        Ok(())
+        })
     }
 }
 #[repr(C)]
@@ -254,6 +177,8 @@ pub struct HudBatch {
     pub scale: f32,
     pub width: f32,
     pub height: f32,
+    /// Glyph pixels to upload into the atlas before drawing.
+    pub patches: Vec<crate::font::Patch>,
 }
 pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
     u32::from(a) << 24 | u32::from(b) << 16 | u32::from(g) << 8 | u32::from(r)
@@ -272,6 +197,7 @@ impl HudBatch {
             scale: scale as f32,
             width: (window[0] as f32 / scale as f32).ceil(),
             height: (window[1] as f32 / scale as f32).ceil(),
+            patches: Vec::new(),
         }
     }
     pub fn quad(&mut self, p: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: u32) {
@@ -318,26 +244,77 @@ impl HudBatch {
         self.rect_uv(x, y, w, h, r, color);
     }
     pub fn text_width(atlas: &HudAtlas, text: &str) -> f32 {
-        text.chars()
-            .map(|c| atlas.glyphs.get(&c).map_or(6.0, |g| g.advance))
-            .sum()
+        atlas.font.width(text)
     }
+    /// Draw plain text (legacy `§` codes are honoured); returns the advance.
     pub fn text(&mut self, atlas: &HudAtlas, text: &str, x: f32, y: f32, color: u32, shadow: bool) -> f32 {
-        if shadow {
-            let c = color.to_le_bytes();
-            let dark = rgba(c[0] / 4, c[1] / 4, c[2] / 4, c[3]);
-            self.text(atlas, text, x + 1.0, y + 1.0, dark, false);
-        }
+        let t = if text.contains('§') { crate::text::Text::legacy(text) } else { crate::text::Text::literal(text) };
+        self.text_styled(atlas, &t, x, y, color, shadow)
+    }
+    /// Font.drawInternal: styled glyphs, shadows first, with bold, italic,
+    /// underline and strikethrough. `color` is the default colour and alpha.
+    pub fn text_styled(&mut self, atlas: &HudAtlas, text: &crate::text::Text, x: f32, y: f32, color: u32, shadow: bool) -> f32 {
+        let font = &atlas.font;
+        let alpha = (color >> 24) as u8;
+        let mut glyphs = Vec::new();
         let mut cursor = x;
-        for ch in text.chars() {
-            let Some(g) = atlas.glyphs.get(&ch).copied() else {
-                cursor += 6.0;
-                continue;
-            };
-            if ch != ' ' {
-                self.rect_uv(cursor, y, 8.0, 8.0, g.rect, color);
+        for (i, (ch, style)) in text.chars().enumerate() {
+            let g = font.glyph(ch);
+            let c = style.color.map_or(color, |rgb| rgba((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, alpha));
+            let bold = style.is_bold();
+            let advance = g.advance + if bold { g.offset } else { 0.0 };
+            glyphs.push((cursor, g, c, bold, style.is_italic(), style.underlined == Some(true), style.strikethrough == Some(true), i == 0, advance));
+            cursor += advance;
+        }
+        self.patches.extend(font.take_patches());
+        let white = font.white();
+        let passes: &[bool] = if shadow { &[true, false] } else { &[false] };
+        for &is_shadow in passes {
+            for &(gx, g, c, bold, italic, underline, strike, first, advance) in &glyphs {
+                let (dx, col) = if is_shadow {
+                    let b = c.to_le_bytes();
+                    (g.offset, rgba((f32::from(b[0]) * 0.25) as u8, (f32::from(b[1]) * 0.25) as u8, (f32::from(b[2]) * 0.25) as u8, b[3]))
+                } else {
+                    (0.0, c)
+                };
+                let (px, py) = (gx + dx, y + dx);
+                let shear = |v: f32| if italic { 1.0 - 0.25 * v } else { 0.0 };
+                let thick = if bold { 0.1 } else { 0.0 };
+                let draw = |batch: &mut Self, ox: f32| match g.rect {
+                    Some(r) => {
+                        let (x0, x1, y0, y1) = (px + ox + g.left, px + ox + g.right, py + g.top, py + g.bottom);
+                        batch.quad(
+                            [
+                                [x0 + shear(g.top) - thick, y0 - thick],
+                                [x1 + shear(g.top) + thick, y0 - thick],
+                                [x1 + shear(g.bottom) + thick, y1 + thick],
+                                [x0 + shear(g.bottom) - thick, y1 + thick],
+                            ],
+                            [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]],
+                            col,
+                        );
+                    }
+                    None if g.right > 0.0 => {
+                        // SpecialGlyphs.MISSING: a 5x8 outline.
+                        let (bx, by) = (px + ox, py);
+                        for (fx, fy, fw, fh) in [(0.0, 0.0, 5.0, 1.0), (0.0, 7.0, 5.0, 1.0), (0.0, 1.0, 1.0, 6.0), (4.0, 1.0, 1.0, 6.0)] {
+                            batch.rect_uv(bx + fx, by + fy, fw, fh, white, col);
+                        }
+                    }
+                    None => {}
+                };
+                draw(self, 0.0);
+                if bold {
+                    draw(self, g.offset);
+                }
+                let x0 = if first { px - 1.0 } else { px };
+                if strike {
+                    self.rect_uv(x0, py + 3.5, px + advance - x0, 1.0, white, col);
+                }
+                if underline {
+                    self.rect_uv(x0, py + 8.0, px + advance - x0, 1.0, white, col);
+                }
             }
-            cursor += g.advance;
         }
         cursor - x
     }
@@ -348,6 +325,8 @@ struct HudUniform {
     size: [f32; 4],
 }
 pub struct HudRenderer {
+    /// The shared atlas texture, for run-time glyph uploads.
+    pub atlas_texture: Option<wgpu::Texture>,
     pipeline: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
@@ -466,6 +445,7 @@ impl HudRenderer {
             mapped_at_creation: false,
         });
         Ok(Self {
+            atlas_texture: None,
             pipeline,
             group,
             uniform,
@@ -482,6 +462,16 @@ impl HudRenderer {
         batch: &HudBatch,
         size: [u32; 2],
     ) {
+        if let Some(texture) = &self.atlas_texture {
+            for p in &batch.patches {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d { x: p.x, y: p.y, z: 0 }, aspect: wgpu::TextureAspect::All },
+                    &p.rgba,
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(p.width * 4), rows_per_image: None },
+                    wgpu::Extent3d { width: p.width, height: p.height, depth_or_array_layers: 1 },
+                );
+            }
+        }
         if batch.vertices.is_empty() {
             return;
         }

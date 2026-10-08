@@ -212,7 +212,7 @@ impl Audio {
             decode(&self.root.join(format!("assets/minecraft/sounds/{file}.ogg"))).map(|(s, r)| (Arc::new(s), r))
         });
         let Some((samples, rate)) = entry.clone() else { return };
-        let volume = (volume * variant.volume).clamp(0.0, 1.0) * self.master;
+        let volume = (volume * variant.volume).clamp(0.0, 1.0) * self.master * crate::settings::event_volume(event);
         let pitch = (pitch * variant.pitch).clamp(0.5, 2.0);
         let (mut left, mut right) = (volume, volume);
         if let Some(p) = at {
