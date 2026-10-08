@@ -68,6 +68,7 @@ fn result(v: &Value) -> Option<ItemStack> {
         item: Arc::from(v["id"].as_str()?),
         count: v["count"].as_u64().unwrap_or(1) as u32,
         damage: 0,
+        extra: None,
     })
 }
 impl Recipes {

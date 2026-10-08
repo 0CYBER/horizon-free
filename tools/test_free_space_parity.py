@@ -78,7 +78,7 @@ def main():
         with (build/(name+'.log')).open('w') as log:
             subprocess.run(list(map(str, command)), cwd=lab.ROOT, check=True, timeout=3600,
                            stdout=log, stderr=subprocess.STDOUT)
-    run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp',
+    run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'), '-cp',
          str(jars['server'])+os.pathsep+dependencies, '-d', classes, oracle, *helpers], 'compile-java')
     def java(side, mode):
         run(['java', '-Xmx768M', '-cp', os.pathsep.join([str(classes), str(jars[side]), dependencies]),

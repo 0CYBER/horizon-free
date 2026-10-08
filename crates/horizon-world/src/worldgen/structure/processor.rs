@@ -314,6 +314,9 @@ pub struct PlaceSettings<'a> {
     pub processors: Vec<&'a Processor>,
     pub waterlogging: bool,
     pub random: Option<&'a mut dyn ProcessorRandom>,
+    /// StructurePlaceSettings.knownShape: skip the neighbor shape updates
+    /// after placement (jigsaw pieces).
+    pub known_shape: bool,
 }
 impl<'a> PlaceSettings<'a> {
     pub fn new(rotation: Rotation) -> Self {
@@ -325,6 +328,7 @@ impl<'a> PlaceSettings<'a> {
             processors: Vec::new(),
             waterlogging: true,
             random: None,
+            known_shape: false,
         }
     }
     pub fn with_processors(mut self, list: &'a ProcessorList) -> Self {
@@ -746,6 +750,7 @@ pub fn place_in_world<W: FeatureWorld + PlacementContext>(
         .unwrap();
     let mut to_fill = Vec::new();
     let mut locked = Vec::new();
+    let mut placed = Vec::new();
     let world_err = |_| PlacementQueryError::Failed("template write".into());
     for info in infos {
         if settings
@@ -769,6 +774,7 @@ pub fn place_in_world<W: FeatureWorld + PlacementContext>(
         if !world.set_block(info.pos, state, flags).map_err(world_err)? {
             continue;
         }
+        placed.push(info.pos);
         if let Some(mut nbt) = info.nbt {
             if resources.transforms.loot_container(state) {
                 let seed = match loot_random.as_deref_mut() {
@@ -820,5 +826,87 @@ pub fn place_in_world<W: FeatureWorld + PlacementContext>(
         }
         to_fill = remaining;
     }
+    if !settings.known_shape && !placed.is_empty() {
+        update_shape_at_edge(world, &placed, flags)?;
+        for &pos in &placed {
+            world.update_from_neighbour_shapes(pos, flags & !1 | 16)?;
+        }
+    }
     Ok(true)
+}
+
+/// StructureTemplate.updateShapeAtEdge over the placed positions' voxel
+/// shape (DiscreteVoxelShape.forAllFaces order: X-Y rows along Z, then
+/// Z-X rows along Y, then Y-Z rows along X).
+fn update_shape_at_edge<W: PlacementContext>(
+    world: &mut W,
+    placed: &[[i32; 3]],
+    flags: i32,
+) -> Result<(), PlacementQueryError> {
+    use horizon_core::geometry::Direction;
+    let mut min = placed[0];
+    let mut max = placed[0];
+    for p in placed {
+        for i in 0..3 {
+            min[i] = min[i].min(p[i]);
+            max[i] = max[i].max(p[i]);
+        }
+    }
+    let size: [i32; 3] = std::array::from_fn(|i| max[i] - min[i] + 1);
+    let index = |[x, y, z]: [i32; 3]| ((x * size[1] + y) * size[2] + z) as usize;
+    let mut bits = vec![false; size.iter().map(|v| *v as usize).product()];
+    for p in placed {
+        bits[index(std::array::from_fn(|i| p[i] - min[i]))] = true;
+    }
+    let full = |p: [i32; 3]| (0..3).all(|i| (0..size[i]).contains(&p[i])) && bits[index(p)];
+    type Map = fn(i32, i32, i32) -> [i32; 3];
+    let passes: [(Direction, Direction, i32, i32, i32, Map); 3] = [
+        (
+            Direction::North,
+            Direction::South,
+            size[0],
+            size[1],
+            size[2],
+            |a, b, c| [a, b, c],
+        ),
+        (
+            Direction::Down,
+            Direction::Up,
+            size[2],
+            size[0],
+            size[1],
+            |a, b, c| [b, c, a],
+        ),
+        (
+            Direction::West,
+            Direction::East,
+            size[1],
+            size[2],
+            size[0],
+            |a, b, c| [c, a, b],
+        ),
+    ];
+    for (negative, positive, a_size, b_size, c_size, map) in passes {
+        for a in 0..a_size {
+            for b in 0..b_size {
+                let mut last = false;
+                for c in 0..=c_size {
+                    let here = c != c_size && full(map(a, b, c));
+                    let face = if !last && here {
+                        Some((negative, map(a, b, c)))
+                    } else if last && !here {
+                        Some((positive, map(a, b, c - 1)))
+                    } else {
+                        None
+                    };
+                    if let Some((direction, local)) = face {
+                        let p = std::array::from_fn(|i| min[i] + local[i]);
+                        world.update_shape_at_face(p, direction, flags)?;
+                    }
+                    last = here;
+                }
+            }
+        }
+    }
+    Ok(())
 }

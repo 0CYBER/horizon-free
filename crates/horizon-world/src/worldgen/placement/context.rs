@@ -39,6 +39,16 @@ pub trait PlacementContext {
     ) -> Result<(), PlacementQueryError> {
         Ok(())
     }
+    /// Block.updateFromNeighbourShapes for the state at `position`, written
+    /// with `flags` when it changes. Worlds without block shape-update
+    /// behavior accept this as a no-op.
+    fn update_from_neighbour_shapes(
+        &mut self,
+        _position: [i32; 3],
+        _flags: i32,
+    ) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
     /// WorldGenRegion.ensureCanWrite: horizontal write radius and upgrade height.
     fn ensure_can_write(&mut self, _position: [i32; 3]) -> Result<bool, PlacementQueryError> {
         Ok(true)

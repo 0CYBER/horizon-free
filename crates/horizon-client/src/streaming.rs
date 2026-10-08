@@ -109,8 +109,18 @@ pub struct Streaming {
     /// Dimension flags: sky light, Nether face shading.
     pub sky_light: bool,
     pub nether_shading: bool,
+    /// Incremental relighting of block edits on lit chunks (see `light::relight`).
+    light_tables: Arc<LightTables>,
+    /// Applied edits by sequence, replayed onto light jobs snapshotted before them.
+    light_log: Vec<(u64, (i32, i32, i32))>,
+    light_edit_sequence: u64,
+    /// Edit sequence at each in-flight light job's snapshot.
+    light_snapshots: HashMap<(i32, i32), u64>,
     pub generated_total: u64,
     pub meshed_total: u64,
+    /// Chunks come from a server (`insert_remote`/`forget`): nothing is
+    /// generated and columns are only unloaded when the server says so.
+    pub remote: bool,
 }
 pub struct WorkerContext {
     pub assets: Arc<crate::assets::Assets>,
@@ -126,6 +136,7 @@ impl Streaming {
             stop: AtomicBool::new(false),
         });
         let (send, results) = mpsc::channel();
+        let light_tables = context.light.clone();
         let threads = (0..threads.max(1))
             .map(|i| {
                 let shared = shared.clone();
@@ -203,9 +214,36 @@ impl Streaming {
             paused: false,
             sky_light: true,
             nether_shading: false,
+            light_tables,
+            light_log: Vec::new(),
+            light_edit_sequence: 0,
+            light_snapshots: HashMap::new(),
             generated_total: 0,
             meshed_total: 0,
+            remote: false,
         }
+    }
+    /// A column received from a server: store it and relight it and its neighbours.
+    pub fn insert_remote(&mut self, world: &mut World, chunk: Chunk) {
+        let key = (chunk.x, chunk.z);
+        self.lit.remove(&key);
+        self.lighting.remove(&key);
+        world.chunks.insert(key, Arc::new(chunk));
+        self.generated_total += 1;
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                world.dirty_light.insert((key.0 + dx, key.1 + dz));
+            }
+        }
+    }
+    /// A column the server unloaded (ClientboundForgetLevelChunkPacket).
+    pub fn forget(&mut self, world: &mut World, x: i32, z: i32) -> Option<Arc<Chunk>> {
+        self.lit.remove(&(x, z));
+        self.meshed.remove(&(x, z));
+        self.lighting.remove(&(x, z));
+        self.meshing.retain(|k, _| (k.0, k.2) != (x, z));
+        world.dirty_sections.retain(|k| (k.0, k.2) != (x, z));
+        world.chunks.remove(&(x, z))
     }
     fn submit(&mut self, priority: i64, job: Job) {
         self.order += 1;
@@ -242,6 +280,7 @@ impl Streaming {
         if self.paused {
             return (uploads, Vec::new());
         }
+        self.relight_edits(world);
         while let Ok(done) = self.results.try_recv() {
             match done {
                 Done::Proto(x, z, proto) => {
@@ -264,6 +303,10 @@ impl Streaming {
                 Done::Generated(mut chunk) => {
                     let key = (chunk.x, chunk.z);
                     world.block_entities.extend(std::mem::take(&mut chunk.block_entities));
+                    let entities = std::mem::take(&mut chunk.entities);
+                    if !entities.is_empty() {
+                        world.loaded_entities.push(((chunk.x, chunk.z), entities));
+                    }
                     self.generating.remove(&key);
                     self.finishing.remove(&key);
                     self.decorated.insert(key);
@@ -282,6 +325,7 @@ impl Streaming {
                         continue;
                     }
                     self.lighting.remove(&(x, z));
+                    let snapshot = self.light_snapshots.remove(&(x, z)).unwrap_or(u64::MAX);
                     if let Some(chunk) = world.chunks.get_mut(&(x, z)) {
                         let chunk = Arc::make_mut(chunk);
                         // Keep blocks edited since the snapshot; take only light.
@@ -292,6 +336,7 @@ impl Streaming {
                         }
                         chunk.lit = true;
                         self.lit.insert((x, z));
+                        self.replay_light_edits(world, x, z, snapshot);
                         for dz in -1..=1 {
                             for dx in -1..=1 {
                                 for sy in 0..SECTIONS as i32 {
@@ -316,7 +361,7 @@ impl Streaming {
             .chunks
             .keys()
             .copied()
-            .filter(|&(x, z)| !self.in_range(x, z, 3))
+            .filter(|&(x, z)| !self.remote && !self.in_range(x, z, 3))
             .collect();
         for key in &far {
             self.decorated.remove(key);
@@ -390,7 +435,7 @@ impl Streaming {
         }
         // Generation (load or proto), closest first, bounded in flight.
         let margin = if self.decorates { 3 } else { 1 };
-        if self.generating.len() < workers * 3 {
+        if !self.remote && self.generating.len() < workers * 3 {
             let r = self.radius + margin;
             let mut wanted = Vec::new();
             for dz in -r..=r {
@@ -426,6 +471,7 @@ impl Streaming {
             world.dirty_light.remove(&(x, z));
             self.sequence += 1;
             self.lighting.insert((x, z), self.sequence);
+            self.light_snapshots.insert((x, z), self.light_edit_sequence);
             self.submit(self.distance(x, z) * 4 + 1, Job::Light(x, z, region, self.sequence, self.sky_light));
         }
         // Meshing once the column and its neighbours are lit.
@@ -454,6 +500,68 @@ impl Streaming {
             );
         }
         (uploads, removed)
+    }
+    /// Relight block edits on lit chunks in place (vanilla's incremental light
+    /// engine) instead of recomputing the 3x3 chunks around each edit.
+    fn relight_edits(&mut self, world: &mut World) {
+        if world.light_edits.is_empty() {
+            return;
+        }
+        let edits = std::mem::take(&mut world.light_edits);
+        let positions: Vec<(i32, i32, i32)> = edits
+            .iter()
+            .filter(|(_, old, new)| self.light_tables.differs(*old, *new))
+            .map(|(p, _, _)| *p)
+            .collect();
+        if positions.is_empty() {
+            return;
+        }
+        let changed = crate::light::relight(&mut world.chunks, &self.light_tables, self.sky_light, &positions, false);
+        Self::mark_light_changes(world, &changed);
+        if !self.light_snapshots.is_empty() {
+            for p in positions {
+                self.light_edit_sequence += 1;
+                self.light_log.push((self.light_edit_sequence, p));
+            }
+        }
+    }
+    /// A light job computed from blocks older than some edits: redo those
+    /// edits on top of its result.
+    fn replay_light_edits(&mut self, world: &mut World, x: i32, z: i32, snapshot: u64) {
+        let positions: Vec<(i32, i32, i32)> = self
+            .light_log
+            .iter()
+            .filter(|(seq, p)| *seq > snapshot && ((p.0 >> 4) - x).abs() <= 1 && ((p.2 >> 4) - z).abs() <= 1)
+            .map(|(_, p)| *p)
+            .collect();
+        if !positions.is_empty() {
+            let changed = crate::light::relight(&mut world.chunks, &self.light_tables, self.sky_light, &positions, true);
+            Self::mark_light_changes(world, &changed);
+        }
+        let oldest = self.light_snapshots.values().copied().min();
+        match oldest {
+            Some(oldest) => self.light_log.retain(|(seq, _)| *seq > oldest),
+            None => self.light_log.clear(),
+        }
+    }
+    /// Sections whose meshes sample a changed light value (faces and corners
+    /// read light from neighbouring blocks).
+    fn mark_light_changes(world: &mut World, changed: &[(i32, i32, i32)]) {
+        let mut last = None;
+        for &(x, y, z) in changed {
+            for dz in -1..=1 {
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let s = ((y + dy - crate::chunk::MIN_Y) >> 4, (x + dx) >> 4, (z + dz) >> 4);
+                        if last == Some(s) || !(0..SECTIONS as i32).contains(&s.0) {
+                            continue;
+                        }
+                        last = Some(s);
+                        world.dirty_sections.insert((s.1, s.0, s.2));
+                    }
+                }
+            }
+        }
     }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
         let r = i64::from(self.radius + margin);

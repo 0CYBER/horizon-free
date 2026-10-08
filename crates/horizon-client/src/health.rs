@@ -229,6 +229,7 @@ impl PlayerMotion {
             dead: &mut h.dead,
             sync_velocity: &mut h.sync_velocity,
             game_time: h.game_time,
+            status: self.status.clone(),
         };
         Ok(ServerPlayerCombat::new(
             &mut self.attributes,
@@ -264,6 +265,8 @@ pub(crate) struct Environment<'a> {
     pub(crate) dead: &'a mut bool,
     pub(crate) sync_velocity: &'a mut bool,
     pub(crate) game_time: i64,
+    /// Resistance, fire resistance and armor protection (effects.rs).
+    pub(crate) status: crate::effects::StatusFlags,
 }
 impl Environment<'_> {
     fn event(&mut self, event: HealthEvent) {
@@ -310,10 +313,10 @@ impl ServerDamageEnvironment<Attributes> for Environment<'_> {
         Ok(())
     } // empty equipment
     fn has_resistance(&mut self) -> io::Result<bool> {
-        Ok(false)
+        Ok(self.status.resistance.is_some())
     }
     fn resistance_amplifier(&mut self) -> io::Result<i32> {
-        Err(io::Error::other("no resistance effect"))
+        self.status.resistance.ok_or_else(|| io::Error::other("no resistance effect"))
     }
     fn award_resisted(&mut self, value: i32) -> io::Result<()> {
         self.stat("resisted", value)
@@ -325,8 +328,8 @@ impl ServerDamageEnvironment<Attributes> for Environment<'_> {
         Err(io::Error::other("no damage attacker"))
     }
     fn damage_protection(&mut self, _: ()) -> io::Result<f32> {
-        Ok(0.0)
-    } // empty equipment
+        Ok(self.status.protection(&self.source.definition().name))
+    }
     fn award_self(&mut self, stat: DamageStat, value: i32) -> io::Result<()> {
         self.stat(
             match stat {
@@ -426,7 +429,7 @@ impl HurtWorld for Environment<'_> {
         Ok(self.source.hurt_tag(tag))
     }
     fn fire_resistance(&mut self, _: &mut State) -> io::Result<bool> {
-        Ok(false)
+        Ok(self.status.fire_resistance)
     }
     fn sleeping(&mut self, _: &mut State) -> io::Result<bool> {
         Ok(false)

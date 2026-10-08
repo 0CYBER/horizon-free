@@ -180,6 +180,9 @@ pub struct GeneratorData {
     /// Templates, processor lists and per-state template transforms.
     pub(super) structures: Option<Arc<super::structure::StructureResources>>,
     pub(super) structure_resources: Option<StructureBundles>,
+    /// Block shape-update behaviour (`block-behaviours.json` next to the
+    /// worldgen directory) for template placement's neighbor updates.
+    pub(super) behaviours: Option<Arc<crate::level::Behaviours>>,
 }
 type Bundle = BTreeMap<String, String>;
 fn read_bundle(dir: &Path, name: &str) -> Result<Bundle, GeneratorError> {
@@ -425,7 +428,13 @@ impl GeneratorData {
             }),
             _ => None,
         };
+        let behaviours = dir
+            .parent()
+            .filter(|root| root.join("block-behaviours.json").exists())
+            .and_then(|root| crate::level::Behaviours::load(registry, root).ok())
+            .map(Arc::new);
         Ok(Arc::new(Self {
+            behaviours,
             structure_resources,
             structures,
             registry,
@@ -1037,13 +1046,20 @@ where
     /// ChunkGenerator.getBaseColumn: opacity of each noise-column state for
     /// a heightmap type, indexed from the minimum Y.
     fn base_column(&self, x: i32, z: i32, kind: HeightmapType) -> Vec<bool> {
+        self.base_columns(x, z, &[kind]).pop().unwrap_or_default()
+    }
+    /// One noise-column pass, as opacities for each heightmap kind.
+    fn base_columns(&self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>> {
         let (min, height) = (self.settings.min_y, self.settings.height);
-        let mut column = vec![false; height as usize];
+        let mut columns = vec![vec![false; height as usize]; kinds.len()];
         self.noise_column(x, z, &mut |y, state| {
-            column[(y - min) as usize] = kind.is_opaque(self.data.states.get(state));
+            let state = self.data.states.get(state);
+            for (column, kind) in columns.iter_mut().zip(kinds) {
+                column[(y - min) as usize] = kind.is_opaque(state);
+            }
             false
         });
-        column
+        columns
     }
     /// iterateNoiseColumn from the top down until `visit` returns true.
     fn noise_column(&self, x: i32, z: i32, visit: &mut dyn FnMut(i32, BlockStateId) -> bool) {
@@ -1148,6 +1164,9 @@ where
     }
     fn base_column(&mut self, x: i32, z: i32, kind: HeightmapType) -> Vec<bool> {
         self.pipeline.base_column(x, z, kind)
+    }
+    fn base_columns(&mut self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>> {
+        self.pipeline.base_columns(x, z, kinds)
     }
     fn cold_enough_to_snow(&mut self, biome: BiomeId, pos: [i32; 3]) -> bool {
         let sea = self.pipeline.settings.sea_level;
@@ -1283,6 +1302,8 @@ pub(super) struct WorkerState {
     carver_context: SamplerContext,
     timings: StageTimings,
     heights: HashMap<(i32, i32, u8), i32>,
+    /// Decorate with structure pieces only (for structure parity checks).
+    pub(super) structures_only: bool,
 }
 
 trait SeededPipeline: Send + Sync {
@@ -1304,6 +1325,7 @@ trait SeededPipeline: Send + Sync {
         pos: ChunkPos,
     ) -> Vec<Arc<super::structure::start::StructureStart>>;
     fn unsupported_features(&self) -> Vec<(String, String)>;
+    fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>>;
 }
 impl<R: RandomSource + 'static> SeededPipeline for Pipeline<R>
 where
@@ -1377,6 +1399,9 @@ where
             .as_ref()
             .map(super::generator_decoration::Decoration::unsupported)
             .unwrap_or_default()
+    }
+    fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
+        self.structures.as_ref()?.cached_rings(set)
     }
 }
 
@@ -1477,6 +1502,11 @@ impl OverworldGenerator {
     pub fn unsupported_features(&self) -> Vec<(String, String)> {
         self.pipeline.unsupported_features()
     }
+    /// ConcentricRingsStructurePlacement chunks of a structure set (such as
+    /// `minecraft:strongholds`), available once structure starts were looked up.
+    pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
+        self.pipeline.ring_positions(set)
+    }
     /// Create per-thread state. Workers are cheap; keep one per thread.
     pub fn worker(&self) -> GeneratorWorker {
         let data = self.pipeline.data();
@@ -1491,6 +1521,7 @@ impl OverworldGenerator {
                 biome_context: SamplerContext::cached(),
                 carver_context: SamplerContext::default(),
                 timings: StageTimings::default(),
+                structures_only: false,
                 heights: HashMap::new(),
             },
         }
@@ -1529,6 +1560,11 @@ impl GeneratorWorker {
         region: &mut [ProtoChunk; 9],
     ) -> Result<DecorateStats, GeneratorError> {
         self.pipeline.decorate(&mut self.state, region)
+    }
+    /// Skip placed features when decorating and keep structure pieces only
+    /// (for structure placement parity checks).
+    pub fn set_structures_only(&mut self, only: bool) {
+        self.state.structures_only = only;
     }
 }
 

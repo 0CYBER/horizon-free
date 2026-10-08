@@ -16,6 +16,8 @@ pub struct VanillaTerrain {
     generator: OverworldGenerator,
     /// Generator biome index -> client biome table index.
     biome_map: Vec<u16>,
+    /// Loot tables for generated containers.
+    loot: Option<Arc<horizon_world::loot::LootData>>,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -27,18 +29,41 @@ impl VanillaTerrain {
         Self::for_dimension(dir, registry, biomes, seed, "minecraft:overworld")
     }
     pub fn for_dimension(dir: &Path, registry: &'static BlockRegistry, biomes: &Biomes, seed: i64, dimension: &str) -> crate::Result<Self> {
-        let data: Arc<GeneratorData> = GeneratorData::load(dir, registry)?;
+        let data: Arc<GeneratorData> = shared_data(dir, registry)?;
         let biome_map = data.biome_names().iter().map(|name| biomes.id(name)).collect();
         let generator = OverworldGenerator::for_dimension(data, seed, "minecraft:normal", dimension)?;
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             eprintln!(
-                "Horizon: {} placed features are not implemented yet and will be skipped",
+                "Horizon: {} placed features cannot run and will be skipped",
                 unsupported.len()
             );
+            if !dir.join("blocks/block-properties.nbt").exists() {
+                eprintln!(
+                    "Horizon: the worldgen bundle lacks the block behavior exports (worldgen/blocks/*.nbt); \
+                     run python3 tools/prepare_native_client.py to add them"
+                );
+            }
         }
-        Ok(Self { generator, biome_map })
+        let loot = dir.parent().and_then(crate::structure_blocks::loot_data);
+        Ok(Self { generator, biome_map, loot })
     }
+    /// Concentric ring positions of a structure set (strongholds), once known.
+    pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
+        self.generator.ring_positions(set)
+    }
+}
+/// The worldgen bundle at `dir`, loaded once and shared by every generator
+/// and by live feature placement (sapling growth, bone meal).
+pub fn shared_data(dir: &Path, registry: &'static BlockRegistry) -> crate::Result<Arc<GeneratorData>> {
+    static CACHE: std::sync::Mutex<Vec<(std::path::PathBuf, Arc<GeneratorData>)>> = std::sync::Mutex::new(Vec::new());
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, data)) = cache.iter().find(|(path, _)| path == dir) {
+        return Ok(data.clone());
+    }
+    let data = GeneratorData::load(dir, registry)?;
+    cache.push((dir.to_owned(), data.clone()));
+    Ok(data)
 }
 impl ChunkGenerator for VanillaTerrain {
     type Worker = GeneratorWorker;
@@ -112,6 +137,17 @@ impl ChunkGenerator for VanillaTerrain {
                 }
             }
         }
+        let base_section = chunk.terrain.min_y() >> 4;
+        for (i, marks) in chunk.terrain.postprocessing().iter().enumerate() {
+            let sy = (base_section + i as i32) * 16;
+            for &packed in marks {
+                let p = i32::from(packed);
+                let y = sy + ((p >> 4) & 15);
+                if (lo..hi).contains(&y) {
+                    out.postprocess.push([bx + (p & 15), y, bz + ((p >> 8) & 15)]);
+                }
+            }
+        }
         let mut biomes = vec![0u16; 16 * (HEIGHT as usize / 4)];
         for qy in 0..HEIGHT / 4 {
             for qz in 0..4 {
@@ -124,6 +160,7 @@ impl ChunkGenerator for VanillaTerrain {
             }
         }
         out.biomes = Arc::new(biomes);
+        out.block_entities = crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
         for s in &mut out.sections {
             Arc::make_mut(s).compact();
         }

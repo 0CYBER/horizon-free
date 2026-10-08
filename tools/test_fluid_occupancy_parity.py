@@ -50,7 +50,7 @@ def main():
     classes=build/'classes';classes.mkdir(exist_ok=True);dependencies=os.pathsep.join(map(str,libraries))
     def run(command,name):
         with (build/(name+'.log')).open('w') as log:subprocess.run(list(map(str,command)),cwd=lab.ROOT,check=True,timeout=3600,stdout=log,stderr=subprocess.STDOUT)
-    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',str(jars['server'])+os.pathsep+dependencies,'-d',classes,*oracles],'compile-java')
+    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependencies,'-d',classes,*oracles],'compile-java')
     def java(side,mode):run(['java','-Xmx768M','-cp',os.pathsep.join([str(classes),str(jars[side]),dependencies]),'dev.horizonlab.parity.VanillaFluidOccupancyOracle',mode,build],side+'-'+mode)
     java('server','export');info=json.loads((build/'info.json').read_text());count=0
     if info['states']!=35723:raise AssertionError('Incomplete pinned registry')

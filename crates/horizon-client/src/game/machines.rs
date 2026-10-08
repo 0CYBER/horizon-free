@@ -1,0 +1,1088 @@
+//! Item-moving blocks: `HopperBlockEntity` (push, pull, item entities,
+//! transfer cooldowns), `DispenserBlock` / `DropperBlock.dispenseFrom` with
+//! the vanilla dispense behaviours Horizon has entities for, and container
+//! comparator signals (`AbstractContainerMenu.getRedstoneSignalFromContainer`).
+use super::Game;
+use horizon_client::{
+    Result,
+    containers::BlockEntity,
+    entities::Arrow,
+    items::{ItemStack, Items},
+    world::World,
+};
+use horizon_core::{
+    geometry::{Direction, Vec3},
+    position::BlockPos,
+    random::{LegacyRandom, RandomSource},
+};
+use horizon_world::{level::Behaviours, registry::BlockStateId};
+
+type Pos = (i32, i32, i32);
+
+/// `HopperBlockEntity` transient state (`TransferCooldown`, `tickedGameTime`).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct HopperState {
+    cooldown: i32,
+    ticked: i64,
+}
+impl Default for HopperState {
+    fn default() -> Self {
+        Self {
+            cooldown: -1,
+            ticked: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Generic,
+    /// `AbstractFurnaceBlockEntity` (a `WorldlyContainer`).
+    Furnace,
+    Hopper,
+}
+
+/// A container: one block entity, or a double chest (`CompoundContainer`).
+#[derive(Clone, Debug)]
+struct View {
+    parts: Vec<(Pos, usize)>,
+    kind: Kind,
+}
+impl View {
+    fn len(&self) -> usize {
+        self.parts.iter().map(|p| p.1).sum()
+    }
+    fn locate(&self, mut slot: usize) -> Option<(Pos, usize)> {
+        for &(pos, size) in &self.parts {
+            if slot < size {
+                return Some((pos, slot));
+            }
+            slot -= size;
+        }
+        None
+    }
+    /// `WorldlyContainer.getSlotsForFace` or every slot.
+    fn slots_for_face(&self, face: Option<Direction>) -> Vec<usize> {
+        match (self.kind, face) {
+            (Kind::Furnace, Some(Direction::Down)) => vec![2, 1],
+            (Kind::Furnace, Some(Direction::Up)) => vec![0],
+            (Kind::Furnace, Some(_)) => vec![1],
+            _ => (0..self.len()).collect(),
+        }
+    }
+}
+
+thread_local! {
+    /// Entity-owned randomness (projectile spread), separate from the level random.
+    static ENTITY_RANDOM: std::cell::RefCell<LegacyRandom> = std::cell::RefCell::new(LegacyRandom::new(0x0d15_7e45));
+}
+
+fn dir_from_name(name: &str) -> Option<Direction> {
+    Some(match name {
+        "down" => Direction::Down,
+        "up" => Direction::Up,
+        "north" => Direction::North,
+        "south" => Direction::South,
+        "west" => Direction::West,
+        "east" => Direction::East,
+        _ => return None,
+    })
+}
+fn step(d: Direction) -> [i32; 3] {
+    match d {
+        Direction::Down => [0, -1, 0],
+        Direction::Up => [0, 1, 0],
+        Direction::North => [0, 0, -1],
+        Direction::South => [0, 0, 1],
+        Direction::West => [-1, 0, 0],
+        Direction::East => [1, 0, 0],
+    }
+}
+fn offset(p: Pos, d: Direction) -> Pos {
+    let s = step(d);
+    (p.0 + s[0], p.1 + s[1], p.2 + s[2])
+}
+fn clockwise(d: Direction) -> Direction {
+    match d {
+        Direction::North => Direction::East,
+        Direction::East => Direction::South,
+        Direction::South => Direction::West,
+        Direction::West => Direction::North,
+        other => other,
+    }
+}
+
+/// State-level container queries shared by the game and comparator signals.
+struct Containers<'a> {
+    world: &'a World,
+    behaviours: &'a Behaviours,
+    items: &'a Items,
+    registry: &'static horizon_world::registry::BlockRegistry,
+}
+impl Containers<'_> {
+    fn prop(&self, state: BlockStateId, key: &str) -> Option<&str> {
+        self.registry
+            .state(state)?
+            .properties
+            .get(key)
+            .map(String::as_str)
+    }
+    fn name(&self, state: BlockStateId) -> &str {
+        self.registry.state(state).map_or("", |s| s.name.as_str())
+    }
+    fn max_stack(&self, stack: &ItemStack) -> u32 {
+        self.items
+            .get(&stack.item)
+            .map_or(64, |i| i.max_stack)
+            .max(1)
+    }
+    /// `HopperBlockEntity.getBlockContainer` (double chests combined, right half
+    /// first). `blocked_chests`: `ChestBlock.getContainer(.., false)` returns
+    /// nothing for a chest under a redstone conductor.
+    fn view(&self, pos: Pos, blocked_chests: bool) -> Option<View> {
+        let entity = self.world.block_entities.get(&pos)?;
+        let state = self.world.block(pos.0, pos.1, pos.2);
+        let name = self.name(state);
+        let kind = match (entity, name) {
+            (BlockEntity::Furnace(_), _) => Kind::Furnace,
+            (_, "minecraft:hopper") => Kind::Hopper,
+            _ => Kind::Generic,
+        };
+        let size = entity.slots().len();
+        if matches!(name, "minecraft:chest" | "minecraft:trapped_chest") {
+            let is_blocked = |p: Pos| {
+                let above = self.world.block(p.0, p.1 + 1, p.2);
+                self.behaviours.facts(above).flags
+                    & horizon_world::level::data::state_flags::CONDUCTOR
+                    != 0
+            };
+            if blocked_chests && is_blocked(pos) {
+                return None;
+            }
+            let kind_prop = self.prop(state, "type").unwrap_or("single");
+            if kind_prop != "single"
+                && let Some(facing) = self.prop(state, "facing").and_then(dir_from_name)
+            {
+                // ChestBlock.getConnectedDirection
+                let connected = if kind_prop == "left" {
+                    clockwise(facing)
+                } else {
+                    clockwise(clockwise(clockwise(facing)))
+                };
+                let other = offset(pos, connected);
+                let other_state = self.world.block(other.0, other.1, other.2);
+                let paired = self.name(other_state) == name
+                    && self
+                        .prop(other_state, "type")
+                        .is_some_and(|t| t != "single" && t != kind_prop)
+                    && self
+                        .world
+                        .block_entities
+                        .get(&other)
+                        .is_some_and(|e| e.slots().len() == 27);
+                if paired {
+                    if blocked_chests && is_blocked(other) {
+                        return None;
+                    }
+                    let parts = if kind_prop == "right" {
+                        vec![(pos, size), (other, 27)]
+                    } else {
+                        vec![(other, 27), (pos, size)]
+                    };
+                    return Some(View { parts, kind });
+                }
+            }
+        }
+        Some(View {
+            parts: vec![(pos, size)],
+            kind,
+        })
+    }
+    fn get(&self, view: &View, slot: usize) -> Option<&ItemStack> {
+        let (pos, i) = view.locate(slot)?;
+        self.world
+            .block_entities
+            .get(&pos)?
+            .slots()
+            .get(i)?
+            .as_ref()
+    }
+    fn is_empty(&self, view: &View) -> bool {
+        (0..view.len()).all(|i| self.get(view, i).is_none())
+    }
+    /// `Container.canPlaceItem` (+ `canPlaceItemThroughFace` for furnaces).
+    fn can_place(&self, view: &View, slot: usize, stack: &ItemStack) -> bool {
+        if view.kind != Kind::Furnace {
+            return true;
+        }
+        match slot {
+            2 => false,
+            1 => {
+                let fuel = self
+                    .items
+                    .get(&stack.item)
+                    .is_some_and(|i| i.fuel.is_some());
+                let current_bucket = self
+                    .get(view, 1)
+                    .is_some_and(|s| &*s.item == "minecraft:bucket");
+                fuel || (&*stack.item == "minecraft:bucket" && !current_bucket)
+            }
+            _ => true,
+        }
+    }
+    /// `canTakeItemThroughFace` (only furnaces restrict it).
+    fn can_take(&self, view: &View, slot: usize, stack: &ItemStack, face: Direction) -> bool {
+        view.kind != Kind::Furnace
+            || face != Direction::Down
+            || slot != 1
+            || matches!(&*stack.item, "minecraft:water_bucket" | "minecraft:bucket")
+    }
+    /// `HopperBlockEntity.isFullContainer`.
+    fn is_full(&self, view: &View, face: Direction) -> bool {
+        view.slots_for_face(Some(face)).into_iter().all(|i| {
+            self.get(view, i)
+                .is_some_and(|s| s.count >= self.max_stack(s))
+        })
+    }
+    /// `AbstractContainerMenu.getRedstoneSignalFromContainer`.
+    fn signal(&self, view: &View) -> i32 {
+        let mut total = 0.0f32;
+        for i in 0..view.len() {
+            if let Some(s) = self.get(view, i) {
+                total += s.count as f32 / self.max_stack(s).min(64) as f32;
+            }
+        }
+        total /= view.len().max(1) as f32;
+        // Mth.lerpDiscrete(total, 0, 15)
+        (total * 14.0).floor() as i32 + i32::from(total > 0.0)
+    }
+}
+
+/// Comparator input from a container block entity (0 when there is none).
+pub(super) fn container_signal(
+    world: &World,
+    behaviours: &Behaviours,
+    items: &Items,
+    registry: &'static horizon_world::registry::BlockRegistry,
+    pos: BlockPos,
+) -> i32 {
+    let c = Containers {
+        world,
+        behaviours,
+        items,
+        registry,
+    };
+    c.view((pos.x, pos.y, pos.z), true)
+        .map_or(0, |v| c.signal(&v))
+}
+
+impl Game<'_> {
+    fn containers(&self) -> Containers<'_> {
+        Containers {
+            world: &self.world,
+            behaviours: &self.res.behaviours,
+            items: &self.res.items,
+            registry: self.res.assets.registry,
+        }
+    }
+    fn slot_mut_at(&mut self, view: &View, slot: usize) -> Option<&mut Option<ItemStack>> {
+        let (pos, i) = view.locate(slot)?;
+        self.world
+            .block_entities
+            .get_mut(&pos)?
+            .slots_mut()
+            .get_mut(i)
+    }
+    /// `BlockEntity.setChanged` for every block entity of a container.
+    fn view_changed(&mut self, view: &View) {
+        for &(pos, _) in &view.parts {
+            self.container_changed(pos);
+        }
+    }
+    /// `BlockEntity.setChanged` at `pos`: comparators re-read the container.
+    pub(super) fn container_changed(&mut self, pos: Pos) {
+        self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+        self.with_level(|b, level, ticks| {
+            b.container_changed(level, ticks, BlockPos::new(pos.0, pos.1, pos.2))
+        });
+    }
+    /// `HopperBlockEntity.tryMoveInItem`.
+    fn try_move_in_item(
+        &mut self,
+        from_hopper: Option<Pos>,
+        view: &View,
+        mut stack: ItemStack,
+        slot: usize,
+    ) -> Option<ItemStack> {
+        let c = self.containers();
+        if !c.can_place(view, slot, &stack) {
+            return Some(stack);
+        }
+        let was_empty = c.is_empty(view);
+        let max = c.max_stack(&stack);
+        let mut success = false;
+        let target = self.slot_mut_at(view, slot)?;
+        match target {
+            None => {
+                *target = Some(stack.clone());
+                stack.count = 0;
+                success = true;
+            }
+            Some(current)
+                if current.item == stack.item
+                    && current.damage == stack.damage
+                    && current.count <= max =>
+            {
+                let space = max.saturating_sub(current.count);
+                let count = stack.count.min(space);
+                stack.count -= count;
+                current.count += count;
+                success = count > 0;
+            }
+            Some(_) => {}
+        }
+        if success {
+            if was_empty && view.kind == Kind::Hopper {
+                let dest = view.parts[0].0;
+                let from_ticked = from_hopper.and_then(|p| self.hoppers.get(&p).map(|h| h.ticked));
+                let state = self.hoppers.entry(dest).or_default();
+                if state.cooldown <= 8 {
+                    let skip = i32::from(from_ticked.is_some_and(|t| state.ticked >= t));
+                    state.cooldown = 8 - skip;
+                }
+            }
+            self.view_changed(view);
+        }
+        (stack.count > 0).then_some(stack)
+    }
+    /// `HopperBlockEntity.addItem(from, container, stack, direction)`; the remainder.
+    fn add_item(
+        &mut self,
+        from_hopper: Option<Pos>,
+        view: &View,
+        stack: ItemStack,
+        face: Option<Direction>,
+    ) -> Option<ItemStack> {
+        let slots = if view.kind == Kind::Furnace && face.is_some() {
+            view.slots_for_face(face)
+        } else {
+            (0..view.len()).collect()
+        };
+        let mut rest = Some(stack);
+        for slot in slots {
+            let Some(stack) = rest.take() else { break };
+            rest = self.try_move_in_item(from_hopper, view, stack, slot);
+        }
+        rest
+    }
+    /// Remove one item from a slot (`removeItem(slot, 1)`).
+    fn take_one(&mut self, view: &View, slot: usize) -> Option<ItemStack> {
+        let target = self.slot_mut_at(view, slot)?;
+        let current = target.as_mut()?;
+        let one = ItemStack {
+            count: 1,
+            ..current.clone()
+        };
+        current.count -= 1;
+        if current.count == 0 {
+            *target = None;
+        }
+        Some(one)
+    }
+    /// Undo `take_one` after a failed move.
+    fn put_back(&mut self, view: &View, slot: usize, one: ItemStack) {
+        if let Some(target) = self.slot_mut_at(view, slot) {
+            match target {
+                Some(current) => current.count += one.count,
+                None => *target = Some(one),
+            }
+        }
+    }
+    /// Every hopper's `pushItemsTick`, in a stable position order.
+    pub(super) fn tick_hoppers(&mut self) -> Result<()> {
+        let hopper = self
+            .res
+            .assets
+            .registry
+            .default_state("minecraft:hopper")
+            .map(|s| self.res.facts.get(s).name.clone());
+        let Some(hopper) = hopper else { return Ok(()) };
+        let mut positions: Vec<Pos> = self
+            .world
+            .block_entities
+            .keys()
+            .copied()
+            .filter(|p| self.res.facts.get(self.world.block(p.0, p.1, p.2)).name == hopper)
+            .collect();
+        positions.sort_unstable();
+        self.hoppers
+            .retain(|p, _| positions.binary_search(p).is_ok());
+        let time = self.world.game_time;
+        for pos in positions {
+            let state = self.hoppers.entry(pos).or_default();
+            state.cooldown -= 1;
+            state.ticked = time;
+            if state.cooldown <= 0 {
+                state.cooldown = 0;
+                self.hopper_try_move_items(pos);
+            }
+        }
+        Ok(())
+    }
+    /// `HopperBlockEntity.tryMoveItems` with `suckInItems`.
+    fn hopper_try_move_items(&mut self, pos: Pos) {
+        let state = self.world.block(pos.0, pos.1, pos.2);
+        let c = self.containers();
+        let enabled = c.prop(state, "enabled") != Some("false");
+        let Some(view) = c.view(pos, false) else {
+            return;
+        };
+        if self.hoppers.get(&pos).is_some_and(|h| h.cooldown > 0) || !enabled {
+            return;
+        }
+        let mut changed = false;
+        if !c.is_empty(&view) {
+            changed = self.hopper_eject(pos, &view);
+        }
+        let c = self.containers();
+        let full =
+            (0..view.len()).all(|i| c.get(&view, i).is_some_and(|s| s.count == c.max_stack(s)));
+        if !full {
+            changed |= self.hopper_suck(pos, &view);
+        }
+        if changed {
+            self.hoppers.entry(pos).or_default().cooldown = 8;
+            self.container_changed(pos);
+        }
+    }
+    /// `HopperBlockEntity.ejectItems`.
+    fn hopper_eject(&mut self, pos: Pos, hopper: &View) -> bool {
+        let state = self.world.block(pos.0, pos.1, pos.2);
+        let c = self.containers();
+        let Some(facing) = c.prop(state, "facing").and_then(dir_from_name) else {
+            return false;
+        };
+        let Some(target) = c.view(offset(pos, facing), false) else {
+            return false;
+        };
+        let face = facing.opposite();
+        if c.is_full(&target, face) {
+            return false;
+        }
+        for slot in 0..hopper.len() {
+            let Some(one) = self.take_one(hopper, slot) else {
+                continue;
+            };
+            match self.add_item(Some(pos), &target, one, Some(face)) {
+                None => {
+                    self.view_changed(&target);
+                    return true;
+                }
+                Some(rest) => self.put_back(hopper, slot, rest),
+            }
+        }
+        false
+    }
+    /// `HopperBlockEntity.suckInItems`: from the container above, or item entities.
+    fn hopper_suck(&mut self, pos: Pos, hopper: &View) -> bool {
+        let above = (pos.0, pos.1 + 1, pos.2);
+        let c = self.containers();
+        if let Some(source) = c.view(above, false) {
+            let source_hopper = (source.kind == Kind::Hopper).then_some(above);
+            for slot in source.slots_for_face(Some(Direction::Down)) {
+                let c = self.containers();
+                let Some(stack) = c.get(&source, slot) else {
+                    continue;
+                };
+                if !c.can_take(&source, slot, stack, Direction::Down) {
+                    continue;
+                }
+                let Some(one) = self.take_one(&source, slot) else {
+                    continue;
+                };
+                match self.add_item(source_hopper, hopper, one, None) {
+                    None => {
+                        self.view_changed(&source);
+                        return true;
+                    }
+                    Some(rest) => self.put_back(&source, slot, rest),
+                }
+            }
+            return false;
+        }
+        let above_state = self.world.block(above.0, above.1, above.2);
+        let blocked = self.res.facts.get(above_state).full_collision
+            && !self
+                .res
+                .behaviours
+                .tag("minecraft:does_not_block_hoppers")
+                .is_some_and(|t| t.contains(self.res.behaviours.block(above_state)));
+        if blocked {
+            return false;
+        }
+        // Hopper.SUCK_AABB: the hopper bowl and the block above.
+        let (min, max) = (
+            [
+                f64::from(pos.0),
+                f64::from(pos.1) + 11.0 / 16.0,
+                f64::from(pos.2),
+            ],
+            [
+                f64::from(pos.0) + 1.0,
+                f64::from(pos.1) + 2.0,
+                f64::from(pos.2) + 1.0,
+            ],
+        );
+        let mut i = 0;
+        while i < self.dropped.len() {
+            let b = self.dropped[i].bounds();
+            let (lo, hi) = (b.min_position(), b.max_position());
+            let inside = lo.x < max[0]
+                && hi.x > min[0]
+                && lo.y < max[1]
+                && hi.y > min[1]
+                && lo.z < max[2]
+                && hi.z > min[2];
+            if inside {
+                let stack = self.dropped[i].stack.clone();
+                match self.add_item(None, hopper, stack, None) {
+                    None => {
+                        self.dropped.remove(i);
+                        return true;
+                    }
+                    Some(rest) => self.dropped[i].stack = rest,
+                }
+            }
+            i += 1;
+        }
+        false
+    }
+
+    // ---- dispensers and droppers ----
+
+    /// `DispenserBlock.dispenseFrom` / `DropperBlock.dispenseFrom`.
+    pub(super) fn dispense_from(&mut self, pos: BlockPos, state: BlockStateId) -> Result<()> {
+        let key = (pos.x, pos.y, pos.z);
+        let name = self.res.facts.get(state).name.clone();
+        let dropper = &*name == "minecraft:dropper";
+        if !dropper && &*name != "minecraft:dispenser" {
+            return Ok(());
+        }
+        let Some(view) = self.containers().view(key, false) else {
+            return Ok(());
+        };
+        // DispenserBlockEntity.getRandomSlot
+        let mut slot = None;
+        let mut odds = 1;
+        for i in 0..view.len() {
+            if self.containers().get(&view, i).is_some() {
+                if self.world.random.next_int_bound(odds).unwrap_or(1) == 0 {
+                    slot = Some(i);
+                }
+                odds += 1;
+            }
+        }
+        let center = [
+            f64::from(pos.x) + 0.5,
+            f64::from(pos.y) + 0.5,
+            f64::from(pos.z) + 0.5,
+        ];
+        let Some(slot) = slot else {
+            self.audio
+                .play("minecraft:block.dispenser.fail", Some(center), 1.0, 1.2);
+            return Ok(());
+        };
+        let Some(facing) = self
+            .containers()
+            .prop(state, "facing")
+            .and_then(dir_from_name)
+        else {
+            return Ok(());
+        };
+        let Some(stack) = self.containers().get(&view, slot).cloned() else {
+            return Ok(());
+        };
+        let target = offset(key, facing);
+        let remaining = if dropper {
+            match self.containers().view(target, false) {
+                None => self.default_dispense(key, facing, stack),
+                Some(into) => {
+                    let one = ItemStack {
+                        count: 1,
+                        ..stack.clone()
+                    };
+                    if self
+                        .add_item(None, &into, one, Some(facing.opposite()))
+                        .is_none()
+                    {
+                        self.view_changed(&into);
+                        Some(ItemStack {
+                            count: stack.count - 1,
+                            ..stack
+                        })
+                        .filter(|s| s.count > 0)
+                    } else {
+                        Some(stack)
+                    }
+                }
+            }
+        } else {
+            self.dispense_behaviour(key, facing, stack)?
+        };
+        if let Some(entry) = self.slot_mut_at(&view, slot) {
+            *entry = remaining;
+        }
+        self.container_changed(key);
+        Ok(())
+    }
+    /// `DefaultDispenseItemBehavior.dispense`: drop one item, click and smoke.
+    fn default_dispense(
+        &mut self,
+        pos: Pos,
+        facing: Direction,
+        mut stack: ItemStack,
+    ) -> Option<ItemStack> {
+        let one = ItemStack {
+            count: 1,
+            ..stack.clone()
+        };
+        stack.count -= 1;
+        self.spawn_dispensed(pos, facing, one, 6);
+        self.dispenser_sound(pos, "minecraft:block.dispenser.dispense", 1.0);
+        (stack.count > 0).then_some(stack)
+    }
+    fn dispenser_sound(&mut self, pos: Pos, sound: &str, pitch: f32) {
+        let center = [
+            f64::from(pos.0) + 0.5,
+            f64::from(pos.1) + 0.5,
+            f64::from(pos.2) + 0.5,
+        ];
+        self.audio.play(sound, Some(center), 1.0, pitch);
+    }
+    /// `DefaultDispenseItemBehavior.spawnItem` at `DispenserBlock.getDispensePosition`.
+    fn spawn_dispensed(&mut self, pos: Pos, facing: Direction, stack: ItemStack, accuracy: i32) {
+        let s = step(facing);
+        let mut at = [
+            f64::from(pos.0) + 0.5 + 0.7 * f64::from(s[0]),
+            f64::from(pos.1) + 0.5 + 0.7 * f64::from(s[1]),
+            f64::from(pos.2) + 0.5 + 0.7 * f64::from(s[2]),
+        ];
+        at[1] -= if s[1] != 0 { 0.125 } else { 0.156_25 };
+        let r = &mut self.world.random;
+        // new ItemEntity(level, x, y, z, stack): its default motion draws first.
+        let _ = (r.next_double(), r.next_double());
+        let pow = r.next_double() * 0.1 + 0.2;
+        let spread = 0.017_227_5 * f64::from(accuracy);
+        let v = [
+            r.triangle(f64::from(s[0]) * pow, spread),
+            r.triangle(0.2, spread),
+            r.triangle(f64::from(s[2]) * pow, spread),
+        ];
+        self.spawn_item(stack, at, v, 0);
+    }
+    /// `DefaultDispenseItemBehavior.consumeWithRemainder`.
+    fn consume_with_remainder(
+        &mut self,
+        pos: Pos,
+        facing: Direction,
+        mut stack: ItemStack,
+        remainder: ItemStack,
+    ) -> Option<ItemStack> {
+        stack.count -= 1;
+        if stack.count == 0 {
+            return Some(remainder);
+        }
+        // DispenserBlockEntity.insertItem, then drop what does not fit.
+        let mut rest = remainder;
+        if let Some(view) = self.containers().view(pos, false) {
+            let max = self.containers().max_stack(&rest);
+            for i in 0..view.len() {
+                let Some(entry) = self.slot_mut_at(&view, i) else {
+                    continue;
+                };
+                match entry {
+                    None => {
+                        let n = rest.count.min(max);
+                        *entry = Some(ItemStack {
+                            count: n,
+                            ..rest.clone()
+                        });
+                        rest.count -= n;
+                    }
+                    Some(e) if e.item == rest.item && e.damage == rest.damage => {
+                        let n = rest.count.min(max.saturating_sub(e.count));
+                        e.count += n;
+                        rest.count -= n;
+                    }
+                    Some(_) => {}
+                }
+                if rest.count == 0 {
+                    break;
+                }
+            }
+        }
+        if rest.count > 0 {
+            self.spawn_dispensed(pos, facing, rest, 6);
+            self.dispenser_sound(pos, "minecraft:block.dispenser.dispense", 1.0);
+        }
+        Some(stack)
+    }
+    /// `DispenserBlock.getDispenseMethod(..).dispense(source, stack)`.
+    fn dispense_behaviour(
+        &mut self,
+        pos: Pos,
+        facing: Direction,
+        stack: ItemStack,
+    ) -> Result<Option<ItemStack>> {
+        let target = offset(pos, facing);
+        let target_pos = BlockPos::new(target.0, target.1, target.2);
+        let item = stack.item.to_string();
+        let result = match item.as_str() {
+            "minecraft:bone_meal" => {
+                let grown = self.with_level(|b, level, ticks| {
+                    b.grow_crop(level, ticks, target_pos)
+                        || b.grow_water_plant(level, ticks, target_pos, None)
+                });
+                self.process_level_events()?;
+                if grown {
+                    self.dispenser_sound(pos, "minecraft:block.dispenser.dispense", 1.0);
+                    self.audio.play(
+                        "minecraft:item.bone_meal.use",
+                        Some([
+                            f64::from(target.0) + 0.5,
+                            f64::from(target.1) + 0.5,
+                            f64::from(target.2) + 0.5,
+                        ]),
+                        1.0,
+                        1.0,
+                    );
+                    Some(ItemStack {
+                        count: stack.count - 1,
+                        ..stack
+                    })
+                    .filter(|s| s.count > 0)
+                } else {
+                    self.dispenser_sound(pos, "minecraft:block.dispenser.fail", 1.2);
+                    Some(stack)
+                }
+            }
+            "minecraft:tnt" => {
+                self.spawn_primed_tnt(target_pos, false);
+                self.dispenser_sound(pos, "minecraft:block.dispenser.dispense", 1.0);
+                Some(ItemStack {
+                    count: stack.count - 1,
+                    ..stack
+                })
+                .filter(|s| s.count > 0)
+            }
+            "minecraft:flint_and_steel" => {
+                let target_state = self.world.block(target.0, target.1, target.2);
+                let target_name = self.res.facts.get(target_state).name.clone();
+                let fire = self.res.assets.registry.default_state("minecraft:fire");
+                let success = if self.res.facts.is_air(target_state)
+                    && let Some(fire) = fire
+                    && self
+                        .with_level(|b, level, ticks| b.can_survive(level, ticks, target_pos, fire))
+                {
+                    self.level_set([target.0, target.1, target.2], fire)?;
+                    true
+                } else if &*target_name == "minecraft:tnt" {
+                    self.spawn_primed_tnt(target_pos, false);
+                    self.with_level(|b, level, ticks| {
+                        b.remove_block(level, ticks, target_pos, false)
+                    });
+                    self.process_level_events()?;
+                    true
+                } else if self.containers().prop(target_state, "lit") == Some("false")
+                    && (target_name.contains("campfire") || target_name.contains("candle"))
+                    && self.containers().prop(target_state, "waterlogged") != Some("true")
+                {
+                    let lit = self
+                        .res
+                        .assets
+                        .registry
+                        .state(target_state)
+                        .cloned()
+                        .and_then(|mut s| {
+                            s.properties.insert("lit".into(), "true".into());
+                            self.res.assets.registry.resolve(&s).ok()
+                        });
+                    if let Some(lit) = lit {
+                        self.level_set([target.0, target.1, target.2], lit)?;
+                    }
+                    true
+                } else {
+                    false
+                };
+                self.dispenser_sound(
+                    pos,
+                    if success {
+                        "minecraft:block.dispenser.dispense"
+                    } else {
+                        "minecraft:block.dispenser.fail"
+                    },
+                    if success { 1.0 } else { 1.2 },
+                );
+                let mut stack = stack;
+                if success {
+                    stack.damage += 1;
+                    let max = self.res.items.get(&stack.item).map_or(0, |i| i.max_damage);
+                    if max > 0 && stack.damage >= max {
+                        return Ok(None);
+                    }
+                }
+                Some(stack)
+            }
+            "minecraft:water_bucket" | "minecraft:lava_bucket" => {
+                let fluid = if item == "minecraft:water_bucket" {
+                    "minecraft:water"
+                } else {
+                    "minecraft:lava"
+                };
+                let target_state = self.world.block(target.0, target.1, target.2);
+                let f = self.res.facts.get(target_state).clone();
+                let waterloggable = item == "minecraft:water_bucket"
+                    && self.containers().prop(target_state, "waterlogged") == Some("false");
+                if waterloggable {
+                    let wet = self
+                        .res
+                        .assets
+                        .registry
+                        .state(target_state)
+                        .cloned()
+                        .and_then(|mut s| {
+                            s.properties.insert("waterlogged".into(), "true".into());
+                            self.res.assets.registry.resolve(&s).ok()
+                        });
+                    if let Some(wet) = wet {
+                        self.level_set([target.0, target.1, target.2], wet)?;
+                    }
+                    self.consume_with_remainder(
+                        pos,
+                        facing,
+                        stack,
+                        ItemStack {
+                            item: "minecraft:bucket".into(),
+                            count: 1,
+                            damage: 0,
+                            extra: None,
+                        },
+                    )
+                } else if (self.res.facts.is_air(target_state) || f.replaceable)
+                    && !(f.fluid_level == 8 && !f.fluid_falling && &*f.name == fluid)
+                    && let Some(source) = self.res.assets.registry.default_state(fluid)
+                {
+                    self.level_set([target.0, target.1, target.2], source)?;
+                    let sound = if fluid == "minecraft:water" {
+                        "minecraft:item.bucket.empty"
+                    } else {
+                        "minecraft:item.bucket.empty_lava"
+                    };
+                    self.audio.play(
+                        sound,
+                        Some([
+                            f64::from(target.0) + 0.5,
+                            f64::from(target.1) + 0.5,
+                            f64::from(target.2) + 0.5,
+                        ]),
+                        1.0,
+                        1.0,
+                    );
+                    self.dispenser_sound(pos, "minecraft:block.dispenser.dispense", 1.0);
+                    self.consume_with_remainder(
+                        pos,
+                        facing,
+                        stack,
+                        ItemStack {
+                            item: "minecraft:bucket".into(),
+                            count: 1,
+                            damage: 0,
+                            extra: None,
+                        },
+                    )
+                } else {
+                    self.default_dispense(pos, facing, stack)
+                }
+            }
+            "minecraft:bucket" => {
+                let target_state = self.world.block(target.0, target.1, target.2);
+                let f = self.res.facts.get(target_state).clone();
+                let picked = if f.waterlogged
+                    && self.containers().prop(target_state, "waterlogged") == Some("true")
+                {
+                    let dry = self
+                        .res
+                        .assets
+                        .registry
+                        .state(target_state)
+                        .cloned()
+                        .and_then(|mut s| {
+                            s.properties.insert("waterlogged".into(), "false".into());
+                            self.res.assets.registry.resolve(&s).ok()
+                        });
+                    if let Some(dry) = dry {
+                        self.level_set([target.0, target.1, target.2], dry)?;
+                    }
+                    Some("minecraft:water_bucket")
+                } else if f.fluid_level == 8
+                    && !f.fluid_falling
+                    && matches!(&*f.name, "minecraft:water" | "minecraft:lava")
+                {
+                    self.level_set([target.0, target.1, target.2], self.world.air)?;
+                    Some(if &*f.name == "minecraft:water" {
+                        "minecraft:water_bucket"
+                    } else {
+                        "minecraft:lava_bucket"
+                    })
+                } else if &*f.name == "minecraft:powder_snow" {
+                    self.level_set([target.0, target.1, target.2], self.world.air)?;
+                    Some("minecraft:powder_snow_bucket")
+                } else {
+                    None
+                };
+                match picked {
+                    Some(filled) => {
+                        self.dispenser_sound(pos, "minecraft:block.dispenser.dispense", 1.0);
+                        self.consume_with_remainder(
+                            pos,
+                            facing,
+                            stack,
+                            ItemStack {
+                                item: filled.into(),
+                                count: 1,
+                                damage: 0,
+                                extra: None,
+                            },
+                        )
+                    }
+                    None => self.default_dispense(pos, facing, stack),
+                }
+            }
+            "minecraft:arrow" | "minecraft:spectral_arrow" | "minecraft:tipped_arrow" => {
+                // ProjectileDispenseBehavior: power 1.1, uncertainty 6, from 0.7 ahead and 0.1 up.
+                let s = step(facing);
+                let at = Vec3::new(
+                    f64::from(pos.0) + 0.5 + 0.7 * f64::from(s[0]),
+                    f64::from(pos.1) + 0.5 + 0.7 * f64::from(s[1]) + 0.1,
+                    f64::from(pos.2) + 0.5 + 0.7 * f64::from(s[2]),
+                );
+                let spread = 0.017_227_5 * 6.0;
+                let v = ENTITY_RANDOM.with(|r| {
+                    let r = &mut *r.borrow_mut();
+                    [
+                        (f64::from(s[0]) + r.triangle(0.0, spread)) * 1.1,
+                        (f64::from(s[1]) + r.triangle(0.0, spread)) * 1.1,
+                        (f64::from(s[2]) + r.triangle(0.0, spread)) * 1.1,
+                    ]
+                });
+                self.arrows.push(Arrow {
+                    from_player: true,
+                    critical: false,
+                    position: at,
+                    previous: at,
+                    velocity: Vec3::new(v[0], v[1], v[2]),
+                    stuck: false,
+                    age: 0,
+                    base_damage: 2.0,
+                });
+                self.dispenser_sound(pos, "minecraft:block.dispenser.launch", 1.2);
+                Some(ItemStack {
+                    count: stack.count - 1,
+                    ..stack
+                })
+                .filter(|s| s.count > 0)
+            }
+            _ => self.default_dispense(pos, facing, stack),
+        };
+        Ok(result)
+    }
+}
+
+// ---- hopper, dispenser and dropper screens ----
+
+/// Which machine screen the open container uses.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Screen {
+    Hopper,
+    Dispenser,
+    Dropper,
+}
+
+impl Game<'_> {
+    fn machine_screen(&self) -> Option<Screen> {
+        let key = self.container?;
+        let state = self.world.block(key.0, key.1, key.2);
+        match &*self.res.facts.get(state).name {
+            "minecraft:hopper" => Some(Screen::Hopper),
+            "minecraft:dispenser" => Some(Screen::Dispenser),
+            "minecraft:dropper" => Some(Screen::Dropper),
+            _ => None,
+        }
+    }
+    /// `imageHeight` of the open screen (HopperScreen is 133 tall).
+    pub(super) fn screen_height(&self) -> f32 {
+        if self.machine_screen() == Some(Screen::Hopper) {
+            133.0
+        } else {
+            166.0
+        }
+    }
+    /// HopperMenu / DispenserMenu slot layouts; None for other screens.
+    pub(super) fn machine_slot_position(&self, i: usize) -> Option<(f32, f32)> {
+        let screen = self.machine_screen()?;
+        let inventory_y = if screen == Screen::Hopper { 51.0 } else { 84.0 };
+        Some(match i {
+            0..9 => (8.0 + i as f32 * 18.0, inventory_y + 58.0),
+            9..36 => (
+                8.0 + ((i - 9) % 9) as f32 * 18.0,
+                inventory_y + ((i - 9) / 9) as f32 * 18.0,
+            ),
+            300..500 if screen == Screen::Hopper => (44.0 + (i - 300) as f32 * 18.0, 20.0),
+            300..500 => (
+                62.0 + ((i - 300) % 3) as f32 * 18.0,
+                17.0 + ((i - 300) / 3) as f32 * 18.0,
+            ),
+            _ => return None,
+        })
+    }
+    /// HopperScreen / DispenserScreen background and labels; false for other containers.
+    pub(super) fn draw_machine_screen(
+        &self,
+        batch: &mut horizon_client::hud::HudBatch,
+        ox: f32,
+        oy: f32,
+    ) -> bool {
+        let Some(screen) = self.machine_screen() else {
+            return false;
+        };
+        let atlas = &self.res.atlas;
+        let (texture, height, title) = match screen {
+            Screen::Hopper => ("gui/container/hopper", 133.0, "Item Hopper"),
+            Screen::Dispenser => ("gui/container/dispenser", 166.0, "Dispenser"),
+            Screen::Dropper => ("gui/container/dispenser", 166.0, "Dropper"),
+        };
+        if let Some(mut r) = atlas.sprites.get(texture).copied() {
+            let dv = (r.v1 - r.v0) / r.h as f32;
+            let du = (r.u1 - r.u0) / r.w as f32;
+            r.u1 = r.u0 + 176.0 * du;
+            r.v1 = r.v0 + height * dv;
+            batch.rect_uv(ox, oy, 176.0, height, r, u32::MAX);
+        }
+        let grey = horizon_client::hud::rgba(64, 64, 64, 255);
+        let title_x = if screen == Screen::Hopper {
+            8.0
+        } else {
+            (176.0 - horizon_client::hud::HudBatch::text_width(atlas, title)) / 2.0
+        };
+        batch.text(atlas, title, ox + title_x, oy + 6.0, grey, false);
+        batch.text(
+            atlas,
+            "Inventory",
+            ox + 8.0,
+            oy + height - 94.0,
+            grey,
+            false,
+        );
+        true
+    }
+}

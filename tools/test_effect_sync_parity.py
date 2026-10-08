@@ -111,7 +111,7 @@ def main():
             base.run(list(map(str, command)), stdout=log, stderr=subprocess.STDOUT)
 
     dependency_path = os.pathsep.join(map(str, libraries))
-    run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp',
+    run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'), '-cp',
          str(jars['server']) + os.pathsep + dependency_path, '-d', classes, oracle, helper], 'compile-java')
 
     def java(side, mode):

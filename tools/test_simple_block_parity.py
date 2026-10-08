@@ -104,7 +104,7 @@ def run(corpus, build_name, source_file, scope):
     for name,value in [('tags.json',tags),('fluid-tags.json',fluid_tags),('catalog.json',{'horizon:stone':json.dumps({'id':'stone'})})]:(build/name).write_text(json.dumps(value,separators=(',',':')))
     feature_bundle={'features':{name:json.dumps({'type':'simple_block','to_place':provider,'schedule_tick':True}) for name,provider in [('horizon:moss',{'id':'pale_moss_carpet'}),('horizon:stone','horizon:stone'),('horizon:empty',{'type':'random_block','blocks':[]})]},'placed':{name:json.dumps({'feature':name,'placement':[{'type':'count','count':2}]}) for name in ['horizon:moss','horizon:stone','horizon:empty']}}
     (build/'feature-catalog.json').write_text(json.dumps(feature_bundle,separators=(',',':')))
-    run(['javac','--release' ,lock['minecraft']['java_major'],'-proc:none','-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle,*helpers],'compile-java')
+    run(['javac','--release' ,lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle,*helpers],'compile-java')
     for side in jars:
         export=build/(side+'-definitions');export.mkdir(exist_ok=True);java(side,'export',export)
     for path in (build/'server-definitions').iterdir():

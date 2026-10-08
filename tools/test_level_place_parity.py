@@ -3,7 +3,7 @@
 
 Generates random neighbourhoods and use-item-on-block actions for random block
 items, resolves the placed position and state with the native oracle
-(VanillaPlacementOracle) and with Behaviours (level_place_fixture), and reports
+(VanillaBlockPlacementOracle) and with Behaviours (level_place_fixture), and reports
 differing cases grouped by item.
 """
 import argparse
@@ -83,11 +83,11 @@ def main():
     classes.mkdir(exist_ok=True)
     dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
     parity = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity'
-    sources = [parity / 'VanillaPlacementOracle.java', parity / 'VanillaHeightmapOracle.java', parity / 'VanillaLevelShapeOracle.java']
-    subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-cp', dependencies,
+    sources = [parity / 'VanillaBlockPlacementOracle.java', parity / 'VanillaHeightmapOracle.java', parity / 'VanillaLevelShapeOracle.java']
+    subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'), '-nowarn', '-cp', dependencies,
                     '-d', str(classes), *map(str, sources)], check=True)
     subprocess.run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies,
-                    'dev.horizonlab.parity.VanillaPlacementOracle', str(resources), str(work / 'cases.jsonl'),
+                    'dev.horizonlab.parity.VanillaBlockPlacementOracle', str(resources), str(work / 'cases.jsonl'),
                     str(work / 'native.txt')], check=True)
     subprocess.run(['cargo', 'run', '-q', '-j2', '--release', '-p', 'horizon-world', '--example', 'level_place_fixture', '--',
                     str(resources), str(work / 'cases.jsonl'), str(work / 'rust.txt')], check=True, cwd=lab.ROOT)

@@ -74,7 +74,7 @@ def main():
     def run(command,name):
         with (build/(name+'.log')).open('w',encoding='utf-8') as log:base.run(list(map(str,command)),stdout=log,stderr=subprocess.STDOUT)
     dependency_path=os.pathsep.join(map(str,libraries))
-    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle,helper],'compile-java')
+    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle,helper],'compile-java')
     run(['cargo','build','--release','-p','horizon-world','--example','decoration_fixture'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True))
     binary=Path(metadata['target_directory'])/'release/examples'/('decoration_fixture.exe' if os.name=='nt' else 'decoration_fixture')

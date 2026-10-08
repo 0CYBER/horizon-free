@@ -49,9 +49,15 @@ pub struct Furnace {
 pub enum BlockEntity {
     Chest(Vec<Option<ItemStack>>),
     Furnace(Furnace),
+    Brewing(Box<crate::brewing::BrewingStand>),
+    /// Signs and hanging signs (`SignBlockEntity`).
+    Sign(crate::signs::SignData),
 }
 impl BlockEntity {
     pub fn for_block(name: &str) -> Option<Self> {
+        if let Some(hanging) = crate::signs::sign_kind(name) {
+            return Some(Self::Sign(crate::signs::SignData { hanging, ..Default::default() }));
+        }
         if let Some(kind) = FurnaceKind::from_block(name) {
             return Some(Self::Furnace(Furnace {
                 kind,
@@ -63,32 +69,70 @@ impl BlockEntity {
                 speed: 1.0,
             }));
         }
-        matches!(
-            name,
-            "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel"
-        )
-        .then(|| Self::Chest(vec![None; 27]))
+        if name == "minecraft:brewing_stand" {
+            return Some(Self::Brewing(Box::new(crate::brewing::BrewingStand::new())));
+        }
+        let size = match name {
+            "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
+            "minecraft:hopper" => 5,
+            "minecraft:dispenser" | "minecraft:dropper" => 9,
+            _ => return None,
+        };
+        Some(Self::Chest(vec![None; size]))
+    }
+    /// The vanilla block entity type id of a container block.
+    pub fn id_for_block(name: &str) -> Option<&'static str> {
+        Some(match name {
+            "minecraft:chest" => "minecraft:chest",
+            "minecraft:trapped_chest" => "minecraft:trapped_chest",
+            "minecraft:barrel" => "minecraft:barrel",
+            "minecraft:hopper" => "minecraft:hopper",
+            "minecraft:dispenser" => "minecraft:dispenser",
+            "minecraft:dropper" => "minecraft:dropper",
+            "minecraft:furnace" => "minecraft:furnace",
+            "minecraft:blast_furnace" => "minecraft:blast_furnace",
+            "minecraft:smoker" => "minecraft:smoker",
+            _ => return None,
+        })
     }
     pub fn id(&self) -> &'static str {
         match self {
-            Self::Chest(_) => "minecraft:chest",
+            Self::Chest(items) => match items.len() {
+                5 => "minecraft:hopper",
+                9 => "minecraft:dispenser",
+                _ => "minecraft:chest",
+            },
             Self::Furnace(f) => match f.kind {
                 FurnaceKind::Furnace => "minecraft:furnace",
                 FurnaceKind::BlastFurnace => "minecraft:blast_furnace",
                 FurnaceKind::Smoker => "minecraft:smoker",
             },
+            Self::Brewing(_) => "minecraft:brewing_stand",
+            Self::Sign(s) => s.id(),
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
         match self {
             Self::Chest(items) => items.iter().flatten().cloned().collect(),
             Self::Furnace(f) => f.items.iter().flatten().cloned().collect(),
+            Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
+            Self::Sign(_) => Vec::new(),
+        }
+    }
+    pub fn slots(&self) -> &[Option<ItemStack>] {
+        match self {
+            Self::Chest(items) => items,
+            Self::Furnace(f) => &f.items,
+            Self::Brewing(b) => &b.items,
+            Self::Sign(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
         match self {
             Self::Chest(items) => items,
             Self::Furnace(f) => &mut f.items,
+            Self::Brewing(b) => &mut b.items,
+            Self::Sign(_) => &mut [],
         }
     }
 }
@@ -147,6 +191,18 @@ impl Providers {
             }
             _ => 0.0,
         }
+    }
+    /// A plain `context_int_provider` value or reference (no context conditions).
+    pub fn int_value(&self, v: &Value) -> i32 {
+        self.eval(v, false, &self.ints, 0) as i32
+    }
+    /// A plain `context_float_provider` value or reference; `default` when absent.
+    pub fn float_value(&self, v: &Value, default: f32) -> f32 {
+        if v.is_null() { default } else { self.eval(v, false, &self.floats, 0) as f32 }
+    }
+    #[cfg(test)]
+    pub fn empty() -> Self {
+        Self { ints: HashMap::new(), floats: HashMap::new() }
     }
     pub fn burn_time(&self, items: &Items, stack: &ItemStack, fast: bool) -> i32 {
         items
@@ -208,7 +264,7 @@ impl Furnace {
                                     let item = f.item.clone();
                                     f.count -= 1;
                                     if f.count == 0 {
-                                        self.items[1] = remainder(&item).map(|r| ItemStack { item: Arc::from(r), count: 1, damage: 0 });
+                                        self.items[1] = remainder(&item).map(|r| ItemStack { item: Arc::from(r), count: 1, damage: 0, extra: None });
                                     }
                                 }
                                 lit = true;

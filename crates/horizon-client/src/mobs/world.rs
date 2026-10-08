@@ -1,0 +1,145 @@
+//! What mobs read from the level: block solidity, ray clipping for line of
+//! sight (`ClipContext.Block.COLLIDER`), sky visibility, light-dependent
+//! values and the positions of other entities.
+use super::{MobWorld, Seen, Species, Who, data};
+use crate::{blocks::Fluid, collisions::SceneCollisions};
+use horizon_core::{
+    geometry::{Aabb, Vec3, traverse_blocks},
+    position::BlockPos,
+};
+
+/// Where a target entity is this tick.
+#[derive(Clone, Copy, Debug)]
+pub struct TargetInfo {
+    pub position: Vec3,
+    pub eye_y: f64,
+    pub bounds: Aabb,
+    pub alive: bool,
+    pub is_player: bool,
+    pub creative: bool,
+}
+impl MobWorld<'_> {
+    /// BlockState.isSolid (the legacy solid flag).
+    pub fn solid(&self, x: i32, y: i32, z: i32) -> bool {
+        self.data.state(self.world.block(x, y, z)).flags & data::SOLID != 0
+    }
+    pub fn fluid(&self, x: i32, y: i32, z: i32) -> Fluid {
+        self.facts.get(self.world.block(x, y, z)).fluid
+    }
+    pub fn block_name(&self, x: i32, y: i32, z: i32) -> &str {
+        &self.facts.get(self.world.block(x, y, z)).name
+    }
+    pub fn has_tag(&self, tag: &str, block: &str) -> bool {
+        self.block_tags.get(tag).is_some_and(|s| s.contains(block))
+    }
+    /// Level.clip with COLLIDER shapes (optionally stopping at any fluid): true on a miss.
+    pub fn clear_between(&self, from: Vec3, to: Vec3, fluids_block: bool) -> bool {
+        let mut scene = SceneCollisions {
+            world: self.world,
+            binding: self.collision,
+        };
+        let result = traverse_blocks(from, to, 512, |p: BlockPos| {
+            let state = self.world.block(p.x, p.y, p.z);
+            if fluids_block && self.facts.get(state).fluid != Fluid::None {
+                return Some(());
+            }
+            if self.facts.is_air(state) {
+                return None;
+            }
+            let shape = self
+                .collision
+                .collision_shape(&mut scene, state, [p.x, p.y, p.z])
+                .ok()?;
+            shape.clip(from, to, p).map(|_| ())
+        });
+        matches!(result, Ok(None))
+    }
+    /// LivingEntity.hasLineOfSight: eye to eye within 128 blocks.
+    pub fn line_of_sight(&self, from_eye: Vec3, to: Vec3) -> bool {
+        let d =
+            (to.x - from_eye.x).powi(2) + (to.y - from_eye.y).powi(2) + (to.z - from_eye.z).powi(2);
+        if d > 128.0 * 128.0 {
+            return false;
+        }
+        self.clear_between(from_eye, to, false)
+    }
+    /// Level.canSeeSky: sky light 15 at the position (no roof above).
+    pub fn can_see_sky(&self, x: i32, y: i32, z: i32) -> bool {
+        if self.nether {
+            return false;
+        }
+        self.world.light(x, y, z) >> 4 == 15
+    }
+    /// Level.getLightLevelDependentMagicValue: the dimension's brightness curve
+    /// at the raw (sky darkened) light level.
+    pub fn brightness(&self, x: i32, y: i32, z: i32) -> f32 {
+        let light = self.world.light(x, y, z);
+        let sky = i32::from(light >> 4) - self.sky_darken();
+        let level = sky.max(i32::from(light & 15)).clamp(0, 15) as f32;
+        // DimensionType.getBrightness with ambient light 0 (overworld) / 0.1 (nether).
+        let f = level / 15.0;
+        let base = f / (4.0 - 3.0 * f);
+        if self.nether { 0.1 + base * 0.9 } else { base }
+    }
+    pub fn sky_darken(&self) -> i32 {
+        if self.daylight { 0 } else { 11 }
+    }
+    pub fn target_info(&self, who: Who) -> Option<TargetInfo> {
+        match who {
+            Who::Player => self.player.as_ref().map(|p| TargetInfo {
+                position: p.position,
+                eye_y: p.eye[1],
+                bounds: p.bounds,
+                alive: p.alive,
+                is_player: true,
+                creative: p.creative,
+            }),
+            Who::Mob(id) => self.seen(id).map(|s| TargetInfo {
+                position: s.position,
+                eye_y: s.eye_y,
+                bounds: s.bounds,
+                alive: s.alive,
+                is_player: false,
+                creative: false,
+            }),
+        }
+    }
+    pub fn seen(&self, id: u32) -> Option<&Seen> {
+        self.others.iter().find(|s| s.id == id)
+    }
+    /// Living mobs of the given species within `range` of `from`, nearest first.
+    pub fn nearby<'s>(
+        &'s self,
+        from: Vec3,
+        range: f64,
+        pred: impl Fn(&Seen) -> bool + 's,
+    ) -> impl Iterator<Item = &'s Seen> + 's {
+        let mut v: Vec<&Seen> = self
+            .others
+            .iter()
+            .filter(|s| {
+                s.alive
+                    && (s.position.x - from.x).abs() <= range
+                    && (s.position.y - from.y).abs() <= range
+                    && (s.position.z - from.z).abs() <= range
+            })
+            .filter(move |s| pred(s))
+            .collect();
+        v.sort_by(|a, b| {
+            let da = (a.position.x - from.x).powi(2)
+                + (a.position.y - from.y).powi(2)
+                + (a.position.z - from.z).powi(2);
+            let db = (b.position.x - from.x).powi(2)
+                + (b.position.y - from.y).powi(2)
+                + (b.position.z - from.z).powi(2);
+            da.total_cmp(&db)
+        });
+        v.into_iter()
+    }
+    pub fn count_species(&self, species: Species) -> usize {
+        self.others
+            .iter()
+            .filter(|s| s.species == species && s.alive)
+            .count()
+    }
+}

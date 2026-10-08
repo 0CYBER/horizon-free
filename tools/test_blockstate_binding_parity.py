@@ -56,7 +56,7 @@ def main():
     def run(command,name):
         with (build/(name+'.log')).open('w') as log:subprocess.run(list(map(str,command)),cwd=lab.ROOT,check=True,timeout=3600,stdout=log,stderr=subprocess.STDOUT)
     dependencies=os.pathsep.join(map(str,[jars['client'],*libraries]));classpath=str(classes)+os.pathsep+dependencies
-    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',dependencies,'-d',classes,oracle,helper],'compile-java')
+    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',dependencies,'-d',classes,oracle,helper],'compile-java')
     facts_path=build/'registry.json';run(['java','-Xmx512M','-cp',classpath,'dev.horizonlab.parity.VanillaBlockStateBindingOracle','export',facts_path],'export');facts=json.loads(facts_path.read_text())
     rows=[];unbound=[]
     with zipfile.ZipFile(jars['client']) as archive:

@@ -120,7 +120,7 @@ fn int(r: &mut impl RandomSource, bound: i32) -> i32 {
 }
 /// BoundingBox.orientBox.
 #[allow(clippy::too_many_arguments)]
-fn orient_box(
+pub(super) fn orient_box(
     [x, y, z]: [i32; 3],
     [ox, oy, oz]: [i32; 3],
     [w, h, d]: [i32; 3],

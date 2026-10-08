@@ -43,6 +43,7 @@ mod generator_decoration;
 mod generator_structures;
 pub mod height_provider;
 pub mod iceberg;
+pub mod live;
 pub mod material_condition;
 pub mod material_extensions;
 pub mod material_stage;

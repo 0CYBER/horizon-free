@@ -42,6 +42,39 @@ def export_structure_blocks(target, jars, libraries):
                        check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
 
 
+BLOCK_BEHAVIOR_FILES = ['block-properties.nbt', 'cached-collision.nbt', 'cached-support.nbt', 'survival-rules.json',
+                        'survival-extra-definitions.json', 'placement-definitions.json']
+
+
+def export_block_behavior(export, jars, libraries):
+    """Run the vanilla exporters of block properties, support, collision and survival definitions.
+
+    Feature placement needs them: without these files the generator skips every placed feature
+    whose blocks are checked for survival or support (trees, flowers, grass, kelp, ...)."""
+    try:
+        from . import test_block_survival_parity as survival
+    except ImportError:
+        import test_block_survival_parity as survival
+    lock = json.loads((lab.ROOT/'research-lock.json').read_text())
+    tests = lab.ROOT/'mods/horizon/src/test/java'
+    classes = export/'classes'
+    classes.mkdir(parents=True, exist_ok=True)
+    dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+    with (export/'export.log').open('w') as log:
+        # The oracle's helper classes are compiled on demand from the source path.
+        subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-cp', dependencies,
+                        '-sourcepath', str(tests), '-d', str(classes),
+                        str(tests/'dev/horizonlab/parity/VanillaSimpleBlockOracle.java')],
+                       check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+        subprocess.run(['java', '-Xmx1G', '-cp', str(classes)+os.pathsep+dependencies,
+                        'dev.horizonlab.parity.VanillaSimpleBlockOracle', 'export', str(export)],
+                       check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+    rules = survival.bind_definitions(*[json.loads((export/name).read_text()) for name in
+                                        ['survival-classes.json', 'survival-placement-classes.json',
+                                         'survival-support-tags.json']])
+    (export/'survival-rules.json').write_text(json.dumps(rules, separators=(',', ':')))
+
+
 def prepare_worldgen(root, jars, local, libraries=None):
     """Write the chunk generator's resource bundle to root/worldgen (see GeneratorData::load)."""
     out = root / 'worldgen'
@@ -82,11 +115,13 @@ def prepare_worldgen(root, jars, local, libraries=None):
     else:
         presets = None
     # Block behavior used by feature placement checks (survival, support, collision).
-    # These come from the Java exporters of the simple-block parity run.
+    # These come from the Java exporters of the simple-block parity run, or a direct export.
     behavior = local/'rust-simple-block-parity'
     blocks = out/'blocks'
-    names = ['block-properties.nbt', 'cached-collision.nbt', 'cached-support.nbt', 'survival-rules.json',
-             'survival-extra-definitions.json', 'placement-definitions.json']
+    names = BLOCK_BEHAVIOR_FILES
+    if libraries is not None and not all((behavior/name).exists() for name in names):
+        behavior = local/'horizon-client-block-behavior'
+        export_block_behavior(behavior, jars, libraries)
     if all((behavior/name).exists() for name in names):
         blocks.mkdir(exist_ok=True)
         for name in names:
@@ -343,6 +378,22 @@ def main():
             subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
                             'dev.horizonlab.parity.VanillaEntityModelExporter', str(entity_models)],
                            check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+    # Mob AI and animation facts: per-state path types, spawn placements and the
+    # client's keyframe animation definitions (needs the client jar).
+    mob_data = root / 'mob-data.json'
+    mob_oracle = oracle.with_name('VanillaMobDataExporter.java')
+    mob_sources = base.source_hashes([mob_oracle])
+    if not (previous.get('mob_data_exporters_sha256') == mob_sources and mob_data.exists()
+            and previous.get('client_sha256') == origin['client_sha256']):
+        classes = lab.LOCAL / 'mob-data' / 'classes'; classes.mkdir(parents=True, exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['client'], *baking.client_libraries()]))
+        with (root / 'mob-data-export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(mob_oracle)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
+                            'dev.horizonlab.parity.VanillaMobDataExporter', str(mob_data), str(jars['client'])],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
     creative = root / 'creative-tabs.json'
     creative_oracle = oracle.with_name('VanillaCreativeTabsExporter.java')
     creative_sources = base.source_hashes([creative_oracle])
@@ -371,6 +422,7 @@ def main():
                              'gameplay_exporters_sha256': gameplay_sources,
                              'entity_model_exporters_sha256': entity_sources,
                              'creative_exporters_sha256': creative_sources,
+                             'mob_data_exporters_sha256': mob_sources,
                              'entity_types_exporters_sha256': entity_types_sources,
                              'behaviour_exporters_sha256': behaviour_sources,
                              'model_states_sha256': lab.digest(model_states, 'sha256'), 'data_version': version['world_version'],

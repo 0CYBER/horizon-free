@@ -1,0 +1,1733 @@
+//! Vanilla's `GoalSelector` (priorities, MOVE/LOOK/JUMP/TARGET control flags,
+//! interruption) and the shared goals of `net.minecraft.world.entity.ai.goal`.
+use super::{Mob, MobEvent, MobWorld, Seen, Species, Who, world::TargetInfo};
+use horizon_core::{geometry::Vec3, random::RandomSource};
+use std::sync::Arc;
+
+pub const MOVE: u8 = 1;
+pub const LOOK: u8 = 2;
+pub const JUMP: u8 = 4;
+pub const TARGET: u8 = 8;
+
+/// What goals may read and emit during a tick.
+pub struct Cx<'a, 'w> {
+    pub w: &'a MobWorld<'w>,
+    pub events: &'a mut Vec<MobEvent>,
+}
+pub trait Goal: std::fmt::Debug {
+    fn flags(&self) -> u8;
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool;
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.can_use(m, cx)
+    }
+    fn interruptable(&self) -> bool {
+        true
+    }
+    fn start(&mut self, _m: &mut Mob, _cx: &mut Cx) {}
+    fn stop(&mut self, _m: &mut Mob, _cx: &mut Cx) {}
+    fn every_tick(&self) -> bool {
+        false
+    }
+    fn tick(&mut self, _m: &mut Mob, _cx: &mut Cx) {}
+    fn box_clone(&self) -> Box<dyn Goal>;
+    /// The goal's name for debugging (`Goal.toString`).
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("Goal")
+    }
+}
+impl Clone for Box<dyn Goal> {
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
+}
+macro_rules! goal_clone {
+    () => {
+        fn box_clone(&self) -> Box<dyn crate::mobs::goals::Goal> {
+            Box::new(self.clone())
+        }
+    };
+}
+pub(crate) use goal_clone;
+
+/// Goal.reducedTickDelay
+pub fn reduced(ticks: i32) -> i32 {
+    (ticks + 1) / 2
+}
+fn adjusted(every_tick: bool, ticks: i32) -> i32 {
+    if every_tick { ticks } else { reduced(ticks) }
+}
+
+#[derive(Clone, Debug)]
+struct Wrapped {
+    priority: i32,
+    goal: Box<dyn Goal>,
+    running: bool,
+}
+#[derive(Clone, Debug, Default)]
+pub struct GoalSelector {
+    goals: Vec<Wrapped>,
+    locked: [Option<usize>; 4],
+    pub disabled: u8,
+}
+fn flag_index(f: u8) -> usize {
+    f.trailing_zeros() as usize
+}
+impl GoalSelector {
+    pub fn add(&mut self, priority: i32, goal: impl Goal + 'static) {
+        self.goals.push(Wrapped {
+            priority,
+            goal: Box::new(goal),
+            running: false,
+        });
+    }
+    pub fn clear(&mut self) {
+        self.goals.clear();
+        self.locked = [None; 4];
+    }
+    pub fn running_names(&self) -> Vec<&'static str> {
+        self.goals
+            .iter()
+            .filter(|g| g.running)
+            .map(|g| g.goal.name())
+            .collect()
+    }
+    pub fn is_running(&self, name: &str) -> bool {
+        self.goals
+            .iter()
+            .any(|g| g.running && g.goal.name() == name)
+    }
+    fn stop(&mut self, i: usize, m: &mut Mob, cx: &mut Cx) {
+        if self.goals[i].running {
+            self.goals[i].running = false;
+            self.goals[i].goal.stop(m, cx);
+        }
+    }
+    /// GoalSelector.tick
+    pub fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        for i in 0..self.goals.len() {
+            if self.goals[i].running
+                && (self.goals[i].goal.flags() & self.disabled != 0
+                    || !self.goals[i].goal.can_continue(m, cx))
+            {
+                self.stop(i, m, cx);
+            }
+        }
+        for slot in &mut self.locked {
+            if slot.is_some_and(|i| !self.goals[i].running) {
+                *slot = None;
+            }
+        }
+        for i in 0..self.goals.len() {
+            let flags = self.goals[i].goal.flags();
+            if self.goals[i].running || flags & self.disabled != 0 {
+                continue;
+            }
+            let replaceable =
+                (0..4)
+                    .filter(|b| flags & (1 << b) != 0)
+                    .all(|b| match self.locked[b] {
+                        None => true,
+                        Some(j) => {
+                            self.goals[j].goal.interruptable()
+                                && self.goals[i].priority < self.goals[j].priority
+                        }
+                    });
+            if !replaceable || !self.goals[i].goal.can_use(m, cx) {
+                continue;
+            }
+            for b in 0..4 {
+                if flags & (1 << b) != 0 {
+                    if let Some(j) = self.locked[b] {
+                        self.stop(j, m, cx);
+                    }
+                    self.locked[b] = Some(i);
+                }
+            }
+            if !self.goals[i].running {
+                self.goals[i].running = true;
+                self.goals[i].goal.start(m, cx);
+            }
+        }
+        self.tick_running(m, cx, true);
+    }
+    pub fn tick_running(&mut self, m: &mut Mob, cx: &mut Cx, force: bool) {
+        for g in &mut self.goals {
+            if g.running && (force || g.goal.every_tick()) {
+                g.goal.tick(m, cx);
+            }
+        }
+    }
+    pub fn stop_all(&mut self, m: &mut Mob, cx: &mut Cx) {
+        for i in 0..self.goals.len() {
+            self.stop(i, m, cx);
+        }
+        self.locked = [None; 4];
+    }
+    #[allow(dead_code)]
+    fn locked_by(&self, flag: u8) -> Option<usize> {
+        self.locked[flag_index(flag)]
+    }
+}
+
+// --- random positions (DefaultRandomPos / LandRandomPos / RandomPos) -------
+
+impl Mob {
+    /// PathfinderMob.getWalkTargetValue.
+    pub fn walk_target_value(&self, w: &MobWorld, p: [i32; 3]) -> f32 {
+        super::ai::walk_target_value(self, w, p)
+    }
+    fn random_direction(&mut self, h: i32, v: i32) -> [i32; 3] {
+        let x = self.random.next_int_bound(2 * h + 1).unwrap_or(0) - h;
+        let y = self.random.next_int_bound(2 * v + 1).unwrap_or(0) - v;
+        let z = self.random.next_int_bound(2 * h + 1).unwrap_or(0) - h;
+        [x, y, z]
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn random_direction_within(
+        &mut self,
+        min: f64,
+        max: f64,
+        v: i32,
+        fly_height: i32,
+        xd: f64,
+        zd: f64,
+        max_rad: f64,
+    ) -> Option<[i32; 3]> {
+        let center = zd.atan2(xd) - std::f64::consts::FRAC_PI_2;
+        let yrad = center + f64::from(2.0 * self.random.next_float() - 1.0) * max_rad;
+        let dist =
+            (min + self.random.next_double().sqrt() * (max - min)) * std::f64::consts::SQRT_2;
+        let xt = -dist * yrad.sin();
+        let zt = dist * yrad.cos();
+        if xt.abs() > max || zt.abs() > max {
+            return None;
+        }
+        let yt = self.random.next_int_bound(2 * v + 1).unwrap_or(0) - v + fly_height;
+        Some([xt.floor() as i32, yt, zt.floor() as i32])
+    }
+    /// RandomPos.generateRandomPosTowardDirection (no home restriction).
+    fn toward(&mut self, _h: f64, d: [i32; 3]) -> [i32; 3] {
+        [
+            (f64::from(d[0]) + self.position.x).floor() as i32,
+            (f64::from(d[1]) + self.position.y).floor() as i32,
+            (f64::from(d[2]) + self.position.z).floor() as i32,
+        ]
+    }
+    fn default_check(&self, w: &MobWorld, p: [i32; 3]) -> bool {
+        p[1] >= crate::chunk::MIN_Y
+            && p[1] < 320
+            && self.stable_destination(w, p)
+            && self.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0
+    }
+    fn pick_best(
+        &mut self,
+        w: &MobWorld,
+        mut supplier: impl FnMut(&mut Self) -> Option<[i32; 3]>,
+    ) -> Option<[f64; 3]> {
+        let mut best: Option<[i32; 3]> = None;
+        let mut best_weight = f64::NEG_INFINITY;
+        for _ in 0..10 {
+            if let Some(p) = supplier(self) {
+                let v = f64::from(self.walk_target_value(w, p));
+                if v > best_weight {
+                    best_weight = v;
+                    best = Some(p);
+                }
+            }
+        }
+        best.map(|p| {
+            [
+                f64::from(p[0]) + 0.5,
+                f64::from(p[1]),
+                f64::from(p[2]) + 0.5,
+            ]
+        })
+    }
+    /// DefaultRandomPos.getPos
+    pub fn default_random_pos(&mut self, w: &MobWorld, h: i32, v: i32) -> Option<[f64; 3]> {
+        self.pick_best(w, |m| {
+            let d = m.random_direction(h, v);
+            let p = m.toward(f64::from(h), d);
+            m.default_check(w, p).then_some(p)
+        })
+    }
+    /// DefaultRandomPos.getPosAway
+    pub fn default_random_pos_away(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        away: [f64; 3],
+    ) -> Option<[f64; 3]> {
+        let (xd, zd) = (self.position.x - away[0], self.position.z - away[2]);
+        self.pick_best(w, |m| {
+            let d = m.random_direction_within(
+                0.0,
+                f64::from(h),
+                v,
+                0,
+                xd,
+                zd,
+                std::f64::consts::FRAC_PI_2,
+            )?;
+            let p = m.toward(f64::from(h), d);
+            m.default_check(w, p).then_some(p)
+        })
+    }
+    /// DefaultRandomPos.getPosTowards
+    pub fn default_random_pos_towards(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        to: [f64; 3],
+        max_rad: f64,
+    ) -> Option<[f64; 3]> {
+        let (xd, zd) = (to[0] - self.position.x, to[2] - self.position.z);
+        self.pick_best(w, |m| {
+            let d = m.random_direction_within(0.0, f64::from(h), v, 0, xd, zd, max_rad)?;
+            let p = m.toward(f64::from(h), d);
+            m.default_check(w, p).then_some(p)
+        })
+    }
+    fn land_up_out_of_solid(&self, w: &MobWorld, mut p: [i32; 3]) -> Option<[i32; 3]> {
+        if w.solid(p[0], p[1], p[2]) {
+            p[1] += 1;
+            while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
+                p[1] += 1;
+            }
+        }
+        let water = w.fluid(p[0], p[1], p[2]) == crate::blocks::Fluid::Water;
+        (!water && self.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0).then_some(p)
+    }
+    /// LandRandomPos.getPos
+    pub fn land_random_pos(&mut self, w: &MobWorld, h: i32, v: i32) -> Option<[f64; 3]> {
+        self.pick_best(w, |m| {
+            let d = m.random_direction(h, v);
+            let p = m.toward(f64::from(h), d);
+            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !m.stable_destination(w, p) {
+                return None;
+            }
+            m.land_up_out_of_solid(w, p)
+        })
+    }
+    /// LandRandomPos.getPosAway
+    pub fn land_random_pos_away(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        away: [f64; 3],
+    ) -> Option<[f64; 3]> {
+        let (mut xd, mut zd) = (self.position.x - away[0], self.position.z - away[2]);
+        if xd == 0.0 && zd == 0.0 {
+            xd = self.random.next_double() - 0.5;
+            zd = self.random.next_double() - 0.5;
+        }
+        self.pick_best(w, |m| {
+            let d = m.random_direction_within(
+                0.0,
+                f64::from(h),
+                v,
+                0,
+                xd,
+                zd,
+                std::f64::consts::FRAC_PI_2,
+            )?;
+            let p = m.toward(f64::from(h), d);
+            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !m.stable_destination(w, p) {
+                return None;
+            }
+            m.land_up_out_of_solid(w, p)
+        })
+    }
+    /// LandRandomPos.getPosTowards
+    pub fn land_random_pos_towards(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        to: [f64; 3],
+    ) -> Option<[f64; 3]> {
+        let (xd, zd) = (to[0] - self.position.x, to[2] - self.position.z);
+        self.pick_best(w, |m| {
+            let d = m.random_direction_within(
+                0.0,
+                f64::from(h),
+                v,
+                0,
+                xd,
+                zd,
+                std::f64::consts::FRAC_PI_2,
+            )?;
+            let p = m.toward(f64::from(h), d);
+            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !m.stable_destination(w, p) {
+                return None;
+            }
+            m.land_up_out_of_solid(w, p)
+        })
+    }
+    pub fn target_info(&self, w: &MobWorld) -> Option<TargetInfo> {
+        self.ai.target.and_then(|t| w.target_info(t))
+    }
+    /// Sensing.hasLineOfSight (cached per tick in vanilla).
+    pub fn sees(&mut self, w: &MobWorld, who: Who) -> bool {
+        if let Some(v) = self.ai.seen_cache.iter().find(|(k, _)| *k == who) {
+            return v.1;
+        }
+        let Some(t) = w.target_info(who) else {
+            return false;
+        };
+        let eye = Vec3::new(self.position.x, self.eye_y(), self.position.z);
+        let v = w.line_of_sight(eye, Vec3::new(t.position.x, t.eye_y, t.position.z));
+        self.ai.seen_cache.push((who, v));
+        v
+    }
+    /// Mob.isWithinMeleeAttackRange: the box inflated by sqrt(2.04) - 0.6.
+    pub fn within_melee_range(&self, t: &TargetInfo) -> bool {
+        let reach = 2.04f32.sqrt() as f64 - 0.6;
+        let b = self.bounds().inflate(Vec3::new(reach, 0.0, reach));
+        b.intersects(t.bounds)
+    }
+    /// TargetingConditions.forCombat().test for the player: alive, not
+    /// creative, within range scaled by visibility, optionally visible.
+    pub fn can_target_player(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
+        let Some(p) = &w.player else { return false };
+        if !p.alive || p.creative {
+            return false;
+        }
+        let mut visibility = 1.0;
+        if p.sneaking {
+            visibility *= 0.8;
+        }
+        if let Some(head) = &p.head {
+            let skull = match self.species() {
+                Species::Zombie | Species::Husk | Species::Drowned | Species::ZombieVillager => {
+                    "minecraft:zombie_head"
+                }
+                Species::Skeleton | Species::Stray | Species::Bogged => "minecraft:skeleton_head",
+                Species::Creeper => "minecraft:creeper_head",
+                Species::Piglin | Species::PiglinBrute => "minecraft:piglin_head",
+                _ => "",
+            };
+            if &**head == skull {
+                visibility *= 0.5;
+            }
+        }
+        let dist = (range * visibility).max(2.0);
+        if self.distance_sqr(p.position) > dist * dist {
+            return false;
+        }
+        !check_sight || self.sees(w, Who::Player)
+    }
+}
+
+// --- goals ---------------------------------------------------------------
+
+/// FloatGoal: jump (swim up) while deeper than the jump threshold or in lava.
+#[derive(Clone, Debug)]
+pub struct Float;
+impl Goal for Float {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        JUMP
+    }
+    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        m.fluids.water > m.fluid_jump_threshold() || m.fluids.in_lava
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, _: &mut Cx) {
+        if m.random.next_float() < 0.8 {
+            m.ai.jump = true;
+        }
+    }
+}
+/// PanicGoal: flee to a random position after panic-causing damage (or
+/// towards water while burning).
+#[derive(Clone, Debug)]
+pub struct Panic {
+    pub speed: f64,
+    pos: [f64; 3],
+}
+impl Panic {
+    pub fn new(speed: f64) -> Self {
+        Self {
+            speed,
+            pos: [0.0; 3],
+        }
+    }
+}
+pub fn should_panic(m: &Mob) -> bool {
+    m.last_damage
+        .is_some_and(|(d, t)| d.causes_panic() && i64::from(m.age) - t <= 40)
+        || m.fire_ticks > 0 && !m.kind.flags.fire_immune
+}
+impl Goal for Panic {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !should_panic(m) {
+            return false;
+        }
+        if m.fire_ticks > 0 {
+            let (bx, by, bz) = (
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            );
+            if cx.w.data.state(cx.w.world.block(bx, by, bz)).top == 0.0 {
+                // findBlocksInBoxByManhattanDistance(pos, 5, 1) for water.
+                let mut best: Option<([i32; 3], i32)> = None;
+                for dy in -1i32..=1 {
+                    for dx in -5i32..=5 {
+                        for dz in -5i32..=5 {
+                            let d = dx.abs() + dy.abs() + dz.abs();
+                            if cx.w.fluid(bx + dx, by + dy, bz + dz) == crate::blocks::Fluid::Water
+                                && best.is_none_or(|b| d < b.1)
+                            {
+                                best = Some(([bx + dx, by + dy, bz + dz], d));
+                            }
+                        }
+                    }
+                }
+                if let Some((p, _)) = best {
+                    self.pos = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])];
+                    return true;
+                }
+            }
+        }
+        match m.default_random_pos(cx.w, 5, 4) {
+            Some(p) => {
+                self.pos = p;
+                true
+            }
+            None => false,
+        }
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.ai.nav.is_done()
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_move_to(cx.w, self.pos, self.speed);
+        m.ai.panicking = true;
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.panicking = false;
+    }
+}
+/// RandomStrollGoal / WaterAvoidingRandomStrollGoal.
+#[derive(Clone, Debug)]
+pub struct Stroll {
+    pub speed: f64,
+    pub interval: i32,
+    pub check_no_action: bool,
+    /// WaterAvoidingRandomStrollGoal probability of a plain stroll.
+    pub water_avoiding: Option<f32>,
+    /// RandomSwimmingGoal: BehaviorUtils.getRandomSwimmablePos.
+    pub swim: bool,
+    pub force: bool,
+    wanted: [f64; 3],
+}
+impl Stroll {
+    pub fn new(speed: f64) -> Self {
+        Self {
+            speed,
+            interval: 120,
+            check_no_action: true,
+            water_avoiding: None,
+            swim: false,
+            force: false,
+            wanted: [0.0; 3],
+        }
+    }
+    pub fn avoiding_water(speed: f64) -> Self {
+        Self {
+            water_avoiding: Some(0.001),
+            ..Self::new(speed)
+        }
+    }
+    pub fn interval(mut self, i: i32) -> Self {
+        self.interval = i;
+        self
+    }
+    /// RandomSwimmingGoal(speed, interval)
+    pub fn swimming(speed: f64, interval: i32) -> Self {
+        Self { swim: true, ..Self::new(speed).interval(interval) }
+    }
+}
+impl Goal for Stroll {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !self.force {
+            if self.check_no_action && m.ai.no_action_time >= 100 {
+                return false;
+            }
+            if m.random.next_int_bound(reduced(self.interval)).unwrap_or(1) != 0 {
+                return false;
+            }
+        }
+        let pos = match self.water_avoiding {
+            Some(prob) => {
+                if m.fluids.in_water {
+                    m.land_random_pos(cx.w, 15, 7)
+                        .or_else(|| m.default_random_pos(cx.w, 10, 7))
+                } else if m.random.next_float() >= prob {
+                    m.land_random_pos(cx.w, 10, 7)
+                } else {
+                    m.default_random_pos(cx.w, 10, 7)
+                }
+            }
+            None if self.swim => {
+                let mut p = m.default_random_pos(cx.w, 10, 7);
+                let mut count = 0;
+                while let Some(q) = p {
+                    let s = cx.w.world.block(q[0].floor() as i32, q[1].floor() as i32, q[2].floor() as i32);
+                    if cx.w.data.state(s).flags & super::data::WATER != 0 || count >= 10 {
+                        break;
+                    }
+                    count += 1;
+                    p = m.default_random_pos(cx.w, 10, 7);
+                }
+                p
+            }
+            None => m.default_random_pos(cx.w, 10, 7),
+        };
+        let Some(p) = pos else { return false };
+        self.wanted = p;
+        self.force = false;
+        true
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.ai.nav.is_done()
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_move_to(cx.w, self.wanted, self.speed);
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.nav_stop();
+    }
+}
+/// LookAtPlayerGoal (player targets only).
+#[derive(Clone, Debug)]
+pub struct LookAtPlayer {
+    pub range: f32,
+    pub probability: f32,
+    pub only_horizontal: bool,
+    look_time: i32,
+}
+impl LookAtPlayer {
+    pub fn new(range: f32) -> Self {
+        Self {
+            range,
+            probability: 0.02,
+            only_horizontal: false,
+            look_time: 0,
+        }
+    }
+    pub fn probability(mut self, p: f32) -> Self {
+        self.probability = p;
+        self
+    }
+}
+impl Goal for LookAtPlayer {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.random.next_float() >= self.probability {
+            return false;
+        }
+        let Some(p) = &cx.w.player else { return false };
+        p.alive && m.distance_sqr(p.position) <= f64::from(self.range * self.range)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(p) = &cx.w.player else { return false };
+        p.alive
+            && m.distance_sqr(p.position) <= f64::from(self.range * self.range)
+            && self.look_time > 0
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        self.look_time = reduced(40 + m.random.next_int_bound(40).unwrap_or(0));
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some(p) = &cx.w.player
+            && p.alive
+        {
+            let y = if self.only_horizontal {
+                m.eye_y()
+            } else {
+                p.eye[1]
+            };
+            m.look_at([p.position.x, y, p.position.z]);
+            self.look_time -= 1;
+        }
+    }
+}
+/// RandomLookAroundGoal.
+#[derive(Clone, Debug, Default)]
+pub struct RandomLookAround {
+    rel: [f64; 2],
+    time: i32,
+}
+impl Goal for RandomLookAround {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        m.random.next_float() < 0.02
+    }
+    fn can_continue(&mut self, _: &mut Mob, _: &mut Cx) -> bool {
+        self.time >= 0
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        let r = std::f64::consts::TAU * m.random.next_double();
+        self.rel = [r.cos(), r.sin()];
+        self.time = 20 + m.random.next_int_bound(20).unwrap_or(0);
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, _: &mut Cx) {
+        self.time -= 1;
+        let at = [
+            m.position.x + self.rel[0],
+            m.eye_y(),
+            m.position.z + self.rel[1],
+        ];
+        m.look_at(at);
+    }
+}
+/// MeleeAttackGoal (and ZombieAttackGoal's raised arms when `zombie`).
+#[derive(Clone, Debug)]
+pub struct MeleeAttack {
+    pub speed: f64,
+    pub follow_unseen: bool,
+    pub zombie: bool,
+    path_target: [f64; 3],
+    recalc: i32,
+    pub until_attack: i32,
+    last_check: i64,
+    raise_arm: i32,
+}
+impl MeleeAttack {
+    pub fn new(speed: f64, follow_unseen: bool) -> Self {
+        Self {
+            speed,
+            follow_unseen,
+            zombie: false,
+            path_target: [0.0; 3],
+            recalc: 0,
+            until_attack: 0,
+            last_check: i64::MIN / 2,
+            raise_arm: 0,
+        }
+    }
+    pub fn zombie(mut self) -> Self {
+        self.zombie = true;
+        self
+    }
+}
+impl Goal for MeleeAttack {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if cx.w.game_time - self.last_check < 20 {
+            return false;
+        }
+        self.last_check = cx.w.game_time;
+        let Some(t) = m.target_info(cx.w) else {
+            return false;
+        };
+        if !t.alive {
+            return false;
+        }
+        let path = m.create_path_to_entity(cx.w, [t.position.x, t.position.y, t.position.z], 0);
+        let ok = path.is_some() || m.within_melee_range(&t);
+        m.ai.pending_path = path;
+        ok
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(t) = m.target_info(cx.w) else {
+            return false;
+        };
+        if !t.alive {
+            return false;
+        }
+        if !self.follow_unseen {
+            return !m.ai.nav.is_done();
+        }
+        !(t.is_player && t.creative)
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        let path = m.ai.pending_path.take();
+        m.nav_move_to_path(path, self.speed);
+        m.ai.aggressive = true;
+        self.recalc = 0;
+        self.until_attack = 0;
+        self.raise_arm = 0;
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some(t) = m.target_info(cx.w)
+            && t.is_player
+            && t.creative
+        {
+            m.ai.target = None;
+        }
+        m.ai.aggressive = false;
+        m.nav_stop();
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(who) = m.ai.target else { return };
+        let Some(t) = cx.w.target_info(who) else {
+            return;
+        };
+        m.look_at_speed([t.position.x, t.eye_y, t.position.z], 30.0, 30.0);
+        self.recalc = (self.recalc - 1).max(0);
+        let moved = (t.position.x - self.path_target[0]).powi(2)
+            + (t.position.y - self.path_target[1]).powi(2)
+            + (t.position.z - self.path_target[2]).powi(2)
+            >= 1.0;
+        if (self.follow_unseen || m.sees(cx.w, who))
+            && self.recalc <= 0
+            && (self.path_target == [0.0; 3] || moved || m.random.next_float() < 0.05)
+        {
+            self.path_target = [t.position.x, t.position.y, t.position.z];
+            self.recalc = 4 + m.random.next_int_bound(7).unwrap_or(0);
+            let d = m.distance_sqr(t.position);
+            if d > 1024.0 {
+                self.recalc += 10;
+            } else if d > 256.0 {
+                self.recalc += 5;
+            }
+            if !m.nav_move_to_entity(cx.w, self.path_target, 0, self.speed) {
+                self.recalc += 15;
+            }
+            self.recalc = adjusted(true, self.recalc);
+        }
+        self.until_attack = (self.until_attack - 1).max(0);
+        if self.until_attack <= 0 && m.within_melee_range(&t) && m.sees(cx.w, who) {
+            self.until_attack = adjusted(true, 20);
+            m.swing();
+            super::ai::do_hurt_target(m, who, cx);
+        }
+        if self.zombie {
+            self.raise_arm += 1;
+            m.ai.aggressive = self.raise_arm >= 5 && self.until_attack < adjusted(true, 20) / 2;
+        }
+    }
+}
+/// LeapAtTargetGoal.
+#[derive(Clone, Debug)]
+pub struct LeapAtTarget {
+    pub yd: f32,
+    target: [f64; 3],
+}
+impl LeapAtTarget {
+    pub fn new(yd: f32) -> Self {
+        Self {
+            yd,
+            target: [0.0; 3],
+        }
+    }
+}
+impl Goal for LeapAtTarget {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        JUMP | MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(t) = m.target_info(cx.w) else {
+            return false;
+        };
+        let d = m.distance_sqr(t.position);
+        if !(4.0..=16.0).contains(&d) || !m.on_ground {
+            return false;
+        }
+        self.target = [t.position.x, t.position.y, t.position.z];
+        m.random.next_int_bound(reduced(5)).unwrap_or(1) == 0
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.on_ground
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        let mut d = [
+            self.target[0] - m.position.x,
+            0.0,
+            self.target[2] - m.position.z,
+        ];
+        let len_sq = d[0] * d[0] + d[2] * d[2];
+        if len_sq > 1.0e-7 {
+            let l = len_sq.sqrt();
+            d = [
+                d[0] / l * 0.4 + m.velocity.x * 0.2,
+                0.0,
+                d[2] / l * 0.4 + m.velocity.z * 0.2,
+            ];
+        }
+        m.velocity = Vec3::new(d[0], f64::from(self.yd), d[2]);
+    }
+}
+/// What a target goal hunts.
+#[derive(Clone, Debug)]
+pub enum Prey {
+    Player,
+    Species(Vec<Species>),
+    /// Any mob matching a predicate on its snapshot.
+    Filter(fn(&Seen) -> bool),
+}
+/// NearestAttackableTargetGoal (+ TargetGoal's continue rules).
+#[derive(Clone, Debug)]
+pub struct NearestTarget {
+    pub prey: Prey,
+    pub must_see: bool,
+    pub must_reach: bool,
+    pub interval: i32,
+    /// Extra condition on the attacker (e.g. spiders only at night).
+    pub when: Option<fn(&Mob, &MobWorld) -> bool>,
+    found: Option<Who>,
+    target_goal: TargetState,
+}
+#[derive(Clone, Debug, Default)]
+pub struct TargetState {
+    unseen: i32,
+    pub unseen_memory: i32,
+    reach_cache: i32,
+    reach_time: i32,
+}
+impl NearestTarget {
+    pub fn new(prey: Prey, must_see: bool) -> Self {
+        Self {
+            prey,
+            must_see,
+            must_reach: false,
+            interval: reduced(10),
+            when: None,
+            found: None,
+            target_goal: TargetState {
+                unseen_memory: 60,
+                ..Default::default()
+            },
+        }
+    }
+    pub fn player(must_see: bool) -> Self {
+        Self::new(Prey::Player, must_see)
+    }
+    pub fn species(list: &[Species], must_see: bool) -> Self {
+        Self::new(Prey::Species(list.to_vec()), must_see)
+    }
+    pub fn interval(mut self, i: i32) -> Self {
+        self.interval = reduced(i);
+        self
+    }
+    pub fn reach(mut self) -> Self {
+        self.must_reach = true;
+        self
+    }
+    pub fn when(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
+        self.when = Some(f);
+        self
+    }
+}
+/// TargetGoal.canContinueToUse
+pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &mut Cx) -> bool {
+    let Some(who) = m.ai.target else { return false };
+    let Some(t) = cx.w.target_info(who) else {
+        return false;
+    };
+    if !t.alive || t.is_player && t.creative {
+        return false;
+    }
+    if m.distance_sqr(t.position) > m.attrs.follow_range * m.attrs.follow_range {
+        return false;
+    }
+    if must_see {
+        if m.sees(cx.w, who) {
+            st.unseen = 0;
+        } else {
+            st.unseen += 1;
+            if st.unseen > reduced(st.unseen_memory) {
+                return false;
+            }
+        }
+    }
+    true
+}
+/// TargetGoal.canAttack's reach check.
+fn can_reach(st: &mut TargetState, m: &mut Mob, cx: &mut Cx, at: Vec3) -> bool {
+    st.reach_time -= 1;
+    if st.reach_time <= 0 {
+        st.reach_cache = 0;
+    }
+    if st.reach_cache == 0 {
+        st.reach_time = reduced(10 + m.random.next_int_bound(5).unwrap_or(0));
+        let path = m.create_path_to_entity(cx.w, [at.x, at.y, at.z], 0);
+        let ok = path.and_then(|p| p.end()).is_some_and(|e| {
+            let (xx, zz) = (e.x - at.x.floor() as i32, e.z - at.z.floor() as i32);
+            f64::from(xx * xx + zz * zz) <= 2.25
+        });
+        st.reach_cache = if ok { 1 } else { 2 };
+    }
+    st.reach_cache == 1
+}
+impl Goal for NearestTarget {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        TARGET
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if self.interval > 0 && m.random.next_int_bound(self.interval).unwrap_or(1) != 0 {
+            return false;
+        }
+        if let Some(f) = self.when
+            && !f(m, cx.w)
+        {
+            return false;
+        }
+        let range = m.attrs.follow_range;
+        self.found = None;
+        match &self.prey {
+            Prey::Player => {
+                if m.can_target_player(cx.w, range, self.must_see) {
+                    let at =
+                        cx.w.player
+                            .as_ref()
+                            .map(|p| p.position)
+                            .unwrap_or(Vec3::ZERO);
+                    if !self.must_reach || can_reach(&mut self.target_goal, m, cx, at) {
+                        self.found = Some(Who::Player);
+                    }
+                }
+            }
+            prey => {
+                let pos = m.position;
+                let id = m.id;
+                let candidates: Vec<(u32, Vec3)> =
+                    cx.w.nearby(pos, range, move |s| {
+                        s.id != id
+                            && match prey {
+                                Prey::Species(list) => list.contains(&s.species),
+                                Prey::Filter(f) => f(s),
+                                Prey::Player => false,
+                            }
+                    })
+                    .map(|s| (s.id, s.position))
+                    .collect();
+                for (cid, cpos) in candidates {
+                    if m.distance_sqr(cpos) > range * range {
+                        continue;
+                    }
+                    if self.must_see && !m.sees(cx.w, Who::Mob(cid)) {
+                        continue;
+                    }
+                    if self.must_reach && !can_reach(&mut self.target_goal, m, cx, cpos) {
+                        continue;
+                    }
+                    self.found = Some(Who::Mob(cid));
+                    break;
+                }
+            }
+        }
+        self.found.is_some()
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        target_continue(&mut self.target_goal, self.must_see, m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.target = self.found;
+        self.target_goal.reach_cache = 0;
+        self.target_goal.reach_time = 0;
+        self.target_goal.unseen = 0;
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.target = None;
+    }
+}
+/// HurtByTargetGoal (optionally alerting others of the same species).
+#[derive(Clone, Debug)]
+pub struct HurtByTarget {
+    pub alert: bool,
+    /// Species that should not be alerted.
+    pub alert_except: Vec<Species>,
+    /// Attackers ignored (e.g. zombified piglins ignore other zombified piglins).
+    pub ignore: Vec<Species>,
+    timestamp: i32,
+    st: TargetState,
+}
+impl HurtByTarget {
+    pub fn new() -> Self {
+        Self {
+            alert: false,
+            alert_except: vec![],
+            ignore: vec![],
+            timestamp: 0,
+            st: TargetState {
+                unseen_memory: 300,
+                ..Default::default()
+            },
+        }
+    }
+    pub fn alert(mut self) -> Self {
+        self.alert = true;
+        self
+    }
+    pub fn ignoring(mut self, s: &[Species]) -> Self {
+        self.ignore = s.to_vec();
+        self
+    }
+}
+impl Default for HurtByTarget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl Goal for HurtByTarget {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        TARGET
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(by) = m.ai.last_hurt_by else {
+            return false;
+        };
+        if m.ai.last_hurt_by_time == self.timestamp {
+            return false;
+        }
+        if let Who::Mob(id) = by
+            && cx
+                .w
+                .seen(id)
+                .is_some_and(|s| self.ignore.contains(&s.species))
+        {
+            return false;
+        }
+        let Some(t) = cx.w.target_info(by) else {
+            return false;
+        };
+        t.alive && !(t.is_player && t.creative)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        target_continue(&mut self.st, true, m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.ai.target = m.ai.last_hurt_by;
+        self.timestamp = m.ai.last_hurt_by_time;
+        self.st.unseen_memory = 300;
+        self.st.unseen = 0;
+        if self.alert
+            && let Some(by) = m.ai.target
+        {
+            let range = m.attrs.follow_range;
+            let species = m.species();
+            let id = m.id;
+            let pos = m.position;
+            let ids: Vec<u32> =
+                cx.w.others
+                    .iter()
+                    .filter(|s| {
+                        s.id != id
+                            && s.alive
+                            && s.species == species
+                            && s.target.is_none()
+                            && (s.position.x - pos.x).abs() <= range + 1.0
+                            && (s.position.y - pos.y).abs() <= 11.0
+                            && (s.position.z - pos.z).abs() <= range + 1.0
+                    })
+                    .filter(|s| !self.alert_except.contains(&s.species))
+                    .filter(|s| Who::Mob(s.id) != by)
+                    .map(|s| s.id)
+                    .collect();
+            for other in ids {
+                cx.events.push(MobEvent::SetTarget {
+                    mob: other,
+                    target: by,
+                });
+            }
+        }
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.target = None;
+    }
+}
+/// What an AvoidEntityGoal flees from.
+#[derive(Clone, Debug)]
+pub enum Avoid {
+    Player,
+    Species(Vec<Species>),
+}
+/// AvoidEntityGoal.
+#[derive(Clone, Debug)]
+pub struct AvoidEntity {
+    pub what: Avoid,
+    pub max_dist: f32,
+    pub walk: f64,
+    pub sprint: f64,
+    /// Extra condition on the avoider (e.g. untamed cats only).
+    pub when: Option<fn(&Mob) -> bool>,
+    from: Vec3,
+}
+impl AvoidEntity {
+    pub fn new(what: Avoid, max_dist: f32, walk: f64, sprint: f64) -> Self {
+        Self {
+            what,
+            max_dist,
+            walk,
+            sprint,
+            when: None,
+            from: Vec3::ZERO,
+        }
+    }
+    pub fn when(mut self, f: fn(&Mob) -> bool) -> Self {
+        self.when = Some(f);
+        self
+    }
+}
+impl Goal for AvoidEntity {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if let Some(f) = self.when
+            && !f(m)
+        {
+            return false;
+        }
+        let max = f64::from(self.max_dist);
+        let found = match &self.what {
+            Avoid::Player => {
+                cx.w.player
+                    .as_ref()
+                    .filter(|p| {
+                        p.alive
+                            && !p.creative
+                            && m.distance_sqr(p.position) <= max * max
+                            && (p.position.y - m.position.y).abs() <= max + 3.0
+                    })
+                    .map(|p| p.position)
+            }
+            Avoid::Species(list) => {
+                let id = m.id;
+                let y = m.position.y;
+                cx.w.nearby(m.position, max, move |s| {
+                    s.id != id && list.contains(&s.species) && (s.position.y - y).abs() <= 3.0 + max
+                })
+                .map(|s| s.position)
+                .next()
+            }
+        };
+        let Some(from) = found else { return false };
+        if m.distance_sqr(from) > max * max {
+            return false;
+        }
+        let Some(pos) = m.default_random_pos_away(cx.w, 16, 7, [from.x, from.y, from.z]) else {
+            return false;
+        };
+        let to_pos =
+            (from.x - pos[0]).powi(2) + (from.y - pos[1]).powi(2) + (from.z - pos[2]).powi(2);
+        if to_pos < m.distance_sqr(from) {
+            return false;
+        }
+        self.from = from;
+        let path = m.create_path_to(
+            cx.w,
+            [
+                pos[0].floor() as i32,
+                pos[1].floor() as i32,
+                pos[2].floor() as i32,
+            ],
+            0,
+        );
+        m.ai.pending_path = path;
+        m.ai.pending_path.is_some()
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.ai.nav.is_done()
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        let path = m.ai.pending_path.take();
+        m.nav_move_to_path(path, self.walk);
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let from = match &self.what {
+            Avoid::Player => {
+                cx.w.player
+                    .as_ref()
+                    .map(|p| p.position)
+                    .unwrap_or(self.from)
+            }
+            Avoid::Species(_) => self.from,
+        };
+        m.ai.nav.speed_modifier = if m.distance_sqr(from) < 49.0 {
+            self.sprint
+        } else {
+            self.walk
+        };
+    }
+}
+/// TemptGoal: follow a player holding one of the items.
+#[derive(Clone, Debug)]
+pub struct Tempt {
+    pub speed: f64,
+    pub items: Arc<[String]>,
+    pub can_scare: bool,
+    pub stop_distance: f64,
+    p: [f64; 3],
+    rot: [f64; 2],
+    calm_down: i32,
+}
+impl Tempt {
+    pub fn new(speed: f64, items: Arc<[String]>, can_scare: bool) -> Self {
+        Self {
+            speed,
+            items,
+            can_scare,
+            stop_distance: 2.5,
+            p: [0.0; 3],
+            rot: [0.0; 2],
+            calm_down: 0,
+        }
+    }
+    fn wants(&self, item: &Option<Arc<str>>) -> bool {
+        item.as_ref()
+            .is_some_and(|i| self.items.iter().any(|t| t.as_str() == &**i))
+    }
+}
+impl Goal for Tempt {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if self.calm_down > 0 {
+            self.calm_down -= 1;
+            return false;
+        }
+        let Some(p) = &cx.w.player else { return false };
+        // Attributes.TEMPT_RANGE default 10.
+        p.alive
+            && (self.wants(&p.main_hand) || self.wants(&p.off_hand))
+            && m.distance_sqr(p.position) <= 100.0
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if self.can_scare
+            && let Some(p) = &cx.w.player
+        {
+            if m.distance_sqr(p.position) < 36.0 {
+                let moved = (p.position.x - self.p[0]).powi(2)
+                    + (p.position.y - self.p[1]).powi(2)
+                    + (p.position.z - self.p[2]).powi(2);
+                if moved > 0.010_000_000_000_000_002 {
+                    return false;
+                }
+                let (yaw, pitch) = look_angles(p.look);
+                if (pitch - self.rot[0]).abs() > 5.0 || (yaw - self.rot[1]).abs() > 5.0 {
+                    return false;
+                }
+            } else {
+                self.p = [p.position.x, p.position.y, p.position.z];
+            }
+            let (yaw, pitch) = look_angles(p.look);
+            self.rot = [pitch, yaw];
+        }
+        self.can_use(m, cx)
+    }
+    fn start(&mut self, _: &mut Mob, cx: &mut Cx) {
+        if let Some(p) = &cx.w.player {
+            self.p = [p.position.x, p.position.y, p.position.z];
+        }
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.nav_stop();
+        self.calm_down = reduced(100);
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(p) = cx.w.player.clone() else { return };
+        let (y, x) = (m.kind.max_head_y_rot + 20.0, m.kind.max_head_x_rot);
+        m.look_at_speed(p.eye, y, x);
+        if m.distance_sqr(p.position) < self.stop_distance * self.stop_distance {
+            m.nav_stop();
+        } else {
+            m.nav_move_to_entity(
+                cx.w,
+                [p.position.x, p.position.y, p.position.z],
+                1,
+                self.speed,
+            );
+        }
+    }
+}
+fn look_angles(look: [f64; 3]) -> (f64, f64) {
+    let yaw = (-look[0]).atan2(look[2]).to_degrees();
+    let pitch = (-look[1]).asin().to_degrees();
+    (yaw, pitch)
+}
+/// BreedGoal: walk to a partner in love and breed after 60 ticks.
+#[derive(Clone, Debug)]
+pub struct Breed {
+    pub speed: f64,
+    partner: Option<u32>,
+    love_time: i32,
+}
+impl Breed {
+    pub fn new(speed: f64) -> Self {
+        Self {
+            speed,
+            partner: None,
+            love_time: 0,
+        }
+    }
+}
+impl Goal for Breed {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.extra.in_love <= 0 {
+            return false;
+        }
+        let species = m.species();
+        let id = m.id;
+        self.partner =
+            cx.w.nearby(m.position, 8.0, move |s| {
+                s.id != id && s.species == species && s.in_love && !s.baby
+            })
+            .map(|s| s.id)
+            .next();
+        self.partner.is_some()
+    }
+    fn can_continue(&mut self, _: &mut Mob, cx: &mut Cx) -> bool {
+        self.partner
+            .and_then(|p| cx.w.seen(p))
+            .is_some_and(|s| s.alive && s.in_love)
+            && self.love_time < 60
+    }
+    fn stop(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.partner = None;
+        self.love_time = 0;
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(p) = self.partner.and_then(|p| cx.w.seen(p)).cloned() else {
+            return;
+        };
+        let x = m.kind.max_head_x_rot;
+        m.look_at_speed([p.position.x, p.eye_y, p.position.z], 10.0, x);
+        m.nav_move_to_entity(
+            cx.w,
+            [p.position.x, p.position.y, p.position.z],
+            1,
+            self.speed,
+        );
+        self.love_time += 1;
+        if self.love_time >= reduced(60) && m.distance_sqr(p.position) < 9.0 {
+            m.extra.in_love = 0;
+            m.extra.age = 6000;
+            cx.events.push(MobEvent::Breed {
+                parent: m.id,
+                partner: p.id,
+            });
+        }
+    }
+}
+/// FollowParentGoal.
+#[derive(Clone, Debug)]
+pub struct FollowParent {
+    pub speed: f64,
+    parent: Option<u32>,
+    recalc: i32,
+}
+impl FollowParent {
+    pub fn new(speed: f64) -> Self {
+        Self {
+            speed,
+            parent: None,
+            recalc: 0,
+        }
+    }
+}
+impl Goal for FollowParent {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.extra.age >= 0 {
+            return false;
+        }
+        let species = m.species();
+        let pos = m.position;
+        let mut best: Option<(u32, f64)> = None;
+        for s in cx.w.others.iter().filter(|s| {
+            s.alive
+                && s.species == species
+                && !s.baby
+                && (s.position.x - pos.x).abs() <= 8.0
+                && (s.position.y - pos.y).abs() <= 4.0
+                && (s.position.z - pos.z).abs() <= 8.0
+        }) {
+            let d = m.distance_sqr(s.position);
+            if best.is_none_or(|b| d <= b.1) {
+                best = Some((s.id, d));
+            }
+        }
+        match best {
+            Some((id, d)) if d >= 9.0 => {
+                self.parent = Some(id);
+                true
+            }
+            _ => false,
+        }
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.extra.age >= 0 {
+            return false;
+        }
+        let Some(p) = self.parent.and_then(|p| cx.w.seen(p)) else {
+            return false;
+        };
+        let d = m.distance_sqr(p.position);
+        p.alive && (9.0..=256.0).contains(&d)
+    }
+    fn start(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.recalc = 0;
+    }
+    fn stop(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.parent = None;
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.recalc -= 1;
+        if self.recalc <= 0 {
+            self.recalc = reduced(10);
+            if let Some(p) = self.parent.and_then(|p| cx.w.seen(p)) {
+                let at = [p.position.x, p.position.y, p.position.z];
+                m.nav_move_to_entity(cx.w, at, 1, self.speed);
+            }
+        }
+    }
+}
+/// RestrictSunGoal: avoid sunlit nodes while it is bright outside.
+#[derive(Clone, Debug)]
+pub struct RestrictSun;
+impl Goal for RestrictSun {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        cx.w.daylight && m.extra.head.is_none()
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.nav.avoid_sun = true;
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.nav.avoid_sun = false;
+    }
+}
+/// FleeSunGoal: find shade while burning.
+#[derive(Clone, Debug)]
+pub struct FleeSun {
+    pub speed: f64,
+    wanted: [f64; 3],
+}
+impl FleeSun {
+    pub fn new(speed: f64) -> Self {
+        Self {
+            speed,
+            wanted: [0.0; 3],
+        }
+    }
+}
+impl Goal for FleeSun {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.ai.target.is_some() || !cx.w.daylight || m.fire_ticks <= 0 || m.extra.head.is_some() {
+            return false;
+        }
+        let (bx, by, bz) = (
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        );
+        if !cx.w.can_see_sky(bx, by, bz) {
+            return false;
+        }
+        for _ in 0..10 {
+            let p = [
+                bx + m.random.next_int_bound(20).unwrap_or(0) - 10,
+                by + m.random.next_int_bound(6).unwrap_or(0) - 3,
+                bz + m.random.next_int_bound(20).unwrap_or(0) - 10,
+            ];
+            if !cx.w.can_see_sky(p[0], p[1], p[2]) && m.walk_target_value(cx.w, p) < 0.0 {
+                self.wanted = [
+                    f64::from(p[0]) + 0.5,
+                    f64::from(p[1]),
+                    f64::from(p[2]) + 0.5,
+                ];
+                return true;
+            }
+        }
+        false
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.ai.nav.is_done()
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_move_to(cx.w, self.wanted, self.speed);
+    }
+}
+/// EatBlockGoal (sheep): eat short grass or turn grass blocks to dirt.
+#[derive(Clone, Debug, Default)]
+pub struct EatBlock {
+    tick: i32,
+}
+impl Goal for EatBlock {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK | JUMP
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let chance = reduced(if m.is_baby() { 50 } else { 1000 });
+        if m.random.next_int_bound(chance).unwrap_or(1) != 0 {
+            return false;
+        }
+        let (x, y, z) = (
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        );
+        let here = cx.w.block_name(x, y, z).to_owned();
+        cx.w.has_tag("minecraft:edible_for_sheep", &here)
+            || cx.w.block_name(x, y - 1, z) == "minecraft:grass_block"
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        self.tick = reduced(40);
+        m.extra.anim_ticks = 40;
+        m.nav_stop();
+    }
+    fn stop(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.tick = 0;
+    }
+    fn can_continue(&mut self, _: &mut Mob, _: &mut Cx) -> bool {
+        self.tick > 0
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.tick = (self.tick - 1).max(0);
+        if self.tick == reduced(4) {
+            let (x, y, z) = (
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            );
+            let here = cx.w.block_name(x, y, z).to_owned();
+            if cx.w.has_tag("minecraft:edible_for_sheep", &here) {
+                cx.events.push(MobEvent::BreakBlock {
+                    pos: [x, y, z],
+                    drop: false,
+                });
+                super::ai::ate(m);
+            } else if cx.w.block_name(x, y - 1, z) == "minecraft:grass_block" {
+                cx.events.push(MobEvent::SetBlockName {
+                    pos: [x, y - 1, z],
+                    name: "minecraft:dirt",
+                    effect: true,
+                });
+                super::ai::ate(m);
+            }
+        }
+    }
+}
+
+/// BreathAirGoal: swim up to air when the air supply runs low.
+#[derive(Clone, Debug, Default)]
+pub struct BreathAir;
+impl BreathAir {
+    fn find_air(m: &mut Mob, cx: &mut Cx) {
+        let (x, y, z) = (m.position.x.floor() as i32, m.position.y.floor() as i32, m.position.z.floor() as i32);
+        let mut dest = None;
+        for yy in y..=y + 8 {
+            let s = cx.w.world.block(x, yy, z);
+            let f = cx.w.facts.get(s);
+            if (f.fluid == crate::blocks::Fluid::None || &*f.name == "minecraft:bubble_column") && cx.w.data.state(s).flags & super::data::LAND != 0 {
+                dest = Some([x, yy, z]);
+                break;
+            }
+        }
+        let d = dest.unwrap_or([x, (m.position.y + 8.0).floor() as i32, z]);
+        m.nav_move_to(cx.w, [f64::from(d[0]), f64::from(d[1] + 1), f64::from(d[2])], 1.0);
+    }
+}
+impl Goal for BreathAir {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        m.air < 140
+    }
+    fn interruptable(&self) -> bool {
+        false
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_stop();
+        Self::find_air(m, cx);
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        Self::find_air(m, cx);
+        let input = Vec3::new(f64::from(m.ai.xxa), f64::from(m.ai.yya), f64::from(m.ai.zza));
+        m.move_relative(0.02, input);
+        let mut ev = Vec::new();
+        m.do_move(cx.w, &mut ev);
+        cx.events.extend(ev);
+    }
+}
+/// TryFindLiquidGoal (water): head for nearby water when stranded on land.
+#[derive(Clone, Debug, Default)]
+pub struct TryFindWater {
+    wanted: [f64; 3],
+}
+impl Goal for TryFindWater {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !m.on_ground || m.fluids.in_water {
+            return false;
+        }
+        let (bx, by, bz) = (m.position.x.floor() as i32, m.position.y.floor() as i32, m.position.z.floor() as i32);
+        for _ in 0..10 {
+            let p = [bx + m.random.next_int_bound(20).unwrap_or(0) - 10, by + 2 - m.random.next_int_bound(8).unwrap_or(0), bz + m.random.next_int_bound(20).unwrap_or(0) - 10];
+            if cx.w.fluid(p[0], p[1], p[2]) == crate::blocks::Fluid::Water {
+                self.wanted = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])];
+                return true;
+            }
+        }
+        false
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.ai.nav.is_done()
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_move_to(cx.w, self.wanted, 1.0);
+    }
+}

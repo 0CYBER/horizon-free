@@ -1,7 +1,7 @@
 //! `neighborChanged`, `onPlace`, `affectNeighborsAfterRemoval` and
 //! `updateIndirectNeighbourShapes` for the overriding vanilla classes.
 use super::{
-    LevelAccess, Sim,
+    LevelAccess, LevelEvent, Sim,
     classes::Class,
     states::BlockId,
     update::{below, rel},
@@ -388,6 +388,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.set_block(head_pos, b.air(), 35);
                 self.level_event(2001, head_pos, head.0 as i32);
             }
+        }
+        // TntBlock.playerWillDestroy: unstable TNT primes unless instabuild.
+        if !creative && data.is(Class::Tnt) && b.table.bool(state, p.unstable) {
+            self.emit(LevelEvent::PrimeTnt { pos });
         }
         self.level_event(2001, pos, state.0 as i32);
         self.game_event(pos, "minecraft:block_destroy");

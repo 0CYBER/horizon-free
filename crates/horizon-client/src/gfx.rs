@@ -24,6 +24,8 @@ struct Globals {
     inverse_view: [[f32; 4]; 4],
     sunrise: [f32; 4],
     sun: [f32; 4],
+    /// x: sky fog end, y: cloud fog end, z: dark disc (camera below the horizon), w: unused.
+    fog_ends: [f32; 4],
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
@@ -49,9 +51,15 @@ pub struct Frame<'a> {
     pub title: bool,
     /// Dimensions without a skybox (the Nether) clear to the fog colour.
     pub skybox: bool,
+    /// The End: clear to black and draw `celestial` (the End sky box) behind the world.
+    pub end_sky: bool,
     /// Environmental fog start/end (Nether 10..96), if any.
     pub environment_fog: Option<(f32, f32)>,
     pub water_fog: [f32; 3],
+    /// `FogRenderer.setupFog` result; replaces the underwater/environment fields when set.
+    pub fog: Option<crate::fog::FogData>,
+    /// Camera eye below the horizon height and not under water (`shouldRenderDarkDisc`).
+    pub dark_disc: bool,
     pub outline: Option<[f64; 6]>,
     pub hud: &'a HudBatch,
     /// Camera-relative entity geometry textured from the shared atlas.
@@ -60,6 +68,8 @@ pub struct Frame<'a> {
     pub celestial: &'a [Vertex],
     /// First-person hand and held item, drawn after clearing depth.
     pub hand: &'a [Vertex],
+    /// Full-screen camera effects drawn over the world and hand, under the HUD.
+    pub screen: &'a [crate::screen_effects::ScreenQuad],
     pub game_time: f32,
     pub ticks: u64,
 }
@@ -73,10 +83,15 @@ pub struct Renderer {
     solid: wgpu::RenderPipeline,
     translucent: wgpu::RenderPipeline,
     sky: wgpu::RenderPipeline,
+    dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     entity_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
+    /// Screen effects: alpha-blended and vignette (`dst * (1 - src)`) pipelines.
+    screen_pipelines: [wgpu::RenderPipeline; 2],
+    screen_buffer: wgpu::Buffer,
+    screen_capacity: u64,
     entity_group: wgpu::BindGroup,
     entity_buffer: wgpu::Buffer,
     entity_capacity: u64,
@@ -93,6 +108,8 @@ pub struct Renderer {
     outline: wgpu::Buffer,
     depth: wgpu::TextureView,
     sections: HashMap<SectionKey, SectionGpu>,
+    /// Block-entity blocks per meshed section (world position, state id).
+    block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// VisGraph face connectivity per meshed section (cave culling).
     visibility: HashMap<SectionKey, u64>,
     reachable: std::collections::HashSet<SectionKey>,
@@ -108,6 +125,9 @@ pub struct Renderer {
     pub screenshot: Option<PathBuf>,
     /// Outcome of the last screenshot: frame size, or the error.
     pub screenshot_result: Option<std::result::Result<[u32; 2], String>>,
+    /// Brightness option (lightmap gamma), 0..1.
+    pub gamma: f32,
+    present_modes: Vec<wgpu::PresentMode>,
 }
 fn mip_chain(pixels: &[u8], size: u32, layers: u32) -> (Vec<u8>, u32) {
     let levels = size.trailing_zeros() + 1;
@@ -204,6 +224,7 @@ impl Renderer {
         if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
             config.usage |= wgpu::TextureUsages::COPY_SRC;
         }
+        let present_modes = caps.present_modes.clone();
         config.present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
             wgpu::PresentMode::Mailbox
         } else {
@@ -354,6 +375,7 @@ impl Renderer {
             Some(alpha_blend),
         );
         let sky = pipeline("Sky", "vs_sky", "fs_sky", &[], tri, None, false, false, None);
+        let dark_disc = pipeline("Dark disc", "vs_sky", "fs_dark_disc", &[], tri, None, false, false, Some(alpha_blend));
         let lines = pipeline(
             "Block outline",
             "vs_line",
@@ -488,7 +510,8 @@ impl Renderer {
             atlas_pixels,
         );
         let atlas_view = atlas.create_view(&Default::default());
-        let hud = HudRenderer::new(&device, config.format.remove_srgb_suffix(), &atlas_view)?;
+        let mut hud = HudRenderer::new(&device, config.format.remove_srgb_suffix(), &atlas_view)?;
+        hud.atlas_texture = Some(atlas.clone());
         let entity_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon entities"),
             source: wgpu::ShaderSource::Wgsl(include_str!("entity.wgsl").into()),
@@ -643,6 +666,62 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let screen_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Horizon screen effects"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("screen.wgsl").into()),
+        });
+        let screen_attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Float32x4,3=>Float32x4];
+        let screen_vertex = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &screen_attributes,
+        })];
+        let vignette_blend = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::OneMinusSrc,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let screen_pipelines = [("fs_screen", alpha_blend), ("fs_vignette", vignette_blend)].map(|(entry, blend)| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Screen effects"),
+                layout: Some(&entity_layout),
+                vertex: wgpu::VertexState {
+                    module: &screen_shader,
+                    entry_point: Some("vs_screen"),
+                    compilation_options: Default::default(),
+                    buffers: &screen_vertex,
+                },
+                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &screen_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format.remove_srgb_suffix(),
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        });
+        let screen_capacity = 64;
+        let screen_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Screen effect vertices"),
+            size: screen_capacity * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let celestial_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Celestial vertices"),
             size: 2048 * 4 * std::mem::size_of::<Vertex>() as u64,
@@ -666,10 +745,14 @@ impl Renderer {
             solid,
             translucent,
             sky,
+            dark_disc,
             lines,
             entity_pipeline,
             celestial_pipeline,
             celestial_buffer,
+            screen_pipelines,
+            screen_buffer,
+            screen_capacity,
             entity_group,
             entity_buffer,
             entity_capacity,
@@ -686,6 +769,7 @@ impl Renderer {
             outline,
             depth,
             sections: HashMap::new(),
+            block_entities: HashMap::new(),
             visibility: HashMap::new(),
             reachable: std::collections::HashSet::new(),
             reachable_from: None,
@@ -698,6 +782,8 @@ impl Renderer {
             started: Instant::now(),
             screenshot: None,
             screenshot_result: None,
+            gamma: 0.5,
+            present_modes,
         })
     }
     fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
@@ -731,6 +817,21 @@ impl Renderer {
             })
             .create_view(&Default::default())
     }
+    /// VSync on: tear-free presentation (Mailbox, else Fifo); off: Immediate when available.
+    pub fn set_vsync(&mut self, vsync: bool) {
+        let has = |m| self.present_modes.contains(&m);
+        let mode = match (vsync, has(wgpu::PresentMode::Mailbox), has(wgpu::PresentMode::Immediate)) {
+            (true, true, _) => wgpu::PresentMode::Mailbox,
+            (true, false, _) => wgpu::PresentMode::Fifo,
+            (false, _, true) => wgpu::PresentMode::Immediate,
+            (false, true, false) => wgpu::PresentMode::Mailbox,
+            _ => wgpu::PresentMode::Fifo,
+        };
+        if self.config.present_mode != mode {
+            self.config.present_mode = mode;
+            self.surface.configure(&self.device, &self.config);
+        }
+    }
     pub fn resize(&mut self, width: u32, height: u32) {
         self.suspended = width == 0 || height == 0;
         if self.suspended {
@@ -747,6 +848,11 @@ impl Renderer {
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         if self.visibility.insert(key, mesh.visibility) != Some(mesh.visibility) {
             self.visibility_dirty = true;
+        }
+        if mesh.block_entities.is_empty() {
+            self.block_entities.remove(&key);
+        } else {
+            self.block_entities.insert(key, mesh.block_entities.clone());
         }
         let solid = (mesh.solid.len() / 4) as u32;
         let translucent = (mesh.translucent.len() / 4) as u32;
@@ -780,7 +886,12 @@ impl Renderer {
             },
         );
     }
+    /// Block-entity blocks of every meshed section (see `SectionMesh::block_entities`).
+    pub fn block_entities(&self) -> impl Iterator<Item = &([i32; 3], u32)> {
+        self.block_entities.values().flatten()
+    }
     pub fn clear_sections(&mut self) {
+        self.block_entities.clear();
         self.sections.clear();
         self.visibility.clear();
         self.visibility_dirty = true;
@@ -820,6 +931,7 @@ impl Renderer {
         self.visibility_dirty = false;
     }
     pub fn remove(&mut self, key: SectionKey) {
+        self.block_entities.remove(&key);
         self.visibility.remove(&key);
         self.visibility_dirty = true;
         self.sections.remove(&key);
@@ -952,7 +1064,7 @@ impl Renderer {
             }
         };
         self.animate(frame.ticks);
-        self.update_lightmap(&frame.sky, 0.0, 0.5);
+        self.update_lightmap(&frame.sky, 0.0, self.gamma);
         let view_proj = self.view_projection(frame);
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
         let (yaw, pitch) = (frame.yaw.to_radians(), frame.pitch.to_radians());
@@ -961,7 +1073,9 @@ impl Renderer {
         let sun_angle = frame.sky.sun_angle.to_radians();
         // Celestial bodies rotate around the X axis; angle 0 = noon.
         let sun = Vec3::new(0.0, sun_angle.cos(), -sun_angle.sin());
-        let (fog_color, fog) = if frame.underwater {
+        let (fog_color, fog) = if let Some(f) = frame.fog {
+            (f.color, [f.environmental_start, f.environmental_end, f.render_distance_start, f.render_distance_end])
+        } else if frame.underwater {
             (
                 [frame.water_fog[0], frame.water_fog[1], frame.water_fog[2], 1.0],
                 [-8.0, 96.0, -8.0, 96.0],
@@ -991,6 +1105,12 @@ impl Renderer {
             inverse_view: view.inverse().to_cols_array_2d(),
             sunrise: frame.sky.sunrise_color,
             sun: [sun.x, sun.y, sun.z, frame.sky.star_brightness],
+            fog_ends: [
+                frame.fog.map_or(frame.distance.min(512.0), |f| f.sky_end),
+                frame.fog.map_or(2048.0, |f| f.cloud_end),
+                if frame.dark_disc { 1.0 } else { 0.0 },
+                0.0,
+            ],
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -1134,7 +1254,7 @@ impl Renderer {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(if frame.title {
+                    load: wgpu::LoadOp::Clear(if frame.title || (frame.end_sky && !frame.underwater) {
                         wgpu::Color::BLACK
                     } else {
                         wgpu::Color {
@@ -1161,8 +1281,13 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group, &[]);
-            if !frame.underwater && frame.skybox {
-                if !frame.title {
+            // LevelRenderer: no sky inside lava or powder snow (sky fog ends within 2 blocks).
+            let sky_visible = match frame.fog {
+                Some(f) => f.sky_end > 2.0,
+                None => !frame.underwater,
+            };
+            if sky_visible && (frame.skybox || frame.end_sky) {
+                if !frame.title && frame.skybox {
                     pass.set_pipeline(&self.sky);
                     pass.draw(0..3, 0..1);
                 }
@@ -1173,6 +1298,10 @@ impl Renderer {
                     pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
                     pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
                     pass.set_bind_group(0, &self.group, &[]);
+                }
+                if !frame.title && frame.dark_disc {
+                    pass.set_pipeline(&self.dark_disc);
+                    pass.draw(0..3, 0..1);
                 }
             }
             if frame.title {
@@ -1244,6 +1373,41 @@ impl Renderer {
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
             pass.draw_indexed(0..hand_quads * 6, (entity_quads * 4) as i32, 0..1);
+        }
+        if !frame.screen.is_empty() {
+            let vertices: Vec<crate::screen_effects::ScreenVertex> = frame.screen.iter().flat_map(|q| q.vertices).collect();
+            if vertices.len() as u64 > self.screen_capacity {
+                self.screen_capacity = (vertices.len() as u64).next_power_of_two();
+                self.screen_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Screen effect vertices"),
+                    size: self.screen_capacity * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.queue.write_buffer(&self.screen_buffer, 0, bytemuck::cast_slice(&vertices));
+            let attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &view_target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Screen effects"),
+                color_attachments: &attachments,
+                ..Default::default()
+            });
+            pass.set_bind_group(0, &self.entity_group, &[]);
+            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_vertex_buffer(0, self.screen_buffer.slice(..));
+            for (i, quad) in frame.screen.iter().enumerate() {
+                let pipeline = match quad.blend {
+                    crate::screen_effects::Blend::Alpha => &self.screen_pipelines[0],
+                    crate::screen_effects::Blend::Vignette => &self.screen_pipelines[1],
+                };
+                pass.set_pipeline(pipeline);
+                pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
+            }
         }
         self.hud.draw(
             &self.device,

@@ -1,0 +1,221 @@
+//! Enchantment effects on gameplay, read from the data-driven effect
+//! components: efficiency and aqua affinity (`Player.getDestroySpeed`),
+//! unbreaking (`minecraft:item_damage`), sharpness/smite/bane and power
+//! (`minecraft:damage`), knockback, fire aspect, infinity (`minecraft:ammo_use`),
+//! thorns (`minecraft:post_attack`), mending (`minecraft:repair_with_xp`) and
+//! the armor attribute effects (respiration, depth strider, ...).
+use super::Game;
+use horizon_client::{enchant::EffectContext, items::ItemStack};
+use horizon_core::{geometry::Vec3, random::RandomSource};
+
+impl Game<'_> {
+    /// `Player.getDestroySpeed` after the tool speed: mining efficiency, haste
+    /// and mining fatigue.
+    pub(super) fn modify_destroy_speed(&self, mut speed: f32) -> f32 {
+        if speed > 1.0 {
+            let held = self.inventory[self.selected].as_ref();
+            speed += self.res.stations.enchantments.attribute_add(held, "minecraft:mining_efficiency") as f32;
+        }
+        speed * self.potions.effects.mining_speed_factor()
+    }
+    /// `Attributes.SUBMERGED_MINING_SPEED` (0.2, raised by aqua affinity).
+    pub(super) fn submerged_mining_speed(&self) -> f32 {
+        let mut total = 0.0;
+        for stack in self.armor.iter().flatten() {
+            for (attr, _, amount, op) in self.res.stations.enchantments.attributes(stack) {
+                if attr == "minecraft:submerged_mining_speed" && op == "add_multiplied_total" {
+                    total += amount;
+                }
+            }
+        }
+        (0.2 * (1.0 + total)) as f32
+    }
+    /// `EnchantmentHelper.processDurabilityChange` (unbreaking) for `amount` points.
+    pub(super) fn durability_loss(&mut self, stack: &ItemStack, amount: u32) -> u32 {
+        let e = &self.res.stations.enchantments;
+        if !e.has_component(stack, "minecraft:item_damage") {
+            return amount;
+        }
+        let ctx = EffectContext { tool: Some(&stack.item), items: Some(&self.res.items), ..Default::default() };
+        e.modify_value(Some(stack), "minecraft:item_damage", &ctx, &mut self.world.random, amount as f32).max(0.0) as u32
+    }
+    /// `getEnchantedDamage - base`: damage bonus of the held weapon against a mob type.
+    pub(super) fn enchant_damage_bonus(&mut self, target: &str) -> f32 {
+        let Some(held) = self.inventory[self.selected].clone() else { return 0.0 };
+        let ctx = EffectContext { this: Some(target), attacker: Some("minecraft:player"), direct_attacker: Some("minecraft:player"), is_direct: true, damage_type: Some("minecraft:player_attack"), items: Some(&self.res.items), ..Default::default() };
+        self.res.stations.enchantments.modify_value(Some(&held), "minecraft:damage", &ctx, &mut self.world.random, 0.0)
+    }
+    /// Strength / weakness on the attack damage attribute.
+    pub(super) fn effect_attack_bonus(&self) -> f32 {
+        let fx = &self.potions.effects;
+        fx.amplifier("strength").map_or(0.0, |a| 3.0 * (a + 1) as f32) - fx.amplifier("weakness").map_or(0.0, |a| 4.0 * (a + 1) as f32)
+    }
+    /// After a successful melee hit: knockback enchantment and fire aspect.
+    pub(super) fn post_attack(&mut self, mob: usize) {
+        let Some(held) = self.inventory[self.selected].clone() else { return };
+        let Some(m) = self.mobs.get(mob) else { return };
+        let kind = m.kind.id.clone();
+        let ctx = EffectContext { this: Some(&kind), attacker: Some("minecraft:player"), direct_attacker: Some("minecraft:player"), is_direct: true, items: Some(&self.res.items), ..Default::default() };
+        let knockback = self.res.stations.enchantments.modify_value(Some(&held), "minecraft:knockback", &ctx, &mut self.world.random, 0.0);
+        if knockback > 0.0 {
+            // LivingEntity.knockback(strength * 0.5, sin(yRot), -cos(yRot)).
+            let strength = f64::from(knockback) * 0.5;
+            let (s, c) = (f64::from(self.yaw.to_radians().sin()), f64::from(self.yaw.to_radians().cos()));
+            let (dx, dz) = (s, -c);
+            let l = (dx * dx + dz * dz).sqrt().max(1e-5);
+            let m = &mut self.mobs[mob];
+            let v = m.velocity;
+            m.velocity = Vec3::new(v.x / 2.0 - dx / l * strength, if m.on_ground { (v.y / 2.0 + strength).min(0.4) } else { v.y }, v.z / 2.0 - dz / l * strength);
+        }
+        // minecraft:post_attack ignite effects of the attacker's weapon (fire aspect).
+        let mut ignite = 0.0f32;
+        for (id, level) in held.enchantments() {
+            let Some(def) = self.res.stations.enchantments.get(id) else { continue };
+            for effect in def.effects["minecraft:post_attack"].as_array().into_iter().flatten() {
+                if effect["enchanted"] == "attacker" && effect["affected"] == "victim" && effect["effect"]["type"] == "minecraft:ignite" {
+                    let mut random = self.world.random.clone();
+                    let ok = effect.get("requirements").is_none_or(|r| self.res.stations.enchantments.condition(r, *level, &ctx, &mut random));
+                    self.world.random = random;
+                    if ok {
+                        ignite = ignite.max(horizon_client::enchant::level_value(&effect["effect"]["duration"], *level));
+                    }
+                }
+            }
+        }
+        if ignite > 0.0 {
+            // Entity.igniteForSeconds; mobs burn for 1 damage per second.
+            let id = self.mobs[mob].id;
+            self.potions.burning.retain(|(m, _)| *m != id);
+            self.potions.burning.push((id, (ignite * 20.0) as i32));
+        }
+    }
+    /// Burning mobs (fire aspect): one damage every 20 ticks, flame particles.
+    pub(super) fn tick_burning(&mut self) {
+        let mut burning = std::mem::take(&mut self.potions.burning);
+        burning.retain_mut(|(id, ticks)| {
+            *ticks -= 1;
+            let Some(m) = self.mobs.iter_mut().find(|m| m.id == *id && m.alive()) else { return false };
+            if *ticks % 20 == 0 {
+                let at = [m.position.x, m.position.y, m.position.z];
+                if m.hurt(1.0, None, &mut self.world.random) {
+                    self.last_hurt_by_player.insert(*id);
+                    let _ = at;
+                }
+            }
+            *ticks > 0
+        });
+        self.potions.burning = burning;
+    }
+    /// Thorns on worn armor when a mob at `from` hits the player.
+    pub(super) fn thorns(&mut self, from: [f64; 3]) {
+        let attacker = self
+            .mobs
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.alive())
+            .min_by(|a, b| {
+                let d = |m: &horizon_client::mobs::Mob| (m.position.x - from[0]).powi(2) + (m.position.y - from[1]).powi(2) + (m.position.z - from[2]).powi(2);
+                d(a.1).total_cmp(&d(b.1))
+            })
+            .map(|(i, _)| i);
+        let Some(attacker) = attacker else { return };
+        for slot in 0..4 {
+            let Some(stack) = self.armor[slot].clone() else { continue };
+            let level = stack.enchantment_level("minecraft:thorns");
+            if level == 0 {
+                continue;
+            }
+            let Some(def) = self.res.stations.enchantments.get("minecraft:thorns") else { continue };
+            let effect = def.effects["minecraft:post_attack"][0].clone();
+            let ctx = EffectContext { items: Some(&self.res.items), ..Default::default() };
+            let mut random = self.world.random.clone();
+            let ok = self.res.stations.enchantments.condition(&effect["requirements"], level, &ctx, &mut random);
+            self.world.random = random;
+            if !ok {
+                continue;
+            }
+            // DamageEntity(min 1, max 5) and ChangeItemDamage(2).
+            let damage = 1.0 + self.world.random.next_float() * 4.0;
+            let center = {
+                let m = &mut self.mobs[attacker];
+                m.hurt(damage, None, &mut self.world.random);
+                [m.position.x, m.position.y, m.position.z]
+            };
+            self.audio.play("minecraft:enchant.thorns.hit", Some(center), 1.0, 1.0);
+            if let Some(s) = self.armor[slot].as_mut() {
+                s.damage += 2;
+                if self.res.items.get(&s.item).is_some_and(|i| s.damage >= i.max_damage) {
+                    self.armor[slot] = None;
+                }
+            }
+        }
+    }
+    /// `ExperienceOrb.repairPlayerItems`: returns the experience left over.
+    pub(super) fn mending(&mut self, amount: u32) -> u32 {
+        let mut amount = amount;
+        loop {
+            // EnchantmentHelper.getRandomItemWith(REPAIR_WITH_XP, damaged): held and armor.
+            let mut candidates: Vec<(bool, usize)> = Vec::new();
+            if let Some(s) = &self.inventory[self.selected]
+                && s.damage > 0
+                && s.enchantment_level("minecraft:mending") > 0
+            {
+                candidates.push((false, self.selected));
+            }
+            for (i, s) in self.armor.iter().enumerate() {
+                if let Some(s) = s
+                    && s.damage > 0
+                    && s.enchantment_level("minecraft:mending") > 0
+                {
+                    candidates.push((true, i));
+                }
+            }
+            if candidates.is_empty() {
+                return amount;
+            }
+            let (armor, i) = candidates[self.world.random.next_int_bound(candidates.len() as i32).unwrap_or(0) as usize];
+            let stack = if armor { self.armor[i].clone() } else { self.inventory[i].clone() };
+            let Some(stack) = stack else { return amount };
+            let ctx = EffectContext { items: Some(&self.res.items), ..Default::default() };
+            let to_repair_xp = self.res.stations.enchantments.modify_value(Some(&stack), "minecraft:repair_with_xp", &ctx, &mut self.world.random, amount as f32) as u32;
+            let repaired = to_repair_xp.min(stack.damage);
+            let slot = if armor { &mut self.armor[i] } else { &mut self.inventory[i] };
+            if let Some(s) = slot.as_mut() {
+                s.damage -= repaired;
+            }
+            if repaired == 0 || to_repair_xp == 0 {
+                return 0;
+            }
+            let remaining = amount.saturating_sub(repaired * amount / to_repair_xp);
+            if remaining == 0 {
+                return 0;
+            }
+            amount = remaining;
+        }
+    }
+    /// Bow enchantments at release: (extra base damage, infinity keeps the arrow).
+    pub(super) fn bow_enchantments(&mut self) -> (f64, bool) {
+        let Some(bow) = self.inventory[self.selected].clone() else { return (0.0, false) };
+        let e = &self.res.stations.enchantments;
+        let ctx = EffectContext { direct_attacker: Some("minecraft:arrow"), attacker: Some("minecraft:player"), items: Some(&self.res.items), ..Default::default() };
+        let power = e.modify_value(Some(&bow), "minecraft:damage", &ctx, &mut self.world.random, 0.0);
+        let ammo_ctx = EffectContext { tool: Some("minecraft:arrow"), items: Some(&self.res.items), ..Default::default() };
+        let infinity = e.has_component(&bow, "minecraft:ammo_use") && e.modify_value(Some(&bow), "minecraft:ammo_use", &ammo_ctx, &mut self.world.random, 1.0) == 0.0;
+        (f64::from(power), infinity)
+    }
+    /// Enchantment attribute modifiers of worn armor (respiration, depth strider...).
+    pub(super) fn apply_enchantment_attributes(&mut self) {
+        let mut wanted: Vec<(String, String, f64, String)> = Vec::new();
+        for stack in self.armor.iter().flatten() {
+            wanted.extend(self.res.stations.enchantments.attributes(stack));
+        }
+        let Some(p) = self.player.as_mut() else { return };
+        for (attr, id, _, op) in std::mem::take(&mut self.potions.enchant_modifiers) {
+            let _ = p.set_modifier(&attr, &id, 0.0, &op, false);
+        }
+        for (attr, id, amount, op) in &wanted {
+            let _ = p.set_modifier(attr, id, *amount, op, true);
+        }
+        self.potions.enchant_modifiers = wanted;
+    }
+}

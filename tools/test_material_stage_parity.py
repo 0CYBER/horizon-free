@@ -114,7 +114,7 @@ def main():
     tested_sources=base.source_hashes(sources);classes=build/'classes';classes.mkdir(exist_ok=True)
     def run(command,name):
         with (build/(name+'.log')).open('w',encoding='utf-8') as log:base.run(list(map(str,command)),stdout=log,stderr=subprocess.STDOUT)
-    dependencies=os.pathsep.join(map(str,libraries));run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',str(jars['server'])+os.pathsep+dependencies,'-d',classes,*oracles],'compile-java')
+    dependencies=os.pathsep.join(map(str,libraries));run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependencies,'-d',classes,*oracles],'compile-java')
     def java(side,mode,path):run(['java','-Xmx1G','-cp',os.pathsep.join([str(classes),str(jars[side]),dependencies]),'dev.horizonlab.parity.VanillaMaterialStageOracle',mode,path],side+'-'+mode)
     for side in jars:java(side,'export',build/f'facts-{side}.json')
     preset_exports=[]

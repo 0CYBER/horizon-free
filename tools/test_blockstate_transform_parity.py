@@ -69,7 +69,7 @@ def main():
         with (build/(name+'.log')).open('w') as log:
             subprocess.run(list(map(str, command)), cwd=lab.ROOT, check=True, timeout=3600, stdout=log, stderr=subprocess.STDOUT)
     dependencies = os.pathsep.join(map(str, [jars['client'], *baking.client_libraries()]))
-    run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp', dependencies, '-d', classes, oracle, helper], 'compile-java')
+    run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'), '-cp', dependencies, '-d', classes, oracle, helper], 'compile-java')
     run(['cargo', 'build', '--locked', '-p', 'horizon-assets', '--example', 'model_baking_fixture'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
     binary = Path(metadata['target_directory'])/'debug/examples'/('model_baking_fixture.exe' if os.name == 'nt' else 'model_baking_fixture')

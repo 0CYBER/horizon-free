@@ -163,6 +163,16 @@ impl FaceVisibility {
             .get(state.0 as usize)
             .is_some_and(|s| s.faces[direction as usize] == 1)
     }
+    /// The state's occlusion face toward `direction` (`getFaceOcclusionShape`) and
+    /// its shared ID: 0 is the empty singleton, 1 the full-block singleton.
+    pub fn occlusion_face(
+        &self,
+        state: BlockStateId,
+        direction: Direction,
+    ) -> Option<(u32, &VoxelShape)> {
+        let id = self.states.get(state.0 as usize)?.faces[direction as usize];
+        Some((id, &self.faces[id as usize]))
+    }
     /// Whether the state's occlusion face toward `direction` is empty.
     pub fn empty_face(&self, state: BlockStateId, direction: Direction) -> bool {
         self.states
