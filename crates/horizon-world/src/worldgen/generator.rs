@@ -1023,9 +1023,33 @@ where
     /// ChunkGenerator.getBaseHeight: the first free Y above the noise column
     /// (with aquifers, without terrain adaptation) for a heightmap type.
     fn base_height(&self, x: i32, z: i32, kind: HeightmapType) -> i32 {
+        let min = self.settings.min_y;
+        let mut found = min;
+        self.noise_column(x, z, &mut |y, state| {
+            if kind.is_opaque(self.data.states.get(state)) {
+                found = y + 1;
+                return true;
+            }
+            false
+        });
+        found
+    }
+    /// ChunkGenerator.getBaseColumn: opacity of each noise-column state for
+    /// a heightmap type, indexed from the minimum Y.
+    fn base_column(&self, x: i32, z: i32, kind: HeightmapType) -> Vec<bool> {
+        let (min, height) = (self.settings.min_y, self.settings.height);
+        let mut column = vec![false; height as usize];
+        self.noise_column(x, z, &mut |y, state| {
+            column[(y - min) as usize] = kind.is_opaque(self.data.states.get(state));
+            false
+        });
+        column
+    }
+    /// iterateNoiseColumn from the top down until `visit` returns true.
+    fn noise_column(&self, x: i32, z: i32, visit: &mut dyn FnMut(i32, BlockStateId) -> bool) {
         let (min, height) = (self.settings.min_y, self.settings.height);
         let Ok(volume) = DensityVolume::new([1, height, 1], [x, min, z], [1; 3]) else {
-            return min;
+            return;
         };
         let mut context = SamplerContext::cached();
         let mut aquifer: Box<dyn TerrainAquifer> = match &self.aquifer {
@@ -1045,7 +1069,7 @@ where
                     .ok()
                 }) {
                 Some(aquifer) => Box::new(aquifer),
-                None => return min,
+                None => return,
             },
             None => Box::new(DisabledAquifer::new(
                 self.picker,
@@ -1059,7 +1083,7 @@ where
             .sample_volume(&mut context, &mut density, volume)
             .is_err()
         {
-            return min;
+            return;
         }
         for y in (0..height).rev() {
             let state = aquifer
@@ -1071,11 +1095,10 @@ where
                 .ok()
                 .flatten()
                 .unwrap_or(self.settings.default_block);
-            if kind.is_opaque(self.data.states.get(state)) {
-                return min + y + 1;
+            if visit(min + y, state) {
+                return;
             }
         }
-        min
     }
 }
 /// Biome and height queries for structure generation on one worker.
@@ -1120,6 +1143,17 @@ where
     fn seed(&self) -> i64 {
         self.pipeline.seed
     }
+    fn sea_level(&self) -> i32 {
+        self.pipeline.settings.sea_level
+    }
+    fn base_column(&mut self, x: i32, z: i32, kind: HeightmapType) -> Vec<bool> {
+        self.pipeline.base_column(x, z, kind)
+    }
+    fn cold_enough_to_snow(&mut self, biome: BiomeId, pos: [i32; 3]) -> bool {
+        let sea = self.pipeline.settings.sea_level;
+        self.worker.temperatures[biome.0 as usize]
+            .cold_enough_to_snow(BlockPos::new(pos[0], pos[1], pos[2]), sea)
+    }
     fn generation(&self) -> WorldGenerationContext {
         self.pipeline.generation()
     }
@@ -1136,9 +1170,6 @@ where
     }
     fn set_valid_biomes(&mut self, biomes: &BTreeSet<BiomeId>) {
         self.valid = biomes.clone();
-    }
-    fn sea_level(&self) -> i32 {
-        self.pipeline.settings.sea_level
     }
 }
 
@@ -1309,7 +1340,7 @@ where
                     self.generation(),
                     worker,
                     region,
-                    || random.next_boolean(),
+                    &mut random,
                     self.structures.as_ref(),
                 )
             }

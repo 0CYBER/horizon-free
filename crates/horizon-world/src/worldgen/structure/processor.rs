@@ -86,6 +86,7 @@ pub enum Processor {
     JigsawReplacement,
     BlockAge(f32),
     LavaSubmerged,
+    BlackstoneReplace,
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
@@ -195,6 +196,7 @@ impl Processor {
             "minecraft:jigsaw_replacement" => Self::JigsawReplacement,
             "minecraft:block_age" => Self::BlockAge(float(value, "mossiness")?),
             "minecraft:lava_submerged_block" => Self::LavaSubmerged,
+            "minecraft:blackstone_replace" => Self::BlackstoneReplace,
             "minecraft:capped" => Self::Capped {
                 delegate: Box::new(Self::decode(&value["delegate"], resources, bindings)?),
                 limit: IntProvider::from_json(&value["limit"].to_string())?,
@@ -344,6 +346,26 @@ impl<'a> PlaceSettings<'a> {
     }
 }
 
+/// BlackstoneReplaceProcessor's block map.
+fn blackstone(name: &str) -> Option<&'static str> {
+    Some(match name.strip_prefix("minecraft:")? {
+        "cobblestone" | "mossy_cobblestone" => "blackstone",
+        "stone" => "polished_blackstone",
+        "stone_bricks" | "mossy_stone_bricks" => "polished_blackstone_bricks",
+        "cobblestone_stairs" | "mossy_cobblestone_stairs" => "blackstone_stairs",
+        "stone_stairs" => "polished_blackstone_stairs",
+        "stone_brick_stairs" | "mossy_stone_brick_stairs" => "polished_blackstone_brick_stairs",
+        "cobblestone_slab" | "mossy_cobblestone_slab" => "blackstone_slab",
+        "smooth_stone_slab" | "stone_slab" => "polished_blackstone_slab",
+        "stone_brick_slab" | "mossy_stone_brick_slab" => "polished_blackstone_brick_slab",
+        "stone_brick_wall" | "mossy_stone_brick_wall" => "polished_blackstone_brick_wall",
+        "cobblestone_wall" | "mossy_cobblestone_wall" => "blackstone_wall",
+        "chiseled_stone_bricks" => "chiseled_polished_blackstone",
+        "cracked_stone_bricks" => "cracked_polished_blackstone_bricks",
+        "iron_bars" => "iron_chain",
+        _ => return None,
+    })
+}
 type ProcessResult = Result<Option<BlockInfo>, PlacementQueryError>;
 #[allow(clippy::too_many_arguments)]
 fn process_block<W: PlacementContext>(
@@ -410,6 +432,20 @@ fn process_block<W: PlacementContext>(
             }
         }
         Processor::BlockAge(mossiness) => block_age(*mossiness, info, settings, resources),
+        Processor::BlackstoneReplace => {
+            let Some(target) = blackstone(name(info.state)) else {
+                return Ok(Some(info));
+            };
+            let old = registry.state(info.state);
+            let properties: Vec<(&str, &str)> = ["facing", "half", "type"]
+                .into_iter()
+                .filter_map(|k| Some((k, old?.properties.get(k)?.as_str())))
+                .collect();
+            Some(BlockInfo {
+                state: super::legacy::state(resources, target, &properties),
+                ..info
+            })
+        }
         Processor::Rule(rules) => {
             let mut random = LegacyRandom::new(position_seed(BlockPos::new(
                 info.pos[0],

@@ -202,6 +202,12 @@ pub trait PlacementContext {
     fn next_world_boolean(&mut self) -> Result<bool, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
     }
+    fn next_world_float(&mut self) -> Result<f32, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
+    fn next_world_int(&mut self, _bound: i32) -> Result<i32, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
     /// Schedule the block type identified by its registry default state.
     fn schedule_block_tick(
         &mut self,

@@ -51,6 +51,15 @@ pub trait PieceWorld {
     fn max_y(&mut self) -> Result<i32>;
     fn block_entity(&mut self, pos: [i32; 3], nbt: Compound) -> Result<()>;
     fn post_process(&mut self, pos: [i32; 3]) -> Result<()>;
+    /// WorldGenLevel.getSeed.
+    fn seed(&mut self) -> Result<i64>;
+    /// Draws from WorldGenLevel.getRandom (the region random).
+    fn level_boolean(&mut self) -> Result<bool>;
+    fn level_float(&mut self) -> Result<f32>;
+    fn level_int(&mut self, bound: i32) -> Result<i32>;
+    fn sea_level(&mut self) -> Result<i32>;
+    /// Block.isFaceFull of the block's shape at `pos` on face `direction`.
+    fn face_full(&mut self, pos: [i32; 3], direction: Direction) -> Result<bool>;
     fn face_sturdy(&mut self, pos: [i32; 3], face: Direction) -> Result<bool>;
     fn center_sturdy(&mut self, pos: [i32; 3], face: Direction) -> Result<bool>;
     /// WorldGenLevel.getBiome (zoomed).
@@ -92,6 +101,24 @@ impl<W: FeatureWorld + PlacementContext> PieceWorld for W {
     }
     fn post_process(&mut self, pos: [i32; 3]) -> Result<()> {
         self.mark_postprocessing(pos)
+    }
+    fn seed(&mut self) -> Result<i64> {
+        self.world_seed()
+    }
+    fn level_boolean(&mut self) -> Result<bool> {
+        self.next_world_boolean()
+    }
+    fn level_float(&mut self) -> Result<f32> {
+        self.next_world_float()
+    }
+    fn level_int(&mut self, bound: i32) -> Result<i32> {
+        self.next_world_int(bound)
+    }
+    fn sea_level(&mut self) -> Result<i32> {
+        PlacementContext::sea_level(self)
+    }
+    fn face_full(&mut self, pos: [i32; 3], direction: Direction) -> Result<bool> {
+        self.attachment_at(offset(pos, direction, 1), opposite(direction))
     }
     fn face_sturdy(&mut self, pos: [i32; 3], face: Direction) -> Result<bool> {
         PlacementContext::face_sturdy(self, pos, face)
@@ -234,6 +261,11 @@ pub trait LegacyPiece: std::fmt::Debug + Send + Sync {
     /// The vanilla StructurePieceType id, for diagnostics and comparisons.
     fn type_name(&self) -> &'static str;
     fn post_process(&self, context: &mut PieceContext<'_>) -> Result<()>;
+    /// Structure.afterPlace, run on the first piece once per chunk after all
+    /// pieces were placed, with every piece's current box.
+    fn after_place(&self, _context: &mut PieceContext<'_>, _pieces: &[BoundingBox]) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// StructurePiece's orientation transform and block helpers.
@@ -713,6 +745,8 @@ pub enum TemplateHandler {
         large: bool,
         integrity: f32,
     },
+    RuinedPortal(super::ruined_portal::PortalProps),
+    Mansion,
     Plain,
 }
 impl TemplatePiece {

@@ -254,7 +254,7 @@ impl Decoration {
         generation: WorldGenerationContext,
         worker: &mut WorkerState,
         region: &mut [ProtoChunk; 9],
-        next_boolean: impl FnMut() -> bool,
+        level_random: &mut dyn super::structure::legacy::PieceRandom,
         structures: Option<&super::generator_structures::StructureState>,
     ) -> Result<DecorateStats, GeneratorError> {
         let center = region[4].position();
@@ -295,14 +295,13 @@ impl Decoration {
             Ok(terrain) => terrain,
             Err(e) => return Err(resource(e.to_string())),
         };
-        let mut next_boolean = next_boolean;
         let mut block_entities = Vec::new();
         for chunk in region.iter_mut() {
             block_entities.append(&mut chunk.block_entities);
         }
         let mut world = World {
             block_entities,
-            next_boolean: &mut next_boolean,
+            level_random,
             blocks: data
                 .feature_resources
                 .as_ref()
@@ -418,7 +417,7 @@ impl Decoration {
 /// the FEATURES step's write radius, biome lookups through the biome zoom.
 struct World<'a> {
     block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
-    next_boolean: &'a mut dyn FnMut() -> bool,
+    level_random: &'a mut dyn super::structure::legacy::PieceRandom,
     blocks: Option<&'a BlockBehavior>,
     region: TerrainRegion<'static, GenBlockStates>,
     biomes: BiomeRegion<BiomeId>,
@@ -540,7 +539,13 @@ impl PlacementContext for World<'_> {
             .map_err(query)
     }
     fn next_world_boolean(&mut self) -> Result<bool, PlacementQueryError> {
-        Ok((self.next_boolean)())
+        Ok(self.level_random.boolean())
+    }
+    fn next_world_float(&mut self) -> Result<f32, PlacementQueryError> {
+        Ok(self.level_random.float())
+    }
+    fn next_world_int(&mut self, bound: i32) -> Result<i32, PlacementQueryError> {
+        Ok(self.level_random.int(bound))
     }
     fn block_survives(
         &mut self,
