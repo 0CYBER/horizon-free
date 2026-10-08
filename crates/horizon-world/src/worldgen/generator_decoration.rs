@@ -295,6 +295,7 @@ impl Decoration {
             Ok(terrain) => terrain,
             Err(e) => return Err(resource(e.to_string())),
         };
+        let structures_only = worker.structures_only;
         let mut block_entities = Vec::new();
         for chunk in region.iter_mut() {
             block_entities.append(&mut chunk.block_entities);
@@ -369,6 +370,9 @@ impl Decoration {
                 Ok(())
             },
             |world, placer, random, id, origin| {
+                if structures_only {
+                    return Ok(false);
+                }
                 let Ok(feature) = &self.features[id.0 as usize] else {
                     stats.unsupported += 1;
                     stats.skipped.insert(self.names[id.0 as usize].clone());

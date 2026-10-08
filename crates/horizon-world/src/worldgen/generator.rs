@@ -1293,6 +1293,8 @@ pub(super) struct WorkerState {
     carver_context: SamplerContext,
     timings: StageTimings,
     heights: HashMap<(i32, i32, u8), i32>,
+    /// Decorate with structure pieces only (for structure parity checks).
+    pub(super) structures_only: bool,
 }
 
 trait SeededPipeline: Send + Sync {
@@ -1501,6 +1503,7 @@ impl OverworldGenerator {
                 biome_context: SamplerContext::cached(),
                 carver_context: SamplerContext::default(),
                 timings: StageTimings::default(),
+                structures_only: false,
                 heights: HashMap::new(),
             },
         }
@@ -1539,6 +1542,11 @@ impl GeneratorWorker {
         region: &mut [ProtoChunk; 9],
     ) -> Result<DecorateStats, GeneratorError> {
         self.pipeline.decorate(&mut self.state, region)
+    }
+    /// Skip placed features when decorating and keep structure pieces only
+    /// (for structure placement parity checks).
+    pub fn set_structures_only(&mut self, only: bool) {
+        self.state.structures_only = only;
     }
 }
 
