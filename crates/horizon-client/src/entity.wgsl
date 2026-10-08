@@ -9,6 +9,8 @@ struct Globals {
     inverse_view: mat4x4<f32>,
     sunrise: vec4<f32>,
     sun: vec4<f32>,
+    // x: sky fog end, y: cloud fog end
+    fog_ends: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
@@ -22,6 +24,7 @@ struct Out {
     @location(2) spherical: f32,
     @location(3) cylindrical: f32,
     @location(4) flash: f32,
+    @location(4) @interpolate(flat) overlay: u32,
 }
 @vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>) -> Out {
@@ -31,8 +34,8 @@ struct Out {
     let l = vec2(f32(light.y), f32(light.x));
     let lm = textureSampleLevel(lightmap, lightmap_sampler,
         clamp(l / 256.0 + 0.5 / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0)), 0.0);
-    // overlay 2: celestial bodies use their vertex colour unlit.
-    var c = select(color * lm, color, overlay == 2u);
+    // overlay 2: celestial bodies, 4: clouds; both use their vertex colour unlit.
+    var c = select(color * lm, color, overlay == 2u || overlay == 4u);
     // Hurt overlay (OverlayTexture red tint).
     if overlay == 1u { c = vec4(mix(c.rgb, vec3(1.0, 0.0, 0.0), 0.3), c.a); }
     out.color = c;
@@ -41,6 +44,8 @@ struct Out {
     // Sky geometry (clouds, celestial bodies) is exempt from render-distance fog.
     out.spherical = select(length(position), 0.0, overlay >= 2u);
     out.cylindrical = select(max(length(position.xz), abs(position.y)), 0.0, overlay >= 2u);
+    out.overlay = overlay;
+    if overlay == 4u { out.spherical = length(position); }
     return out;
 }
 fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
@@ -50,6 +55,11 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
 }
 @fragment fn fs_entity(in: Out) -> @location(0) vec4<f32> {
     var color = textureSample(atlas, atlas_sampler, in.uv) * in.color;
+    let color = textureSample(atlas, atlas_sampler, in.uv) * in.color;
+    if in.overlay == 4u {
+        // clouds.fsh: alpha fades out towards the cloud fog end.
+        return vec4(color.rgb, color.a * (1.0 - linear_fog(in.spherical, 0.0, globals.fog_ends.y)));
+    }
     if color.a < 0.1 { discard; }
     color = vec4(mix(color.rgb, vec3(1.0), in.flash), color.a);
     let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),

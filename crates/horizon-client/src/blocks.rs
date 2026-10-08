@@ -52,6 +52,19 @@ pub struct StateFacts {
     pub fluid_level: u8,
     pub fluid_falling: bool,
     pub waterlogged: bool,
+    /// `hasOffsetFunction`: the model is jittered per column.
+    pub random_offset: bool,
+    /// `BlockState.isSolid()` (legacy solidity; fluid surfaces read it).
+    pub legacy_solid: bool,
+    /// `isFaceSturdy(.., SupportType.FULL)` by Direction ordinal.
+    pub sturdy_full: u8,
+    /// The block's class chain (`TransparentBlock`, `LeavesBlock`, ...), most specific first.
+    pub classes: Arc<[Arc<str>]>,
+}
+impl StateFacts {
+    pub fn has_class(&self, name: &str) -> bool {
+        self.classes.iter().any(|c| &**c == name)
+    }
 }
 pub struct BlockFacts {
     pub states: Vec<StateFacts>,
@@ -67,6 +80,33 @@ impl BlockFacts {
         if entries.len() != registry.len() {
             return Err("gameplay facts do not match the block registry".into());
         }
+        // Class chains and per-state behaviour flags exported from the actual block objects.
+        let behaviours: Value = serde_json::from_reader(BufReader::new(File::open(
+            root.join("block-behaviours.json"),
+        )?))?;
+        let behaviour_states = behaviours["states"]
+            .as_array()
+            .filter(|s| s.len() == registry.len())
+            .ok_or("block behaviour facts do not match the block registry")?;
+        let mut class_names: HashMap<String, Arc<str>> = HashMap::new();
+        let classes: HashMap<&str, Arc<[Arc<str>]>> = behaviours["blocks"]
+            .as_array()
+            .ok_or("missing block behaviour classes")?
+            .iter()
+            .filter_map(|b| {
+                let chain = b["class"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|c| {
+                        class_names
+                            .entry(c.to_owned())
+                            .or_insert_with(|| Arc::from(c))
+                            .clone()
+                    });
+                Some((b["name"].as_str()?, chain.collect()))
+            })
+            .collect();
         let mut names: HashMap<String, Arc<str>> = HashMap::new();
         let mut intern = |s: &str| -> Arc<str> {
             names
@@ -143,6 +183,13 @@ impl BlockFacts {
                 fluid_level,
                 fluid_falling,
                 waterlogged: prop("waterlogged") == Some("true"),
+                random_offset: flag("offset"),
+                legacy_solid: behaviour_states[index][1].as_u64().unwrap_or(0) & 1 != 0,
+                sturdy_full: (behaviour_states[index][0].as_u64().unwrap_or(0) & 63) as u8,
+                classes: classes
+                    .get(state.name.as_str())
+                    .cloned()
+                    .ok_or("missing block behaviour class chain")?,
             });
         }
         Ok(Self {

@@ -22,6 +22,9 @@ mod options;
 mod packs;
 mod screens;
 mod creatures;
+mod render_control;
+mod render_tick;
+mod sign_edit;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -337,7 +340,10 @@ pub struct Resources {
     mob_types: HashMap<String, Arc<MobType>>,
     mob_data: horizon_client::mobs::MobData,
     providers: Providers,
-    chest_model: Option<horizon_client::mobs::Part>,
+    block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer,
+    animate: horizon_client::animate_tick::AnimateTables,
+    fog: horizon_client::fog::FogRenderer,
+    screen_fx: horizon_client::screen_effects::ScreenEffects,
     nether_environment: Environment,
     end_environment: Environment,
     behaviours: Behaviours,
@@ -407,7 +413,9 @@ struct Game<'a> {
     audio: Audio,
     dropped: Vec<ItemEntity>,
     next_entity: u32,
-    particles: Vec<Particle>,
+    particles: horizon_client::particles::ParticleEngine,
+    /// Sign text being edited (`SignEditScreen`).
+    sign_edit: Option<sign_edit::SignEditor>,
     spawn_search: u32,
     mobs: Vec<Mob>,
     arrows: Vec<Arrow>,
@@ -1132,7 +1140,11 @@ impl Game<'_> {
         };
         let target = [pos.x, pos.y, pos.z];
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
+            let sign = matches!(entity, BlockEntity::Sign(_));
             self.world.block_entities.insert((target[0], target[1], target[2]), entity);
+            if sign {
+                self.open_sign_editor((target[0], target[1], target[2]), true);
+            }
         }
         self.swing_arm();
         let sounds = self.res.facts.get(state).sounds.clone();
@@ -1543,7 +1555,11 @@ impl Game<'_> {
         if self.particles.len() > 4000 {
             let excess = self.particles.len() - 4000;
             self.particles.drain(..excess);
+        if let Some(r) = &self.renderer {
+            let eye = self.player.as_ref().map(|p| [p.position.x, p.position.y + f64::from(self.eye), p.position.z]);
+            self.res.block_entity_render.tick(r.block_entities(), eye);
         }
+        self.tick_particles();
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
             self.use_item()?;
             self.use_delay = 4;
@@ -1847,6 +1863,7 @@ impl Game<'_> {
             Screen::Playing | Screen::Options => {}
         }
         self.remote_hud(&mut batch);
+        self.draw_sign_editor(&mut batch);
         batch
     }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
@@ -1866,6 +1883,7 @@ impl Game<'_> {
             Some(BlockEntity::Chest(items)) => v.extend((0..items.len()).map(|i| 300 + i)),
             Some(BlockEntity::Furnace(_)) => v.extend(300..303),
             Some(BlockEntity::Brewing(_)) => v.extend(300..305),
+            Some(BlockEntity::Sign(_)) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
                 v.push(200);
@@ -1989,6 +2007,7 @@ impl Game<'_> {
                     }
                 }
                 Some(BlockEntity::Brewing(_)) => {}
+                Some(BlockEntity::Sign(_)) => {}
                 None => {
                     let texture = if self.craft_size == 3 { "gui/container/crafting_table" } else { "gui/container/inventory" };
                     part(batch, texture, 0.0, 0.0, 176.0, 166.0, ox, oy);
@@ -2258,49 +2277,41 @@ impl Game<'_> {
                 }
             }
         }
-        // Chests (ChestRenderer): rotate by facing around the block centre, lift the lid.
-        if let Some(model) = &self.res.chest_model {
-            for (pos, entity) in &self.world.block_entities {
-                if !matches!(entity, BlockEntity::Chest(_)) {
-                    continue;
-                }
-                let state = self.world.block(pos.0, pos.1, pos.2);
-                let name = &self.res.facts.get(state).name;
-                let texture = match &**name {
-                    "minecraft:chest" => "entity/chest/normal",
-                    "minecraft:trapped_chest" => "entity/chest/trapped",
-                    _ => continue,
-                };
-                let origin = glam::DVec3::new(f64::from(pos.0), f64::from(pos.1), f64::from(pos.2)) - camera;
-                if origin.length_squared() > 64.0 * 64.0 {
-                    continue;
-                }
-                let Some(r) = self.res.atlas.sprites.get(texture).copied() else { continue };
-                let facing = self.res.assets.registry.state(state).and_then(|s| s.properties.get("facing").cloned()).unwrap_or_default();
-                let yrot: f32 = match facing.as_str() {
-                    "west" => 90.0,
-                    "north" => 180.0,
-                    "east" => 270.0,
-                    _ => 0.0,
-                };
-                let (prev, cur) = self.chest_open.get(pos).copied().unwrap_or((0.0, 0.0));
-                let o = prev + (cur - prev) * alpha as f32;
-                let open = 1.0 - (1.0 - o).powi(3);
-                let base = glam::Mat4::from_translation(origin.as_vec3())
-                    * glam::Mat4::from_translation(glam::Vec3::new(0.5, 0.0, 0.5))
-                    * glam::Mat4::from_rotation_y((-yrot).to_radians())
-                    * glam::Mat4::from_translation(glam::Vec3::new(-0.5, 0.0, -0.5));
-                let light = self.world.light(pos.0, pos.1, pos.2);
-                let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
-                let pose = |part: &horizon_client::mobs::Part| {
-                    let mut p = part.pose;
-                    if part.name == "lid" || part.name == "lock" {
-                        p[3] = -(open * std::f32::consts::FRAC_PI_2);
-                    }
-                    p
-                };
-                horizon_client::mobs::render_model(model, base, &pose, [r.u0, r.v0, r.u1, r.v1], packed, 0, &mut out);
+        // Entity shadows (EntityRenderer.extractShadow).
+        if let Some(sprite) = self.res.atlas.sprites.get("misc/shadow").copied() {
+            let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
+            let darken = self.sky_darken();
+            let a = alpha;
+            let lerp = |p: Vec3, q: Vec3| glam::DVec3::new(p.x + (q.x - p.x) * a, p.y + (q.y - p.y) * a, p.z + (q.z - p.z) * a);
+            let mut casters: Vec<(glam::DVec3, &str)> = self.mobs.iter().map(|m| (lerp(m.previous, m.position), m.kind.id.as_str())).collect();
+            casters.extend(self.dropped.iter().map(|i| (lerp(i.previous, i.position), "minecraft:item")));
+            casters.extend(self.orbs.iter().map(|o| (lerp(o.previous, o.position), "minecraft:experience_orb")));
+            for (pos, id) in casters {
+                let (radius, strength) = horizon_client::shadows::shadow_params(id);
+                horizon_client::shadows::shadow(&self.world, &self.res.facts, sprite, camera, pos, radius, strength, ambient, darken, &mut out);
             }
+        }
+        // Block entities (BlockEntityRenderers): chests, shulker boxes, banners, skulls...
+        if let Some(r) = &self.renderer {
+            let lid = |p: [i32; 3]| {
+                let (prev, cur) = self.chest_open.get(&(p[0], p[1], p[2])).copied().unwrap_or((0.0, 0.0));
+                prev + (cur - prev) * alpha as f32
+            };
+            let scene = horizon_client::block_entity_render::Scene {
+                camera,
+                partial: alpha as f32,
+                game_time: self.world.game_time,
+                world: &self.world,
+                sprites: &self.res.atlas.sprites,
+                nether: self.dim == Dim::Nether,
+                lid: &lid,
+                sign: &|p| match self.world.block_entities.get(&(p[0], p[1], p[2])) {
+                    Some(BlockEntity::Sign(sign)) => Some(sign),
+                    _ => None,
+                },
+                glyph: &|c| self.res.atlas.glyph(c),
+            };
+            self.res.block_entity_render.render(&scene, r.block_entities(), &mut out);
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
         if let Some(r) = self.res.atlas.sprites.get("entity/experience_orb").copied() {
@@ -2366,29 +2377,10 @@ impl Game<'_> {
         let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
         let right = forward.cross(glam::Vec3::Y).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
+        // Particles (ParticleEngine.extract): camera-facing quads.
+        let world = &self.world;
+        self.particles.render(camera, self.yaw, self.pitch, alpha as f32, &|b| world.light(b[0], b[1], b[2]), &mut out);
         let atlas = &self.res.atlas;
-        for p in &self.particles {
-            let Some(r) = atlas.sprites.get(&p.sprite).copied() else { continue };
-            let a = alpha;
-            let pos = glam::DVec3::new(
-                p.previous[0] + (p.position[0] - p.previous[0]) * a,
-                p.previous[1] + (p.position[1] - p.previous[1]) * a,
-                p.previous[2] + (p.position[2] - p.previous[2]) * a,
-            ) - camera;
-            let c = pos.as_vec3();
-            let light = self.world.light(p.position[0].floor() as i32, p.position[1].floor() as i32, p.position[2].floor() as i32);
-            let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
-            // TerrainParticle colour: 0.6 base brightness times the block tint.
-            let ch = |sft: u32| (((p.tint >> sft) & 255) as f32 * 0.6) as u32;
-            let color = 0xFF00_0000 | ch(0) << 16 | ch(8) << 8 | ch(16);
-            let (du, dv) = (r.u1 - r.u0, r.v1 - r.v0);
-            let (u0, v0, u1, v1) = (r.u0 + du * p.uv[0], r.v0 + dv * p.uv[1], r.u0 + du * p.uv[2], r.v0 + dv * p.uv[3]);
-            let s = p.size;
-            for (k, uv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter().zip([[u0, v1], [u1, v1], [u1, v0], [u0, v0]]) {
-                let v = c + right * (k.0 * s) + up * (k.1 * s);
-                out.push(Vertex { pos: v.to_array(), uv, layer: 0, color, light: packed });
-            }
-        }
         // Breaking progress overlay (destroy_stage_0..9).
         if let Some(m) = &self.mining
             && m.progress > 0.0
@@ -2502,6 +2494,15 @@ impl Game<'_> {
         let mob = &mut self.mobs[index];
         let center = [mob.position.x, mob.position.y + mob.kind.height / 2.0, mob.position.z];
         if mob.hurt(amount, from, &mut self.world.random) {
+            // Player.attack: crit emitter and damage indicator hearts.
+            let (feet, width, height) = ([mob.position.x, mob.position.y, mob.position.z], mob.kind.width, mob.kind.height);
+            if crit {
+                self.particles.tracking_emitter(horizon_client::particles::ParticleOptions::simple(horizon_client::particles::ParticleType::Crit), feet, width, height);
+            }
+            if amount > 2.0 {
+                let indicator = horizon_client::particles::ParticleOptions::simple(horizon_client::particles::ParticleType::DamageIndicator);
+                self.particles.send_particles(&indicator, [feet[0], feet[1] + height * 0.5, feet[2]], [0.1, 0.0, 0.1], 0.2, (amount * 0.5) as u32);
+            }
             self.last_hurt_by_player.insert(mob.id);
             let kind = mob.kind.clone();
             let dead = !mob.alive();
@@ -2559,6 +2560,7 @@ impl Game<'_> {
                 }
             }
         }
+        let destroyed_count = destroyed.len();
         for b in destroyed {
             let state = self.world.block(b[0], b[1], b[2]);
             if self.res.facts.is_air(state) {
@@ -2573,6 +2575,8 @@ impl Game<'_> {
             }
             self.world.set(b[0], b[1], b[2], self.world.air)?;
         }
+        let (world, facts) = (&self.world, &self.res.facts);
+        self.particles.explosion(center, radius, destroyed_count, &|b| facts.is_air(world.block(b[0], b[1], b[2])));
         self.audio.play("minecraft:entity.generic.explode", Some(center), 4.0, (1.0 + (self.world.random.next_float() - self.world.random.next_float()) * 0.2) * 0.7);
         // Entity damage by distance (exposure approximated as unobstructed).
         let diameter = f64::from(radius) * 2.0;
@@ -2901,7 +2905,8 @@ impl Game<'_> {
                 let (x1, z1, y0, y1) = (x0 + 12.0, z0 + 12.0, bottom, bottom + 4.0);
                 let mut quad = |p: [[f32; 3]; 4], shade: f32| {
                     for v in p {
-                        out.push(Vertex { pos: v, uv, layer: 2, color: color(shade), light });
+                        // Overlay 4: clouds (unlit, faded by the cloud fog end).
+                        out.push(Vertex { pos: v, uv, layer: 4, color: color(shade), light });
                     }
                 };
                 quad([[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]], 1.0);
@@ -4282,6 +4287,7 @@ impl Game<'_> {
             Vec::new()
         };
         let hand = if title || self.screen == Screen::Inventory { Vec::new() } else { self.hand_geometry(alpha) };
+        let screen = if title { Vec::new() } else { self.screen_quads(alpha as f32, size) };
         let mut entities = entities;
         if !title {
             self.end_geometry(camera, &mut entities);
@@ -4315,11 +4321,14 @@ impl Game<'_> {
             // The camera inside an opaque block sees nothing through it: disable.
             cave_culling: !self.res.facts.get(self.world.block(block[0], block[1], block[2])).solid_render,
             water_fog,
+            fog: Some(self.frame_fog(camera, &sky, biome)),
+            dark_disc: self.dark_disc(camera),
             outline,
             hud: &hud,
             entities: &entities,
             celestial: &celestial,
             hand: &hand,
+            screen: &screen,
             game_time: self.world.game_time as f32,
             ticks: self.ticks,
         };
@@ -4587,6 +4596,12 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::MouseInput { .. } if self.title.is_some() => {}
+                WindowEvent::MouseInput { state, button, .. } if self.sign_edit.is_some() => {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
+                        self.sign_edit_click(size);
+                    }
+                }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
                     match self.screen {
@@ -4658,6 +4673,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                 }
+                WindowEvent::KeyboardInput { event, .. } if self.sign_edit.is_some() => self.sign_edit_key(&event),
                 WindowEvent::KeyboardInput { event, .. }
                     if self.screen == Screen::Creative && self.creative_screen.tab().search && event.state == ElementState::Pressed
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
@@ -4882,6 +4898,8 @@ pub fn run() -> Result<()> {
     let world = World::new(facts.air, 0);
     let creative = options.creative;
     let stations = horizon_client::stations::StationData::load(&root, &items);
+    let animate = horizon_client::animate_tick::AnimateTables::load(&root, registry_owner.registry, &biomes)?;
+    let fog = horizon_client::fog::FogRenderer::load(&root, &biomes);
     let mut resources = Resources {
         stations,
         assets,
@@ -4894,7 +4912,10 @@ pub fn run() -> Result<()> {
         icons: HashMap::new(),
         layer_names,
         providers: Providers::load(&root),
-        chest_model: horizon_client::mobs::load_model(&root, "minecraft:chest#main"),
+        block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(&root, &registry_owner.registry)?,
+        animate,
+        fog,
+        screen_fx: Default::default(),
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         end_environment: Environment::load_dimension(&root, "the_end", false)?,
         behaviours: Behaviours::load(registry_owner.registry, &root)?,
@@ -4918,6 +4939,7 @@ pub fn run() -> Result<()> {
         settings.render_distance = d;
     }
     let look = options.look;
+    let particles = horizon_client::particles::ParticleEngine::new(&root, &resources.atlas.sprites);
     let mut game = Game {
         res: &mut resources,
         collision: &collision,
@@ -4970,7 +4992,8 @@ pub fn run() -> Result<()> {
         audio,
         dropped: Vec::new(),
         next_entity: 0,
-        particles: Vec::new(),
+        particles,
+        sign_edit: None,
         spawn_search: 0,
         mobs: Vec::new(),
         arrows: Vec::new(),

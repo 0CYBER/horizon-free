@@ -1,10 +1,12 @@
 //! Horizon native client: resources, world streaming, rendering and the
 //! bindings between the validated simulation pieces and the game loop.
 #![forbid(unsafe_code)]
+pub mod animate_tick;
 pub mod assets;
 pub mod attribute_updates;
 pub mod audio;
 pub mod biome;
+pub mod block_entity_render;
 pub mod blocks;
 pub mod brewing;
 pub mod chunk;
@@ -23,6 +25,7 @@ pub mod entity_nbt;
 pub mod environment;
 pub mod font;
 pub mod gamerules;
+pub mod fog;
 pub mod gfx;
 pub mod health;
 pub mod hud;
@@ -47,7 +50,10 @@ pub mod particles;
 pub mod pose;
 pub mod projectiles;
 pub mod save;
+pub mod screen_effects;
 pub mod settings;
+pub mod shadows;
+pub mod signs;
 pub mod sprint;
 pub mod sprites;
 pub mod stations;

@@ -81,6 +81,8 @@ impl Game<'_> {
         match words[0] {
             "help" => Ok(Some(json!({ "commands": HELP.iter().chain(super::station_control::HELP).collect::<Vec<_>>() }))),
             "help" => Ok(Some(json!({ "commands": HELP.iter().chain(super::blockctl::HELP).collect::<Vec<_>>() }))),
+            "help" => Ok(Some(json!({ "commands": HELP.iter().chain(super::render_control::HELP).collect::<Vec<_>>() }))),
+            "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
             "status" => Ok(Some(self.control_status())),
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;

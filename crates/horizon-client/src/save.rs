@@ -350,6 +350,7 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
             entries.push(("total_fuel", Tag::Int(b.total_fuel)));
             entries.push(("speed_multiplier", Tag::Float(b.speed.to_bits())));
         }
+        BlockEntity::Sign(sign) => entries.extend(sign.encode()),
     }
     Tag::compound(entries)
 }
@@ -387,6 +388,7 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
                 _ => 1.0,
             };
         }
+        BlockEntity::Sign(sign) => sign.decode(tag),
     }
     Some((pos, entity))
 }
