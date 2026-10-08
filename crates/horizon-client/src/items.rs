@@ -45,6 +45,8 @@ pub struct ItemStack {
     pub item: Arc<str>,
     pub count: u32,
     pub damage: u32,
+    /// Components beyond count and damage (see `item_data`); None when default.
+    pub extra: Option<Box<crate::item_data::StackData>>,
 }
 pub struct Items {
     pub items: HashMap<Arc<str>, ItemInfo>,
@@ -205,6 +207,11 @@ impl Items {
     }
     pub fn get(&self, id: &str) -> Option<&ItemInfo> {
         self.items.get(id)
+    }
+    /// An item table with only tags, for unit tests of item rules.
+    #[cfg(test)]
+    pub fn for_tests(item_tags: HashMap<String, HashSet<String>>) -> Self {
+        Self { items: HashMap::new(), order: Vec::new(), block_tags: HashMap::new(), item_tags, loot: HashMap::new() }
     }
     fn block_matches(&self, spec: &str, block: &str) -> bool {
         match spec.strip_prefix('#') {
@@ -438,6 +445,7 @@ impl LootContext<'_> {
                         item: Arc::from(e["name"].as_str().unwrap_or("minecraft:air")),
                         count: 1,
                         damage: 0,
+                        extra: None,
                     },
                     e["modifier"].clone(),
                 ));
@@ -466,7 +474,7 @@ impl LootContext<'_> {
                 true
             }
             "minecraft:empty" => {
-                out.push((e["weight"].as_i64().unwrap_or(1) as i32, ItemStack { item: Arc::from("minecraft:air"), count: 0, damage: 0 }, Value::Null));
+                out.push((e["weight"].as_i64().unwrap_or(1) as i32, ItemStack { item: Arc::from("minecraft:air"), count: 0, damage: 0, extra: None }, Value::Null));
                 true
             }
             _ => false,

@@ -174,6 +174,7 @@ impl Game<'_> {
                             item: item.as_str().into(),
                             count: n,
                             damage: 0,
+                            extra: None,
                         })
                         .map_or(0, |r| r.count);
                     given += n - rest;

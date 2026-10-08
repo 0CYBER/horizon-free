@@ -208,7 +208,7 @@ impl Furnace {
                                     let item = f.item.clone();
                                     f.count -= 1;
                                     if f.count == 0 {
-                                        self.items[1] = remainder(&item).map(|r| ItemStack { item: Arc::from(r), count: 1, damage: 0 });
+                                        self.items[1] = remainder(&item).map(|r| ItemStack { item: Arc::from(r), count: 1, damage: 0, extra: None });
                                     }
                                 }
                                 lit = true;

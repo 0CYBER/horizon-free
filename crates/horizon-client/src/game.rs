@@ -792,11 +792,11 @@ impl Game<'_> {
                     PlayerEffect::OpenMenu => self.open_menu([pos.x, pos.y, pos.z]),
                     PlayerEffect::Sleep => self.try_sleep([pos.x, pos.y, pos.z]),
                     PlayerEffect::GiveItem(item) => {
-                        if let Some(rest) = self.give(ItemStack { item, count: 1, damage: 0 }) {
+                        if let Some(rest) = self.give(ItemStack { item, count: 1, damage: 0, extra: None }) {
                             self.pop_resource([pos.x, pos.y, pos.z], rest);
                         }
                     }
-                    PlayerEffect::DropItem(item) => self.pop_resource([pos.x, pos.y + 1, pos.z], ItemStack { item, count: 1, damage: 0 }),
+                    PlayerEffect::DropItem(item) => self.pop_resource([pos.x, pos.y + 1, pos.z], ItemStack { item, count: 1, damage: 0, extra: None }),
                     PlayerEffect::EatCake => {
                         if let Some(p) = self.player.as_mut() {
                             let food = &mut p.health.food;
@@ -861,7 +861,7 @@ impl Game<'_> {
             if matches!(landing, Landing::Broken) {
                 let item = self.res.facts.get(state).item.clone();
                 if &*item != "minecraft:air" {
-                    self.pop_resource(pos, ItemStack { item, count: 1, damage: 0 });
+                    self.pop_resource(pos, ItemStack { item, count: 1, damage: 0, extra: None });
                 }
             }
         }
@@ -2895,7 +2895,7 @@ impl Game<'_> {
         let mut inventory = vec![None; 36];
         self.armor = [None, None, None, None];
         for (slot, id, count, damage) in &level.inventory {
-            let stack = ItemStack { item: Arc::from(id.as_str()), count: *count, damage: *damage };
+            let stack = ItemStack { item: Arc::from(id.as_str()), count: *count, damage: *damage, extra: level.inventory_components.get(slot).cloned() };
             if (100..104).contains(slot) {
                 self.armor[usize::from(103 - slot)] = Some(stack);
             } else if let Some(cell) = inventory.get_mut(usize::from(*slot)) {
@@ -2904,7 +2904,7 @@ impl Game<'_> {
         }
         if self.creative && level.inventory.is_empty() && level.position.is_none() {
             for (i, name) in ["minecraft:grass_block", "minecraft:stone", "minecraft:oak_planks", "minecraft:glass", "minecraft:torch", "minecraft:oak_log", "minecraft:chest", "minecraft:furnace", "minecraft:diamond_pickaxe"].iter().enumerate() {
-                inventory[i] = Some(ItemStack { item: Arc::from(*name), count: 1, damage: 0 });
+                inventory[i] = Some(ItemStack { item: Arc::from(*name), count: 1, damage: 0, extra: None });
             }
         }
         let (yaw, pitch) = self.options.look.unwrap_or((level.rotation[0], level.rotation[1]));
@@ -3350,7 +3350,7 @@ impl Game<'_> {
             self.audio.play(sound, Some(at(hit.pos)), 1.0, 1.0);
             if !self.creative {
                 self.consume_held();
-                let filled = ItemStack { item: Arc::from(filled), count: 1, damage: 0 };
+                let filled = ItemStack { item: Arc::from(filled), count: 1, damage: 0, extra: None };
                 if self.inventory[self.selected].is_none() {
                     self.inventory[self.selected] = Some(filled);
                 } else if let Some(rest) = self.give(filled)
@@ -3376,7 +3376,7 @@ impl Game<'_> {
             let sound = if item == "water_bucket" { "minecraft:item.bucket.empty" } else { "minecraft:item.bucket.empty_lava" };
             self.audio.play(sound, Some(at(target)), 1.0, 1.0);
             if !self.creative {
-                self.inventory[self.selected] = Some(ItemStack { item: Arc::from("minecraft:bucket"), count: 1, damage: 0 });
+                self.inventory[self.selected] = Some(ItemStack { item: Arc::from("minecraft:bucket"), count: 1, damage: 0, extra: None });
             }
             return Ok(true);
         }
@@ -3390,7 +3390,7 @@ impl Game<'_> {
             if let Some(result) = result {
                 self.set_state_named(hit.pos, result, &[])?;
                 if name == "rooted_dirt" {
-                    self.pop_resource([hit.pos[0], hit.pos[1] - 1, hit.pos[2]], ItemStack { item: Arc::from("minecraft:hanging_roots"), count: 1, damage: 0 });
+                    self.pop_resource([hit.pos[0], hit.pos[1] - 1, hit.pos[2]], ItemStack { item: Arc::from("minecraft:hanging_roots"), count: 1, damage: 0, extra: None });
                 }
                 self.audio.play("minecraft:item.hoe.till", Some(at(hit.pos)), 1.0, 1.0);
                 self.damage_held(1);
@@ -3961,7 +3961,7 @@ impl Game<'_> {
         batch.sprite(&self.res.atlas, &tab_sprite(&tab, true), ox + tx, oy + ty);
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
-            let stack = ItemStack { item: Arc::from(t.icon.as_str()), count: 1, damage: 0 };
+            let stack = ItemStack { item: Arc::from(t.icon.as_str()), count: 1, damage: 0, extra: None };
             self.draw_item(batch, &stack, ox + tx + 5.0, oy + ty + if t.top { 9.0 } else { 7.0 });
         }
         let atlas = &self.res.atlas;
@@ -3977,7 +3977,7 @@ impl Game<'_> {
             for c in 0..9 {
                 let Some(item) = items.get((first + r) * 9 + c) else { continue };
                 let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
-                let stack = ItemStack { item: Arc::from(item.as_str()), count: 1, damage: 0 };
+                let stack = ItemStack { item: Arc::from(item.as_str()), count: 1, damage: 0, extra: None };
                 self.draw_item(batch, &stack, x, y);
                 if self.cursor.0 >= x && self.cursor.0 < x + 16.0 && self.cursor.1 >= y && self.cursor.1 < y + 16.0 {
                     batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
@@ -4051,7 +4051,7 @@ impl Game<'_> {
                 }
                 let Some(item) = items.get((first + r) * 9 + c) else { return };
                 let max = self.res.items.get(item).map_or(64, |i| i.max_stack);
-                let stack = ItemStack { item: Arc::from(item.as_str()), count: if right { 1 } else { max }, damage: 0 };
+                let stack = ItemStack { item: Arc::from(item.as_str()), count: if right { 1 } else { max }, damage: 0, extra: None };
                 if shift {
                     let _ = self.give(stack);
                 } else {
@@ -4102,10 +4102,14 @@ impl Game<'_> {
             .enumerate()
             .filter_map(|(i, s)| s.as_ref().map(|s| (i as u8, s.item.to_string(), s.count, s.damage)))
             .collect();
+        level.inventory_components = self.inventory.iter().enumerate().filter_map(|(i, s)| Some((i as u8, s.as_ref()?.extra.clone()?))).collect();
         // Vanilla stores armor in slots 100 (feet) to 103 (head).
         for (i, s) in self.armor.iter().enumerate() {
             if let Some(s) = s {
                 level.inventory.push((103 - i as u8, s.item.to_string(), s.count, s.damage));
+                if let Some(extra) = s.extra.clone() {
+                    level.inventory_components.insert(103 - i as u8, extra);
+                }
             }
         }
         level.dimension = self.dim.id().to_owned();
@@ -4299,7 +4303,7 @@ impl Game<'_> {
                     let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
                     let item = self.res.facts.get(state).item.clone();
                     if &*item != "minecraft:air" {
-                        self.inventory[self.selected] = Some(ItemStack { item, count: 1, damage: 0 });
+                        self.inventory[self.selected] = Some(ItemStack { item, count: 1, damage: 0, extra: None });
                     }
                 }
             }

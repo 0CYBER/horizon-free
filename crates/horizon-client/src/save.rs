@@ -62,8 +62,8 @@ fn encode_items(slots: &[Option<crate::items::ItemStack>]) -> Tag {
                     ("id", string(&s.item)),
                     ("count", Tag::Int(s.count as i32)),
                 ];
-                if s.damage > 0 {
-                    entries.push(("components", Tag::compound([("minecraft:damage", Tag::Int(s.damage as i32))])));
+                if let Some(components) = crate::item_data::encode_components(s) {
+                    entries.push(("components", components));
                 }
                 Some(Tag::compound(entries))
             })
@@ -81,12 +81,9 @@ fn decode_items(tag: Option<&Tag>, size: usize) -> Vec<Option<crate::items::Item
                 Some(Tag::Byte(c)) => *c as u32,
                 _ => 1,
             };
-            let damage = match it.get("components").and_then(|c| c.get("minecraft:damage")) {
-                Some(Tag::Int(d)) => *d as u32,
-                _ => 0,
-            };
+            let (damage, extra) = crate::item_data::decode_components(it.get("components"));
             if let Some(cell) = slots.get_mut(*slot as u8 as usize) {
-                *cell = Some(crate::items::ItemStack { item: Arc::from(id.to_string_lossy().as_str()), count, damage });
+                *cell = Some(crate::items::ItemStack { item: Arc::from(id.to_string_lossy().as_str()), count, damage, extra });
             }
         }
     }
@@ -362,6 +359,10 @@ pub struct Level {
     pub food: i32,
     pub saturation: f32,
     pub inventory: Vec<(u8, String, u32, u32)>,
+    /// Extra item components of `inventory` entries, by slot.
+    pub inventory_components: HashMap<u8, Box<crate::item_data::StackData>>,
+    /// Player.XpSeed: the enchanting table seed.
+    pub xp_seed: i32,
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
@@ -392,6 +393,7 @@ impl Level {
         let player = data.get("Player");
         let float = |t: Option<&Tag>| if let Some(Tag::Float(b)) = t { f32::from_bits(*b) } else { 0.0 };
         let mut inventory = Vec::new();
+        let mut inventory_components = HashMap::new();
         if let Some(Tag::List(items)) = player.and_then(|p| p.get("Inventory")) {
             for it in items {
                 let slot = if let Some(Tag::Byte(s)) = it.get("Slot") { *s as u8 } else { continue };
@@ -401,6 +403,9 @@ impl Level {
                     .get("components")
                     .and_then(|c| c.get("minecraft:damage"))
                     .map_or(0, |d| long(Some(d)) as u32);
+                if let (_, Some(extra)) = crate::item_data::decode_components(it.get("components")) {
+                    inventory_components.insert(slot, extra);
+                }
                 inventory.push((slot, id, count, damage));
             }
         }
@@ -439,7 +444,9 @@ impl Level {
             xp_level: player.map_or(0, |p| long(p.get("XpLevel")) as i32),
             xp_progress: player.map_or(0.0, |p| float(p.get("XpP"))),
             xp_total: player.map_or(0, |p| long(p.get("XpTotal")) as i32),
+            xp_seed: player.map_or(0, |p| long(p.get("XpSeed")) as i32),
             inventory,
+            inventory_components,
         })
     }
     pub fn write(&self, dir: &Path) -> Result<()> {
@@ -452,6 +459,7 @@ impl Level {
             ("XpLevel", Tag::Int(self.xp_level)),
             ("XpP", Tag::Float(self.xp_progress.to_bits())),
             ("XpTotal", Tag::Int(self.xp_total)),
+            ("XpSeed", Tag::Int(self.xp_seed)),
             ("playerGameType", Tag::Int(i32::from(self.creative))),
             (
                 "Rotation",
@@ -468,8 +476,8 @@ impl Level {
                                 ("id", string(id)),
                                 ("count", Tag::Int(*count as i32)),
                             ];
-                            if *damage > 0 {
-                                entries.push(("components", Tag::compound([("minecraft:damage", Tag::Int(*damage as i32))])));
+                            if let Some(components) = crate::item_data::components_tag(*damage, self.inventory_components.get(slot).map(|d| &**d)) {
+                                entries.push(("components", components));
                             }
                             Tag::compound(entries)
                         })
