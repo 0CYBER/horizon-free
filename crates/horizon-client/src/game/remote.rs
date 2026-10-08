@@ -1321,8 +1321,8 @@ impl Game<'_> {
         let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
         self.audio.play(&s.break_sound, Some(at), (s.volume + 1.0) / 2.0, s.pitch * 0.8);
         self.destroy_particles(pos, state);
-        let fluid = self.res.facts.get(state).waterlogged;
-        let air = if fluid { self.world.air } else { self.world.air };
+        // The server's block update follows (waterlogged blocks leave water).
+        let air = self.world.air;
         if self.world.set(pos[0], pos[1], pos[2], air).is_ok() {
             self.world.block_entities.remove(&(pos[0], pos[1], pos[2]));
         }
@@ -1645,7 +1645,7 @@ impl Game<'_> {
         }
         if let Some(input) = &r.chat_input {
             batch.fill(atlas, 2.0, h - 14.0, w - 4.0, 12.0, rgba(0, 0, 0, 128));
-            let blink = (self.started.elapsed().as_millis() / 300) % 2 == 0;
+            let blink = (self.started.elapsed().as_millis() / 300).is_multiple_of(2);
             let shown = if blink { format!("{input}_") } else { input.clone() };
             batch.text(atlas, &shown, 4.0, h - 12.0, rgba(224, 224, 224, 255), true);
         }

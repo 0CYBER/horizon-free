@@ -158,7 +158,7 @@ impl Title {
                     batch.text(atlas, &shown, w / 2.0 - 96.0, y + 17.0, rgba(224, 224, 224, 255), true);
                 }
             }
-            Mode::Multiplayer(screen) => screen.draw(atlas, batch, (self.started.elapsed().as_millis() / 300) % 2 == 0),
+            Mode::Multiplayer(screen) => screen.draw(atlas, batch, (self.started.elapsed().as_millis() / 300).is_multiple_of(2)),
         }
         for b in self.buttons(w, h) {
             let hover = b.enabled && cursor.0 >= b.x && cursor.0 < b.x + b.w && cursor.1 >= b.y && cursor.1 < b.y + 20.0;

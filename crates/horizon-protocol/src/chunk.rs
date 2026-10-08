@@ -253,7 +253,7 @@ packet!(
 impl LightData {
     /// Per light section: the sky and block DataLayers (None = absent/unchanged,
     /// Some(zeroed) when marked empty).
-    pub fn layers(&self, light_sections: usize) -> Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> {
+    pub fn layers(&self, light_sections: usize) -> Vec<SectionLight> {
         use crate::buf::bit;
         let (mut sky, mut block) = (self.sky.iter(), self.block.iter());
         (0..light_sections)
@@ -277,6 +277,8 @@ impl LightData {
             .collect()
     }
 }
+/// A light section's (sky, block) DataLayers.
+pub type SectionLight = (Option<Vec<u8>>, Option<Vec<u8>>);
 /// DataLayer.get: the nibble at (y << 8 | z << 4 | x), low nibble first.
 pub fn nibble(layer: &[u8], i: usize) -> u8 {
     layer
