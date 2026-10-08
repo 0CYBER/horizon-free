@@ -2995,6 +2995,7 @@ impl Game<'_> {
             let inner = Arc::new(VanillaTerrain::for_dimension(&self.options.resources.join("worldgen"), res.assets.registry, &res.biomes, seed, dim.id()).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with: python3 tools/prepare_native_client.py")
             })?);
+            self.end.set_locator((dim == Dim::Overworld).then(|| inner.clone()));
             Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
         };
         streaming.radius = self.settings.render_distance;

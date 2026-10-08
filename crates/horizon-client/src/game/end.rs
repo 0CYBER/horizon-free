@@ -5,12 +5,13 @@
 use super::{Dim, Game};
 use horizon_client::{
     Result, environment::Environment, items::ItemStack, mesher::Vertex, motion::PlayerMotion,
+    vanillagen::VanillaTerrain,
 };
 use horizon_core::{
     geometry::Vec3,
     random::{LegacyRandom, RandomSource},
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 /// ServerLevel.END_SPAWN_POINT.
 const END_SPAWN: [i32; 3] = [100, 50, 0];
@@ -40,6 +41,46 @@ pub(super) struct EndState {
     portals: HashMap<(i32, i32), Vec<([i32; 3], bool)>>,
     /// Chunks left to scan for portal blocks in the current round.
     scan: Vec<(i32, i32)>,
+    /// The Overworld generator, for stronghold positions (ServerLevel.findNearestMapStructure).
+    locator: std::sync::Mutex<Option<Arc<VanillaTerrain>>>,
+    /// Thrown eyes of ender in flight.
+    eyes: Vec<EyeOfEnder>,
+}
+impl EndState {
+    pub(super) fn set_locator(&self, terrain: Option<Arc<VanillaTerrain>>) {
+        *self.locator.lock().unwrap() = terrain;
+    }
+}
+
+/// The EyeOfEnder entity.
+struct EyeOfEnder {
+    position: glam::DVec3,
+    previous: glam::DVec3,
+    velocity: glam::DVec3,
+    target: glam::DVec3,
+    life: u32,
+    survive: bool,
+}
+impl EyeOfEnder {
+    /// EyeOfEnder.updateDeltaMovement.
+    fn update_delta(old: glam::DVec3, position: glam::DVec3, target: glam::DVec3) -> glam::DVec3 {
+        let horizontal = glam::DVec3::new(target.x - position.x, 0.0, target.z - position.z);
+        let length = horizontal.length();
+        let old_horizontal = old.x.hypot(old.z);
+        let mut wanted_speed = old_horizontal + 0.0025 * (length - old_horizontal);
+        let mut y = old.y;
+        if length < 1.0 {
+            wanted_speed *= 0.8;
+            y *= 0.8;
+        }
+        let wanted_y = if position.y - old.y < target.y {
+            1.0
+        } else {
+            -1.0
+        };
+        horizontal * (wanted_speed / length)
+            + glam::DVec3::new(0.0, y + (wanted_y - y) * 0.015, 0.0)
+    }
 }
 
 /// Chunks scanned for portal blocks per tick.
@@ -115,20 +156,19 @@ impl Game<'_> {
         if &*stack.item != "minecraft:ender_eye" {
             return Ok(false);
         }
-        let Some(hit) = self.pick() else {
-            return Ok(false);
-        };
         let registry = self.res.assets.registry;
-        let Some(state) = registry
-            .state(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))
-            .cloned()
-        else {
-            return Ok(false);
+        let target = self.pick().and_then(|hit| {
+            let state = registry.state(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))?;
+            (state.name == "minecraft:end_portal_frame").then(|| (hit, state.clone()))
+        });
+        let Some((hit, state)) = target else {
+            // EnderEyeItem.use: throw the eye towards the nearest stronghold.
+            self.throw_ender_eye();
+            return Ok(true);
         };
-        if state.name != "minecraft:end_portal_frame"
-            || state.properties.get("eye").map(String::as_str) == Some("true")
-        {
-            return Ok(false);
+        if state.properties.get("eye").map(String::as_str) == Some("true") {
+            // Both useOn and use pass on a filled frame.
+            return Ok(true);
         }
         let mut filled = state;
         filled.properties.insert("eye".into(), "true".into());
@@ -219,6 +259,7 @@ impl Game<'_> {
     pub(super) fn tick_end(&mut self) -> Result<()> {
         self.end.gateway_cooldown = self.end.gateway_cooldown.saturating_sub(1);
         self.scan_portals();
+        self.tick_eyes();
         if self.dim == Dim::End {
             self.ensure_exit_portal()?;
         }
@@ -924,6 +965,7 @@ impl Game<'_> {
         if self.dim == Dim::End {
             self.end_crystal_geometry(camera, out);
         }
+        self.eye_geometry(camera, out);
     }
 
     /// EndCrystalRenderer and EndCrystalModel for the crystals EndSpikeFeature
@@ -1045,6 +1087,140 @@ impl Game<'_> {
                         });
                     }
                 }
+            }
+        }
+    }
+
+    /// EnderEyeItem.use: findNearestMapStructure over the stronghold rings,
+    /// then an EyeOfEnder signalled towards it. Without a stronghold (other
+    /// dimensions) nothing is thrown.
+    fn throw_ender_eye(&mut self) {
+        let rings = self
+            .end
+            .locator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|t| t.ring_positions("minecraft:strongholds"));
+        let (Some(rings), Some(p)) = (rings, self.player.as_ref()) else {
+            return;
+        };
+        let block = [
+            p.position.x.floor(),
+            p.position.y.floor(),
+            p.position.z.floor(),
+        ];
+        // ChunkGenerator.getNearestGeneratedStructure: the ring chunk closest to
+        // its (8, 32, 8) block, located at the chunk's corner.
+        let Some(nearest) = rings.iter().min_by(|a, b| {
+            let d = |c: &horizon_core::position::ChunkPos| {
+                (f64::from(c.x * 16 + 8) - block[0]).powi(2)
+                    + (32.0 - block[1]).powi(2)
+                    + (f64::from(c.z * 16 + 8) - block[2]).powi(2)
+            };
+            d(a).total_cmp(&d(b))
+        }) else {
+            return;
+        };
+        let target = glam::DVec3::new(f64::from(nearest.x * 16), 0.0, f64::from(nearest.z * 16));
+        let start = glam::DVec3::new(
+            p.position.x,
+            p.position.y + f64::from(p.dimensions.height) * 0.5,
+            p.position.z,
+        );
+        // EyeOfEnder.signalTo.
+        let delta = target - start;
+        let horizontal = delta.x.hypot(delta.z);
+        let target = if horizontal > 12.0 {
+            start
+                + glam::DVec3::new(
+                    delta.x / horizontal * 12.0,
+                    8.0,
+                    delta.z / horizontal * 12.0,
+                )
+        } else {
+            target
+        };
+        let survive = self.world.random.next_int_bound(5).unwrap_or(0) > 0;
+        self.end.eyes.push(EyeOfEnder {
+            position: start,
+            previous: start,
+            velocity: glam::DVec3::ZERO,
+            target,
+            life: 0,
+            survive,
+        });
+        let r = self.world.random.next_float();
+        let pitch = 0.33 + r * (0.5 - 0.33);
+        let at = [p.position.x, p.position.y, p.position.z];
+        self.audio
+            .play("minecraft:entity.ender_eye.launch", Some(at), 1.0, pitch);
+        self.consume_held();
+        self.swing_arm();
+    }
+
+    /// EyeOfEnder.tick: fly, then drop (4 in 5) or shatter after 80 ticks.
+    fn tick_eyes(&mut self) {
+        let mut eyes = std::mem::take(&mut self.end.eyes);
+        eyes.retain_mut(|eye| {
+            eye.previous = eye.position;
+            let next = eye.position + eye.velocity;
+            eye.velocity = EyeOfEnder::update_delta(eye.velocity, next, eye.target);
+            eye.position = next;
+            eye.life += 1;
+            if eye.life <= 80 {
+                return true;
+            }
+            let at = eye.position.to_array();
+            self.audio
+                .play("minecraft:entity.ender_eye.death", Some(at), 1.0, 1.0);
+            if eye.survive {
+                // new ItemEntity(level, x, y, z, item): random spread, 0.2 up.
+                let vx = self.world.random.next_double() * 0.2 - 0.1;
+                let vz = self.world.random.next_double() * 0.2 - 0.1;
+                let stack = ItemStack {
+                    item: "minecraft:ender_eye".into(),
+                    count: 1,
+                    damage: 0,
+                };
+                self.spawn_item(stack, at, [vx, 0.2, vz], 0);
+            }
+            false
+        });
+        self.end.eyes = eyes;
+    }
+
+    /// ThrownItemRenderer: the ender eye item facing the camera.
+    fn eye_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
+        let Some(r) = self.res.atlas.sprites.get("item/ender_eye").copied() else {
+            return;
+        };
+        let alpha = self.clock.fraction();
+        let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
+        let right = glam::Vec3::new(-yaw.cos(), 0.0, -yaw.sin()) * 0.25;
+        let up = glam::Vec3::new(
+            -yaw.sin() * pitch.sin(),
+            pitch.cos(),
+            yaw.cos() * pitch.sin(),
+        ) * 0.25;
+        let full = 15 * 16 | (15 * 16) << 8;
+        for eye in &self.end.eyes {
+            let p = eye.previous + (eye.position - eye.previous) * alpha - camera;
+            let c = p.as_vec3();
+            let corners = [
+                (c - right - up, [r.u0, r.v1]),
+                (c + right - up, [r.u1, r.v1]),
+                (c + right + up, [r.u1, r.v0]),
+                (c - right + up, [r.u0, r.v0]),
+            ];
+            for (pos, uv) in corners {
+                out.push(Vertex {
+                    pos: pos.to_array(),
+                    uv,
+                    layer: 0,
+                    color: 0xFFFF_FFFF,
+                    light: full,
+                });
             }
         }
     }

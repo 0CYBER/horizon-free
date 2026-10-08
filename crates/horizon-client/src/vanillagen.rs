@@ -45,6 +45,10 @@ impl VanillaTerrain {
         }
         Ok(Self { generator, biome_map })
     }
+    /// Concentric ring positions of a structure set (strongholds), once known.
+    pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
+        self.generator.ring_positions(set)
+    }
 }
 impl ChunkGenerator for VanillaTerrain {
     type Worker = GeneratorWorker;

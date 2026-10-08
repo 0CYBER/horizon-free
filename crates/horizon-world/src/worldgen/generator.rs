@@ -1304,6 +1304,7 @@ trait SeededPipeline: Send + Sync {
         pos: ChunkPos,
     ) -> Vec<Arc<super::structure::start::StructureStart>>;
     fn unsupported_features(&self) -> Vec<(String, String)>;
+    fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>>;
 }
 impl<R: RandomSource + 'static> SeededPipeline for Pipeline<R>
 where
@@ -1377,6 +1378,9 @@ where
             .as_ref()
             .map(super::generator_decoration::Decoration::unsupported)
             .unwrap_or_default()
+    }
+    fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
+        self.structures.as_ref()?.cached_rings(set)
     }
 }
 
@@ -1476,6 +1480,11 @@ impl OverworldGenerator {
     /// their algorithm or bindings are not implemented, with the decode error.
     pub fn unsupported_features(&self) -> Vec<(String, String)> {
         self.pipeline.unsupported_features()
+    }
+    /// ConcentricRingsStructurePlacement chunks of a structure set (such as
+    /// `minecraft:strongholds`), available once structure starts were looked up.
+    pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
+        self.pipeline.ring_positions(set)
     }
     /// Create per-thread state. Workers are cheap; keep one per thread.
     pub fn worker(&self) -> GeneratorWorker {

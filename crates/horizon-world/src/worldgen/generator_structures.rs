@@ -90,6 +90,11 @@ impl StructureState {
             rings: OnceLock::new(),
         }))
     }
+    /// Concentric ring positions of a structure set, once the first start
+    /// lookup has computed them.
+    pub(super) fn cached_rings(&self, set: &str) -> Option<Vec<ChunkPos>> {
+        self.rings.get().and_then(|rings| rings.get(set).cloned())
+    }
     /// The (cached) structure starts owned by a chunk.
     pub(super) fn starts_at(
         &self,
