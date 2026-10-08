@@ -12,6 +12,18 @@ use horizon_core::random::{LegacyRandom, RandomSource};
 use serde_json::Value;
 use std::{collections::HashSet, fs, path::Path, sync::Arc};
 
+/// Everything the workstation menus read, loaded once with the resources.
+pub struct StationData {
+    pub enchantments: Enchantments,
+    pub recipes: StationRecipes,
+    pub brewing: crate::brewing::Brewing,
+}
+impl StationData {
+    pub fn load(root: &Path, items: &Items) -> Self {
+        Self { enchantments: Enchantments::load(root), recipes: StationRecipes::load(root, items), brewing: crate::brewing::Brewing::load(root, items) }
+    }
+}
+
 // ---------------------------------------------------------------- enchanting
 
 /// `EnchantingTableBlock.BOOKSHELF_OFFSETS`: the 5x5 ring two blocks out, two high.

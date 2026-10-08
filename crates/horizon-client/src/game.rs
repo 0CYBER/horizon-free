@@ -1,6 +1,8 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
 mod control;
+mod station_control;
+mod stations;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -287,6 +289,8 @@ pub struct Resources {
     player_arm: Option<horizon_client::mobs::Part>,
     /// firstperson_righthand display transforms per item: (rotation, translation, scale).
     displays: HashMap<String, Option<([f32; 3], [f32; 3], [f32; 3])>>,
+    /// Enchantments, workstation recipes and brewing (game/stations.rs).
+    stations: horizon_client::stations::StationData,
 }
 struct Game<'a> {
     res: &'a mut Resources,
@@ -310,6 +314,8 @@ struct Game<'a> {
     craft_size: usize,
     /// Open container block entity, if any.
     container: Option<(i32, i32, i32)>,
+    /// Open workstation menu (enchanting table, anvil, ...).
+    station: Option<stations::Station>,
     scratch_slot: Option<ItemStack>,
     mining: Option<Mining>,
     destroy_delay: u32,
@@ -486,8 +492,7 @@ impl Game<'_> {
         let order: Vec<usize> = std::iter::once(self.selected).chain((0..36).filter(|&i| i != self.selected)).collect();
         for &i in &order {
             if let Some(slot) = &mut self.inventory[i]
-                && slot.item == stack.item
-                && slot.damage == stack.damage
+                && slot.same_item_same_components(&stack)
                 && slot.count < max
             {
                 let moved = (max - slot.count).min(stack.count);
@@ -828,6 +833,8 @@ impl Game<'_> {
             if let Some(sound) = sound {
                 self.audio.play(sound, Some([f64::from(key.0) + 0.5, f64::from(key.1) + 0.5, f64::from(key.2) + 0.5]), 0.5, 1.0);
             }
+        } else if self.open_station(pos, &name) {
+            // Workstation menus: game/stations.rs.
         } else {
             self.message = Some((format!("{} is not available yet", name.trim_start_matches("minecraft:").replace('_', " ")), Instant::now()));
             return;
@@ -1392,6 +1399,7 @@ impl Game<'_> {
             self.bob.1 += (target - self.bob.1) * 0.4;
         }
         self.tick_block_entities()?;
+        self.tick_brewing_stands()?;
         let facts = &self.res.facts;
         let world = &self.world;
         self.particles.retain_mut(|p| p.tick(world, |id| facts.states[id as usize].full_collision));
@@ -1536,6 +1544,7 @@ impl Game<'_> {
             }
             None => batch.fill(atlas, x + 2.0, y + 2.0, 12.0, 12.0, rgba(200, 0, 200, 255)),
         }
+        self.draw_glint(batch, stack, x, y);
         if stack.count > 1 {
             let text = stack.count.to_string();
             let w = HudBatch::text_width(atlas, &text);
@@ -1726,10 +1735,14 @@ impl Game<'_> {
     }
     /// 300.. are the open container's slots.
     fn slots(&self) -> Vec<usize> {
+        if let Some(v) = self.station_slots() {
+            return v;
+        }
         let mut v: Vec<usize> = (0..36).collect();
         match self.container_kind() {
             Some(BlockEntity::Chest(items)) => v.extend((0..items.len()).map(|i| 300 + i)),
             Some(BlockEntity::Furnace(_)) => v.extend(300..303),
+            Some(BlockEntity::Brewing(_)) => v.extend(300..305),
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
                 v.push(200);
@@ -1742,6 +1755,9 @@ impl Game<'_> {
     }
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
+        if let Some(p) = self.station_slot_position(i) {
+            return p;
+        }
         let table = self.craft_size == 3;
         // ContainerScreen (3 rows) shifts the player inventory down by one pixel.
         let shift = if matches!(self.container_kind(), Some(BlockEntity::Chest(_))) { 1.0 } else { 0.0 };
@@ -1773,6 +1789,9 @@ impl Game<'_> {
         })
     }
     fn slot_mut(&mut self, i: usize) -> &mut Option<ItemStack> {
+        if i >= stations::INPUT {
+            return self.station_slot_mut(i);
+        }
         if (500..504).contains(&i) {
             return &mut self.armor[i - 500];
         }
@@ -1795,6 +1814,9 @@ impl Game<'_> {
         self.res.recipes.craft(&grid, n)
     }
     fn draw_inventory(&mut self, batch: &mut HudBatch) {
+        if self.draw_station(batch) {
+            return;
+        }
         let (ox, oy) = self.inventory_origin(batch);
         {
             let atlas = &self.res.atlas;
@@ -1841,6 +1863,7 @@ impl Game<'_> {
                         part(batch, "gui/sprites/container/furnace/burn_progress", 0.0, 0.0, w, 16.0, ox + 79.0, oy + 34.0);
                     }
                 }
+                Some(BlockEntity::Brewing(_)) => {}
                 None => {
                     let texture = if self.craft_size == 3 { "gui/container/crafting_table" } else { "gui/container/inventory" };
                     part(batch, texture, 0.0, 0.0, 176.0, 166.0, ox, oy);
@@ -1870,8 +1893,10 @@ impl Game<'_> {
         if let Some(stack) = self.carried.clone() {
             self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
         }
+        self.draw_slot_tooltip(batch);
     }
     fn close_container(&mut self) {
+        self.close_station();
         let mut returned: Vec<ItemStack> = self.carried.take().into_iter().collect();
         returned.extend(self.craft_grid.iter_mut().filter_map(Option::take));
         for stack in returned {
@@ -1892,6 +1917,9 @@ impl Game<'_> {
         }
     }
     fn click_inventory(&mut self, right: bool) {
+        if self.station_click(right) {
+            return;
+        }
         let Some(size) = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]) else { return };
         let batch = HudBatch::new(size);
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else { return };
@@ -1957,8 +1985,7 @@ impl Game<'_> {
                 let mut stack = stack;
                 for i in range.clone() {
                     if let Some(s) = &mut self.inventory[i]
-                        && s.item == stack.item
-                        && s.damage == stack.damage
+                        && s.same_item_same_components(&stack)
                     {
                         let moved = max(&self.res.items, s).saturating_sub(s.count).min(stack.count);
                         s.count += moved;
@@ -2004,7 +2031,7 @@ impl Game<'_> {
                 (Some(one), (c.count > 0).then_some(c))
             }
             (Some(c), None) => (Some(c), None),
-            (Some(mut c), Some(mut s)) if c.item == s.item && c.damage == s.damage => {
+            (Some(mut c), Some(mut s)) if c.same_item_same_components(&s) => {
                 let room = max(items, &s).saturating_sub(s.count);
                 let moved = if right { 1.min(room).min(c.count) } else { room.min(c.count) };
                 s.count += moved;
@@ -4426,6 +4453,9 @@ impl ApplicationHandler for Game<'_> {
                         let rows = self.creative_screen.rows(&self.res.names).saturating_sub(5).max(1) as f32;
                         self.creative_screen.scroll = (self.creative_screen.scroll - d.signum() / rows).clamp(0.0, 1.0);
                     }
+                    if self.screen == Screen::Inventory && d != 0.0 {
+                        self.station_scroll(d);
+                    }
                     if self.screen == Screen::Playing && d != 0.0 {
                         self.selected = (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
                     }
@@ -4519,6 +4549,14 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     self.creative_screen.scroll = 0.0;
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.station_typing() && event.state == ElementState::Pressed
+                        && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
+                {
+                    // The anvil rename box takes every key but Escape (AnvilScreen.keyPressed).
+                    let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
+                    self.station_text(event.text.as_deref(), backspace);
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
                     if event.state == ElementState::Pressed
@@ -4684,7 +4722,9 @@ pub fn run() -> Result<()> {
     let audio = Audio::new(&root);
     let world = World::new(facts.air, 0);
     let creative = options.creative;
+    let stations = horizon_client::stations::StationData::load(&root, &items);
     let mut resources = Resources {
+        stations,
         assets,
         facts,
         items,
@@ -4738,6 +4778,7 @@ pub fn run() -> Result<()> {
         craft_grid: vec![None; 9],
         craft_size: 2,
         container: None,
+        station: None,
         scratch_slot: None,
         mining: None,
         destroy_delay: 0,

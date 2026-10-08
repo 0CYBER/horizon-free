@@ -6,6 +6,7 @@ pub mod attribute_updates;
 pub mod audio;
 pub mod biome;
 pub mod blocks;
+pub mod brewing;
 pub mod chunk;
 pub mod clock;
 pub mod containers;

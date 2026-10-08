@@ -49,6 +49,7 @@ pub struct Furnace {
 pub enum BlockEntity {
     Chest(Vec<Option<ItemStack>>),
     Furnace(Furnace),
+    Brewing(Box<crate::brewing::BrewingStand>),
 }
 impl BlockEntity {
     pub fn for_block(name: &str) -> Option<Self> {
@@ -63,6 +64,9 @@ impl BlockEntity {
                 speed: 1.0,
             }));
         }
+        if name == "minecraft:brewing_stand" {
+            return Some(Self::Brewing(Box::new(crate::brewing::BrewingStand::new())));
+        }
         matches!(
             name,
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel"
@@ -72,6 +76,7 @@ impl BlockEntity {
     pub fn id(&self) -> &'static str {
         match self {
             Self::Chest(_) => "minecraft:chest",
+            Self::Brewing(_) => "minecraft:brewing_stand",
             Self::Furnace(f) => match f.kind {
                 FurnaceKind::Furnace => "minecraft:furnace",
                 FurnaceKind::BlastFurnace => "minecraft:blast_furnace",
@@ -83,12 +88,14 @@ impl BlockEntity {
         match self {
             Self::Chest(items) => items.iter().flatten().cloned().collect(),
             Self::Furnace(f) => f.items.iter().flatten().cloned().collect(),
+            Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
         match self {
             Self::Chest(items) => items,
             Self::Furnace(f) => &mut f.items,
+            Self::Brewing(b) => &mut b.items,
         }
     }
 }
@@ -147,6 +154,18 @@ impl Providers {
             }
             _ => 0.0,
         }
+    }
+    /// A plain `context_int_provider` value or reference (no context conditions).
+    pub fn int_value(&self, v: &Value) -> i32 {
+        self.eval(v, false, &self.ints, 0) as i32
+    }
+    /// A plain `context_float_provider` value or reference; `default` when absent.
+    pub fn float_value(&self, v: &Value, default: f32) -> f32 {
+        if v.is_null() { default } else { self.eval(v, false, &self.floats, 0) as f32 }
+    }
+    #[cfg(test)]
+    pub fn empty() -> Self {
+        Self { ints: HashMap::new(), floats: HashMap::new() }
     }
     pub fn burn_time(&self, items: &Items, stack: &ItemStack, fast: bool) -> i32 {
         items

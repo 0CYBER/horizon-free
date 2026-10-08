@@ -33,6 +33,8 @@ pub struct ItemInfo {
     pub attack_speed: f32,
     /// `cooking_fuel`: burn-time and speed-multiplier provider references.
     pub fuel: Option<(Value, Value)>,
+    /// `brewing_fuel`: uses and speed-multiplier provider references.
+    pub brewing_fuel: Option<(Value, Value)>,
     /// Item left behind after crafting/fuel use (e.g. bucket).
     pub remainder: Option<String>,
     /// `equippable.slot` (head, chest, legs, feet, ...).
@@ -178,6 +180,7 @@ impl Items {
                         })
                         .collect(),
                     fuel: c.get("minecraft:cooking_fuel").map(|f| (f["burn_time"].clone(), f["speed_multiplier"].clone())),
+                    brewing_fuel: c.get("minecraft:brewing_fuel").map(|f| (f["uses"].clone(), f["speed_multiplier"].clone())),
                     remainder: c["minecraft:use_remainder"]["id"].as_str().or(c["minecraft:crafting_remainder"]["id"].as_str()).or(c["minecraft:crafting_remainder"].as_str()).map(str::to_owned),
                     attack_damage: modifier("minecraft:attack_damage"),
                     attack_speed: modifier("minecraft:attack_speed"),

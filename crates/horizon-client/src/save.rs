@@ -107,6 +107,14 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity) -
             entries.push(("cooking_time_spent", Tag::Short(f.cooking_timer as i16)));
             entries.push(("cooking_total_time", Tag::Short(f.cooking_total as i16)));
         }
+        BlockEntity::Brewing(b) => {
+            entries.push(("Items", encode_items(&b.items)));
+            entries.push(("BrewTime", Tag::Int(b.brew_time)));
+            entries.push(("total_brew_time", Tag::Int(b.total_brew_time)));
+            entries.push(("Fuel", Tag::Int(b.fuel)));
+            entries.push(("total_fuel", Tag::Int(b.total_fuel)));
+            entries.push(("speed_multiplier", Tag::Float(b.speed.to_bits())));
+        }
     }
     Tag::compound(entries)
 }
@@ -130,6 +138,21 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             f.lit_total = int("lit_total_time").unwrap_or(0);
             f.cooking_timer = int("cooking_time_spent").unwrap_or(0);
             f.cooking_total = int("cooking_total_time").unwrap_or(200);
+        }
+        BlockEntity::Brewing(b) => {
+            let items = decode_items(tag.get("Items"), 5);
+            b.items = [items[0].clone(), items[1].clone(), items[2].clone(), items[3].clone(), items[4].clone()];
+            b.brew_time = int("BrewTime").unwrap_or(0);
+            b.total_brew_time = int("total_brew_time").unwrap_or(400);
+            if b.brew_time > 0 {
+                b.ingredient = b.items[3].as_ref().map(|s| s.item.clone());
+            }
+            b.fuel = int("Fuel").unwrap_or(0);
+            b.total_fuel = int("total_fuel").unwrap_or(20);
+            b.speed = match tag.get("speed_multiplier") {
+                Some(Tag::Float(f)) => f32::from_bits(*f),
+                _ => 1.0,
+            };
         }
     }
     Some((pos, entity))
