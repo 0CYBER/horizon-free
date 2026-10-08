@@ -464,6 +464,22 @@ fn main() -> Result<(), Error> {
         .map(|c| c.block_entities.len())
         .sum();
     println!("block entities: {block_entities}");
+    if std::env::var_os("HORIZON_BLOCK_ENTITIES").is_some() {
+        for chunk in chunks.iter().flatten() {
+            for ([x, y, z], nbt) in &chunk.block_entities {
+                let text = |key: &str| match nbt.get(&key.into()) {
+                    Some(Tag::String(s)) => s.to_string_lossy(),
+                    _ => "-".into(),
+                };
+                println!(
+                    "block_entity {x} {y} {z} {} {} {}",
+                    chunk.block_name(*x, *y, *z),
+                    text("id"),
+                    text("LootTable")
+                );
+            }
+        }
+    }
     let mut legend = BTreeMap::<char, BTreeMap<String, usize>>::new();
     let step = (size * 16 / 96).max(1);
     for bz in (0..size * 16).step_by(step as usize) {

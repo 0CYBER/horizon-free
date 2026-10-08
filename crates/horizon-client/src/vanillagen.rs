@@ -16,6 +16,8 @@ pub struct VanillaTerrain {
     generator: OverworldGenerator,
     /// Generator biome index -> client biome table index.
     biome_map: Vec<u16>,
+    /// Loot tables for generated containers.
+    loot: Option<Arc<horizon_world::loot::LootData>>,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -37,7 +39,8 @@ impl VanillaTerrain {
                 unsupported.len()
             );
         }
-        Ok(Self { generator, biome_map })
+        let loot = dir.parent().and_then(crate::structure_blocks::loot_data);
+        Ok(Self { generator, biome_map, loot })
     }
 }
 impl ChunkGenerator for VanillaTerrain {
@@ -124,6 +127,7 @@ impl ChunkGenerator for VanillaTerrain {
             }
         }
         out.biomes = Arc::new(biomes);
+        out.block_entities = crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
         for s in &mut out.sections {
             Arc::make_mut(s).compact();
         }

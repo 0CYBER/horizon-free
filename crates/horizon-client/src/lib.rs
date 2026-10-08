@@ -34,6 +34,7 @@ pub mod settings;
 pub mod sprint;
 pub mod sprites;
 pub mod streaming;
+pub mod structure_blocks;
 pub mod testgen;
 pub mod title;
 pub mod vanillagen;
