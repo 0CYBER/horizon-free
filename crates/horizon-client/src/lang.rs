@@ -4,7 +4,6 @@
 //! language used by every screen.
 use std::{
     collections::{BTreeMap, HashMap},
-    path::Path,
     sync::{Arc, RwLock},
 };
 
@@ -34,7 +33,7 @@ static CURRENT: RwLock<Option<Arc<Language>>> = RwLock::new(None);
 pub trait ResourceSource {
     fn read(&self, path: &str) -> Option<Vec<u8>>;
 }
-impl ResourceSource for Path {
+impl ResourceSource for std::path::PathBuf {
     fn read(&self, path: &str) -> Option<Vec<u8>> {
         std::fs::read(self.join(path)).ok()
     }

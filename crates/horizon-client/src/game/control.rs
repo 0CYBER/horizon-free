@@ -23,6 +23,9 @@ const HELP: &[&str] = &[
     "time TICKS                     set the time of day",
     "resume                         leave the pause menu",
     "screenshot PATH                write the next frame as PNG",
+    "chat TEXT                      send a chat line or /command as if typed",
+    "type TEXT                      type into the open chat box (key enter tap sends)",
+    "chat-log [N]                   the newest N chat messages (default 10)",
     "stats [reset]                  frame-time summary since the last reset",
     "bench SECONDS                  reset stats, wait, then reply with the summary",
     "open WORLD [SEED] [creative]   open or create a world from the title screen",
@@ -211,6 +214,25 @@ impl Game<'_> {
                 self.pending_screenshot = Some(reply.clone());
                 Ok(None)
             }
+            "chat" => {
+                self.require_world()?;
+                let text = line.trim_start().strip_prefix("chat").unwrap_or("").trim();
+                self.handle_chat_input(text);
+                Ok(Some(json!({ "ok": true, "chat": self.ui.chat.recent_lines(5) })))
+            }
+            "type" => {
+                self.require_world()?;
+                let text = line.trim_start().strip_prefix("type").unwrap_or("").strip_prefix(' ').unwrap_or("");
+                if self.screen != Screen::Chat {
+                    return Err("type needs the chat screen (key t tap)".into());
+                }
+                self.chat_type(text);
+                ok()
+            }
+            "chat-log" => {
+                let n = words.get(1).map_or(Ok(10), |n| n.parse())?;
+                Ok(Some(json!({ "chat": self.ui.chat.recent_lines(n) })))
+            }
             "stats" => {
                 let summary = self.frame_stats.summary();
                 if words.get(1) == Some(&"reset") {
@@ -264,6 +286,10 @@ impl Game<'_> {
     }
 
     fn control_key_down(&mut self, key: KeyCode) -> Result<()> {
+        if self.screen == Screen::Chat {
+            self.chat_key_code(key, None);
+            return Ok(());
+        }
         if self.keys.insert(key) {
             self.key_pressed(key)?;
         }
@@ -281,6 +307,7 @@ impl Game<'_> {
             Screen::Inventory => "inventory",
             Screen::Creative => "creative",
             Screen::Dead => "dead",
+            Screen::Chat => "chat",
         }
     }
 
@@ -390,7 +417,15 @@ fn key_code(name: &str) -> Option<KeyCode> {
         "esc" | "escape" => KeyCode::Escape,
         "tab" => KeyCode::Tab,
         "enter" | "return" => KeyCode::Enter,
+        "f1" => KeyCode::F1,
+        "f2" => KeyCode::F2,
         "f3" => KeyCode::F3,
+        "f5" => KeyCode::F5,
+        "f11" => KeyCode::F11,
+        "slash" | "/" => KeyCode::Slash,
+        "backspace" => KeyCode::Backspace,
+        "pageup" => KeyCode::PageUp,
+        "pagedown" => KeyCode::PageDown,
         "left" => KeyCode::ArrowLeft,
         "right" => KeyCode::ArrowRight,
         "up" => KeyCode::ArrowUp,

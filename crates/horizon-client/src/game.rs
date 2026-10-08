@@ -1,5 +1,7 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
+mod chat;
+mod commands;
 mod control;
 use horizon_client::{
     Result,
@@ -166,6 +168,7 @@ enum Screen {
     Playing,
     Paused,
     Options,
+    Chat,
     Creative,
     Inventory,
     Dead,
@@ -196,8 +199,12 @@ struct GameLevel<'w> {
     raining: bool,
     thundering: bool,
     player_box: Option<([f64; 3], [f64; 3])>,
+    rules: horizon_world::level::GameRules,
 }
 impl LevelAccess for GameLevel<'_> {
+    fn game_rules(&self) -> horizon_world::level::GameRules {
+        self.rules
+    }
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.world.block(pos.x, pos.y, pos.z)
     }
@@ -387,6 +394,7 @@ struct Game<'a> {
     /// Control replies waiting for a rendered frame or a benchmark deadline.
     pending_screenshot: Option<std::sync::mpsc::Sender<String>>,
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
+    ui: chat::UiState,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -677,6 +685,7 @@ impl Game<'_> {
             ([p.position.x - w, p.position.y, p.position.z - w], [p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w])
         });
         let dimension = if self.dim == Dim::Nether { LevelDimension::Nether } else { LevelDimension::Overworld };
+        let rules = self.level_rules();
         let mut level = GameLevel {
             world: &mut self.world,
             facts: &self.res.facts,
@@ -686,6 +695,7 @@ impl Game<'_> {
             raining: rain > 0.2,
             thundering: thunder > 0.9,
             player_box,
+            rules,
         };
         f(&self.res.behaviours, &mut level, &mut self.block_ticks)
     }
@@ -1286,12 +1296,14 @@ impl Game<'_> {
     fn tick(&mut self) -> Result<()> {
         self.ticks += 1;
         self.world.game_time += 1;
-        self.world.weather.tick(&mut self.world.random);
+        if self.ui.rules.bool("advance_weather") {
+            self.world.weather.tick(&mut self.world.random);
+        }
         self.tick_weather_effects();
         if self.ticks % 6000 == 0 {
             self.save_game()?;
         }
-        self.world.day_time += 1;
+        self.advance_clock();
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
@@ -1357,7 +1369,8 @@ impl Game<'_> {
         if player.health.dead_or_dying() && self.screen != Screen::Dead {
             // Inventory.dropAll: every stack thrown in a random direction.
             let at = [player.position.x, player.position.y + 1.32, player.position.z];
-            if !self.creative {
+            self.death_message();
+            if !self.creative && !self.ui.rules.bool("keep_inventory") {
                 let stacks: Vec<ItemStack> = self.inventory.iter_mut().filter_map(Option::take).collect();
                 for stack in stacks {
                     let r = &mut self.world.random;
@@ -1676,6 +1689,8 @@ impl Game<'_> {
             let tw = HudBatch::text_width(atlas, text);
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
+        self.draw_chat(&mut batch);
+        let atlas = &self.res.atlas;
         if let Some((_, ticks)) = self.sleeping {
             // Gui sleep overlay fading in over 100 ticks.
             let a = ((ticks as f32 / 100.0).min(1.0) * 204.0) as u8;
@@ -1713,6 +1728,7 @@ impl Game<'_> {
             Screen::Creative => {
                 self.draw_creative(&mut batch);
             }
+            Screen::Chat => self.draw_chat_screen(&mut batch),
             Screen::Playing | Screen::Options => {}
         }
         batch
@@ -2946,6 +2962,7 @@ impl Game<'_> {
         if !save_root.join("level.dat").exists() {
             self.level.write(&save_root)?;
         }
+        self.load_world_state();
         Ok(())
     }
     /// Streaming and region storage for one dimension of a world.
@@ -4110,6 +4127,7 @@ impl Game<'_> {
         }
         level.dimension = self.dim.id().to_owned();
         level.write(&self.world_root)?;
+        self.save_world_state();
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())
     }
@@ -4232,7 +4250,12 @@ impl Game<'_> {
                     self.capture(true);
                 }
                 Screen::Dead => {}
+                Screen::Chat => self.close_chat(),
             },
+            KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
+            KeyCode::Slash if self.screen == Screen::Playing => self.open_chat("/"),
+            KeyCode::F1 => self.toggle_hide_gui(),
+            KeyCode::F2 => self.take_screenshot(),
             KeyCode::KeyE if self.screen == Screen::Creative && self.creative_screen.tab().search => {}
             KeyCode::KeyE => match self.screen {
                 Screen::Playing => {
@@ -4418,6 +4441,9 @@ impl ApplicationHandler for Game<'_> {
                         MouseScrollDelta::LineDelta(_, y) => y,
                         MouseScrollDelta::PixelDelta(p) => p.y as f32,
                     };
+                    if self.screen == Screen::Chat && d != 0.0 {
+                        self.chat_scroll(d);
+                    }
                     if self.screen == Screen::Creative && d != 0.0 {
                         let rows = self.creative_screen.rows(&self.res.names).saturating_sub(5).max(1) as f32;
                         self.creative_screen.scroll = (self.creative_screen.scroll - d.signum() / rows).clamp(0.0, 1.0);
@@ -4470,6 +4496,7 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Inventory if pressed => {
                             self.click_inventory(button == MouseButton::Right);
                         }
+                        Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
                         }
@@ -4498,6 +4525,16 @@ impl ApplicationHandler for Game<'_> {
                             self.capture(true);
                         }
                         _ => {}
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Chat && self.title.is_none() => {
+                    if let PhysicalKey::Code(key) = event.physical_key {
+                        if event.state == ElementState::Pressed {
+                            self.keys.insert(key);
+                            self.chat_key(&event);
+                        } else {
+                            self.keys.remove(&key);
+                        }
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. }
@@ -4564,7 +4601,13 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     let rendered = self.render()?;
-                    if let Some(result) = self.renderer.as_mut().and_then(|r| r.screenshot_result.take())
+                    let finished = self.renderer.as_mut().and_then(|r| r.screenshot_result.take());
+                    if let Some(result) = &finished
+                        && self.ui.screenshot_message.is_some()
+                    {
+                        self.finish_screenshot(result);
+                    }
+                    if let Some(result) = finished
                         && let Some(reply) = self.pending_screenshot.take()
                     {
                         let _ = reply.send(match result {
@@ -4643,6 +4686,8 @@ pub fn run() -> Result<()> {
     let light = Arc::new(LightTables::new(&facts));
     eprintln!("load tables: {:.2}s", started.elapsed().as_secs_f32());
     let atlas = HudAtlas::build(&root)?;
+    horizon_client::ui::load_metadata(&root);
+    horizon_client::lang::set(horizon_client::lang::Language::load(&[&root], horizon_client::lang::DEFAULT));
     eprintln!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
     let layer_names = assets
         .sprite_layers
@@ -4803,6 +4848,7 @@ pub fn run() -> Result<()> {
         frame_stats: Default::default(),
         pending_screenshot: None,
         pending_bench: None,
+        ui: Default::default(),
     };
     if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)
