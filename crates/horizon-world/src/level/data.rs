@@ -110,7 +110,7 @@ pub struct ShapeInfo {
     pub wall_cover: u8,
 }
 
-fn analyse_shape(shape: &VoxelShape) -> io::Result<ShapeInfo> {
+pub(crate) fn analyse_shape(shape: &VoxelShape) -> io::Result<ShapeInfo> {
     let err = |e: horizon_core::geometry::ShapeError| invalid(e.to_string());
     let mut info = ShapeInfo::default();
     let block = VoxelShape::block();
@@ -551,6 +551,7 @@ props! {
     side_chain = "side_chain",
     copper_golem_pose = "copper_golem_pose",
     sculk_sensor_phase = "sculk_sensor_phase",
+    potent_sulfur_state = "potent_sulfur_state",
 }
 
 fn fail(message: &str) -> io::Error {
@@ -932,6 +933,15 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
     }
 
     let liquid_blocks = FluidBlockBindings::new(registry)?;
+    let mut dynamic = HashMap::new();
+    for (id, fact) in facts.iter().enumerate() {
+        if fact.shape < 0 {
+            let state = BlockStateId(id as u32);
+            if let Some(support) = crate::dynamic_support::DynamicSupport::from_state(registry.state(state).unwrap())? {
+                dynamic.insert(state, support);
+            }
+        }
+    }
     Ok(Behaviours {
         table,
         props,
@@ -945,6 +955,7 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
         blocks,
         items,
         liquid_blocks,
+        dynamic,
         occlusion_cache: Default::default(),
     })
 }

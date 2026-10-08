@@ -876,7 +876,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 if clicked_vine { Some(result) } else { None }
             }
-            Class::PotentSulfur | Class::Nylium => sup!(),
+            Class::PotentSulfur => Some(self.potent_sulfur_state(default, pos)),
+            Class::Nylium => sup!(),
             _ => return None,
         })
     }

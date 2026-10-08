@@ -257,7 +257,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 } else if b.in_set(below_state, &t.support_override_snow_layer) {
                     true
                 } else {
-                    b.collision_face_full(below_state, Direction::Up)
+                    self.shape_info_at(below_state, below(pos)).full_faces & (1 << Direction::Up as u8) != 0
                         || (b.is_block(below_state, block) && b.table.int(below_state, p.layers) == 8)
                 }
             }
@@ -330,7 +330,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::NetherSprouts => b.in_set(ground, &t.supports_nether_sprouts),
                 Class::NetherWart => b.in_set(ground, &t.supports_nether_wart),
                 Class::SeaPickle => {
-                    b.shape_info(ground).nonempty_faces & (1 << Direction::Up as u8) != 0 || b.is_face_sturdy(ground, Direction::Up)
+                    self.shape_info_at(ground, ground_pos).nonempty_faces & (1 << Direction::Up as u8) != 0 || b.is_face_sturdy(ground, Direction::Up)
                 }
                 Class::Seagrass | Class::TallSeagrass => {
                     b.is_face_sturdy(ground, Direction::Up) && !b.in_set(ground, &t.cannot_support_seagrass)

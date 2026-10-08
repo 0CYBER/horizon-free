@@ -348,6 +348,8 @@ pub struct Behaviours {
     blocks: Vec<BlockData>,
     items: HashMap<String, ItemBinding>,
     liquid_blocks: FluidBlockBindings,
+    /// Uncached (position- or block-entity-dependent) collision shapes.
+    dynamic: HashMap<BlockStateId, crate::dynamic_support::DynamicSupport>,
     occlusion_cache: Mutex<HashMap<(i32, i32, u8), bool>>,
 }
 
@@ -453,6 +455,22 @@ impl Behaviours {
     /// `BlockState.canSurvive(level, pos)`.
     pub fn can_survive<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, state: BlockStateId) -> bool {
         self.sim(level, ticks).can_survive(state, pos)
+    }
+    /// `BlockState.updateShape(level, ticks, pos, direction, neighbourPos,
+    /// neighbourState, random)`: the state `state` at `pos` would take after its
+    /// neighbour in `direction` became `neighbour` (ticks it requests are queued).
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_shape<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+        neighbour_pos: BlockPos,
+        neighbour: BlockStateId,
+    ) -> BlockStateId {
+        self.sim(level, ticks).update_shape(state, pos, direction, neighbour_pos, neighbour)
     }
     /// `Block.updateFromNeighbourShapes`: a state adjusted to its neighbours.
     pub fn update_from_neighbour_shapes<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks, pos: BlockPos, state: BlockStateId) -> BlockStateId {

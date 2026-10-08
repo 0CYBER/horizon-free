@@ -131,7 +131,40 @@ impl Behaviours {
     }
 }
 
+/// Block-entity lookups for dynamic shapes: Horizon's level keeps no shulker
+/// box animation state, so boxes read as closed (a full cube).
+struct NoBlockEntities;
+impl crate::dynamic_support::DynamicSupportWorld for NoBlockEntities {
+    type Error = std::convert::Infallible;
+    fn shulker_is_closed(&mut self, _position: [i32; 3]) -> Result<Option<bool>, Self::Error> {
+        Ok(None)
+    }
+    fn moving_piston_shape(&mut self, _position: [i32; 3]) -> Result<Option<horizon_core::geometry::VoxelShape>, Self::Error> {
+        Ok(None)
+    }
+}
+impl crate::block_collision::DynamicCollisionWorld for NoBlockEntities {
+    fn shulker_collision_state(&mut self, _position: [i32; 3]) -> Result<Option<crate::block_collision::ShulkerCollisionState>, Self::Error> {
+        Ok(None)
+    }
+}
+
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
+    /// Shape queries over `getCollisionShape(level, pos)`, including the
+    /// position-dependent shapes (bamboo, speleothems, shulker boxes).
+    pub(crate) fn shape_info_at(&self, state: BlockStateId, pos: BlockPos) -> super::data::ShapeInfo {
+        if self.b.facts(state).shape >= 0 {
+            return self.b.shape_info(state);
+        }
+        match self.b.dynamic.get(&state) {
+            Some(support) => support
+                .collision_shape(&mut NoBlockEntities, [pos.x, pos.y, pos.z])
+                .ok()
+                .and_then(|shape| super::data::analyse_shape(&shape).ok())
+                .unwrap_or_default(),
+            None => super::data::ShapeInfo::default(),
+        }
+    }
     pub fn sturdy(&self, pos: BlockPos, direction: Direction) -> bool {
         self.b.is_face_sturdy(self.state(pos), direction)
     }

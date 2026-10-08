@@ -653,12 +653,39 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::WallHangingSign => {
                 survive_or_air!(axis_of(dir) == axis_of(clockwise(b.facing(state))))
             }
-            Class::NetherPortal | Class::PotentSulfur => sup!(),
+            Class::PotentSulfur => self.potent_sulfur_state(state, pos),
+            Class::NetherPortal => sup!(),
             _ => return None,
         })
     }
 
     // ---- family helpers ----
+
+    /// `PotentSulfurBlock.validBlockState` (the geyser block-entity countdown
+    /// reset is the caller's).
+    pub(crate) fn potent_sulfur_state(&self, state: BlockStateId, pos: BlockPos) -> BlockStateId {
+        let b = self.b;
+        let key = b.props.potent_sulfur_state;
+        if self.fluid_at(above(pos)).kind() != FluidKind::Water {
+            return b.table.set_text(state, key, "dry");
+        }
+        let below_state = self.below_state(pos);
+        let fluid = b.fluid(below_state);
+        let source_if_fluid = fluid.kind() == FluidKind::Empty || fluid.is_source();
+        let tagged = |name: &str| b.tag(name).is_some_and(|tag| b.in_set(below_state, tag));
+        if tagged("minecraft:causes_continuous_geyser_eruptions") && source_if_fluid {
+            return b.table.set_text(state, key, "continuous");
+        }
+        if tagged("minecraft:causes_periodic_geyser_eruptions") && source_if_fluid {
+            if b.table.text(state, key) == "erupting" {
+                state
+            } else {
+                b.table.set_text(state, key, "dormant")
+            }
+        } else {
+            b.table.set_text(state, key, "wet")
+        }
+    }
 
     fn bed_neighbour_direction(&self, state: BlockStateId) -> Direction {
         let facing = self.b.facing(state);
@@ -697,10 +724,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         b.in_set(state, &b.tags.walls) || (!b.is_exception_for_connection(state) && face_solid) || b.instance_of(state, Class::IronBars) || gate
     }
     /// `WallBlock.updateShape(level, state, topPos, topNeighbour, n, e, s, w)`.
-    pub(crate) fn wall_shape(&self, state: BlockStateId, _top_pos: BlockPos, top: BlockStateId, sides: [bool; 4]) -> BlockStateId {
+    pub(crate) fn wall_shape(&self, state: BlockStateId, top_pos: BlockPos, top: BlockStateId, sides: [bool; 4]) -> BlockStateId {
         let b = self.b;
         let table = &b.table;
-        let cover = b.shape_info(top).wall_cover;
+        let cover = self.shape_info_at(top, top_pos).wall_cover;
         let mut result = state;
         let directions = [Direction::North, Direction::East, Direction::South, Direction::West];
         for (i, direction) in directions.into_iter().enumerate() {

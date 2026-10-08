@@ -72,7 +72,20 @@ impl Behaviours {
             return Landing::Continue;
         }
         let concrete = self.instance_of(state, Class::ConcretePowder);
-        let may_replace = self.is_replaceable(current);
+        // DirectionalPlaceContext(level, pos, DOWN, ItemStack.EMPTY, UP).
+        let ctx = super::place::Ctx {
+            pos,
+            hit_pos: pos,
+            face: Direction::Up,
+            hit: horizon_core::geometry::Vec3::new(f64::from(pos.x) + 0.5, f64::from(pos.y), f64::from(pos.z) + 0.5),
+            inside: false,
+            yaw: 0.0,
+            pitch: 90.0,
+            sneaking: false,
+            item: String::new(),
+            replace_clicked: true,
+        };
+        let may_replace = sim.can_be_replaced(current, &ctx);
         let would_continue = sim.is_free(sim.below_state(pos)) && (!concrete || !stuck_in_water);
         let would_survive = sim.can_survive(state, pos) && !would_continue;
         if !(may_replace && would_survive) {
