@@ -69,7 +69,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let data = b.data(state);
         let block = b.block(state);
         use InteractionResult::*;
-        for class in data.chain.clone() {
+        for &class in data.chain.iter() {
             return match class {
                 Class::Door => {
                     if !data.set_type.as_ref().is_some_and(|s| s.can_open_by_hand) {

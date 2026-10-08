@@ -14,8 +14,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub fn neighbor_changed(&mut self, state: BlockStateId, pos: BlockPos, changed: BlockId, moved: bool) {
         let b = self.b;
         let block = b.block(state);
-        let chain = b.data(state).chain.clone();
-        for class in chain {
+        let chain = &b.data(state).chain;
+        for &class in chain.iter() {
             match class {
                 Class::AbstractSkull => self.skull_neighbor_changed(pos, state),
                 Class::BaseRail => self.rail_neighbor_changed(pos, state, changed, moved),
@@ -64,8 +64,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let block = b.block(state);
         let same = b.block(old) == block;
-        let chain = b.data(state).chain.clone();
-        for class in chain {
+        let chain = &b.data(state).chain;
+        for &class in chain.iter() {
             match class {
                 Class::Fire => {
                     self.base_fire_on_place(pos, state, same);
@@ -189,8 +189,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub fn affect_neighbors_after_removal(&mut self, state: BlockStateId, pos: BlockPos, moved: bool) {
         let b = self.b;
         let block = b.block(state);
-        let chain = b.data(state).chain.clone();
-        for class in chain {
+        let chain = &b.data(state).chain;
+        for &class in chain.iter() {
             match class {
                 Class::AbstractFurnace
                 | Class::Barrel

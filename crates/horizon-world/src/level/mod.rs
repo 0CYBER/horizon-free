@@ -36,6 +36,48 @@
 //!
 //! Randomness is drawn from [`LevelAccess::random`] (vanilla `level.random`, a
 //! `LegacyRandomSource`) in the same order as vanilla.
+//!
+//! # Integration sketch
+//!
+//! ```ignore
+//! use horizon_world::level::{self, Behaviours, LevelAccess, LevelEvent, PlaceContext, Ticks, flags};
+//!
+//! struct GameLevel { chunks: Chunks, random: LegacyRandom, time: i64, events: Vec<LevelEvent> }
+//! impl LevelAccess for GameLevel {
+//!     fn block_state(&self, pos: BlockPos) -> BlockStateId { self.chunks.get(pos) }
+//!     fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+//!         let old = self.chunks.set(pos, state)?; // also mark light/heightmap/mesh dirty
+//!         Some(old)
+//!     }
+//!     fn is_loaded(&self, pos: BlockPos) -> bool { self.chunks.contains(pos.chunk()) }
+//!     fn random(&mut self) -> &mut LegacyRandom { &mut self.random }
+//!     fn game_time(&self) -> i64 { self.time }
+//!     fn block_light(&self, pos: BlockPos) -> i32 { self.chunks.block_light(pos) }
+//!     fn sky_light(&self, pos: BlockPos) -> i32 { self.chunks.sky_light(pos) }
+//!     fn emit(&mut self, event: LevelEvent) { self.events.push(event) }
+//! }
+//!
+//! let registry = level::data::load_registry(&resources)?;
+//! let behaviours = Behaviours::load(&registry, &resources)?;
+//! let mut ticks = Ticks::new(seed as i32);
+//! ticks.add_empty_chunk(chunk_pos)?;          // when a chunk loads (remove_chunk on unload)
+//!
+//! // Every server tick:
+//! level.time += 1;
+//! behaviours.tick_scheduled(&mut level, &mut ticks);
+//! for chunk in ticking_chunks {
+//!     behaviours.tick_chunk_random(&mut level, &mut ticks, chunk, randomly_ticking_section_min_ys(chunk));
+//! }
+//! for event in level.events.drain(..) { /* play sounds, spawn drops/falling blocks, grow trees */ }
+//!
+//! // Player actions:
+//! behaviours.place_block(&mut level, &mut ticks, &PlaceContext { clicked_pos, face, hit, inside: false,
+//!     yaw, pitch, sneaking, item: "minecraft:oak_stairs".into() });
+//! behaviours.use_without_item(&mut level, &mut ticks, pos, face, hit, player_context);
+//! behaviours.player_destroy_block(&mut level, &mut ticks, pos, creative);
+//! // Falling-block entity landed:
+//! behaviours.falling_block_landed(&mut level, &mut ticks, landing_pos, carried_state, false);
+//! ```
 use crate::{
     fluid::{FluidBlockBindings, FluidKind, FluidState},
     registry::{BlockRegistry, BlockStateId},

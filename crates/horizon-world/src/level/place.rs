@@ -228,7 +228,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 
     fn placement_at(&mut self, block: BlockId, depth: usize, ctx: &Ctx) -> Option<BlockStateId> {
-        let chain = self.b.block_data(block).chain.clone();
+        let b = self.b;
+        let chain = &b.block_data(block).chain;
         for (index, class) in chain.iter().copied().enumerate().skip(depth) {
             if let Some(result) = self.placement_class(class, index, block, ctx) {
                 return result;

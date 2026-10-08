@@ -24,8 +24,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let p = b.props;
         let block = b.block(state);
-        let chain = b.data(state).chain.clone();
-        for class in chain {
+        let chain = &b.data(state).chain;
+        for &class in chain.iter() {
             match class {
                 Class::BambooStalk
                 | Class::BigDripleafStem
@@ -171,7 +171,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let p = b.props;
         let block = b.block(state);
         let data = b.data(state);
-        let chain = data.chain.clone();
+        let chain = &data.chain;
         for class in chain.iter().copied() {
             match class {
                 Class::BambooSapling => {
