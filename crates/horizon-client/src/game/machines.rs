@@ -865,6 +865,7 @@ impl Game<'_> {
                             item: "minecraft:bucket".into(),
                             count: 1,
                             damage: 0,
+                            extra: None,
                         },
                     )
                 } else if (self.res.facts.is_air(target_state) || f.replaceable)
@@ -896,6 +897,7 @@ impl Game<'_> {
                             item: "minecraft:bucket".into(),
                             count: 1,
                             damage: 0,
+                            extra: None,
                         },
                     )
                 } else {
@@ -949,6 +951,7 @@ impl Game<'_> {
                                 item: filled.into(),
                                 count: 1,
                                 damage: 0,
+                                extra: None,
                             },
                         )
                     }

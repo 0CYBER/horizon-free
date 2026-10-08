@@ -125,6 +125,7 @@ impl Game<'_> {
                         item: item.as_str().into(),
                         count,
                         damage: 0,
+                        extra: None,
                     });
                 }
                 let entity = self

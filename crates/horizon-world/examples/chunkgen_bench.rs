@@ -2,7 +2,6 @@
 //!
 //! chunkgen_bench <client resource dir> [--seed S] [--size N] [--threads T]
 //!     [--center CX CZ] [--verify <material-stage parity dir>] [--no-decorate]
-//!     [--dimension minecraft:the_nether|minecraft:the_end]
 //!     [--dimension overworld|the_nether|the_end]
 use horizon_core::position::ChunkPos;
 use horizon_world::{
@@ -278,7 +277,6 @@ fn main() -> Result<(), Error> {
     let mut decorate = true;
     let mut dimension = String::from("minecraft:overworld");
     let mut starts: Option<(i32, i32, i32, i32, PathBuf)> = None;
-    let mut dimension = "minecraft:overworld".to_owned();
     while let Some(arg) = args.next() {
         let mut next = || args.next().expect("argument value");
         match arg.as_str() {
@@ -288,8 +286,10 @@ fn main() -> Result<(), Error> {
             "--center" => center = (next().parse()?, next().parse()?),
             "--verify" => parity = Some(PathBuf::from(next())),
             "--no-decorate" => decorate = false,
-            "--dimension" => dimension = next(),
-            "--dimension" => dimension = format!("minecraft:{}", next()),
+            "--dimension" => {
+                let d = next();
+                dimension = if d.contains(':') { d } else { format!("minecraft:{d}") };
+            }
             "--starts" => {
                 starts = Some((
                     next().parse()?,

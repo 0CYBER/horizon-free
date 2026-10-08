@@ -644,7 +644,7 @@ impl Game<'_> {
 
     fn gateway_exits(&mut self) -> &mut HashMap<[i32; 3], ([i32; 3], bool)> {
         if self.end.exits.is_none() {
-            let path = self.world_root.join("DIM1").join(GATEWAY_FILE);
+            let path = horizon_client::save::dimension_dir(&self.world_root, "minecraft:the_end").join(GATEWAY_FILE);
             let parsed: Option<Vec<([i32; 3], [i32; 3], bool)>> = std::fs::read(&path)
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok());
@@ -666,7 +666,7 @@ impl Game<'_> {
             .iter()
             .map(|(g, (e, x))| (*g, *e, *x))
             .collect();
-        let dir = self.world_root.join("DIM1");
+        let dir = horizon_client::save::dimension_dir(&self.world_root, "minecraft:the_end");
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join(GATEWAY_FILE), serde_json::to_vec(&list)?)?;
         Ok(())
@@ -1278,6 +1278,7 @@ impl Game<'_> {
                     item: "minecraft:ender_eye".into(),
                     count: 1,
                     damage: 0,
+                    extra: None,
                 };
                 self.spawn_item(stack, at, [vx, 0.2, vz], 0);
             }

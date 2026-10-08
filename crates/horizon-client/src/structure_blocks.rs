@@ -63,6 +63,7 @@ pub fn block_entities(
                     item: Arc::from(s.item.as_str()),
                     count: s.count.max(0) as u32,
                     damage: s.damage.max(0) as u32,
+                    extra: None,
                 });
             }
         }

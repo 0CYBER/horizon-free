@@ -79,9 +79,12 @@ impl Game<'_> {
             return Ok(Some(value));
         }
         match words[0] {
-            "help" => Ok(Some(json!({ "commands": HELP.iter().chain(super::station_control::HELP).collect::<Vec<_>>() }))),
-            "help" => Ok(Some(json!({ "commands": HELP.iter().chain(super::blockctl::HELP).collect::<Vec<_>>() }))),
-            "help" => Ok(Some(json!({ "commands": HELP.iter().chain(super::render_control::HELP).collect::<Vec<_>>() }))),
+            "help" => Ok(Some(json!({ "commands": HELP
+                .iter()
+                .chain(super::station_control::HELP)
+                .chain(super::blockctl::HELP)
+                .chain(super::render_control::HELP)
+                .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
             "status" => Ok(Some(self.control_status())),
             "key" => {
@@ -243,27 +246,6 @@ impl Game<'_> {
                 let id = self.summon(arg(1)?, at, baby)?;
                 Ok(Some(json!({ "ok": true, "id": id })))
             }
-            "fill" => {
-                self.require_world()?;
-                let c: Vec<i32> = (1..=6).map(|i| arg(i).and_then(|v| v.parse::<i32>().map_err(|e| e.to_string()))).collect::<std::result::Result<_, _>>()?;
-                let name = arg(7)?;
-                let name = if name.contains(':') { name.to_owned() } else { format!("minecraft:{name}") };
-                let state = self.res.assets.registry.default_state(&name).ok_or_else(|| format!("unknown block {name}"))?;
-                let (lo, hi) = ([c[0].min(c[3]), c[1].min(c[4]), c[2].min(c[5])], [c[0].max(c[3]), c[1].max(c[4]), c[2].max(c[5])]);
-                if (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > 1 << 20 {
-                    return Err("fill volume too large".into());
-                }
-                for x in lo[0]..=hi[0] {
-                    for y in lo[1]..=hi[1] {
-                        for z in lo[2]..=hi[2] {
-                            if self.world.loaded(x, z) {
-                                self.world.set(x, y, z, state)?;
-                            }
-                        }
-                    }
-                }
-                ok()
-            }
             "mobs" => {
                 self.require_world()?;
                 let radius: f64 = words.get(1).map_or(Ok(64.0), |r| r.parse())?;
@@ -285,8 +267,12 @@ impl Game<'_> {
                 Ok(None)
             }
             "chat" => {
-                self.require_world()?;
                 let text = line.trim_start().strip_prefix("chat").unwrap_or("").trim();
+                if self.remote.is_some() {
+                    self.send_chat(text);
+                    return ok();
+                }
+                self.require_world()?;
                 self.handle_chat_input(text);
                 Ok(Some(json!({ "ok": true, "chat": self.ui.chat.recent_lines(5) })))
             }
@@ -362,14 +348,6 @@ impl Game<'_> {
                 }
                 let name = words.get(2).map_or_else(|| self.options.player_name.clone(), |n| (*n).to_owned());
                 self.connect_server(arg(1)?, &name)?;
-                ok()
-            }
-            "chat" => {
-                if self.remote.is_none() {
-                    return Err("not connected to a server".into());
-                }
-                let message = line.trim_start().strip_prefix("chat").unwrap_or("").trim();
-                self.send_chat(message);
                 ok()
             }
             "respawn" => {

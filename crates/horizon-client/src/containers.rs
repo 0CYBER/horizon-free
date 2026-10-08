@@ -72,16 +72,6 @@ impl BlockEntity {
         if name == "minecraft:brewing_stand" {
             return Some(Self::Brewing(Box::new(crate::brewing::BrewingStand::new())));
         }
-        matches!(
-            name,
-            "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel"
-        )
-        .then(|| Self::Chest(vec![None; 27]))
-    }
-    pub fn id(&self) -> &'static str {
-        match self {
-            Self::Chest(_) => "minecraft:chest",
-            Self::Brewing(_) => "minecraft:brewing_stand",
         let size = match name {
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
             "minecraft:hopper" => 5,
@@ -117,6 +107,7 @@ impl BlockEntity {
                 FurnaceKind::BlastFurnace => "minecraft:blast_furnace",
                 FurnaceKind::Smoker => "minecraft:smoker",
             },
+            Self::Brewing(_) => "minecraft:brewing_stand",
             Self::Sign(s) => s.id(),
         }
     }
@@ -125,13 +116,15 @@ impl BlockEntity {
             Self::Chest(items) => items.iter().flatten().cloned().collect(),
             Self::Furnace(f) => f.items.iter().flatten().cloned().collect(),
             Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
+            Self::Sign(_) => Vec::new(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
         match self {
             Self::Chest(items) => items,
             Self::Furnace(f) => &f.items,
-            Self::Sign(_) => Vec::new(),
+            Self::Brewing(b) => &b.items,
+            Self::Sign(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {

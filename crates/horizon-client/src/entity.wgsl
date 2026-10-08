@@ -23,7 +23,7 @@ struct Out {
     @location(1) color: vec4<f32>,
     @location(2) spherical: f32,
     @location(3) cylindrical: f32,
-    @location(4) flash: f32,
+    @location(5) flash: f32,
     @location(4) @interpolate(flat) overlay: u32,
 }
 @vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
@@ -39,11 +39,11 @@ struct Out {
     // Hurt overlay (OverlayTexture red tint).
     if overlay == 1u { c = vec4(mix(c.rgb, vec3(1.0, 0.0, 0.0), 0.3), c.a); }
     out.color = c;
-    // Overlay 4: OverlayTexture white flash (primed TNT), applied after texturing.
-    out.flash = select(0.0, 0.75, overlay == 4u);
+    // Overlay 5: OverlayTexture white flash (primed TNT), applied after texturing.
+    out.flash = select(0.0, 0.75, overlay == 5u);
     // Sky geometry (clouds, celestial bodies) is exempt from render-distance fog.
-    out.spherical = select(length(position), 0.0, overlay >= 2u);
-    out.cylindrical = select(max(length(position.xz), abs(position.y)), 0.0, overlay >= 2u);
+    out.spherical = select(length(position), 0.0, overlay >= 2u && overlay <= 4u);
+    out.cylindrical = select(max(length(position.xz), abs(position.y)), 0.0, overlay >= 2u && overlay <= 4u);
     out.overlay = overlay;
     if overlay == 4u { out.spherical = length(position); }
     return out;
@@ -55,7 +55,6 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
 }
 @fragment fn fs_entity(in: Out) -> @location(0) vec4<f32> {
     var color = textureSample(atlas, atlas_sampler, in.uv) * in.color;
-    let color = textureSample(atlas, atlas_sampler, in.uv) * in.color;
     if in.overlay == 4u {
         // clouds.fsh: alpha fades out towards the cloud fog end.
         return vec4(color.rgb, color.a * (1.0 - linear_fog(in.spherical, 0.0, globals.fog_ends.y)));

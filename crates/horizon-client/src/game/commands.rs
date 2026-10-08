@@ -406,7 +406,7 @@ impl Game<'_> {
             while remaining > 0 {
                 let size = remaining.min(max_stack);
                 remaining -= size;
-                let left = self.give(ItemStack { item: id.as_str().into(), count: size as u32, damage: 0 });
+                let left = self.give(ItemStack { item: id.as_str().into(), count: size as u32, damage: 0, extra: None });
                 if let Some(rest) = left {
                     // Inventory full: drop the rest at the player's feet without pickup delay.
                     let p = self.source_position();
@@ -706,11 +706,11 @@ impl Game<'_> {
         }
         let short = kind.trim_start_matches("minecraft:").to_owned();
         let name;
-        if let Some(t) = self.res.mob_types.get(&short).cloned() {
+        if let Some(t) = self.res.mob_types.get(&format!("minecraft:{short}")).cloned() {
             if self.ui.difficulty == 0 && t.category == "monster" {
                 return Err(err("commands.summon.failed.peaceful", &[]));
             }
-            self.add_mob(&short, pos[0], pos[1], pos[2], true);
+            self.spawn_mob(&short, pos, true);
             name = Text::translate(&format!("entity.minecraft.{short}"), &[]);
         } else {
             match short.as_str() {

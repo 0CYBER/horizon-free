@@ -321,7 +321,7 @@ mod tests {
     fn item_entities_round_trip() {
         let e = ItemEntity {
             id: 7,
-            stack: ItemStack { item: Arc::from("minecraft:diamond_pickaxe"), count: 1, damage: 5 },
+            stack: ItemStack { item: Arc::from("minecraft:diamond_pickaxe"), count: 1, damage: 5, extra: None },
             position: Vec3::new(100.5, 64.0, -31.5),
             previous: Vec3::ZERO,
             velocity: Vec3::new(0.0, -0.04, 0.0),

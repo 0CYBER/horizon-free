@@ -1281,15 +1281,13 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group, &[]);
-            if !frame.underwater && (frame.skybox || frame.end_sky) {
-                if !frame.title && frame.skybox {
             // LevelRenderer: no sky inside lava or powder snow (sky fog ends within 2 blocks).
             let sky_visible = match frame.fog {
                 Some(f) => f.sky_end > 2.0,
                 None => !frame.underwater,
             };
-            if sky_visible && frame.skybox {
-                if !frame.title {
+            if sky_visible && (frame.skybox || frame.end_sky) {
+                if !frame.title && frame.skybox {
                     pass.set_pipeline(&self.sky);
                     pass.draw(0..3, 0..1);
                 }

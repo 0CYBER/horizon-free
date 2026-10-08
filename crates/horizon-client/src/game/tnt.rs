@@ -243,11 +243,11 @@ impl Game<'_> {
                         .iter()
                         .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
                 {
-                    // Overlay 4: OverlayTexture white flash.
+                    // Overlay 5: OverlayTexture white flash.
                     out.push(Vertex {
                         pos: p.to_array(),
                         uv,
-                        layer: if lit { 4 } else { 0 },
+                        layer: if lit { 5 } else { 0 },
                         color,
                         light: packed,
                     });

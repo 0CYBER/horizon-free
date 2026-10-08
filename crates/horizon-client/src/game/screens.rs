@@ -106,7 +106,12 @@ impl Game<'_> {
         let b = HudBatch::new(size);
         let hit = death_buttons(b.width, b.height).into_iter().find(|d| ui::hovered(self.cursor, d.0, d.1, 200.0, 20.0)).map(|d| d.3);
         match hit {
+            Some(0) if self.remote.is_some() => {
+                self.ui.death_text = None;
+                self.remote_respawn();
+            }
             Some(0) => {
+                self.respawn_out_of_end()?;
                 self.player = None;
                 self.screen = Screen::Playing;
                 self.ui.death_text = None;

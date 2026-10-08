@@ -282,7 +282,7 @@ pub struct Particle {
     removed: bool,
     pub age: i32,
     pub lifetime: i32,
-    gravity: f32,
+    pub gravity: f32,
     friction: f32,
     speed_up_when_y_blocked: bool,
     /// `quadSize`.

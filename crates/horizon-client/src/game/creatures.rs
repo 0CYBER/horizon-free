@@ -582,6 +582,7 @@ impl Game<'_> {
                             item: item.clone(),
                             count: 1,
                             damage: 0,
+                            extra: None,
                         },
                         pos,
                         [0.0, 0.2, 0.0],
@@ -679,6 +680,7 @@ impl Game<'_> {
                         item,
                         count,
                         damage: 0,
+                        extra: None,
                     },
                     at,
                     [0.0, 0.2, 0.0],
@@ -829,6 +831,7 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:entity.player.hurt", Some(at), 1.0, 1.0);
             self.hurt_armor(amount);
+            self.thorns(from);
         }
     }
     /// Poison, wither, hunger and burning applied to the player by mobs.
@@ -1314,6 +1317,7 @@ impl Game<'_> {
                 item: g.into(),
                 count: 1,
                 damage: 0,
+                extra: None,
             };
             if self.inventory[selected].is_none() {
                 self.inventory[selected] = Some(stack);
@@ -1334,6 +1338,7 @@ impl Game<'_> {
                         item: item.as_str().into(),
                         count: 1,
                         damage: 0,
+                        extra: None,
                     },
                     [center[0], center[1] + 0.5, center[2]],
                     v,

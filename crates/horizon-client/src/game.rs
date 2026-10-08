@@ -17,7 +17,6 @@ mod tnt;
 mod remote;
 mod chat;
 mod commands;
-mod control;
 mod options;
 mod packs;
 mod screens;
@@ -233,6 +232,7 @@ struct GameLevel<'w> {
     behaviours: &'w Behaviours,
     items: &'w Items,
     registry: &'static horizon_world::registry::BlockRegistry,
+    rules: horizon_world::level::GameRules,
 }
 impl LevelAccess for GameLevel<'_> {
     fn precipitation(&self, pos: BlockPos) -> Option<horizon_world::level::Precipitation> {
@@ -253,9 +253,7 @@ impl LevelAccess for GameLevel<'_> {
     }
     fn day_time(&self) -> i64 {
         self.world.day_time
-    rules: horizon_world::level::GameRules,
-}
-impl LevelAccess for GameLevel<'_> {
+    }
     fn game_rules(&self) -> horizon_world::level::GameRules {
         self.rules
     }
@@ -277,9 +275,8 @@ impl LevelAccess for GameLevel<'_> {
         if self.dimension != LevelDimension::Overworld { 0 } else { MIN_Y }
     }
     fn max_y(&self) -> i32 {
-        if self.dimension != LevelDimension::Overworld { 255 } else { MIN_Y + HEIGHT - 1 }
         // Exclusive, as LevelAccess::max_y documents.
-        if self.dimension == LevelDimension::Nether { 256 } else { MIN_Y + HEIGHT }
+        if self.dimension != LevelDimension::Overworld { 256 } else { MIN_Y + HEIGHT }
     }
     fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
         &mut self.world.random
@@ -495,14 +492,6 @@ impl Dim {
             "minecraft:the_nether" => Self::Nether,
             "minecraft:the_end" => Self::End,
             _ => Self::Overworld,
-        }
-    }
-    /// Region folder inside the world (vanilla's DIM-1 for the Nether).
-    fn folder(self) -> Option<&'static str> {
-        match self {
-            Self::Overworld => None,
-            Self::Nether => Some("DIM-1"),
-            Self::End => Some("DIM1"),
         }
     }
 }
@@ -775,7 +764,6 @@ impl Game<'_> {
             Dim::Nether => LevelDimension::Nether,
             Dim::End => LevelDimension::End,
         };
-        let dimension = if self.dim == Dim::Nether { LevelDimension::Nether } else { LevelDimension::Overworld };
         let rules = self.level_rules();
         let mut level = GameLevel {
             world: &mut self.world,
@@ -917,7 +905,7 @@ impl Game<'_> {
                 LevelEvent::BlockEvent { pos, state, kind: "dispense" } => self.dispense_from(pos, state)?,
                 LevelEvent::BlockEvent { pos, state, kind: "pop_block_item" } => {
                     let item = self.res.facts.get(state).item.clone();
-                    self.pop_resource([pos.x, pos.y, pos.z], ItemStack { item, count: 1, damage: 0 });
+                    self.pop_resource([pos.x, pos.y, pos.z], ItemStack { item, count: 1, damage: 0, extra: None });
                 }
                 LevelEvent::GrowTree { .. } | LevelEvent::PlaceFeature { .. } | LevelEvent::BlockEvent { .. } | LevelEvent::GameEvent { .. } => {}
             }
@@ -1080,8 +1068,7 @@ impl Game<'_> {
         }
         let Some(stack) = self.held().cloned() else { return Ok(()) };
         let Some(info) = self.res.items.get(&stack.item).cloned() else { return Ok(()) };
-        if self.use_potion_item(&stack)? {
-        if self.throw_item(&stack)? {
+        if self.use_potion_item(&stack)? || self.throw_item(&stack)? {
             return Ok(());
         }
         if &*stack.item == "minecraft:bow" {
@@ -1549,12 +1536,6 @@ impl Game<'_> {
         }
         self.tick_block_entities()?;
         self.tick_brewing_stands()?;
-        let facts = &self.res.facts;
-        let world = &self.world;
-        self.particles.retain_mut(|p| p.tick(world, |id| facts.states[id as usize].full_collision));
-        if self.particles.len() > 4000 {
-            let excess = self.particles.len() - 4000;
-            self.particles.drain(..excess);
         if let Some(r) = &self.renderer {
             let eye = self.player.as_ref().map(|p| [p.position.x, p.position.y + f64::from(self.eye), p.position.z]);
             self.res.block_entity_render.tick(r.block_entities(), eye);
@@ -1896,8 +1877,7 @@ impl Game<'_> {
     }
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
-        if let Some(p) = self.station_slot_position(i) {
-        if let Some(p) = self.machine_slot_position(i) {
+        if let Some(p) = self.station_slot_position(i).or_else(|| self.machine_slot_position(i)) {
             return p;
         }
         let table = self.craft_size == 3;
@@ -2066,6 +2046,7 @@ impl Game<'_> {
     fn click_inventory(&mut self, right: bool) {
         if self.station_click(right) {
             return;
+        }
         if self.remote.is_some() {
             return self.remote_click(right);
         }
@@ -2372,11 +2353,6 @@ impl Game<'_> {
             }
         }
         self.tnt_geometry(camera, alpha, &mut out);
-        // Camera-facing particle quads.
-        let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
-        let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
-        let right = forward.cross(glam::Vec3::Y).normalize_or_zero();
-        let up = right.cross(forward).normalize_or_zero();
         // Particles (ParticleEngine.extract): camera-facing quads.
         let world = &self.world;
         self.particles.render(camera, self.yaw, self.pitch, alpha as f32, &|b| world.light(b[0], b[1], b[2]), &mut out);
@@ -2531,90 +2507,6 @@ impl Game<'_> {
     /// default mobGriefing rule).
     fn explode(&mut self, center: [f64; 3], radius: f32) -> Result<()> {
         self.server_explode(center, radius, explosion::BlockInteraction::DestroyWithDecay, false)
-        let mut destroyed = HashSet::new();
-        for j in 0..16 {
-            for k in 0..16 {
-                for l in 0..16 {
-                    if !(j == 0 || j == 15 || k == 0 || k == 15 || l == 0 || l == 15) {
-                        continue;
-                    }
-                    let mut d = [f64::from(j) / 15.0 * 2.0 - 1.0, f64::from(k) / 15.0 * 2.0 - 1.0, f64::from(l) / 15.0 * 2.0 - 1.0];
-                    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                    d = d.map(|v| v / len);
-                    let mut h = radius * (0.7 + self.world.random.next_float() * 0.6);
-                    let mut p = center;
-                    while h > 0.0 {
-                        let b = [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32];
-                        let state = self.world.block(b[0], b[1], b[2]);
-                        if !self.res.facts.is_air(state) {
-                            let f = self.res.facts.get(state);
-                            let resistance = if f.fluid != Fluid::None && !f.waterlogged { 100.0 } else { f.explosion_resistance };
-                            h -= (resistance + 0.3) * 0.3;
-                            if h > 0.0 && f.hardness >= 0.0 {
-                                destroyed.insert(b);
-                            }
-                        }
-                        p = [p[0] + d[0] * 0.3, p[1] + d[1] * 0.3, p[2] + d[2] * 0.3];
-                        h -= 0.225_000_01;
-                    }
-                }
-            }
-        }
-        let destroyed_count = destroyed.len();
-        for b in destroyed {
-            let state = self.world.block(b[0], b[1], b[2]);
-            if self.res.facts.is_air(state) {
-                continue;
-            }
-            // Explosion decay: each drop survives with probability 1 / radius.
-            if self.world.random.next_float() < 1.0 / radius {
-                let drops = self.res.items.block_drops(&self.res.assets.registry, state, None, &mut self.world.random);
-                for d in drops {
-                    self.pop_resource(b, d);
-                }
-            }
-            self.world.set(b[0], b[1], b[2], self.world.air)?;
-        }
-        let (world, facts) = (&self.world, &self.res.facts);
-        self.particles.explosion(center, radius, destroyed_count, &|b| facts.is_air(world.block(b[0], b[1], b[2])));
-        self.audio.play("minecraft:entity.generic.explode", Some(center), 4.0, (1.0 + (self.world.random.next_float() - self.world.random.next_float()) * 0.2) * 0.7);
-        // Entity damage by distance (exposure approximated as unobstructed).
-        let diameter = f64::from(radius) * 2.0;
-        let mut armor_damage = None;
-        if let Some(player) = self.player.as_mut() {
-            let p = [player.position.x, player.position.y, player.position.z];
-            let dist = ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2) + (p[2] - center[2]).powi(2)).sqrt() / diameter;
-            if dist <= 1.0 {
-                let impact = 1.0 - dist;
-                let damage = ((impact * impact + impact) / 2.0 * 7.0 * diameter + 1.0) as f32;
-                if let Some(id) = self.motion.health.damage.id("minecraft:explosion") {
-                    let _ = player.hurt(&self.motion.health, self.world.health_rules, id, damage);
-                    armor_damage = Some(damage);
-                }
-                let (dx, dy, dz) = (p[0] - center[0], p[1] - center[1], p[2] - center[2]);
-                let l = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-4);
-                player.velocity = Vec3::new(player.velocity.x + dx / l * impact, player.velocity.y + dy / l * impact, player.velocity.z + dz / l * impact);
-            }
-        }
-        if let Some(d) = armor_damage
-            && !self.creative
-        {
-            self.hurt_armor(d);
-        }
-        for m in &mut self.mobs {
-            let dist = ((m.position.x - center[0]).powi(2) + (m.position.y - center[1]).powi(2) + (m.position.z - center[2]).powi(2)).sqrt() / diameter;
-            if dist <= 1.0 && m.alive() {
-                let impact = 1.0 - dist;
-                let source = horizon_client::mobs::Damage { kind: horizon_client::mobs::DamageKind::Explosion, attacker: None, from: Some(center) };
-                if m.damage(((impact * impact + impact) / 2.0 * 7.0 * diameter + 1.0) as f32, source) {
-                    let (dx, dy, dz) = (m.position.x - center[0], m.position.y - center[1], m.position.z - center[2]);
-                    let l = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-4);
-                    let k = impact * (1.0 - m.kind.knockback_resistance);
-                    m.velocity = Vec3::new(m.velocity.x + dx / l * k, m.velocity.y + dy / l * k, m.velocity.z + dz / l * k);
-                }
-            }
-        }
-        Ok(())
     }
     fn tick_block_entities(&mut self) -> Result<()> {
         self.tick_hoppers()?;
@@ -2663,153 +2555,6 @@ impl Game<'_> {
         Arc::new(c)
     }
     fn tick_mobs(&mut self) -> Result<()> {
-        self.attack_ticks = self.attack_ticks.saturating_add(1);
-        // Generation-time creature packs for newly generated chunks.
-        let fresh: Vec<(i32, i32)> = self.world.chunks.iter().filter(|(_, c)| c.fresh && c.lit).map(|(k, _)| *k).collect();
-        for key in fresh {
-            if let Some(c) = self.world.chunks.get_mut(&key) {
-                Arc::make_mut(c).fresh = false;
-            }
-            self.spawn_chunk_creatures(key.0, key.1);
-        }
-        if self.ticks % 2 == 0 {
-            self.spawn_monsters();
-        }
-        let player = self.player.as_ref().map(|p| ([p.position.x, p.position.y + 0.5, p.position.z], !p.health.dead_or_dying()));
-        let daylight = self.sky_darken() < 4 && self.world.weather.levels(1.0).0 < 0.2;
-        let mut events = Vec::new();
-        let mut mobs = std::mem::take(&mut self.mobs);
-        {
-            let w = MobWorld { world: &self.world, facts: &self.res.facts, collision: self.collision, player, daylight };
-            let random = &mut self.world.random.clone();
-            let loaded = |m: &Mob| w.world.loaded(m.position.x.floor() as i32, m.position.z.floor() as i32);
-            let mut dead = Vec::new();
-            mobs.retain_mut(|m| {
-                if !loaded(m) {
-                    return !m.hostile() || m.persistent;
-                }
-                let keep = m.tick(&w, random, &mut events);
-                if !keep && !m.alive() {
-                    dead.push((m.kind.id.clone(), [m.position.x, m.position.y, m.position.z], m.id));
-                }
-                keep
-            });
-            self.world.random = random.clone();
-            for (kind, pos, id) in dead {
-                let by_player = self.last_hurt_by_player.remove(&id);
-                let held = self.held().cloned();
-                let drops = self.res.items.entity_drops(&kind, by_player, held.as_ref(), &mut self.world.random);
-                for d in drops {
-                    self.spawn_item(d, [pos[0], pos[1] + 0.5, pos[2]], [0.0, 0.2, 0.0], 10);
-                }
-                if by_player {
-                    // Animal: 1 + random(3); Monster: 5.
-                    let hostile = self.res.mob_types.get(&kind).is_some_and(|t| t.category == "monster");
-                    let xp = if hostile { 5 } else { 1 + self.world.random.next_int_bound(3).unwrap_or(0) as u32 };
-                    self.spawn_orbs([pos[0], pos[1] + 0.5, pos[2]], xp);
-                }
-            }
-        }
-        self.mobs = mobs;
-        for e in events {
-            match e {
-                MobEvent::Sound(name, at, volume, pitch) => self.audio.play(&format!("minecraft:{name}"), Some(at), volume, pitch),
-                MobEvent::AttackPlayer(amount, from) => {
-                    if self.creative {
-                        continue;
-                    }
-                    if let Some(player) = self.player.as_mut()
-                        && let Some(id) = self.motion.health.damage.id("minecraft:mob_attack")
-                        && player.hurt(&self.motion.health, self.world.health_rules, id, amount).unwrap_or(false)
-                    {
-                        let (dx, dz) = (player.position.x - from[0], player.position.z - from[2]);
-                        let l = (dx * dx + dz * dz).sqrt().max(1e-4);
-                        player.velocity = Vec3::new(player.velocity.x / 2.0 + dx / l * 0.4, (player.velocity.y / 2.0 + 0.4).min(0.4), player.velocity.z / 2.0 + dz / l * 0.4);
-                        let at = [player.position.x, player.position.y, player.position.z];
-                        self.audio.play("minecraft:entity.player.hurt", Some(at), 1.0, 1.0);
-                        self.hurt_armor(amount);
-                        self.thorns(from);
-                    }
-                }
-                MobEvent::Shoot(from, target) => {
-                    // Skeleton.performRangedAttack: aim above by 20% of distance, inaccuracy 14 - 4 * difficulty(2).
-                    let (dx, dz) = (target[0] - from[0], target[2] - from[2]);
-                    let horizontal = (dx * dx + dz * dz).sqrt();
-                    let dy = target[1] + 0.5 - from[1] + horizontal * 0.2;
-                    let len = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-4);
-                    let spread = 0.0075 * 6.0;
-                    let r = &mut self.world.random;
-                    let mut gauss = || f64::from(r.next_float() + r.next_float() - 1.0) * spread;
-                    let v = [(dx / len + gauss()) * 1.6, (dy / len + gauss()) * 1.6, (dz / len + gauss()) * 1.6];
-                    let p = Vec3::new(from[0], from[1] - 0.1, from[2]);
-                    self.arrows.push(Arrow { from_player: false, critical: false, position: p, previous: p, velocity: Vec3::new(v[0], v[1], v[2]), stuck: false, age: 0, base_damage: 2.0 });
-                    self.audio.play("minecraft:entity.skeleton.shoot", Some(from), 1.0, 1.0 / (self.world.random.next_float() * 0.4 + 0.8));
-                }
-                MobEvent::Explode(at, radius) => self.explode(at, radius)?,
-            }
-        }
-        // Arrows.
-        let bounds = self.player.as_ref().map(|p| {
-            let w = f64::from(p.dimensions.width) / 2.0;
-            horizon_core::geometry::Aabb::new(
-                Vec3::new(p.position.x - w, p.position.y, p.position.z - w),
-                Vec3::new(p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w),
-            )
-        });
-        let mut arrows = std::mem::take(&mut self.arrows);
-        let mut hits = Vec::new();
-        let mobs = &mut self.mobs;
-        let mut random_state = self.world.random.clone();
-        let random = &mut random_state;
-        let mut mob_hits = Vec::new();
-        arrows.retain_mut(|a| {
-            if a.from_player && !a.stuck {
-                let (keep, _) = a.tick(&self.world, &self.res.facts, None);
-                for m in mobs.iter_mut().filter(|m| m.alive()) {
-                    let b = m.bounds();
-                    let (lo, hi) = (b.min_position(), b.max_position());
-                    let p = a.position;
-                    if p.x > lo.x - 0.3 && p.x < hi.x + 0.3 && p.y > lo.y - 0.3 && p.y < hi.y + 0.3 && p.z > lo.z - 0.3 && p.z < hi.z + 0.3 {
-                        // AbstractArrow.onHitEntity: ceil(speed * base), crits add random(damage / 2 + 2).
-                        let speed = (a.velocity.x.powi(2) + a.velocity.y.powi(2) + a.velocity.z.powi(2)).sqrt();
-                        let mut damage = (speed * a.base_damage).ceil().max(0.0) as i32;
-                        if a.critical {
-                            damage += random.next_int_bound(damage / 2 + 2).unwrap_or(0);
-                        }
-                        if m.hurt(damage as f32, Some([a.previous.x, a.previous.y, a.previous.z]), random) {
-                            mob_hits.push((m.id, [p.x, p.y, p.z]));
-                        }
-                        return false;
-                    }
-                }
-                return keep;
-            }
-            let (keep, hit) = a.tick(&self.world, &self.res.facts, if a.from_player { None } else { bounds });
-            if let ArrowHit::Player(d) = hit {
-                hits.push(d);
-            }
-            keep
-        });
-        self.arrows = arrows;
-        self.world.random = random_state;
-        for (id, at) in mob_hits {
-            self.last_hurt_by_player.insert(id);
-            self.audio.play("minecraft:entity.arrow.hit", Some(at), 1.0, 1.2 / (self.world.random.next_float() * 0.2 + 0.9));
-        }
-        for d in hits {
-            if self.creative {
-                continue;
-            }
-            if let Some(player) = self.player.as_mut()
-                && let Some(id) = self.motion.health.damage.id("minecraft:arrow")
-            {
-                let _ = player.hurt(&self.motion.health, self.world.health_rules, id, d);
-                let at = [player.position.x, player.position.y, player.position.z];
-                self.audio.play("minecraft:entity.arrow.hit_player", Some(at), 1.0, 1.0);
-                self.hurt_armor(d);
-            }
-        }
-        Ok(())
         self.tick_creatures()
     }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
@@ -3642,8 +3387,7 @@ impl Game<'_> {
         // BowItem.shootProjectile: shootFromRotation(power * 3, inaccuracy 1).
         let p = Vec3::new(eye[0], eye[1] - 0.1, eye[2]);
         let (power_bonus, infinity) = self.bow_enchantments();
-        self.arrows.push(Arrow { from_player: true, critical: power >= 1.0, position: p, previous: p, velocity: Vec3::new(v[0], v[1], v[2]), stuck: false, age: 0, base_damage: 2.0 + power_bonus });
-        let kind = horizon_client::projectiles::ProjectileKind::Arrow { base_damage: 2.0, critical: power >= 1.0, effect: None };
+        let kind = horizon_client::projectiles::ProjectileKind::Arrow { base_damage: 2.0 + power_bonus, critical: power >= 1.0, effect: None };
         let mut arrow = horizon_client::projectiles::Projectile::new(kind, p, Some(horizon_client::mobs::Who::Player));
         let (velocity, on_ground) = self.player.as_ref().map_or((Vec3::ZERO, true), |pl| (pl.velocity, pl.ground.on_ground));
         arrow.shoot_from_rotation(&mut self.world.random, self.pitch, self.yaw, 0.0, power * 3.0, 1.0, velocity, on_ground);
@@ -4631,32 +4375,6 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
-                        }
-                        Screen::Paused if pressed => {
-                            let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
-                            let b = HudBatch::new(size);
-                            for i in 0..3 {
-                                let (bx, by) = (b.width / 2.0 - 100.0, b.height / 4.0 + 24.0 + i as f32 * 24.0 + 16.0);
-                                if self.cursor.0 >= bx && self.cursor.0 < bx + 200.0 && self.cursor.1 >= by && self.cursor.1 < by + 20.0 {
-                                    if i == 0 {
-                                        self.screen = Screen::Playing;
-                                        self.capture(true);
-                                    } else if i == 1 {
-                                        self.screen = Screen::Options;
-                                        self.options_from_title = false;
-                                    } else {
-                                        self.close_world()?;
-                                    }
-                                }
-                            }
-                        }
-                        Screen::Dead if pressed && self.remote.is_some() => self.remote_respawn(),
-                        Screen::Dead if pressed => {
-                            self.respawn_out_of_end()?;
-                            self.player = None;
-                            self.screen = Screen::Playing;
-                            self.spawn_player()?;
-                            self.capture(true);
                         }
                         Screen::Paused if pressed => self.pause_click()?,
                         Screen::Dead if pressed => self.death_click()?,
