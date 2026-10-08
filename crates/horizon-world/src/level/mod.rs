@@ -1,0 +1,591 @@
+//! Server-side vanilla block behaviour: `Level.setBlock` with neighbour and
+//! shape-update propagation, scheduled block/fluid ticks, random ticks,
+//! placement (`getStateForPlacement`) and interaction (`useWithoutItem`).
+//!
+//! The library is client-agnostic. A game owns its chunk storage and exposes
+//! it through [`LevelAccess`]; it also owns one [`Ticks`] per level (scheduled
+//! tick queues, the in-flight neighbour-update queue and the random-tick LCG).
+//! [`Behaviours`] holds immutable tables loaded once from the pinned client
+//! resources (`block-behaviours.json`, `gameplay-facts.json`,
+//! `block-tags.json`, `cached-collision.nbt`; see
+//! `tools/prepare_native_client.py`).
+//!
+//! # Driving a level
+//!
+//! Per server tick, in vanilla order (`ServerLevel.tick`):
+//! 1. [`Behaviours::tick_scheduled`] runs due block ticks then fluid ticks
+//!    (`blockTicks.tick(time, 65536, ...)`, then `fluidTicks`).
+//! 2. For every ticking chunk, [`Behaviours::tick_chunk_random`] performs
+//!    `ServerLevel.tickChunk`'s random ticks: for each non-empty section,
+//!    `randomTickSpeed` (game rule, default 3) positions are drawn with
+//!    `Level.getBlockRandomPos` and randomly-ticking block and fluid states are
+//!    ticked. The caller decides which sections are randomly ticking (vanilla
+//!    counts randomly-ticking states per section); [`Behaviours::random_tick`]
+//!    ticks a single position.
+//! 3. [`Behaviours::run_block_events`] runs queued block events (pistons),
+//!    then (after entities) [`Behaviours::tick_block_entities`] advances
+//!    moving pistons ([`Ticks::moving_pistons`]).
+//! 4. Player actions call [`Behaviours::place_block`] /
+//!    [`Behaviours::use_without_item`] / [`Behaviours::destroy_block`].
+//!
+//! Every block mutation goes through [`Behaviours::set_block`] with vanilla's
+//! update flags ([`flags`]). The library writes storage only through
+//! [`LevelAccess::set_raw`]; the caller updates heightmaps, light, block
+//! entities and render meshes for the written position.
+//!
+//! Side effects the library cannot perform (sounds, particles, item drops,
+//! spawning falling-block or TNT entities, growing trees) are reported as
+//! [`LevelEvent`]s through [`LevelAccess::emit`], in vanilla call order.
+//!
+//! Randomness is drawn from [`LevelAccess::random`] (vanilla `level.random`, a
+//! `LegacyRandomSource`) in the same order as vanilla.
+//!
+//! # Integration sketch
+//!
+//! ```ignore
+//! use horizon_world::level::{self, Behaviours, LevelAccess, LevelEvent, PlaceContext, Ticks, flags};
+//!
+//! struct GameLevel { chunks: Chunks, random: LegacyRandom, time: i64, events: Vec<LevelEvent> }
+//! impl LevelAccess for GameLevel {
+//!     fn block_state(&self, pos: BlockPos) -> BlockStateId { self.chunks.get(pos) }
+//!     fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+//!         let old = self.chunks.set(pos, state)?; // also mark light/heightmap/mesh dirty
+//!         Some(old)
+//!     }
+//!     fn is_loaded(&self, pos: BlockPos) -> bool { self.chunks.contains(pos.chunk()) }
+//!     fn random(&mut self) -> &mut LegacyRandom { &mut self.random }
+//!     fn game_time(&self) -> i64 { self.time }
+//!     fn block_light(&self, pos: BlockPos) -> i32 { self.chunks.block_light(pos) }
+//!     fn sky_light(&self, pos: BlockPos) -> i32 { self.chunks.sky_light(pos) }
+//!     fn emit(&mut self, event: LevelEvent) { self.events.push(event) }
+//! }
+//!
+//! let registry = level::data::load_registry(&resources)?;
+//! let behaviours = Behaviours::load(&registry, &resources)?;
+//! let mut ticks = Ticks::new(seed as i32);
+//! ticks.add_empty_chunk(chunk_pos)?;          // when a chunk loads (remove_chunk on unload)
+//!
+//! // Every server tick:
+//! level.time += 1;
+//! behaviours.tick_scheduled(&mut level, &mut ticks);
+//! for chunk in ticking_chunks {
+//!     behaviours.tick_chunk_random(&mut level, &mut ticks, chunk, randomly_ticking_section_min_ys(chunk));
+//! }
+//! behaviours.run_block_events(&mut level, &mut ticks);
+//! /* tick entities */
+//! behaviours.tick_block_entities(&mut level, &mut ticks);
+//! for event in level.events.drain(..) { /* play sounds, spawn drops/falling blocks, grow trees */ }
+//!
+//! // Player actions:
+//! behaviours.place_block(&mut level, &mut ticks, &PlaceContext { clicked_pos, face, hit, inside: false,
+//!     yaw, pitch, sneaking, item: "minecraft:oak_stairs".into(), can_use_game_master_blocks: false });
+//! behaviours.use_without_item(&mut level, &mut ticks, pos, face, hit, player_context);
+//! behaviours.player_destroy_block(&mut level, &mut ticks, pos, creative);
+//! // Falling-block entity landed:
+//! behaviours.falling_block_landed(&mut level, &mut ticks, landing_pos, carried_state, false);
+//! ```
+use crate::{
+    fluid::{FluidBlockBindings, FluidKind, FluidState},
+    registry::{BlockRegistry, BlockStateId},
+};
+use horizon_core::{
+    geometry::{Aabb, Direction, VoxelShape},
+    position::{BlockPos, ChunkPos},
+    random::LegacyRandom,
+};
+use std::{collections::HashMap, io, path::Path, sync::Arc, sync::Mutex};
+
+pub mod classes;
+pub mod data;
+pub mod states;
+pub mod ticks;
+
+mod falling;
+mod fluids;
+mod hooks;
+mod interact;
+pub mod pistons;
+mod place;
+mod query;
+mod rails;
+mod redstone;
+mod shapes;
+mod speleothem;
+mod survive;
+mod tick;
+mod update;
+
+#[cfg(test)]
+mod tests;
+
+pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
+pub use falling::Landing;
+pub use interact::{InteractionResult, PlayerContext, PlayerEffect};
+pub use pistons::{BlockEventData, MovingPiston};
+pub use place::{PlaceContext, PlaceOutcome};
+pub use states::{BlockId, PropKey, StateTable};
+pub use tick::{Precipitation, PrecipitationKind};
+pub use ticks::Ticks;
+
+/// `Block.UPDATE_*` flags accepted by [`Behaviours::set_block`].
+pub mod flags {
+    pub const UPDATE_NEIGHBORS: i32 = 1;
+    pub const UPDATE_CLIENTS: i32 = 2;
+    pub const UPDATE_INVISIBLE: i32 = 4;
+    pub const UPDATE_IMMEDIATE: i32 = 8;
+    pub const UPDATE_KNOWN_SHAPE: i32 = 16;
+    pub const UPDATE_SUPPRESS_DROPS: i32 = 32;
+    pub const UPDATE_MOVE_BY_PISTON: i32 = 64;
+    pub const UPDATE_SKIP_SHAPE_UPDATE_ON_WIRE: i32 = 128;
+    pub const UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS: i32 = 256;
+    pub const UPDATE_SKIP_ON_PLACE: i32 = 512;
+    pub const UPDATE_NONE: i32 = 260;
+    pub const UPDATE_ALL: i32 = 3;
+    pub const UPDATE_ALL_IMMEDIATE: i32 = 11;
+    pub const UPDATE_SKIP_ALL_SIDEEFFECTS: i32 = 816;
+    /// `Block.UPDATE_LIMIT`, the recursion budget of shape updates.
+    pub const UPDATE_LIMIT: i32 = 512;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dimension {
+    Overworld,
+    Nether,
+    End,
+}
+
+/// Game rules consulted by block behaviour (vanilla defaults).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GameRules {
+    pub water_source_conversion: bool,
+    pub lava_source_conversion: bool,
+    pub random_tick_speed: i32,
+    pub block_drops: bool,
+    pub mob_griefing: bool,
+    pub max_snow_accumulation_height: i32,
+}
+impl Default for GameRules {
+    fn default() -> Self {
+        Self {
+            water_source_conversion: true,
+            lava_source_conversion: false,
+            random_tick_speed: 3,
+            block_drops: true,
+            mob_griefing: true,
+            max_snow_accumulation_height: 1,
+        }
+    }
+}
+
+/// Entity filters for the entity-sensing blocks (pressure plates, tripwire).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntityQuery {
+    /// Any entity that does not ignore block triggers (wooden plates, tripwire).
+    Everything,
+    /// Living entities only (stone plates).
+    Mobs,
+}
+
+/// Side effects reported to the caller, in vanilla call order.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LevelEvent {
+    /// `Level.levelEvent(type, pos, data)`, using vanilla's numeric event IDs
+    /// (e.g. 2001 block destroyed with `data` = state ID, 1501 lava
+    /// extinguished, 1009 fire extinguished, 1502 redstone torch burnout,
+    /// 2009 dripping water/sponge, 1033/1034 ... per `LevelEvent.java`).
+    LevelEvent { id: i32, pos: BlockPos, data: i32 },
+    /// `Level.playSound(null, pos, sound, BLOCKS, volume, pitch)`.
+    Sound {
+        pos: BlockPos,
+        sound: Arc<str>,
+        volume: f32,
+        pitch: f32,
+    },
+    /// `Block.dropResources(state, level, pos)`: the caller evaluates the
+    /// block's loot table (no tool, no breaker) and pops the items.
+    DropResources { pos: BlockPos, state: BlockStateId },
+    /// `FallingBlockEntity.fall`: the block at `pos` was already replaced by its
+    /// fluid's legacy block; the caller spawns and simulates a falling-block
+    /// entity carrying `state` and calls [`Behaviours::falling_block_landed`]
+    /// (or drops the item) when it lands.
+    FallingBlock { pos: BlockPos, state: BlockStateId },
+    /// A sapling reached stage 1 and tried to grow (`TreeGrower.growTree`).
+    /// The caller runs the grower's configured feature and, on success,
+    /// replaces the sapling (vanilla leaves the sapling on failure).
+    GrowTree {
+        pos: BlockPos,
+        state: BlockStateId,
+        grower: Arc<str>,
+    },
+    /// A configured feature placement request from a bonemealed or random-ticked
+    /// block (huge mushrooms, fungi). The block was already removed when vanilla
+    /// does so before placing; on failure the caller restores `state`.
+    PlaceFeature {
+        pos: BlockPos,
+        state: BlockStateId,
+        feature: Arc<str>,
+    },
+    /// `TntBlock.prime`: the TNT block is removed; spawn primed TNT.
+    PrimeTnt { pos: BlockPos },
+    /// Block-entity or entity side effects the caller implements: `"dispense"`
+    /// (dispenser/dropper/crafter scheduled tick), `"hatch"` (frogspawn
+    /// hatched into tadpoles; the block is already destroyed).
+    BlockEvent {
+        pos: BlockPos,
+        state: BlockStateId,
+        kind: &'static str,
+    },
+    /// A player-side effect of [`Behaviours::use_without_item`].
+    Player {
+        pos: BlockPos,
+        state: BlockStateId,
+        effect: PlayerEffect,
+    },
+    /// `Level.gameEvent` (vibration system), by vanilla identifier.
+    GameEvent { pos: BlockPos, event: &'static str },
+}
+
+/// The world as seen by block behaviour. Implemented by the game and tests.
+pub trait LevelAccess {
+    /// `getBlockState`. Unloaded or out-of-bounds positions read as air.
+    fn block_state(&self, pos: BlockPos) -> BlockStateId;
+    /// Storage write (`LevelChunkSection.setBlockState`). Returns the previous
+    /// state, or None when nothing could be stored (unloaded chunk).
+    fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId>;
+    fn is_loaded(&self, pos: BlockPos) -> bool;
+    /// Inclusive minimum and exclusive maximum build height.
+    fn min_y(&self) -> i32 {
+        -64
+    }
+    fn max_y(&self) -> i32 {
+        320
+    }
+    /// Vanilla `level.random` (a `LegacyRandomSource`).
+    fn random(&mut self) -> &mut LegacyRandom;
+    fn game_time(&self) -> i64;
+    fn block_light(&self, _pos: BlockPos) -> i32 {
+        0
+    }
+    fn sky_light(&self, _pos: BlockPos) -> i32 {
+        15
+    }
+    /// `Level.getSkyDarken` (0 at noon, up to 11 at night).
+    fn sky_darken(&self) -> i32 {
+        0
+    }
+    fn is_raining(&self) -> bool {
+        false
+    }
+    fn is_thundering(&self) -> bool {
+        false
+    }
+    fn is_raining_at(&self, _pos: BlockPos) -> bool {
+        false
+    }
+    fn dimension(&self) -> Dimension {
+        Dimension::Overworld
+    }
+    fn game_rules(&self) -> GameRules {
+        GameRules::default()
+    }
+    /// `Difficulty.getId()` (peaceful 0 .. hard 3).
+    fn difficulty(&self) -> i32 {
+        2
+    }
+    /// `ServerLevel.canSpreadFireAround` (fire-spread radius around players).
+    fn can_spread_fire_around(&self, _pos: BlockPos) -> bool {
+        true
+    }
+    /// `Level.isUnobstructed(state, pos, context)`: whether the state's
+    /// collision shape at `pos` would intersect an entity.
+    fn is_unobstructed(&self, _pos: BlockPos, _state: BlockStateId) -> bool {
+        true
+    }
+    /// Comparator input from a block entity (`getAnalogOutputSignal` of
+    /// containers, jukeboxes, lecterns, ...). State-only sources (cake,
+    /// composter, cauldrons, beehives, ...) are evaluated by the library.
+    fn block_entity_analog_signal(
+        &self,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        _direction: Direction,
+    ) -> i32 {
+        0
+    }
+    /// Weak/strong signal of a block-entity-driven source (trapped chest
+    /// openers); other sources are evaluated by the library.
+    fn block_entity_signal(
+        &self,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        _direction: Direction,
+    ) -> i32 {
+        0
+    }
+    /// Biome answers for a precipitation tick at the column of `pos` (see
+    /// [`Precipitation`]); None skips snow/ice formation and cauldron filling.
+    fn precipitation(&self, _pos: BlockPos) -> Option<Precipitation> {
+        None
+    }
+    /// Count of entities intersecting `area` that trigger pressure plates or
+    /// tripwires under `query`.
+    fn count_entities(&self, _area: Aabb, _query: EntityQuery) -> usize {
+        0
+    }
+    /// `ServerLevel.isPositionTickingWithEntitiesLoaded` for scheduled ticks.
+    fn is_ticking_chunk(&self, _chunk: ChunkPos) -> bool {
+        true
+    }
+    fn emit(&mut self, _event: LevelEvent) {}
+}
+
+/// Raw brightness as `Level.getRawBrightness(pos, skyDarken)`.
+pub fn raw_brightness<L: LevelAccess + ?Sized>(level: &L, pos: BlockPos, sky_darken: i32) -> i32 {
+    (level.sky_light(pos) - sky_darken).max(level.block_light(pos))
+}
+
+/// Immutable vanilla block-behaviour tables. Build once with [`Behaviours::load`].
+pub struct Behaviours {
+    pub table: StateTable,
+    pub props: Props,
+    pub named: Named,
+    pub tags: Tags,
+    all_tags: HashMap<String, Arc<data::BlockSet>>,
+    facts: Vec<StateFacts>,
+    shapes: Vec<VoxelShape>,
+    shape_info: Vec<data::ShapeInfo>,
+    pub fluid_tags: data::FluidTags,
+    blocks: Vec<BlockData>,
+    items: HashMap<String, ItemBinding>,
+    liquid_blocks: FluidBlockBindings,
+    /// Uncached (position- or block-entity-dependent) collision shapes.
+    dynamic: HashMap<BlockStateId, crate::dynamic_support::DynamicSupport>,
+    occlusion_cache: Mutex<HashMap<(i32, i32, u8), bool>>,
+}
+
+impl Behaviours {
+    /// Load from a prepared client resource directory (`.local/horizon-client/<version>`).
+    pub fn load(registry: &BlockRegistry, resources_dir: &Path) -> io::Result<Self> {
+        data::load(registry, resources_dir)
+    }
+    pub fn facts(&self, state: BlockStateId) -> &StateFacts {
+        &self.facts[state.0 as usize]
+    }
+    pub fn block_data(&self, block: BlockId) -> &BlockData {
+        &self.blocks[block.0 as usize]
+    }
+    pub fn data(&self, state: BlockStateId) -> &BlockData {
+        self.block_data(self.table.block(state))
+    }
+    pub fn block(&self, state: BlockStateId) -> BlockId {
+        self.table.block(state)
+    }
+    pub fn item_binding(&self, item: &str) -> Option<&ItemBinding> {
+        self.items.get(item)
+    }
+    pub fn tag(&self, name: &str) -> Option<&data::BlockSet> {
+        self.all_tags.get(name).map(|s| &**s)
+    }
+    pub fn fluid(&self, state: BlockStateId) -> FluidState {
+        self.facts(state).fluid
+    }
+    /// `FluidState.createLegacyBlock`.
+    pub fn legacy_block(&self, fluid: FluidState) -> BlockStateId {
+        self.liquid_blocks.block(fluid)
+    }
+    /// Cached collision shape (`getCollisionShape(level, pos)` for states whose
+    /// shape does not depend on the world); None for dynamic shapes.
+    pub fn collision_shape(&self, state: BlockStateId) -> Option<&VoxelShape> {
+        let index = self.facts(state).shape;
+        (index >= 0).then(|| &self.shapes[index as usize])
+    }
+    /// Precomputed shape queries; dynamic shapes read as empty.
+    pub fn shape_info(&self, state: BlockStateId) -> data::ShapeInfo {
+        let index = self.facts(state).shape;
+        if index < 0 {
+            data::ShapeInfo::default()
+        } else {
+            self.shape_info[index as usize]
+        }
+    }
+    pub(crate) fn has_flag(&self, state: BlockStateId, flag: u32) -> bool {
+        self.facts(state).flags & flag != 0
+    }
+    pub fn is_air(&self, state: BlockStateId) -> bool {
+        self.has_flag(state, data::state_flags::AIR)
+    }
+    pub fn is_solid(&self, state: BlockStateId) -> bool {
+        self.has_flag(state, data::state_flags::SOLID)
+    }
+    pub fn is_replaceable(&self, state: BlockStateId) -> bool {
+        self.has_flag(state, data::state_flags::REPLACEABLE)
+    }
+    pub fn is_randomly_ticking(&self, state: BlockStateId) -> bool {
+        self.has_flag(state, data::state_flags::RANDOM_TICKS)
+    }
+    /// `isFaceSturdy(level, pos, direction, FULL)` from the empty-level cache.
+    pub fn is_face_sturdy(&self, state: BlockStateId, direction: Direction) -> bool {
+        self.facts(state).sturdy & (1 << direction as u32) != 0
+    }
+    pub fn is_face_sturdy_center(&self, state: BlockStateId, direction: Direction) -> bool {
+        self.facts(state).sturdy & (1 << (6 + direction as u32)) != 0
+    }
+    pub fn is_face_sturdy_rigid(&self, state: BlockStateId, direction: Direction) -> bool {
+        self.facts(state).sturdy & (1 << (12 + direction as u32)) != 0
+    }
+    /// Tick type ID of a fluid for [`Ticks::schedule_fluid`].
+    pub fn fluid_kind(&self, state: BlockStateId) -> FluidKind {
+        self.fluid(state).kind()
+    }
+}
+
+/// Level mutation entry points (all keep vanilla update semantics).
+impl Behaviours {
+    /// `Level.setBlock(pos, state, flags)` with vanilla's update limit (512).
+    /// Returns false when nothing was written (unloaded, out of bounds, or
+    /// the state was already present).
+    pub fn set_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+        flags: i32,
+    ) -> bool {
+        self.sim(level, ticks).set_block(pos, state, flags)
+    }
+    /// `Level.removeBlock(pos, movedByPiston)`: replace with the fluid's block.
+    pub fn remove_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        moved_by_piston: bool,
+    ) -> bool {
+        self.sim(level, ticks).remove_block(pos, moved_by_piston)
+    }
+    /// `Level.destroyBlock(pos, dropResources)`: destroy particles (2001),
+    /// optional drops, and replacement by the block's fluid.
+    pub fn destroy_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        drop: bool,
+    ) -> bool {
+        self.sim(level, ticks)
+            .destroy_block(pos, drop, flags::UPDATE_LIMIT)
+    }
+    /// A player breaking a block (`playerWillDestroy` + `Level.destroyBlock`
+    /// without drops; the caller handles the player's loot/tool). Double
+    /// blocks (doors, tall plants, beds) remove their other half as vanilla.
+    pub fn player_destroy_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        creative: bool,
+    ) -> bool {
+        self.sim(level, ticks).player_destroy(pos, creative)
+    }
+    /// `BlockState.canSurvive(level, pos)`.
+    pub fn can_survive<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) -> bool {
+        self.sim(level, ticks).can_survive(state, pos)
+    }
+    /// `BlockState.updateShape(level, ticks, pos, direction, neighbourPos,
+    /// neighbourState, random)`: the state `state` at `pos` would take after its
+    /// neighbour in `direction` became `neighbour` (ticks it requests are queued).
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_shape<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+        neighbour_pos: BlockPos,
+        neighbour: BlockStateId,
+    ) -> BlockStateId {
+        self.sim(level, ticks)
+            .update_shape(state, pos, direction, neighbour_pos, neighbour)
+    }
+    /// `Block.updateFromNeighbourShapes`: a state adjusted to its neighbours.
+    pub fn update_from_neighbour_shapes<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) -> BlockStateId {
+        self.sim(level, ticks)
+            .update_from_neighbour_shapes(state, pos)
+    }
+    /// `Level.updateNeighborsAt(pos, block)`: notify the six neighbours.
+    pub fn update_neighbors_at<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        block: BlockId,
+    ) {
+        self.sim(level, ticks).update_neighbors_at(pos, block);
+    }
+    /// Entity collision with a block (`entityInside`) for the entity-sensing
+    /// blocks: pressure plates, tripwires and buttons hit by arrows are
+    /// re-evaluated through [`LevelAccess::count_entities`].
+    pub fn entity_inside<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
+        self.sim(level, ticks).entity_inside(pos);
+    }
+    /// Redstone signal queries (`SignalGetter`).
+    pub fn has_neighbor_signal<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) -> bool {
+        self.sim(level, ticks).has_neighbor_signal(pos)
+    }
+    pub fn best_neighbor_signal<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) -> i32 {
+        self.sim(level, ticks).best_neighbor_signal(pos)
+    }
+}
+
+/// One mutable view used by the ported behaviour code.
+pub(crate) struct Sim<'a, L: LevelAccess + ?Sized> {
+    pub b: &'a Behaviours,
+    pub level: &'a mut L,
+    pub ticks: &'a mut Ticks,
+    /// `RedstoneWireBlock.shouldSignal` is false while a wire samples its
+    /// neighbours (`getBlockSignal`).
+    pub wire_signal_off: std::cell::Cell<bool>,
+}
+impl Behaviours {
+    pub(crate) fn sim<'a, L: LevelAccess + ?Sized>(
+        &'a self,
+        level: &'a mut L,
+        ticks: &'a mut Ticks,
+    ) -> Sim<'a, L> {
+        Sim {
+            b: self,
+            level,
+            ticks,
+            wire_signal_off: std::cell::Cell::new(false),
+        }
+    }
+}

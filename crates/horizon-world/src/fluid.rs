@@ -127,6 +127,17 @@ impl FluidState {
         }
         serde_json::to_string(&value).map_err(|e| invalid(e.to_string()))
     }
+    /// A fluid state from its parts; the empty fluid ignores amount and falling.
+    pub const fn new(kind: FluidKind, amount: u8, falling: bool) -> Self {
+        if matches!(kind, FluidKind::Empty) {
+            return Self::EMPTY;
+        }
+        Self {
+            kind,
+            amount,
+            falling,
+        }
+    }
     pub const EMPTY: Self = Self {
         kind: FluidKind::Empty,
         amount: 0,
