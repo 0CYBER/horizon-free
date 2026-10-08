@@ -118,6 +118,13 @@ pub(super) fn parse_state_string(registry: &BlockRegistry, text: &str) -> Option
 }
 
 impl StructureTemplate {
+    /// A new, never-loaded template: zero size and no palettes.
+    pub fn empty() -> Self {
+        Self {
+            size: [0; 3],
+            palettes: Vec::new(),
+        }
+    }
     /// StructureTemplate.load. Blocks are ordered as vanilla orders them:
     /// full collision blocks, then other blocks, then block entities, each
     /// sorted by Y, X, Z.

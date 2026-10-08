@@ -294,7 +294,7 @@ impl StructureResources {
                 .collect(),
         }
     }
-    /// StructureTemplateManager.getOrCreate; missing templates are None.
+    /// StructureTemplateManager.getOrCreate; missing templates are empty.
     pub fn template(&self, id: &str) -> Option<Arc<StructureTemplate>> {
         let id = if id.contains(':') {
             id.to_owned()
@@ -322,6 +322,8 @@ impl StructureResources {
                 &self.transforms,
             )))
         });
+        // StructureTemplateManager.getOrCreate: missing templates are empty.
+        let loaded = loaded.or_else(|| Some(Arc::new(StructureTemplate::empty())));
         self.templates.write().unwrap().insert(id, loaded.clone());
         loaded
     }

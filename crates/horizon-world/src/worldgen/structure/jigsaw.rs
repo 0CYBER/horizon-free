@@ -406,12 +406,7 @@ impl PoolPiece {
         random: &mut R,
         chunk_box: BoundingBox,
         reference: [i32; 3],
-        place_feature: &mut dyn FnMut(
-            &mut W,
-            &mut R,
-            &str,
-            [i32; 3],
-        ) -> Result<bool, PlacementQueryError>,
+        place_feature: &mut PlaceFeature<'_, W, R>,
     ) -> Result<bool, PlacementQueryError> {
         place_element(
             &self.element,
@@ -441,12 +436,7 @@ fn place_element<W: FeatureWorld + PlacementContext, R: RandomSource>(
     reference: [i32; 3],
     rotation: Rotation,
     waterlogging: bool,
-    place_feature: &mut dyn FnMut(
-        &mut W,
-        &mut R,
-        &str,
-        [i32; 3],
-    ) -> Result<bool, PlacementQueryError>,
+    place_feature: &mut PlaceFeature<'_, W, R>,
 ) -> Result<bool, PlacementQueryError> {
     match element {
         PoolElement::Empty => Ok(true),
@@ -519,6 +509,10 @@ fn place_element<W: FeatureWorld + PlacementContext, R: RandomSource>(
         }
     }
 }
+
+/// Places a named placed feature (feature pool elements) with the piece random.
+pub type PlaceFeature<'a, W, R> =
+    dyn FnMut(&mut W, &mut R, &str, [i32; 3]) -> Result<bool, PlacementQueryError> + 'a;
 
 /// The world queries jigsaw assembly needs from the chunk generator.
 pub trait JigsawContext {

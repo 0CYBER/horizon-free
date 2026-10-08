@@ -325,7 +325,7 @@ impl<'a> PlaceSettings<'a> {
             random: None,
         }
     }
-    pub fn add(mut self, list: &'a ProcessorList) -> Self {
+    pub fn with_processors(mut self, list: &'a ProcessorList) -> Self {
         self.processors.extend(list.0.iter());
         self
     }

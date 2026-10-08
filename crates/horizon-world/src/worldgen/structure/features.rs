@@ -94,7 +94,7 @@ impl TemplateFeature {
                 pos[i] += step[i] * length;
             }
         }
-        let mut settings = PlaceSettings::new(rotation).add(&self.processors);
+        let mut settings = PlaceSettings::new(rotation).with_processors(&self.processors);
         settings.random = Some(random);
         place_in_world(
             world,
@@ -212,7 +212,7 @@ impl FossilFeature {
             (base, &self.fossil_processors),
             (overlay, &self.overlay_processors),
         ] {
-            let mut settings = PlaceSettings::new(rotation).add(processors);
+            let mut settings = PlaceSettings::new(rotation).with_processors(processors);
             settings.bounding_box = Some(bounds);
             settings.random = Some(&mut *random);
             place_in_world(

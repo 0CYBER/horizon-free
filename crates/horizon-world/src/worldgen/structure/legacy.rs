@@ -23,6 +23,8 @@ use horizon_core::{
 use std::sync::{Arc, Mutex};
 
 pub type Result<T> = std::result::Result<T, PlacementQueryError>;
+/// Data markers of a placed template: (metadata, absolute position).
+pub type Markers = Vec<(String, [i32; 3])>;
 
 /// The random draws legacy pieces make.
 pub trait PieceRandom: ProcessorRandom {
@@ -48,6 +50,7 @@ pub trait PieceWorld {
     fn max_y(&mut self) -> Result<i32>;
     fn block_entity(&mut self, pos: [i32; 3], nbt: Compound) -> Result<()>;
     fn post_process(&mut self, pos: [i32; 3]) -> Result<()>;
+    #[allow(clippy::too_many_arguments)]
     fn place_template(
         &mut self,
         resources: &StructureResources,
@@ -85,6 +88,7 @@ impl<W: FeatureWorld + PlacementContext> PieceWorld for W {
     fn post_process(&mut self, pos: [i32; 3]) -> Result<()> {
         self.mark_postprocessing(pos)
     }
+    #[allow(clippy::too_many_arguments)]
     fn place_template(
         &mut self,
         resources: &StructureResources,
@@ -721,7 +725,7 @@ impl TemplatePiece {
         c: &mut PieceContext<'_>,
         position: [i32; 3],
         extra: &[Processor],
-    ) -> Result<Option<Vec<(String, [i32; 3])>>> {
+    ) -> Result<Option<Markers>> {
         let ignore = Processor::BlockIgnore(self.ignore.iter().cloned().collect());
         let mut settings = self.settings();
         settings.bounding_box = Some(c.chunk_box);

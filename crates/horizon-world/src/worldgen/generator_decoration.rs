@@ -246,6 +246,7 @@ impl Decoration {
             .filter_map(|(name, feature)| feature.as_ref().err().map(|e| (name.clone(), e.clone())))
             .collect()
     }
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn decorate(
         &self,
         data: &Arc<GeneratorData>,
