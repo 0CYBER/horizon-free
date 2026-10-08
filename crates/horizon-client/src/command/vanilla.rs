@@ -104,6 +104,38 @@ pub fn build() -> Dispatcher {
     let t = d.argument(kill, "targets", ENTITIES);
     d.executes(t, "kill");
 
+    // effect clear [<targets> [<effect>]] | give <targets> <effect> [<seconds>|infinite [<amplifier> [<hideParticles>]]]
+    let effect = d.literal(root, "effect");
+    d.requires(effect, GAMEMASTERS);
+    let clear = d.literal(effect, "clear");
+    d.executes(clear, "effect.clear");
+    let t = d.argument(clear, "targets", ENTITIES);
+    d.executes(t, "effect.clear");
+    let e = d.argument(t, "effect", ArgType::Resource(Resource::Effect));
+    d.executes(e, "effect.clear");
+    let give = d.literal(effect, "give");
+    let t = d.argument(give, "targets", ENTITIES);
+    let e = d.argument(t, "effect", ArgType::Resource(Resource::Effect));
+    d.executes(e, "effect.give");
+    let seconds = d.argument(e, "seconds", ArgType::Integer { min: 1, max: 1_000_000 });
+    let infinite = d.literal(e, "infinite");
+    for duration in [seconds, infinite] {
+        d.executes(duration, "effect.give");
+        let amp = d.argument(duration, "amplifier", ArgType::Integer { min: 0, max: 255 });
+        d.executes(amp, "effect.give");
+        let hide = d.argument(amp, "hideParticles", ArgType::Bool);
+        d.executes(hide, "effect.give");
+    }
+
+    // enchant <targets> <enchantment> [<level>]
+    let enchant = d.literal(root, "enchant");
+    d.requires(enchant, GAMEMASTERS);
+    let t = d.argument(enchant, "targets", ENTITIES);
+    let e = d.argument(t, "enchantment", ArgType::Resource(Resource::Enchantment));
+    d.executes(e, "enchant");
+    let level = d.argument(e, "level", integer(0));
+    d.executes(level, "enchant");
+
     // summon <entity> [<pos>] [<nbt>]
     let summon = d.literal(root, "summon");
     d.requires(summon, GAMEMASTERS);

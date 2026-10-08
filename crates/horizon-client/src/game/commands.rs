@@ -1,5 +1,7 @@
 //! Command execution (the `execute` side of each vanilla command class):
 //! entity selectors resolved against the game, vanilla feedback and errors.
+mod effects;
+
 use super::{Dim, Game, Screen, chat::PLAYER_NAME};
 use horizon_client::{
     command::{
@@ -281,6 +283,9 @@ impl Game<'_> {
             "weather" => self.cmd_weather(ctx),
             "kill" => self.cmd_kill(ctx),
             "summon" => self.cmd_summon(ctx),
+            "effect.give" => self.cmd_effect_give(ctx),
+            "effect.clear" => self.cmd_effect_clear(ctx),
+            "enchant" => self.cmd_enchant(ctx),
             "setblock" => self.cmd_setblock(ctx),
             "fill" => self.cmd_fill(ctx),
             "clone" => self.cmd_clone(ctx),
