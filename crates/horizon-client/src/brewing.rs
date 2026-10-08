@@ -152,7 +152,10 @@ pub fn potion_color(id: Option<&str>) -> u32 {
         b += w * (e.color & 255);
         total += w;
     }
-    if total == 0 { BASE_POTION_COLOR } else { (r / total) << 16 | (g / total) << 8 | b / total }
+    match (r.checked_div(total), g.checked_div(total), b.checked_div(total)) {
+        (Some(r), Some(g), Some(b)) => (r << 16) | (g << 8) | b,
+        _ => BASE_POTION_COLOR,
+    }
 }
 /// `MobEffectUtil.formatDuration` at 20 TPS: m:ss or h:mm:ss.
 pub fn format_duration(ticks: i32) -> String {

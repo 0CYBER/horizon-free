@@ -507,7 +507,7 @@ mod tests {
         let a = enchant_offers(&e, &items, 1234, 15, Some(&s));
         let b = enchant_offers(&e, &items, 1234, 15, Some(&s));
         assert_eq!(a, b);
-        assert!(a.costs[2] >= 30 && a.costs[2] <= 30, "{a:?}");
+        assert_eq!(a.costs[2], 30, "{a:?}");
         assert!(a.costs[0] >= 1 && a.costs[0] <= a.costs[2]);
         // The clue is the first offer's random pick from the same list.
         for slot in 0..3 {

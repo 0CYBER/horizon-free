@@ -523,7 +523,9 @@ pub fn apply_value_effect(effect: &Value, level: u32, random: &mut LegacyRandom,
         "minecraft:remove_binomial" => {
             let p = level_value(&effect["chance"], level);
             let n = value;
-            let removed = if !(n <= 128.0) && !(n * p < 20.0) && !(n * (1.0 - p) < 20.0) {
+            // Normal approximation for large counts (written as vanilla's negated tests).
+            let large = n > 128.0 && n * p >= 20.0 && n * (1.0 - p) >= 20.0;
+            let removed = if large {
                 let miu = (f64::from(n) * f64::from(p)).floor();
                 let sigma = (f64::from(n) * f64::from(p) * f64::from(1.0 - p)).sqrt();
                 ((miu + random.next_gaussian() * sigma).round() as i32).clamp(0, n as i32)

@@ -103,7 +103,7 @@ impl Game<'_> {
         let remaining = 32u32.saturating_sub(ticks);
         let eye = self.eye_position().unwrap_or_default();
         // Consumable.emitParticlesAndSounds: the drink sound every 4 ticks near the end.
-        if remaining <= 25 && remaining % 4 == 0 {
+        if remaining <= 25 && remaining.is_multiple_of(4) {
             let pitch = self.world.random.next_float() * 0.1 + 0.9;
             self.audio.play("minecraft:entity.generic.drink", Some(eye), 0.5, pitch);
         }
@@ -269,7 +269,7 @@ impl Game<'_> {
                             self.apply_effect_action(a);
                         }
                     } else {
-                        let d = (intensity * f64::from(*duration) * f64::from(scale) + 0.5) as i32;
+                        let d = (intensity * f64::from(*duration) * scale + 0.5) as i32;
                         if d > 20
                             && let Some(e) = brewing::effect(id)
                         {

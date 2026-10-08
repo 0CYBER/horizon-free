@@ -286,10 +286,10 @@ pub fn offer_from<R: RandomSource>(ctx: &TradeContext<'_>, t: &Value, random: &m
         result = stack;
         additional += extra;
     }
-    if let Some(Value::String(tag)) = t.get("double_trade_price_enchantments") {
-        if result.stored_enchantments().iter().any(|(e, _)| ctx.enchantments.in_tag(tag, e)) {
-            additional *= 2;
-        }
+    if let Some(Value::String(tag)) = t.get("double_trade_price_enchantments")
+        && result.stored_enchantments().iter().any(|(e, _)| ctx.enchantments.in_tag(tag, e))
+    {
+        additional *= 2;
     }
     let a = cost(ctx.items, &t["wants"], additional);
     if a.stack.count < 1 {

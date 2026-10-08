@@ -890,15 +890,14 @@ impl Game<'_> {
                         let count = names.next_int_bound(2).unwrap_or(0) + 3;
                         let words: Vec<&str> = (0..count).map(|_| WORDS[names.next_int_bound(WORDS.len() as i32).unwrap_or(0) as usize]).collect();
                         let message = words.join(" ");
-                        let col: i32;
                         let disabled = (gold < i as i32 + 1 || level < cost) && !self.creative;
-                        if disabled {
+                        let col: i32 = if disabled {
                             batch.sprite_scaled(atlas, "gui/sprites/container/enchanting_table/enchantment_slot_disabled", ox + bx, oy + by, bw, bh, u32::MAX);
                             batch.sprite(atlas, &format!("gui/sprites/container/enchanting_table/level_{}_disabled", i + 1), ox + bx + 1.0, oy + by + 1.0);
                             let c = ((-9937334i32) & 16711422) >> 1;
                             let msg_color = argb(c | 0xFF00_0000u32 as i32);
                             self.galactic_deferred(batch, &message, ox + bx + 20.0, oy + by + 2.0, text_width, msg_color);
-                            col = -12550384;
+                            -12550384
                         } else {
                             let hover = inside(local, bx, by, bw, bh);
                             let sprite = if hover { "enchantment_slot_highlighted" } else { "enchantment_slot" };
@@ -906,8 +905,8 @@ impl Game<'_> {
                             batch.sprite(atlas, &format!("gui/sprites/container/enchanting_table/level_{}", i + 1), ox + bx + 1.0, oy + by + 1.0);
                             let msg_color = if hover { -128 } else { -9937334 };
                             self.galactic_deferred(batch, &message, ox + bx + 20.0, oy + by + 2.0, text_width, argb(msg_color));
-                            col = -8323296;
-                        }
+                            -8323296
+                        };
                         let atlas = &self.res.atlas;
                         let cw = HudBatch::text_width(atlas, &cost_text);
                         batch.text(atlas, &cost_text, ox + bx + 20.0 + 86.0 - cw, oy + by + 9.0, argb(col), true);
@@ -942,7 +941,7 @@ impl Game<'_> {
                         batch.sprite(atlas, "gui/sprites/container/anvil/error", ox + 99.0, oy + 45.0);
                     }
                     if s.inputs[0].is_some() {
-                        let blink = if (self.ticks / 6) % 2 == 0 { "_" } else { "" };
+                        let blink = if (self.ticks / 6).is_multiple_of(2) { "_" } else { "" };
                         batch.text(atlas, &format!("{}{blink}", s.name), ox + 62.0, oy + 24.0, u32::MAX, true);
                     }
                     let cost = s.anvil.cost;
