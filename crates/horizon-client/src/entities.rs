@@ -428,3 +428,70 @@ impl ItemFrame {
         )
     }
 }
+/// An armor stand (`ArmorStand`).
+#[derive(Clone, Debug)]
+pub struct ArmorStand {
+    pub id: u32,
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub on_ground: bool,
+    pub yaw: f32,
+    /// mainhand, offhand, feet, legs, chest, head (EquipmentSlot order).
+    pub equipment: [Option<crate::items::ItemStack>; 6],
+    pub small: bool,
+    pub show_arms: bool,
+    pub no_base_plate: bool,
+    pub invisible: bool,
+    pub marker: bool,
+    /// Game time of the last hit (the wobble and the second-hit window).
+    pub last_hit: i64,
+}
+impl ArmorStand {
+    pub const SLOTS: [&'static str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
+    pub fn new(id: u32, position: Vec3, yaw: f32) -> Self {
+        Self {
+            id,
+            position,
+            velocity: Vec3::ZERO,
+            on_ground: true,
+            yaw,
+            equipment: Default::default(),
+            small: false,
+            show_arms: false,
+            no_base_plate: false,
+            invisible: false,
+            marker: false,
+            last_hit: i64::MIN / 2,
+        }
+    }
+    /// EntityType.ARMOR_STAND dimensions (0.5 x 1.975, half for small).
+    pub fn bounds(&self) -> Aabb {
+        let s = if self.small { 0.5 } else { 1.0 };
+        let (w, h) = (0.25 * s, 1.975 * s);
+        let p = self.position;
+        Aabb::new(
+            Vec3::new(p.x - w, p.y, p.z - w),
+            Vec3::new(p.x + w, p.y + h, p.z + w),
+        )
+    }
+    /// LivingEntity.travel with gravity 0.08 and 0.98 drag, falling until it
+    /// lands (armor stands have no other movement).
+    pub fn tick(&mut self, scene: &mut crate::collisions::SceneCollisions) {
+        if self.marker {
+            return;
+        }
+        let mut v = self.velocity;
+        v.y -= 0.08;
+        let wanted = v;
+        if let Ok(moved) = scene.resolve(self.bounds(), wanted, 0.0, self.on_ground) {
+            self.position = Vec3::new(
+                self.position.x + moved.x,
+                self.position.y + moved.y,
+                self.position.z + moved.z,
+            );
+            self.on_ground = wanted.y < 0.0 && moved.y > wanted.y;
+            v = Vec3::new(0.0, if moved.y != wanted.y { 0.0 } else { v.y * 0.98 }, 0.0);
+        }
+        self.velocity = v;
+    }
+}

@@ -130,6 +130,13 @@ impl Game<'_> {
                             });
                         }
                     }
+                    "minecraft:armor_stand" => {
+                        self.next_entity += 1;
+                        if let Some(a) = entity_nbt::armor_stand_from_nbt(&tag, self.next_entity) {
+                            self.remember(a.id, uuid, tag);
+                            self.armor_stands.push(a);
+                        }
+                    }
                     "minecraft:item_frame" | "minecraft:glow_item_frame" => {
                         self.next_entity += 1;
                         if let Some(f) = entity_nbt::item_frame_from_nbt(&tag, self.next_entity) {
@@ -274,6 +281,18 @@ impl Game<'_> {
                 out.entry(chunk_of(f.position)).or_default().push(tag);
             }
         }
+        for a in &self.armor_stands {
+            if keys.contains(&chunk_of(a.position)) {
+                let uuid = self
+                    .persist
+                    .uuids
+                    .get(&a.id)
+                    .copied()
+                    .unwrap_or_else(random_uuid);
+                let tag = entity_nbt::armor_stand_to_nbt(a, uuid, self.persist.raw.get(&a.id));
+                out.entry(chunk_of(a.position)).or_default().push(tag);
+            }
+        }
         for f in &self.item_frames {
             let (lo, hi) = f.bounds();
             let at = Vec3::new(
@@ -318,6 +337,13 @@ impl Game<'_> {
         if remove {
             let gone = |p: Vec3| keys.contains(&chunk_of(p));
             let mut removed: Vec<u32> = Vec::new();
+            self.armor_stands.retain(|a| {
+                let keep = !gone(a.position);
+                if !keep {
+                    removed.push(a.id);
+                }
+                keep
+            });
             self.item_frames.retain(|f| {
                 let (lo, hi) = f.bounds();
                 let keep = !gone(Vec3::new(

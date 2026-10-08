@@ -39,6 +39,8 @@ pub struct ItemInfo {
     pub remainder: Option<String>,
     /// `equippable.slot` (head, chest, legs, feet, ...).
     pub equip_slot: Option<String>,
+    /// `equippable.asset_id`: the equipment asset drawn when worn.
+    pub equip_asset: Option<String>,
     /// All `attribute_modifiers`: (attribute, id, amount, operation, slot group).
     pub modifiers: Vec<(String, String, f64, String, String)>,
     /// `blocks_attacks` (shields).
@@ -270,6 +272,9 @@ impl Items {
                     disable_blocking_seconds: c["minecraft:weapon"]["disable_blocking_for_seconds"]
                         .as_f64()
                         .unwrap_or(0.0) as f32,
+                    equip_asset: c["minecraft:equippable"]["asset_id"]
+                        .as_str()
+                        .map(str::to_owned),
                     equip_slot: c["minecraft:equippable"]["slot"]
                         .as_str()
                         .map(str::to_owned),

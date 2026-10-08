@@ -5,7 +5,7 @@
 //! Horizon does not model (variants, attributes, equipment, custom names)
 //! survive a Horizon save.
 use crate::{
-    entities::{Arrow, ExperienceOrb, ItemEntity, ItemFrame, Painting},
+    entities::{ArmorStand, Arrow, ExperienceOrb, ItemEntity, ItemFrame, Painting},
     mobs::{Mob, MobType},
     save::{
         doubles, float, floats, item_from_nbt, item_to_nbt, number, put, read_doubles, text,
@@ -537,4 +537,54 @@ pub fn item_frame_from_nbt(tag: &Tag, id: u32) -> Option<ItemFrame> {
         invisible: flag(tag, "Invisible"),
         check_interval: 0,
     })
+}
+/// ArmorStand.addAdditionalSaveData with LivingEntity's `equipment`.
+pub fn armor_stand_to_nbt(a: &ArmorStand, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
+    let base = Base {
+        id: "minecraft:armor_stand",
+        uuid,
+        position: a.position,
+        motion: a.velocity,
+        rotation: [a.yaw, 0.0],
+        on_ground: a.on_ground,
+        fall_distance: 0.0,
+    };
+    let mut tag = base.tag(raw);
+    let equipment: Vec<(&str, Tag)> = ArmorStand::SLOTS
+        .iter()
+        .zip(&a.equipment)
+        .filter_map(|(slot, stack)| Some((*slot, item_to_nbt(stack.as_ref()?))))
+        .collect();
+    put(&mut tag, "equipment", Tag::compound(equipment));
+    for (key, value) in [
+        ("Small", a.small),
+        ("ShowArms", a.show_arms),
+        ("NoBasePlate", a.no_base_plate),
+        ("Invisible", a.invisible),
+        ("Marker", a.marker),
+    ] {
+        put(&mut tag, key, Tag::Byte(i8::from(value)));
+    }
+    if let Tag::Compound(map) = &tag
+        && !map.contains_key(&horizon_world::nbt::JavaString::from("Health"))
+    {
+        put(&mut tag, "Health", Tag::Float(20f32.to_bits()));
+    }
+    tag
+}
+pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {
+    let mut a = ArmorStand::new(id, position(tag)?, rotation(tag)[0]);
+    a.velocity = motion(tag);
+    if let Some(eq) = tag.get("equipment") {
+        for (i, slot) in ArmorStand::SLOTS.iter().enumerate() {
+            a.equipment[i] = eq.get(slot).and_then(item_from_nbt);
+        }
+    }
+    a.small = flag(tag, "Small");
+    a.show_arms = flag(tag, "ShowArms");
+    a.no_base_plate = flag(tag, "NoBasePlate");
+    a.invisible = flag(tag, "Invisible");
+    a.marker = flag(tag, "Marker");
+    a.on_ground = flag(tag, "OnGround");
+    Some(a)
 }
