@@ -387,73 +387,6 @@ pub fn falling_block_from_nbt(tag: &Tag) -> Option<(Tag, Vec3, Vec3, u32)> {
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::items::ItemStack;
-
-    #[test]
-    fn item_entities_round_trip() {
-        let e = ItemEntity {
-            id: 7,
-            stack: ItemStack {
-                item: Arc::from("minecraft:diamond_pickaxe"),
-                count: 1,
-                damage: 5,
-                extra: None,
-            },
-            position: Vec3::new(100.5, 64.0, -31.5),
-            previous: Vec3::ZERO,
-            velocity: Vec3::new(0.0, -0.04, 0.0),
-            on_ground: true,
-            age: 120,
-            pickup_delay: 10,
-            bob_offset: 0.0,
-        };
-        let tag = item_entity_to_nbt(&e, [1, 2, 3, 4], None);
-        assert_eq!(kind(&tag).as_deref(), Some("minecraft:item"));
-        assert_eq!(uuid(&tag), Some([1, 2, 3, 4]));
-        let back = item_entity_from_nbt(&tag, 9, 0.0).unwrap();
-        assert_eq!(back.stack.damage, 5);
-        assert_eq!(
-            (back.age, back.pickup_delay, back.on_ground),
-            (120, 10, true)
-        );
-        assert_eq!(back.position.x, 100.5);
-    }
-    #[test]
-    fn unknown_fields_survive() {
-        let raw = Tag::compound([
-            ("id", string("minecraft:item")),
-            ("CustomName", string("x")),
-            ("Pos", doubles(&[0.5, 64.0, 0.5])),
-            (
-                "Item",
-                Tag::compound([("id", string("minecraft:stone")), ("count", Tag::Int(3))]),
-            ),
-        ]);
-        let e = item_entity_from_nbt(&raw, 1, 0.0).unwrap();
-        let tag = item_entity_to_nbt(&e, [0; 4], Some(&raw));
-        assert_eq!(text(tag.get("CustomName")).as_deref(), Some("x"));
-        assert_eq!(number(tag.get("Health")), Some(5));
-    }
-    #[test]
-    fn orbs_expand_their_count() {
-        let o = ExperienceOrb {
-            position: Vec3::new(1.0, 2.0, 3.0),
-            previous: Vec3::ZERO,
-            velocity: Vec3::ZERO,
-            value: 7,
-            age: 3,
-            on_ground: false,
-        };
-        let mut tag = orb_to_nbt(&o, [0; 4]);
-        put(&mut tag, "Count", Tag::Int(3));
-        let back = orbs_from_nbt(&tag);
-        assert_eq!(back.len(), 3);
-        assert_eq!(back[0].value, 7);
-    }
-}
 /// Painting.addAdditionalSaveData: `facing`, `variant` and `block_pos`.
 pub fn painting_to_nbt(p: &Painting, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let (lo, hi) = p.bounds();
@@ -615,4 +548,72 @@ pub fn boat_to_nbt(
 }
 pub fn boat_from_nbt(tag: &Tag) -> Option<(Vec3, Vec3, f32)> {
     Some((position(tag)?, motion(tag), rotation(tag)[0]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::items::ItemStack;
+
+    #[test]
+    fn item_entities_round_trip() {
+        let e = ItemEntity {
+            id: 7,
+            stack: ItemStack {
+                item: Arc::from("minecraft:diamond_pickaxe"),
+                count: 1,
+                damage: 5,
+                extra: None,
+            },
+            position: Vec3::new(100.5, 64.0, -31.5),
+            previous: Vec3::ZERO,
+            velocity: Vec3::new(0.0, -0.04, 0.0),
+            on_ground: true,
+            age: 120,
+            pickup_delay: 10,
+            bob_offset: 0.0,
+        };
+        let tag = item_entity_to_nbt(&e, [1, 2, 3, 4], None);
+        assert_eq!(kind(&tag).as_deref(), Some("minecraft:item"));
+        assert_eq!(uuid(&tag), Some([1, 2, 3, 4]));
+        let back = item_entity_from_nbt(&tag, 9, 0.0).unwrap();
+        assert_eq!(back.stack.damage, 5);
+        assert_eq!(
+            (back.age, back.pickup_delay, back.on_ground),
+            (120, 10, true)
+        );
+        assert_eq!(back.position.x, 100.5);
+    }
+    #[test]
+    fn unknown_fields_survive() {
+        let raw = Tag::compound([
+            ("id", string("minecraft:item")),
+            ("CustomName", string("x")),
+            ("Pos", doubles(&[0.5, 64.0, 0.5])),
+            (
+                "Item",
+                Tag::compound([("id", string("minecraft:stone")), ("count", Tag::Int(3))]),
+            ),
+        ]);
+        let e = item_entity_from_nbt(&raw, 1, 0.0).unwrap();
+        let tag = item_entity_to_nbt(&e, [0; 4], Some(&raw));
+        assert_eq!(text(tag.get("CustomName")).as_deref(), Some("x"));
+        assert_eq!(number(tag.get("Health")), Some(5));
+    }
+    #[test]
+    fn orbs_expand_their_count() {
+        let o = ExperienceOrb {
+            position: Vec3::new(1.0, 2.0, 3.0),
+            previous: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            value: 7,
+            age: 3,
+            on_ground: false,
+        };
+        let mut tag = orb_to_nbt(&o, [0; 4]);
+        put(&mut tag, "Count", Tag::Int(3));
+        let back = orbs_from_nbt(&tag);
+        assert_eq!(back.len(), 3);
+        assert_eq!(back[0].value, 7);
+    }
 }
