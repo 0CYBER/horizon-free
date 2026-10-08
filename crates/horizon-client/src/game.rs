@@ -477,6 +477,8 @@ struct Game<'a> {
     offhand: Option<ItemStack>,
     /// The shield's item cooldown after an axe disabled it (ticks).
     shield_cooldown: u32,
+    /// The source of a command run through /execute (the player otherwise).
+    command_source: Option<commands::execute::Source>,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
     orbs: Vec<ExperienceOrb>,
@@ -6946,6 +6948,7 @@ pub fn run() -> Result<()> {
         armor: [None, None, None, None],
         offhand: None,
         shield_cooldown: 0,
+        command_source: None,
         applied_modifiers: Vec::new(),
         experience: Experience::default(),
         orbs: Vec::new(),

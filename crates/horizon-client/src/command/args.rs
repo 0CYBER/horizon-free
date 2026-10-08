@@ -109,6 +109,8 @@ pub enum ArgType {
     Message,
     Dimension,
     Anchor,
+    /// SwizzleArgument: a set of `x`, `y` and `z` (kept as text).
+    Swizzle,
     /// CompoundTagArgument (kept as SNBT text).
     Nbt,
 }
@@ -1400,6 +1402,22 @@ impl ArgType {
                 }
                 Arg::Str(read_braced(reader, '{', '}')?)
             }
+            ArgType::Swizzle => {
+                let mut axes = String::new();
+                while reader.can_read() && reader.peek() != ' ' {
+                    let c = reader.read();
+                    if !matches!(c, 'x' | 'y' | 'z') || axes.contains(c) {
+                        reader.cursor = start;
+                        return Err(CommandError::tr_at(
+                            "arguments.swizzle.invalid",
+                            &[],
+                            reader,
+                        ));
+                    }
+                    axes.push(c);
+                }
+                Arg::Str(axes)
+            }
             ArgType::Anchor => {
                 let name = reader.read_unquoted_string();
                 match name {
@@ -1475,6 +1493,7 @@ impl ArgType {
             }
             ArgType::GameMode => builder.suggest_matching(GameMode::ALL.map(GameMode::name)),
             ArgType::Anchor => builder.suggest_matching(["eyes", "feet"]),
+            ArgType::Swizzle => {}
             ArgType::Message => {
                 // MessageArgument suggests selectors and names for the last word.
                 let rem = builder.remaining();

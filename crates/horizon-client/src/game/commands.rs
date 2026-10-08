@@ -1,6 +1,7 @@
 //! Command execution (the `execute` side of each vanilla command class):
 //! entity selectors resolved against the game, vanilla feedback and errors.
 mod effects;
+pub(super) mod execute;
 
 use super::{Dim, Game, Screen, chat::PLAYER_NAME};
 use horizon_client::{
@@ -58,7 +59,17 @@ impl Game<'_> {
             }
             Ok((ctx, id)) => {
                 let ctx = ctx.clone();
-                self.execute_command(id, &ctx)
+                if parse
+                    .context
+                    .literals
+                    .first()
+                    .is_some_and(|w| w == "execute")
+                {
+                    let root = parse.context.clone();
+                    self.run_execute(&root)
+                } else {
+                    self.execute_command(id, &ctx)
+                }
             }
         };
         if let Err(e) = result {
@@ -111,13 +122,25 @@ impl Game<'_> {
         }
     }
     fn source_position(&self) -> [f64; 3] {
+        if let Some(s) = &self.command_source {
+            return s.pos;
+        }
         match &self.player {
             Some(p) => [p.position.x, p.position.y, p.position.z],
             None => self.spawn.map_or([0.0, 64.0, 0.0], |s| [s.x, s.y, s.z]),
         }
     }
     fn source_rotation(&self) -> [f32; 2] {
-        [self.yaw, self.pitch]
+        self.command_source
+            .map_or([self.yaw, self.pitch], |s| s.rot)
+    }
+    /// LocalCoordinates use the anchored position; world coordinates the position.
+    fn resolve_coords(&self, c: &Coordinates) -> [f64; 3] {
+        let origin = match (c, &self.command_source) {
+            (Coordinates::Local(_), Some(s)) => self.anchor_position(s),
+            _ => self.source_position(),
+        };
+        c.position(origin, self.source_rotation())
     }
     fn coords(&self, ctx: &Context, name: &str) -> Option<Coordinates> {
         match ctx.get(name) {
@@ -126,15 +149,15 @@ impl Game<'_> {
         }
     }
     fn position_arg(&self, ctx: &Context, name: &str) -> Option<[f64; 3]> {
-        self.coords(ctx, name)
-            .map(|c| c.position(self.source_position(), self.source_rotation()))
+        self.coords(ctx, name).map(|c| self.resolve_coords(&c))
     }
     /// BlockPosArgument.getLoadedBlockPos.
     fn block_pos_arg(&self, ctx: &Context, name: &str) -> R<[i32; 3]> {
         let c = self
             .coords(ctx, name)
             .ok_or_else(|| err("argument.pos.missing.int", &[]))?;
-        let p = c.block(self.source_position(), self.source_rotation());
+        // BlockPos.containing(getPosition)
+        let p = self.resolve_coords(&c).map(|v| v.floor() as i32);
         if !self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4)) {
             return Err(err("argument.pos.unloaded", &[]));
         }
@@ -231,8 +254,11 @@ impl Game<'_> {
             ]
         };
         let mut candidates: Vec<Target> = Vec::new();
-        if self.player.is_some() {
-            candidates.push(Target::Player);
+        match (s.kind, self.command_source) {
+            // @s: the executing entity (none for a server source).
+            ('s', Some(source)) => candidates.extend(source.entity),
+            _ if self.player.is_some() => candidates.push(Target::Player),
+            _ => {}
         }
         if s.kind != 's' {
             candidates.extend(
@@ -1666,12 +1692,15 @@ impl Game<'_> {
             _ => String::new(),
         };
         let message = self.expand_selectors(&raw);
+        // CommandSourceStack.getDisplayName: the executing entity's name.
+        let name = match self.command_source.map(|s| s.entity) {
+            Some(Some(t)) => self.target_name(t),
+            Some(None) => Text::literal("Server"),
+            None => Text::literal(PLAYER_NAME),
+        };
         let line = match id {
-            "say" => Text::translate(
-                "chat.type.announcement",
-                &[Text::literal(PLAYER_NAME), message],
-            ),
-            "me" => Text::translate("chat.type.emote", &[Text::literal(PLAYER_NAME), message]),
+            "say" => Text::translate("chat.type.announcement", &[name, message]),
+            "me" => Text::translate("chat.type.emote", &[name, message]),
             _ => {
                 let _ = self.entities(ctx, "targets", true)?;
                 // Whispering to yourself: the incoming and outgoing lines.
