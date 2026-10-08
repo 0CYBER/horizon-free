@@ -24,9 +24,12 @@ enum VanillaProto {
 }
 impl VanillaTerrain {
     pub fn new(dir: &Path, registry: &'static BlockRegistry, biomes: &Biomes, seed: i64) -> crate::Result<Self> {
+        Self::for_dimension(dir, registry, biomes, seed, "minecraft:overworld")
+    }
+    pub fn for_dimension(dir: &Path, registry: &'static BlockRegistry, biomes: &Biomes, seed: i64, dimension: &str) -> crate::Result<Self> {
         let data: Arc<GeneratorData> = GeneratorData::load(dir, registry)?;
         let biome_map = data.biome_names().iter().map(|name| biomes.id(name)).collect();
-        let generator = OverworldGenerator::new(data, seed)?;
+        let generator = OverworldGenerator::for_dimension(data, seed, "minecraft:normal", dimension)?;
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             eprintln!(
@@ -97,7 +100,9 @@ impl ChunkGenerator for VanillaTerrain {
         let pos = chunk.position();
         let mut out = Chunk::empty(pos.x, pos.z);
         let (bx, bz) = (pos.x * 16, pos.z * 16);
-        for y in MIN_Y..MIN_Y + HEIGHT {
+        // Only the generated range (the Nether is 0..256) is copied.
+        let (lo, hi) = (chunk.terrain.min_y().max(MIN_Y), (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT));
+        for y in lo..hi {
             for z in 0..16 {
                 for x in 0..16 {
                     let id = chunk.block(bx + x, y, bz + z).0 as u16;
@@ -111,7 +116,8 @@ impl ChunkGenerator for VanillaTerrain {
         for qy in 0..HEIGHT / 4 {
             for qz in 0..4 {
                 for qx in 0..4 {
-                    let id = chunk.biome_id_at(bx + qx * 4, MIN_Y + qy * 4, bz + qz * 4);
+                    let y = (MIN_Y + qy * 4).clamp(lo, hi - 1);
+                    let id = chunk.biome_id_at(bx + qx * 4, y, bz + qz * 4);
                     let index = id.0 as usize;
                     biomes[(qy * 16 + qz * 4 + qx) as usize] = self.biome_map.get(index).copied().unwrap_or(0);
                 }

@@ -133,13 +133,23 @@ pub struct Sky {
     pub cloud_color: [f32; 4],
     /// `gameplay/sky_light_level`, the server-side sky darkening.
     pub sky_light_level: f32,
+    /// Environmental fog (`visual/fog_start_distance` / `fog_end_distance`).
+    pub fog_start: f32,
+    pub fog_end: f32,
 }
 impl Environment {
     pub fn load(root: &Path) -> Result<Self> {
-        let timeline: Value =
-            serde_json::from_slice(&fs::read(root.join("data/minecraft/timeline/day.json"))?)?;
+        Self::load_dimension(root, "overworld", true)
+    }
+    /// A dimension's base attributes, optionally driven by the day timeline.
+    pub fn load_dimension(root: &Path, dimension: &str, day_cycle: bool) -> Result<Self> {
+        let timeline: Value = if day_cycle {
+            serde_json::from_slice(&fs::read(root.join("data/minecraft/timeline/day.json"))?)?
+        } else {
+            serde_json::json!({"period_ticks": 24000, "tracks": {}})
+        };
         let dimension: Value = serde_json::from_slice(&fs::read(
-            root.join("data/minecraft/dimension_type/overworld.json"),
+            root.join(format!("data/minecraft/dimension_type/{dimension}.json")),
         )?)?;
         let mut tracks = HashMap::new();
         for (name, track) in timeline["tracks"].as_object().ok_or("invalid timeline")? {
@@ -180,7 +190,8 @@ impl Environment {
         .filter_map(|(k, v)| Some((k.to_owned(), parse_value(&Value::String(v.into()))?)))
         .collect();
         base.insert("minecraft:visual/sky_light_factor".into(), [1.0, 0.0, 0.0, 0.0]);
-        base.insert("minecraft:gameplay/sky_light_level".into(), [1.0, 0.0, 0.0, 0.0]);
+        // Sky light level in light levels (the timeline multiplies it).
+        base.insert("minecraft:gameplay/sky_light_level".into(), [15.0, 0.0, 0.0, 0.0]);
         for (k, v) in dimension["attributes"].as_object().into_iter().flatten() {
             if let Some(v) = parse_value(v) {
                 base.insert(k.clone(), v);
@@ -257,7 +268,9 @@ impl Environment {
                 "minecraft:visual/cloud_color",
                 self.base("minecraft:visual/cloud_color"),
             ),
-            sky_light_level: scalar("minecraft:gameplay/sky_light_level"),
+            sky_light_level: scalar("minecraft:gameplay/sky_light_level") / 15.0,
+            fog_start: self.base.get("minecraft:visual/fog_start_distance").map_or(0.0, |v| v[0]),
+            fog_end: self.base.get("minecraft:visual/fog_end_distance").map_or(1024.0, |v| v[0]),
         }
     }
 }

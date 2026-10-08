@@ -307,6 +307,8 @@ fn pack_light(sky: f32, block: f32) -> u32 {
     (sky * 16.0).clamp(0.0, 255.0) as u32 | ((block * 16.0).clamp(0.0, 255.0) as u32) << 8
 }
 pub struct Mesher<'a> {
+    /// CardinalLighting.NETHER: brighter up/down faces.
+    pub nether_shading: bool,
     pub assets: &'a Assets,
     pub tables: &'a MeshTables,
     pub biomes: &'a Biomes,
@@ -437,10 +439,13 @@ impl Mesher<'_> {
             [x, y, z]
         };
         let tint = Self::tint(state, q.tint_index, colors, x, z);
-        let directional = match q.shade_direction_override {
+        let mut directional = match q.shade_direction_override {
             Some(d) => shade(d),
             None => shade(facing),
         };
+        if self.nether_shading && matches!(q.shade_direction_override.unwrap_or(facing), horizon_assets::model::Direction::Up | horizon_assets::model::Direction::Down) {
+            directional = 0.9;
+        }
         let info = &self.tables.info;
         let light_at = |p: [i32; 3]| -> u32 {
             let i = pi(p[0], p[1], p[2]);

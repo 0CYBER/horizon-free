@@ -366,6 +366,8 @@ pub struct Level {
     pub xp_progress: f32,
     pub xp_total: i32,
     pub weather: crate::world::Weather,
+    /// Player.Dimension (minecraft:overworld / minecraft:the_nether).
+    pub dimension: String,
 }
 impl Level {
     pub fn read(dir: &Path) -> Option<Self> {
@@ -421,6 +423,10 @@ impl Level {
             health: player.map_or(20.0, |p| float(p.get("Health"))),
             food: player.map_or(20, |p| long(p.get("foodLevel")) as i32),
             saturation: player.map_or(5.0, |p| float(p.get("foodSaturationLevel"))),
+            dimension: match player.and_then(|p| p.get("Dimension")) {
+                Some(Tag::String(s)) => s.to_string_lossy(),
+                _ => "minecraft:overworld".into(),
+            },
             weather: crate::world::Weather {
                 clear_time: long(data.get("clearWeatherTime")) as i32,
                 rain_time: long(data.get("rainTime")) as i32,
@@ -470,7 +476,7 @@ impl Level {
                         .collect(),
                 ),
             ),
-            ("Dimension", string("minecraft:overworld")),
+            ("Dimension", string(if self.dimension.is_empty() { "minecraft:overworld" } else { &self.dimension })),
         ];
         if let Some(p) = self.position {
             player.push(("Pos", Tag::List(p.iter().map(|v| Tag::Double(v.to_bits())).collect())));

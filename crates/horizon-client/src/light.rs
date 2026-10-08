@@ -35,7 +35,8 @@ impl LightTables {
     }
 }
 /// `region[dz][dx]` holds the chunks around the centre (index 1,1).
-pub fn light_chunk(region: &[[Option<&Chunk>; 3]; 3], tables: &LightTables) -> Vec<Arc<Section>> {
+/// `sky` is false in dimensions without skylight (the Nether).
+pub fn light_chunk(region: &[[Option<&Chunk>; 3]; 3], tables: &LightTables, sky_light: bool) -> Vec<Arc<Section>> {
     let center = region[1][1].expect("centre chunk");
     // Highest occupied section in the region bounds the work.
     let mut top_section = 0;
@@ -80,7 +81,7 @@ pub fn light_chunk(region: &[[Option<&Chunk>; 3]; 3], tables: &LightTables) -> V
     let mut lowest = vec![h as i32; W * W];
     for z in 0..W {
         for x in 0..W {
-            if !present(x, z) {
+            if !present(x, z) || !sky_light {
                 continue;
             }
             let mut y = h as i32 - 1;
@@ -94,7 +95,7 @@ pub fn light_chunk(region: &[[Option<&Chunk>; 3]; 3], tables: &LightTables) -> V
     }
     for z in 0..W {
         for x in 0..W {
-            if !present(x, z) {
+            if !present(x, z) || !sky_light {
                 continue;
             }
             let own = lowest[z * W + x];
@@ -156,15 +157,16 @@ pub fn light_chunk(region: &[[Option<&Chunk>; 3]; 3], tables: &LightTables) -> V
     let mut sections = Vec::with_capacity(SECTIONS);
     for (si, section) in center.sections.iter().enumerate() {
         let mut out = (**section).clone();
+        let open = if sky_light { 0xF0 } else { 0x00 };
         if si * 16 >= h {
-            out.light = Light::Uniform(0xF0);
+            out.light = Light::Uniform(open);
         } else {
             let mut data = Box::new([0u8; 4096]);
             for ly in 0..16 {
                 let y = si * 16 + ly;
                 if y >= h {
                     for i in 0..256 {
-                        data[ly << 8 | i] = 0xF0;
+                        data[ly << 8 | i] = open;
                     }
                     continue;
                 }

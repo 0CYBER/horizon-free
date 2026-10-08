@@ -62,6 +62,7 @@ struct Options {
     look: Option<(f32, f32)>,
     time: Option<i64>,
     weather: Option<String>,
+    dimension: Option<String>,
 }
 impl Options {
     fn read() -> Result<Option<Self>> {
@@ -88,6 +89,7 @@ impl Options {
             look: None,
             time: None,
             weather: None,
+            dimension: None,
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -127,6 +129,7 @@ impl Options {
                         "--world" => o.world = Some(value),
                         "--time" => o.time = Some(value.parse()?),
                         "--weather" => o.weather = Some(value),
+                        "--dimension" => o.dimension = Some(if value.contains(':') { value } else { format!("minecraft:{value}") }),
                         "--look" => {
                             let (y, p) = value.split_once(',').ok_or("--look takes YAW,PITCH")?;
                             o.look = Some((y.parse()?, p.parse()?));
@@ -175,6 +178,7 @@ pub struct Resources {
     mob_types: HashMap<String, Arc<MobType>>,
     providers: Providers,
     chest_model: Option<horizon_client::mobs::Part>,
+    nether_environment: Environment,
     /// clouds.png: (width, height, filled cells).
     clouds: (u32, u32, Vec<bool>),
     context: Arc<WorkerContext>,
@@ -266,6 +270,35 @@ struct Game<'a> {
     flash: u32,
     /// Sleeping in a bed: (bed head position, ticks asleep).
     sleeping: Option<([i32; 3], u32)>,
+    dim: Dim,
+    world_root: PathBuf,
+    /// A player carried through a portal, re-placed once the destination loads.
+    travelling: Option<(PlayerMotion, Vec3)>,
+    portal_ticks: u32,
+    portal_cooldown: u32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Dim {
+    Overworld,
+    Nether,
+}
+impl Dim {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Overworld => "minecraft:overworld",
+            Self::Nether => "minecraft:the_nether",
+        }
+    }
+    fn from_id(id: &str) -> Self {
+        if id == "minecraft:the_nether" { Self::Nether } else { Self::Overworld }
+    }
+    /// Region folder inside the world (vanilla's DIM-1 for the Nether).
+    fn folder(self) -> Option<&'static str> {
+        match self {
+            Self::Overworld => None,
+            Self::Nether => Some("DIM-1"),
+        }
+    }
 }
 fn facing_offset(facing: &str) -> [i32; 3] {
     match facing {
@@ -978,6 +1011,19 @@ impl Game<'_> {
     }
     /// A column whose surface is a full solid, non-fluid, non-leaf block open to the sky.
     fn land_column(&self, x: i32, z: i32) -> Option<i32> {
+        if self.dim == Dim::Nether {
+            // Below the bedrock ceiling: a solid floor with two air blocks above.
+            for y in (32..120).rev() {
+                let floor = self.res.facts.get(self.world.block(x, y - 1, z));
+                if floor.full_collision && floor.fluid == Fluid::None
+                    && self.res.facts.is_air(self.world.block(x, y, z))
+                    && self.res.facts.is_air(self.world.block(x, y + 1, z))
+                {
+                    return Some(y);
+                }
+            }
+            return None;
+        }
         let mut y = MIN_Y + HEIGHT - 1;
         while y > MIN_Y {
             let s = self.world.block(x, y, z);
@@ -992,6 +1038,15 @@ impl Game<'_> {
     }
     fn spawn_player(&mut self) -> Result<()> {
         if self.player.is_some() {
+            return Ok(());
+        }
+        if let Some((_, target)) = &self.travelling {
+            let (cx, cz) = ((target.x.floor() as i32) >> 4, (target.z.floor() as i32) >> 4);
+            self.streaming.center = (cx, cz);
+            if (-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
+                let (player, target) = self.travelling.take().ok_or("travel")?;
+                self.place_after_travel(player, target)?;
+            }
             return Ok(());
         }
         let saved = self.level.position.map(|p| Vec3::new(p[0], p[1], p[2]));
@@ -1149,6 +1204,7 @@ impl Game<'_> {
         self.tick_experience();
         self.tick_hand();
         self.tick_sleep();
+        self.tick_portal()?;
         if let Some(p) = &self.player {
             // Player.aiStep bob and Entity.walkDist (0.6 per block).
             let (dx, dz) = (p.position.x - self.previous_position.x, p.position.z - self.previous_position.z);
@@ -1999,6 +2055,9 @@ impl Game<'_> {
     }
 
     fn sky_darken(&self) -> i32 {
+        if self.dim == Dim::Nether {
+            return 11;
+        }
         let mut sky = self.res.environment.sample(self.world.day_time, 0, 0);
         let (rain, thunder) = self.world.weather.levels(1.0);
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
@@ -2594,17 +2653,13 @@ impl Game<'_> {
             saturation: 5.0,
             ..Level::default()
         });
-        let save = Arc::new(SaveDir::new(save_root.clone()));
-        let res = &*self.res;
-        let mut streaming = if self.options.test_terrain {
-            let inner = Arc::new(TestTerrain::new(res.assets.registry, &res.biomes)?);
-            Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
-        } else {
-            let inner = Arc::new(VanillaTerrain::new(&self.options.resources.join("worldgen"), res.assets.registry, &res.biomes, level.seed).map_err(|e| {
-                format!("{e}\nPrepare the worldgen bundle with: python3 tools/prepare_native_client.py")
-            })?);
-            Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
-        };
+        let mut level = level;
+        if let Some(d) = &self.options.dimension {
+            level.dimension = d.clone();
+            level.position = None;
+        }
+        let dim = Dim::from_id(&level.dimension);
+        let (mut streaming, save) = self.make_streaming(&save_root, dim, level.seed)?;
         streaming.radius = self.settings.render_distance;
         let mut world = World::new(self.res.facts.air, level.seed);
         world.game_time = level.time;
@@ -2647,6 +2702,9 @@ impl Game<'_> {
         self.inventory = inventory;
         self.save = save;
         self.level = level;
+        self.dim = dim;
+        self.world_root = save_root.clone();
+        self.travelling = None;
         self.player = None;
         self.spawn = None;
         self.spawn_search = 0;
@@ -2666,9 +2724,245 @@ impl Game<'_> {
             r.clear_sections();
         }
         self.apply_settings();
+        self.streaming.sky_light = dim == Dim::Overworld;
+        self.streaming.nether_shading = dim == Dim::Nether;
         // New worlds get their level.dat right away.
         if !save_root.join("level.dat").exists() {
             self.level.write(&save_root)?;
+        }
+        Ok(())
+    }
+    /// Streaming and region storage for one dimension of a world.
+    fn make_streaming(&self, world_root: &std::path::Path, dim: Dim, seed: i64) -> Result<(Streaming, Arc<SaveDir>)> {
+        let region_root = match dim.folder() {
+            Some(f) => world_root.join(f),
+            None => world_root.to_owned(),
+        };
+        let save = Arc::new(SaveDir::new(region_root));
+        let res = &*self.res;
+        let mut streaming = if self.options.test_terrain && dim == Dim::Overworld {
+            let inner = Arc::new(TestTerrain::new(res.assets.registry, &res.biomes)?);
+            Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
+        } else {
+            let inner = Arc::new(VanillaTerrain::for_dimension(&self.options.resources.join("worldgen"), res.assets.registry, &res.biomes, seed, dim.id()).map_err(|e| {
+                format!("{e}\nPrepare the worldgen bundle with: python3 tools/prepare_native_client.py")
+            })?);
+            Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
+        };
+        streaming.radius = self.settings.render_distance;
+        streaming.sky_light = dim == Dim::Overworld;
+        streaming.nether_shading = dim == Dim::Nether;
+        Ok((streaming, save))
+    }
+    /// Change dimension through a portal (Entity.changeDimension with
+    /// PortalForcer placement once the destination has loaded).
+    fn enter_dimension(&mut self, target: Dim) -> Result<()> {
+        let Some(player) = self.player.take() else { return Ok(()) };
+        // Save the departing dimension's changed chunks.
+        let keys: Vec<_> = self.world.modified.drain().collect();
+        let chunks: Vec<_> = keys.iter().filter_map(|k| self.world.chunks.get(k)).map(|c| self.with_entities(c)).collect();
+        self.save.save(&chunks, &self.res.assets.registry, &self.res.biomes)?;
+        // Coordinates scale by 8 between the Overworld and the Nether.
+        let scale = match (self.dim, target) {
+            (Dim::Overworld, Dim::Nether) => 1.0 / 8.0,
+            (Dim::Nether, Dim::Overworld) => 8.0,
+            _ => 1.0,
+        };
+        let destination = Vec3::new(player.position.x * scale, player.position.y, player.position.z * scale);
+        let (streaming, save) = self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
+        let mut world = World::new(self.res.facts.air, self.level.seed);
+        world.game_time = self.world.game_time;
+        world.day_time = self.world.day_time;
+        world.weather = self.world.weather;
+        self.streaming = streaming;
+        self.world = world;
+        self.save = save;
+        self.dim = target;
+        self.level.dimension = target.id().to_owned();
+        self.mobs.clear();
+        self.arrows.clear();
+        self.dropped.clear();
+        self.particles.clear();
+        self.orbs.clear();
+        self.mining = None;
+        self.travelling = Some((player, destination));
+        self.portal_cooldown = 300;
+        if let Some(r) = self.renderer.as_mut() {
+            r.clear_sections();
+        }
+        self.apply_settings();
+        Ok(())
+    }
+    /// PortalShape: an obsidian frame around 2..=21 by 3..=21 empty blocks.
+    fn portal_shape(&self, start: [i32; 3], x_axis: bool) -> Option<([i32; 3], i32, i32)> {
+        let name = |p: [i32; 3]| self.res.facts.get(self.world.block(p[0], p[1], p[2])).name.clone();
+        let empty = |p: [i32; 3]| {
+            let n = name(p);
+            matches!(&*n, "minecraft:air" | "minecraft:cave_air" | "minecraft:fire" | "minecraft:soul_fire" | "minecraft:nether_portal")
+        };
+        let frame = |p: [i32; 3]| &*name(p) == "minecraft:obsidian";
+        let d = if x_axis { [1, 0, 0] } else { [0, 0, 1] };
+        let mut bottom = start;
+        let mut n = 0;
+        while empty([bottom[0], bottom[1] - 1, bottom[2]]) && n < 21 {
+            bottom[1] -= 1;
+            n += 1;
+        }
+        if !frame([bottom[0], bottom[1] - 1, bottom[2]]) {
+            return None;
+        }
+        let mut left = bottom;
+        n = 0;
+        while empty([left[0] - d[0], left[1], left[2] - d[2]]) && n < 21 {
+            left = [left[0] - d[0], left[1], left[2] - d[2]];
+            n += 1;
+        }
+        if !frame([left[0] - d[0], left[1], left[2] - d[2]]) {
+            return None;
+        }
+        let mut width = 0;
+        while width <= 21 {
+            let p = [left[0] + d[0] * width, left[1], left[2] + d[2] * width];
+            if !empty(p) || !frame([p[0], p[1] - 1, p[2]]) {
+                break;
+            }
+            width += 1;
+        }
+        if !(2..=21).contains(&width) || !frame([left[0] + d[0] * width, left[1], left[2] + d[2] * width]) {
+            return None;
+        }
+        let mut height = 0;
+        'rows: while height <= 21 {
+            let y = left[1] + height;
+            if !frame([left[0] - d[0], y, left[2] - d[2]]) || !frame([left[0] + d[0] * width, y, left[2] + d[2] * width]) {
+                break;
+            }
+            for i in 0..width {
+                if !empty([left[0] + d[0] * i, y, left[2] + d[2] * i]) {
+                    break 'rows;
+                }
+            }
+            height += 1;
+        }
+        let top_ok = (0..width).all(|i| frame([left[0] + d[0] * i, left[1] + height, left[2] + d[2] * i]));
+        ((3..=21).contains(&height) && top_ok).then_some((left, width, height))
+    }
+    /// BaseFireBlock.onPlace: lighting fire inside a frame creates a portal.
+    fn try_light_portal(&mut self, at: [i32; 3]) -> Result<bool> {
+        for x_axis in [true, false] {
+            if let Some((origin, width, height)) = self.portal_shape(at, x_axis) {
+                let d = if x_axis { [1, 0, 0] } else { [0, 0, 1] };
+                let registry = &self.res.assets.registry;
+                let Some(default) = registry.default_state("minecraft:nether_portal") else { return Ok(false) };
+                let mut portal = registry.state(default).cloned().ok_or("portal state")?;
+                portal.properties.insert("axis".into(), if x_axis { "x" } else { "z" }.into());
+                let id = registry.resolve(&portal).unwrap_or(default);
+                for h in 0..height {
+                    for w in 0..width {
+                        self.world.set(origin[0] + d[0] * w, origin[1] + h, origin[2] + d[2] * w, id)?;
+                    }
+                }
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    /// PortalForcer: reuse a nearby portal, else build a 2x3 obsidian portal.
+    fn place_after_travel(&mut self, mut player: PlayerMotion, target: Vec3) -> Result<()> {
+        let (tx, tz) = (target.x.floor() as i32, target.z.floor() as i32);
+        let radius = if self.dim == Dim::Nether { 16 } else { 32 };
+        let (min_y, max_y) = if self.dim == Dim::Nether { (1, 126) } else { (MIN_Y + 1, MIN_Y + HEIGHT - 3) };
+        let portal_name = "minecraft:nether_portal";
+        let mut best: Option<(i64, [i32; 3])> = None;
+        for z in tz - radius..=tz + radius {
+            for x in tx - radius..=tx + radius {
+                if !self.world.loaded(x, z) {
+                    continue;
+                }
+                for y in min_y..max_y {
+                    if &*self.res.facts.get(self.world.block(x, y, z)).name == portal_name
+                        && &*self.res.facts.get(self.world.block(x, y - 1, z)).name != portal_name
+                    {
+                        let d = i64::from(x - tx).pow(2) + i64::from(z - tz).pow(2) + i64::from(y - target.y as i32).pow(2);
+                        if best.is_none_or(|b| d < b.0) {
+                            best = Some((d, [x, y, z]));
+                        }
+                    }
+                }
+            }
+        }
+        let spot = match best {
+            Some((_, p)) => p,
+            None => {
+                // Build: obsidian frame 4 wide, 5 tall, with a floor, carved into the terrain.
+                let y = (target.y.floor() as i32).clamp(min_y + 1, max_y - 5);
+                let set = |g: &mut Self, p: [i32; 3], name: &str| -> Result<()> {
+                    if let Some(id) = g.res.assets.registry.default_state(name) {
+                        g.world.set(p[0], p[1], p[2], id)?;
+                    }
+                    Ok(())
+                };
+                for dz in -1..=1 {
+                    for dx in -1..=2 {
+                        set(self, [tx + dx, y - 1, tz + dz], "minecraft:obsidian")?;
+                        for dy in 0..4 {
+                            set(self, [tx + dx, y + dy, tz + dz], "minecraft:air")?;
+                        }
+                    }
+                }
+                for w in -1..=2 {
+                    for h in -1..=3 {
+                        if w == -1 || w == 2 || h == -1 || h == 3 {
+                            set(self, [tx + w, y + h, tz], "minecraft:obsidian")?;
+                        }
+                    }
+                }
+                self.try_light_portal([tx, y, tz])?;
+                [tx, y, tz]
+            }
+        };
+        player.position = Vec3::new(f64::from(spot[0]) + 0.5, f64::from(spot[1]), f64::from(spot[2]) + 0.5);
+        player.velocity = Vec3::ZERO;
+        self.previous_position = player.position;
+        self.player = Some(player);
+        self.apply_equipment();
+        let at = [f64::from(spot[0]), f64::from(spot[1]), f64::from(spot[2])];
+        self.audio.play("minecraft:block.portal.travel", Some(at), 0.25, 1.0);
+        Ok(())
+    }
+    fn tick_portal(&mut self) -> Result<()> {
+        let Some(p) = self.player.as_ref() else { return Ok(()) };
+        let w = f64::from(p.dimensions.width) / 2.0;
+        let (lo, hi) = ([p.position.x - w, p.position.y, p.position.z - w], [p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w]);
+        let mut inside = false;
+        for x in lo[0].floor() as i32..=hi[0].floor() as i32 {
+            for y in lo[1].floor() as i32..=hi[1].floor() as i32 {
+                for z in lo[2].floor() as i32..=hi[2].floor() as i32 {
+                    if &*self.res.facts.get(self.world.block(x, y, z)).name == "minecraft:nether_portal" {
+                        inside = true;
+                    }
+                }
+            }
+        }
+        if !inside {
+            self.portal_ticks = 0;
+            self.portal_cooldown = self.portal_cooldown.saturating_sub(1);
+            return Ok(());
+        }
+        if self.portal_cooldown > 0 {
+            return Ok(());
+        }
+        if self.portal_ticks == 0 {
+            let at = self.eye_position();
+            self.audio.play("minecraft:block.portal.trigger", at, 0.25, self.world.random.next_float() * 0.4 + 0.8);
+        }
+        self.portal_ticks += 1;
+        // Player.getPortalWaitTime: 80 ticks, or 1 when invulnerable (creative).
+        let wait = if self.creative { 1 } else { 80 };
+        if self.portal_ticks >= wait {
+            self.portal_ticks = 0;
+            let target = if self.dim == Dim::Overworld { Dim::Nether } else { Dim::Overworld };
+            self.enter_dimension(target)?;
         }
         Ok(())
     }
@@ -2907,7 +3201,9 @@ impl Game<'_> {
         if item == "flint_and_steel" || item == "fire_charge" {
             let target = [hit.pos[0] + hit.face[0], hit.pos[1] + hit.face[1], hit.pos[2] + hit.face[2]];
             if self.res.facts.is_air(self.world.block(target[0], target[1], target[2])) {
-                self.set_state_named(target, "minecraft:fire", &[])?;
+                if !self.try_light_portal(target)? {
+                    self.set_state_named(target, "minecraft:fire", &[])?;
+                }
                 let sound = if item == "fire_charge" { "minecraft:item.firecharge.use" } else { "minecraft:item.flintandsteel.use" };
                 self.audio.play(sound, Some(at(target)), 1.0, self.world.random.next_float() * 0.4 + 0.8);
                 if item == "fire_charge" {
@@ -3437,7 +3733,8 @@ impl Game<'_> {
                 level.inventory.push((103 - i as u8, s.item.to_string(), s.count, s.damage));
             }
         }
-        level.write(&self.save.root)?;
+        level.dimension = self.dim.id().to_owned();
+        level.write(&self.world_root)?;
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())
     }
@@ -3470,8 +3767,9 @@ impl Game<'_> {
             .map(|c| c.biome(block[0], block[1], block[2]))
             .unwrap_or(0);
         let info = self.res.biomes.get(biome).clone();
-        let mut sky = self.res.environment.sample(self.world.day_time, info.sky, info.fog);
-        let (rain, thunder) = self.world.weather.levels(alpha as f32);
+        let environment = if self.dim == Dim::Nether { &self.res.nether_environment } else { &self.res.environment };
+        let mut sky = environment.sample(self.world.day_time, info.sky, info.fog);
+        let (rain, thunder) = if self.dim == Dim::Overworld { self.world.weather.levels(alpha as f32) } else { (0.0, 0.0) };
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
         if self.flash > 0 {
             // Lightning flash brightens the sky (LevelRenderer skyFlashTime).
@@ -3489,10 +3787,16 @@ impl Game<'_> {
         let hud = self.hud(size);
         let title = self.title.is_some();
         let entities = if title { Vec::new() } else { self.entity_geometry(camera, alpha) };
-        let celestial = if title { self.panorama_geometry() } else { self.celestial_geometry(&sky) };
+        let celestial = if title {
+            self.panorama_geometry()
+        } else if self.dim == Dim::Overworld {
+            self.celestial_geometry(&sky)
+        } else {
+            Vec::new()
+        };
         let hand = if title || self.screen == Screen::Inventory { Vec::new() } else { self.hand_geometry(alpha) };
         let mut entities = entities;
-        if !title {
+        if !title && self.dim == Dim::Overworld {
             self.cloud_geometry(&sky, camera, alpha, &mut entities);
             self.weather_geometry(camera, alpha, &mut entities);
         }
@@ -3515,6 +3819,8 @@ impl Game<'_> {
             distance: (self.streaming.radius * 16) as f32,
             underwater,
             title,
+            skybox: self.dim == Dim::Overworld,
+            environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
             // The camera inside an opaque block sees nothing through it: disable.
             cave_culling: !self.res.facts.get(self.world.block(block[0], block[1], block[2])).solid_render,
             water_fog,
@@ -3954,6 +4260,7 @@ pub fn run() -> Result<()> {
         layer_names,
         providers: Providers::load(&root),
         chest_model: horizon_client::mobs::load_model(&root, "minecraft:chest#main"),
+        nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         clouds: horizon_client::hud::decode(&root.join("assets/minecraft/textures/environment/clouds.png"))
             .map(|(w, h, px)| (w, h, px.chunks_exact(4).map(|p| p[3] > 0).collect()))
             .unwrap_or((1, 1, vec![false])),
@@ -4047,6 +4354,11 @@ pub fn run() -> Result<()> {
         bob: (0.0, 0.0),
         flash: 0,
         sleeping: None,
+        dim: Dim::Overworld,
+        world_root: PathBuf::new(),
+        travelling: None,
+        portal_ticks: 0,
+        portal_cooldown: 0,
     };
     match game.options.world.clone() {
         Some(folder) => {

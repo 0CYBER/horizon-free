@@ -47,6 +47,10 @@ pub struct Frame<'a> {
     pub cave_culling: bool,
     /// Title screen: only the panorama (in `celestial`) and the HUD.
     pub title: bool,
+    /// Dimensions without a skybox (the Nether) clear to the fog colour.
+    pub skybox: bool,
+    /// Environmental fog start/end (Nether 10..96), if any.
+    pub environment_fog: Option<(f32, f32)>,
     pub water_fog: [f32; 3],
     pub outline: Option<[f64; 6]>,
     pub hud: &'a HudBatch,
@@ -957,7 +961,10 @@ impl Renderer {
             (
                 [frame.sky.fog_color[0], frame.sky.fog_color[1], frame.sky.fog_color[2], 1.0],
                 // FogRenderer: render-distance fog starts at max(d - 16, 0)... d.
-                [f32::MAX, f32::MAX, (d - d.min(64.0) * 0.25).max(0.0), d],
+                {
+                    let (start, end) = frame.environment_fog.unwrap_or((f32::MAX, f32::MAX));
+                    [start, end, (d - d.min(64.0) * 0.25).max(0.0), d]
+                },
             )
         };
         let globals = Globals {
@@ -1144,7 +1151,7 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group, &[]);
-            if !frame.underwater {
+            if !frame.underwater && frame.skybox {
                 if !frame.title {
                     pass.set_pipeline(&self.sky);
                     pass.draw(0..3, 0..1);

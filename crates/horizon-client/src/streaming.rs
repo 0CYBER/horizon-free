@@ -44,8 +44,8 @@ enum Job {
     Generate(i32, i32),
     Decorate(i32, i32, Box<[Proto; 9]>),
     Finish(Proto),
-    Light(i32, i32, Box<Region>, u64),
-    Mesh(i32, i32, i32, Box<Region>, u64),
+    Light(i32, i32, Box<Region>, u64, bool),
+    Mesh(i32, i32, i32, Box<Region>, u64, bool),
 }
 pub enum Done {
     Generated(Chunk),
@@ -106,6 +106,9 @@ pub struct Streaming {
     pub radius: i32,
     /// No work is scheduled while paused (title screen).
     pub paused: bool,
+    /// Dimension flags: sky light, Nether face shading.
+    pub sky_light: bool,
+    pub nether_shading: bool,
     pub generated_total: u64,
     pub meshed_total: u64,
 }
@@ -134,6 +137,7 @@ impl Streaming {
                     .spawn(move || {
                         let mut worker = generator.worker();
                         let mut mesher = Mesher {
+                            nether_shading: false,
                             assets: &context.assets,
                             tables: &context.tables,
                             biomes: &context.biomes,
@@ -162,10 +166,11 @@ impl Streaming {
                                     Done::Decorated(x, z, region)
                                 }
                                 Job::Finish(proto) => Done::Generated(generator.finish(proto)),
-                                Job::Light(x, z, region, seq) => {
-                                    Done::Lit(x, z, light_chunk(&borrow(&region), &context.light), seq)
+                                Job::Light(x, z, region, seq, sky) => {
+                                    Done::Lit(x, z, light_chunk(&borrow(&region), &context.light, sky), seq)
                                 }
-                                Job::Mesh(x, sy, z, region, seq) => {
+                                Job::Mesh(x, sy, z, region, seq, nether) => {
+                                    mesher.nether_shading = nether;
                                     Done::Meshed(x, sy, z, mesher.mesh(&borrow(&region), sy), seq)
                                 }
                             };
@@ -196,6 +201,8 @@ impl Streaming {
             center: (0, 0),
             radius: 8,
             paused: false,
+            sky_light: true,
+            nether_shading: false,
             generated_total: 0,
             meshed_total: 0,
         }
@@ -419,7 +426,7 @@ impl Streaming {
             world.dirty_light.remove(&(x, z));
             self.sequence += 1;
             self.lighting.insert((x, z), self.sequence);
-            self.submit(self.distance(x, z) * 4 + 1, Job::Light(x, z, region, self.sequence));
+            self.submit(self.distance(x, z) * 4 + 1, Job::Light(x, z, region, self.sequence, self.sky_light));
         }
         // Meshing once the column and its neighbours are lit.
         let dirty: Vec<_> = world.dirty_sections.iter().copied().collect();
@@ -443,7 +450,7 @@ impl Streaming {
             self.meshing.insert((x, sy, z), self.sequence);
             self.submit(
                 self.distance(x, z) * 4 + if first { 2 } else { 0 },
-                Job::Mesh(x, sy, z, region, self.sequence),
+                Job::Mesh(x, sy, z, region, self.sequence, self.nether_shading),
             );
         }
         (uploads, removed)
