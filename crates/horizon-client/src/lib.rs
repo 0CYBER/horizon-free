@@ -35,6 +35,7 @@ pub mod pose;
 pub mod save;
 pub mod screen_effects;
 pub mod settings;
+pub mod shadows;
 pub mod sprint;
 pub mod sprites;
 pub mod streaming;

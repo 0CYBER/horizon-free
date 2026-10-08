@@ -2113,6 +2113,20 @@ impl Game<'_> {
                 }
             }
         }
+        // Entity shadows (EntityRenderer.extractShadow).
+        if let Some(sprite) = self.res.atlas.sprites.get("misc/shadow").copied() {
+            let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
+            let darken = self.sky_darken();
+            let a = alpha;
+            let lerp = |p: Vec3, q: Vec3| glam::DVec3::new(p.x + (q.x - p.x) * a, p.y + (q.y - p.y) * a, p.z + (q.z - p.z) * a);
+            let mut casters: Vec<(glam::DVec3, &str)> = self.mobs.iter().map(|m| (lerp(m.previous, m.position), m.kind.id.as_str())).collect();
+            casters.extend(self.dropped.iter().map(|i| (lerp(i.previous, i.position), "minecraft:item")));
+            casters.extend(self.orbs.iter().map(|o| (lerp(o.previous, o.position), "minecraft:experience_orb")));
+            for (pos, id) in casters {
+                let (radius, strength) = horizon_client::shadows::shadow_params(id);
+                horizon_client::shadows::shadow(&self.world, &self.res.facts, sprite, camera, pos, radius, strength, ambient, darken, &mut out);
+            }
+        }
         // Block entities (BlockEntityRenderers): chests, shulker boxes, banners, skulls...
         if let Some(r) = &self.renderer {
             let lid = |p: [i32; 3]| {
