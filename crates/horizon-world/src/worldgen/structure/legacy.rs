@@ -11,6 +11,7 @@ use crate::{
     nbt::{Compound, JavaString, Tag},
     registry::BlockStateId,
     worldgen::{
+        biome::BiomeId,
         feature::FeatureWorld,
         placement::{PlacementContext, PlacementQueryError},
     },
@@ -50,6 +51,10 @@ pub trait PieceWorld {
     fn max_y(&mut self) -> Result<i32>;
     fn block_entity(&mut self, pos: [i32; 3], nbt: Compound) -> Result<()>;
     fn post_process(&mut self, pos: [i32; 3]) -> Result<()>;
+    fn face_sturdy(&mut self, pos: [i32; 3], face: Direction) -> Result<bool>;
+    fn center_sturdy(&mut self, pos: [i32; 3], face: Direction) -> Result<bool>;
+    /// WorldGenLevel.getBiome (zoomed).
+    fn biome(&mut self, pos: [i32; 3]) -> Result<BiomeId>;
     #[allow(clippy::too_many_arguments)]
     fn place_template(
         &mut self,
@@ -87,6 +92,15 @@ impl<W: FeatureWorld + PlacementContext> PieceWorld for W {
     }
     fn post_process(&mut self, pos: [i32; 3]) -> Result<()> {
         self.mark_postprocessing(pos)
+    }
+    fn face_sturdy(&mut self, pos: [i32; 3], face: Direction) -> Result<bool> {
+        PlacementContext::face_sturdy(self, pos, face)
+    }
+    fn center_sturdy(&mut self, pos: [i32; 3], face: Direction) -> Result<bool> {
+        PlacementContext::center_sturdy(self, pos, face)
+    }
+    fn biome(&mut self, pos: [i32; 3]) -> Result<BiomeId> {
+        self.biome_identity(pos)
     }
     #[allow(clippy::too_many_arguments)]
     fn place_template(
@@ -174,6 +188,18 @@ impl PieceContext<'_> {
         nbt.insert("LootTableSeed".into(), Tag::Long(seed));
         self.world.block_entity(pos, nbt)
     }
+    /// Place a spawner and set its entity (SpawnerBlockEntity.setEntityId).
+    pub fn spawner(&mut self, pos: [i32; 3], entity: &str) -> Result<()> {
+        self.world.set(pos, self.state("spawner"), 2)?;
+        let mut id = Compound::new();
+        id.insert("id".into(), Tag::String(entity.into()));
+        let mut data = Compound::new();
+        data.insert("entity".into(), Tag::Compound(id));
+        let mut nbt = Compound::new();
+        nbt.insert("id".into(), Tag::String("minecraft:mob_spawner".into()));
+        nbt.insert("SpawnData".into(), Tag::Compound(data));
+        self.world.block_entity(pos, nbt)
+    }
 }
 /// A state by block name and properties (missing properties keep defaults).
 pub fn state(
@@ -217,6 +243,8 @@ pub struct PieceFrame {
     pub orientation: Option<Direction>,
     pub mirror: Mirror,
     pub rotation: Rotation,
+    /// Blocks placeBlock must not replace (StructurePiece.canBeReplaced).
+    pub keep: &'static [&'static str],
 }
 pub const HORIZONTAL: [Direction; 4] = [
     Direction::North,
@@ -256,6 +284,7 @@ impl PieceFrame {
             orientation,
             mirror,
             rotation,
+            keep: &[],
         }
     }
     pub fn world_x(&self, x: i32, z: i32) -> i32 {
@@ -296,6 +325,12 @@ impl PieceFrame {
         let pos = self.world_pos(x, y, z);
         if !c.chunk_box.is_inside(pos) {
             return Ok(());
+        }
+        if !self.keep.is_empty() {
+            let current = c.world.block(pos)?;
+            if self.keep.contains(&c.name(current)) {
+                return Ok(());
+            }
         }
         let mut state = state;
         if self.mirror != Mirror::None {
@@ -555,7 +590,7 @@ pub fn offset(pos: [i32; 3], d: Direction, n: i32) -> [i32; 3] {
     let s = d.normal();
     [pos[0] + s[0] * n, pos[1] + s[1] * n, pos[2] + s[2] * n]
 }
-fn solid_render(c: &PieceContext<'_>, state: BlockStateId) -> bool {
+pub fn solid_render(c: &PieceContext<'_>, state: BlockStateId) -> bool {
     c.resources.transforms.full_block(state) && !c.is_liquid(state)
 }
 /// StructurePiece.createChest with an absolute position.

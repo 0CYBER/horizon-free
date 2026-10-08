@@ -70,6 +70,12 @@ pub enum StructureKind {
         large: f32,
         cluster: f32,
     },
+    Mineshaft {
+        mesa: bool,
+        /// #minecraft:mineshaft_blocking
+        blocking: Arc<BTreeSet<BiomeId>>,
+    },
+    Stronghold,
     /// A structure type whose generator is not implemented yet.
     Unsupported(String),
 }
@@ -95,9 +101,16 @@ enum Placement {
         separation: i32,
         triangular: bool,
     },
-    ConcentricRings,
+    ConcentricRings {
+        distance: i32,
+        spread: i32,
+        count: i32,
+        preferred: BTreeSet<BiomeId>,
+    },
     Unsupported,
 }
+/// Concentric ring chunk positions by structure set name.
+pub type Rings = BTreeMap<String, Vec<ChunkPos>>;
 #[derive(Debug)]
 pub struct StructureSet {
     pub name: String,
@@ -183,6 +196,13 @@ impl StructureRegistry {
                     large: v["large_probability"].as_f64().unwrap_or(0.) as f32,
                     cluster: v["cluster_probability"].as_f64().unwrap_or(0.) as f32,
                 },
+                "minecraft:mineshaft" => StructureKind::Mineshaft {
+                    mesa: v["mineshaft_type"].as_str() == Some("mesa"),
+                    blocking: Arc::new(biome_set(&Value::String(
+                        "#minecraft:mineshaft_blocking".into(),
+                    ))?),
+                },
+                "minecraft:stronghold" => StructureKind::Stronghold,
                 other => StructureKind::Unsupported(other.to_owned()),
             };
             defs.push(StructureDef {
@@ -207,7 +227,12 @@ impl StructureRegistry {
                     separation: p["separation"].as_i64().unwrap_or(0) as i32,
                     triangular: p["spread_type"].as_str() == Some("triangular"),
                 },
-                "minecraft:concentric_rings" => Placement::ConcentricRings,
+                "minecraft:concentric_rings" => Placement::ConcentricRings {
+                    distance: p["distance"].as_i64().unwrap_or(0) as i32,
+                    spread: p["spread"].as_i64().unwrap_or(0) as i32,
+                    count: p["count"].as_i64().unwrap_or(0) as i32,
+                    preferred: biome_set(&p["preferred_biomes"])?,
+                },
                 _ => Placement::Unsupported,
             };
             out.push(StructureSet {
@@ -246,6 +271,32 @@ impl StructureRegistry {
             pools: Pools::new(pools),
         })
     }
+    /// ChunkGeneratorStructureState ring positions of the concentric-ring
+    /// sets among `possible_sets`.
+    pub fn ring_positions(
+        &self,
+        possible_sets: &[usize],
+        seed: i64,
+        biome: &mut dyn FnMut([i32; 3]) -> BiomeId,
+    ) -> Rings {
+        let mut rings = Rings::new();
+        for &i in possible_sets {
+            let set = &self.sets[i];
+            if let Placement::ConcentricRings {
+                distance,
+                spread,
+                count,
+                preferred,
+            } = &set.placement
+            {
+                let positions = super::stronghold::ring_positions(
+                    seed, *distance, *spread, *count, preferred, biome,
+                );
+                rings.insert(set.name.clone(), positions);
+            }
+        }
+        rings
+    }
     /// RandomSpreadStructurePlacement.getPotentialStructureChunk et al.
     pub fn is_structure_chunk(
         &self,
@@ -253,7 +304,7 @@ impl StructureRegistry {
         seed: i64,
         x: i32,
         z: i32,
-        rings: &[ChunkPos],
+        rings: &Rings,
     ) -> bool {
         let placed = match set.placement {
             Placement::RandomSpread {
@@ -278,7 +329,9 @@ impl StructureRegistry {
                 let sz = spread(&mut random);
                 gx * spacing + sx == x && gz * spacing + sz == z
             }
-            Placement::ConcentricRings => rings.contains(&ChunkPos::new(x, z)),
+            Placement::ConcentricRings { .. } => rings
+                .get(&set.name)
+                .is_some_and(|r| r.contains(&ChunkPos::new(x, z))),
             Placement::Unsupported => false,
         };
         if !placed {
@@ -399,6 +452,7 @@ pub trait StartContext: JigsawContext {
     /// Noise biome at a quart position (caching resolver, no zoom).
     fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId;
     fn set_valid_biomes(&mut self, biomes: &BTreeSet<BiomeId>);
+    fn sea_level(&self) -> i32;
 }
 
 /// ChunkGenerator.createStructures for one chunk: the starts it owns.
@@ -408,7 +462,7 @@ pub fn create_starts(
     bindings: &FeatureBlockBindings<'_>,
     context: &mut impl StartContext,
     possible_sets: &[usize],
-    rings: &[ChunkPos],
+    rings: &Rings,
     chunk: ChunkPos,
 ) -> Vec<StructureStart> {
     let seed = context.seed();
@@ -580,6 +634,25 @@ fn try_generate(
                 &config,
             )?;
             (stub, legacy(pieces))
+        }
+        StructureKind::Mineshaft { mesa, blocking } => {
+            let (sea, min) = (context.sea_level(), context.min_y());
+            let (position, pieces) = super::mineshaft::generate(
+                &mut random,
+                [chunk.x, chunk.z],
+                *mesa,
+                blocking.clone(),
+                sea,
+                min,
+                &mut |x, z| context.base_height(x, z, HeightmapType::WorldSurfaceWg),
+            );
+            (position, legacy(pieces))
+        }
+        StructureKind::Stronghold => {
+            let (sea, min) = (context.sea_level(), context.min_y());
+            let pieces =
+                super::stronghold::generate(&mut random, seed, [chunk.x, chunk.z], sea, min);
+            ([chunk.x * 16, 0, chunk.z * 16], legacy(pieces))
         }
         StructureKind::Unsupported(_) => return None,
     };

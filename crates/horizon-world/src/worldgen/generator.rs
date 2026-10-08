@@ -1137,6 +1137,9 @@ where
     fn set_valid_biomes(&mut self, biomes: &BTreeSet<BiomeId>) {
         self.valid = biomes.clone();
     }
+    fn sea_level(&self) -> i32 {
+        self.pipeline.settings.sea_level
+    }
 }
 
 enum Biomes<'a, 'b> {

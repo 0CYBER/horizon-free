@@ -572,6 +572,17 @@ impl PlacementContext for World<'_> {
             .is_face_sturdy(self, state, position, direction, SupportType::Full)
             .map_err(query)
     }
+    fn center_sturdy(
+        &mut self,
+        position: [i32; 3],
+        direction: Direction,
+    ) -> Result<bool, PlacementQueryError> {
+        let state = self.region.block_state(position)?;
+        let support = self.blocks()?.support.clone();
+        support
+            .is_face_sturdy(self, state, position, direction, SupportType::Center)
+            .map_err(query)
+    }
     fn collision_full_block(
         &mut self,
         state: BlockStateId,
