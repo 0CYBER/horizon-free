@@ -2543,6 +2543,8 @@ impl Game<'_> {
             distance: (self.streaming.radius * 16) as f32,
             underwater,
             title,
+            // The camera inside an opaque block sees nothing through it: disable.
+            cave_culling: !self.res.facts.get(self.world.block(block[0], block[1], block[2])).solid_render,
             water_fog,
             outline,
             hud: &hud,

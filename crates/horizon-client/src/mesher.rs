@@ -26,10 +26,64 @@ pub struct Vertex {
     /// Smooth light, 16x fixed point: sky in bits 0..8, block in bits 8..16.
     pub light: u32,
 }
-#[derive(Default)]
 pub struct SectionMesh {
     pub solid: Vec<Vertex>,
     pub translucent: Vec<Vertex>,
+    /// VisGraph: bit `a * 6 + b` is set when faces `a` and `b` (Direction
+    /// order) are connected through non-opaque blocks.
+    pub visibility: u64,
+}
+impl Default for SectionMesh {
+    fn default() -> Self {
+        Self { solid: Vec::new(), translucent: Vec::new(), visibility: ALL_VISIBLE }
+    }
+}
+pub const ALL_VISIBLE: u64 = (1 << 36) - 1;
+/// VisGraph.resolve: flood fill non-opaque cells and connect the faces each region touches.
+fn visibility(pad: &Padded, info: &[Info]) -> u64 {
+    let mut seen = vec![false; 4096];
+    let mut result = 0u64;
+    let opaque = |x: i32, y: i32, z: i32| info[pad.blocks[pi(x, y, z)] as usize].solid;
+    let mut stack = Vec::new();
+    for start in 0..4096usize {
+        let (x, y, z) = ((start & 15) as i32, (start >> 8) as i32, ((start >> 4) & 15) as i32);
+        if seen[start] || opaque(x, y, z) {
+            continue;
+        }
+        let mut faces = 0u8;
+        seen[start] = true;
+        stack.push(start);
+        while let Some(c) = stack.pop() {
+            let (x, y, z) = ((c & 15) as i32, (c >> 8) as i32, ((c >> 4) & 15) as i32);
+            if y == 0 { faces |= 1 << 0; }
+            if y == 15 { faces |= 1 << 1; }
+            if z == 0 { faces |= 1 << 2; }
+            if z == 15 { faces |= 1 << 3; }
+            if x == 0 { faces |= 1 << 4; }
+            if x == 15 { faces |= 1 << 5; }
+            for (dx, dy, dz) in [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)] {
+                let (nx, ny, nz) = (x + dx, y + dy, z + dz);
+                if !(0..16).contains(&nx) || !(0..16).contains(&ny) || !(0..16).contains(&nz) {
+                    continue;
+                }
+                let n = (ny << 8 | nz << 4 | nx) as usize;
+                if !seen[n] && !opaque(nx, ny, nz) {
+                    seen[n] = true;
+                    stack.push(n);
+                }
+            }
+        }
+        for a in 0..6 {
+            if faces & (1 << a) != 0 {
+                for b in 0..6 {
+                    if faces & (1 << b) != 0 {
+                        result |= 1 << (a * 6 + b);
+                    }
+                }
+            }
+        }
+    }
+    result
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tint {
@@ -268,6 +322,7 @@ impl Mesher<'_> {
             return out;
         }
         let pad = Padded::new(region, sy);
+        out.visibility = visibility(&pad, &self.tables.info);
         let base_y = MIN_Y + sy * 16;
         let colors = blend(region, self.biomes, center.x, center.z, base_y + 8);
         let info = &self.tables.info;

@@ -40,6 +40,9 @@ pub struct Frame<'a> {
     /// Render distance in blocks (fog end).
     pub distance: f32,
     pub underwater: bool,
+    /// Skip sections the camera cannot see through open faces (vanilla's
+    /// occlusion graph; off in spectator-like views inside blocks).
+    pub cave_culling: bool,
     /// Title screen: only the panorama (in `celestial`) and the HUD.
     pub title: bool,
     pub water_fog: [f32; 3],
@@ -82,6 +85,11 @@ pub struct Renderer {
     outline: wgpu::Buffer,
     depth: wgpu::TextureView,
     sections: HashMap<SectionKey, SectionGpu>,
+    /// VisGraph face connectivity per meshed section (cave culling).
+    visibility: HashMap<SectionKey, u64>,
+    reachable: std::collections::HashSet<SectionKey>,
+    reachable_from: Option<SectionKey>,
+    visibility_dirty: bool,
     pub hud: HudRenderer,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
@@ -662,6 +670,10 @@ impl Renderer {
             outline,
             depth,
             sections: HashMap::new(),
+            visibility: HashMap::new(),
+            reachable: std::collections::HashSet::new(),
+            reachable_from: None,
+            visibility_dirty: true,
             hud,
             info,
             suspended: size.width == 0 || size.height == 0,
@@ -715,6 +727,9 @@ impl Renderer {
         self.sections.len()
     }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
+        if self.visibility.insert(key, mesh.visibility) != Some(mesh.visibility) {
+            self.visibility_dirty = true;
+        }
         let solid = (mesh.solid.len() / 4) as u32;
         let translucent = (mesh.translucent.len() / 4) as u32;
         if solid + translucent == 0 {
@@ -749,8 +764,46 @@ impl Renderer {
     }
     pub fn clear_sections(&mut self) {
         self.sections.clear();
+        self.visibility.clear();
+        self.visibility_dirty = true;
+    }
+    /// SectionOcclusionGraph: breadth-first from the camera section through
+    /// faces its VisGraph connects, never stepping back towards the camera.
+    fn update_reachable(&mut self, from: SectionKey, radius: i32) {
+        const STEPS: [(i32, i32, i32); 6] = [(0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1), (-1, 0, 0), (1, 0, 0)];
+        let opposite = |d: usize| d ^ 1;
+        self.reachable.clear();
+        let mut queue = std::collections::VecDeque::new();
+        // (section, entered face, directions travelled)
+        queue.push_back((from, None::<usize>, 0u8));
+        self.reachable.insert(from);
+        let sections = (crate::chunk::HEIGHT / 16) as i32;
+        while let Some((key, entered, travelled)) = queue.pop_front() {
+            let vis = self.visibility.get(&key).copied().unwrap_or(crate::mesher::ALL_VISIBLE);
+            for (d, step) in STEPS.iter().enumerate() {
+                if travelled & (1 << opposite(d)) != 0 {
+                    continue;
+                }
+                if let Some(e) = entered
+                    && vis & (1 << (e * 6 + d)) == 0
+                {
+                    continue;
+                }
+                let next = (key.0 + step.0, key.1 + step.1, key.2 + step.2);
+                if next.1 < -1 || next.1 > sections || (next.0 - from.0).abs() > radius || (next.2 - from.2).abs() > radius {
+                    continue;
+                }
+                if self.reachable.insert(next) {
+                    queue.push_back((next, Some(opposite(d)), travelled | (1 << d)));
+                }
+            }
+        }
+        self.reachable_from = Some(from);
+        self.visibility_dirty = false;
     }
     pub fn remove(&mut self, key: SectionKey) {
+        self.visibility.remove(&key);
+        self.visibility_dirty = true;
         self.sections.remove(&key);
     }
     pub fn view_projection(&self, frame: &Frame) -> Mat4 {
@@ -916,9 +969,21 @@ impl Renderer {
         // Frustum culling and camera-relative origins.
         let planes = frustum(view_proj);
         let camera = frame.camera;
+        let camera_section = (
+            (camera.x.floor() as i32) >> 4,
+            (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
+            (camera.z.floor() as i32) >> 4,
+        );
+        let culling = !frame.title && frame.cave_culling;
+        if culling && (self.visibility_dirty || self.reachable_from != Some(camera_section)) {
+            let radius = (frame.distance / 16.0) as i32 + 2;
+            self.update_reachable(camera_section, radius);
+        }
+        let reachable = &self.reachable;
         let mut visible: Vec<(SectionKey, f64, [f32; 3])> = self
             .sections
             .keys()
+            .filter(|k| !culling || reachable.contains(k))
             .filter_map(|&(sx, sy, sz)| {
                 let origin = DVec3::new(
                     f64::from(sx * 16),
