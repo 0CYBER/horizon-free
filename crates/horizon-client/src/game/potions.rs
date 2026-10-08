@@ -51,11 +51,13 @@ impl Game<'_> {
                 let sound = if &*stack.item == "minecraft:splash_potion" { "minecraft:entity.splash_potion.throw" } else { "minecraft:entity.lingering_potion.throw" };
                 self.audio.play(sound, Some(eye), 0.5, pitch);
                 // Projectile.shootFromRotation(xRot, yRot, -20, 0.5, 1.0).
-                let (yaw, pitch) = (self.yaw.to_radians(), (self.pitch - 20.0).to_radians());
-                let dir = [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()];
+                let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
+                let dir = [-yaw.sin() * pitch.cos(), -(self.pitch - 20.0).to_radians().sin(), yaw.cos() * pitch.cos()];
+                let l = dir.iter().map(|c| f64::from(*c).powi(2)).sum::<f64>().sqrt().max(1e-9);
+                // getMovementToShoot: normalize, add triangle(0, 0.0172275 * uncertainty), scale.
                 let r = &mut self.world.random;
-                let mut jitter = || f64::from(r.next_float() + r.next_float() - 1.0) * 0.0075;
-                let v = Vec3::new((f64::from(dir[0]) + jitter()) * 0.5, (f64::from(dir[1]) + jitter()) * 0.5, (f64::from(dir[2]) + jitter()) * 0.5);
+                let mut jitter = || r.triangle(0.0, 0.0172275);
+                let v = Vec3::new((f64::from(dir[0]) / l + jitter()) * 0.5, (f64::from(dir[1]) / l + jitter()) * 0.5, (f64::from(dir[2]) / l + jitter()) * 0.5);
                 let pv = self.player.as_ref().map_or(Vec3::ZERO, |p| p.velocity);
                 let on_ground = self.player.as_ref().is_some_and(|p| p.ground.on_ground);
                 let v = Vec3::new(v.x + pv.x, v.y + if on_ground { 0.0 } else { pv.y }, v.z + pv.z);
@@ -367,6 +369,9 @@ impl Game<'_> {
         }
     }
     pub(super) fn effects_json(&self) -> serde_json::Value {
-        serde_json::Value::Array(self.potions.effects.list.iter().map(|e| serde_json::json!({ "id": e.id, "duration": e.duration, "amplifier": e.amplifier })).collect())
+        serde_json::json!({
+            "active": self.potions.effects.list.iter().map(|e| serde_json::json!({ "id": e.id, "duration": e.duration, "amplifier": e.amplifier })).collect::<Vec<_>>(),
+            "thrown": self.potions.thrown.iter().map(|t| [t.position.x, t.position.y, t.position.z]).collect::<Vec<_>>(),
+        })
     }
 }
