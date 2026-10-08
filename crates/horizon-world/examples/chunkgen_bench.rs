@@ -288,7 +288,11 @@ fn main() -> Result<(), Error> {
             "--no-decorate" => decorate = false,
             "--dimension" => {
                 let d = next();
-                dimension = if d.contains(':') { d } else { format!("minecraft:{d}") };
+                dimension = if d.contains(':') {
+                    d
+                } else {
+                    format!("minecraft:{d}")
+                };
             }
             "--starts" => {
                 starts = Some((

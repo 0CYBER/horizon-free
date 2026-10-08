@@ -247,7 +247,11 @@ impl Game<'_> {
                 [feet[0] - w, feet[1], feet[2] - w],
                 [feet[0] + w, feet[1] + h, feet[2] + w],
             );
-            let source = horizon_client::mobs::Damage { kind: horizon_client::mobs::DamageKind::Explosion, attacker: None, from: Some(center) };
+            let source = horizon_client::mobs::Damage {
+                kind: horizon_client::mobs::DamageKind::Explosion,
+                attacker: None,
+                from: Some(center),
+            };
             if !m.damage(damage(dist, exposure), source) {
                 continue;
             }
@@ -357,10 +361,15 @@ impl Game<'_> {
         let pitch = (1.0 + (client_float() - client_float()) * 0.2) * 0.7;
         self.audio
             .play("minecraft:entity.generic.explode", Some(center), 4.0, pitch);
-        let block_count = if interaction == BlockInteraction::Keep { 0 } else { targets.len() };
+        let block_count = if interaction == BlockInteraction::Keep {
+            0
+        } else {
+            targets.len()
+        };
         let (world, facts) = (&self.world, &self.res.facts);
-        self.particles
-            .explosion(center, radius, block_count, &|b| facts.is_air(world.block(b[0], b[1], b[2])));
+        self.particles.explosion(center, radius, block_count, &|b| {
+            facts.is_air(world.block(b[0], b[1], b[2]))
+        });
         Ok(())
     }
     /// `BlockBehaviour.onExplosionHit` (TNT: `wasExploded` primes a short fuse).

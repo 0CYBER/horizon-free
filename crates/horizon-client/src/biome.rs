@@ -80,10 +80,10 @@ impl Biomes {
         let dimension: Value = serde_json::from_slice(&fs::read(
             root.join("data/minecraft/dimension_type/overworld.json"),
         )?)?;
-        let default_fog = color(&dimension["attributes"]["minecraft:visual/fog_color"])
-            .unwrap_or(0xC0D8FF);
-        let default_sky = color(&dimension["attributes"]["minecraft:visual/sky_color"])
-            .unwrap_or(0x78A7FF);
+        let default_fog =
+            color(&dimension["attributes"]["minecraft:visual/fog_color"]).unwrap_or(0xC0D8FF);
+        let default_sky =
+            color(&dimension["attributes"]["minecraft:visual/sky_color"]).unwrap_or(0x78A7FF);
         let mut list = Vec::new();
         let mut names: Vec<_> = fs::read_dir(root.join("data/minecraft/worldgen/biome"))?
             .filter_map(|e| e.ok())
@@ -94,7 +94,9 @@ impl Biomes {
         for path in names {
             let name = format!(
                 "minecraft:{}",
-                path.file_stem().and_then(|s| s.to_str()).ok_or("bad biome")?
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .ok_or("bad biome")?
             );
             let v: Value = serde_json::from_slice(&fs::read(&path)?)?;
             let effects = &v["effects"];
@@ -136,7 +138,8 @@ impl Biomes {
             }
             list.push(BiomeInfo {
                 spawns,
-                creature_probability: v["creature_spawn_probability"].as_f64().unwrap_or(0.1) as f32,
+                creature_probability: v["creature_spawn_probability"].as_f64().unwrap_or(0.1)
+                    as f32,
                 temperature,
                 downfall,
                 precipitation: v["has_precipitation"].as_bool().unwrap_or(true),

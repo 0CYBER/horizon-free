@@ -114,7 +114,11 @@ impl MansionGrid {
         corridor(&mut base, r, ex - 2, ey - 1, Direction::West, 3);
         corridor(&mut base, r, ex - 2, ey + 2, Direction::West, 3);
         while clean_edges(&mut base) {}
-        let mut rooms = [Grid::new(11, 11, 5), Grid::new(11, 11, 5), Grid::new(11, 11, 5)];
+        let mut rooms = [
+            Grid::new(11, 11, 5),
+            Grid::new(11, 11, 5),
+            Grid::new(11, 11, 5),
+        ];
         identify_rooms(&base, &mut rooms[0], r);
         identify_rooms(&base, &mut rooms[1], r);
         rooms[0].fill(ex + 1, ey, ex + 1, ey + 1, CORRIDOR_FLAG);
@@ -194,7 +198,14 @@ impl MansionGrid {
         }
     }
 }
-fn corridor(g: &mut Grid, r: &mut impl RandomSource, x: i32, y: i32, heading: Direction, depth: i32) {
+fn corridor(
+    g: &mut Grid,
+    r: &mut impl RandomSource,
+    x: i32,
+    y: i32,
+    heading: Direction,
+    depth: i32,
+) {
     if depth <= 0 {
         return;
     }
@@ -230,7 +241,8 @@ fn clean_edges(g: &mut Grid) -> bool {
                 continue;
             }
             let house = |g: &Grid, x, y| i32::from(is_house(g, x, y));
-            let direct = house(g, x + 1, y) + house(g, x - 1, y) + house(g, x, y + 1) + house(g, x, y - 1);
+            let direct =
+                house(g, x + 1, y) + house(g, x - 1, y) + house(g, x, y + 1) + house(g, x, y - 1);
             if direct >= 3 {
                 g.set(x, y, 2);
                 touched = true;
@@ -265,7 +277,8 @@ fn identify_rooms(from: &Grid, rooms: &mut Grid, r: &mut impl RandomSource) {
         }
         let (mut x0, mut x1, mut y0, mut y1) = (x, x, y, y);
         let mut kind = ROOM_1X1;
-        let free = |dx: i32, dy: i32| rooms.get(x + dx, y + dy) == 0 && from.get(x + dx, y + dy) == 2;
+        let free =
+            |dx: i32, dy: i32| rooms.get(x + dx, y + dy) == 0 && from.get(x + dx, y + dy) == 2;
         if free(1, 0) && free(0, 1) && free(1, 1) {
             x1 += 1;
             y1 += 1;
@@ -375,7 +388,13 @@ struct Placer<'a, R: RandomSource> {
     start_y: i32,
 }
 impl<R: RandomSource> Placer<'_, R> {
-    fn add(&mut self, name: impl Into<String>, position: [i32; 3], rotation: Rotation, mirror: Mirror) {
+    fn add(
+        &mut self,
+        name: impl Into<String>,
+        position: [i32; 3],
+        rotation: Rotation,
+        mirror: Mirror,
+    ) {
         self.pieces.push(Piece {
             name: name.into(),
             position,
@@ -383,8 +402,20 @@ impl<R: RandomSource> Placer<'_, R> {
             mirror,
         });
     }
-    fn grid_pos(&self, origin: [i32; 3], rotation: Rotation, x: i32, y: i32, east: i32) -> [i32; 3] {
-        let p = rel(origin, rotation, Direction::South, 8 + (y - self.start_y) * 8);
+    fn grid_pos(
+        &self,
+        origin: [i32; 3],
+        rotation: Rotation,
+        x: i32,
+        y: i32,
+        east: i32,
+    ) -> [i32; 3] {
+        let p = rel(
+            origin,
+            rotation,
+            Direction::South,
+            8 + (y - self.start_y) * 8,
+        );
         rel(p, rotation, Direction::East, east + (x - self.start_x) * 8)
     }
     fn create(&mut self, origin: [i32; 3], rotation: Rotation, mansion: &MansionGrid) {
@@ -394,7 +425,12 @@ impl<R: RandomSource> Placer<'_, R> {
             wall: "wall_flat",
         };
         let west = rotation.rotate_direction(Direction::West);
-        self.add("entrance", offset(data.position, west, 9), rotation, Mirror::None);
+        self.add(
+            "entrance",
+            offset(data.position, west, 9),
+            rotation,
+            Mirror::None,
+        );
         data.position = rel(data.position, rotation, Direction::South, 16);
         let mut second = Placement {
             position: up(data.position, 8),
@@ -429,9 +465,18 @@ impl<R: RandomSource> Placer<'_, R> {
             let floor_origin = up(origin, 8 * floor as i32 + if floor == 2 { 3 } else { 0 });
             let rooms = &mansion.rooms[floor];
             let grid = if floor == 2 { third } else { base };
-            let south_piece = if floor == 0 { "carpet_south_1" } else { "carpet_south_2" };
-            let west_piece = if floor == 0 { "carpet_west_1" } else { "carpet_west_2" };
-            let corridor = |x, y| grid.get(x, y) == 1 || rooms.get(x, y) & CORRIDOR_FLAG == CORRIDOR_FLAG;
+            let south_piece = if floor == 0 {
+                "carpet_south_1"
+            } else {
+                "carpet_south_2"
+            };
+            let west_piece = if floor == 0 {
+                "carpet_west_1"
+            } else {
+                "carpet_west_2"
+            };
+            let corridor =
+                |x, y| grid.get(x, y) == 1 || rooms.get(x, y) & CORRIDOR_FLAG == CORRIDOR_FLAG;
             for y in 0..grid.height {
                 for x in 0..grid.width {
                     if grid.get(x, y) != 1 {
@@ -460,8 +505,16 @@ impl<R: RandomSource> Placer<'_, R> {
                     }
                 }
             }
-            let wall = if floor == 0 { "indoors_wall_1" } else { "indoors_wall_2" };
-            let door = if floor == 0 { "indoors_door_1" } else { "indoors_door_2" };
+            let wall = if floor == 0 {
+                "indoors_wall_1"
+            } else {
+                "indoors_wall_2"
+            };
+            let door = if floor == 0 {
+                "indoors_door_1"
+            } else {
+                "indoors_door_2"
+            };
             for y in 0..grid.height {
                 for x in 0..grid.width {
                     let mut third_start = floor == 2 && grid.get(x, y) == 3;
@@ -482,7 +535,10 @@ impl<R: RandomSource> Placer<'_, R> {
                         }
                     }
                     let door_dir = if !doors.is_empty() {
-                        Some(doors[self.random.next_int_bound(doors.len() as i32).unwrap_or(0) as usize])
+                        Some(
+                            doors[self.random.next_int_bound(doors.len() as i32).unwrap_or(0)
+                                as usize],
+                        )
                     } else if data & ORIGIN_FLAG == ORIGIN_FLAG {
                         Some(Direction::Up)
                     } else {
@@ -675,7 +731,12 @@ impl<R: RandomSource> Placer<'_, R> {
                     if !is_house(grid, x, y + 1) {
                         self.add("roof_corner", rel(p2, rotation, South, 6), rotation, none);
                     } else if is_house(grid, x + 1, y + 1) {
-                        self.add("roof_inner_corner", rel(p2, rotation, South, 5), rotation, none);
+                        self.add(
+                            "roof_inner_corner",
+                            rel(p2, rotation, South, 5),
+                            rotation,
+                            none,
+                        );
                     }
                     if !is_house(grid, x, y - 1) {
                         self.add("roof_corner", p2, ccw90, none);
@@ -695,13 +756,24 @@ impl<R: RandomSource> Placer<'_, R> {
                     if !is_house(grid, x, y - 1) {
                         self.add("roof_corner", p2, cw180, none);
                     } else if is_house(grid, x - 1, y - 1) {
-                        self.add("roof_inner_corner", rel(p2, rotation, South, 1), cw180, none);
+                        self.add(
+                            "roof_inner_corner",
+                            rel(p2, rotation, South, 1),
+                            cw180,
+                            none,
+                        );
                     }
                 }
             }
         }
     }
-    fn room_1x1(&mut self, room_pos: [i32; 3], rotation: Rotation, door: Option<Direction>, floor: usize) {
+    fn room_1x1(
+        &mut self,
+        room_pos: [i32; 3],
+        rotation: Rotation,
+        door: Option<Direction>,
+        floor: usize,
+    ) {
         let mut piece_rot = Rotation::None;
         let mut name = room_name(floor, "1x1", self.random, false);
         if door != Some(Direction::East) {
@@ -747,14 +819,34 @@ impl<R: RandomSource> Placer<'_, R> {
             (East, North) => ("side", at(1, 6), rotation, Mirror::LeftRight),
             (West, North) => ("side", at(7, 6), r(Rotation::Clockwise180), Mirror::None),
             (West, South) => ("side", at(7, 0), rotation, Mirror::FrontBack),
-            (South, East) => ("side", at(1, 0), r(Rotation::Clockwise90), Mirror::LeftRight),
+            (South, East) => (
+                "side",
+                at(1, 0),
+                r(Rotation::Clockwise90),
+                Mirror::LeftRight,
+            ),
             (South, West) => ("side", at(7, 0), r(Rotation::Clockwise90), Mirror::None),
-            (North, West) => ("side", at(7, 6), r(Rotation::Clockwise90), Mirror::FrontBack),
-            (North, East) => ("side", at(1, 6), r(Rotation::Counterclockwise90), Mirror::None),
+            (North, West) => (
+                "side",
+                at(7, 6),
+                r(Rotation::Clockwise90),
+                Mirror::FrontBack,
+            ),
+            (North, East) => (
+                "side",
+                at(1, 6),
+                r(Rotation::Counterclockwise90),
+                Mirror::None,
+            ),
             (South, North) => ("front", at(1, -8), rotation, Mirror::None),
             (North, South) => ("front", at(7, 14), r(Rotation::Clockwise180), Mirror::None),
             (West, East) => ("front", at(15, 0), r(Rotation::Clockwise90), Mirror::None),
-            (East, West) => ("front", at(-7, 6), r(Rotation::Counterclockwise90), Mirror::None),
+            (East, West) => (
+                "front",
+                at(-7, 6),
+                r(Rotation::Counterclockwise90),
+                Mirror::None,
+            ),
             (Up, East) => ("1x2s", at(15, 0), r(Rotation::Clockwise90), Mirror::None),
             (Up, South) => ("1x2s", at(1, 0), rotation, Mirror::None),
             _ => return,
@@ -762,7 +854,14 @@ impl<R: RandomSource> Placer<'_, R> {
         let name = room_name(floor, kind, self.random, stairs);
         self.add(name, pos, rot, mirror);
     }
-    fn room_2x2(&mut self, room_pos: [i32; 3], rotation: Rotation, room: Direction, door: Direction, floor: usize) {
+    fn room_2x2(
+        &mut self,
+        room_pos: [i32; 3],
+        rotation: Rotation,
+        room: Direction,
+        door: Direction,
+        floor: usize,
+    ) {
         use Direction::{East, North, South, West};
         let r = |rot: Rotation| rotation.get_rotated(rot);
         let (east, south, rot, mirror) = match (door, room) {

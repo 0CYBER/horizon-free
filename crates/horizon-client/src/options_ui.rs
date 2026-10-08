@@ -73,13 +73,22 @@ fn generic(caption: &str, value: Text) -> Text {
     Text::translate("options.generic_value", &[tr(caption), value])
 }
 fn percent(caption: &str, value: f32) -> Text {
-    Text::translate("options.percent_value", &[tr(caption), Text::literal(((f64::from(value) * 100.0) as i32).to_string())])
+    Text::translate(
+        "options.percent_value",
+        &[
+            tr(caption),
+            Text::literal(((f64::from(value) * 100.0) as i32).to_string()),
+        ],
+    )
 }
 fn on_off(v: bool) -> Text {
     tr(if v { "options.on" } else { "options.off" })
 }
 fn chat_px(caption: &str, px: f32) -> Text {
-    Text::translate("options.pixel_value", &[tr(caption), Text::literal((px as i32).to_string())])
+    Text::translate(
+        "options.pixel_value",
+        &[tr(caption), Text::literal((px as i32).to_string())],
+    )
 }
 enum Kind {
     /// Slider position 0..1.
@@ -150,7 +159,11 @@ impl Opt {
             Opt::SimulationDistance => unit(s.simulation_distance as f32, 5.0, 32.0),
             Opt::Sensitivity => Kind::Slider(s.sensitivity),
             Opt::WheelSensitivity => unit(s.mouse_wheel_sensitivity, 0.01, 10.0),
-            Opt::Volume(i) => Kind::Slider(if i == 0 { s.master_volume } else { s.volumes[i] }),
+            Opt::Volume(i) => Kind::Slider(if i == 0 {
+                s.master_volume
+            } else {
+                s.volumes[i]
+            }),
             Opt::GuiScale => unit(s.gui_scale as f32, 0.0, 6.0),
             Opt::Gamma => Kind::Slider(s.gamma),
             Opt::MaxFps => unit(s.max_fps as f32, 10.0, 260.0),
@@ -182,7 +195,9 @@ impl Opt {
                 v => generic(c, Text::literal(v.to_string())),
             },
             Opt::RenderDistance => generic(c, Text::tr("options.chunks", &[&s.render_distance])),
-            Opt::SimulationDistance => generic(c, Text::tr("options.chunks", &[&s.simulation_distance])),
+            Opt::SimulationDistance => {
+                generic(c, Text::tr("options.chunks", &[&s.simulation_distance]))
+            }
             Opt::Sensitivity => {
                 if s.sensitivity == 0.0 {
                     generic(c, tr("options.sensitivity.min"))
@@ -192,11 +207,22 @@ impl Opt {
                     percent(c, 2.0 * s.sensitivity)
                 }
             }
-            Opt::WheelSensitivity => generic(c, Text::literal(format!("{:.2}", s.mouse_wheel_sensitivity))),
+            Opt::WheelSensitivity => generic(
+                c,
+                Text::literal(format!("{:.2}", s.mouse_wheel_sensitivity)),
+            ),
             Opt::Volume(i) => {
-                let v = if i == 0 { s.master_volume } else { s.volumes[i] };
+                let v = if i == 0 {
+                    s.master_volume
+                } else {
+                    s.volumes[i]
+                };
                 let caption = format!("soundCategory.{}", SOUND_SOURCES[i]);
-                if v == 0.0 { generic(&caption, tr("options.off")) } else { percent(&caption, v) }
+                if v == 0.0 {
+                    generic(&caption, tr("options.off"))
+                } else {
+                    percent(&caption, v)
+                }
             }
             Opt::GuiScale => {
                 if s.gui_scale == 0 {
@@ -220,7 +246,13 @@ impl Opt {
             }
             Opt::CloudRange => generic(c, Text::tr("options.chunks", &[&s.cloud_range])),
             Opt::EntityDistance => percent(c, s.entity_distance),
-            Opt::BiomeBlend => generic(c, tr(&format!("options.biomeBlendRadius.{}", s.biome_blend * 2 + 1))),
+            Opt::BiomeBlend => generic(
+                c,
+                tr(&format!(
+                    "options.biomeBlendRadius.{}",
+                    s.biome_blend * 2 + 1
+                )),
+            ),
             Opt::Preset => generic(c, tr(&format!("options.graphics.{}", s.graphics_preset))),
             Opt::Mipmaps => {
                 if s.mipmap_levels == 0 {
@@ -234,7 +266,10 @@ impl Opt {
                 if s.chunk_fade <= 0.0 {
                     tr("options.chunkFade.none")
                 } else {
-                    Text::tr("options.chunkFade.seconds", &[&format!("{:.2}", s.chunk_fade)])
+                    Text::tr(
+                        "options.chunkFade.seconds",
+                        &[&format!("{:.2}", s.chunk_fade)],
+                    )
                 }
             }
             Opt::MenuBlur => {
@@ -255,7 +290,9 @@ impl Opt {
             }
             Opt::ChatWidth => chat_px(c, (s.chat_width * 280.0 + 40.0).floor()),
             Opt::ChatHeightFocused => chat_px(c, (s.chat_height_focused * 160.0 + 20.0).floor()),
-            Opt::ChatHeightUnfocused => chat_px(c, (s.chat_height_unfocused * 160.0 + 20.0).floor()),
+            Opt::ChatHeightUnfocused => {
+                chat_px(c, (s.chat_height_unfocused * 160.0 + 20.0).floor())
+            }
             Opt::ChatLineSpacing => percent(c, s.chat_line_spacing),
             _ => generic(c, self.value_text(s)),
         }
@@ -273,19 +310,47 @@ impl Opt {
                 "fast" => "options.clouds.fast",
                 _ => "options.clouds.fancy",
             }),
-            Opt::Particles => tr(["options.particles.all", "options.particles.decreased", "options.particles.minimal"][usize::from(s.particles.min(2))]),
+            Opt::Particles => tr([
+                "options.particles.all",
+                "options.particles.decreased",
+                "options.particles.minimal",
+            ][usize::from(s.particles.min(2))]),
             Opt::EntityShadows => on_off(s.entity_shadows),
             Opt::Vignette => on_off(s.vignette),
             Opt::Autosave => on_off(s.autosave_indicator),
             Opt::CutoutLeaves => on_off(s.cutout_leaves),
             Opt::ImprovedTransparency => on_off(s.improved_transparency),
-            Opt::AttackIndicator => tr(["options.off", "options.attack.crosshair", "options.attack.hotbar"][usize::from(s.attack_indicator.min(2))]),
-            Opt::InactivityFps => tr(if s.inactivity_fps_limit == "minimized" { "options.inactivityFpsLimit.minimized" } else { "options.inactivityFpsLimit.afk" }),
-            Opt::ChunkBuilder => tr(["options.prioritizeChunkUpdates.none", "options.prioritizeChunkUpdates.byPlayer", "options.prioritizeChunkUpdates.nearby"][usize::from(s.prioritize_chunk_updates.min(2))]),
-            Opt::ToggleCrouch => tr(if s.toggle_crouch { "options.key.toggle" } else { "options.key.hold" }),
-            Opt::ToggleSprint => tr(if s.toggle_sprint { "options.key.toggle" } else { "options.key.hold" }),
+            Opt::AttackIndicator => tr([
+                "options.off",
+                "options.attack.crosshair",
+                "options.attack.hotbar",
+            ][usize::from(s.attack_indicator.min(2))]),
+            Opt::InactivityFps => tr(if s.inactivity_fps_limit == "minimized" {
+                "options.inactivityFpsLimit.minimized"
+            } else {
+                "options.inactivityFpsLimit.afk"
+            }),
+            Opt::ChunkBuilder => tr([
+                "options.prioritizeChunkUpdates.none",
+                "options.prioritizeChunkUpdates.byPlayer",
+                "options.prioritizeChunkUpdates.nearby",
+            ][usize::from(s.prioritize_chunk_updates.min(2))]),
+            Opt::ToggleCrouch => tr(if s.toggle_crouch {
+                "options.key.toggle"
+            } else {
+                "options.key.hold"
+            }),
+            Opt::ToggleSprint => tr(if s.toggle_sprint {
+                "options.key.toggle"
+            } else {
+                "options.key.hold"
+            }),
             Opt::AutoJump => on_off(s.auto_jump),
-            Opt::ChatVisibility => tr(["options.chat.visibility.full", "options.chat.visibility.system", "options.chat.visibility.hidden"][usize::from(s.chat_visibility.min(2))]),
+            Opt::ChatVisibility => tr([
+                "options.chat.visibility.full",
+                "options.chat.visibility.system",
+                "options.chat.visibility.hidden",
+            ][usize::from(s.chat_visibility.min(2))]),
             Opt::ChatColors => on_off(s.chat_colors),
             Opt::ChatLinks => on_off(s.chat_links),
             Opt::AutoSuggestions => on_off(s.auto_suggestions),
@@ -352,7 +417,13 @@ impl Opt {
     }
     /// Advance a cycle button (CycleButton.cycleValue).
     pub fn cycle(self, s: &mut Settings, back: bool) {
-        let next = |n: u8, count: u8| if back { (n + count - 1) % count } else { (n + 1) % count };
+        let next = |n: u8, count: u8| {
+            if back {
+                (n + count - 1) % count
+            } else {
+                (n + 1) % count
+            }
+        };
         match self {
             Opt::InvertY => s.invert_y = !s.invert_y,
             Opt::DiscreteScroll => s.discrete_scroll = !s.discrete_scroll,
@@ -372,7 +443,13 @@ impl Opt {
             Opt::CutoutLeaves => s.cutout_leaves = !s.cutout_leaves,
             Opt::ImprovedTransparency => s.improved_transparency = !s.improved_transparency,
             Opt::AttackIndicator => s.attack_indicator = next(s.attack_indicator, 3),
-            Opt::InactivityFps => s.inactivity_fps_limit = if s.inactivity_fps_limit == "afk" { "minimized".into() } else { "afk".into() },
+            Opt::InactivityFps => {
+                s.inactivity_fps_limit = if s.inactivity_fps_limit == "afk" {
+                    "minimized".into()
+                } else {
+                    "afk".into()
+                }
+            }
             Opt::ChunkBuilder => s.prioritize_chunk_updates = next(s.prioritize_chunk_updates, 3),
             Opt::ToggleCrouch => s.toggle_crouch = !s.toggle_crouch,
             Opt::ToggleSprint => s.toggle_sprint = !s.toggle_sprint,
@@ -464,11 +541,32 @@ enum Act {
     OpenPackFolder,
 }
 enum WKind {
-    Button { label: Text, active: bool, act: Act },
-    Slider { label: Text, value: f32, opt: Opt },
-    Text { text: Text, color: u32, centered: bool },
-    LanguageRow { label: Text, selected: bool, code: String },
-    PackRow { pack: PackEntry, selected: bool, index: usize, count: usize },
+    Button {
+        label: Text,
+        active: bool,
+        act: Act,
+    },
+    Slider {
+        label: Text,
+        value: f32,
+        opt: Opt,
+    },
+    Text {
+        text: Text,
+        color: u32,
+        centered: bool,
+    },
+    LanguageRow {
+        label: Text,
+        selected: bool,
+        code: String,
+    },
+    PackRow {
+        pack: PackEntry,
+        selected: bool,
+        index: usize,
+        count: usize,
+    },
 }
 struct Widget {
     x: f32,
@@ -530,7 +628,18 @@ impl Default for OptionsUi {
     }
 }
 fn button(x: f32, y: f32, w: f32, label: Text, act: Act) -> Widget {
-    Widget { x, y, w, h: 20.0, kind: WKind::Button { label, active: true, act }, list: false }
+    Widget {
+        x,
+        y,
+        w,
+        h: 20.0,
+        kind: WKind::Button {
+            label,
+            active: true,
+            act,
+        },
+        list: false,
+    }
 }
 fn inactive(mut w: Widget) -> Widget {
     if let WKind::Button { active, .. } = &mut w.kind {
@@ -540,7 +649,18 @@ fn inactive(mut w: Widget) -> Widget {
 }
 fn option_widget(s: &Settings, opt: Opt, x: f32, y: f32, w: f32) -> Widget {
     match opt.kind(s) {
-        Kind::Slider(v) => Widget { x, y, w, h: 20.0, kind: WKind::Slider { label: opt.label(s), value: v, opt }, list: false },
+        Kind::Slider(v) => Widget {
+            x,
+            y,
+            w,
+            h: 20.0,
+            kind: WKind::Slider {
+                label: opt.label(s),
+                value: v,
+                opt,
+            },
+            list: false,
+        },
         Kind::Cycle => button(x, y, w, opt.label(s), Act::Cycle(opt)),
     }
 }
@@ -552,7 +672,9 @@ enum Row {
     Buttons(Widget, Option<Widget>),
 }
 fn pairs(opts: &[Opt]) -> Vec<Row> {
-    opts.chunks(2).map(|c| Row::Pair(c[0], c.get(1).copied())).collect()
+    opts.chunks(2)
+        .map(|c| Row::Pair(c[0], c.get(1).copied()))
+        .collect()
 }
 impl OptionsUi {
     pub fn page(&self) -> Page {
@@ -601,7 +723,14 @@ impl OptionsUi {
         match self.page() {
             Page::Video => {
                 let mut rows = vec![Row::Header("options.video.display.header")];
-                rows.extend(pairs(&[Opt::MaxFps, Opt::Vsync, Opt::InactivityFps, Opt::GuiScale, Opt::Fullscreen, Opt::Gamma]));
+                rows.extend(pairs(&[
+                    Opt::MaxFps,
+                    Opt::Vsync,
+                    Opt::InactivityFps,
+                    Opt::GuiScale,
+                    Opt::Fullscreen,
+                    Opt::Gamma,
+                ]));
                 rows.push(Row::Header("options.video.quality.header"));
                 rows.push(Row::Big(Opt::Preset));
                 rows.extend(pairs(&[
@@ -622,7 +751,12 @@ impl OptionsUi {
                     Opt::WeatherRadius,
                 ]));
                 rows.push(Row::Header("options.video.preferences.header"));
-                rows.extend(pairs(&[Opt::Autosave, Opt::Vignette, Opt::AttackIndicator, Opt::ChunkFade]));
+                rows.extend(pairs(&[
+                    Opt::Autosave,
+                    Opt::Vignette,
+                    Opt::AttackIndicator,
+                    Opt::ChunkFade,
+                ]));
                 rows
             }
             Page::Sound => {
@@ -633,13 +767,34 @@ impl OptionsUi {
             }
             Page::Controls => {
                 let mut rows = vec![Row::Buttons(
-                    button(0.0, 0.0, 150.0, tr("options.mouse_settings"), Act::Push(Page::Mouse)),
-                    Some(button(0.0, 0.0, 150.0, tr("controls.keybinds"), Act::Push(Page::KeyBinds))),
+                    button(
+                        0.0,
+                        0.0,
+                        150.0,
+                        tr("options.mouse_settings"),
+                        Act::Push(Page::Mouse),
+                    ),
+                    Some(button(
+                        0.0,
+                        0.0,
+                        150.0,
+                        tr("controls.keybinds"),
+                        Act::Push(Page::KeyBinds),
+                    )),
                 )];
-                rows.extend(pairs(&[Opt::ToggleCrouch, Opt::ToggleSprint, Opt::AutoJump]));
+                rows.extend(pairs(&[
+                    Opt::ToggleCrouch,
+                    Opt::ToggleSprint,
+                    Opt::AutoJump,
+                ]));
                 rows
             }
-            Page::Mouse => pairs(&[Opt::Sensitivity, Opt::WheelSensitivity, Opt::DiscreteScroll, Opt::InvertY]),
+            Page::Mouse => pairs(&[
+                Opt::Sensitivity,
+                Opt::WheelSensitivity,
+                Opt::DiscreteScroll,
+                Opt::InvertY,
+            ]),
             Page::Chat => pairs(&[
                 Opt::ChatVisibility,
                 Opt::ChatColors,
@@ -673,7 +828,13 @@ impl OptionsUi {
         }
     }
     /// Build every widget of the current page.
-    fn layout(&mut self, s: &Settings, atlas: &HudAtlas, w: f32, h: f32) -> (Vec<Widget>, f32, f32, f32) {
+    fn layout(
+        &mut self,
+        s: &Settings,
+        atlas: &HudAtlas,
+        w: f32,
+        h: f32,
+    ) -> (Vec<Widget>, f32, f32, f32) {
         let mut out = Vec::new();
         let page = self.page();
         let cx = (w / 2.0).floor();
@@ -682,9 +843,26 @@ impl OptionsUi {
         let (mut top, mut bottom, mut content) = (33.0, h - 33.0, 0.0);
         match page {
             Page::Main => {
-                out.push(Widget { x: 0.0, y: 12.0, w, h: 9.0, kind: WKind::Text { text: tr("options.title"), color: u32::MAX, centered: true } , list: false });
+                out.push(Widget {
+                    x: 0.0,
+                    y: 12.0,
+                    w,
+                    h: 9.0,
+                    kind: WKind::Text {
+                        text: tr("options.title"),
+                        color: u32::MAX,
+                        centered: true,
+                    },
+                    list: false,
+                });
                 out.push(option_widget(s, Opt::Fov, cx - 154.0, 29.0, 150.0));
-                out.push(inactive(button(cx + 4.0, 29.0, 150.0, tr("options.online"), Act::None)));
+                out.push(inactive(button(
+                    cx + 4.0,
+                    29.0,
+                    150.0,
+                    tr("options.online"),
+                    Act::None,
+                )));
                 let entries = [
                     ("options.skinCustomisation", None),
                     ("options.sounds", Some(Page::Sound)),
@@ -709,12 +887,25 @@ impl OptionsUi {
                 bottom = 0.0;
             }
             Page::KeyBinds => {
-                out.push(Widget { x: 0.0, y: 12.0, w, h: 9.0, kind: WKind::Text { text: tr(Self::title(page)), color: u32::MAX, centered: true } , list: false });
-                let mut mappings: Vec<(&str, &str)> = MAPPINGS.iter().map(|(n, _, c)| (*n, *c)).collect();
+                out.push(Widget {
+                    x: 0.0,
+                    y: 12.0,
+                    w,
+                    h: 9.0,
+                    kind: WKind::Text {
+                        text: tr(Self::title(page)),
+                        color: u32::MAX,
+                        centered: true,
+                    },
+                    list: false,
+                });
+                let mut mappings: Vec<(&str, &str)> =
+                    MAPPINGS.iter().map(|(n, _, c)| (*n, *c)).collect();
                 mappings.sort_by(|a, b| {
                     let ca = CATEGORIES.iter().position(|c| *c == a.1).unwrap_or(99);
                     let cb = CATEGORIES.iter().position(|c| *c == b.1).unwrap_or(99);
-                    ca.cmp(&cb).then_with(|| lang::get(a.0).cmp(&lang::get(b.0)))
+                    ca.cmp(&cb)
+                        .then_with(|| lang::get(a.0).cmp(&lang::get(b.0)))
                 });
                 let row_left = cx - 170.0;
                 let scrollbar_x = row_left + 340.0 + 6.0 + 2.0;
@@ -724,44 +915,122 @@ impl OptionsUi {
                 for (name, category) in mappings {
                     if category != last_category {
                         last_category = category;
-                        let label = Text::translate(&format!("key.categories.{category}"), &[]).with_style(&Style { bold: Some(true), underlined: Some(true), ..Style::default() });
-                        out.push(Widget { x: 0.0, y: y + 7.0, w, h: 9.0, kind: WKind::Text { text: label, color: u32::MAX, centered: true } , list: false });
+                        let label = Text::translate(&format!("key.categories.{category}"), &[])
+                            .with_style(&Style {
+                                bold: Some(true),
+                                underlined: Some(true),
+                                ..Style::default()
+                            });
+                        out.push(Widget {
+                            x: 0.0,
+                            y: y + 7.0,
+                            w,
+                            h: 9.0,
+                            kind: WKind::Text {
+                                text: label,
+                                color: u32::MAX,
+                                centered: true,
+                            },
+                            list: false,
+                        });
                         y += 20.0;
                     }
-                    out.push(Widget { x: row_left + 2.0, y: y + 6.0, w: 200.0, h: 9.0, kind: WKind::Text { text: tr(name), color: u32::MAX, centered: false } , list: false });
+                    out.push(Widget {
+                        x: row_left + 2.0,
+                        y: y + 6.0,
+                        w: 200.0,
+                        h: 9.0,
+                        kind: WKind::Text {
+                            text: tr(name),
+                            color: u32::MAX,
+                            centered: false,
+                        },
+                        list: false,
+                    });
                     let key = s.keys.get(name).to_owned();
                     let mut message = keybinds::display_name(&key);
                     let conflicts = s.keys.conflicts(name);
                     if !conflicts.is_empty() {
-                        message = Text::literal("[ ").append(message.with_color(text::WHITE)).append(" ]").with_color(text::YELLOW);
+                        message = Text::literal("[ ")
+                            .append(message.with_color(text::WHITE))
+                            .append(" ]")
+                            .with_color(text::YELLOW);
                     }
                     if self.selected_key == Some(name) {
-                        message = Text::literal("> ").append(message.with_style(&Style { color: Some(text::WHITE), underlined: Some(true), ..Style::default() })).append(" <").with_color(text::YELLOW);
+                        message = Text::literal("> ")
+                            .append(message.with_style(&Style {
+                                color: Some(text::WHITE),
+                                underlined: Some(true),
+                                ..Style::default()
+                            }))
+                            .append(" <")
+                            .with_color(text::YELLOW);
                     }
                     let reset_x = scrollbar_x - 50.0 - 10.0;
                     let change_x = reset_x - 5.0 - 75.0;
                     let name_static = MAPPINGS.iter().find(|m| m.0 == name).map_or("", |m| m.0);
                     out.push(button(change_x, y, 75.0, message, Act::Key(name_static)));
                     if !conflicts.is_empty() {
-                        out.push(Widget { x: change_x - 6.0, y: y + 1.0, w: 3.0, h: 18.0, kind: WKind::Text { text: Text::empty(), color: rgba(255, 255, 0, 255), centered: false } , list: false });
+                        out.push(Widget {
+                            x: change_x - 6.0,
+                            y: y + 1.0,
+                            w: 3.0,
+                            h: 18.0,
+                            kind: WKind::Text {
+                                text: Text::empty(),
+                                color: rgba(255, 255, 0, 255),
+                                centered: false,
+                            },
+                            list: false,
+                        });
                     }
-                    let reset = button(reset_x, y, 50.0, tr("controls.reset"), Act::ResetKey(name_static));
-                    out.push(if s.keys.is_default(name) { inactive(reset) } else { reset });
+                    let reset = button(
+                        reset_x,
+                        y,
+                        50.0,
+                        tr("controls.reset"),
+                        Act::ResetKey(name_static),
+                    );
+                    out.push(if s.keys.is_default(name) {
+                        inactive(reset)
+                    } else {
+                        reset
+                    });
                     y += 20.0;
                 }
                 content = y + self.scroll - top + 2.0;
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
-                out.push(button(cx - 154.0, h - 27.0, 150.0, tr("controls.resetAll"), Act::ResetKeys));
+                out.push(button(
+                    cx - 154.0,
+                    h - 27.0,
+                    150.0,
+                    tr("controls.resetAll"),
+                    Act::ResetKeys,
+                ));
                 out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
             }
             Page::Language => {
                 top = 36.0;
                 bottom = h - 53.0;
-                out.push(Widget { x: 0.0, y: 4.0, w, h: 9.0, kind: WKind::Text { text: tr(Self::title(page)), color: u32::MAX, centered: true } , list: false });
+                out.push(Widget {
+                    x: 0.0,
+                    y: 4.0,
+                    w,
+                    h: 9.0,
+                    kind: WKind::Text {
+                        text: tr(Self::title(page)),
+                        color: u32::MAX,
+                        centered: true,
+                    },
+                    list: false,
+                });
                 self.language_search.x = cx - 100.0;
                 self.language_search.y = 17.0;
                 let query = self.language_search.value.to_lowercase();
-                let current = self.language_choice.clone().unwrap_or_else(|| s.language.clone());
+                let current = self
+                    .language_choice
+                    .clone()
+                    .unwrap_or_else(|| s.language.clone());
                 if std::mem::take(&mut self.center_language)
                     && let Some(i) = self.languages.iter().position(|l| l.code == current)
                 {
@@ -771,50 +1040,175 @@ impl OptionsUi {
                 let list_start = out.len();
                 let mut y = top + 2.0 - self.scroll;
                 for l in &self.languages {
-                    if !query.is_empty() && !l.label().to_lowercase().contains(&query) && !l.code.contains(&query) {
+                    if !query.is_empty()
+                        && !l.label().to_lowercase().contains(&query)
+                        && !l.code.contains(&query)
+                    {
                         continue;
                     }
-                    out.push(Widget { x: cx - 110.0, y, w: 220.0, h: 18.0, kind: WKind::LanguageRow { label: Text::literal(l.label()), selected: l.code == current, code: l.code.clone() } , list: false });
+                    out.push(Widget {
+                        x: cx - 110.0,
+                        y,
+                        w: 220.0,
+                        h: 18.0,
+                        kind: WKind::LanguageRow {
+                            label: Text::literal(l.label()),
+                            selected: l.code == current,
+                            code: l.code.clone(),
+                        },
+                        list: false,
+                    });
                     y += 18.0;
                 }
                 content = y + self.scroll - top + 2.0;
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
-                out.push(Widget { x: 0.0, y: h - 45.0, w, h: 9.0, kind: WKind::Text { text: tr("options.languageAccuracyWarning"), color: rgba(0xBA, 0xBA, 0xBA, 255), centered: true } , list: false });
-                out.push(button(cx - 154.0, h - 28.0, 150.0, tr("options.font"), Act::Push(Page::Font)));
+                out.push(Widget {
+                    x: 0.0,
+                    y: h - 45.0,
+                    w,
+                    h: 9.0,
+                    kind: WKind::Text {
+                        text: tr("options.languageAccuracyWarning"),
+                        color: rgba(0xBA, 0xBA, 0xBA, 255),
+                        centered: true,
+                    },
+                    list: false,
+                });
+                out.push(button(
+                    cx - 154.0,
+                    h - 28.0,
+                    150.0,
+                    tr("options.font"),
+                    Act::Push(Page::Font),
+                ));
                 out.push(button(cx + 4.0, h - 28.0, 150.0, tr("gui.done"), Act::Done));
             }
             Page::Packs => {
                 top = 47.0;
                 bottom = h - 33.0;
-                out.push(Widget { x: 0.0, y: 8.0, w, h: 9.0, kind: WKind::Text { text: tr("resourcePack.title"), color: u32::MAX, centered: true } , list: false });
-                out.push(Widget { x: 0.0, y: 20.0, w, h: 9.0, kind: WKind::Text { text: tr("pack.dropInfo").with_color(text::GRAY), color: u32::MAX, centered: true } , list: false });
+                out.push(Widget {
+                    x: 0.0,
+                    y: 8.0,
+                    w,
+                    h: 9.0,
+                    kind: WKind::Text {
+                        text: tr("resourcePack.title"),
+                        color: u32::MAX,
+                        centered: true,
+                    },
+                    list: false,
+                });
+                out.push(Widget {
+                    x: 0.0,
+                    y: 20.0,
+                    w,
+                    h: 9.0,
+                    kind: WKind::Text {
+                        text: tr("pack.dropInfo").with_color(text::GRAY),
+                        color: u32::MAX,
+                        centered: true,
+                    },
+                    list: false,
+                });
                 let lists = [(false, cx - 4.0 - 200.0), (true, cx + 4.0)];
                 let list_start = out.len();
                 for (selected, lx) in lists {
-                    let entries = if selected { &self.selected } else { &self.available };
-                    let header = tr(if selected { "pack.selected.title" } else { "pack.available.title" }).with_style(&Style { bold: Some(true), underlined: Some(true), ..Style::default() });
-                    out.push(Widget { x: lx, y: top + 4.0, w: 200.0, h: 9.0, kind: WKind::Text { text: header, color: u32::MAX, centered: true } , list: false });
+                    let entries = if selected {
+                        &self.selected
+                    } else {
+                        &self.available
+                    };
+                    let header = tr(if selected {
+                        "pack.selected.title"
+                    } else {
+                        "pack.available.title"
+                    })
+                    .with_style(&Style {
+                        bold: Some(true),
+                        underlined: Some(true),
+                        ..Style::default()
+                    });
+                    out.push(Widget {
+                        x: lx,
+                        y: top + 4.0,
+                        w: 200.0,
+                        h: 9.0,
+                        kind: WKind::Text {
+                            text: header,
+                            color: u32::MAX,
+                            centered: true,
+                        },
+                        list: false,
+                    });
                     let mut y = top + 17.0 - self.scroll;
                     for (i, p) in entries.iter().enumerate() {
-                        out.push(Widget { x: lx, y, w: 200.0, h: 36.0, kind: WKind::PackRow { pack: p.clone(), selected, index: i, count: entries.len() } , list: false });
+                        out.push(Widget {
+                            x: lx,
+                            y,
+                            w: 200.0,
+                            h: 36.0,
+                            kind: WKind::PackRow {
+                                pack: p.clone(),
+                                selected,
+                                index: i,
+                                count: entries.len(),
+                            },
+                            list: false,
+                        });
                         y += 36.0;
                     }
                     content = f32::max(content, y + self.scroll - top + 4.0);
                 }
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
-                out.push(button(cx - 154.0, h - 27.0, 150.0, tr("pack.openFolder"), Act::OpenPackFolder));
+                out.push(button(
+                    cx - 154.0,
+                    h - 27.0,
+                    150.0,
+                    tr("pack.openFolder"),
+                    Act::OpenPackFolder,
+                ));
                 out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
             }
             _ => {
-                out.push(Widget { x: 0.0, y: 12.0, w, h: 9.0, kind: WKind::Text { text: tr(Self::title(page)), color: u32::MAX, centered: true } , list: false });
+                out.push(Widget {
+                    x: 0.0,
+                    y: 12.0,
+                    w,
+                    h: 9.0,
+                    kind: WKind::Text {
+                        text: tr(Self::title(page)),
+                        color: u32::MAX,
+                        centered: true,
+                    },
+                    list: false,
+                });
                 let list_start = out.len();
                 let mut y = top + 2.0 - self.scroll;
                 for row in self.list_rows(s) {
                     match row {
                         Row::Header(key) => {
-                            let padding = if y + self.scroll <= top + 2.0 { 0.0 } else { 18.0 };
-                            let label = tr(key).with_style(&Style { bold: Some(true), underlined: Some(true), ..Style::default() });
-                            out.push(Widget { x: 0.0, y: y + 2.0 + padding + 4.0, w, h: 9.0, kind: WKind::Text { text: label, color: u32::MAX, centered: true } , list: false });
+                            let padding = if y + self.scroll <= top + 2.0 {
+                                0.0
+                            } else {
+                                18.0
+                            };
+                            let label = tr(key).with_style(&Style {
+                                bold: Some(true),
+                                underlined: Some(true),
+                                ..Style::default()
+                            });
+                            out.push(Widget {
+                                x: 0.0,
+                                y: y + 2.0 + padding + 4.0,
+                                w,
+                                h: 9.0,
+                                kind: WKind::Text {
+                                    text: label,
+                                    color: u32::MAX,
+                                    centered: true,
+                                },
+                                list: false,
+                            });
                             y += padding + 18.0;
                         }
                         Row::Big(opt) => {
@@ -853,7 +1247,13 @@ impl OptionsUi {
         let max = (content - (bottom - top)).max(0.0);
         self.scroll = self.scroll.clamp(0.0, max);
     }
-    pub fn draw(&mut self, s: &Settings, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
+    pub fn draw(
+        &mut self,
+        s: &Settings,
+        batch: &mut HudBatch,
+        atlas: &HudAtlas,
+        cursor: (f32, f32),
+    ) {
         let (w, h) = (batch.width, batch.height);
         let (widgets, top, bottom, content) = self.layout(s, atlas, w, h);
         self.clamp_scroll(top, bottom, content);
@@ -869,65 +1269,183 @@ impl OptionsUi {
             if !visible(wd) {
                 continue;
             }
-            let hover = ui::hovered(cursor, wd.x, wd.y, wd.w, wd.h) && (!wd.list || cursor.1 >= top && cursor.1 < bottom);
+            let hover = ui::hovered(cursor, wd.x, wd.y, wd.w, wd.h)
+                && (!wd.list || cursor.1 >= top && cursor.1 < bottom);
             match &wd.kind {
                 WKind::Button { label, active, act } => {
                     ui::button(batch, atlas, wd.x, wd.y, wd.w, wd.h, label, *active, hover);
                     if hover && let Act::Key(name) = act {
                         let conflicts = s.keys.conflicts(name);
                         if !conflicts.is_empty() {
-                            let names = conflicts.iter().map(|c| lang::get(c)).collect::<Vec<_>>().join(", ");
-                            let full = Text::translate("controls.keybinds.duplicateKeybinds", &[Text::literal(names)]);
-                            tooltip = Some(full.plain().split('\n').map(|l| Text::literal(l.to_owned())).collect::<Vec<_>>());
+                            let names = conflicts
+                                .iter()
+                                .map(|c| lang::get(c))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let full = Text::translate(
+                                "controls.keybinds.duplicateKeybinds",
+                                &[Text::literal(names)],
+                            );
+                            tooltip = Some(
+                                full.plain()
+                                    .split('\n')
+                                    .map(|l| Text::literal(l.to_owned()))
+                                    .collect::<Vec<_>>(),
+                            );
                         }
                     }
                 }
                 WKind::Slider { label, value, opt } => {
                     let dragging = self.dragging == Some(*opt);
-                    ui::slider(batch, atlas, wd.x, wd.y, wd.w, label, *value, hover || dragging, true);
+                    ui::slider(
+                        batch,
+                        atlas,
+                        wd.x,
+                        wd.y,
+                        wd.w,
+                        label,
+                        *value,
+                        hover || dragging,
+                        true,
+                    );
                 }
-                WKind::Text { text, color, centered } => {
+                WKind::Text {
+                    text,
+                    color,
+                    centered,
+                } => {
                     if text.is_empty() {
                         batch.fill(atlas, wd.x, wd.y, wd.w, wd.h, *color);
                     } else if *centered {
                         let tw = atlas.font.width_text(text);
-                        batch.text_styled(atlas, text, wd.x + ((wd.w - tw) / 2.0).floor(), wd.y, *color, true);
+                        batch.text_styled(
+                            atlas,
+                            text,
+                            wd.x + ((wd.w - tw) / 2.0).floor(),
+                            wd.y,
+                            *color,
+                            true,
+                        );
                     } else {
                         batch.text_styled(atlas, text, wd.x, wd.y, *color, true);
                     }
                 }
-                WKind::LanguageRow { label, selected, .. } => {
+                WKind::LanguageRow {
+                    label, selected, ..
+                } => {
                     if *selected {
                         batch.fill(atlas, wd.x, wd.y, wd.w, wd.h, u32::MAX);
-                        batch.fill(atlas, wd.x + 1.0, wd.y + 1.0, wd.w - 2.0, wd.h - 2.0, rgba(0, 0, 0, 255));
+                        batch.fill(
+                            atlas,
+                            wd.x + 1.0,
+                            wd.y + 1.0,
+                            wd.w - 2.0,
+                            wd.h - 2.0,
+                            rgba(0, 0, 0, 255),
+                        );
                     }
                     let tw = atlas.font.width_text(label);
-                    batch.text_styled(atlas, label, wd.x + ((wd.w - tw) / 2.0).floor(), wd.y + 2.0 + 7.0 - 4.0, u32::MAX, true);
+                    batch.text_styled(
+                        atlas,
+                        label,
+                        wd.x + ((wd.w - tw) / 2.0).floor(),
+                        wd.y + 2.0 + 7.0 - 4.0,
+                        u32::MAX,
+                        true,
+                    );
                 }
-                WKind::PackRow { pack, selected, index, count } => {
+                WKind::PackRow {
+                    pack,
+                    selected,
+                    index,
+                    count,
+                } => {
                     if hover {
                         batch.fill(atlas, wd.x, wd.y, wd.w, wd.h, rgba(255, 255, 255, 255));
-                        batch.fill(atlas, wd.x + 1.0, wd.y + 1.0, wd.w - 2.0, wd.h - 2.0, rgba(0, 0, 0, 255));
+                        batch.fill(
+                            atlas,
+                            wd.x + 1.0,
+                            wd.y + 1.0,
+                            wd.w - 2.0,
+                            wd.h - 2.0,
+                            rgba(0, 0, 0, 255),
+                        );
                     }
-                    batch.sprite_scaled(atlas, "misc/unknown_pack", wd.x + 2.0, wd.y + 2.0, 32.0, 32.0, u32::MAX);
-                    let title_color = if pack.compatible { u32::MAX } else { rgba(255, 85, 85, 255) };
-                    batch.text_styled(atlas, &pack.title, wd.x + 36.0, wd.y + 3.0, title_color, true);
-                    for (i, line) in atlas.font.split(&pack.description, 157.0).iter().take(2).enumerate() {
-                        batch.text_styled(atlas, line, wd.x + 36.0, wd.y + 14.0 + i as f32 * 9.0, rgba(128, 128, 128, 255), true);
+                    batch.sprite_scaled(
+                        atlas,
+                        "misc/unknown_pack",
+                        wd.x + 2.0,
+                        wd.y + 2.0,
+                        32.0,
+                        32.0,
+                        u32::MAX,
+                    );
+                    let title_color = if pack.compatible {
+                        u32::MAX
+                    } else {
+                        rgba(255, 85, 85, 255)
+                    };
+                    batch.text_styled(
+                        atlas,
+                        &pack.title,
+                        wd.x + 36.0,
+                        wd.y + 3.0,
+                        title_color,
+                        true,
+                    );
+                    for (i, line) in atlas
+                        .font
+                        .split(&pack.description, 157.0)
+                        .iter()
+                        .take(2)
+                        .enumerate()
+                    {
+                        batch.text_styled(
+                            atlas,
+                            line,
+                            wd.x + 36.0,
+                            wd.y + 14.0 + i as f32 * 9.0,
+                            rgba(128, 128, 128, 255),
+                            true,
+                        );
                     }
                     if hover && cursor.0 < wd.x + 34.0 {
                         // TransferableSelectionList arrows over the icon.
-                        batch.fill(atlas, wd.x + 2.0, wd.y + 2.0, 32.0, 32.0, rgba(160, 160, 160, 136));
+                        batch.fill(
+                            atlas,
+                            wd.x + 2.0,
+                            wd.y + 2.0,
+                            32.0,
+                            32.0,
+                            rgba(160, 160, 160, 136),
+                        );
                         let sprite_dir = if *selected { "unselect" } else { "select" };
                         let left = cursor.0 < wd.x + 18.0;
-                        let name = format!("gui/sprites/transferable_list/{sprite_dir}{}", if left || !*selected { "_highlighted" } else { "" });
+                        let name = format!(
+                            "gui/sprites/transferable_list/{sprite_dir}{}",
+                            if left || !*selected {
+                                "_highlighted"
+                            } else {
+                                ""
+                            }
+                        );
                         batch.sprite(atlas, &name, wd.x + 2.0, wd.y + 2.0);
                         if *selected {
                             if *index > 0 {
-                                batch.sprite(atlas, "gui/sprites/transferable_list/move_up", wd.x + 2.0, wd.y + 2.0);
+                                batch.sprite(
+                                    atlas,
+                                    "gui/sprites/transferable_list/move_up",
+                                    wd.x + 2.0,
+                                    wd.y + 2.0,
+                                );
                             }
                             if index + 1 < *count {
-                                batch.sprite(atlas, "gui/sprites/transferable_list/move_down", wd.x + 2.0, wd.y + 2.0);
+                                batch.sprite(
+                                    atlas,
+                                    "gui/sprites/transferable_list/move_down",
+                                    wd.x + 2.0,
+                                    wd.y + 2.0,
+                                );
                             }
                         }
                     }
@@ -947,7 +1465,14 @@ impl OptionsUi {
             let mut search = self.language_search.clone();
             search.draw(batch, atlas, None);
             if search.value.is_empty() {
-                batch.text_styled(atlas, &tr("gui.language.search").with_color(text::GRAY).italic(), search.text_x(), search.text_y(), u32::MAX, true);
+                batch.text_styled(
+                    atlas,
+                    &tr("gui.language.search").with_color(text::GRAY).italic(),
+                    search.text_x(),
+                    search.text_y(),
+                    u32::MAX,
+                    true,
+                );
             }
             self.language_search = search;
         }
@@ -956,12 +1481,23 @@ impl OptionsUi {
         }
     }
     /// Mouse press/drag. Returns events for the game.
-    pub fn click(&mut self, s: &mut Settings, atlas: &HudAtlas, x: f32, y: f32, size: (f32, f32), drag: bool, right: bool) -> Vec<Event> {
+    pub fn click(
+        &mut self,
+        s: &mut Settings,
+        atlas: &HudAtlas,
+        x: f32,
+        y: f32,
+        size: (f32, f32),
+        drag: bool,
+        right: bool,
+    ) -> Vec<Event> {
         let (widgets, top, bottom, _) = self.layout(s, atlas, size.0, size.1);
         let mut events = Vec::new();
         if drag {
             if let Some(opt) = self.dragging
-                && let Some(wd) = widgets.iter().find(|wd| matches!(&wd.kind, WKind::Slider { opt: o, .. } if *o == opt))
+                && let Some(wd) = widgets
+                    .iter()
+                    .find(|wd| matches!(&wd.kind, WKind::Slider { opt: o, .. } if *o == opt))
             {
                 opt.set_slider(s, ui::slider_value(wd.x, wd.w, x));
                 events.push(Event::Changed);
@@ -970,7 +1506,11 @@ impl OptionsUi {
         }
         // Key Binds: a mouse button pressed while waiting binds it.
         if let Some(name) = self.selected_key.take() {
-            let button = if right { "key.mouse.right" } else { "key.mouse.left" };
+            let button = if right {
+                "key.mouse.right"
+            } else {
+                "key.mouse.left"
+            };
             s.keys.set(name, button);
             events.push(Event::Changed);
             return events;
@@ -983,7 +1523,9 @@ impl OptionsUi {
                 continue;
             }
             match wd.kind {
-                WKind::Button { active: true, act, .. } => match act {
+                WKind::Button {
+                    active: true, act, ..
+                } => match act {
                     Act::Push(p) => self.push(p),
                     Act::Done => events.extend(self.back(s)),
                     Act::Cycle(opt) => {
@@ -1020,7 +1562,12 @@ impl OptionsUi {
                         self.language_choice = Some(code);
                     }
                 }
-                WKind::PackRow { pack, selected, index, .. } => {
+                WKind::PackRow {
+                    pack,
+                    selected,
+                    index,
+                    ..
+                } => {
                     if pack.required {
                         continue;
                     }
@@ -1028,8 +1575,14 @@ impl OptionsUi {
                     if selected && on_icon && x >= wd.x + 18.0 {
                         // Right half of the icon: move up (top) or down (bottom).
                         let up = y < wd.y + 18.0;
-                        let target = if up { index.checked_sub(1) } else { Some(index + 1) };
-                        if let Some(t) = target.filter(|t| *t < self.selected.len() && !self.selected[*t].required) {
+                        let target = if up {
+                            index.checked_sub(1)
+                        } else {
+                            Some(index + 1)
+                        };
+                        if let Some(t) = target
+                            .filter(|t| *t < self.selected.len() && !self.selected[*t].required)
+                        {
                             self.selected.swap(index, t);
                             self.packs_changed = true;
                         }
@@ -1072,7 +1625,8 @@ impl OptionsUi {
                 }
             }
             Page::Packs if self.packs_changed => {
-                let mut ids: Vec<String> = self.selected.iter().rev().map(|p| p.id.clone()).collect();
+                let mut ids: Vec<String> =
+                    self.selected.iter().rev().map(|p| p.id.clone()).collect();
                 if !ids.contains(&"vanilla".to_owned()) {
                     ids.insert(0, "vanilla".into());
                 }
@@ -1096,11 +1650,22 @@ impl OptionsUi {
     }
     /// Keys while the options are open. Returns events; `handled` false lets
     /// Escape fall through.
-    pub fn key(&mut self, s: &mut Settings, key: winit::keyboard::KeyCode, text: Option<&str>) -> Vec<Event> {
+    pub fn key(
+        &mut self,
+        s: &mut Settings,
+        key: winit::keyboard::KeyCode,
+        text: Option<&str>,
+    ) -> Vec<Event> {
         use winit::keyboard::KeyCode as K;
         if let Some(name) = self.selected_key.take() {
             // KeyBindsScreen.keyPressed: Escape unbinds.
-            let value = if key == K::Escape { "key.keyboard.unknown".to_owned() } else { keybinds::key_name(key).unwrap_or("key.keyboard.unknown").to_owned() };
+            let value = if key == K::Escape {
+                "key.keyboard.unknown".to_owned()
+            } else {
+                keybinds::key_name(key)
+                    .unwrap_or("key.keyboard.unknown")
+                    .to_owned()
+            };
             s.keys.set(name, &value);
             return vec![Event::Changed];
         }

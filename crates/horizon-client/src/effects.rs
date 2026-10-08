@@ -17,7 +17,14 @@ pub struct EffectInstance {
 }
 impl EffectInstance {
     pub fn new(id: &'static str, duration: i32, amplifier: i32) -> Self {
-        Self { id, duration, amplifier: amplifier.clamp(0, 255), ambient: false, visible: true, hidden: None }
+        Self {
+            id,
+            duration,
+            amplifier: amplifier.clamp(0, 255),
+            ambient: false,
+            visible: true,
+            hidden: None,
+        }
     }
     fn infinite(&self) -> bool {
         self.duration == -1
@@ -45,7 +52,10 @@ impl EffectInstance {
             } else if let Some(h) = self.hidden.as_mut() {
                 h.update(take);
             } else {
-                self.hidden = Some(Box::new(EffectInstance { hidden: None, ..take.clone() }));
+                self.hidden = Some(Box::new(EffectInstance {
+                    hidden: None,
+                    ..take.clone()
+                }));
             }
         }
         if !take.ambient && self.ambient || changed {
@@ -102,15 +112,23 @@ fn periodic(id: &str, tick: i32, amp: i32) -> Option<EffectAction> {
         "hunger" => Some(EffectAction::Exhaust(0.005 * (amp + 1) as f32)),
         "saturation" if tick >= 1 => Some(EffectAction::Eat(amp + 1, 1.0)),
         "instant_health" if tick >= 1 => Some(EffectAction::Heal((4 << amp.min(30)) as f32)),
-        "instant_damage" if tick >= 1 => Some(EffectAction::Hurt("minecraft:magic", (6 << amp.min(30)) as f32)),
+        "instant_damage" if tick >= 1 => Some(EffectAction::Hurt(
+            "minecraft:magic",
+            (6 << amp.min(30)) as f32,
+        )),
         _ => None,
     }
 }
 /// `InstantenousMobEffect.applyInstantenousEffect` (potions apply these directly).
 pub fn instant(id: &str, amp: i32, scale: f64) -> Option<EffectAction> {
     match id {
-        "instant_health" => Some(EffectAction::Heal((scale * f64::from(4 << amp.min(30))) as i32 as f32)),
-        "instant_damage" => Some(EffectAction::Hurt("minecraft:magic", (scale * f64::from(6 << amp.min(30))) as i32 as f32)),
+        "instant_health" => Some(EffectAction::Heal(
+            (scale * f64::from(4 << amp.min(30))) as i32 as f32,
+        )),
+        "instant_damage" => Some(EffectAction::Hurt(
+            "minecraft:magic",
+            (scale * f64::from(6 << amp.min(30))) as i32 as f32,
+        )),
         "saturation" => Some(EffectAction::Eat(amp + 1, 1.0)),
         _ => None,
     }
@@ -160,7 +178,10 @@ impl PlayerEffects {
         actions
     }
     /// Effects applied by drinking a potion (`PotionContents.applyToLivingEntity`).
-    pub fn potion_effects(potion: Option<&str>, scale: f32) -> (Vec<EffectInstance>, Vec<EffectAction>) {
+    pub fn potion_effects(
+        potion: Option<&str>,
+        scale: f32,
+    ) -> (Vec<EffectInstance>, Vec<EffectAction>) {
         let mut lasting = Vec::new();
         let mut now = Vec::new();
         if let Some(def) = potion.and_then(brewing::potion) {
@@ -185,7 +206,8 @@ impl PlayerEffects {
             levitation: self.amplifier("levitation"),
             resistance: self.amplifier("resistance"),
             fire_resistance: self.get("fire_resistance").is_some(),
-            water_breathing: self.get("water_breathing").is_some() || self.get("conduit_power").is_some(),
+            water_breathing: self.get("water_breathing").is_some()
+                || self.get("conduit_power").is_some(),
             protection: Vec::new(),
         }
     }
@@ -195,16 +217,61 @@ impl PlayerEffects {
         for e in &self.list {
             let level = f64::from(e.amplifier + 1);
             let m = match e.id {
-                "speed" => Some(("minecraft:movement_speed", "minecraft:effect.speed", 0.2, "add_multiplied_total")),
-                "slowness" => Some(("minecraft:movement_speed", "minecraft:effect.slowness", -0.15, "add_multiplied_total")),
-                "haste" => Some(("minecraft:attack_speed", "minecraft:effect.haste", 0.1, "add_multiplied_total")),
-                "mining_fatigue" => Some(("minecraft:attack_speed", "minecraft:effect.mining_fatigue", -0.1, "add_multiplied_total")),
-                "strength" => Some(("minecraft:attack_damage", "minecraft:effect.strength", 3.0, "add_value")),
-                "weakness" => Some(("minecraft:attack_damage", "minecraft:effect.weakness", -4.0, "add_value")),
-                "jump_boost" => Some(("minecraft:safe_fall_distance", "minecraft:effect.jump_boost", 1.0, "add_value")),
-                "health_boost" => Some(("minecraft:max_health", "minecraft:effect.health_boost", 4.0, "add_value")),
+                "speed" => Some((
+                    "minecraft:movement_speed",
+                    "minecraft:effect.speed",
+                    0.2,
+                    "add_multiplied_total",
+                )),
+                "slowness" => Some((
+                    "minecraft:movement_speed",
+                    "minecraft:effect.slowness",
+                    -0.15,
+                    "add_multiplied_total",
+                )),
+                "haste" => Some((
+                    "minecraft:attack_speed",
+                    "minecraft:effect.haste",
+                    0.1,
+                    "add_multiplied_total",
+                )),
+                "mining_fatigue" => Some((
+                    "minecraft:attack_speed",
+                    "minecraft:effect.mining_fatigue",
+                    -0.1,
+                    "add_multiplied_total",
+                )),
+                "strength" => Some((
+                    "minecraft:attack_damage",
+                    "minecraft:effect.strength",
+                    3.0,
+                    "add_value",
+                )),
+                "weakness" => Some((
+                    "minecraft:attack_damage",
+                    "minecraft:effect.weakness",
+                    -4.0,
+                    "add_value",
+                )),
+                "jump_boost" => Some((
+                    "minecraft:safe_fall_distance",
+                    "minecraft:effect.jump_boost",
+                    1.0,
+                    "add_value",
+                )),
+                "health_boost" => Some((
+                    "minecraft:max_health",
+                    "minecraft:effect.health_boost",
+                    4.0,
+                    "add_value",
+                )),
                 "luck" => Some(("minecraft:luck", "minecraft:effect.luck", 1.0, "add_value")),
-                "unluck" => Some(("minecraft:luck", "minecraft:effect.unluck", -1.0, "add_value")),
+                "unluck" => Some((
+                    "minecraft:luck",
+                    "minecraft:effect.unluck",
+                    -1.0,
+                    "add_value",
+                )),
                 _ => None,
             };
             if let Some((a, id, amount, op)) = m {
@@ -245,7 +312,10 @@ pub struct StatusFlags {
 }
 impl StatusFlags {
     pub fn protection(&self, damage_type: &str) -> f32 {
-        self.protection.iter().find(|(t, _)| *t == damage_type).map_or(0.0, |(_, p)| *p)
+        self.protection
+            .iter()
+            .find(|(t, _)| *t == damage_type)
+            .map_or(0.0, |(_, p)| *p)
     }
 }
 
@@ -261,7 +331,10 @@ mod tests {
         fx.add(EffectInstance::new("speed", 1800, 1));
         let e = fx.get("speed").unwrap();
         assert_eq!((e.amplifier, e.duration), (1, 1800));
-        assert_eq!(e.hidden.as_ref().map(|h| (h.amplifier, h.duration)), Some((0, 9600)));
+        assert_eq!(
+            e.hidden.as_ref().map(|h| (h.amplifier, h.duration)),
+            Some((0, 9600))
+        );
         for _ in 0..1800 {
             fx.tick();
         }
@@ -275,13 +348,19 @@ mod tests {
     fn regeneration_and_poison_intervals() {
         let mut fx = PlayerEffects::default();
         fx.add(EffectInstance::new("regeneration", 900, 0));
-        let heals = (0..900).flat_map(|_| fx.tick()).filter(|a| *a == EffectAction::Heal(1.0)).count();
+        let heals = (0..900)
+            .flat_map(|_| fx.tick())
+            .filter(|a| *a == EffectAction::Heal(1.0))
+            .count();
         // Duration 900..1 divisible by 50: 18 heals.
         assert_eq!(heals, 18);
         assert!(fx.get("regeneration").is_none());
         let mut fx = PlayerEffects::default();
         fx.add(EffectInstance::new("poison", 432, 1));
-        let hurts = (0..432).flat_map(|_| fx.tick()).filter(|a| matches!(a, EffectAction::Hurt(..))).count();
+        let hurts = (0..432)
+            .flat_map(|_| fx.tick())
+            .filter(|a| matches!(a, EffectAction::Hurt(..)))
+            .count();
         // Interval 25 >> 1 = 12: 432/12 = 36 hits.
         assert_eq!(hurts, 36);
     }

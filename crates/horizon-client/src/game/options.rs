@@ -11,10 +11,15 @@ use winit::{event::MouseButton, keyboard::KeyCode, window::Fullscreen};
 
 impl Game<'_> {
     fn options_path() -> std::path::PathBuf {
-        std::env::current_dir().unwrap_or_default().join("options.txt")
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join("options.txt")
     }
     fn gui_size(&self) -> (f32, f32) {
-        let size = self.renderer.as_ref().map_or([1280, 720], |r| [r.config.width, r.config.height]);
+        let size = self
+            .renderer
+            .as_ref()
+            .map_or([1280, 720], |r| [r.config.width, r.config.height]);
         let b = HudBatch::new(size);
         (b.width, b.height)
     }
@@ -42,14 +47,30 @@ impl Game<'_> {
         self.dragging = true;
         let size = self.gui_size();
         let mut ui = std::mem::take(&mut self.ui.options);
-        let events = ui.click(&mut self.settings, &self.res.atlas, self.cursor.0, self.cursor.1, size, false, right);
+        let events = ui.click(
+            &mut self.settings,
+            &self.res.atlas,
+            self.cursor.0,
+            self.cursor.1,
+            size,
+            false,
+            right,
+        );
         self.ui.options = ui;
         self.handle_option_events(events)
     }
     pub(super) fn options_drag(&mut self) -> Result<()> {
         let size = self.gui_size();
         let mut ui = std::mem::take(&mut self.ui.options);
-        let events = ui.click(&mut self.settings, &self.res.atlas, self.cursor.0, self.cursor.1, size, true, false);
+        let events = ui.click(
+            &mut self.settings,
+            &self.res.atlas,
+            self.cursor.0,
+            self.cursor.1,
+            size,
+            true,
+            false,
+        );
         self.ui.options = ui;
         self.handle_option_events(events)
     }
@@ -68,7 +89,9 @@ impl Game<'_> {
     }
     pub(super) fn options_bind_mouse(&mut self, button: MouseButton) -> Result<()> {
         if let Some(name) = self.ui.options.selected_key.take() {
-            self.settings.keys.set(name, &horizon_client::keybinds::mouse_name(button));
+            self.settings
+                .keys
+                .set(name, &horizon_client::keybinds::mouse_name(button));
             self.handle_option_events(vec![Event::Changed])?;
         }
         Ok(())
@@ -82,7 +105,11 @@ impl Game<'_> {
                 }
                 Event::Close => {
                     self.settings.save(&Self::options_path());
-                    self.screen = if self.options_from_title { Screen::Playing } else { Screen::Paused };
+                    self.screen = if self.options_from_title {
+                        Screen::Playing
+                    } else {
+                        Screen::Paused
+                    };
                     self.dragging = false;
                 }
                 Event::Language(code) => {
@@ -93,7 +120,9 @@ impl Game<'_> {
                     self.reload_packs();
                 }
                 Event::OpenPackFolder => {
-                    let dir = std::env::current_dir().unwrap_or_default().join("resourcepacks");
+                    let dir = std::env::current_dir()
+                        .unwrap_or_default()
+                        .join("resourcepacks");
                     let _ = std::fs::create_dir_all(&dir);
                     let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
                 }
@@ -153,7 +182,11 @@ impl Game<'_> {
             return None;
         }
         // Menus without a world run at 60 fps like vanilla's title screen.
-        let fps = if self.title.is_some() { fps.min(60) } else { fps };
+        let fps = if self.title.is_some() {
+            fps.min(60)
+        } else {
+            fps
+        };
         let due = self.previous + std::time::Duration::from_secs_f64(1.0 / f64::from(fps));
         (due > std::time::Instant::now()).then_some(due)
     }

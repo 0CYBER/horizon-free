@@ -8,8 +8,8 @@
 pub mod ai;
 pub mod anim;
 pub mod aquatic;
-pub mod data;
 pub mod control;
+pub mod data;
 pub mod farm;
 pub mod goals;
 pub mod hostile;
@@ -18,8 +18,8 @@ pub mod living;
 pub mod nav;
 pub mod path;
 pub mod render;
-pub mod species;
 pub mod spawning;
+pub mod species;
 pub mod undead;
 mod world;
 
@@ -47,7 +47,12 @@ pub struct Part {
 }
 impl Part {
     fn parse(name: &str, v: &Value) -> Self {
-        let pose: Vec<f32> = v["pose"].as_array().into_iter().flatten().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
+        let pose: Vec<f32> = v["pose"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|x| x.as_f64().unwrap_or(0.0) as f32)
+            .collect();
         let mut p = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         for (i, x) in pose.iter().enumerate().take(9) {
             p[i] = *x;
@@ -61,11 +66,18 @@ impl Part {
                     .as_array()?
                     .iter()
                     .map(|vx| {
-                        let a: Vec<f32> = vx.as_array().into_iter().flatten().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
+                        let a: Vec<f32> = vx
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|x| x.as_f64().unwrap_or(0.0) as f32)
+                            .collect();
                         [a[0], a[1], a[2], a[3], a[4]]
                     })
                     .collect();
-                (verts.len() == 4).then(|| Polygon { vertices: [verts[0], verts[1], verts[2], verts[3]] })
+                (verts.len() == 4).then(|| Polygon {
+                    vertices: [verts[0], verts[1], verts[2], verts[3]],
+                })
             })
             .collect();
         let mut children: Vec<Part> = v["children"]
@@ -75,7 +87,12 @@ impl Part {
             .map(|(k, c)| Part::parse(k, c))
             .collect();
         children.sort_by(|a, b| a.name.cmp(&b.name));
-        Self { name: name.to_owned(), pose: p, polygons, children }
+        Self {
+            name: name.to_owned(),
+            pose: p,
+            polygons,
+            children,
+        }
     }
 }
 /// Kept for callers of the earlier simple AI; species now select behaviour.
@@ -178,7 +195,12 @@ impl MobTypes {
         let models: Value = serde_json::from_slice(&fs::read(root.join("entity-models.json"))?)?;
         let item_tags = crate::items::load_tags(root, "item").unwrap_or_default();
         let tag = |name: &str| -> Arc<[String]> {
-            let mut v: Vec<String> = item_tags.get(&format!("minecraft:{name}")).into_iter().flatten().cloned().collect();
+            let mut v: Vec<String> = item_tags
+                .get(&format!("minecraft:{name}"))
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect();
             v.sort();
             v.into()
         };
@@ -190,14 +212,19 @@ impl MobTypes {
                 continue;
             }
             let model_key = format!("minecraft:{}", def.model);
-            let Some(model) = models.get(&model_key) else { continue };
+            let Some(model) = models.get(&model_key) else {
+                continue;
+            };
             let attr = |k: &str| t["attributes"][format!("minecraft:{k}")].as_f64();
             let mut layers = HashMap::new();
             if let Some(all) = models.as_object() {
                 for prefix in def.layer_prefixes() {
                     let start = format!("minecraft:{prefix}#");
                     for (k, v) in all.iter().filter(|(k, _)| k.starts_with(&start)) {
-                        layers.insert(k.trim_start_matches("minecraft:").to_owned(), Arc::new(Part::parse("root", v)));
+                        layers.insert(
+                            k.trim_start_matches("minecraft:").to_owned(),
+                            Arc::new(Part::parse("root", v)),
+                        );
                     }
                 }
             }
@@ -241,8 +268,15 @@ impl MobTypes {
                     anim: def.anim,
                     sounds: def.sounds,
                     step_sound: def.step_sound,
-                    food: def.food_tag().map(tag).unwrap_or_else(|| Arc::from(Vec::new())),
-                    tempt: def.tempt_tag().or(def.food_tag()).map(tag).unwrap_or_else(|| Arc::from(Vec::new())),
+                    food: def
+                        .food_tag()
+                        .map(tag)
+                        .unwrap_or_else(|| Arc::from(Vec::new())),
+                    tempt: def
+                        .tempt_tag()
+                        .or(def.food_tag())
+                        .map(tag)
+                        .unwrap_or_else(|| Arc::from(Vec::new())),
                     category,
                     id,
                 },
@@ -285,30 +319,63 @@ pub struct Damage {
 }
 impl Damage {
     pub fn fall() -> Self {
-        Self { kind: DamageKind::Fall, attacker: None, from: None }
+        Self {
+            kind: DamageKind::Fall,
+            attacker: None,
+            from: None,
+        }
     }
     pub fn of(kind: DamageKind) -> Self {
-        Self { kind, attacker: None, from: None }
+        Self {
+            kind,
+            attacker: None,
+            from: None,
+        }
     }
     pub fn player(from: [f64; 3]) -> Self {
-        Self { kind: DamageKind::PlayerAttack, attacker: Some(Who::Player), from: Some(from) }
+        Self {
+            kind: DamageKind::PlayerAttack,
+            attacker: Some(Who::Player),
+            from: Some(from),
+        }
     }
     pub fn mob(id: u32, from: [f64; 3]) -> Self {
-        Self { kind: DamageKind::MobAttack, attacker: Some(Who::Mob(id)), from: Some(from) }
+        Self {
+            kind: DamageKind::MobAttack,
+            attacker: Some(Who::Mob(id)),
+            from: Some(from),
+        }
     }
     /// DamageTypeTags.PANIC_CAUSES
     pub fn causes_panic(&self) -> bool {
-        !matches!(self.kind, DamageKind::Fall | DamageKind::Drown | DamageKind::Generic | DamageKind::InWall)
+        !matches!(
+            self.kind,
+            DamageKind::Fall | DamageKind::Drown | DamageKind::Generic | DamageKind::InWall
+        )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
     pub fn bypasses_armor(&self) -> bool {
-        matches!(self.kind, DamageKind::Fall | DamageKind::OnFire | DamageKind::Drown | DamageKind::Magic | DamageKind::InWall | DamageKind::Generic)
+        matches!(
+            self.kind,
+            DamageKind::Fall
+                | DamageKind::OnFire
+                | DamageKind::Drown
+                | DamageKind::Magic
+                | DamageKind::InWall
+                | DamageKind::Generic
+        )
     }
     pub fn is_fire(&self) -> bool {
-        matches!(self.kind, DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava | DamageKind::Fireball)
+        matches!(
+            self.kind,
+            DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava | DamageKind::Fireball
+        )
     }
     pub fn is_projectile(&self) -> bool {
-        matches!(self.kind, DamageKind::Arrow | DamageKind::Thrown | DamageKind::Fireball)
+        matches!(
+            self.kind,
+            DamageKind::Arrow | DamageKind::Thrown | DamageKind::Fireball
+        )
     }
 }
 /// Per-mob attribute base values (the type's defaults unless changed).
@@ -422,31 +489,76 @@ pub enum MobEvent {
     Shoot([f64; 3], [f64; 3]),
     Explode([f64; 3], f32),
     /// Melee or ranged damage to another mob.
-    AttackMob { target: u32, amount: f32, source: Damage },
+    AttackMob {
+        target: u32,
+        amount: f32,
+        source: Damage,
+    },
     /// Set another mob's attack target (HurtByTargetGoal alerts).
-    SetTarget { mob: u32, target: Who },
+    SetTarget {
+        mob: u32,
+        target: Who,
+    },
     Projectile(crate::projectiles::Projectile),
     /// Spawn a new mob (breeding, slime splitting, chicken eggs...).
     Spawn(Box<Mob>),
     /// Spawn a mob by type id at a position (conversions, splits).
-    SpawnKind { kind: String, at: [f64; 3], setup: SpawnSetup },
-    DropItem { item: Arc<str>, count: u32, at: [f64; 3] },
-    SetBlock { pos: [i32; 3], state: horizon_world::registry::BlockStateId },
+    SpawnKind {
+        kind: String,
+        at: [f64; 3],
+        setup: SpawnSetup,
+    },
+    DropItem {
+        item: Arc<str>,
+        count: u32,
+        at: [f64; 3],
+    },
+    SetBlock {
+        pos: [i32; 3],
+        state: horizon_world::registry::BlockStateId,
+    },
     /// Destroy a block, dropping nothing (sheep eating grass becomes dirt via SetBlock).
-    BreakBlock { pos: [i32; 3], drop: bool },
-    Particles { kind: &'static str, at: [f64; 3], count: u32 },
-    Experience { at: [f64; 3], amount: u32 },
+    BreakBlock {
+        pos: [i32; 3],
+        drop: bool,
+    },
+    Particles {
+        kind: &'static str,
+        at: [f64; 3],
+        count: u32,
+    },
+    Experience {
+        at: [f64; 3],
+        amount: u32,
+    },
     /// Apply an effect to the player (witch potions, bee stings, cave spider poison).
-    EffectPlayer { effect: &'static str, ticks: i32, amplifier: i32 },
+    EffectPlayer {
+        effect: &'static str,
+        ticks: i32,
+        amplifier: i32,
+    },
     /// Set an entity on fire.
-    Ignite { target: Who, seconds: i32 },
+    Ignite {
+        target: Who,
+        seconds: i32,
+    },
     /// Two animals bred: the game spawns the baby and resets the partner.
-    Breed { parent: u32, partner: u32 },
+    Breed {
+        parent: u32,
+        partner: u32,
+    },
     /// Replace a block by name (sheep turning grass to dirt), optionally with
     /// the destroy effect.
-    SetBlockName { pos: [i32; 3], name: &'static str, effect: bool },
+    SetBlockName {
+        pos: [i32; 3],
+        name: &'static str,
+        effect: bool,
+    },
     /// Drop the loot of a gift table (chicken eggs, armadillo scutes).
-    GiftLoot { table: &'static str, at: [f64; 3] },
+    GiftLoot {
+        table: &'static str,
+        at: [f64; 3],
+    },
 }
 /// How a spawned-by-kind mob should be set up.
 #[derive(Clone, Debug, Default)]
@@ -508,7 +620,11 @@ pub struct MobWorld<'a> {
 }
 impl Mob {
     pub fn new(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {
-        let mut random = LegacyRandom::new(i64::from(id).wrapping_mul(0x5DEE_CE66D) ^ (position.x.to_bits() as i64) ^ (position.z.to_bits() as i64).rotate_left(17));
+        let mut random = LegacyRandom::new(
+            i64::from(id).wrapping_mul(0x5DEE_CE66D)
+                ^ (position.x.to_bits() as i64)
+                ^ (position.z.to_bits() as i64).rotate_left(17),
+        );
         let _ = random.next_int();
         let mut mob = Self {
             id,
@@ -551,7 +667,12 @@ impl Mob {
             last_damage: None,
             removed: false,
             anim: anim::AnimState::default(),
-            attrs: Attrs { speed: kind.speed, attack_damage: kind.attack_damage, max_health: kind.max_health, follow_range: kind.follow_range },
+            attrs: Attrs {
+                speed: kind.speed,
+                attack_damage: kind.attack_damage,
+                max_health: kind.max_health,
+                follow_range: kind.follow_range,
+            },
             kind,
         };
         ai::register(&mut mob);
@@ -561,7 +682,11 @@ impl Mob {
         let w = f64::from(self.width()) / 2.0;
         Aabb::new(
             Vec3::new(self.position.x - w, self.position.y, self.position.z - w),
-            Vec3::new(self.position.x + w, self.position.y + f64::from(self.height()), self.position.z + w),
+            Vec3::new(
+                self.position.x + w,
+                self.position.y + f64::from(self.height()),
+                self.position.z + w,
+            ),
         )
     }
     pub fn alive(&self) -> bool {
@@ -574,7 +699,12 @@ impl Mob {
         self.kind.species
     }
     /// The player hit this mob (melee): LivingEntity.hurt with knockback.
-    pub fn hurt(&mut self, amount: f32, from: Option<[f64; 3]>, _random: &mut LegacyRandom) -> bool {
+    pub fn hurt(
+        &mut self,
+        amount: f32,
+        from: Option<[f64; 3]>,
+        _random: &mut LegacyRandom,
+    ) -> bool {
         let source = match from {
             Some(f) => Damage::player(f),
             None => Damage::of(DamageKind::Generic),
@@ -650,20 +780,35 @@ impl Mob {
         let (kx, kz) = (xd / len * power, zd / len * power);
         self.velocity = Vec3::new(
             self.velocity.x / 2.0 - kx,
-            if self.on_ground { (self.velocity.y / 2.0 + power).min(0.4) } else { self.velocity.y },
+            if self.on_ground {
+                (self.velocity.y / 2.0 + power).min(0.4)
+            } else {
+                self.velocity.y
+            },
             self.velocity.z / 2.0 - kz,
         );
     }
     /// One game tick. Returns false once the mob should be removed.
-    pub fn tick(&mut self, w: &MobWorld, _random: &mut LegacyRandom, events: &mut Vec<MobEvent>) -> bool {
+    pub fn tick(
+        &mut self,
+        w: &MobWorld,
+        _random: &mut LegacyRandom,
+        events: &mut Vec<MobEvent>,
+    ) -> bool {
         ai::tick(self, w, events)
     }
     pub fn distance_to(&self, p: [f64; 3]) -> f64 {
-        let d = [p[0] - self.position.x, p[1] - self.position.y, p[2] - self.position.z];
+        let d = [
+            p[0] - self.position.x,
+            p[1] - self.position.y,
+            p[2] - self.position.z,
+        ];
         (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
     }
     pub fn distance_sqr(&self, p: Vec3) -> f64 {
-        (p.x - self.position.x).powi(2) + (p.y - self.position.y).powi(2) + (p.z - self.position.z).powi(2)
+        (p.x - self.position.x).powi(2)
+            + (p.y - self.position.y).powi(2)
+            + (p.z - self.position.z).powi(2)
     }
     /// Movement speed attribute bonus (baby zombies, sprinting modifiers).
     /// MOVEMENT_SPEED including effects (speed +20%/level, slowness -15%/level).
@@ -693,7 +838,11 @@ impl Mob {
         ai::speed_bonus(self)
     }
     pub fn center(&self) -> [f64; 3] {
-        [self.position.x, self.position.y + f64::from(self.height()) / 2.0, self.position.z]
+        [
+            self.position.x,
+            self.position.y + f64::from(self.height()) / 2.0,
+            self.position.z,
+        ]
     }
     pub fn sound(&self, event: &'static str, events: &mut Vec<MobEvent>) {
         let at = [self.position.x, self.eye_y(), self.position.z];
@@ -701,36 +850,69 @@ impl Mob {
     }
     /// Mob.playSound with LivingEntity.getVoicePitch.
     pub fn voice(&mut self, event: &'static str, events: &mut Vec<MobEvent>) {
-        let pitch = (self.random.next_float() - self.random.next_float()) * 0.2 + if self.is_baby() { 1.5 } else { 1.0 };
+        let pitch = (self.random.next_float() - self.random.next_float()) * 0.2
+            + if self.is_baby() { 1.5 } else { 1.0 };
         let at = [self.position.x, self.eye_y(), self.position.z];
         events.push(MobEvent::Sound(event, at, ai::sound_volume(self), pitch));
     }
 }
 /// Model geometry for a mob, posed for its animation state, as camera-relative
 /// vertices textured from the shared atlas.
-pub fn render(mob: &Mob, alpha: f32, camera: glam::DVec3, uv: [f32; 4], light: u32, out: &mut Vec<Vertex>) {
+pub fn render(
+    mob: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    uv: [f32; 4],
+    light: u32,
+    out: &mut Vec<Vertex>,
+) {
     render::render_single(mob, alpha, camera, uv, light, out);
 }
 /// Load one baked model layer from `entity-models.json` (e.g. `minecraft:chest#main`).
 pub fn load_model(root: &Path, key: &str) -> Option<Part> {
-    let models: Value = serde_json::from_slice(&fs::read(root.join("entity-models.json")).ok()?).ok()?;
+    let models: Value =
+        serde_json::from_slice(&fs::read(root.join("entity-models.json")).ok()?).ok()?;
     models.get(key).map(|m| Part::parse("root", m))
 }
 /// ModelPart.render: translate, rotate ZYX, scale, then children.
-pub fn render_model(part: &Part, base: glam::Mat4, pose_for: &dyn Fn(&Part) -> [f32; 9], uv: [f32; 4], light: u32, overlay: u32, out: &mut Vec<Vertex>) {
+pub fn render_model(
+    part: &Part,
+    base: glam::Mat4,
+    pose_for: &dyn Fn(&Part) -> [f32; 9],
+    uv: [f32; 4],
+    light: u32,
+    overlay: u32,
+    out: &mut Vec<Vertex>,
+) {
     visit(part, base, pose_for, uv, light, overlay, out);
-    fn visit(part: &Part, parent: glam::Mat4, pose_for: &dyn Fn(&Part) -> [f32; 9], uv: [f32; 4], light: u32, overlay: u32, out: &mut Vec<Vertex>) {
+    fn visit(
+        part: &Part,
+        parent: glam::Mat4,
+        pose_for: &dyn Fn(&Part) -> [f32; 9],
+        uv: [f32; 4],
+        light: u32,
+        overlay: u32,
+        out: &mut Vec<Vertex>,
+    ) {
         let p = pose_for(part);
         let m = parent
             * glam::Mat4::from_translation(glam::Vec3::new(p[0], p[1], p[2]) / 16.0)
-            * glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::ZYX, p[5], p[4], p[3]))
+            * glam::Mat4::from_quat(glam::Quat::from_euler(
+                glam::EulerRot::ZYX,
+                p[5],
+                p[4],
+                p[3],
+            ))
             * glam::Mat4::from_scale(glam::Vec3::new(p[6], p[7], p[8]));
         for poly in &part.polygons {
             for v in poly.vertices {
                 let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
                 out.push(Vertex {
                     pos: pos.to_array(),
-                    uv: [uv[0] + (uv[2] - uv[0]) * v[3], uv[1] + (uv[3] - uv[1]) * v[4]],
+                    uv: [
+                        uv[0] + (uv[2] - uv[0]) * v[3],
+                        uv[1] + (uv[3] - uv[1]) * v[4],
+                    ],
                     layer: overlay,
                     color: 0xFFFF_FFFF,
                     light,

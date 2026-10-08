@@ -56,7 +56,10 @@ pub enum BlockEntity {
 impl BlockEntity {
     pub fn for_block(name: &str) -> Option<Self> {
         if let Some(hanging) = crate::signs::sign_kind(name) {
-            return Some(Self::Sign(crate::signs::SignData { hanging, ..Default::default() }));
+            return Some(Self::Sign(crate::signs::SignData {
+                hanging,
+                ..Default::default()
+            }));
         }
         if let Some(kind) = FurnaceKind::from_block(name) {
             return Some(Self::Furnace(Furnace {
@@ -142,10 +145,16 @@ pub struct Providers {
     floats: HashMap<String, Value>,
 }
 fn load_dir(dir: &Path, prefix: &str, out: &mut HashMap<String, Value>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
-        let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_owned();
+        let name = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_owned();
         if p.is_dir() {
             load_dir(&p, &format!("{prefix}{name}/"), out);
         } else if let Ok(bytes) = fs::read(&p)
@@ -159,8 +168,16 @@ impl Providers {
     pub fn load(root: &Path) -> Self {
         let mut ints = HashMap::new();
         let mut floats = HashMap::new();
-        load_dir(&root.join("data/minecraft/context_int_provider"), "", &mut ints);
-        load_dir(&root.join("data/minecraft/context_float_provider"), "", &mut floats);
+        load_dir(
+            &root.join("data/minecraft/context_int_provider"),
+            "",
+            &mut ints,
+        );
+        load_dir(
+            &root.join("data/minecraft/context_float_provider"),
+            "",
+            &mut floats,
+        );
         Self { ints, floats }
     }
     fn eval(&self, v: &Value, fast: bool, table: &HashMap<String, Value>, depth: u32) -> f64 {
@@ -169,13 +186,20 @@ impl Providers {
         }
         match v {
             Value::Number(n) => n.as_f64().unwrap_or(0.0),
-            Value::String(name) => table.get(name).map_or(0.0, |v| self.eval(v, fast, table, depth + 1)),
+            Value::String(name) => table
+                .get(name)
+                .map_or(0.0, |v| self.eval(v, fast, table, depth + 1)),
             Value::Object(o) => {
-                let f = |k: &str| self.eval(o.get(k).unwrap_or(&Value::Null), fast, table, depth + 1);
+                let f =
+                    |k: &str| self.eval(o.get(k).unwrap_or(&Value::Null), fast, table, depth + 1);
                 match o.get("type").and_then(Value::as_str).unwrap_or("") {
                     "minecraft:div" => {
                         let r = f("right");
-                        if r == 0.0 { 0.0 } else { (f("left") / r).trunc() }
+                        if r == 0.0 {
+                            0.0
+                        } else {
+                            (f("left") / r).trunc()
+                        }
                     }
                     "minecraft:mul" => f("left") * f("right"),
                     "minecraft:add" | "minecraft:sum" => f("left") + f("right"),
@@ -183,8 +207,13 @@ impl Providers {
                     "minecraft:constant" => f("value"),
                     "minecraft:conditional" => {
                         // The only condition in the pinned data: block/fast_cooking.
-                        let condition = o.get("condition").and_then(Value::as_str) == Some("minecraft:block/fast_cooking");
-                        if condition && fast { f("on_true") } else { f("on_false") }
+                        let condition = o.get("condition").and_then(Value::as_str)
+                            == Some("minecraft:block/fast_cooking");
+                        if condition && fast {
+                            f("on_true")
+                        } else {
+                            f("on_false")
+                        }
                     }
                     _ => 0.0,
                 }
@@ -198,11 +227,18 @@ impl Providers {
     }
     /// A plain `context_float_provider` value or reference; `default` when absent.
     pub fn float_value(&self, v: &Value, default: f32) -> f32 {
-        if v.is_null() { default } else { self.eval(v, false, &self.floats, 0) as f32 }
+        if v.is_null() {
+            default
+        } else {
+            self.eval(v, false, &self.floats, 0) as f32
+        }
     }
     #[cfg(test)]
     pub fn empty() -> Self {
-        Self { ints: HashMap::new(), floats: HashMap::new() }
+        Self {
+            ints: HashMap::new(),
+            floats: HashMap::new(),
+        }
     }
     pub fn burn_time(&self, items: &Items, stack: &ItemStack, fast: bool) -> i32 {
         items
@@ -214,18 +250,27 @@ impl Providers {
         items
             .get(&stack.item)
             .and_then(|i| i.fuel.as_ref())
-            .map_or(1.0, |(_, speed)| self.eval(speed, fast, &self.floats, 0) as f32)
+            .map_or(1.0, |(_, speed)| {
+                self.eval(speed, fast, &self.floats, 0) as f32
+            })
     }
 }
 fn remainder(item: &str) -> Option<&'static str> {
     match item {
-        "minecraft:lava_bucket" | "minecraft:water_bucket" | "minecraft:milk_bucket" => Some("minecraft:bucket"),
+        "minecraft:lava_bucket" | "minecraft:water_bucket" | "minecraft:milk_bucket" => {
+            Some("minecraft:bucket")
+        }
         _ => None,
     }
 }
 impl Furnace {
     /// One server tick. Returns `Some(lit)` when the LIT block state must change.
-    pub fn tick(&mut self, recipes: &Recipes, items: &Items, providers: &Providers) -> Option<bool> {
+    pub fn tick(
+        &mut self,
+        recipes: &Recipes,
+        items: &Items,
+        providers: &Providers,
+    ) -> Option<bool> {
         let was_lit = self.lit_remaining > 0;
         let mut lit = false;
         if self.lit_remaining > 0 {
@@ -244,27 +289,39 @@ impl Furnace {
                     let max = items.get(&recipe.result.item).map_or(64, |i| i.max_stack);
                     let can_burn = match &self.items[2] {
                         None => true,
-                        Some(out) => out.item == recipe.result.item && out.count + recipe.result.count <= max,
+                        Some(out) => {
+                            out.item == recipe.result.item && out.count + recipe.result.count <= max
+                        }
                     };
                     if can_burn {
                         if !lit {
                             let fuel = self.items[1].clone();
-                            let time = fuel.as_ref().map_or(0, |f| providers.burn_time(items, f, fast));
-                            let speed = fuel.as_ref().map_or(1.0, |f| providers.speed(items, f, fast));
+                            let time = fuel
+                                .as_ref()
+                                .map_or(0, |f| providers.burn_time(items, f, fast));
+                            let speed = fuel
+                                .as_ref()
+                                .map_or(1.0, |f| providers.speed(items, f, fast));
                             self.lit_remaining = time;
                             self.lit_total = time;
                             self.speed = speed;
                             if self.cooking_total > 0 && self.cooking_timer < self.cooking_total {
                                 let ratio = self.cooking_timer as f32 / self.cooking_total as f32;
                                 self.cooking_total = total_time(recipe.time, self.speed);
-                                self.cooking_timer = (ratio * self.cooking_total as f32).ceil() as i32;
+                                self.cooking_timer =
+                                    (ratio * self.cooking_total as f32).ceil() as i32;
                             }
                             if time > 0 {
                                 if let Some(f) = self.items[1].as_mut() {
                                     let item = f.item.clone();
                                     f.count -= 1;
                                     if f.count == 0 {
-                                        self.items[1] = remainder(&item).map(|r| ItemStack { item: Arc::from(r), count: 1, damage: 0, extra: None });
+                                        self.items[1] = remainder(&item).map(|r| ItemStack {
+                                            item: Arc::from(r),
+                                            count: 1,
+                                            damage: 0,
+                                            extra: None,
+                                        });
                                     }
                                 }
                                 lit = true;

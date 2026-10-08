@@ -3,12 +3,19 @@
 //! prints costs, clues and applied enchantments in the oracle's format.
 //!
 //! usage: enchanting_fixture RESOURCES INPUT OUTPUT
-use horizon_client::{enchant::Enchantments, items::{ItemStack, Items}, stations};
+use horizon_client::{
+    enchant::Enchantments,
+    items::{ItemStack, Items},
+    stations,
+};
 use std::{fmt::Write as _, fs, path::Path};
 
 fn main() -> horizon_client::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let root = Path::new(args.get(1).ok_or("usage: enchanting_fixture RESOURCES INPUT OUTPUT")?);
+    let root = Path::new(
+        args.get(1)
+            .ok_or("usage: enchanting_fixture RESOURCES INPUT OUTPUT")?,
+    );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
     let items = Items::tags_only(root)?;
     let e = Enchantments::load(root);
@@ -20,10 +27,19 @@ fn main() -> horizon_client::Result<()> {
         let offers = stations::enchant_offers(&e, &items, seed, bookcases, Some(&stack));
         for i in 0..3 {
             let cost = offers.costs[i];
-            let clue = offers.clues[i].as_ref().map_or("-".to_owned(), |(id, l)| format!("{id}:{l}"));
+            let clue = offers.clues[i]
+                .as_ref()
+                .map_or("-".to_owned(), |(id, l)| format!("{id}:{l}"));
             let applied = if cost > 0 {
                 let list = stations::enchantment_list(&e, &items, seed, i, cost, item);
-                if list.is_empty() { "-".to_owned() } else { list.iter().map(|(id, l)| format!("{id}:{l}")).collect::<Vec<_>>().join(",") }
+                if list.is_empty() {
+                    "-".to_owned()
+                } else {
+                    list.iter()
+                        .map(|(id, l)| format!("{id}:{l}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                }
             } else {
                 "-".to_owned()
             };

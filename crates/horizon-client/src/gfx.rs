@@ -133,7 +133,8 @@ fn mip_chain(pixels: &[u8], size: u32, layers: u32) -> (Vec<u8>, u32) {
     let levels = size.trailing_zeros() + 1;
     let mut out = Vec::new();
     for layer in 0..layers as usize {
-        let base = &pixels[layer * (size * size * 4) as usize..(layer + 1) * (size * size * 4) as usize];
+        let base =
+            &pixels[layer * (size * size * 4) as usize..(layer + 1) * (size * size * 4) as usize];
         let mut level = base.to_vec();
         let mut s = size as usize;
         out.extend_from_slice(&level);
@@ -155,7 +156,11 @@ fn mip_chain(pixels: &[u8], size: u32, layers: u32) -> (Vec<u8>, u32) {
                     }
                     let o = &mut next[(y * n + x) * 4..][..4];
                     for c in 0..3 {
-                        o[c] = if weight > 0 { (acc[c] / weight) as u8 } else { 0 };
+                        o[c] = if weight > 0 {
+                            (acc[c] / weight) as u8
+                        } else {
+                            0
+                        };
                     }
                     o[3] = (acc[3] / 4) as u8;
                 }
@@ -263,7 +268,11 @@ impl Renderer {
                         multisampled: false,
                     },
                 ),
-                entry(1 + 1, vf, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+                entry(
+                    1 + 1,
+                    vf,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
                 entry(
                     3,
                     vf,
@@ -273,7 +282,11 @@ impl Renderer {
                         multisampled: false,
                     },
                 ),
-                entry(4, vf, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+                entry(
+                    4,
+                    vf,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -281,7 +294,8 @@ impl Renderer {
             bind_group_layouts: &[Some(&bindings)],
             ..Default::default()
         });
-        let vertex_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4];
+        let vertex_attributes =
+            wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4];
         let instance_attributes = wgpu::vertex_attr_array![5=>Float32x4];
         let terrain_buffers = [
             Some(wgpu::VertexBufferLayout {
@@ -374,8 +388,28 @@ impl Renderer {
             true,
             Some(alpha_blend),
         );
-        let sky = pipeline("Sky", "vs_sky", "fs_sky", &[], tri, None, false, false, None);
-        let dark_disc = pipeline("Dark disc", "vs_sky", "fs_dark_disc", &[], tri, None, false, false, Some(alpha_blend));
+        let sky = pipeline(
+            "Sky",
+            "vs_sky",
+            "fs_sky",
+            &[],
+            tri,
+            None,
+            false,
+            false,
+            None,
+        );
+        let dark_disc = pipeline(
+            "Dark disc",
+            "vs_sky",
+            "fs_dark_disc",
+            &[],
+            tri,
+            None,
+            false,
+            false,
+            Some(alpha_blend),
+        );
         let lines = pipeline(
             "Block outline",
             "vs_line",
@@ -537,7 +571,11 @@ impl Renderer {
                         multisampled: false,
                     },
                 ),
-                entry(2, vf, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+                entry(
+                    2,
+                    vf,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
                 entry(
                     3,
                     vf,
@@ -547,7 +585,11 @@ impl Renderer {
                         multisampled: false,
                     },
                 ),
-                entry(4, vf, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+                entry(
+                    4,
+                    vf,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
             ],
         });
         let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -670,7 +712,8 @@ impl Renderer {
             label: Some("Horizon screen effects"),
             source: wgpu::ShaderSource::Wgsl(include_str!("screen.wgsl").into()),
         });
-        let screen_attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Float32x4,3=>Float32x4];
+        let screen_attributes =
+            wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Float32x4,3=>Float32x4];
         let screen_vertex = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -688,37 +731,42 @@ impl Renderer {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let screen_pipelines = [("fs_screen", alpha_blend), ("fs_vignette", vignette_blend)].map(|(entry, blend)| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Screen effects"),
-                layout: Some(&entity_layout),
-                vertex: wgpu::VertexState {
-                    module: &screen_shader,
-                    entry_point: Some("vs_screen"),
-                    compilation_options: Default::default(),
-                    buffers: &screen_vertex,
-                },
-                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
-                depth_stencil: None,
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &screen_shader,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: config.format.remove_srgb_suffix(),
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        });
+        let screen_pipelines =
+            [("fs_screen", alpha_blend), ("fs_vignette", vignette_blend)].map(|(entry, blend)| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("Screen effects"),
+                    layout: Some(&entity_layout),
+                    vertex: wgpu::VertexState {
+                        module: &screen_shader,
+                        entry_point: Some("vs_screen"),
+                        compilation_options: Default::default(),
+                        buffers: &screen_vertex,
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        cull_mode: None,
+                        ..Default::default()
+                    },
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &screen_shader,
+                        entry_point: Some(entry),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: config.format.remove_srgb_suffix(),
+                            blend: Some(blend),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            });
         let screen_capacity = 64;
         let screen_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Screen effect vertices"),
-            size: screen_capacity * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
+            size: screen_capacity
+                * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -820,7 +868,11 @@ impl Renderer {
     /// VSync on: tear-free presentation (Mailbox, else Fifo); off: Immediate when available.
     pub fn set_vsync(&mut self, vsync: bool) {
         let has = |m| self.present_modes.contains(&m);
-        let mode = match (vsync, has(wgpu::PresentMode::Mailbox), has(wgpu::PresentMode::Immediate)) {
+        let mode = match (
+            vsync,
+            has(wgpu::PresentMode::Mailbox),
+            has(wgpu::PresentMode::Immediate),
+        ) {
             (true, true, _) => wgpu::PresentMode::Mailbox,
             (true, false, _) => wgpu::PresentMode::Fifo,
             (false, _, true) => wgpu::PresentMode::Immediate,
@@ -899,7 +951,14 @@ impl Renderer {
     /// SectionOcclusionGraph: breadth-first from the camera section through
     /// faces its VisGraph connects, never stepping back towards the camera.
     fn update_reachable(&mut self, from: SectionKey, radius: i32) {
-        const STEPS: [(i32, i32, i32); 6] = [(0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1), (-1, 0, 0), (1, 0, 0)];
+        const STEPS: [(i32, i32, i32); 6] = [
+            (0, -1, 0),
+            (0, 1, 0),
+            (0, 0, -1),
+            (0, 0, 1),
+            (-1, 0, 0),
+            (1, 0, 0),
+        ];
         let opposite = |d: usize| d ^ 1;
         self.reachable.clear();
         let mut queue = std::collections::VecDeque::new();
@@ -908,7 +967,11 @@ impl Renderer {
         self.reachable.insert(from);
         let sections = (crate::chunk::HEIGHT / 16) as i32;
         while let Some((key, entered, travelled)) = queue.pop_front() {
-            let vis = self.visibility.get(&key).copied().unwrap_or(crate::mesher::ALL_VISIBLE);
+            let vis = self
+                .visibility
+                .get(&key)
+                .copied()
+                .unwrap_or(crate::mesher::ALL_VISIBLE);
             for (d, step) in STEPS.iter().enumerate() {
                 if travelled & (1 << opposite(d)) != 0 {
                     continue;
@@ -919,7 +982,11 @@ impl Renderer {
                     continue;
                 }
                 let next = (key.0 + step.0, key.1 + step.1, key.2 + step.2);
-                if next.1 < -1 || next.1 > sections || (next.0 - from.0).abs() > radius || (next.2 - from.2).abs() > radius {
+                if next.1 < -1
+                    || next.1 > sections
+                    || (next.0 - from.0).abs() > radius
+                    || (next.2 - from.2).abs() > radius
+                {
                     continue;
                 }
                 if self.reachable.insert(next) {
@@ -940,13 +1007,19 @@ impl Renderer {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
         let (yaw, pitch) = (frame.yaw.to_radians(), frame.pitch.to_radians());
         // Minecraft yaw: 0 = +Z (south), 90 = -X (west); pitch positive looks down.
-        let forward = Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
+        let forward = Vec3::new(
+            -yaw.sin() * pitch.cos(),
+            -pitch.sin(),
+            yaw.cos() * pitch.cos(),
+        );
         let far = (frame.distance * 4.0).max(1024.0);
         let bob = frame.bob.map_or(Mat4::IDENTITY, |(walk, bob)| {
             let f = -walk * std::f32::consts::PI;
             Mat4::from_translation(Vec3::new(f.sin() * bob * 0.5, -(f.cos() * bob).abs(), 0.0))
                 * Mat4::from_rotation_z((f.sin() * bob * 3.0).to_radians())
-                * Mat4::from_rotation_x(((f - 0.2).cos() * bob).abs().mul_add(5.0, 0.0).to_radians())
+                * Mat4::from_rotation_x(
+                    ((f - 0.2).cos() * bob).abs().mul_add(5.0, 0.0).to_radians(),
+                )
         });
         Mat4::perspective_rh(frame.fov_degrees.to_radians(), aspect, 0.05, far)
             * bob
@@ -1068,22 +1141,44 @@ impl Renderer {
         let view_proj = self.view_projection(frame);
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
         let (yaw, pitch) = (frame.yaw.to_radians(), frame.pitch.to_radians());
-        let forward = Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
+        let forward = Vec3::new(
+            -yaw.sin() * pitch.cos(),
+            -pitch.sin(),
+            yaw.cos() * pitch.cos(),
+        );
         let view = Mat4::look_to_rh(Vec3::ZERO, forward, Vec3::Y);
         let sun_angle = frame.sky.sun_angle.to_radians();
         // Celestial bodies rotate around the X axis; angle 0 = noon.
         let sun = Vec3::new(0.0, sun_angle.cos(), -sun_angle.sin());
         let (fog_color, fog) = if let Some(f) = frame.fog {
-            (f.color, [f.environmental_start, f.environmental_end, f.render_distance_start, f.render_distance_end])
+            (
+                f.color,
+                [
+                    f.environmental_start,
+                    f.environmental_end,
+                    f.render_distance_start,
+                    f.render_distance_end,
+                ],
+            )
         } else if frame.underwater {
             (
-                [frame.water_fog[0], frame.water_fog[1], frame.water_fog[2], 1.0],
+                [
+                    frame.water_fog[0],
+                    frame.water_fog[1],
+                    frame.water_fog[2],
+                    1.0,
+                ],
                 [-8.0, 96.0, -8.0, 96.0],
             )
         } else {
             let d = frame.distance;
             (
-                [frame.sky.fog_color[0], frame.sky.fog_color[1], frame.sky.fog_color[2], 1.0],
+                [
+                    frame.sky.fog_color[0],
+                    frame.sky.fog_color[1],
+                    frame.sky.fog_color[2],
+                    1.0,
+                ],
                 // FogRenderer: render-distance fog starts at max(d - 16, 0)... d.
                 {
                     let (start, end) = frame.environment_fog.unwrap_or((f32::MAX, f32::MAX));
@@ -1095,7 +1190,12 @@ impl Renderer {
             view_proj: view_proj.to_cols_array_2d(),
             fog_color,
             fog,
-            sky_color: [frame.sky.sky_color[0], frame.sky.sky_color[1], frame.sky.sky_color[2], 1.0],
+            sky_color: [
+                frame.sky.sky_color[0],
+                frame.sky.sky_color[1],
+                frame.sky.sky_color[2],
+                1.0,
+            ],
             misc: [
                 1.0 - frame.sky.sky_light_factor,
                 frame.game_time,
@@ -1155,7 +1255,11 @@ impl Renderer {
                 }) {
                     return None;
                 }
-                Some(((sx, sy, sz), center.length_squared(), origin.as_vec3().to_array()))
+                Some((
+                    (sx, sy, sz),
+                    center.length_squared(),
+                    origin.as_vec3().to_array(),
+                ))
             })
             .collect();
         visible.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -1196,7 +1300,18 @@ impl Renderer {
                 ]
             };
             let edges = [
-                (0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7),
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (0, 2),
+                (1, 3),
+                (4, 6),
+                (5, 7),
+                (0, 4),
+                (1, 5),
+                (2, 6),
+                (3, 7),
             ];
             let lines: Vec<[f32; 3]> = edges.iter().flat_map(|&(a, b)| [c(a), c(b)]).collect();
             self.queue
@@ -1239,10 +1354,12 @@ impl Renderer {
             self.index_quads = (entity_quads + hand_quads).next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
-        let view_target = surface_frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(self.config.format.remove_srgb_suffix()),
-            ..Default::default()
-        });
+        let view_target = surface_frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                format: Some(self.config.format.remove_srgb_suffix()),
+                ..Default::default()
+            });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1254,16 +1371,18 @@ impl Renderer {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(if frame.title || (frame.end_sky && !frame.underwater) {
-                        wgpu::Color::BLACK
-                    } else {
-                        wgpu::Color {
-                            r: f64::from(fog_color[0]),
-                            g: f64::from(fog_color[1]),
-                            b: f64::from(fog_color[2]),
-                            a: 1.0,
-                        }
-                    }),
+                    load: wgpu::LoadOp::Clear(
+                        if frame.title || (frame.end_sky && !frame.underwater) {
+                            wgpu::Color::BLACK
+                        } else {
+                            wgpu::Color {
+                                r: f64::from(fog_color[0]),
+                                g: f64::from(fog_color[1]),
+                                b: f64::from(fog_color[2]),
+                                a: 1.0,
+                            }
+                        },
+                    ),
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -1375,22 +1494,28 @@ impl Renderer {
             pass.draw_indexed(0..hand_quads * 6, (entity_quads * 4) as i32, 0..1);
         }
         if !frame.screen.is_empty() {
-            let vertices: Vec<crate::screen_effects::ScreenVertex> = frame.screen.iter().flat_map(|q| q.vertices).collect();
+            let vertices: Vec<crate::screen_effects::ScreenVertex> =
+                frame.screen.iter().flat_map(|q| q.vertices).collect();
             if vertices.len() as u64 > self.screen_capacity {
                 self.screen_capacity = (vertices.len() as u64).next_power_of_two();
                 self.screen_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("Screen effect vertices"),
-                    size: self.screen_capacity * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
+                    size: self.screen_capacity
+                        * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
                     usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
             }
-            self.queue.write_buffer(&self.screen_buffer, 0, bytemuck::cast_slice(&vertices));
+            self.queue
+                .write_buffer(&self.screen_buffer, 0, bytemuck::cast_slice(&vertices));
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
                 resolve_target: None,
                 depth_slice: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
             })];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Screen effects"),
@@ -1417,10 +1542,16 @@ impl Renderer {
             frame.hud,
             [self.config.width, self.config.height],
         );
-        let readback = self.screenshot.take().map(|path| (path, self.copy_frame(&mut encoder, &surface_frame.texture)));
+        let readback = self
+            .screenshot
+            .take()
+            .map(|path| (path, self.copy_frame(&mut encoder, &surface_frame.texture)));
         self.queue.submit([encoder.finish()]);
         if let Some((path, buffer)) = readback {
-            self.screenshot_result = Some(self.write_screenshot(&path, &buffer).map_err(|e| e.to_string()));
+            self.screenshot_result = Some(
+                self.write_screenshot(&path, &buffer)
+                    .map_err(|e| e.to_string()),
+            );
         }
         self.window.pre_present_notify();
         self.queue.present(surface_frame);
@@ -1435,7 +1566,11 @@ impl Renderer {
     fn padded_row(&self) -> u32 {
         (self.config.width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
     }
-    fn copy_frame(&self, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) -> wgpu::Buffer {
+    fn copy_frame(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+    ) -> wgpu::Buffer {
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Horizon screenshot"),
             size: u64::from(self.padded_row()) * u64::from(self.config.height),
@@ -1452,7 +1587,11 @@ impl Renderer {
                     rows_per_image: None,
                 },
             },
-            wgpu::Extent3d { width: self.config.width, height: self.config.height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: self.config.width,
+                height: self.config.height,
+                depth_or_array_layers: 1,
+            },
         );
         buffer
     }
@@ -1464,22 +1603,41 @@ impl Renderer {
         buffer.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = sender.send(r);
         });
-        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
-        receiver.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
-        let (width, height, row) = (self.config.width, self.config.height, self.padded_row() as usize);
-        let bgra = matches!(self.config.format.remove_srgb_suffix(), wgpu::TextureFormat::Bgra8Unorm);
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| e.to_string())?;
+        receiver
+            .recv()
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        let (width, height, row) = (
+            self.config.width,
+            self.config.height,
+            self.padded_row() as usize,
+        );
+        let bgra = matches!(
+            self.config.format.remove_srgb_suffix(),
+            wgpu::TextureFormat::Bgra8Unorm
+        );
         let mut pixels = Vec::with_capacity((width * height * 4) as usize);
         {
             let data = buffer.get_mapped_range(..).map_err(|e| e.to_string())?;
             for y in 0..height as usize {
-                for px in data[y * row..y * row + width as usize * 4].as_chunks::<4>().0 {
+                for px in data[y * row..y * row + width as usize * 4]
+                    .as_chunks::<4>()
+                    .0
+                {
                     let (r, b) = if bgra { (px[2], px[0]) } else { (px[0], px[2]) };
                     pixels.extend_from_slice(&[r, px[1], b, 255]);
                 }
             }
         }
         buffer.unmap();
-        let mut encoder = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(path)?), width, height);
+        let mut encoder = png::Encoder::new(
+            std::io::BufWriter::new(std::fs::File::create(path)?),
+            width,
+            height,
+        );
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.write_header()?.write_image_data(&pixels)?;

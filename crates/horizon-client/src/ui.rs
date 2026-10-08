@@ -5,12 +5,7 @@ use crate::{
     hud::{HudAtlas, HudBatch, Rect, rgba},
     text::Text,
 };
-use std::{
-    collections::HashMap,
-    path::Path,
-    sync::RwLock,
-    time::Instant,
-};
+use std::{collections::HashMap, path::Path, sync::RwLock, time::Instant};
 
 /// Nine-slice borders (left, top, right, bottom) from `.png.mcmeta` files.
 static NINE_SLICE: RwLock<Option<HashMap<String, [u32; 4]>>> = RwLock::new(None);
@@ -21,7 +16,9 @@ pub fn load_metadata(root: &Path) {
     let base = root.join("assets/minecraft/textures");
     let mut stack = vec![base.join("gui/sprites")];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in entries.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -29,9 +26,15 @@ pub fn load_metadata(root: &Path) {
                 continue;
             }
             let name = p.to_string_lossy().into_owned();
-            let Some(stripped) = name.strip_suffix(".png.mcmeta") else { continue };
-            let Ok(text) = std::fs::read_to_string(&p) else { continue };
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+            let Some(stripped) = name.strip_suffix(".png.mcmeta") else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
             let s = &v["gui"]["scaling"];
             if s["type"] != "nine_slice" {
                 continue;
@@ -43,22 +46,41 @@ pub fn load_metadata(root: &Path) {
                 let g = |k: &str| border[k].as_u64().unwrap_or(0) as u32;
                 [g("left"), g("top"), g("right"), g("bottom")]
             };
-            let key = Path::new(stripped).strip_prefix(&base).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+            let key = Path::new(stripped)
+                .strip_prefix(&base)
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
             map.insert(key, b);
         }
     }
     *NINE_SLICE.write().unwrap_or_else(|e| e.into_inner()) = Some(map);
 }
 fn border(sprite: &str) -> [u32; 4] {
-    NINE_SLICE.read().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(sprite).copied()).unwrap_or(match sprite {
-        "gui/sprites/widget/button" | "gui/sprites/widget/button_highlighted" | "gui/sprites/widget/button_disabled" => [3; 4],
-        "gui/sprites/widget/slider_handle" | "gui/sprites/widget/slider_handle_highlighted" => [2, 2, 2, 3],
-        _ => [1; 4],
-    })
+    NINE_SLICE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(sprite).copied())
+        .unwrap_or(match sprite {
+            "gui/sprites/widget/button"
+            | "gui/sprites/widget/button_highlighted"
+            | "gui/sprites/widget/button_disabled" => [3; 4],
+            "gui/sprites/widget/slider_handle" | "gui/sprites/widget/slider_handle_highlighted" => {
+                [2, 2, 2, 3]
+            }
+            _ => [1; 4],
+        })
 }
 fn sub(r: Rect, x: f32, y: f32, w: f32, h: f32) -> Rect {
     let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
-    Rect { u0: r.u0 + x * du, v0: r.v0 + y * dv, u1: r.u0 + (x + w) * du, v1: r.v0 + (y + h) * dv, w: w as u32, h: h as u32 }
+    Rect {
+        u0: r.u0 + x * du,
+        v0: r.v0 + y * dv,
+        u1: r.u0 + (x + w) * du,
+        v1: r.v0 + (y + h) * dv,
+        w: w as u32,
+        h: h as u32,
+    }
 }
 /// Tile `src` (a sub-rectangle of a sprite, in its pixels) over a target area.
 fn tile(batch: &mut HudBatch, r: Rect, src: [f32; 4], dst: [f32; 4], color: u32) {
@@ -80,8 +102,19 @@ fn tile(batch: &mut HudBatch, r: Rect, src: [f32; 4], dst: [f32; 4], color: u32)
     }
 }
 /// GuiGraphics.blitSprite with nine-slice scaling (inner parts tiled).
-pub fn nine_slice(batch: &mut HudBatch, atlas: &HudAtlas, sprite: &str, x: f32, y: f32, w: f32, h: f32, color: u32) {
-    let Some(r) = atlas.sprites.get(sprite).copied() else { return };
+pub fn nine_slice(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    sprite: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: u32,
+) {
+    let Some(r) = atlas.sprites.get(sprite).copied() else {
+        return;
+    };
     let [l, t, rr, b] = border(sprite).map(|v| v as f32);
     let (sw, sh) = (r.w as f32, r.h as f32);
     let l = l.min(w / 2.0);
@@ -94,17 +127,48 @@ pub fn nine_slice(batch: &mut HudBatch, atlas: &HudAtlas, sprite: &str, x: f32, 
     batch.rect_uv(x, y, l, t, sub(r, 0.0, 0.0, l, t), color);
     batch.rect_uv(x + w - rr, y, rr, t, sub(r, sw - rr, 0.0, rr, t), color);
     batch.rect_uv(x, y + h - b, l, b, sub(r, 0.0, sh - b, l, b), color);
-    batch.rect_uv(x + w - rr, y + h - b, rr, b, sub(r, sw - rr, sh - b, rr, b), color);
+    batch.rect_uv(
+        x + w - rr,
+        y + h - b,
+        rr,
+        b,
+        sub(r, sw - rr, sh - b, rr, b),
+        color,
+    );
     // Edges and centre.
     tile(batch, r, [l, 0.0, scw, t], [x + l, y, cw, t], color);
-    tile(batch, r, [l, sh - b, scw, b], [x + l, y + h - b, cw, b], color);
+    tile(
+        batch,
+        r,
+        [l, sh - b, scw, b],
+        [x + l, y + h - b, cw, b],
+        color,
+    );
     tile(batch, r, [0.0, t, l, sch], [x, y + t, l, ch], color);
-    tile(batch, r, [sw - rr, t, rr, sch], [x + w - rr, y + t, rr, ch], color);
+    tile(
+        batch,
+        r,
+        [sw - rr, t, rr, sch],
+        [x + w - rr, y + t, rr, ch],
+        color,
+    );
     tile(batch, r, [l, t, scw, sch], [x + l, y + t, cw, ch], color);
 }
 /// Repeat a whole texture with each copy drawn `size` GUI pixels square.
-pub fn tiled(batch: &mut HudBatch, atlas: &HudAtlas, sprite: &str, x: f32, y: f32, w: f32, h: f32, size: f32, color: u32) {
-    let Some(r) = atlas.sprites.get(sprite).copied() else { return };
+pub fn tiled(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    sprite: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    size: f32,
+    color: u32,
+) {
+    let Some(r) = atlas.sprites.get(sprite).copied() else {
+        return;
+    };
     let scale = r.w as f32 / size;
     let mut yy = 0.0;
     while yy < h {
@@ -112,14 +176,29 @@ pub fn tiled(batch: &mut HudBatch, atlas: &HudAtlas, sprite: &str, x: f32, y: f3
         let mut xx = 0.0;
         while xx < w {
             let tw = size.min(w - xx);
-            batch.rect_uv(x + xx, y + yy, tw, th, sub(r, 0.0, 0.0, tw * scale, th * scale), color);
+            batch.rect_uv(
+                x + xx,
+                y + yy,
+                tw,
+                th,
+                sub(r, 0.0, 0.0, tw * scale, th * scale),
+                color,
+            );
             xx += size;
         }
         yy += size;
     }
 }
 /// Text drawn at `scale` times its size (a scaled pose).
-pub fn text_scaled(batch: &mut HudBatch, atlas: &HudAtlas, text: &Text, x: f32, y: f32, scale: f32, color: u32) {
+pub fn text_scaled(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    text: &Text,
+    x: f32,
+    y: f32,
+    scale: f32,
+    color: u32,
+) {
     let start = batch.vertices.len();
     batch.text_styled(atlas, text, 0.0, 0.0, color, true);
     for v in &mut batch.vertices[start..] {
@@ -130,7 +209,15 @@ pub fn hovered(cursor: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {
     cursor.0 >= x && cursor.0 < x + w && cursor.1 >= y && cursor.1 < y + h
 }
 /// Centered text with a shadow, scrolled when wider than `w` (AbstractWidget.renderScrollingString).
-pub fn centered_text(batch: &mut HudBatch, atlas: &HudAtlas, text: &Text, x: f32, y: f32, w: f32, color: u32) {
+pub fn centered_text(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    text: &Text,
+    x: f32,
+    y: f32,
+    w: f32,
+    color: u32,
+) {
     let width = atlas.font.width_text(text);
     if width <= w {
         batch.text_styled(atlas, text, x + ((w - width) / 2.0).floor(), y, color, true);
@@ -149,7 +236,17 @@ pub fn centered_text(batch: &mut HudBatch, atlas: &HudAtlas, text: &Text, x: f32
     }
 }
 /// Button (AbstractButton): nine-slice sprite plus the centred label.
-pub fn button(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, y: f32, w: f32, h: f32, label: &Text, active: bool, hover: bool) {
+pub fn button(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    label: &Text,
+    active: bool,
+    hover: bool,
+) {
     let sprite = if !active {
         "gui/sprites/widget/button_disabled"
     } else if hover {
@@ -158,16 +255,59 @@ pub fn button(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, y: f32, w: f32, h:
         "gui/sprites/widget/button"
     };
     nine_slice(batch, atlas, sprite, x, y, w, h, u32::MAX);
-    let color = if active { rgba(255, 255, 255, 255) } else { rgba(160, 160, 160, 255) };
-    centered_text(batch, atlas, label, x + 2.0, y + ((h - 8.0) / 2.0).floor(), w - 4.0, color);
+    let color = if active {
+        rgba(255, 255, 255, 255)
+    } else {
+        rgba(160, 160, 160, 255)
+    };
+    centered_text(
+        batch,
+        atlas,
+        label,
+        x + 2.0,
+        y + ((h - 8.0) / 2.0).floor(),
+        w - 4.0,
+        color,
+    );
 }
 /// AbstractSliderButton: track, 8px handle at `value` (0..1) and the label.
-pub fn slider(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, y: f32, w: f32, label: &Text, value: f32, hover: bool, active: bool) {
-    let track = if hover && active { "gui/sprites/widget/slider_highlighted" } else { "gui/sprites/widget/slider" };
+pub fn slider(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    x: f32,
+    y: f32,
+    w: f32,
+    label: &Text,
+    value: f32,
+    hover: bool,
+    active: bool,
+) {
+    let track = if hover && active {
+        "gui/sprites/widget/slider_highlighted"
+    } else {
+        "gui/sprites/widget/slider"
+    };
     nine_slice(batch, atlas, track, x, y, w, 20.0, u32::MAX);
-    let handle = if hover && active { "gui/sprites/widget/slider_handle_highlighted" } else { "gui/sprites/widget/slider_handle" };
-    nine_slice(batch, atlas, handle, x + (value.clamp(0.0, 1.0) * (w - 8.0)).floor(), y, 8.0, 20.0, u32::MAX);
-    let color = if active { u32::MAX } else { rgba(160, 160, 160, 255) };
+    let handle = if hover && active {
+        "gui/sprites/widget/slider_handle_highlighted"
+    } else {
+        "gui/sprites/widget/slider_handle"
+    };
+    nine_slice(
+        batch,
+        atlas,
+        handle,
+        x + (value.clamp(0.0, 1.0) * (w - 8.0)).floor(),
+        y,
+        8.0,
+        20.0,
+        u32::MAX,
+    );
+    let color = if active {
+        u32::MAX
+    } else {
+        rgba(160, 160, 160, 255)
+    };
     centered_text(batch, atlas, label, x + 2.0, y + 6.0, w - 4.0, color);
 }
 /// Slider value for a click at `cx` (AbstractSliderButton.setValueFromMouse).
@@ -176,8 +316,20 @@ pub fn slider_value(x: f32, w: f32, cx: f32) -> f32 {
 }
 /// Screen.renderMenuBackground: in a world the translucent dark texture,
 /// otherwise the dirt-like menu texture, tiled at 32 pixels.
-pub fn menu_background(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, y: f32, w: f32, h: f32, in_world: bool) {
-    let sprite = if in_world { "gui/inworld_menu_background" } else { "gui/menu_background" };
+pub fn menu_background(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    in_world: bool,
+) {
+    let sprite = if in_world {
+        "gui/inworld_menu_background"
+    } else {
+        "gui/menu_background"
+    };
     if atlas.sprites.contains_key(sprite) {
         tiled(batch, atlas, sprite, x, y, w, h, 32.0, u32::MAX);
     } else {
@@ -185,32 +337,109 @@ pub fn menu_background(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, y: f32, w
     }
 }
 /// Header and footer separators of list screens.
-pub fn separators(batch: &mut HudBatch, atlas: &HudAtlas, header_bottom: f32, footer_top: f32, in_world: bool) {
+pub fn separators(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    header_bottom: f32,
+    footer_top: f32,
+    in_world: bool,
+) {
     let (header, footer) = if in_world {
-        ("gui/inworld_header_separator", "gui/inworld_footer_separator")
+        (
+            "gui/inworld_header_separator",
+            "gui/inworld_footer_separator",
+        )
     } else {
         ("gui/header_separator", "gui/footer_separator")
     };
     let w = batch.width;
-    tiled(batch, atlas, header, 0.0, header_bottom - 2.0, w, 2.0, 32.0, u32::MAX);
-    tiled(batch, atlas, footer, 0.0, footer_top, w, 2.0, 32.0, u32::MAX);
+    tiled(
+        batch,
+        atlas,
+        header,
+        0.0,
+        header_bottom - 2.0,
+        w,
+        2.0,
+        32.0,
+        u32::MAX,
+    );
+    tiled(
+        batch,
+        atlas,
+        footer,
+        0.0,
+        footer_top,
+        w,
+        2.0,
+        32.0,
+        u32::MAX,
+    );
 }
 /// List background between the separators.
-pub fn list_background(batch: &mut HudBatch, atlas: &HudAtlas, top: f32, bottom: f32, in_world: bool) {
-    let sprite = if in_world { "gui/inworld_menu_list_background" } else { "gui/menu_list_background" };
-    tiled(batch, atlas, sprite, 0.0, top, batch.width, bottom - top, 32.0, u32::MAX);
+pub fn list_background(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    top: f32,
+    bottom: f32,
+    in_world: bool,
+) {
+    let sprite = if in_world {
+        "gui/inworld_menu_list_background"
+    } else {
+        "gui/menu_list_background"
+    };
+    tiled(
+        batch,
+        atlas,
+        sprite,
+        0.0,
+        top,
+        batch.width,
+        bottom - top,
+        32.0,
+        u32::MAX,
+    );
 }
 /// Vertical scroll bar (AbstractScrollArea): background and scroller sprites.
-pub fn scrollbar(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, top: f32, bottom: f32, content: f32, scroll: f32) {
+pub fn scrollbar(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    x: f32,
+    top: f32,
+    bottom: f32,
+    content: f32,
+    scroll: f32,
+) {
     let height = bottom - top;
     if content <= height {
         return;
     }
-    let bar = (height * height / content).clamp(32.0, height - 8.0).floor();
+    let bar = (height * height / content)
+        .clamp(32.0, height - 8.0)
+        .floor();
     let max = content - height;
     let y = top + ((scroll / max) * (height - bar)).floor();
-    nine_slice(batch, atlas, "gui/sprites/widget/scroller_background", x, top, 6.0, height, u32::MAX);
-    nine_slice(batch, atlas, "gui/sprites/widget/scroller", x, y, 6.0, bar, u32::MAX);
+    nine_slice(
+        batch,
+        atlas,
+        "gui/sprites/widget/scroller_background",
+        x,
+        top,
+        6.0,
+        height,
+        u32::MAX,
+    );
+    nine_slice(
+        batch,
+        atlas,
+        "gui/sprites/widget/scroller",
+        x,
+        y,
+        6.0,
+        bar,
+        u32::MAX,
+    );
 }
 
 /// Screen tooltip (DefaultTooltipPositioner + TooltipRenderUtil): the
@@ -219,8 +448,15 @@ pub fn tooltip(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], cursor: (
     if lines.is_empty() {
         return;
     }
-    let w = lines.iter().map(|l| atlas.font.width_text(l)).fold(0.0, f32::max);
-    let h = if lines.len() == 1 { 8.0 } else { 10.0 * lines.len() as f32 };
+    let w = lines
+        .iter()
+        .map(|l| atlas.font.width_text(l))
+        .fold(0.0, f32::max);
+    let h = if lines.len() == 1 {
+        8.0
+    } else {
+        10.0 * lines.len() as f32
+    };
     let mut x = cursor.0 + 12.0;
     let mut y = cursor.1 - 12.0;
     if x + w > batch.width {
@@ -230,8 +466,26 @@ pub fn tooltip(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], cursor: (
         y = batch.height - h - 3.0;
     }
     y = y.max(4.0);
-    nine_slice(batch, atlas, "gui/sprites/tooltip/background", x - 12.0, y - 12.0, w + 24.0, h + 24.0, u32::MAX);
-    nine_slice(batch, atlas, "gui/sprites/tooltip/frame", x - 12.0, y - 12.0, w + 24.0, h + 24.0, u32::MAX);
+    nine_slice(
+        batch,
+        atlas,
+        "gui/sprites/tooltip/background",
+        x - 12.0,
+        y - 12.0,
+        w + 24.0,
+        h + 24.0,
+        u32::MAX,
+    );
+    nine_slice(
+        batch,
+        atlas,
+        "gui/sprites/tooltip/frame",
+        x - 12.0,
+        y - 12.0,
+        w + 24.0,
+        h + 24.0,
+        u32::MAX,
+    );
     let mut ly = y;
     for (i, line) in lines.iter().enumerate() {
         batch.text_styled(atlas, line, x, ly, u32::MAX, true);
@@ -285,13 +539,21 @@ impl EditBox {
         }
     }
     pub fn inner_width(&self) -> f32 {
-        if self.bordered { self.width - 8.0 } else { self.width }
+        if self.bordered {
+            self.width - 8.0
+        } else {
+            self.width
+        }
     }
     pub fn text_x(&self) -> f32 {
         if self.bordered { self.x + 4.0 } else { self.x }
     }
     pub fn text_y(&self) -> f32 {
-        if self.bordered { self.y + ((self.height - 8.0) / 2.0).floor() } else { self.y }
+        if self.bordered {
+            self.y + ((self.height - 8.0) / 2.0).floor()
+        } else {
+            self.y
+        }
     }
     pub fn reset_blink(&mut self) {
         self.focused_at = Instant::now();
@@ -301,7 +563,10 @@ impl EditBox {
         self.move_cursor_to_end(false);
     }
     fn selected(&self) -> (usize, usize) {
-        (self.cursor.min(self.highlight), self.cursor.max(self.highlight))
+        (
+            self.cursor.min(self.highlight),
+            self.cursor.max(self.highlight),
+        )
     }
     pub fn selected_text(&self) -> String {
         let (a, b) = self.selected();
@@ -310,8 +575,13 @@ impl EditBox {
     /// EditBox.insertText: replace the selection, respecting the maximum length.
     pub fn insert_text(&mut self, text: &str) {
         let (a, b) = self.selected();
-        let filtered: String = text.chars().filter(|c| !c.is_control() && *c != '§').collect();
-        let room = self.max_length.saturating_sub(char_len(&self.value) - (b - a));
+        let filtered: String = text
+            .chars()
+            .filter(|c| !c.is_control() && *c != '§')
+            .collect();
+        let room = self
+            .max_length
+            .saturating_sub(char_len(&self.value) - (b - a));
         let insert: String = filtered.chars().take(room).collect();
         let (ba, bb) = (byte_index(&self.value, a), byte_index(&self.value, b));
         self.value.replace_range(ba..bb, &insert);
@@ -390,19 +660,35 @@ impl EditBox {
         use winit::keyboard::KeyCode as K;
         match key {
             K::Backspace => {
-                let n = if ctrl { self.word_position(-1) as isize - self.cursor as isize } else { -1 };
+                let n = if ctrl {
+                    self.word_position(-1) as isize - self.cursor as isize
+                } else {
+                    -1
+                };
                 self.delete_chars(n);
             }
             K::Delete => {
-                let n = if ctrl { self.word_position(1) as isize - self.cursor as isize } else { 1 };
+                let n = if ctrl {
+                    self.word_position(1) as isize - self.cursor as isize
+                } else {
+                    1
+                };
                 self.delete_chars(n);
             }
             K::ArrowLeft => {
-                let p = if ctrl { self.word_position(-1) } else { self.cursor.saturating_sub(1) };
+                let p = if ctrl {
+                    self.word_position(-1)
+                } else {
+                    self.cursor.saturating_sub(1)
+                };
                 self.set_cursor(p, shift);
             }
             K::ArrowRight => {
-                let p = if ctrl { self.word_position(1) } else { self.cursor + 1 };
+                let p = if ctrl {
+                    self.word_position(1)
+                } else {
+                    self.cursor + 1
+                };
                 self.set_cursor(p, shift);
             }
             K::Home => self.set_cursor(0, shift),
@@ -419,8 +705,21 @@ impl EditBox {
     pub fn draw(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, format: Option<&Text>) {
         self.layout(atlas);
         if self.bordered {
-            let sprite = if self.focused { "gui/sprites/widget/text_field_highlighted" } else { "gui/sprites/widget/text_field" };
-            nine_slice(batch, atlas, sprite, self.x, self.y, self.width, self.height, u32::MAX);
+            let sprite = if self.focused {
+                "gui/sprites/widget/text_field_highlighted"
+            } else {
+                "gui/sprites/widget/text_field"
+            };
+            nine_slice(
+                batch,
+                atlas,
+                sprite,
+                self.x,
+                self.y,
+                self.width,
+                self.height,
+                u32::MAX,
+            );
         }
         let color = self.text_color;
         let rest: String = self.value.chars().skip(self.display).collect();
@@ -428,22 +727,34 @@ impl EditBox {
         let displayed: String = rest.chars().take(shown_len).collect();
         let rel_cursor = self.cursor as isize - self.display as isize;
         let on_screen = rel_cursor >= 0 && rel_cursor as usize <= shown_len;
-        let show_cursor = self.focused && (self.focused_at.elapsed().as_millis() / 300) % 2 == 0 && on_screen;
+        let show_cursor =
+            self.focused && (self.focused_at.elapsed().as_millis() / 300) % 2 == 0 && on_screen;
         let styled = |from: usize, to: usize| -> Text {
             match format {
                 Some(t) => t.slice(self.display + from, self.display + to),
-                None => Text::literal(displayed.chars().skip(from).take(to - from).collect::<String>()),
+                None => Text::literal(
+                    displayed
+                        .chars()
+                        .skip(from)
+                        .take(to - from)
+                        .collect::<String>(),
+                ),
             }
         };
         let (tx, ty) = (self.text_x(), self.text_y());
         let mut draw_x = tx;
         if !displayed.is_empty() {
-            let half = if on_screen { rel_cursor as usize } else { shown_len };
+            let half = if on_screen {
+                rel_cursor as usize
+            } else {
+                shown_len
+            };
             let t = styled(0, half);
             batch.text_styled(atlas, &t, draw_x, ty, color, true);
             draw_x += atlas.font.width_text(&t) + 1.0;
         }
-        let insert = self.cursor < char_len(&self.value) || char_len(&self.value) >= self.max_length;
+        let insert =
+            self.cursor < char_len(&self.value) || char_len(&self.value) >= self.max_length;
         let mut cursor_x = draw_x;
         if !on_screen {
             cursor_x = if rel_cursor > 0 { tx + self.width } else { tx };
@@ -452,14 +763,25 @@ impl EditBox {
             draw_x -= 1.0;
         }
         if !displayed.is_empty() && on_screen && (rel_cursor as usize) < shown_len {
-            batch.text_styled(atlas, &styled(rel_cursor as usize, shown_len), draw_x, ty, color, true);
+            batch.text_styled(
+                atlas,
+                &styled(rel_cursor as usize, shown_len),
+                draw_x,
+                ty,
+                color,
+                true,
+            );
         }
         if !insert && let Some(s) = &self.suggestion {
             batch.text(atlas, s, cursor_x - 1.0, ty, rgba(128, 128, 128, 255), true);
         }
-        let rel_highlight = (self.highlight as isize - self.display as isize).clamp(0, shown_len as isize) as usize;
+        let rel_highlight =
+            (self.highlight as isize - self.display as isize).clamp(0, shown_len as isize) as usize;
         if rel_highlight as isize != rel_cursor {
-            let hx = tx + atlas.font.width(&displayed.chars().take(rel_highlight).collect::<String>());
+            let hx = tx
+                + atlas
+                    .font
+                    .width(&displayed.chars().take(rel_highlight).collect::<String>());
             let (a, b) = (cursor_x.min(hx - 1.0), cursor_x.max(hx - 1.0));
             batch.fill(atlas, a, ty - 1.0, b - a, 11.0, rgba(0, 0, 255, 128));
         }
@@ -481,7 +803,12 @@ impl EditBox {
         if index > char_len(&self.value) {
             return self.x;
         }
-        let shown: String = self.value.chars().skip(self.display).take(index.saturating_sub(self.display)).collect();
+        let shown: String = self
+            .value
+            .chars()
+            .skip(self.display)
+            .take(index.saturating_sub(self.display))
+            .collect();
         self.text_x() + atlas.font.width(&shown)
     }
 }

@@ -28,7 +28,11 @@ impl ItemEntity {
         let h = Self::WIDTH / 2.0;
         Aabb::new(
             Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
-            Vec3::new(self.position.x + h, self.position.y + Self::WIDTH, self.position.z + h),
+            Vec3::new(
+                self.position.x + h,
+                self.position.y + Self::WIDTH,
+                self.position.z + h,
+            ),
         )
     }
     /// Returns false when the item should be removed.
@@ -60,7 +64,10 @@ impl ItemEntity {
         }
         let horizontal = self.velocity.x * self.velocity.x + self.velocity.z * self.velocity.z;
         if !self.on_ground || horizontal > 1.0e-5 || (self.age + self.id) % 4 == 0 {
-            let mut scene = SceneCollisions { world, binding: collision };
+            let mut scene = SceneCollisions {
+                world,
+                binding: collision,
+            };
             let wanted = self.velocity;
             let moved = scene
                 .resolve(self.bounds(), wanted, 0.0, self.on_ground)
@@ -89,7 +96,11 @@ impl ItemEntity {
                 );
                 friction = f64::from(facts.get(below).friction) * 0.98;
             }
-            self.velocity = Vec3::new(self.velocity.x * friction, self.velocity.y * 0.98, self.velocity.z * friction);
+            self.velocity = Vec3::new(
+                self.velocity.x * friction,
+                self.velocity.y * 0.98,
+                self.velocity.z * friction,
+            );
             if self.on_ground && self.velocity.y < 0.0 {
                 self.velocity.y *= -0.5;
             }
@@ -116,7 +127,12 @@ pub enum ArrowHit {
     Player(f32),
 }
 impl Arrow {
-    pub fn tick(&mut self, world: &World, facts: &BlockFacts, player: Option<Aabb>) -> (bool, ArrowHit) {
+    pub fn tick(
+        &mut self,
+        world: &World,
+        facts: &BlockFacts,
+        player: Option<Aabb>,
+    ) -> (bool, ArrowHit) {
         self.previous = self.position;
         self.age += 1;
         if self.stuck {
@@ -131,14 +147,27 @@ impl Arrow {
             );
             if let Some(b) = player {
                 let (min, max) = (b.min_position(), b.max_position());
-                if next.x >= min.x && next.x <= max.x && next.y >= min.y && next.y <= max.y && next.z >= min.z && next.z <= max.z {
-                    let speed = (self.velocity.x.powi(2) + self.velocity.y.powi(2) + self.velocity.z.powi(2)).sqrt();
+                if next.x >= min.x
+                    && next.x <= max.x
+                    && next.y >= min.y
+                    && next.y <= max.y
+                    && next.z >= min.z
+                    && next.z <= max.z
+                {
+                    let speed = (self.velocity.x.powi(2)
+                        + self.velocity.y.powi(2)
+                        + self.velocity.z.powi(2))
+                    .sqrt();
                     // AbstractArrow.onHitEntity: ceil(speed * baseDamage).
                     let damage = (speed * self.base_damage).ceil().max(0.0) as f32;
                     return (false, ArrowHit::Player(damage));
                 }
             }
-            let block = world.block(next.x.floor() as i32, next.y.floor() as i32, next.z.floor() as i32);
+            let block = world.block(
+                next.x.floor() as i32,
+                next.y.floor() as i32,
+                next.z.floor() as i32,
+            );
             if facts.get(block).full_collision {
                 self.stuck = true;
                 self.age = 0;
@@ -146,7 +175,11 @@ impl Arrow {
             }
             self.position = next;
         }
-        self.velocity = Vec3::new(self.velocity.x * 0.99, self.velocity.y * 0.99 - 0.05, self.velocity.z * 0.99);
+        self.velocity = Vec3::new(
+            self.velocity.x * 0.99,
+            self.velocity.y * 0.99 - 0.05,
+            self.velocity.z * 0.99,
+        );
         (self.position.y > -128.0 && self.age < 1200, ArrowHit::None)
     }
 }
@@ -184,16 +217,34 @@ impl ExperienceOrb {
             _ => 0,
         }
     }
-    pub fn tick(&mut self, world: &World, facts: &BlockFacts, collision: &BlockCollisionRegistry<'_>, player: Option<[f64; 3]>) -> bool {
+    pub fn tick(
+        &mut self,
+        world: &World,
+        facts: &BlockFacts,
+        collision: &BlockCollisionRegistry<'_>,
+        player: Option<[f64; 3]>,
+    ) -> bool {
         self.previous = self.position;
-        let block = world.block(self.position.x.floor() as i32, self.position.y.floor() as i32, self.position.z.floor() as i32);
+        let block = world.block(
+            self.position.x.floor() as i32,
+            self.position.y.floor() as i32,
+            self.position.z.floor() as i32,
+        );
         if facts.get(block).fluid == Fluid::Water {
-            self.velocity = Vec3::new(self.velocity.x * 0.99, (self.velocity.y + 5.0e-4).min(0.06), self.velocity.z * 0.99);
+            self.velocity = Vec3::new(
+                self.velocity.x * 0.99,
+                (self.velocity.y + 5.0e-4).min(0.06),
+                self.velocity.z * 0.99,
+            );
         } else {
             self.velocity.y -= 0.03;
         }
         if let Some(p) = player {
-            let d = [(p[0] - self.position.x) / 8.0, (p[1] - self.position.y) / 8.0, (p[2] - self.position.z) / 8.0];
+            let d = [
+                (p[0] - self.position.x) / 8.0,
+                (p[1] - self.position.y) / 8.0,
+                (p[2] - self.position.z) / 8.0,
+            ];
             let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
             let power = 1.0 - length;
             if power > 0.0 && length > 1e-6 {
@@ -208,19 +259,40 @@ impl ExperienceOrb {
         let h = 0.25;
         let bounds = Aabb::new(
             Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
-            Vec3::new(self.position.x + h, self.position.y + 0.5, self.position.z + h),
+            Vec3::new(
+                self.position.x + h,
+                self.position.y + 0.5,
+                self.position.z + h,
+            ),
         );
-        let mut scene = SceneCollisions { world, binding: collision };
+        let mut scene = SceneCollisions {
+            world,
+            binding: collision,
+        };
         let wanted = self.velocity;
-        let moved = scene.resolve(bounds, wanted, 0.0, self.on_ground).unwrap_or(Vec3::ZERO);
-        self.position = Vec3::new(self.position.x + moved.x, self.position.y + moved.y, self.position.z + moved.z);
+        let moved = scene
+            .resolve(bounds, wanted, 0.0, self.on_ground)
+            .unwrap_or(Vec3::ZERO);
+        self.position = Vec3::new(
+            self.position.x + moved.x,
+            self.position.y + moved.y,
+            self.position.z + moved.z,
+        );
         self.on_ground = wanted.y < 0.0 && moved.y != wanted.y;
         let mut friction = 0.98;
         if self.on_ground {
-            let below = world.block(self.position.x.floor() as i32, (self.position.y - 1.0).floor() as i32, self.position.z.floor() as i32);
+            let below = world.block(
+                self.position.x.floor() as i32,
+                (self.position.y - 1.0).floor() as i32,
+                self.position.z.floor() as i32,
+            );
             friction = f64::from(facts.get(below).friction) * 0.98;
         }
-        self.velocity = Vec3::new(self.velocity.x * friction, self.velocity.y * 0.98, self.velocity.z * friction);
+        self.velocity = Vec3::new(
+            self.velocity.x * friction,
+            self.velocity.y * 0.98,
+            self.velocity.z * friction,
+        );
         if self.on_ground {
             self.velocity.y *= -0.9;
         }

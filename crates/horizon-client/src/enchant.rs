@@ -21,7 +21,10 @@ pub struct Cost {
 }
 impl Cost {
     fn parse(v: &Value) -> Self {
-        Self { base: v["base"].as_i64().unwrap_or(1) as i32, per_level: v["per_level_above_first"].as_i64().unwrap_or(0) as i32 }
+        Self {
+            base: v["base"].as_i64().unwrap_or(1) as i32,
+            per_level: v["per_level_above_first"].as_i64().unwrap_or(0) as i32,
+        }
     }
     pub fn calculate(self, level: u32) -> i32 {
         self.base + self.per_level * (level as i32 - 1)
@@ -71,13 +74,18 @@ pub struct Enchantments {
 fn string_list(v: &Value) -> Vec<String> {
     match v {
         Value::String(s) => vec![s.clone()],
-        Value::Array(a) => a.iter().filter_map(|e| e.as_str().map(str::to_owned)).collect(),
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|e| e.as_str().map(str::to_owned))
+            .collect(),
         _ => vec![],
     }
 }
 fn read_tag_dir(dir: &Path) -> HashMap<String, Vec<String>> {
     fn walk(dir: &Path, base: &Path, out: &mut HashMap<String, Vec<String>>) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         for e in entries.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -87,8 +95,16 @@ fn read_tag_dir(dir: &Path) -> HashMap<String, Vec<String>> {
                 && let Ok(bytes) = fs::read(&p)
                 && let Ok(v) = serde_json::from_slice::<Value>(&bytes)
             {
-                let name = format!("minecraft:{}", rel.with_extension("").to_string_lossy().replace('\\', "/"));
-                let values = v["values"].as_array().into_iter().flatten().filter_map(|e| e.as_str().or_else(|| e["id"].as_str()).map(str::to_owned)).collect();
+                let name = format!(
+                    "minecraft:{}",
+                    rel.with_extension("").to_string_lossy().replace('\\', "/")
+                );
+                let values = v["values"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| e.as_str().or_else(|| e["id"].as_str()).map(str::to_owned))
+                    .collect();
                 out.insert(name, values);
             }
         }
@@ -98,7 +114,12 @@ fn read_tag_dir(dir: &Path) -> HashMap<String, Vec<String>> {
     out
 }
 /// Expand a tag keeping first-seen order (`TagLoader` builds a linked set).
-fn expand_ordered(name: &str, raw: &HashMap<String, Vec<String>>, out: &mut Vec<String>, depth: u32) {
+fn expand_ordered(
+    name: &str,
+    raw: &HashMap<String, Vec<String>>,
+    out: &mut Vec<String>,
+    depth: u32,
+) {
     if depth > 16 {
         return;
     }
@@ -113,7 +134,9 @@ fn expand_ordered(name: &str, raw: &HashMap<String, Vec<String>>, out: &mut Vec<
 /// Roman numerals as in `enchantment.level.N` (falls back to the number).
 pub fn level_name(level: u32) -> String {
     const NAMES: [&str; 10] = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
-    NAMES.get(level.wrapping_sub(1) as usize).map_or_else(|| level.to_string(), |s| (*s).to_owned())
+    NAMES
+        .get(level.wrapping_sub(1) as usize)
+        .map_or_else(|| level.to_string(), |s| (*s).to_owned())
 }
 
 impl Enchantments {
@@ -125,7 +148,10 @@ impl Enchantments {
             .map(|k| {
                 let mut v = Vec::new();
                 expand_ordered(k, &raw_tags, &mut v, 0);
-                (k.clone(), v.into_iter().map(|s| Arc::from(s.as_str())).collect())
+                (
+                    k.clone(),
+                    v.into_iter().map(|s| Arc::from(s.as_str())).collect(),
+                )
             })
             .collect();
         let unordered = |raw: HashMap<String, Vec<String>>| -> HashMap<String, HashSet<String>> {
@@ -144,7 +170,8 @@ impl Enchantments {
         if let Ok(entries) = fs::read_dir(data.join("enchantment")) {
             for e in entries.flatten() {
                 let p = e.path();
-                if let (Some(stem), Ok(bytes)) = (p.file_stem().and_then(|s| s.to_str()), fs::read(&p))
+                if let (Some(stem), Ok(bytes)) =
+                    (p.file_stem().and_then(|s| s.to_str()), fs::read(&p))
                     && let Ok(v) = serde_json::from_slice(&bytes)
                 {
                     files.insert(format!("minecraft:{stem}"), v);
@@ -156,18 +183,38 @@ impl Enchantments {
             .and_then(|b| serde_json::from_slice::<HashMap<String, String>>(&b).ok())
             .unwrap_or_default()
             .into_iter()
-            .filter(|(k, _)| k.starts_with("enchantment.") || k.starts_with("effect.") || k.starts_with("item.minecraft.potion") || k.starts_with("item.minecraft.splash_potion") || k.starts_with("item.minecraft.lingering_potion") || k.starts_with("item.minecraft.tipped_arrow") || k.starts_with("trim_") || k.starts_with("potion.") || k.starts_with("container.") || k.starts_with("merchant.") || k.starts_with("entity.minecraft.villager"))
+            .filter(|(k, _)| {
+                k.starts_with("enchantment.")
+                    || k.starts_with("effect.")
+                    || k.starts_with("item.minecraft.potion")
+                    || k.starts_with("item.minecraft.splash_potion")
+                    || k.starts_with("item.minecraft.lingering_potion")
+                    || k.starts_with("item.minecraft.tipped_arrow")
+                    || k.starts_with("trim_")
+                    || k.starts_with("potion.")
+                    || k.starts_with("container.")
+                    || k.starts_with("merchant.")
+                    || k.starts_with("entity.minecraft.villager")
+            })
             .collect();
         let mut list = Vec::new();
         for (id, v) in &files {
             let exclusive = match &v["exclusive_set"] {
-                Value::String(s) if s.starts_with('#') => tags.get(&s[1..]).cloned().unwrap_or_default(),
-                other => string_list(other).into_iter().map(|s| Arc::from(s.as_str())).collect(),
+                Value::String(s) if s.starts_with('#') => {
+                    tags.get(&s[1..]).cloned().unwrap_or_default()
+                }
+                other => string_list(other)
+                    .into_iter()
+                    .map(|s| Arc::from(s.as_str()))
+                    .collect(),
             };
             let key = v["description"]["translate"].as_str().unwrap_or("");
             list.push(Enchantment {
                 id: Arc::from(id.as_str()),
-                description: lang.get(key).cloned().unwrap_or_else(|| id.trim_start_matches("minecraft:").replace('_', " ")),
+                description: lang
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_else(|| id.trim_start_matches("minecraft:").replace('_', " ")),
                 max_level: v["max_level"].as_u64().unwrap_or(1) as u32,
                 weight: v["weight"].as_u64().unwrap_or(1) as u32,
                 anvil_cost: v["anvil_cost"].as_u64().unwrap_or(0) as u32,
@@ -180,7 +227,11 @@ impl Enchantments {
                 effects: v["effects"].clone(),
             });
         }
-        let index = list.iter().enumerate().map(|(i, e)| (e.id.clone(), i)).collect();
+        let index = list
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.id.clone(), i))
+            .collect();
         let mut props = HashMap::new();
         if let Ok(bytes) = fs::read(root.join("items.json"))
             && let Ok(raw) = serde_json::from_slice::<BTreeMap<String, Value>>(&bytes)
@@ -189,23 +240,41 @@ impl Enchantments {
                 props.insert(
                     Arc::from(id.as_str()),
                     ItemProps {
-                        enchantable: c["minecraft:enchantable"]["value"].as_u64().unwrap_or(0) as u32,
+                        enchantable: c["minecraft:enchantable"]["value"].as_u64().unwrap_or(0)
+                            as u32,
                         repairable: string_list(&c["minecraft:repairable"]["items"]),
-                        glint: c["minecraft:enchantment_glint_override"].as_bool().unwrap_or(false),
-                        rarity: c["minecraft:rarity"].as_str().unwrap_or("common").to_owned(),
-                        trim_material: c["minecraft:provides_trim_material"].as_str().map(str::to_owned),
+                        glint: c["minecraft:enchantment_glint_override"]
+                            .as_bool()
+                            .unwrap_or(false),
+                        rarity: c["minecraft:rarity"]
+                            .as_str()
+                            .unwrap_or("common")
+                            .to_owned(),
+                        trim_material: c["minecraft:provides_trim_material"]
+                            .as_str()
+                            .map(str::to_owned),
                         brewing_fuel: c.get("minecraft:brewing_fuel").is_some(),
                     },
                 );
             }
         }
-        Self { list, index, tags, entity_tags, damage_tags, props, lang }
+        Self {
+            list,
+            index,
+            tags,
+            entity_tags,
+            damage_tags,
+            props,
+            lang,
+        }
     }
     pub fn get(&self, id: &str) -> Option<&Enchantment> {
         self.index.get(id).map(|&i| &self.list[i])
     }
     pub fn tag(&self, name: &str) -> &[Arc<str>] {
-        self.tags.get(name.trim_start_matches('#')).map_or(&[], Vec::as_slice)
+        self.tags
+            .get(name.trim_start_matches('#'))
+            .map_or(&[], Vec::as_slice)
     }
     pub fn in_tag(&self, name: &str, id: &str) -> bool {
         self.tag(name).iter().any(|e| &**e == id)
@@ -231,11 +300,15 @@ impl Enchantments {
     }
     /// `Enchantment.canEnchant` / `isSupportedItem`.
     pub fn can_enchant(&self, items: &Items, id: &str, item: &str) -> bool {
-        self.get(id).is_some_and(|e| Self::item_in(items, &e.supported, item))
+        self.get(id)
+            .is_some_and(|e| Self::item_in(items, &e.supported, item))
     }
     /// `Enchantment.isPrimaryItem`.
     pub fn is_primary(&self, items: &Items, e: &Enchantment, item: &str) -> bool {
-        Self::item_in(items, &e.supported, item) && e.primary.as_ref().is_none_or(|p| Self::item_in(items, p, item))
+        Self::item_in(items, &e.supported, item)
+            && e.primary
+                .as_ref()
+                .is_none_or(|p| Self::item_in(items, p, item))
     }
     /// `Enchantment.areCompatible`.
     pub fn compatible(&self, a: &str, b: &str) -> bool {
@@ -247,11 +320,17 @@ impl Enchantments {
     }
     /// `Enchantment.getFullname` as plain text and whether it is a curse (red).
     pub fn full_name(&self, id: &str, level: u32) -> (String, bool) {
-        let Some(e) = self.get(id) else { return (format!("{id} {}", level_name(level)), false) };
+        let Some(e) = self.get(id) else {
+            return (format!("{id} {}", level_name(level)), false);
+        };
         let mut name = e.description.clone();
         if level != 1 || e.max_level != 1 {
             name.push(' ');
-            name.push_str(self.lang.get(&format!("enchantment.level.{level}")).map_or(&level_name(level), |s| s));
+            name.push_str(
+                self.lang
+                    .get(&format!("enchantment.level.{level}"))
+                    .map_or(&level_name(level), |s| s),
+            );
         }
         (name, self.is_curse(id))
     }
@@ -279,7 +358,13 @@ impl Enchantments {
     // ---- Enchanting table (EnchantmentHelper) ----
 
     /// `EnchantmentHelper.getEnchantmentCost`.
-    pub fn enchantment_cost<R: RandomSource>(&self, random: &mut R, slot: usize, bookcases: i32, item: &str) -> i32 {
+    pub fn enchantment_cost<R: RandomSource>(
+        &self,
+        random: &mut R,
+        slot: usize,
+        bookcases: i32,
+        item: &str,
+    ) -> i32 {
         if self.enchantable(item) == 0 {
             return 0;
         }
@@ -292,7 +377,13 @@ impl Enchantments {
         }
     }
     /// `EnchantmentHelper.getAvailableEnchantmentResults`.
-    pub fn available_results(&self, items: &Items, value: i32, item: &str, pool: &[Arc<str>]) -> Vec<(Arc<str>, u32)> {
+    pub fn available_results(
+        &self,
+        items: &Items,
+        value: i32,
+        item: &str,
+        pool: &[Arc<str>],
+    ) -> Vec<(Arc<str>, u32)> {
         let book = item == "minecraft:book";
         let mut out = Vec::new();
         for id in pool {
@@ -309,8 +400,15 @@ impl Enchantments {
         }
         out
     }
-    fn weighted<R: RandomSource>(&self, random: &mut R, list: &[(Arc<str>, u32)]) -> Option<(Arc<str>, u32)> {
-        let total: i32 = list.iter().map(|(id, _)| self.get(id).map_or(0, |e| e.weight as i32)).sum();
+    fn weighted<R: RandomSource>(
+        &self,
+        random: &mut R,
+        list: &[(Arc<str>, u32)],
+    ) -> Option<(Arc<str>, u32)> {
+        let total: i32 = list
+            .iter()
+            .map(|(id, _)| self.get(id).map_or(0, |e| e.weight as i32))
+            .sum();
         if total <= 0 {
             return None;
         }
@@ -324,7 +422,14 @@ impl Enchantments {
         None
     }
     /// `EnchantmentHelper.selectEnchantment`.
-    pub fn select<R: RandomSource>(&self, items: &Items, random: &mut R, item: &str, cost: i32, pool: &[Arc<str>]) -> Vec<(Arc<str>, u32)> {
+    pub fn select<R: RandomSource>(
+        &self,
+        items: &Items,
+        random: &mut R,
+        item: &str,
+        cost: i32,
+        pool: &[Arc<str>],
+    ) -> Vec<(Arc<str>, u32)> {
         let mut results = Vec::new();
         let value = self.enchantable(item) as i32;
         if value == 0 {
@@ -358,7 +463,14 @@ impl Enchantments {
     // ---- Effect components ----
 
     /// Run `component` value effects of every enchantment on `stack` over `value`.
-    pub fn modify_value(&self, stack: Option<&ItemStack>, component: &str, ctx: &EffectContext<'_>, random: &mut LegacyRandom, value: f32) -> f32 {
+    pub fn modify_value(
+        &self,
+        stack: Option<&ItemStack>,
+        component: &str,
+        ctx: &EffectContext<'_>,
+        random: &mut LegacyRandom,
+        value: f32,
+    ) -> f32 {
         let Some(stack) = stack else { return value };
         let mut value = value;
         for (id, level) in stack.enchantments() {
@@ -366,7 +478,15 @@ impl Enchantments {
         }
         value
     }
-    pub fn modify_value_with(&self, id: &str, level: u32, component: &str, ctx: &EffectContext<'_>, random: &mut LegacyRandom, mut value: f32) -> f32 {
+    pub fn modify_value_with(
+        &self,
+        id: &str,
+        level: u32,
+        component: &str,
+        ctx: &EffectContext<'_>,
+        random: &mut LegacyRandom,
+        mut value: f32,
+    ) -> f32 {
         let Some(e) = self.get(id) else { return value };
         for effect in e.effects[component].as_array().into_iter().flatten() {
             if let Some(req) = effect.get("requirements")
@@ -380,18 +500,34 @@ impl Enchantments {
     }
     /// Whether `stack` has any enchantment providing `component`.
     pub fn has_component(&self, stack: &ItemStack, component: &str) -> bool {
-        stack.enchantments().iter().any(|(id, _)| self.get(id).is_some_and(|e| e.effects.get(component).is_some()))
+        stack.enchantments().iter().any(|(id, _)| {
+            self.get(id)
+                .is_some_and(|e| e.effects.get(component).is_some())
+        })
     }
     /// The highest level among enchantments on `stack` that have `component`.
     pub fn component_level(&self, stack: &ItemStack, component: &str) -> u32 {
-        stack.enchantments().iter().filter(|(id, _)| self.get(id).is_some_and(|e| e.effects.get(component).is_some())).map(|(_, l)| *l).max().unwrap_or(0)
+        stack
+            .enchantments()
+            .iter()
+            .filter(|(id, _)| {
+                self.get(id)
+                    .is_some_and(|e| e.effects.get(component).is_some())
+            })
+            .map(|(_, l)| *l)
+            .max()
+            .unwrap_or(0)
     }
     /// `minecraft:attributes` contributions of `stack`: (attribute, id, amount, operation).
     pub fn attributes(&self, stack: &ItemStack) -> Vec<(String, String, f64, String)> {
         let mut out = Vec::new();
         for (id, level) in stack.enchantments() {
             let Some(e) = self.get(id) else { continue };
-            for a in e.effects["minecraft:attributes"].as_array().into_iter().flatten() {
+            for a in e.effects["minecraft:attributes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
                 out.push((
                     a["attribute"].as_str().unwrap_or("").to_owned(),
                     format!("{}.{}", a["id"].as_str().unwrap_or(""), level),
@@ -404,34 +540,61 @@ impl Enchantments {
     }
     /// Sum of `add_value` amounts of one attribute from enchantments on `stack`.
     pub fn attribute_add(&self, stack: Option<&ItemStack>, attribute: &str) -> f64 {
-        stack.map_or(0.0, |s| self.attributes(s).iter().filter(|a| a.0 == attribute && a.3 == "add_value").map(|a| a.2).sum())
+        stack.map_or(0.0, |s| {
+            self.attributes(s)
+                .iter()
+                .filter(|a| a.0 == attribute && a.3 == "add_value")
+                .map(|a| a.2)
+                .sum()
+        })
     }
     fn entity_matches(&self, spec: &Value, entity: Option<&str>) -> bool {
         let Some(entity) = entity else { return false };
         match spec.as_str() {
             Some(s) => match s.strip_prefix('#') {
-                Some(tag) => self.entity_tags.get(tag).is_some_and(|t| t.contains(entity)),
+                Some(tag) => self
+                    .entity_tags
+                    .get(tag)
+                    .is_some_and(|t| t.contains(entity)),
                 None => s == entity,
             },
             None => string_list(spec).iter().any(|s| s == entity),
         }
     }
     /// The loot-condition subset enchantment `requirements` use.
-    pub fn condition(&self, c: &Value, level: u32, ctx: &EffectContext<'_>, random: &mut LegacyRandom) -> bool {
+    pub fn condition(
+        &self,
+        c: &Value,
+        level: u32,
+        ctx: &EffectContext<'_>,
+        random: &mut LegacyRandom,
+    ) -> bool {
         match c["type"].as_str().or(c["condition"].as_str()).unwrap_or("") {
             "minecraft:inverted" => !self.condition(&c["term"], level, ctx, random),
-            "minecraft:all_of" => c["terms"].as_array().into_iter().flatten().all(|t| self.condition(t, level, ctx, random)),
-            "minecraft:any_of" => c["terms"].as_array().into_iter().flatten().any(|t| self.condition(t, level, ctx, random)),
+            "minecraft:all_of" => c["terms"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .all(|t| self.condition(t, level, ctx, random)),
+            "minecraft:any_of" => c["terms"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|t| self.condition(t, level, ctx, random)),
             "minecraft:match_tool" => {
                 let Some(tool) = ctx.tool else { return false };
                 let items = &c["predicate"]["items"];
                 if items.is_null() {
                     return true;
                 }
-                string_list(items).iter().any(|s| match s.strip_prefix('#') {
-                    Some(tag) => ctx.items.is_some_and(|i| i.item_tags.get(tag).is_some_and(|t| t.contains(tool))),
-                    None => s == tool,
-                })
+                string_list(items)
+                    .iter()
+                    .any(|s| match s.strip_prefix('#') {
+                        Some(tag) => ctx.items.is_some_and(|i| {
+                            i.item_tags.get(tag).is_some_and(|t| t.contains(tool))
+                        }),
+                        None => s == tool,
+                    })
             }
             "minecraft:damage_source_properties" => {
                 let p = &c["predicate"];
@@ -442,7 +605,9 @@ impl Enchantments {
                 }
                 p["tags"].as_array().into_iter().flatten().all(|t| {
                     let tag = t["id"].as_str().unwrap_or("").trim_start_matches('#');
-                    let has = ctx.damage_type.is_some_and(|d| self.damage_tags.get(tag).is_some_and(|s| s.contains(d)));
+                    let has = ctx
+                        .damage_type
+                        .is_some_and(|d| self.damage_tags.get(tag).is_some_and(|s| s.contains(d)));
                     has == t["expected"].as_bool().unwrap_or(true)
                 })
             }
@@ -454,13 +619,24 @@ impl Enchantments {
                     _ => None,
                 };
                 let spec = &c["predicate"]["minecraft:entity_type"];
-                let spec = if spec.is_null() { &c["predicate"]["type"] } else { spec };
+                let spec = if spec.is_null() {
+                    &c["predicate"]["type"]
+                } else {
+                    spec
+                };
                 spec.is_null() && entity.is_some() || self.entity_matches(spec, entity)
             }
             "minecraft:random_chance" => {
                 let chance = match &c["chance"] {
-                    Value::Object(o) if o.get("type").and_then(Value::as_str) == Some("minecraft:enchantment_level") => level_value(&c["chance"]["amount"], level),
-                    v => v.as_f64().map_or_else(|| level_value(v, level), |f| f as f32),
+                    Value::Object(o)
+                        if o.get("type").and_then(Value::as_str)
+                            == Some("minecraft:enchantment_level") =>
+                    {
+                        level_value(&c["chance"]["amount"], level)
+                    }
+                    v => v
+                        .as_f64()
+                        .map_or_else(|| level_value(v, level), |f| f as f32),
                 };
                 random.next_float() < chance
             }
@@ -498,9 +674,15 @@ pub fn level_value(v: &Value, level: u32) -> f32 {
                 "minecraft:clamped" => level_value(&o["value"], level).clamp(f("min"), f("max")),
                 "minecraft:fraction" => {
                     let d = level_value(&o["denominator"], level);
-                    if d == 0.0 { 0.0 } else { level_value(&o["numerator"], level) / d }
+                    if d == 0.0 {
+                        0.0
+                    } else {
+                        level_value(&o["numerator"], level) / d
+                    }
                 }
-                "minecraft:exponent" => level_value(&o["base"], level).powf(level_value(&o["power"], level)),
+                "minecraft:exponent" => {
+                    level_value(&o["base"], level).powf(level_value(&o["power"], level))
+                }
                 "minecraft:lookup" => {
                     let values = o.get("values").and_then(Value::as_array);
                     match values.and_then(|a| a.get(level as usize - 1)) {
@@ -515,7 +697,12 @@ pub fn level_value(v: &Value, level: u32) -> f32 {
     }
 }
 /// `EnchantmentValueEffect.process`.
-pub fn apply_value_effect(effect: &Value, level: u32, random: &mut LegacyRandom, value: f32) -> f32 {
+pub fn apply_value_effect(
+    effect: &Value,
+    level: u32,
+    random: &mut LegacyRandom,
+    value: f32,
+) -> f32 {
     match effect["type"].as_str().unwrap_or("") {
         "minecraft:add" => value + level_value(&effect["value"], level),
         "minecraft:multiply" => value * level_value(&effect["factor"], level),
@@ -540,7 +727,11 @@ pub fn apply_value_effect(effect: &Value, level: u32, random: &mut LegacyRandom,
             };
             n - removed as f32
         }
-        "minecraft:all_of" => effect["effects"].as_array().into_iter().flatten().fold(value, |v, e| apply_value_effect(e, level, random, v)),
+        "minecraft:all_of" => effect["effects"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .fold(value, |v, e| apply_value_effect(e, level, random, v)),
         _ => value,
     }
 }
@@ -553,11 +744,26 @@ pub(crate) mod tests {
     /// A small registry built from literal JSON matching the vanilla files.
     pub fn sample() -> Enchantments {
         let defs = [
-            ("minecraft:sharpness", json!({"anvil_cost":1,"exclusive_set":"#minecraft:exclusive_set/damage","max_cost":{"base":21,"per_level_above_first":11},"max_level":5,"min_cost":{"base":1,"per_level_above_first":11},"primary_items":"#minecraft:enchantable/melee_weapon","supported_items":"#minecraft:enchantable/sharp_weapon","weight":10,"slots":["mainhand"],"effects":{"minecraft:damage":[{"effect":{"type":"minecraft:add","value":{"type":"minecraft:linear","base":1.0,"per_level_above_first":0.5}}}]}})),
-            ("minecraft:smite", json!({"anvil_cost":2,"exclusive_set":"#minecraft:exclusive_set/damage","max_cost":{"base":25,"per_level_above_first":8},"max_level":5,"min_cost":{"base":5,"per_level_above_first":8},"primary_items":"#minecraft:enchantable/melee_weapon","supported_items":"#minecraft:enchantable/weapon","weight":5,"effects":{"minecraft:damage":[{"effect":{"type":"minecraft:add","value":{"type":"minecraft:linear","base":2.5,"per_level_above_first":2.5}},"requirements":{"type":"minecraft:entity_properties","entity":"this","predicate":{"minecraft:entity_type":"#minecraft:sensitive_to_smite"}}}]}})),
-            ("minecraft:unbreaking", json!({"anvil_cost":2,"max_cost":{"base":55,"per_level_above_first":8},"max_level":3,"min_cost":{"base":5,"per_level_above_first":8},"supported_items":"#minecraft:enchantable/durability","weight":5,"effects":{"minecraft:item_damage":[{"effect":{"type":"minecraft:remove_binomial","chance":{"type":"minecraft:fraction","denominator":{"type":"minecraft:linear","base":2.0,"per_level_above_first":1.0},"numerator":{"type":"minecraft:linear","base":1.0,"per_level_above_first":1.0}}}}]}})),
-            ("minecraft:mending", json!({"anvil_cost":4,"max_cost":{"base":75,"per_level_above_first":25},"max_level":1,"min_cost":{"base":25,"per_level_above_first":25},"supported_items":"#minecraft:enchantable/durability","weight":2})),
-            ("minecraft:feather_falling", json!({"anvil_cost":2,"max_cost":{"base":11,"per_level_above_first":6},"max_level":4,"min_cost":{"base":5,"per_level_above_first":6},"supported_items":"#minecraft:enchantable/foot_armor","weight":5,"effects":{"minecraft:damage_protection":[{"effect":{"type":"minecraft:add","value":{"type":"minecraft:linear","base":3.0,"per_level_above_first":3.0}},"requirements":{"type":"minecraft:damage_source_properties","predicate":{"tags":[{"expected":true,"id":"#minecraft:is_fall"},{"expected":false,"id":"#minecraft:bypasses_invulnerability"}]}}}]}})),
+            (
+                "minecraft:sharpness",
+                json!({"anvil_cost":1,"exclusive_set":"#minecraft:exclusive_set/damage","max_cost":{"base":21,"per_level_above_first":11},"max_level":5,"min_cost":{"base":1,"per_level_above_first":11},"primary_items":"#minecraft:enchantable/melee_weapon","supported_items":"#minecraft:enchantable/sharp_weapon","weight":10,"slots":["mainhand"],"effects":{"minecraft:damage":[{"effect":{"type":"minecraft:add","value":{"type":"minecraft:linear","base":1.0,"per_level_above_first":0.5}}}]}}),
+            ),
+            (
+                "minecraft:smite",
+                json!({"anvil_cost":2,"exclusive_set":"#minecraft:exclusive_set/damage","max_cost":{"base":25,"per_level_above_first":8},"max_level":5,"min_cost":{"base":5,"per_level_above_first":8},"primary_items":"#minecraft:enchantable/melee_weapon","supported_items":"#minecraft:enchantable/weapon","weight":5,"effects":{"minecraft:damage":[{"effect":{"type":"minecraft:add","value":{"type":"minecraft:linear","base":2.5,"per_level_above_first":2.5}},"requirements":{"type":"minecraft:entity_properties","entity":"this","predicate":{"minecraft:entity_type":"#minecraft:sensitive_to_smite"}}}]}}),
+            ),
+            (
+                "minecraft:unbreaking",
+                json!({"anvil_cost":2,"max_cost":{"base":55,"per_level_above_first":8},"max_level":3,"min_cost":{"base":5,"per_level_above_first":8},"supported_items":"#minecraft:enchantable/durability","weight":5,"effects":{"minecraft:item_damage":[{"effect":{"type":"minecraft:remove_binomial","chance":{"type":"minecraft:fraction","denominator":{"type":"minecraft:linear","base":2.0,"per_level_above_first":1.0},"numerator":{"type":"minecraft:linear","base":1.0,"per_level_above_first":1.0}}}}]}}),
+            ),
+            (
+                "minecraft:mending",
+                json!({"anvil_cost":4,"max_cost":{"base":75,"per_level_above_first":25},"max_level":1,"min_cost":{"base":25,"per_level_above_first":25},"supported_items":"#minecraft:enchantable/durability","weight":2}),
+            ),
+            (
+                "minecraft:feather_falling",
+                json!({"anvil_cost":2,"max_cost":{"base":11,"per_level_above_first":6},"max_level":4,"min_cost":{"base":5,"per_level_above_first":6},"supported_items":"#minecraft:enchantable/foot_armor","weight":5,"effects":{"minecraft:damage_protection":[{"effect":{"type":"minecraft:add","value":{"type":"minecraft:linear","base":3.0,"per_level_above_first":3.0}},"requirements":{"type":"minecraft:damage_source_properties","predicate":{"tags":[{"expected":true,"id":"#minecraft:is_fall"},{"expected":false,"id":"#minecraft:bypasses_invulnerability"}]}}}]}}),
+            ),
         ];
         let list: Vec<Enchantment> = defs
             .iter()
@@ -571,44 +777,136 @@ pub(crate) mod tests {
                 max_cost: Cost::parse(&v["max_cost"]),
                 supported: string_list(&v["supported_items"]),
                 primary: v.get("primary_items").map(string_list),
-                exclusive: if v["exclusive_set"].is_null() { HashSet::new() } else { [Arc::from("minecraft:sharpness"), Arc::from("minecraft:smite")].into_iter().collect() },
+                exclusive: if v["exclusive_set"].is_null() {
+                    HashSet::new()
+                } else {
+                    [
+                        Arc::from("minecraft:sharpness"),
+                        Arc::from("minecraft:smite"),
+                    ]
+                    .into_iter()
+                    .collect()
+                },
                 slots: vec![],
                 effects: v["effects"].clone(),
             })
             .collect();
-        let index = list.iter().enumerate().map(|(i, e)| (e.id.clone(), i)).collect();
-        let pool: Vec<Arc<str>> = ["minecraft:feather_falling", "minecraft:sharpness", "minecraft:smite", "minecraft:unbreaking", "minecraft:mending"].iter().map(|s| Arc::from(*s)).collect();
+        let index = list
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.id.clone(), i))
+            .collect();
+        let pool: Vec<Arc<str>> = [
+            "minecraft:feather_falling",
+            "minecraft:sharpness",
+            "minecraft:smite",
+            "minecraft:unbreaking",
+            "minecraft:mending",
+        ]
+        .iter()
+        .map(|s| Arc::from(*s))
+        .collect();
         let mut tags = HashMap::new();
-        tags.insert("minecraft:in_enchanting_table".to_owned(), pool[..4].to_vec());
-        tags.insert("minecraft:tooltip_order".to_owned(), vec![Arc::from("minecraft:sharpness"), Arc::from("minecraft:unbreaking")]);
+        tags.insert(
+            "minecraft:in_enchanting_table".to_owned(),
+            pool[..4].to_vec(),
+        );
+        tags.insert(
+            "minecraft:tooltip_order".to_owned(),
+            vec![
+                Arc::from("minecraft:sharpness"),
+                Arc::from("minecraft:unbreaking"),
+            ],
+        );
         let mut entity_tags = HashMap::new();
-        entity_tags.insert("minecraft:sensitive_to_smite".to_owned(), ["minecraft:zombie".to_owned()].into_iter().collect());
+        entity_tags.insert(
+            "minecraft:sensitive_to_smite".to_owned(),
+            ["minecraft:zombie".to_owned()].into_iter().collect(),
+        );
         let mut damage_tags = HashMap::new();
-        damage_tags.insert("minecraft:is_fall".to_owned(), ["minecraft:fall".to_owned()].into_iter().collect());
+        damage_tags.insert(
+            "minecraft:is_fall".to_owned(),
+            ["minecraft:fall".to_owned()].into_iter().collect(),
+        );
         let mut props = HashMap::new();
-        for (item, value) in [("minecraft:diamond_sword", 10), ("minecraft:iron_sword", 14), ("minecraft:book", 1), ("minecraft:iron_boots", 9)] {
-            props.insert(Arc::from(item), ItemProps { enchantable: value, ..Default::default() });
+        for (item, value) in [
+            ("minecraft:diamond_sword", 10),
+            ("minecraft:iron_sword", 14),
+            ("minecraft:book", 1),
+            ("minecraft:iron_boots", 9),
+        ] {
+            props.insert(
+                Arc::from(item),
+                ItemProps {
+                    enchantable: value,
+                    ..Default::default()
+                },
+            );
         }
-        Enchantments { list, index, tags, entity_tags, damage_tags, props, lang: HashMap::new() }
+        Enchantments {
+            list,
+            index,
+            tags,
+            entity_tags,
+            damage_tags,
+            props,
+            lang: HashMap::new(),
+        }
     }
     pub fn sample_items() -> Items {
         let mut item_tags: HashMap<String, HashSet<String>> = HashMap::new();
         let swords = ["minecraft:diamond_sword", "minecraft:iron_sword"];
-        for tag in ["enchantable/melee_weapon", "enchantable/sharp_weapon", "enchantable/weapon", "enchantable/durability"] {
-            item_tags.insert(format!("minecraft:{tag}"), swords.iter().map(|s| (*s).to_owned()).collect());
+        for tag in [
+            "enchantable/melee_weapon",
+            "enchantable/sharp_weapon",
+            "enchantable/weapon",
+            "enchantable/durability",
+        ] {
+            item_tags.insert(
+                format!("minecraft:{tag}"),
+                swords.iter().map(|s| (*s).to_owned()).collect(),
+            );
         }
-        item_tags.get_mut("minecraft:enchantable/durability").unwrap().insert("minecraft:iron_boots".into());
-        item_tags.insert("minecraft:enchantable/foot_armor".into(), ["minecraft:iron_boots".to_owned()].into_iter().collect());
+        item_tags
+            .get_mut("minecraft:enchantable/durability")
+            .unwrap()
+            .insert("minecraft:iron_boots".into());
+        item_tags.insert(
+            "minecraft:enchantable/foot_armor".into(),
+            ["minecraft:iron_boots".to_owned()].into_iter().collect(),
+        );
         Items::for_tests(item_tags)
     }
 
     #[test]
     fn level_based_values() {
-        assert_eq!(level_value(&json!({"type":"minecraft:linear","base":1.0,"per_level_above_first":0.5}), 5), 3.0);
-        assert_eq!(level_value(&json!({"type":"minecraft:levels_squared","added":1.0}), 3), 10.0);
-        assert_eq!(level_value(&json!({"type":"minecraft:fraction","numerator":{"type":"minecraft:linear","base":1.0,"per_level_above_first":1.0},"denominator":{"type":"minecraft:linear","base":2.0,"per_level_above_first":1.0}}), 3), 0.75);
+        assert_eq!(
+            level_value(
+                &json!({"type":"minecraft:linear","base":1.0,"per_level_above_first":0.5}),
+                5
+            ),
+            3.0
+        );
+        assert_eq!(
+            level_value(&json!({"type":"minecraft:levels_squared","added":1.0}), 3),
+            10.0
+        );
+        assert_eq!(
+            level_value(
+                &json!({"type":"minecraft:fraction","numerator":{"type":"minecraft:linear","base":1.0,"per_level_above_first":1.0},"denominator":{"type":"minecraft:linear","base":2.0,"per_level_above_first":1.0}}),
+                3
+            ),
+            0.75
+        );
         assert_eq!(level_name(4), "IV");
-        assert_eq!(Cost { base: 1, per_level: 11 }.calculate(5), 45);
+        assert_eq!(
+            Cost {
+                base: 1,
+                per_level: 11
+            }
+            .calculate(5),
+            45
+        );
     }
 
     #[test]
@@ -619,11 +917,18 @@ pub(crate) mod tests {
             for bookcases in [0, 5, 15, 20] {
                 let mut a = LegacyRandom::new(seed);
                 let mut b = LegacyRandom::new(seed);
-                let costs: Vec<i32> = (0..3).map(|slot| e.enchantment_cost(&mut a, slot, bookcases, "minecraft:diamond_sword")).collect();
+                let costs: Vec<i32> = (0..3)
+                    .map(|slot| {
+                        e.enchantment_cost(&mut a, slot, bookcases, "minecraft:diamond_sword")
+                    })
+                    .collect();
                 let bc = bookcases.min(15);
                 let expect: Vec<i32> = (0..3)
                     .map(|slot| {
-                        let s = b.next_int_bound(8).unwrap() + 1 + (bc >> 1) + b.next_int_bound(bc + 1).unwrap();
+                        let s = b.next_int_bound(8).unwrap()
+                            + 1
+                            + (bc >> 1)
+                            + b.next_int_bound(bc + 1).unwrap();
                         match slot {
                             0 => (s / 3).max(1),
                             1 => s * 2 / 3 + 1,
@@ -635,7 +940,10 @@ pub(crate) mod tests {
                 assert!(costs[2] <= 30);
             }
         }
-        assert_eq!(e.enchantment_cost(&mut LegacyRandom::new(0), 0, 15, "minecraft:stick"), 0);
+        assert_eq!(
+            e.enchantment_cost(&mut LegacyRandom::new(0), 0, 15, "minecraft:stick"),
+            0
+        );
     }
 
     #[test]
@@ -648,7 +956,10 @@ pub(crate) mod tests {
             let picked = e.select(&items, &mut r, "minecraft:diamond_sword", 30, &pool);
             assert!(!picked.is_empty());
             let has = |id: &str| picked.iter().any(|(p, _)| &**p == id);
-            assert!(!(has("minecraft:sharpness") && has("minecraft:smite")), "{picked:?}");
+            assert!(
+                !(has("minecraft:sharpness") && has("minecraft:smite")),
+                "{picked:?}"
+            );
             assert!(!has("minecraft:feather_falling"));
             for (id, l) in &picked {
                 assert!(*l >= 1 && *l <= e.get(id).unwrap().max_level);
@@ -657,8 +968,15 @@ pub(crate) mod tests {
         // Books accept every enchantment in the pool.
         let mut r = LegacyRandom::new(3);
         let available = e.available_results(&items, 20, "minecraft:book", &pool);
-        assert!(available.iter().any(|(id, _)| &**id == "minecraft:feather_falling"));
-        assert!(e.select(&items, &mut r, "minecraft:stick", 30, &pool).is_empty());
+        assert!(
+            available
+                .iter()
+                .any(|(id, _)| &**id == "minecraft:feather_falling")
+        );
+        assert!(
+            e.select(&items, &mut r, "minecraft:stick", 30, &pool)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -668,23 +986,65 @@ pub(crate) mod tests {
         let mut sword = ItemStack::new("minecraft:diamond_sword", 1);
         sword.enchant("minecraft:sharpness", 5);
         let mut r = LegacyRandom::new(1);
-        let ctx = EffectContext { items: Some(&items), this: Some("minecraft:zombie"), ..Default::default() };
-        assert_eq!(e.modify_value(Some(&sword), "minecraft:damage", &ctx, &mut r, 0.0), 3.0);
+        let ctx = EffectContext {
+            items: Some(&items),
+            this: Some("minecraft:zombie"),
+            ..Default::default()
+        };
+        assert_eq!(
+            e.modify_value(Some(&sword), "minecraft:damage", &ctx, &mut r, 0.0),
+            3.0
+        );
         let mut smite = ItemStack::new("minecraft:diamond_sword", 1);
         smite.enchant("minecraft:smite", 2);
-        assert_eq!(e.modify_value(Some(&smite), "minecraft:damage", &ctx, &mut r, 0.0), 5.0);
-        let pig = EffectContext { this: Some("minecraft:pig"), ..ctx };
-        assert_eq!(e.modify_value(Some(&smite), "minecraft:damage", &pig, &mut r, 0.0), 0.0);
+        assert_eq!(
+            e.modify_value(Some(&smite), "minecraft:damage", &ctx, &mut r, 0.0),
+            5.0
+        );
+        let pig = EffectContext {
+            this: Some("minecraft:pig"),
+            ..ctx
+        };
+        assert_eq!(
+            e.modify_value(Some(&smite), "minecraft:damage", &pig, &mut r, 0.0),
+            0.0
+        );
         let mut boots = ItemStack::new("minecraft:iron_boots", 1);
         boots.enchant("minecraft:feather_falling", 4);
-        let fall = EffectContext { damage_type: Some("minecraft:fall"), ..Default::default() };
-        assert_eq!(e.modify_value(Some(&boots), "minecraft:damage_protection", &fall, &mut r, 0.0), 12.0);
-        let lava = EffectContext { damage_type: Some("minecraft:lava"), ..Default::default() };
-        assert_eq!(e.modify_value(Some(&boots), "minecraft:damage_protection", &lava, &mut r, 0.0), 0.0);
+        let fall = EffectContext {
+            damage_type: Some("minecraft:fall"),
+            ..Default::default()
+        };
+        assert_eq!(
+            e.modify_value(
+                Some(&boots),
+                "minecraft:damage_protection",
+                &fall,
+                &mut r,
+                0.0
+            ),
+            12.0
+        );
+        let lava = EffectContext {
+            damage_type: Some("minecraft:lava"),
+            ..Default::default()
+        };
+        assert_eq!(
+            e.modify_value(
+                Some(&boots),
+                "minecraft:damage_protection",
+                &lava,
+                &mut r,
+                0.0
+            ),
+            0.0
+        );
         // Unbreaking III keeps about 1/4 of durability hits.
         let mut tool = ItemStack::new("minecraft:diamond_sword", 1);
         tool.enchant("minecraft:unbreaking", 3);
-        let kept: f32 = (0..4000).map(|_| e.modify_value(Some(&tool), "minecraft:item_damage", &ctx, &mut r, 1.0)).sum();
+        let kept: f32 = (0..4000)
+            .map(|_| e.modify_value(Some(&tool), "minecraft:item_damage", &ctx, &mut r, 1.0))
+            .sum();
         assert!((800.0..1200.0).contains(&kept), "{kept}");
     }
 
@@ -693,7 +1053,11 @@ pub(crate) mod tests {
         let e = sample();
         assert_eq!(e.full_name("minecraft:mending", 1).0, "mending");
         assert_eq!(e.full_name("minecraft:sharpness", 1).0, "sharpness I");
-        let levels = vec![(Arc::from("minecraft:unbreaking"), 3), (Arc::from("minecraft:mending"), 1), (Arc::from("minecraft:sharpness"), 2)];
+        let levels = vec![
+            (Arc::from("minecraft:unbreaking"), 3),
+            (Arc::from("minecraft:mending"), 1),
+            (Arc::from("minecraft:sharpness"), 2),
+        ];
         let lines: Vec<String> = e.tooltip(&levels).into_iter().map(|l| l.0).collect();
         assert_eq!(lines, ["sharpness II", "unbreaking III", "mending"]);
         assert!(!e.compatible("minecraft:sharpness", "minecraft:smite"));

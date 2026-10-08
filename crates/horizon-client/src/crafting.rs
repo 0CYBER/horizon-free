@@ -2,7 +2,10 @@
 //! (placed anywhere in the grid, optionally mirrored as in
 //! `ShapedRecipePattern.matches`), shapeless ingredient sets, and furnace-type
 //! cooking lookups.
-use crate::{Result, items::{ItemStack, Items}};
+use crate::{
+    Result,
+    items::{ItemStack, Items},
+};
 use serde_json::Value;
 use std::{collections::HashSet, fs, path::Path, sync::Arc};
 
@@ -82,7 +85,11 @@ impl Recipes {
             .collect();
         files.sort();
         for path in files {
-            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_owned();
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_owned();
             let v: Value = serde_json::from_slice(&fs::read(&path)?)?;
             match v["type"].as_str().unwrap_or("") {
                 "minecraft:crafting_shaped" => {
@@ -110,7 +117,15 @@ impl Recipes {
                         }
                     }
                     if let (true, Some(result)) = (ok, result(&v["result"])) {
-                        crafting.push((name, Recipe::Shaped { width, height, cells, result }));
+                        crafting.push((
+                            name,
+                            Recipe::Shaped {
+                                width,
+                                height,
+                                cells,
+                                result,
+                            },
+                        ));
                     }
                 }
                 "minecraft:crafting_shapeless" => {
@@ -121,11 +136,23 @@ impl Recipes {
                         .map(|i| Ingredient::parse(i, items))
                         .collect();
                     if let (Some(ingredients), Some(result)) = (ingredients, result(&v["result"])) {
-                        crafting.push((name, Recipe::Shapeless { ingredients, result }));
+                        crafting.push((
+                            name,
+                            Recipe::Shapeless {
+                                ingredients,
+                                result,
+                            },
+                        ));
                     }
                 }
-                kind @ ("minecraft:smelting" | "minecraft:blasting" | "minecraft:smoking" | "minecraft:campfire_cooking") => {
-                    if let (Some(ingredient), Some(result)) = (Ingredient::parse(&v["ingredient"], items), result(&v["result"])) {
+                kind @ ("minecraft:smelting"
+                | "minecraft:blasting"
+                | "minecraft:smoking"
+                | "minecraft:campfire_cooking") => {
+                    if let (Some(ingredient), Some(result)) = (
+                        Ingredient::parse(&v["ingredient"], items),
+                        result(&v["result"]),
+                    ) {
                         cooking.push(Cooking {
                             kind: kind.to_owned(),
                             ingredient,
@@ -150,13 +177,24 @@ impl Recipes {
         if occupied.is_empty() {
             return None;
         }
-        let (x0, x1) = (occupied.iter().map(|p| p.0).min()?, occupied.iter().map(|p| p.0).max()?);
-        let (y0, y1) = (occupied.iter().map(|p| p.1).min()?, occupied.iter().map(|p| p.1).max()?);
+        let (x0, x1) = (
+            occupied.iter().map(|p| p.0).min()?,
+            occupied.iter().map(|p| p.0).max()?,
+        );
+        let (y0, y1) = (
+            occupied.iter().map(|p| p.1).min()?,
+            occupied.iter().map(|p| p.1).max()?,
+        );
         let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
         let cell = |x: usize, y: usize| grid[(y0 + y) * size + x0 + x].as_ref();
         for (_, recipe) in &self.crafting {
             match recipe {
-                Recipe::Shaped { width, height, cells, result } => {
+                Recipe::Shaped {
+                    width,
+                    height,
+                    cells,
+                    result,
+                } => {
                     if *width != w || *height != h {
                         continue;
                     }
@@ -176,7 +214,10 @@ impl Recipes {
                         return Some(result.clone());
                     }
                 }
-                Recipe::Shapeless { ingredients, result } => {
+                Recipe::Shapeless {
+                    ingredients,
+                    result,
+                } => {
                     let stacks: Vec<&ItemStack> = grid.iter().flatten().collect();
                     if stacks.len() != ingredients.len() {
                         continue;
@@ -184,7 +225,9 @@ impl Recipes {
                     // Greedy bipartite matching is sufficient for vanilla's ingredient sets.
                     let mut used = vec![false; stacks.len()];
                     let ok = ingredients.iter().all(|ingredient| {
-                        if let Some(i) = (0..stacks.len()).find(|&i| !used[i] && ingredient.test(stacks[i])) {
+                        if let Some(i) =
+                            (0..stacks.len()).find(|&i| !used[i] && ingredient.test(stacks[i]))
+                        {
                             used[i] = true;
                             true
                         } else {
@@ -200,6 +243,8 @@ impl Recipes {
         None
     }
     pub fn cook(&self, kind: &str, input: &ItemStack) -> Option<&Cooking> {
-        self.cooking.iter().find(|c| c.kind == kind && c.ingredient.test(input))
+        self.cooking
+            .iter()
+            .find(|c| c.kind == kind && c.ingredient.test(input))
     }
 }

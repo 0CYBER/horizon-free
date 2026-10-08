@@ -123,7 +123,12 @@ fn room_box(direction: Direction, index: i32, w: i32, h: i32, d: i32) -> Boundin
     })
 }
 impl MonumentBuilding {
-    pub fn new(random: &mut impl RandomSource, west: i32, north: i32, direction: Direction) -> Self {
+    pub fn new(
+        random: &mut impl RandomSource,
+        west: i32,
+        north: i32,
+        direction: Direction,
+    ) -> Self {
         let frame = PieceFrame::new(
             make_bounding_box(west, 39, north, direction, 58, 23, 58),
             Some(direction),
@@ -241,7 +246,10 @@ impl MonumentBuilding {
         let mut children = Vec::new();
         let child = |kind: Kind, room: usize, g: &Graph, w: i32, h: i32, d: i32| Child {
             kind,
-            frame: PieceFrame::new(room_box(direction, g.rooms[room].index, w, h, d), Some(direction)),
+            frame: PieceFrame::new(
+                room_box(direction, g.rooms[room].index, w, h, d),
+                Some(direction),
+            ),
             room,
         };
         children.push(child(Kind::Entry, source, &g, 1, 1, 1));
@@ -250,14 +258,16 @@ impl MonumentBuilding {
             if g.rooms[def].claimed || g.rooms[def].index >= 75 {
                 continue;
             }
-            let free = |g: &Graph, r: usize, d: usize| g.open(r, d) && !g.rooms[g.conn(r, d)].claimed;
+            let free =
+                |g: &Graph, r: usize, d: usize| g.open(r, d) && !g.rooms[g.conn(r, d)].claimed;
             if free(&g, def, EAST) && free(&g, def, UP) && free(&g, g.conn(def, EAST), UP) {
                 let e = g.conn(def, EAST);
                 for r in [def, e, g.conn(def, UP), g.conn(e, UP)] {
                     g.claim(r);
                 }
                 children.push(child(Kind::DoubleXY, def, &g, 2, 2, 1));
-            } else if free(&g, def, NORTH) && free(&g, def, UP) && free(&g, g.conn(def, NORTH), UP) {
+            } else if free(&g, def, NORTH) && free(&g, def, UP) && free(&g, g.conn(def, NORTH), UP)
+            {
                 let n = g.conn(def, NORTH);
                 for r in [def, n, g.conn(def, UP), g.conn(n, UP)] {
                     g.claim(r);
@@ -275,7 +285,10 @@ impl MonumentBuilding {
                 g.claim(def);
                 g.claim(g.conn(def, UP));
                 children.push(child(Kind::DoubleY, def, &g, 1, 2, 1));
-            } else if [WEST, EAST, NORTH, SOUTH, UP].iter().all(|&d| !g.open(def, d)) {
+            } else if [WEST, EAST, NORTH, SOUTH, UP]
+                .iter()
+                .all(|&d| !g.open(def, d))
+            {
                 g.claim(def);
                 children.push(child(Kind::SimpleTop, def, &g, 1, 1, 1));
             } else {
@@ -330,8 +343,18 @@ struct W<'x, 'c> {
 }
 impl W<'_, '_> {
     #[allow(clippy::too_many_arguments)]
-    fn bx(&mut self, x0: i32, y0: i32, z0: i32, x1: i32, y1: i32, z1: i32, s: BlockStateId) -> Result<()> {
-        self.f.generate_box(self.c, [x0, y0, z0], [x1, y1, z1], s, s, false)
+    fn bx(
+        &mut self,
+        x0: i32,
+        y0: i32,
+        z0: i32,
+        x1: i32,
+        y1: i32,
+        z1: i32,
+        s: BlockStateId,
+    ) -> Result<()> {
+        self.f
+            .generate_box(self.c, [x0, y0, z0], [x1, y1, z1], s, s, false)
     }
     fn put(&mut self, s: BlockStateId, x: i32, y: i32, z: i32) -> Result<()> {
         self.f.place(self.c, s, x, y, z)
@@ -344,7 +367,10 @@ impl W<'_, '_> {
                     let s = self.f.get(self.c, x, y, z)?;
                     if matches!(
                         self.c.name(s),
-                        "minecraft:ice" | "minecraft:packed_ice" | "minecraft:blue_ice" | "minecraft:water"
+                        "minecraft:ice"
+                            | "minecraft:packed_ice"
+                            | "minecraft:blue_ice"
+                            | "minecraft:water"
                     ) {
                         continue;
                     }
@@ -360,7 +386,16 @@ impl W<'_, '_> {
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
-    fn fill_only(&mut self, x0: i32, y0: i32, z0: i32, x1: i32, y1: i32, z1: i32, s: BlockStateId) -> Result<()> {
+    fn fill_only(
+        &mut self,
+        x0: i32,
+        y0: i32,
+        z0: i32,
+        x1: i32,
+        y1: i32,
+        z1: i32,
+        s: BlockStateId,
+    ) -> Result<()> {
         for y in y0..=y1 {
             for x in x0..=x1 {
                 for z in z0..=z1 {
@@ -373,7 +408,10 @@ impl W<'_, '_> {
         Ok(())
     }
     fn floor(&mut self, xo: i32, zo: i32, down: bool) -> Result<()> {
-        let (g, l) = (self.c.state("prismarine"), self.c.state("prismarine_bricks"));
+        let (g, l) = (
+            self.c.state("prismarine"),
+            self.c.state("prismarine_bricks"),
+        );
         if down {
             self.bx(xo, 0, zo, xo + 2, 0, zo + 7, g)?;
             self.bx(xo + 5, 0, zo, xo + 7, 0, zo + 7, g)?;
@@ -391,7 +429,10 @@ impl W<'_, '_> {
         let (ax, az) = (self.f.world_x(x0, z0), self.f.world_z(x0, z0));
         let (bx, bz) = (self.f.world_x(x1, z1), self.f.world_z(x1, z1));
         let b = self.c.chunk_box;
-        b.max[0] >= ax.min(bx) && b.min[0] <= ax.max(bx) && b.max[2] >= az.min(bz) && b.min[2] <= az.max(bz)
+        b.max[0] >= ax.min(bx)
+            && b.min[0] <= ax.max(bx)
+            && b.max[2] >= az.min(bz)
+            && b.min[2] <= az.max(bz)
     }
 }
 struct Palette {
@@ -509,11 +550,7 @@ fn building(w: &mut W<'_, '_>, p: &Palette) -> Result<()> {
     if w.hits(15, 20, 42, 21) {
         w.bx(15, 0, 21, 42, 0, 21, g)?;
         w.water(26, 1, 21, 31, 3, 21)?;
-        for [x0, y, x1] in [
-            [21, 12, 36],
-            [17, 11, 40],
-            [16, 10, 41],
-        ] {
+        for [x0, y, x1] in [[21, 12, 36], [17, 11, 40], [16, 10, 41]] {
             w.bx(x0, y, 21, x1, y, 21, g)?;
         }
         w.bx(15, 7, 21, 42, 9, 21, g)?;
@@ -580,7 +617,12 @@ fn building(w: &mut W<'_, '_>, p: &Palette) -> Result<()> {
         w.bx(32, 17, 25, 32, 19, 25, l)?;
         w.bx(25, 17, 32, 25, 19, 32, l)?;
         w.bx(32, 17, 32, 32, 19, 32, l)?;
-        for [a, b, cx, cz] in [[26, 26, 27, 27], [26, 31, 27, 30], [31, 31, 30, 30], [31, 26, 30, 27]] {
+        for [a, b, cx, cz] in [
+            [26, 26, 27, 27],
+            [26, 31, 27, 30],
+            [31, 31, 30, 30],
+            [31, 26, 30, 27],
+        ] {
             w.put(l, a, 20, b)?;
             w.put(l, cx, 21, cz)?;
             w.put(lamp, cx, 20, cz)?;
@@ -1225,7 +1267,16 @@ fn room(w: &mut W<'_, '_>, p: &Palette, child: &Child, rooms: &[Room]) -> Result
                     ] {
                         w.bx(x0, 1, z0, x1, 3, z1, l)?;
                     }
-                    for [x, z] in [[1, 0], [0, 1], [1, 7], [0, 6], [6, 7], [7, 6], [6, 0], [7, 1]] {
+                    for [x, z] in [
+                        [1, 0],
+                        [0, 1],
+                        [1, 7],
+                        [0, 6],
+                        [6, 7],
+                        [7, 6],
+                        [6, 0],
+                        [7, 1],
+                    ] {
                         w.put(g, x, 2, z)?;
                     }
                     for (side, [x0, z0, x1, z1]) in [
@@ -1325,7 +1376,14 @@ fn room(w: &mut W<'_, '_>, p: &Palette, child: &Child, rooms: &[Room]) -> Result
                 w.put(lamp, 6, 3, z)?;
                 w.put(lamp, 16, 3, z)?;
             }
-            for [x, y, z] in [[10, 0, 10], [12, 0, 10], [10, 0, 12], [12, 0, 12], [8, 3, 6], [14, 3, 6]] {
+            for [x, y, z] in [
+                [10, 0, 10],
+                [12, 0, 10],
+                [10, 0, 12],
+                [12, 0, 12],
+                [8, 3, 6],
+                [14, 3, 6],
+            ] {
                 w.put(lamp, x, y, z)?;
             }
             for [x, z] in [[4, 4], [18, 4], [4, 18], [18, 18]] {

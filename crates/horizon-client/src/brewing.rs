@@ -24,7 +24,12 @@ pub struct EffectDef {
     pub instant: bool,
 }
 const fn fx(id: &'static str, color: u32, category: Category) -> EffectDef {
-    EffectDef { id, color, category, instant: false }
+    EffectDef {
+        id,
+        color,
+        category,
+        instant: false,
+    }
 }
 use Category::{Beneficial as B, Harmful as H, Neutral as N};
 /// `MobEffects` in registration order.
@@ -34,8 +39,18 @@ pub const EFFECTS: &[EffectDef] = &[
     fx("haste", 14270531, B),
     fx("mining_fatigue", 4866583, H),
     fx("strength", 16762624, B),
-    EffectDef { id: "instant_health", color: 16262179, category: B, instant: true },
-    EffectDef { id: "instant_damage", color: 11101546, category: H, instant: true },
+    EffectDef {
+        id: "instant_health",
+        color: 16262179,
+        category: B,
+        instant: true,
+    },
+    EffectDef {
+        id: "instant_damage",
+        color: 11101546,
+        category: H,
+        instant: true,
+    },
     fx("jump_boost", 16646020, B),
     fx("nausea", 5578058, H),
     fx("regeneration", 13458603, B),
@@ -51,7 +66,12 @@ pub const EFFECTS: &[EffectDef] = &[
     fx("wither", 7561558, H),
     fx("health_boost", 16284963, B),
     fx("absorption", 2445989, B),
-    EffectDef { id: "saturation", color: 16262179, category: B, instant: true },
+    EffectDef {
+        id: "saturation",
+        color: 16262179,
+        category: B,
+        instant: true,
+    },
     fx("glowing", 9740385, N),
     fx("levitation", 13565951, H),
     fx("luck", 5882118, B),
@@ -82,7 +102,11 @@ pub struct PotionDef {
     pub name: &'static str,
     pub effects: &'static [(&'static str, i32, i32)],
 }
-const fn p(id: &'static str, name: &'static str, effects: &'static [(&'static str, i32, i32)]) -> PotionDef {
+const fn p(
+    id: &'static str,
+    name: &'static str,
+    effects: &'static [(&'static str, i32, i32)],
+) -> PotionDef {
     PotionDef { id, name, effects }
 }
 /// `Potions` in registration order.
@@ -92,25 +116,61 @@ pub const POTIONS: &[PotionDef] = &[
     p("thick", "thick", &[]),
     p("awkward", "awkward", &[]),
     p("night_vision", "night_vision", &[("night_vision", 3600, 0)]),
-    p("long_night_vision", "night_vision", &[("night_vision", 9600, 0)]),
+    p(
+        "long_night_vision",
+        "night_vision",
+        &[("night_vision", 9600, 0)],
+    ),
     p("invisibility", "invisibility", &[("invisibility", 3600, 0)]),
-    p("long_invisibility", "invisibility", &[("invisibility", 9600, 0)]),
+    p(
+        "long_invisibility",
+        "invisibility",
+        &[("invisibility", 9600, 0)],
+    ),
     p("leaping", "leaping", &[("jump_boost", 3600, 0)]),
     p("long_leaping", "leaping", &[("jump_boost", 9600, 0)]),
     p("strong_leaping", "leaping", &[("jump_boost", 1800, 1)]),
-    p("fire_resistance", "fire_resistance", &[("fire_resistance", 3600, 0)]),
-    p("long_fire_resistance", "fire_resistance", &[("fire_resistance", 9600, 0)]),
+    p(
+        "fire_resistance",
+        "fire_resistance",
+        &[("fire_resistance", 3600, 0)],
+    ),
+    p(
+        "long_fire_resistance",
+        "fire_resistance",
+        &[("fire_resistance", 9600, 0)],
+    ),
     p("swiftness", "swiftness", &[("speed", 3600, 0)]),
     p("long_swiftness", "swiftness", &[("speed", 9600, 0)]),
     p("strong_swiftness", "swiftness", &[("speed", 1800, 1)]),
     p("slowness", "slowness", &[("slowness", 1800, 0)]),
     p("long_slowness", "slowness", &[("slowness", 4800, 0)]),
     p("strong_slowness", "slowness", &[("slowness", 400, 3)]),
-    p("turtle_master", "turtle_master", &[("slowness", 400, 3), ("resistance", 400, 2)]),
-    p("long_turtle_master", "turtle_master", &[("slowness", 800, 3), ("resistance", 800, 2)]),
-    p("strong_turtle_master", "turtle_master", &[("slowness", 400, 5), ("resistance", 400, 3)]),
-    p("water_breathing", "water_breathing", &[("water_breathing", 3600, 0)]),
-    p("long_water_breathing", "water_breathing", &[("water_breathing", 9600, 0)]),
+    p(
+        "turtle_master",
+        "turtle_master",
+        &[("slowness", 400, 3), ("resistance", 400, 2)],
+    ),
+    p(
+        "long_turtle_master",
+        "turtle_master",
+        &[("slowness", 800, 3), ("resistance", 800, 2)],
+    ),
+    p(
+        "strong_turtle_master",
+        "turtle_master",
+        &[("slowness", 400, 5), ("resistance", 400, 3)],
+    ),
+    p(
+        "water_breathing",
+        "water_breathing",
+        &[("water_breathing", 3600, 0)],
+    ),
+    p(
+        "long_water_breathing",
+        "water_breathing",
+        &[("water_breathing", 9600, 0)],
+    ),
     p("healing", "healing", &[("instant_health", 1, 0)]),
     p("strong_healing", "healing", &[("instant_health", 1, 1)]),
     p("harming", "harming", &[("instant_damage", 1, 0)]),
@@ -119,8 +179,16 @@ pub const POTIONS: &[PotionDef] = &[
     p("long_poison", "poison", &[("poison", 1800, 0)]),
     p("strong_poison", "poison", &[("poison", 432, 1)]),
     p("regeneration", "regeneration", &[("regeneration", 900, 0)]),
-    p("long_regeneration", "regeneration", &[("regeneration", 1800, 0)]),
-    p("strong_regeneration", "regeneration", &[("regeneration", 450, 1)]),
+    p(
+        "long_regeneration",
+        "regeneration",
+        &[("regeneration", 1800, 0)],
+    ),
+    p(
+        "strong_regeneration",
+        "regeneration",
+        &[("regeneration", 450, 1)],
+    ),
     p("strength", "strength", &[("strength", 3600, 0)]),
     p("long_strength", "strength", &[("strength", 9600, 0)]),
     p("strong_strength", "strength", &[("strength", 1800, 1)]),
@@ -128,7 +196,11 @@ pub const POTIONS: &[PotionDef] = &[
     p("long_weakness", "weakness", &[("weakness", 4800, 0)]),
     p("luck", "luck", &[("luck", 6000, 0)]),
     p("slow_falling", "slow_falling", &[("slow_falling", 1800, 0)]),
-    p("long_slow_falling", "slow_falling", &[("slow_falling", 4800, 0)]),
+    p(
+        "long_slow_falling",
+        "slow_falling",
+        &[("slow_falling", 4800, 0)],
+    ),
     p("wind_charged", "wind_charged", &[("wind_charged", 3600, 0)]),
     p("weaving", "weaving", &[("weaving", 3600, 0)]),
     p("oozing", "oozing", &[("oozing", 3600, 0)]),
@@ -142,7 +214,9 @@ pub fn potion(id: &str) -> Option<&'static PotionDef> {
 pub const BASE_POTION_COLOR: u32 = 0x385DC6;
 /// `PotionContents.getColor`: amplifier-weighted mix of visible effect colours.
 pub fn potion_color(id: Option<&str>) -> u32 {
-    let Some(def) = id.and_then(potion) else { return BASE_POTION_COLOR };
+    let Some(def) = id.and_then(potion) else {
+        return BASE_POTION_COLOR;
+    };
     let (mut r, mut g, mut b, mut total) = (0u32, 0u32, 0u32, 0u32);
     for (e, _, amp) in def.effects {
         let Some(e) = effect(e) else { continue };
@@ -152,7 +226,11 @@ pub fn potion_color(id: Option<&str>) -> u32 {
         b += w * (e.color & 255);
         total += w;
     }
-    match (r.checked_div(total), g.checked_div(total), b.checked_div(total)) {
+    match (
+        r.checked_div(total),
+        g.checked_div(total),
+        b.checked_div(total),
+    ) {
         (Some(r), Some(g), Some(b)) => (r << 16) | (g << 8) | b,
         _ => BASE_POTION_COLOR,
     }
@@ -161,7 +239,11 @@ pub fn potion_color(id: Option<&str>) -> u32 {
 pub fn format_duration(ticks: i32) -> String {
     let secs = ticks / 20;
     let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
-    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
 }
 /// `item.minecraft.potion.effect.<name>` style translation key for a potion item.
 pub fn potion_name_key(item: &str, potion: Option<&str>) -> String {
@@ -170,18 +252,31 @@ pub fn potion_name_key(item: &str, potion: Option<&str>) -> String {
     format!("item.minecraft.{prefix}.effect.{suffix}")
 }
 /// Roman amplifier suffix (`potion.potency.N`) and duration lines of a potion.
-pub fn tooltip(potion: Option<&str>, scale: f32, translate: &dyn Fn(&str) -> Option<String>) -> Vec<(String, Category)> {
-    let Some(def) = potion.and_then(self::potion) else { return vec![] };
+pub fn tooltip(
+    potion: Option<&str>,
+    scale: f32,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, Category)> {
+    let Some(def) = potion.and_then(self::potion) else {
+        return vec![];
+    };
     if def.effects.is_empty() {
-        return vec![(translate("effect.none").unwrap_or_else(|| "No Effects".into()), Category::Neutral)];
+        return vec![(
+            translate("effect.none").unwrap_or_else(|| "No Effects".into()),
+            Category::Neutral,
+        )];
     }
     def.effects
         .iter()
         .map(|(e, duration, amp)| {
-            let mut line = translate(&format!("effect.minecraft.{e}")).unwrap_or_else(|| (*e).to_owned());
+            let mut line =
+                translate(&format!("effect.minecraft.{e}")).unwrap_or_else(|| (*e).to_owned());
             if *amp > 0 {
                 line.push(' ');
-                line.push_str(&translate(&format!("potion.potency.{amp}")).unwrap_or_else(|| crate::enchant::level_name(*amp as u32 + 1)));
+                line.push_str(
+                    &translate(&format!("potion.potency.{amp}"))
+                        .unwrap_or_else(|| crate::enchant::level_name(*amp as u32 + 1)),
+                );
             }
             let instant = effect(e).is_some_and(|d| d.instant);
             let scaled = (*duration as f32 * scale) as i32;
@@ -210,18 +305,32 @@ impl PotionIngredient {
         };
         match &v["item"] {
             Value::String(s) => add(s, &mut set),
-            Value::Array(a) => a.iter().filter_map(Value::as_str).for_each(|s| add(s, &mut set)),
+            Value::Array(a) => a
+                .iter()
+                .filter_map(Value::as_str)
+                .for_each(|s| add(s, &mut set)),
             _ => {}
         }
         let potions = match &v["potion_contents"]["potions"] {
             Value::String(s) => Some([s.clone()].into_iter().collect()),
-            Value::Array(a) => Some(a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()),
+            Value::Array(a) => Some(
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_owned))
+                    .collect(),
+            ),
             _ => None,
         };
-        Self { items: set, potions }
+        Self {
+            items: set,
+            potions,
+        }
     }
     pub fn test(&self, stack: &ItemStack) -> bool {
-        self.items.contains(&*stack.item) && self.potions.as_ref().is_none_or(|p| stack.potion().is_some_and(|x| p.contains(x)))
+        self.items.contains(&*stack.item)
+            && self
+                .potions
+                .as_ref()
+                .is_none_or(|p| stack.potion().is_some_and(|x| p.contains(x)))
     }
 }
 #[derive(Clone, Debug)]
@@ -240,32 +349,60 @@ pub struct Brewing {
 }
 impl Brewing {
     pub fn load(root: &Path, items: &Items) -> Self {
-        let mut files: Vec<_> = fs::read_dir(root.join("data/minecraft/recipe/brewing")).into_iter().flatten().flatten().map(|e| e.path()).collect();
+        let mut files: Vec<_> = fs::read_dir(root.join("data/minecraft/recipe/brewing"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
         files.sort();
         let mut recipes = Vec::new();
         for p in files {
             let Ok(bytes) = fs::read(&p) else { continue };
-            let Ok(v) = serde_json::from_slice::<Value>(&bytes) else { continue };
+            let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
             if v["type"] != "minecraft:brewing" {
                 continue;
             }
-            let mut output = ItemStack::new(v["output"]["id"].as_str().unwrap_or("minecraft:potion"), v["output"]["count"].as_u64().unwrap_or(1) as u32);
-            if let Some(potion) = v["output"]["components"]["minecraft:potion_contents"]["potion"].as_str() {
+            let mut output = ItemStack::new(
+                v["output"]["id"].as_str().unwrap_or("minecraft:potion"),
+                v["output"]["count"].as_u64().unwrap_or(1) as u32,
+            );
+            if let Some(potion) =
+                v["output"]["components"]["minecraft:potion_contents"]["potion"].as_str()
+            {
                 output = output.with_potion(potion);
             }
             recipes.push(BrewingRecipe {
-                id: format!("minecraft:brewing/{}", p.file_stem().and_then(|s| s.to_str()).unwrap_or("")),
+                id: format!(
+                    "minecraft:brewing/{}",
+                    p.file_stem().and_then(|s| s.to_str()).unwrap_or("")
+                ),
                 input: PotionIngredient::parse(&v["input"], items),
                 reagent: PotionIngredient::parse(&v["reagent"], items),
                 output,
             });
         }
-        let reagents = recipes.iter().flat_map(|r| r.reagent.items.iter().cloned()).collect();
-        let inputs = recipes.iter().flat_map(|r| r.input.items.iter().cloned()).chain(std::iter::once("minecraft:glass_bottle".to_owned())).collect();
-        Self { recipes, reagents, inputs }
+        let reagents = recipes
+            .iter()
+            .flat_map(|r| r.reagent.items.iter().cloned())
+            .collect();
+        let inputs = recipes
+            .iter()
+            .flat_map(|r| r.input.items.iter().cloned())
+            .chain(std::iter::once("minecraft:glass_bottle".to_owned()))
+            .collect();
+        Self {
+            recipes,
+            reagents,
+            inputs,
+        }
     }
     pub fn find(&self, input: &ItemStack, reagent: &ItemStack) -> Option<&BrewingRecipe> {
-        self.recipes.iter().find(|r| r.input.test(input) && r.reagent.test(reagent))
+        self.recipes
+            .iter()
+            .find(|r| r.input.test(input) && r.reagent.test(reagent))
     }
     pub fn is_reagent(&self, stack: &ItemStack) -> bool {
         self.reagents.contains(&*stack.item)
@@ -299,14 +436,24 @@ pub struct BrewTick {
 }
 impl BrewingStand {
     pub fn new() -> Self {
-        Self { total_brew_time: 400, total_fuel: 20, speed: 1.0, ..Default::default() }
+        Self {
+            total_brew_time: 400,
+            total_fuel: 20,
+            speed: 1.0,
+            ..Default::default()
+        }
     }
     fn brewable(&self, brewing: &Brewing) -> bool {
-        let Some(ingredient) = &self.items[3] else { return false };
+        let Some(ingredient) = &self.items[3] else {
+            return false;
+        };
         if !brewing.is_reagent(ingredient) {
             return false;
         }
-        self.items[..3].iter().flatten().any(|b| brewing.find(b, ingredient).is_some())
+        self.items[..3]
+            .iter()
+            .flatten()
+            .any(|b| brewing.find(b, ingredient).is_some())
     }
     /// `BrewingStandBlockEntity.serverTick`.
     pub fn tick(&mut self, brewing: &Brewing, items: &Items, providers: &Providers) -> BrewTick {
@@ -342,7 +489,11 @@ impl BrewingStand {
             self.total_brew_time = self.brew_time;
             self.ingredient = self.items[3].as_ref().map(|s| s.item.clone());
         }
-        let bottles = [self.items[0].is_some(), self.items[1].is_some(), self.items[2].is_some()];
+        let bottles = [
+            self.items[0].is_some(),
+            self.items[1].is_some(),
+            self.items[2].is_some(),
+        ];
         if self.last_bottles != Some(bottles) {
             self.last_bottles = Some(bottles);
             out.bottles = Some(bottles);
@@ -350,7 +501,9 @@ impl BrewingStand {
         out
     }
     fn brew(&mut self, brewing: &Brewing, items: &Items, out: &mut BrewTick) {
-        let Some(ingredient) = self.items[3].clone() else { return };
+        let Some(ingredient) = self.items[3].clone() else {
+            return;
+        };
         for slot in 0..3 {
             if let Some(input) = &self.items[slot]
                 && let Some(r) = brewing.find(input, &ingredient)
@@ -358,7 +511,9 @@ impl BrewingStand {
                 self.items[slot] = Some(r.output.clone());
             }
         }
-        let remainder = items.get(&ingredient.item).and_then(|i| i.remainder.clone());
+        let remainder = items
+            .get(&ingredient.item)
+            .and_then(|i| i.remainder.clone());
         if let Some(i) = self.items[3].as_mut() {
             i.count -= 1;
             if i.count == 0 {
@@ -387,8 +542,14 @@ mod tests {
         // Turtle master mixes slowness x4 and resistance x3.
         let (s, r) = (9154528u32, 9520880u32);
         let mix = |sh: u32| ((s >> sh & 255) * 4 + (r >> sh & 255) * 3) / 7;
-        assert_eq!(potion_color(Some("minecraft:turtle_master")), mix(16) << 16 | mix(8) << 8 | mix(0));
-        assert_eq!(potion_name_key("minecraft:splash_potion", Some("minecraft:long_swiftness")), "item.minecraft.splash_potion.effect.swiftness");
+        assert_eq!(
+            potion_color(Some("minecraft:turtle_master")),
+            mix(16) << 16 | mix(8) << 8 | mix(0)
+        );
+        assert_eq!(
+            potion_name_key("minecraft:splash_potion", Some("minecraft:long_swiftness")),
+            "item.minecraft.splash_potion.effect.swiftness"
+        );
         assert_eq!(format_duration(9600), "8:00");
         assert_eq!(format_duration(450), "0:22");
         let t = tooltip(Some("minecraft:strong_poison"), 1.0, &|_| None);
@@ -403,16 +564,27 @@ mod tests {
         let items = Items::for_tests(item_tags);
         let recipe = BrewingRecipe {
             id: "awkward".into(),
-            input: PotionIngredient { items: ["minecraft:potion".to_owned()].into_iter().collect(), potions: Some(["minecraft:water".to_owned()].into_iter().collect()) },
-            reagent: PotionIngredient { items: ["minecraft:nether_wart".to_owned()].into_iter().collect(), potions: None },
+            input: PotionIngredient {
+                items: ["minecraft:potion".to_owned()].into_iter().collect(),
+                potions: Some(["minecraft:water".to_owned()].into_iter().collect()),
+            },
+            reagent: PotionIngredient {
+                items: ["minecraft:nether_wart".to_owned()].into_iter().collect(),
+                potions: None,
+            },
             output: ItemStack::new("minecraft:potion", 1).with_potion("minecraft:awkward"),
         };
-        let brewing = Brewing { reagents: ["minecraft:nether_wart".to_owned()].into_iter().collect(), inputs: HashSet::new(), recipes: vec![recipe] };
+        let brewing = Brewing {
+            reagents: ["minecraft:nether_wart".to_owned()].into_iter().collect(),
+            inputs: HashSet::new(),
+            recipes: vec![recipe],
+        };
         let providers = Providers::empty();
         let mut stand = BrewingStand::new();
         stand.fuel = 1;
         stand.items[0] = Some(ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water"));
-        stand.items[2] = Some(ItemStack::new("minecraft:potion", 1).with_potion("minecraft:awkward"));
+        stand.items[2] =
+            Some(ItemStack::new("minecraft:potion", 1).with_potion("minecraft:awkward"));
         stand.items[3] = Some(ItemStack::new("minecraft:nether_wart", 2));
         let first = stand.tick(&brewing, &items, &providers);
         assert_eq!(first.bottles, Some([true, false, true]));
@@ -424,9 +596,15 @@ mod tests {
             }
         }
         assert_eq!(brewed_at, 400);
-        assert_eq!(stand.items[0].as_ref().unwrap().potion(), Some("minecraft:awkward"));
+        assert_eq!(
+            stand.items[0].as_ref().unwrap().potion(),
+            Some("minecraft:awkward")
+        );
         // The awkward potion had no recipe and stays.
-        assert_eq!(stand.items[2].as_ref().unwrap().potion(), Some("minecraft:awkward"));
+        assert_eq!(
+            stand.items[2].as_ref().unwrap().potion(),
+            Some("minecraft:awkward")
+        );
         assert_eq!(stand.items[3].as_ref().unwrap().count, 1);
         // No fuel left: nothing more brews.
         stand.tick(&brewing, &items, &providers);

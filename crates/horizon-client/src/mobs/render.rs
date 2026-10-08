@@ -193,9 +193,18 @@ pub fn body(m: &Mob) -> (String, String) {
                 "entity/strider/strider"
             }),
         ),
-        S::Squid => (baby_or(m, "squid#main", "squid_baby#main"), b("entity/squid/squid")),
-        S::GlowSquid => (baby_or(m, "glow_squid#main", "glow_squid_baby#main"), b("entity/squid/glow_squid")),
-        S::Dolphin => (baby_or(m, "dolphin#main", "dolphin_baby#main"), b("entity/dolphin/dolphin")),
+        S::Squid => (
+            baby_or(m, "squid#main", "squid_baby#main"),
+            b("entity/squid/squid"),
+        ),
+        S::GlowSquid => (
+            baby_or(m, "glow_squid#main", "glow_squid_baby#main"),
+            b("entity/squid/glow_squid"),
+        ),
+        S::Dolphin => (
+            baby_or(m, "dolphin#main", "dolphin_baby#main"),
+            b("entity/dolphin/dolphin"),
+        ),
         S::Pufferfish => {
             let model = match m.extra.size {
                 0 => "pufferfish_small#main",
@@ -206,9 +215,15 @@ pub fn body(m: &Mob) -> (String, String) {
         }
         S::TropicalFish => {
             if m.extra.variant < 6 {
-                ("tropical_fish_small#main".into(), "entity/fish/tropical_a".into())
+                (
+                    "tropical_fish_small#main".into(),
+                    "entity/fish/tropical_a".into(),
+                )
             } else {
-                ("tropical_fish_large#main".into(), "entity/fish/tropical_b".into())
+                (
+                    "tropical_fish_large#main".into(),
+                    "entity/fish/tropical_b".into(),
+                )
             }
         }
         _ => (m.kind.model_key(), m.kind.texture.clone()),
@@ -321,8 +336,18 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         S::Creeper if m.extra.charged => {}
         S::TropicalFish => {
             // TropicalFishPatternLayer: the pattern tinted with the pattern colour.
-            let (model, letter, n) = if m.extra.variant < 6 { ("tropical_fish_small#pattern", "a", m.extra.variant + 1) } else { ("tropical_fish_large#pattern", "b", m.extra.variant - 5) };
-            push(&mut v, model, &format!("entity/fish/tropical_{letter}_pattern_{n}"), abgr(DYE[m.extra.variant3 as usize & 15]), false);
+            let (model, letter, n) = if m.extra.variant < 6 {
+                ("tropical_fish_small#pattern", "a", m.extra.variant + 1)
+            } else {
+                ("tropical_fish_large#pattern", "b", m.extra.variant - 5)
+            };
+            push(
+                &mut v,
+                model,
+                &format!("entity/fish/tropical_{letter}_pattern_{n}"),
+                abgr(DYE[m.extra.variant3 as usize & 15]),
+                false,
+            );
         }
         S::Villager | S::ZombieVillager => {
             let base = if m.species() == S::Villager {
@@ -539,19 +564,32 @@ pub fn render_single(
 }
 
 /// The transform of a named part (ModelPart.translateAndRotate down the tree).
-pub fn part_matrix(part: &Part, parent: glam::Mat4, poses: &Poses, name: &str, x_offset: f32) -> Option<glam::Mat4> {
+pub fn part_matrix(
+    part: &Part,
+    parent: glam::Mat4,
+    poses: &Poses,
+    name: &str,
+    x_offset: f32,
+) -> Option<glam::Mat4> {
     let mut p = poses.pose(part);
     if part.name == name {
         p[0] += x_offset;
     }
     let m = parent
         * glam::Mat4::from_translation(glam::Vec3::new(p[0], p[1], p[2]) / 16.0)
-        * glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::ZYX, p[5], p[4], p[3]))
+        * glam::Mat4::from_quat(glam::Quat::from_euler(
+            glam::EulerRot::ZYX,
+            p[5],
+            p[4],
+            p[3],
+        ))
         * glam::Mat4::from_scale(glam::Vec3::new(p[6], p[7], p[8]));
     if part.name == name {
         return Some(m);
     }
-    part.children.iter().find_map(|c| part_matrix(c, m, poses, name, x_offset))
+    part.children
+        .iter()
+        .find_map(|c| part_matrix(c, m, poses, name, x_offset))
 }
 /// ItemModel thirdperson_righthand display transform by item model parent.
 fn item_display(item: &str) -> ([f32; 3], [f32; 3], [f32; 3]) {
@@ -560,9 +598,26 @@ fn item_display(item: &str) -> ([f32; 3], [f32; 3], [f32; 3]) {
         ([-80.0, 260.0, -40.0], [-1.0, -2.0, 2.5], [0.9; 3])
     } else if name == "crossbow" {
         ([-90.0, 0.0, -60.0], [2.0, 0.1, -3.0], [0.9; 3])
-    } else if name == "fishing_rod" || name == "carrot_on_a_stick" || name == "warped_fungus_on_a_stick" {
+    } else if name == "fishing_rod"
+        || name == "carrot_on_a_stick"
+        || name == "warped_fungus_on_a_stick"
+    {
         ([0.0, 90.0, 55.0], [0.0, 4.0, 2.5], [0.85; 3])
-    } else if ["_sword", "_axe", "_pickaxe", "_shovel", "_hoe", "trident", "mace", "stick", "bone", "blaze_rod"].iter().any(|t| name.ends_with(t)) {
+    } else if [
+        "_sword",
+        "_axe",
+        "_pickaxe",
+        "_shovel",
+        "_hoe",
+        "trident",
+        "mace",
+        "stick",
+        "bone",
+        "blaze_rod",
+    ]
+    .iter()
+    .any(|t| name.ends_with(t))
+    {
         ([0.0, -90.0, 55.0], [0.0, 4.0, 0.5], [0.85; 3])
     } else {
         ([0.0, 0.0, 0.0], [0.0, 3.0, 1.0], [0.55; 3])
@@ -573,7 +628,13 @@ fn item_sprite(m: &Mob, item: &str) -> String {
     let name = item.trim_start_matches("minecraft:");
     if name == "bow" && m.extra.using_item > 0 {
         let pull = m.extra.using_item as f32 * 0.05;
-        let frame = if pull >= 0.9 { 2 } else if pull >= 0.65 { 1 } else { 0 };
+        let frame = if pull >= 0.9 {
+            2
+        } else if pull >= 0.65 {
+            1
+        } else {
+            0
+        };
         return format!("item/bow_pulling_{frame}");
     }
     if name == "crossbow" && m.extra.flag2 {
@@ -582,23 +643,59 @@ fn item_sprite(m: &Mob, item: &str) -> String {
     format!("item/{name}")
 }
 /// ItemInHandLayer: items in the mob's hands.
-fn held_items(m: &Mob, model: &Part, base: glam::Mat4, poses: &Poses, atlas: Atlas, light: u32, out: &mut Vec<Vertex>) {
-    let skeleton = matches!(m.species(), Species::Skeleton | Species::Stray | Species::Bogged | Species::WitherSkeleton);
+fn held_items(
+    m: &Mob,
+    model: &Part,
+    base: glam::Mat4,
+    poses: &Poses,
+    atlas: Atlas,
+    light: u32,
+    out: &mut Vec<Vertex>,
+) {
+    let skeleton = matches!(
+        m.species(),
+        Species::Skeleton | Species::Stray | Species::Bogged | Species::WitherSkeleton
+    );
     for (item, left) in [(&m.extra.main_hand, false), (&m.extra.off_hand, true)] {
         let Some(item) = item else { continue };
         let arm = if left { "left_arm" } else { "right_arm" };
-        let offset = if skeleton { if left { -1.0 } else { 1.0 } } else { 0.0 };
-        let Some(mut t) = part_matrix(model, base, poses, arm, offset) else { continue };
-        let Some(uv) = atlas(&item_sprite(m, item)) else { continue };
+        let offset = if skeleton {
+            if left { -1.0 } else { 1.0 }
+        } else {
+            0.0
+        };
+        let Some(mut t) = part_matrix(model, base, poses, arm, offset) else {
+            continue;
+        };
+        let Some(uv) = atlas(&item_sprite(m, item)) else {
+            continue;
+        };
         let baby = m.is_baby();
-        let (ox, oy, oz) = if baby { (0.0, 1.0, -4.5) } else { (1.0, 2.0, -10.0) };
+        let (ox, oy, oz) = if baby {
+            (0.0, 1.0, -4.5)
+        } else {
+            (1.0, 2.0, -10.0)
+        };
         t *= glam::Mat4::from_rotation_x((-90.0f32).to_radians()) * glam::Mat4::from_rotation_y(PI);
-        t *= glam::Mat4::from_translation(glam::Vec3::new(if left { -ox } else { ox } / 16.0, oy / 16.0, oz / 16.0));
+        t *= glam::Mat4::from_translation(glam::Vec3::new(
+            if left { -ox } else { ox } / 16.0,
+            oy / 16.0,
+            oz / 16.0,
+        ));
         // ItemTransform.apply (mirrored for the left hand).
         let (rot, tr, sc) = item_display(item);
-        let (ry, rz, tx) = if left { (-rot[1], -rot[2], -tr[0]) } else { (rot[1], rot[2], tr[0]) };
+        let (ry, rz, tx) = if left {
+            (-rot[1], -rot[2], -tr[0])
+        } else {
+            (rot[1], rot[2], tr[0])
+        };
         t *= glam::Mat4::from_translation(glam::Vec3::new(tx, tr[1], tr[2]) / 16.0);
-        t *= glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::XYZ, rot[0].to_radians(), ry.to_radians(), rz.to_radians()));
+        t *= glam::Mat4::from_quat(glam::Quat::from_euler(
+            glam::EulerRot::XYZ,
+            rot[0].to_radians(),
+            ry.to_radians(),
+            rz.to_radians(),
+        ));
         t *= glam::Mat4::from_scale(glam::Vec3::from(sc));
         t *= glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
         draw_item_plane(t, uv, light, out);
@@ -610,13 +707,29 @@ pub fn draw_item_plane(t: glam::Mat4, uv: [f32; 4], light: u32, out: &mut Vec<Ve
     let south = 8.5 / 16.0;
     let north = 7.5 / 16.0;
     let quads = [
-        [([0.0, 0.0, south], [u0, v1]), ([1.0, 0.0, south], [u1, v1]), ([1.0, 1.0, south], [u1, v0]), ([0.0, 1.0, south], [u0, v0])],
-        [([1.0, 0.0, north], [u1, v1]), ([0.0, 0.0, north], [u0, v1]), ([0.0, 1.0, north], [u0, v0]), ([1.0, 1.0, north], [u1, v0])],
+        [
+            ([0.0, 0.0, south], [u0, v1]),
+            ([1.0, 0.0, south], [u1, v1]),
+            ([1.0, 1.0, south], [u1, v0]),
+            ([0.0, 1.0, south], [u0, v0]),
+        ],
+        [
+            ([1.0, 0.0, north], [u1, v1]),
+            ([0.0, 0.0, north], [u0, v1]),
+            ([0.0, 1.0, north], [u0, v0]),
+            ([1.0, 1.0, north], [u1, v0]),
+        ],
     ];
     for q in quads {
         for (p, uv) in q {
             let pos = t.transform_point3(glam::Vec3::from(p));
-            out.push(Vertex { pos: pos.to_array(), uv, layer: 0, color: 0xFFFF_FFFF, light });
+            out.push(Vertex {
+                pos: pos.to_array(),
+                uv,
+                layer: 0,
+                color: 0xFFFF_FFFF,
+                light,
+            });
         }
     }
 }

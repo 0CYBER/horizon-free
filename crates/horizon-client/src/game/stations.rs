@@ -33,7 +33,9 @@ impl Kind {
     fn from_block(name: &str) -> Option<Self> {
         Some(match name {
             "minecraft:enchanting_table" => Self::Enchanting,
-            "minecraft:anvil" | "minecraft:chipped_anvil" | "minecraft:damaged_anvil" => Self::Anvil,
+            "minecraft:anvil" | "minecraft:chipped_anvil" | "minecraft:damaged_anvil" => {
+                Self::Anvil
+            }
             "minecraft:grindstone" => Self::Grindstone,
             "minecraft:smithing_table" => Self::Smithing,
             "minecraft:stonecutter" => Self::Stonecutter,
@@ -154,12 +156,78 @@ fn inside(p: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {
 }
 /// `EnchantmentNames` word list.
 const WORDS: &[&str] = &[
-    "the", "elder", "scrolls", "klaatu", "berata", "niktu", "xyzzy", "bless", "curse", "light", "darkness", "fire", "air", "earth", "water", "hot", "dry", "cold", "wet", "ignite", "snuff", "embiggen", "twist", "shorten", "stretch", "fiddle", "destroy", "imbue", "galvanize", "enchant", "free", "limited", "range", "of", "towards", "inside", "sphere", "cube", "self", "other", "ball", "mental", "physical", "grow", "shrink", "demon", "elemental", "spirit", "animal", "creature", "beast", "humanoid", "undead", "fresh", "stale", "phnglui", "mglwnafh", "cthulhu", "rlyeh", "wgahnagl", "fhtagn", "baguette",
+    "the",
+    "elder",
+    "scrolls",
+    "klaatu",
+    "berata",
+    "niktu",
+    "xyzzy",
+    "bless",
+    "curse",
+    "light",
+    "darkness",
+    "fire",
+    "air",
+    "earth",
+    "water",
+    "hot",
+    "dry",
+    "cold",
+    "wet",
+    "ignite",
+    "snuff",
+    "embiggen",
+    "twist",
+    "shorten",
+    "stretch",
+    "fiddle",
+    "destroy",
+    "imbue",
+    "galvanize",
+    "enchant",
+    "free",
+    "limited",
+    "range",
+    "of",
+    "towards",
+    "inside",
+    "sphere",
+    "cube",
+    "self",
+    "other",
+    "ball",
+    "mental",
+    "physical",
+    "grow",
+    "shrink",
+    "demon",
+    "elemental",
+    "spirit",
+    "animal",
+    "creature",
+    "beast",
+    "humanoid",
+    "undead",
+    "fresh",
+    "stale",
+    "phnglui",
+    "mglwnafh",
+    "cthulhu",
+    "rlyeh",
+    "wgahnagl",
+    "fhtagn",
+    "baguette",
 ];
 const GREY: u32 = 0xFF40_4040;
 fn argb(c: i32) -> u32 {
     let c = c as u32;
-    rgba((c >> 16 & 255) as u8, (c >> 8 & 255) as u8, (c & 255) as u8, (c >> 24 & 255) as u8)
+    rgba(
+        (c >> 16 & 255) as u8,
+        (c >> 8 & 255) as u8,
+        (c & 255) as u8,
+        (c >> 24 & 255) as u8,
+    )
 }
 
 impl Game<'_> {
@@ -167,14 +235,20 @@ impl Game<'_> {
         &self.res.stations
     }
     fn translate(&self, key: &str, fallback: &str) -> String {
-        self.data().enchantments.translate(key).unwrap_or(fallback).to_owned()
+        self.data()
+            .enchantments
+            .translate(key)
+            .unwrap_or(fallback)
+            .to_owned()
     }
     fn brewing_open(&self) -> bool {
         matches!(self.container_kind(), Some(BlockEntity::Brewing(_)))
     }
     /// Opens a workstation menu for the block; false when it is not one.
     pub(super) fn open_station(&mut self, pos: [i32; 3], name: &str) -> bool {
-        let Some(kind) = Kind::from_block(name) else { return false };
+        let Some(kind) = Kind::from_block(name) else {
+            return false;
+        };
         if self.level.xp_seed == 0 {
             self.level.xp_seed = self.world.random.next_int();
         }
@@ -184,7 +258,9 @@ impl Game<'_> {
     }
     /// `AbstractContainerMenu.clearContainer`: inputs go back to the player.
     pub(super) fn close_station(&mut self) {
-        let Some(station) = self.station.take() else { return };
+        let Some(station) = self.station.take() else {
+            return;
+        };
         for stack in station.inputs.into_iter().flatten() {
             self.give_or_drop(stack);
         }
@@ -204,7 +280,15 @@ impl Game<'_> {
     }
     pub(super) fn station_slot_position(&self, i: usize) -> Option<(f32, f32)> {
         if self.brewing_open() && (300..305).contains(&i) {
-            return Some([(56.0, 51.0), (79.0, 58.0), (102.0, 51.0), (79.0, 17.0), (17.0, 17.0)][i - 300]);
+            return Some(
+                [
+                    (56.0, 51.0),
+                    (79.0, 58.0),
+                    (102.0, 51.0),
+                    (79.0, 17.0),
+                    (17.0, 17.0),
+                ][i - 300],
+            );
         }
         let s = self.station.as_ref()?;
         if s.kind == Kind::Merchant && i < 36 {
@@ -232,41 +316,79 @@ impl Game<'_> {
         stations::bookshelf_offsets()
             .into_iter()
             .filter(|o| {
-                is([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]], "minecraft:enchantment_power_provider")
-                    && is([pos[0] + o[0] / 2, pos[1] + o[1], pos[2] + o[2] / 2], "minecraft:enchantment_power_transmitter")
+                is(
+                    [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]],
+                    "minecraft:enchantment_power_provider",
+                ) && is(
+                    [pos[0] + o[0] / 2, pos[1] + o[1], pos[2] + o[2] / 2],
+                    "minecraft:enchantment_power_transmitter",
+                )
             })
             .count() as i32
     }
     /// The anvil name the menu works with (`AnvilScreen.onNameChanged`).
     fn anvil_item_name(&self, s: &Station) -> String {
         match &s.inputs[0] {
-            Some(input) if input.custom_name().is_none() && s.name == self.res.names.item(&input.item) => String::new(),
+            Some(input)
+                if input.custom_name().is_none() && s.name == self.res.names.item(&input.item) =>
+            {
+                String::new()
+            }
             Some(_) => s.name.clone(),
             None => String::new(),
         }
     }
     /// `slotsChanged` / `createResult` for the open station.
     pub(super) fn station_changed(&mut self) {
-        let Some(mut s) = self.station.take() else { return };
+        let Some(mut s) = self.station.take() else {
+            return;
+        };
         let creative = self.creative;
         let data = &self.res.stations;
         let items = &self.res.items;
         match s.kind {
             Kind::Enchanting => {
                 s.bookcases = self.count_bookshelves(s.pos);
-                s.offers = stations::enchant_offers(&data.enchantments, items, self.level.xp_seed, s.bookcases, s.inputs[0].as_ref());
+                s.offers = stations::enchant_offers(
+                    &data.enchantments,
+                    items,
+                    self.level.xp_seed,
+                    s.bookcases,
+                    s.inputs[0].as_ref(),
+                );
             }
             Kind::Anvil => {
                 let name = self.anvil_item_name(&s);
-                let hover = s.inputs[0].as_ref().map(|i| stations::hover_name(&|id| self.res.names.item(id), i)).unwrap_or_default();
-                s.anvil = stations::anvil_result(&data.enchantments, items, s.inputs[0].as_ref(), s.inputs[1].as_ref(), Some(&name), &hover, creative);
+                let hover = s.inputs[0]
+                    .as_ref()
+                    .map(|i| stations::hover_name(&|id| self.res.names.item(id), i))
+                    .unwrap_or_default();
+                s.anvil = stations::anvil_result(
+                    &data.enchantments,
+                    items,
+                    s.inputs[0].as_ref(),
+                    s.inputs[1].as_ref(),
+                    Some(&name),
+                    &hover,
+                    creative,
+                );
                 s.result = s.anvil.result.clone();
             }
             Kind::Grindstone => {
-                s.result = stations::grindstone_result(&data.enchantments, items, s.inputs[0].as_ref(), s.inputs[1].as_ref());
+                s.result = stations::grindstone_result(
+                    &data.enchantments,
+                    items,
+                    s.inputs[0].as_ref(),
+                    s.inputs[1].as_ref(),
+                );
             }
             Kind::Smithing => {
-                s.result = data.recipes.smithing_result(&data.enchantments, s.inputs[0].as_ref(), s.inputs[1].as_ref(), s.inputs[2].as_ref());
+                s.result = data.recipes.smithing_result(
+                    &data.enchantments,
+                    s.inputs[0].as_ref(),
+                    s.inputs[1].as_ref(),
+                    s.inputs[2].as_ref(),
+                );
             }
             Kind::Merchant => super::trading::update(&mut s, items),
             Kind::Stonecutter => {
@@ -276,12 +398,22 @@ impl Game<'_> {
                     s.selected = None;
                     s.start = 0;
                     s.recipes = match &s.inputs[0] {
-                        Some(input) => data.recipes.stonecutting.iter().enumerate().filter(|(_, r)| r.input.test(input)).map(|(i, _)| i).collect(),
+                        Some(input) => data
+                            .recipes
+                            .stonecutting
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, r)| r.input.test(input))
+                            .map(|(i, _)| i)
+                            .collect(),
                         None => Vec::new(),
                     };
                 }
                 s.result = match (s.selected, &s.inputs[0]) {
-                    (Some(i), Some(_)) => s.recipes.get(i).map(|&r| data.recipes.stonecutting[r].result.clone()),
+                    (Some(i), Some(_)) => s
+                        .recipes
+                        .get(i)
+                        .map(|&r| data.recipes.stonecutting[r].result.clone()),
                     _ => None,
                 };
             }
@@ -298,10 +430,18 @@ impl Game<'_> {
             return match slot - 300 {
                 0..=2 => (data.brewing.is_bottle(stack), 1),
                 3 => (data.brewing.is_reagent(stack), 64),
-                _ => (self.res.items.get(&stack.item).is_some_and(|i| i.brewing_fuel.is_some()), 64),
+                _ => (
+                    self.res
+                        .items
+                        .get(&stack.item)
+                        .is_some_and(|i| i.brewing_fuel.is_some()),
+                    64,
+                ),
             };
         }
-        let Some(s) = self.station.as_ref() else { return (true, 64) };
+        let Some(s) = self.station.as_ref() else {
+            return (true, 64);
+        };
         if slot < 36 {
             return (true, 64);
         }
@@ -326,14 +466,20 @@ impl Game<'_> {
             (None, Some(mut s)) => {
                 let take = if right { s.count.div_ceil(2) } else { s.count };
                 s.count -= take;
-                let taken = ItemStack { count: take, ..s.clone() };
+                let taken = ItemStack {
+                    count: take,
+                    ..s.clone()
+                };
                 ((s.count > 0).then_some(s), Some(taken))
             }
             (Some(mut c), None) => {
                 let (ok, cap) = self.slot_rules(slot, &c);
                 if ok {
                     let n = if right { 1 } else { c.count }.min(cap.min(self.max_stack(&c)));
-                    let placed = ItemStack { count: n, ..c.clone() };
+                    let placed = ItemStack {
+                        count: n,
+                        ..c.clone()
+                    };
                     c.count -= n;
                     (Some(placed), (c.count > 0).then_some(c))
                 } else {
@@ -365,7 +511,11 @@ impl Game<'_> {
     }
     /// `moveItemStackTo` over `targets` (menu order), merging first, then empty slots.
     fn move_to(&mut self, stack: &mut ItemStack, targets: &[usize], reverse: bool) -> bool {
-        let order: Vec<usize> = if reverse { targets.iter().rev().copied().collect() } else { targets.to_vec() };
+        let order: Vec<usize> = if reverse {
+            targets.iter().rev().copied().collect()
+        } else {
+            targets.to_vec()
+        };
         let start = stack.count;
         if self.max_stack(stack) > 1 {
             for &t in &order {
@@ -390,7 +540,10 @@ impl Game<'_> {
             let (ok, cap) = self.slot_rules(t, stack);
             if self.slot_mut(t).is_none() && (t < 36 || ok) {
                 let n = cap.min(self.max_stack(stack)).min(stack.count);
-                *self.slot_mut(t) = Some(ItemStack { count: n, ..stack.clone() });
+                *self.slot_mut(t) = Some(ItemStack {
+                    count: n,
+                    ..stack.clone()
+                });
                 stack.count -= n;
             }
         }
@@ -402,15 +555,24 @@ impl Game<'_> {
     }
     /// `quickMoveStack` for one slot; returns whether anything moved.
     fn quick_move(&mut self, slot: usize) -> bool {
-        let Some(mut stack) = self.slot_mut(slot).take() else { return false };
+        let Some(mut stack) = self.slot_mut(slot).take() else {
+            return false;
+        };
         let player = Self::player_slots();
         let moved = if (300..305).contains(&slot) || slot >= INPUT {
             self.move_to(&mut stack, &player, true)
         } else if self.brewing_open() {
             // BrewingStandMenu.quickMoveStack: fuel, ingredient, bottles, then the other half.
             let data = self.data();
-            let fuel = self.res.items.get(&stack.item).is_some_and(|i| i.brewing_fuel.is_some());
-            let (reagent, bottle) = (data.brewing.is_reagent(&stack), data.brewing.is_bottle(&stack));
+            let fuel = self
+                .res
+                .items
+                .get(&stack.item)
+                .is_some_and(|i| i.brewing_fuel.is_some());
+            let (reagent, bottle) = (
+                data.brewing.is_reagent(&stack),
+                data.brewing.is_bottle(&stack),
+            );
             let mut moved = false;
             if fuel {
                 moved = self.move_to(&mut stack, &[304], false);
@@ -422,7 +584,11 @@ impl Game<'_> {
                 moved = self.move_to(&mut stack, &[300, 301, 302], false);
             }
             if !moved {
-                let other: Vec<usize> = if slot < 9 { (9..36).collect() } else { (0..9).collect() };
+                let other: Vec<usize> = if slot < 9 {
+                    (9..36).collect()
+                } else {
+                    (0..9).collect()
+                };
                 moved = self.move_to(&mut stack, &other, false);
             }
             moved
@@ -434,14 +600,20 @@ impl Game<'_> {
                     if &*stack.item == "minecraft:lapis_lazuli" {
                         moved = self.move_to(&mut stack, &[INPUT + 1], true);
                     } else if self.station_slot_mut(INPUT).is_none() {
-                        let one = ItemStack { count: 1, ..stack.clone() };
+                        let one = ItemStack {
+                            count: 1,
+                            ..stack.clone()
+                        };
                         *self.station_slot_mut(INPUT) = Some(one);
                         stack.count -= 1;
                         moved = true;
                     }
                 }
                 Some(Kind::Grindstone) => {
-                    let both = self.station.as_ref().is_some_and(|s| s.inputs.iter().all(Option::is_some));
+                    let both = self
+                        .station
+                        .as_ref()
+                        .is_some_and(|s| s.inputs.iter().all(Option::is_some));
                     if !both {
                         moved = self.move_to(&mut stack, &[INPUT, INPUT + 1], false);
                     }
@@ -455,7 +627,11 @@ impl Game<'_> {
                 None => {}
             }
             if !moved {
-                let other: Vec<usize> = if slot < 9 { (9..36).collect() } else { (0..9).collect() };
+                let other: Vec<usize> = if slot < 9 {
+                    (9..36).collect()
+                } else {
+                    (0..9).collect()
+                };
                 moved = self.move_to(&mut stack, &other, false);
             }
             moved
@@ -466,7 +642,11 @@ impl Game<'_> {
         moved
     }
     fn play_at(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32) {
-        let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 0.5,
+            f64::from(pos[2]) + 0.5,
+        ];
         self.audio.play(sound, Some(at), volume, pitch);
     }
     fn give_or_drop(&mut self, stack: ItemStack) {
@@ -488,15 +668,21 @@ impl Game<'_> {
     }
     /// Whether the result slot may be taken (`mayPickup`).
     fn may_take_result(&self) -> bool {
-        let Some(s) = self.station.as_ref() else { return false };
+        let Some(s) = self.station.as_ref() else {
+            return false;
+        };
         match s.kind {
-            Kind::Anvil => (self.creative || self.experience.level >= s.anvil.cost) && s.anvil.cost > 0,
+            Kind::Anvil => {
+                (self.creative || self.experience.level >= s.anvil.cost) && s.anvil.cost > 0
+            }
             _ => true,
         }
     }
     /// The result slot's `onTake`.
     fn take_result(&mut self) {
-        let Some(mut s) = self.station.take() else { return };
+        let Some(mut s) = self.station.take() else {
+            return;
+        };
         let pos = s.pos;
         match s.kind {
             Kind::Anvil => {
@@ -551,9 +737,21 @@ impl Game<'_> {
             Kind::Grindstone => {
                 let (a, b) = (s.inputs[0].take(), s.inputs[1].take());
                 let mut random = LegacyRandom::new(self.world.random.next_long());
-                let xp = stations::grindstone_experience(&self.res.stations.enchantments, &mut random, a.as_ref(), b.as_ref());
+                let xp = stations::grindstone_experience(
+                    &self.res.stations.enchantments,
+                    &mut random,
+                    a.as_ref(),
+                    b.as_ref(),
+                );
                 if xp > 0 {
-                    self.spawn_orbs([f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5], xp);
+                    self.spawn_orbs(
+                        [
+                            f64::from(pos[0]) + 0.5,
+                            f64::from(pos[1]) + 0.5,
+                            f64::from(pos[2]) + 0.5,
+                        ],
+                        xp,
+                    );
                 }
                 let pitch = self.world.random.next_float() * 0.1 + 0.9;
                 self.play_at("minecraft:block.grindstone.use", pos, 1.0, pitch);
@@ -590,7 +788,9 @@ impl Game<'_> {
     }
     fn click_result(&mut self, shift: bool) {
         loop {
-            let Some(result) = self.station.as_ref().and_then(|s| s.result.clone()) else { return };
+            let Some(result) = self.station.as_ref().and_then(|s| s.result.clone()) else {
+                return;
+            };
             if !self.may_take_result() {
                 return;
             }
@@ -607,7 +807,13 @@ impl Game<'_> {
             } else {
                 match &mut self.carried {
                     None => self.carried = Some(result.clone()),
-                    Some(c) if c.same_item_same_components(&result) && c.count + result.count <= self.res.items.get(&c.item).map_or(64, |i| i.max_stack) => c.count += result.count,
+                    Some(c)
+                        if c.same_item_same_components(&result)
+                            && c.count + result.count
+                                <= self.res.items.get(&c.item).map_or(64, |i| i.max_stack) =>
+                    {
+                        c.count += result.count
+                    }
                     _ => return,
                 }
             }
@@ -615,7 +821,12 @@ impl Game<'_> {
                 s.result = None;
             }
             self.take_result();
-            let again = shift && self.station.as_ref().and_then(|s| s.result.as_ref()).is_some_and(|r| r.item == result.item);
+            let again = shift
+                && self
+                    .station
+                    .as_ref()
+                    .and_then(|s| s.result.as_ref())
+                    .is_some_and(|r| r.item == result.item);
             if !again {
                 return;
             }
@@ -623,18 +834,34 @@ impl Game<'_> {
     }
     /// `EnchantmentMenu.clickMenuButton`.
     fn click_enchant(&mut self, button: usize) {
-        let Some(s) = self.station.as_ref() else { return };
+        let Some(s) = self.station.as_ref() else {
+            return;
+        };
         let cost = s.offers.costs[button];
         let lapis_needed = button as u32 + 1;
-        let Some(item) = s.inputs[0].clone() else { return };
+        let Some(item) = s.inputs[0].clone() else {
+            return;
+        };
         let lapis = s.inputs[1].as_ref().map_or(0, |l| l.count);
         if lapis < lapis_needed && !self.creative {
             return;
         }
-        if cost <= 0 || (self.experience.level < lapis_needed as i32 || self.experience.level < cost) && !self.creative {
+        if cost <= 0
+            || (self.experience.level < lapis_needed as i32 || self.experience.level < cost)
+                && !self.creative
+        {
             return;
         }
-        let Some(enchanted) = stations::apply_enchantment(&self.res.stations.enchantments, &self.res.items, self.level.xp_seed, button, cost, &item) else { return };
+        let Some(enchanted) = stations::apply_enchantment(
+            &self.res.stations.enchantments,
+            &self.res.items,
+            self.level.xp_seed,
+            button,
+            cost,
+            &item,
+        ) else {
+            return;
+        };
         let pos = s.pos;
         // Player.onEnchantmentPerformed
         self.give_levels(-(lapis_needed as i32));
@@ -659,11 +886,18 @@ impl Game<'_> {
         if self.station.is_none() && !self.brewing_open() {
             return false;
         }
-        let Some(size) = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]) else { return true };
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return true;
+        };
         let batch = HudBatch::new(size);
         let (ox, oy) = self.inventory_origin(&batch);
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
-        let shift = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
+        let shift = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+            || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
         if let Some(kind) = self.station.as_ref().map(|s| s.kind) {
             if kind == Kind::Merchant && !right && self.merchant_click(local) {
                 return true;
@@ -689,7 +923,12 @@ impl Game<'_> {
                             if let Some(st) = self.station.as_mut() {
                                 st.selected = Some(index);
                             }
-                            self.audio.play("minecraft:ui.stonecutter.select_recipe", None, 1.0, 1.0);
+                            self.audio.play(
+                                "minecraft:ui.stonecutter.select_recipe",
+                                None,
+                                1.0,
+                                1.0,
+                            );
                             self.station_changed();
                         }
                         return true;
@@ -697,7 +936,9 @@ impl Game<'_> {
                 }
             }
         }
-        let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else { return true };
+        let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
+            return true;
+        };
         if slot == RESULT {
             self.click_result(shift);
             return true;
@@ -717,17 +958,24 @@ impl Game<'_> {
     }
     /// Recompute after slot changes; the anvil box follows its input item.
     fn station_after_input(&mut self) {
-        let Some(s) = self.station.as_mut() else { return };
+        let Some(s) = self.station.as_mut() else {
+            return;
+        };
         if s.kind == Kind::Anvil && s.inputs[0] != s.anvil_last {
             // AnvilScreen.slotChanged: the box shows the new input's name.
             s.anvil_last = s.inputs[0].clone();
-            s.name = s.inputs[0].as_ref().map(|i| stations::hover_name(&|id| self.res.names.item(id), i)).unwrap_or_default();
+            s.name = s.inputs[0]
+                .as_ref()
+                .map(|i| stations::hover_name(&|id| self.res.names.item(id), i))
+                .unwrap_or_default();
         }
         self.station_changed();
     }
     pub(super) fn station_scroll(&mut self, d: f32) {
         self.merchant_scroll(d);
-        let Some(s) = self.station.as_mut() else { return };
+        let Some(s) = self.station.as_mut() else {
+            return;
+        };
         if s.kind != Kind::Stonecutter || s.recipes.len() <= 12 {
             return;
         }
@@ -737,10 +985,16 @@ impl Game<'_> {
     }
     /// Whether keyboard text goes to the anvil rename box.
     pub(super) fn station_typing(&self) -> bool {
-        self.screen == Screen::Inventory && self.station.as_ref().is_some_and(|s| s.kind == Kind::Anvil && s.inputs[0].is_some())
+        self.screen == Screen::Inventory
+            && self
+                .station
+                .as_ref()
+                .is_some_and(|s| s.kind == Kind::Anvil && s.inputs[0].is_some())
     }
     pub(super) fn station_text(&mut self, text: Option<&str>, backspace: bool) {
-        let Some(s) = self.station.as_mut() else { return };
+        let Some(s) = self.station.as_mut() else {
+            return;
+        };
         if backspace {
             s.name.pop();
         } else if let Some(t) = text {
@@ -755,7 +1009,14 @@ impl Game<'_> {
 
     // ---------------------------------------------------------------- drawing
 
-    fn part(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, name: &str, src: (f32, f32), size: (f32, f32), dst: (f32, f32)) {
+    fn part(
+        batch: &mut HudBatch,
+        atlas: &horizon_client::hud::HudAtlas,
+        name: &str,
+        src: (f32, f32),
+        size: (f32, f32),
+        dst: (f32, f32),
+    ) {
         if let Some(mut r) = atlas.sprites.get(name).copied() {
             let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
             r.u0 += src.0 * du;
@@ -773,7 +1034,10 @@ impl Game<'_> {
             return;
         };
         let cell = sheet.w / 16;
-        let (px, py) = ((sheet.u0 * atlas.width as f32) as u32, (sheet.v0 * atlas.height as f32) as u32);
+        let (px, py) = (
+            (sheet.u0 * atlas.width as f32) as u32,
+            (sheet.v0 * atlas.height as f32) as u32,
+        );
         let mut cursor = x;
         for ch in text.chars() {
             let advance = if ch == ' ' {
@@ -787,7 +1051,9 @@ impl Game<'_> {
                 let (cx, cy) = (px + col * cell, py + row * cell);
                 let mut used = 0;
                 for dx in (0..cell).rev() {
-                    if (0..cell).any(|dy| atlas.pixels[(((cy + dy) * atlas.width + cx + dx) * 4 + 3) as usize] != 0) {
+                    if (0..cell).any(|dy| {
+                        atlas.pixels[(((cy + dy) * atlas.width + cx + dx) * 4 + 3) as usize] != 0
+                    }) {
                         used = dx + 1;
                         break;
                     }
@@ -815,7 +1081,11 @@ impl Game<'_> {
     }
     /// Draws the open station or brewing stand screen; false when none is open.
     pub(super) fn draw_station(&mut self, batch: &mut HudBatch) -> bool {
-        if self.station.as_ref().is_some_and(|s| s.kind == Kind::Merchant) {
+        if self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == Kind::Merchant)
+        {
             return self.draw_merchant(batch);
         }
         let brewing = self.brewing_open();
@@ -827,43 +1097,109 @@ impl Game<'_> {
         let mut tooltip: Option<Vec<(String, u32)>> = None;
         {
             let atlas = &self.res.atlas;
-            batch.fill(atlas, 0.0, 0.0, batch.width, batch.height, rgba(16, 16, 16, 160));
+            batch.fill(
+                atlas,
+                0.0,
+                0.0,
+                batch.width,
+                batch.height,
+                rgba(16, 16, 16, 160),
+            );
         }
         let inventory_label = self.translate("container.inventory", "Inventory");
         if brewing {
-            let Some(BlockEntity::Brewing(b)) = self.container_kind() else { return true };
-            let (fuel, total_fuel, brew, total_brew) = (b.fuel, b.total_fuel, b.brew_time, b.total_brew_time);
+            let Some(BlockEntity::Brewing(b)) = self.container_kind() else {
+                return true;
+            };
+            let (fuel, total_fuel, brew, total_brew) =
+                (b.fuel, b.total_fuel, b.brew_time, b.total_brew_time);
             let atlas = &self.res.atlas;
-            Self::part(batch, atlas, "gui/container/brewing_stand", (0.0, 0.0), (176.0, 166.0), (ox, oy));
-            let fuel_len = if total_fuel > 0 { ((18 * fuel + total_fuel - 1) / total_fuel).clamp(0, 18) } else { 0 };
+            Self::part(
+                batch,
+                atlas,
+                "gui/container/brewing_stand",
+                (0.0, 0.0),
+                (176.0, 166.0),
+                (ox, oy),
+            );
+            let fuel_len = if total_fuel > 0 {
+                ((18 * fuel + total_fuel - 1) / total_fuel).clamp(0, 18)
+            } else {
+                0
+            };
             if fuel_len > 0 {
-                Self::part(batch, atlas, "gui/sprites/container/brewing_stand/fuel_length", (0.0, 0.0), (fuel_len as f32, 4.0), (ox + 60.0, oy + 44.0));
+                Self::part(
+                    batch,
+                    atlas,
+                    "gui/sprites/container/brewing_stand/fuel_length",
+                    (0.0, 0.0),
+                    (fuel_len as f32, 4.0),
+                    (ox + 60.0, oy + 44.0),
+                );
             }
             if brew > 0 && total_brew > 0 {
                 let len = (28.0 * (1.0 - brew as f32 / total_brew as f32)) as i32;
                 if len > 0 {
-                    Self::part(batch, atlas, "gui/sprites/container/brewing_stand/brew_progress", (0.0, 0.0), (9.0, len as f32), (ox + 97.0, oy + 16.0));
+                    Self::part(
+                        batch,
+                        atlas,
+                        "gui/sprites/container/brewing_stand/brew_progress",
+                        (0.0, 0.0),
+                        (9.0, len as f32),
+                        (ox + 97.0, oy + 16.0),
+                    );
                 }
                 let bubble = [29, 24, 20, 16, 11, 6, 0][(brew / 2 % 7) as usize] as f32;
                 if bubble > 0.0 {
-                    Self::part(batch, atlas, "gui/sprites/container/brewing_stand/bubbles", (0.0, 29.0 - bubble), (12.0, bubble), (ox + 63.0, oy + 14.0 + 29.0 - bubble));
+                    Self::part(
+                        batch,
+                        atlas,
+                        "gui/sprites/container/brewing_stand/bubbles",
+                        (0.0, 29.0 - bubble),
+                        (12.0, bubble),
+                        (ox + 63.0, oy + 14.0 + 29.0 - bubble),
+                    );
                 }
             }
             let title = self.translate("container.brewing", "Brewing Stand");
             let tw = HudBatch::text_width(atlas, &title);
-            batch.text(atlas, &title, ox + (176.0 - tw) / 2.0, oy + 6.0, GREY, false);
+            batch.text(
+                atlas,
+                &title,
+                ox + (176.0 - tw) / 2.0,
+                oy + 6.0,
+                GREY,
+                false,
+            );
             batch.text(atlas, &inventory_label, ox + 8.0, oy + 72.0, GREY, false);
             // Empty-slot icons.
-            for (i, icon) in [(300, "potion"), (301, "potion"), (302, "potion"), (304, "brewing_fuel")] {
+            for (i, icon) in [
+                (300, "potion"),
+                (301, "potion"),
+                (302, "potion"),
+                (304, "brewing_fuel"),
+            ] {
                 if self.slot_mut(i).is_none() {
                     let (sx, sy) = self.station_slot_position(i).unwrap_or_default();
-                    batch.sprite(&self.res.atlas, &format!("gui/sprites/container/slot/{icon}"), ox + sx, oy + sy);
+                    batch.sprite(
+                        &self.res.atlas,
+                        &format!("gui/sprites/container/slot/{icon}"),
+                        ox + sx,
+                        oy + sy,
+                    );
                 }
             }
         } else if let Some(kind) = self.station.as_ref().map(|s| s.kind) {
             let title = self.translate(kind.title_key(), "");
             let atlas = &self.res.atlas;
-            Self::part(batch, atlas, kind.texture(), (0.0, 0.0), (176.0, 166.0), (ox, oy));
+            Self::part(
+                batch,
+                atlas,
+                kind.texture(),
+                (0.0, 0.0),
+                (176.0, 166.0),
+                (ox, oy),
+            );
             let (tx, ty) = kind.title_pos();
             batch.text(atlas, &title, ox + tx, oy + ty, GREY, false);
             batch.text(atlas, &inventory_label, ox + 8.0, oy + 72.0, GREY, false);
@@ -872,7 +1208,12 @@ impl Game<'_> {
             match kind {
                 Kind::Enchanting => {
                     if s.inputs[1].is_none() {
-                        batch.sprite(atlas, "gui/sprites/container/slot/lapis_lazuli", ox + 35.0, oy + 47.0);
+                        batch.sprite(
+                            atlas,
+                            "gui/sprites/container/slot/lapis_lazuli",
+                            ox + 35.0,
+                            oy + 47.0,
+                        );
                     }
                     let mut names = LegacyRandom::new(i64::from(self.level.xp_seed));
                     let gold = s.inputs[1].as_ref().map_or(0, |l| l.count as i32);
@@ -882,51 +1223,156 @@ impl Game<'_> {
                         let (bx, by, bw, bh) = enchant_button(i);
                         let cost = offers.costs[i];
                         if cost == 0 {
-                            batch.sprite_scaled(atlas, "gui/sprites/container/enchanting_table/enchantment_slot_disabled", ox + bx, oy + by, bw, bh, u32::MAX);
+                            batch.sprite_scaled(
+                                atlas,
+                                "gui/sprites/container/enchanting_table/enchantment_slot_disabled",
+                                ox + bx,
+                                oy + by,
+                                bw,
+                                bh,
+                                u32::MAX,
+                            );
                             continue;
                         }
                         let cost_text = cost.to_string();
                         let text_width = 86.0 - HudBatch::text_width(atlas, &cost_text);
                         let count = names.next_int_bound(2).unwrap_or(0) + 3;
-                        let words: Vec<&str> = (0..count).map(|_| WORDS[names.next_int_bound(WORDS.len() as i32).unwrap_or(0) as usize]).collect();
+                        let words: Vec<&str> = (0..count)
+                            .map(|_| {
+                                WORDS
+                                    [names.next_int_bound(WORDS.len() as i32).unwrap_or(0) as usize]
+                            })
+                            .collect();
                         let message = words.join(" ");
                         let disabled = (gold < i as i32 + 1 || level < cost) && !self.creative;
                         let col: i32 = if disabled {
-                            batch.sprite_scaled(atlas, "gui/sprites/container/enchanting_table/enchantment_slot_disabled", ox + bx, oy + by, bw, bh, u32::MAX);
-                            batch.sprite(atlas, &format!("gui/sprites/container/enchanting_table/level_{}_disabled", i + 1), ox + bx + 1.0, oy + by + 1.0);
+                            batch.sprite_scaled(
+                                atlas,
+                                "gui/sprites/container/enchanting_table/enchantment_slot_disabled",
+                                ox + bx,
+                                oy + by,
+                                bw,
+                                bh,
+                                u32::MAX,
+                            );
+                            batch.sprite(
+                                atlas,
+                                &format!(
+                                    "gui/sprites/container/enchanting_table/level_{}_disabled",
+                                    i + 1
+                                ),
+                                ox + bx + 1.0,
+                                oy + by + 1.0,
+                            );
                             let c = ((-9937334i32) & 16711422) >> 1;
                             let msg_color = argb(c | 0xFF00_0000u32 as i32);
-                            self.galactic_deferred(batch, &message, ox + bx + 20.0, oy + by + 2.0, text_width, msg_color);
+                            self.galactic_deferred(
+                                batch,
+                                &message,
+                                ox + bx + 20.0,
+                                oy + by + 2.0,
+                                text_width,
+                                msg_color,
+                            );
                             -12550384
                         } else {
                             let hover = inside(local, bx, by, bw, bh);
-                            let sprite = if hover { "enchantment_slot_highlighted" } else { "enchantment_slot" };
-                            batch.sprite_scaled(atlas, &format!("gui/sprites/container/enchanting_table/{sprite}"), ox + bx, oy + by, bw, bh, u32::MAX);
-                            batch.sprite(atlas, &format!("gui/sprites/container/enchanting_table/level_{}", i + 1), ox + bx + 1.0, oy + by + 1.0);
+                            let sprite = if hover {
+                                "enchantment_slot_highlighted"
+                            } else {
+                                "enchantment_slot"
+                            };
+                            batch.sprite_scaled(
+                                atlas,
+                                &format!("gui/sprites/container/enchanting_table/{sprite}"),
+                                ox + bx,
+                                oy + by,
+                                bw,
+                                bh,
+                                u32::MAX,
+                            );
+                            batch.sprite(
+                                atlas,
+                                &format!("gui/sprites/container/enchanting_table/level_{}", i + 1),
+                                ox + bx + 1.0,
+                                oy + by + 1.0,
+                            );
                             let msg_color = if hover { -128 } else { -9937334 };
-                            self.galactic_deferred(batch, &message, ox + bx + 20.0, oy + by + 2.0, text_width, argb(msg_color));
+                            self.galactic_deferred(
+                                batch,
+                                &message,
+                                ox + bx + 20.0,
+                                oy + by + 2.0,
+                                text_width,
+                                argb(msg_color),
+                            );
                             -8323296
                         };
                         let atlas = &self.res.atlas;
                         let cw = HudBatch::text_width(atlas, &cost_text);
-                        batch.text(atlas, &cost_text, ox + bx + 20.0 + 86.0 - cw, oy + by + 9.0, argb(col), true);
+                        batch.text(
+                            atlas,
+                            &cost_text,
+                            ox + bx + 20.0 + 86.0 - cw,
+                            oy + by + 9.0,
+                            argb(col),
+                            true,
+                        );
                         // Tooltip with the clue (EnchantmentScreen.extractRenderState).
                         if inside(local, bx, by, bw, 17.0)
                             && let Some((id, l)) = &offers.clues[i]
                         {
                             let e = &self.res.stations.enchantments;
                             let (name, _) = e.full_name(id, *l);
-                            let clue = self.translate("container.enchant.clue", "%s . . . ?").replace("%s", &name);
+                            let clue = self
+                                .translate("container.enchant.clue", "%s . . . ?")
+                                .replace("%s", &name);
                             let mut lines = vec![(clue, u32::MAX)];
                             if !self.creative {
                                 lines.push((String::new(), u32::MAX));
                                 if level < cost {
-                                    lines.push((self.translate("container.enchant.level.requirement", "Level Requirement: %s").replace("%s", &cost.to_string()), rgba(255, 85, 85, 255)));
+                                    lines.push((
+                                        self.translate(
+                                            "container.enchant.level.requirement",
+                                            "Level Requirement: %s",
+                                        )
+                                        .replace("%s", &cost.to_string()),
+                                        rgba(255, 85, 85, 255),
+                                    ));
                                 } else {
                                     let n = i + 1;
-                                    let lapis = if n == 1 { self.translate("container.enchant.lapis.one", "1 Lapis Lazuli") } else { self.translate("container.enchant.lapis.many", "%s Lapis Lazuli").replace("%s", &n.to_string()) };
-                                    lines.push((lapis, if gold >= n as i32 { rgba(170, 170, 170, 255) } else { rgba(255, 85, 85, 255) }));
-                                    let levels = if n == 1 { self.translate("container.enchant.level.one", "1 Enchantment Level") } else { self.translate("container.enchant.level.many", "%s Enchantment Levels").replace("%s", &n.to_string()) };
+                                    let lapis = if n == 1 {
+                                        self.translate(
+                                            "container.enchant.lapis.one",
+                                            "1 Lapis Lazuli",
+                                        )
+                                    } else {
+                                        self.translate(
+                                            "container.enchant.lapis.many",
+                                            "%s Lapis Lazuli",
+                                        )
+                                        .replace("%s", &n.to_string())
+                                    };
+                                    lines.push((
+                                        lapis,
+                                        if gold >= n as i32 {
+                                            rgba(170, 170, 170, 255)
+                                        } else {
+                                            rgba(255, 85, 85, 255)
+                                        },
+                                    ));
+                                    let levels = if n == 1 {
+                                        self.translate(
+                                            "container.enchant.level.one",
+                                            "1 Enchantment Level",
+                                        )
+                                    } else {
+                                        self.translate(
+                                            "container.enchant.level.many",
+                                            "%s Enchantment Levels",
+                                        )
+                                        .replace("%s", &n.to_string())
+                                    };
                                     lines.push((levels, rgba(170, 170, 170, 255)));
                                 }
                             }
@@ -935,14 +1381,42 @@ impl Game<'_> {
                     }
                 }
                 Kind::Anvil => {
-                    let field = if s.inputs[0].is_some() { "text_field" } else { "text_field_disabled" };
-                    batch.sprite_scaled(atlas, &format!("gui/sprites/container/anvil/{field}"), ox + 59.0, oy + 20.0, 110.0, 16.0, u32::MAX);
+                    let field = if s.inputs[0].is_some() {
+                        "text_field"
+                    } else {
+                        "text_field_disabled"
+                    };
+                    batch.sprite_scaled(
+                        atlas,
+                        &format!("gui/sprites/container/anvil/{field}"),
+                        ox + 59.0,
+                        oy + 20.0,
+                        110.0,
+                        16.0,
+                        u32::MAX,
+                    );
                     if has_input && s.result.is_none() {
-                        batch.sprite(atlas, "gui/sprites/container/anvil/error", ox + 99.0, oy + 45.0);
+                        batch.sprite(
+                            atlas,
+                            "gui/sprites/container/anvil/error",
+                            ox + 99.0,
+                            oy + 45.0,
+                        );
                     }
                     if s.inputs[0].is_some() {
-                        let blink = if (self.ticks / 6).is_multiple_of(2) { "_" } else { "" };
-                        batch.text(atlas, &format!("{}{blink}", s.name), ox + 62.0, oy + 24.0, u32::MAX, true);
+                        let blink = if (self.ticks / 6).is_multiple_of(2) {
+                            "_"
+                        } else {
+                            ""
+                        };
+                        batch.text(
+                            atlas,
+                            &format!("{}{blink}", s.name),
+                            ox + 62.0,
+                            oy + 24.0,
+                            u32::MAX,
+                            true,
+                        );
                     }
                     let cost = s.anvil.cost;
                     if cost > 0 {
@@ -956,20 +1430,35 @@ impl Game<'_> {
                             if !self.may_take_result() {
                                 color = argb(-40864);
                             }
-                            Some(self.translate("container.repair.cost", "Enchantment Cost: %1$s").replace("%1$s", &cost.to_string()))
+                            Some(
+                                self.translate("container.repair.cost", "Enchantment Cost: %1$s")
+                                    .replace("%1$s", &cost.to_string()),
+                            )
                         };
                         if let Some(line) = line {
                             let atlas = &self.res.atlas;
                             let tw = HudBatch::text_width(atlas, &line);
                             let tx = 176.0 - 8.0 - tw - 2.0;
-                            batch.fill(atlas, ox + tx - 2.0, oy + 67.0, 176.0 - 8.0 - (tx - 2.0), 12.0, argb(1325400064));
+                            batch.fill(
+                                atlas,
+                                ox + tx - 2.0,
+                                oy + 67.0,
+                                176.0 - 8.0 - (tx - 2.0),
+                                12.0,
+                                argb(1325400064),
+                            );
                             batch.text(atlas, &line, ox + tx, oy + 69.0, color, true);
                         }
                     }
                 }
                 Kind::Grindstone => {
                     if has_input && s.result.is_none() {
-                        batch.sprite(atlas, "gui/sprites/container/grindstone/error", ox + 92.0, oy + 31.0);
+                        batch.sprite(
+                            atlas,
+                            "gui/sprites/container/grindstone/error",
+                            ox + 92.0,
+                            oy + 31.0,
+                        );
                     }
                 }
                 Kind::Smithing => {
@@ -977,13 +1466,29 @@ impl Game<'_> {
                     for (i, icon) in icons.iter().enumerate() {
                         if s.inputs[i].is_none() && !icon.is_empty() {
                             let (sx, sy) = kind.input_pos(i);
-                            batch.sprite(atlas, &format!("gui/sprites/container/slot/{icon}"), ox + sx, oy + sy);
+                            batch.sprite(
+                                atlas,
+                                &format!("gui/sprites/container/slot/{icon}"),
+                                ox + sx,
+                                oy + sy,
+                            );
                         }
                     }
                     if s.inputs.iter().all(Option::is_some) && s.result.is_none() {
-                        batch.sprite(atlas, "gui/sprites/container/smithing/error", ox + 65.0, oy + 46.0);
+                        batch.sprite(
+                            atlas,
+                            "gui/sprites/container/smithing/error",
+                            ox + 65.0,
+                            oy + 46.0,
+                        );
                         if inside(local, 65.0, 46.0, 28.0, 21.0) {
-                            tooltip = Some(vec![(self.translate("container.upgrade.error_tooltip", "Item can't be upgraded this way"), u32::MAX)]);
+                            tooltip = Some(vec![(
+                                self.translate(
+                                    "container.upgrade.error_tooltip",
+                                    "Item can't be upgraded this way",
+                                ),
+                                u32::MAX,
+                            )]);
                         }
                     }
                 }
@@ -992,19 +1497,62 @@ impl Game<'_> {
                     let display = s.inputs[0].is_some() && !s.recipes.is_empty();
                     let active = display && s.recipes.len() > 12;
                     let rows = s.recipes.len().div_ceil(4).saturating_sub(3).max(1);
-                    let offs = if active { (s.start / 4) as f32 / rows as f32 } else { 0.0 };
-                    let scroller = if active { "scroller" } else { "scroller_disabled" };
-                    batch.sprite(atlas, &format!("gui/sprites/container/stonecutter/{scroller}"), ox + 119.0, oy + 15.0 + (41.0 * offs).floor());
+                    let offs = if active {
+                        (s.start / 4) as f32 / rows as f32
+                    } else {
+                        0.0
+                    };
+                    let scroller = if active {
+                        "scroller"
+                    } else {
+                        "scroller_disabled"
+                    };
+                    batch.sprite(
+                        atlas,
+                        &format!("gui/sprites/container/stonecutter/{scroller}"),
+                        ox + 119.0,
+                        oy + 15.0 + (41.0 * offs).floor(),
+                    );
                     if display {
                         let (start, selected) = (s.start, s.selected);
                         // graphics.item: the icon only, without the count.
-                        let shown: Vec<(usize, ItemStack)> = (start..(start + 12).min(s.recipes.len())).map(|i| (i, ItemStack { count: 1, ..self.res.stations.recipes.stonecutting[s.recipes[i]].result.clone() })).collect();
+                        let shown: Vec<(usize, ItemStack)> = (start
+                            ..(start + 12).min(s.recipes.len()))
+                            .map(|i| {
+                                (
+                                    i,
+                                    ItemStack {
+                                        count: 1,
+                                        ..self.res.stations.recipes.stonecutting[s.recipes[i]]
+                                            .result
+                                            .clone()
+                                    },
+                                )
+                            })
+                            .collect();
                         for (index, result) in shown {
                             let p = index - start;
-                            let (x, y) = (52.0 + (p % 4) as f32 * 16.0, 14.0 + (p / 4) as f32 * 18.0 + 2.0);
+                            let (x, y) = (
+                                52.0 + (p % 4) as f32 * 16.0,
+                                14.0 + (p / 4) as f32 * 18.0 + 2.0,
+                            );
                             let hover = inside(local, x, y, 16.0, 18.0);
-                            let sprite = if Some(index) == selected { "recipe_selected" } else if hover { "recipe_highlighted" } else { "recipe" };
-                            batch.sprite_scaled(&self.res.atlas, &format!("gui/sprites/container/stonecutter/{sprite}"), ox + x, oy + y - 1.0, 16.0, 18.0, u32::MAX);
+                            let sprite = if Some(index) == selected {
+                                "recipe_selected"
+                            } else if hover {
+                                "recipe_highlighted"
+                            } else {
+                                "recipe"
+                            };
+                            batch.sprite_scaled(
+                                &self.res.atlas,
+                                &format!("gui/sprites/container/stonecutter/{sprite}"),
+                                ox + x,
+                                oy + y - 1.0,
+                                16.0,
+                                18.0,
+                                u32::MAX,
+                            );
                             self.draw_item(batch, &result, ox + x, oy + y);
                             if hover {
                                 tooltip = Some(self.stack_tooltip(&result));
@@ -1015,7 +1563,9 @@ impl Game<'_> {
             }
         }
         for i in self.station_slots().unwrap_or_default() {
-            let Some((sx, sy)) = self.slot_position_any(i) else { continue };
+            let Some((sx, sy)) = self.slot_position_any(i) else {
+                continue;
+            };
             let stack = self.slot_mut(i).clone();
             if let Some(stack) = stack {
                 self.draw_item(batch, &stack, ox + sx, oy + sy);
@@ -1023,7 +1573,14 @@ impl Game<'_> {
         }
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
-            batch.fill(&self.res.atlas, ox + sx, oy + sy, 16.0, 16.0, rgba(255, 255, 255, 128));
+            batch.fill(
+                &self.res.atlas,
+                ox + sx,
+                oy + sy,
+                16.0,
+                16.0,
+                rgba(255, 255, 255, 128),
+            );
             if self.carried.is_none()
                 && tooltip.is_none()
                 && let Some(stack) = self.slot_mut(slot).clone()
@@ -1038,11 +1595,20 @@ impl Game<'_> {
         }
         true
     }
-    fn galactic_deferred(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32, max: f32, color: u32) {
+    fn galactic_deferred(
+        &self,
+        batch: &mut HudBatch,
+        text: &str,
+        x: f32,
+        y: f32,
+        max: f32,
+        color: u32,
+    ) {
         self.galactic(batch, text, x, y, max, color);
     }
     fn slot_position_any(&self, i: usize) -> Option<(f32, f32)> {
-        self.station_slot_position(i).or_else(|| (i < 36).then(|| self.slot_position(i)))
+        self.station_slot_position(i)
+            .or_else(|| (i < 36).then(|| self.slot_position(i)))
     }
 
     // ---------------------------------------------------------------- tooltips
@@ -1068,9 +1634,13 @@ impl Game<'_> {
         };
         let name = if let Some(n) = stack.custom_name() {
             n.to_owned()
-        } else if stack.data().and_then(|d| d.potion.as_ref()).is_some() || stack.item.ends_with("potion") || &*stack.item == "minecraft:tipped_arrow" {
+        } else if stack.data().and_then(|d| d.potion.as_ref()).is_some()
+            || stack.item.ends_with("potion")
+            || &*stack.item == "minecraft:tipped_arrow"
+        {
             let key = brewing::potion_name_key(&stack.item, stack.potion());
-            e.translate(&key).map_or_else(|| self.res.names.item(&stack.item), str::to_owned)
+            e.translate(&key)
+                .map_or_else(|| self.res.names.item(&stack.item), str::to_owned)
         } else {
             self.res.names.item(&stack.item)
         };
@@ -1081,7 +1651,9 @@ impl Game<'_> {
                 "minecraft:tipped_arrow" => 0.125,
                 _ => 1.0,
             };
-            for (line, cat) in brewing::tooltip(stack.potion(), scale, &|k| e.translate(k).map(str::to_owned)) {
+            for (line, cat) in brewing::tooltip(stack.potion(), scale, &|k| {
+                e.translate(k).map(str::to_owned)
+            }) {
                 let c = match cat {
                     brewing::Category::Beneficial => rgba(85, 85, 255, 255),
                     brewing::Category::Harmful => rgba(255, 85, 85, 255),
@@ -1091,22 +1663,49 @@ impl Game<'_> {
             }
         }
         if let Some((material, pattern)) = stack.data().and_then(|d| d.trim.clone()) {
-            lines.push((e.translate("item.minecraft.smithing_template.upgrade").unwrap_or("Upgrade:").to_owned(), rgba(170, 170, 170, 255)));
+            lines.push((
+                e.translate("item.minecraft.smithing_template.upgrade")
+                    .unwrap_or("Upgrade:")
+                    .to_owned(),
+                rgba(170, 170, 170, 255),
+            ));
             let short = |s: &str| s.trim_start_matches("minecraft:").to_owned();
-            let p = e.translate(&format!("trim_pattern.minecraft.{}", short(&pattern))).map_or_else(|| short(&pattern), str::to_owned);
-            let m = e.translate(&format!("trim_material.minecraft.{}", short(&material))).map_or_else(|| short(&material), str::to_owned);
+            let p = e
+                .translate(&format!("trim_pattern.minecraft.{}", short(&pattern)))
+                .map_or_else(|| short(&pattern), str::to_owned);
+            let m = e
+                .translate(&format!("trim_material.minecraft.{}", short(&material)))
+                .map_or_else(|| short(&material), str::to_owned);
             lines.push((format!(" {p}"), rgba(170, 170, 170, 255)));
             lines.push((format!(" {m}"), rgba(170, 170, 170, 255)));
         }
-        for (text, curse) in e.tooltip(stack.stored_enchantments()).into_iter().chain(e.tooltip(stack.enchantments())) {
-            lines.push((text, if curse { rgba(255, 85, 85, 255) } else { rgba(170, 170, 170, 255) }));
+        for (text, curse) in e
+            .tooltip(stack.stored_enchantments())
+            .into_iter()
+            .chain(e.tooltip(stack.enchantments()))
+        {
+            lines.push((
+                text,
+                if curse {
+                    rgba(255, 85, 85, 255)
+                } else {
+                    rgba(170, 170, 170, 255)
+                },
+            ));
         }
         if let Some(info) = self.res.items.get(&stack.item)
             && info.max_damage > 0
             && stack.damage > 0
             && self.options_advanced_tooltips()
         {
-            lines.push((format!("Durability: {} / {}", info.max_damage - stack.damage, info.max_damage), u32::MAX));
+            lines.push((
+                format!(
+                    "Durability: {} / {}",
+                    info.max_damage - stack.damage,
+                    info.max_damage
+                ),
+                u32::MAX,
+            ));
         }
         lines
     }
@@ -1114,7 +1713,9 @@ impl Game<'_> {
     pub(super) fn station_info(&self) -> serde_json::Value {
         let Some(s) = self.station.as_ref() else {
             return match self.container_kind() {
-                Some(BlockEntity::Brewing(b)) => serde_json::json!({ "brew_time": b.brew_time, "fuel": b.fuel }),
+                Some(BlockEntity::Brewing(b)) => {
+                    serde_json::json!({ "brew_time": b.brew_time, "fuel": b.fuel })
+                }
                 _ => serde_json::Value::Null,
             };
         };
@@ -1133,13 +1734,26 @@ impl Game<'_> {
         false
     }
     /// `TooltipRenderUtil`: dark box with the purple border, first line spaced.
-    pub(super) fn draw_tooltip_lines(&self, batch: &mut HudBatch, lines: &[(String, u32)], x: f32, y: f32) {
+    pub(super) fn draw_tooltip_lines(
+        &self,
+        batch: &mut HudBatch,
+        lines: &[(String, u32)],
+        x: f32,
+        y: f32,
+    ) {
         if lines.is_empty() {
             return;
         }
         let atlas = &self.res.atlas;
-        let w = lines.iter().map(|(t, _)| HudBatch::text_width(atlas, t)).fold(0.0, f32::max);
-        let h = if lines.len() == 1 { 8.0 } else { 8.0 + 2.0 + (lines.len() - 1) as f32 * 10.0 };
+        let w = lines
+            .iter()
+            .map(|(t, _)| HudBatch::text_width(atlas, t))
+            .fold(0.0, f32::max);
+        let h = if lines.len() == 1 {
+            8.0
+        } else {
+            8.0 + 2.0 + (lines.len() - 1) as f32 * 10.0
+        };
         let mut x = x + 12.0;
         let mut y = y - 12.0;
         if x + w > batch.width - 4.0 {
@@ -1150,12 +1764,40 @@ impl Game<'_> {
         }
         y = y.max(4.0);
         batch.fill(atlas, x - 3.0, y - 4.0, w + 6.0, 1.0, rgba(16, 0, 16, 240));
-        batch.fill(atlas, x - 3.0, y + h + 3.0, w + 6.0, 1.0, rgba(16, 0, 16, 240));
-        batch.fill(atlas, x - 4.0, y - 3.0, w + 8.0, h + 6.0, rgba(16, 0, 16, 240));
+        batch.fill(
+            atlas,
+            x - 3.0,
+            y + h + 3.0,
+            w + 6.0,
+            1.0,
+            rgba(16, 0, 16, 240),
+        );
+        batch.fill(
+            atlas,
+            x - 4.0,
+            y - 3.0,
+            w + 8.0,
+            h + 6.0,
+            rgba(16, 0, 16, 240),
+        );
         batch.fill(atlas, x - 3.0, y - 3.0, w + 6.0, 1.0, rgba(80, 0, 255, 80));
-        batch.fill(atlas, x - 3.0, y + h + 2.0, w + 6.0, 1.0, rgba(40, 0, 127, 80));
+        batch.fill(
+            atlas,
+            x - 3.0,
+            y + h + 2.0,
+            w + 6.0,
+            1.0,
+            rgba(40, 0, 127, 80),
+        );
         batch.fill(atlas, x - 3.0, y - 2.0, 1.0, h + 4.0, rgba(60, 0, 190, 80));
-        batch.fill(atlas, x + w + 2.0, y - 2.0, 1.0, h + 4.0, rgba(60, 0, 190, 80));
+        batch.fill(
+            atlas,
+            x + w + 2.0,
+            y - 2.0,
+            1.0,
+            h + 4.0,
+            rgba(60, 0, 190, 80),
+        );
         let mut ty = y;
         for (i, (text, color)) in lines.iter().enumerate() {
             batch.text(atlas, text, x, ty, *color, true);
@@ -1167,8 +1809,14 @@ impl Game<'_> {
         if self.carried.is_some() {
             return;
         }
-        let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) else { return };
-        let stack = if slot == 200 { self.craft_result() } else { self.slot_mut(slot).clone() };
+        let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) else {
+            return;
+        };
+        let stack = if slot == 200 {
+            self.craft_result()
+        } else {
+            self.slot_mut(slot).clone()
+        };
         if let Some(stack) = stack {
             let lines = self.stack_tooltip(&stack);
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
@@ -1176,7 +1824,13 @@ impl Game<'_> {
     }
     /// Potion items: `layer0` tinted with the potion colour under the bottle
     /// (`minecraft:potion` item tint source).
-    pub(super) fn draw_potion_layers(&self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
+    pub(super) fn draw_potion_layers(
+        &self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        x: f32,
+        y: f32,
+    ) {
         let (overlay, base) = match &*stack.item {
             "minecraft:potion" => ("item/potion_overlay", "item/potion"),
             "minecraft:splash_potion" => ("item/potion_overlay", "item/splash_potion"),
@@ -1186,7 +1840,20 @@ impl Game<'_> {
         };
         let c = brewing::potion_color(stack.potion());
         let atlas = &self.res.atlas;
-        batch.sprite_scaled(atlas, overlay, x, y, 16.0, 16.0, rgba((c >> 16 & 255) as u8, (c >> 8 & 255) as u8, (c & 255) as u8, 255));
+        batch.sprite_scaled(
+            atlas,
+            overlay,
+            x,
+            y,
+            16.0,
+            16.0,
+            rgba(
+                (c >> 16 & 255) as u8,
+                (c >> 8 & 255) as u8,
+                (c & 255) as u8,
+                255,
+            ),
+        );
         batch.sprite_scaled(atlas, base, x, y, 16.0, 16.0, u32::MAX);
     }
     /// The enchantment glint over an item icon: a shimmering purple tint.
@@ -1202,11 +1869,18 @@ impl Game<'_> {
             let d = ((gx + gy) / 32.0 - t * 0.35).rem_euclid(1.0);
             let band = (1.0 - (d - 0.5).abs() * 6.0).max(0.0);
             let a = 45.0 + 110.0 * band;
-            rgba((170.0 + 70.0 * band) as u8, (90.0 + 110.0 * band) as u8, 255, a as u8)
+            rgba(
+                (170.0 + 70.0 * band) as u8,
+                (90.0 + 110.0 * band) as u8,
+                255,
+                a as u8,
+            )
         };
         match self.res.icons.get(&*stack.item).cloned().flatten() {
             Some(super::Icon::Flat(name)) => {
-                let Some(r) = self.res.atlas.sprites.get(&name).copied() else { return };
+                let Some(r) = self.res.atlas.sprites.get(&name).copied() else {
+                    return;
+                };
                 const N: usize = 4;
                 let cell = 16.0 / N as f32;
                 let (du, dv) = ((r.u1 - r.u0) / N as f32, (r.v1 - r.v0) / N as f32);
@@ -1214,15 +1888,31 @@ impl Game<'_> {
                     for col in 0..N {
                         let (x0, y0) = (col as f32 * cell, row as f32 * cell);
                         let (u0, v0) = (r.u0 + du * col as f32, r.v0 + dv * row as f32);
-                        let corners = [(x0, y0, u0, v0), (x0 + cell, y0, u0 + du, v0), (x0 + cell, y0 + cell, u0 + du, v0 + dv), (x0, y0 + cell, u0, v0 + dv)];
+                        let corners = [
+                            (x0, y0, u0, v0),
+                            (x0 + cell, y0, u0 + du, v0),
+                            (x0 + cell, y0 + cell, u0 + du, v0 + dv),
+                            (x0, y0 + cell, u0, v0 + dv),
+                        ];
                         for i in [0usize, 1, 2, 0, 2, 3] {
                             let (cx, cy, u, v) = corners[i];
-                            batch.vertices.push(horizon_client::hud::HudVertex { pos: [x + cx, y + cy], uv: [u + 2.0, v], color: glint(cx, cy) });
+                            batch.vertices.push(horizon_client::hud::HudVertex {
+                                pos: [x + cx, y + cy],
+                                uv: [u + 2.0, v],
+                                color: glint(cx, cy),
+                            });
                         }
                     }
                 }
             }
-            Some(super::Icon::Cube { .. }) => batch.fill(&self.res.atlas, x + 1.0, y + 1.0, 14.0, 14.0, glint(8.0, 8.0) & 0x7FFF_FFFF),
+            Some(super::Icon::Cube { .. }) => batch.fill(
+                &self.res.atlas,
+                x + 1.0,
+                y + 1.0,
+                14.0,
+                14.0,
+                glint(8.0, 8.0) & 0x7FFF_FFFF,
+            ),
             None => {}
         }
     }
@@ -1234,7 +1924,11 @@ impl Game<'_> {
         let mut changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {
             if let BlockEntity::Brewing(b) = entity {
-                let out = b.tick(&self.res.stations.brewing, &self.res.items, &self.res.providers);
+                let out = b.tick(
+                    &self.res.stations.brewing,
+                    &self.res.items,
+                    &self.res.providers,
+                );
                 if out != brewing::BrewTick::default() {
                     changes.push((*pos, out));
                 }
@@ -1254,7 +1948,8 @@ impl Game<'_> {
                     && AsRef::<str>::as_ref(&s.name) == "minecraft:brewing_stand"
                 {
                     for (i, has) in bottles.iter().enumerate() {
-                        s.properties.insert(format!("has_bottle_{i}"), has.to_string());
+                        s.properties
+                            .insert(format!("has_bottle_{i}"), has.to_string());
                     }
                     if let Ok(id) = self.res.assets.registry.resolve(&s) {
                         self.world.set(x, y, z, id)?;

@@ -555,7 +555,9 @@ impl FeatureWorld for World<'_> {
                 None
             };
             if let Some(y) = mark {
-                self.region.chunk_mut(x >> 4, z >> 4)?.mark_postprocessing(x, y, z);
+                self.region
+                    .chunk_mut(x >> 4, z >> 4)?
+                    .mark_postprocessing(x, y, z);
             }
         }
         Ok(true)

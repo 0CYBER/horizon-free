@@ -75,12 +75,19 @@ fn parse_hex_digit(b: u8) -> Option<u32> {
 fn parse_hex(text: &[u8], out: &mut HashMap<u32, HexGlyph>) {
     for line in text.split(|b| *b == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
-        let Some(colon) = line.iter().position(|b| *b == b':') else { continue };
+        let Some(colon) = line.iter().position(|b| *b == b':') else {
+            continue;
+        };
         let (code, data) = (&line[..colon], &line[colon + 1..]);
         if !(4..=6).contains(&code.len()) {
             continue;
         }
-        let Some(codepoint) = code.iter().try_fold(0u32, |a, b| parse_hex_digit(*b).map(|d| a << 4 | d)) else { continue };
+        let Some(codepoint) = code
+            .iter()
+            .try_fold(0u32, |a, b| parse_hex_digit(*b).map(|d| a << 4 | d))
+        else {
+            continue;
+        };
         let digits_per_row = match data.len() {
             32 => 2,
             64 => 4,
@@ -94,7 +101,10 @@ fn parse_hex(text: &[u8], out: &mut HashMap<u32, HexGlyph>) {
         let mut ok = true;
         for (r, row) in rows.iter_mut().enumerate() {
             let chunk = &data[r * digits_per_row..(r + 1) * digits_per_row];
-            match chunk.iter().try_fold(0u32, |a, b| parse_hex_digit(*b).map(|d| a << 4 | d)) {
+            match chunk
+                .iter()
+                .try_fold(0u32, |a, b| parse_hex_digit(*b).map(|d| a << 4 | d))
+            {
                 Some(v) => {
                     *row = v << (32 - bit_width);
                     mask |= *row;
@@ -106,7 +116,11 @@ fn parse_hex(text: &[u8], out: &mut HashMap<u32, HexGlyph>) {
             continue;
         }
         // LineData.calculateWidth.
-        let (left, right) = if mask == 0 { (0, bit_width) } else { (mask.leading_zeros(), 31 - mask.trailing_zeros()) };
+        let (left, right) = if mask == 0 {
+            (0, bit_width)
+        } else {
+            (mask.leading_zeros(), 31 - mask.trailing_zeros())
+        };
         out.insert(codepoint, HexGlyph { rows, left, right });
     }
 }
@@ -123,7 +137,9 @@ fn providers(root: &Path, id: &str, depth: u32, out: &mut Vec<serde_json::Value>
     if depth > 8 {
         return;
     }
-    let Some(def) = read_json(root, &resource_path(id, "font", ".json")) else { return };
+    let Some(def) = read_json(root, &resource_path(id, "font", ".json")) else {
+        return;
+    };
     for p in def["providers"].as_array().into_iter().flatten() {
         if p["type"] == "reference" {
             let mut nested = Vec::new();
@@ -131,7 +147,13 @@ fn providers(root: &Path, id: &str, depth: u32, out: &mut Vec<serde_json::Value>
             for mut n in nested {
                 // A reference's filter applies to everything it includes.
                 if let Some(f) = p["filter"].as_object() {
-                    let merged = n["filter"].as_object().cloned().unwrap_or_default().into_iter().chain(f.clone()).collect();
+                    let merged = n["filter"]
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .chain(f.clone())
+                        .collect();
                     n["filter"] = serde_json::Value::Object(merged);
                 }
                 out.push(n);
@@ -144,7 +166,14 @@ fn providers(root: &Path, id: &str, depth: u32, out: &mut Vec<serde_json::Value>
 impl Font {
     /// Build from the atlas holding the bitmap font sheets. `pixels` is the
     /// RGBA atlas (for glyph widths) and `region` the reserved rows.
-    pub fn load(root: &Path, sprites: &HashMap<String, Rect>, pixels: &[u8], atlas: (u32, u32), region: (u32, u32), white: Rect) -> Self {
+    pub fn load(
+        root: &Path,
+        sprites: &HashMap<String, Rect>,
+        pixels: &[u8],
+        atlas: (u32, u32),
+        region: (u32, u32),
+        white: Rect,
+    ) -> Self {
         let mut bitmap = HashMap::new();
         let mut space = HashMap::new();
         let mut all = Vec::new();
@@ -161,9 +190,13 @@ impl Font {
                 Some("bitmap") => {
                     // Only non-uniform bitmap sheets exist in the default font.
                     let file = provider["file"].as_str().unwrap_or("");
-                    let name = file.trim_start_matches("minecraft:").trim_end_matches(".png");
+                    let name = file
+                        .trim_start_matches("minecraft:")
+                        .trim_end_matches(".png");
                     let name = format!("{}", name);
-                    let Some(rect) = sprites.get(&name).copied() else { continue };
+                    let Some(rect) = sprites.get(&name).copied() else {
+                        continue;
+                    };
                     let rows: Vec<Vec<char>> = provider["chars"]
                         .as_array()
                         .into_iter()
@@ -178,7 +211,10 @@ impl Font {
                     let height = provider["height"].as_f64().unwrap_or(8.0) as f32;
                     let ascent = provider["ascent"].as_f64().unwrap_or(7.0) as f32;
                     let scale = height / cell_h as f32;
-                    let (ax, ay) = ((rect.u0 * atlas.0 as f32).round() as u32, (rect.v0 * atlas.1 as f32).round() as u32);
+                    let (ax, ay) = (
+                        (rect.u0 * atlas.0 as f32).round() as u32,
+                        (rect.v0 * atlas.1 as f32).round() as u32,
+                    );
                     for (r, row) in rows.iter().enumerate() {
                         for (c, ch) in row.iter().enumerate() {
                             if *ch == '\0' || bitmap.contains_key(ch) {
@@ -188,7 +224,11 @@ impl Font {
                             // BitmapProvider.getActualGlyphWidth.
                             let mut used = 0;
                             for x in (0..cell_w).rev() {
-                                if (0..cell_h).any(|y| pixels.get((((cy + y) * atlas.0 + cx + x) * 4 + 3) as usize).is_some_and(|a| *a != 0)) {
+                                if (0..cell_h).any(|y| {
+                                    pixels
+                                        .get((((cy + y) * atlas.0 + cx + x) * 4 + 3) as usize)
+                                        .is_some_and(|a| *a != 0)
+                                }) {
                                     used = x + 1;
                                     break;
                                 }
@@ -219,7 +259,15 @@ impl Font {
                 _ => {}
             }
         }
-        let missing = Glyph { rect: None, left: 0.0, top: 0.0, right: 5.0, bottom: 8.0, advance: 6.0, offset: 1.0 };
+        let missing = Glyph {
+            rect: None,
+            left: 0.0,
+            top: 0.0,
+            right: 5.0,
+            bottom: 8.0,
+            advance: 6.0,
+            offset: 1.0,
+        };
         Self {
             bitmap,
             space,
@@ -228,7 +276,12 @@ impl Font {
             root: root.to_owned(),
             atlas,
             region,
-            cache: RefCell::new(Cache { glyphs: HashMap::new(), cursor: (0, 0), pending: Vec::new(), hex: None }),
+            cache: RefCell::new(Cache {
+                glyphs: HashMap::new(),
+                cursor: (0, 0),
+                pending: Vec::new(),
+                hex: None,
+            }),
             uniform: false,
             japanese: false,
         }
@@ -248,20 +301,37 @@ impl Font {
                     continue;
                 }
             }
-            let Some(file) = p["hex_file"].as_str() else { continue };
-            let path = self.root.join(resource_path(file, "", "").replace("//", "/"));
+            let Some(file) = p["hex_file"].as_str() else {
+                continue;
+            };
+            let path = self
+                .root
+                .join(resource_path(file, "", "").replace("//", "/"));
             let Ok(zip) = Zip::open(&path) else { continue };
             let mut provider = HexProvider::default();
-            let names: Vec<String> = zip.names().filter(|n| n.ends_with(".hex")).map(str::to_owned).collect();
+            let names: Vec<String> = zip
+                .names()
+                .filter(|n| n.ends_with(".hex"))
+                .map(str::to_owned)
+                .collect();
             for name in names {
                 if let Ok(bytes) = zip.read(&name) {
                     parse_hex(&bytes, &mut provider.glyphs);
                 }
             }
             for o in p["size_overrides"].as_array().into_iter().flatten() {
-                let from = o["from"].as_str().and_then(|s| s.chars().next()).map_or(0, u32::from);
-                let to = o["to"].as_str().and_then(|s| s.chars().next()).map_or(0, u32::from);
-                let (left, right) = (o["left"].as_u64().unwrap_or(0) as u32, o["right"].as_u64().unwrap_or(15) as u32);
+                let from = o["from"]
+                    .as_str()
+                    .and_then(|s| s.chars().next())
+                    .map_or(0, u32::from);
+                let to = o["to"]
+                    .as_str()
+                    .and_then(|s| s.chars().next())
+                    .map_or(0, u32::from);
+                let (left, right) = (
+                    o["left"].as_u64().unwrap_or(0) as u32,
+                    o["right"].as_u64().unwrap_or(15) as u32,
+                );
                 for c in from..=to {
                     if let Some(g) = provider.glyphs.get_mut(&c) {
                         g.left = left;
@@ -283,7 +353,15 @@ impl Font {
     /// The glyph for a character (FontSet.getGlyph).
     pub fn glyph(&self, c: char) -> Glyph {
         if let Some(a) = self.space.get(&c) {
-            return Glyph { rect: None, left: 0.0, top: 0.0, right: 0.0, bottom: 0.0, advance: *a, offset: 1.0 };
+            return Glyph {
+                rect: None,
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                advance: *a,
+                offset: 1.0,
+            };
         }
         if !self.uniform
             && let Some(g) = self.bitmap.get(&c)
@@ -297,7 +375,11 @@ impl Font {
         if cache.hex.is_none() {
             cache.hex = Some(self.load_hex());
         }
-        let hex = cache.hex.as_ref().and_then(|providers| providers.iter().find_map(|p| p.glyphs.get(&u32::from(c)).copied()));
+        let hex = cache.hex.as_ref().and_then(|providers| {
+            providers
+                .iter()
+                .find_map(|p| p.glyphs.get(&u32::from(c)).copied())
+        });
         let glyph = match hex {
             Some(h) => self.rasterize(&mut cache, h).unwrap_or(self.missing),
             None => self.missing,
@@ -323,7 +405,13 @@ impl Font {
             }
         }
         let (ax, ay) = (x, self.region.0 + y);
-        cache.pending.push(Patch { x: ax, y: ay, width, height: 16, rgba });
+        cache.pending.push(Patch {
+            x: ax,
+            y: ay,
+            width,
+            height: 16,
+            rgba,
+        });
         cache.cursor = (x + width + 1, y);
         Some(Glyph {
             rect: Some(Rect {
@@ -358,7 +446,10 @@ impl Font {
         s.chars().map(|c| self.glyph(c).advance).sum::<f32>().ceil()
     }
     pub fn width_text(&self, t: &Text) -> f32 {
-        t.chars().map(|(c, s)| self.advance(c, s)).sum::<f32>().ceil()
+        t.chars()
+            .map(|(c, s)| self.advance(c, s))
+            .sum::<f32>()
+            .ceil()
     }
     /// StringSplitter.splitLines: wrap at the last space that fits (or
     /// mid-word when none does); `\n` always breaks. Styles are kept.

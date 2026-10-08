@@ -9,7 +9,10 @@ use horizon_client::{
     text::Text,
 };
 use std::collections::BTreeMap;
-use winit::{event::KeyEvent, keyboard::{KeyCode, PhysicalKey}};
+use winit::{
+    event::KeyEvent,
+    keyboard::{KeyCode, PhysicalKey},
+};
 
 /// The local player's name (offline single player).
 pub const PLAYER_NAME: &str = "Player";
@@ -24,7 +27,11 @@ pub struct WorldClock {
 }
 impl Default for WorldClock {
     fn default() -> Self {
-        Self { partial: 0.0, rate: 1.0, paused: false }
+        Self {
+            partial: 0.0,
+            rate: 1.0,
+            paused: false,
+        }
     }
 }
 /// A clock time marker from the timelines (ClockTimeMarker).
@@ -87,14 +94,29 @@ impl Game<'_> {
         let mut items: Vec<String> = self.res.items.order.iter().map(|s| s.to_string()).collect();
         items.sort();
         reg.items = items;
-        reg.item_tags = self.res.items.item_tags.keys().map(|k| horizon_client::command::args::normalize(k)).collect();
+        reg.item_tags = self
+            .res
+            .items
+            .item_tags
+            .keys()
+            .map(|k| horizon_client::command::args::normalize(k))
+            .collect();
         reg.item_tags.sort();
-        reg.block_tags = self.res.items.block_tags.keys().map(|k| horizon_client::command::args::normalize(k)).collect();
+        reg.block_tags = self
+            .res
+            .items
+            .block_tags
+            .keys()
+            .map(|k| horizon_client::command::args::normalize(k))
+            .collect();
         reg.block_tags.sort();
         let registry = self.res.assets.registry;
         let mut blocks: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
         for id in 0..registry.len() {
-            let Some(state) = registry.state(horizon_world::registry::BlockStateId(id as u32)) else { continue };
+            let Some(state) = registry.state(horizon_world::registry::BlockStateId(id as u32))
+            else {
+                continue;
+            };
             let props = blocks.entry(state.name.clone()).or_default();
             for (k, v) in &state.properties {
                 let values = props.entry(k.clone()).or_default();
@@ -103,17 +125,41 @@ impl Game<'_> {
                 }
             }
         }
-        reg.blocks = blocks.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect();
-        let mut summonable: Vec<String> = self.res.mob_types.keys().map(|k| horizon_client::command::args::normalize(k)).collect();
-        summonable.extend(["minecraft:item", "minecraft:experience_orb", "minecraft:falling_block", "minecraft:arrow"].map(String::from));
+        reg.blocks = blocks
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().collect()))
+            .collect();
+        let mut summonable: Vec<String> = self
+            .res
+            .mob_types
+            .keys()
+            .map(|k| horizon_client::command::args::normalize(k))
+            .collect();
+        summonable.extend(
+            [
+                "minecraft:item",
+                "minecraft:experience_orb",
+                "minecraft:falling_block",
+                "minecraft:arrow",
+            ]
+            .map(String::from),
+        );
         summonable.sort();
         summonable.dedup();
         reg.summonable = summonable;
         let root = self.options.resources.clone();
-        let mut types: Vec<String> = serde_json::from_slice::<serde_json::Value>(&std::fs::read(root.join("entity-types.json")).unwrap_or_default())
-            .ok()
-            .and_then(|v| v.as_object().map(|o| o.keys().map(|k| horizon_client::command::args::normalize(k)).collect()))
-            .unwrap_or_default();
+        let mut types: Vec<String> = serde_json::from_slice::<serde_json::Value>(
+            &std::fs::read(root.join("entity-types.json")).unwrap_or_default(),
+        )
+        .ok()
+        .and_then(|v| {
+            v.as_object().map(|o| {
+                o.keys()
+                    .map(|k| horizon_client::command::args::normalize(k))
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
         if types.is_empty() {
             types = reg.summonable.clone();
             types.push("minecraft:player".into());
@@ -125,7 +171,12 @@ impl Game<'_> {
                 .into_iter()
                 .flatten()
                 .flatten()
-                .filter_map(|e| e.file_name().to_str()?.strip_suffix(".json").map(|n| format!("minecraft:{n}")))
+                .filter_map(|e| {
+                    e.file_name()
+                        .to_str()?
+                        .strip_suffix(".json")
+                        .map(|n| format!("minecraft:{n}"))
+                })
                 .collect();
             out.sort();
             out
@@ -140,8 +191,15 @@ impl Game<'_> {
         self.ui.markers.clear();
         self.ui.timelines.clear();
         for name in list("data/minecraft/timeline") {
-            let path = root.join(format!("data/minecraft/timeline/{}.json", name.trim_start_matches("minecraft:")));
-            let Ok(v) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(path).unwrap_or_default()) else { continue };
+            let path = root.join(format!(
+                "data/minecraft/timeline/{}.json",
+                name.trim_start_matches("minecraft:")
+            ));
+            let Ok(v) = serde_json::from_slice::<serde_json::Value>(
+                &std::fs::read(path).unwrap_or_default(),
+            ) else {
+                continue;
+            };
             if v["clock"].as_str() != Some("minecraft:overworld") {
                 continue;
             }
@@ -150,14 +208,30 @@ impl Game<'_> {
             for (marker, def) in v["time_markers"].as_object().into_iter().flatten() {
                 let (ticks, show) = match def {
                     serde_json::Value::Number(n) => (n.as_i64().unwrap_or(0), false),
-                    other => (other["ticks"].as_i64().unwrap_or(0), other["show_in_commands"].as_bool().unwrap_or(false)),
+                    other => (
+                        other["ticks"].as_i64().unwrap_or(0),
+                        other["show_in_commands"].as_bool().unwrap_or(false),
+                    ),
                 };
-                self.ui.markers.insert(marker.clone(), TimeMarker { ticks, period, show });
+                self.ui.markers.insert(
+                    marker.clone(),
+                    TimeMarker {
+                        ticks,
+                        period,
+                        show,
+                    },
+                );
             }
         }
         let reg = &mut self.ui.registries;
         reg.timelines = self.ui.timelines.keys().cloned().collect();
-        reg.time_markers = self.ui.markers.iter().filter(|(_, m)| m.show).map(|(k, _)| k.clone()).collect();
+        reg.time_markers = self
+            .ui
+            .markers
+            .iter()
+            .filter(|(_, m)| m.show)
+            .map(|(k, _)| k.clone())
+            .collect();
     }
     /// The block the player is looking at, for coordinate suggestions.
     fn refresh_dynamic_registries(&mut self) {
@@ -168,7 +242,10 @@ impl Game<'_> {
             return;
         }
         self.refresh_dynamic_registries();
-        let size = self.renderer.as_ref().map_or([1280, 720], |r| [r.config.width, r.config.height]);
+        let size = self
+            .renderer
+            .as_ref()
+            .map_or([1280, 720], |r| [r.config.width, r.config.height]);
         let b = HudBatch::new(size);
         let mut screen = ChatScreen::new(initial, self.ui.chat.recent.len(), b.width, b.height);
         screen.auto_suggestions = true;
@@ -190,18 +267,30 @@ impl Game<'_> {
     /// A chat message from the game (ChatComponent.addServerSystemMessage).
     pub(super) fn system_message(&mut self, text: Text) {
         let focused = self.screen == Screen::Chat;
-        self.ui.chat.add(&self.res.atlas, text, Some(SYSTEM_INDICATOR), self.ticks, focused);
+        self.ui.chat.add(
+            &self.res.atlas,
+            text,
+            Some(SYSTEM_INDICATOR),
+            self.ticks,
+            focused,
+        );
     }
     /// Keys while the chat screen is open.
     pub(super) fn chat_key(&mut self, event: &KeyEvent) {
-        let PhysicalKey::Code(key) = event.physical_key else { return };
+        let PhysicalKey::Code(key) = event.physical_key else {
+            return;
+        };
         self.chat_key_code(key, event.text.as_deref());
     }
     /// A key (and the text it typed) while the chat screen is open.
     pub(super) fn chat_key_code(&mut self, key: KeyCode, typed_text: Option<&str>) {
-        let ctrl = self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight);
-        let shift = self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
-        let Some(mut screen) = self.ui.chat_screen.take() else { return };
+        let ctrl =
+            self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight);
+        let shift =
+            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        let Some(mut screen) = self.ui.chat_screen.take() else {
+            return;
+        };
         let atlas = &self.res.atlas;
         let d = vanilla::dispatcher();
         if screen.suggestion_key(atlas, d, &self.ui.registries, key, shift) {
@@ -264,14 +353,21 @@ impl Game<'_> {
         if let Some(command) = message.strip_prefix('/') {
             self.run_command(command);
         } else {
-            let line = Text::translate("chat.type.text", &[Text::literal(PLAYER_NAME), Text::literal(message)]);
+            let line = Text::translate(
+                "chat.type.text",
+                &[Text::literal(PLAYER_NAME), Text::literal(message)],
+            );
             let focused = self.screen == Screen::Chat;
-            self.ui.chat.add(&self.res.atlas, line, None, self.ticks, focused);
+            self.ui
+                .chat
+                .add(&self.res.atlas, line, None, self.ticks, focused);
         }
     }
     pub(super) fn chat_scroll(&mut self, amount: f32) {
         let cursor = self.cursor;
-        let height = self.renderer.as_ref().map_or(720.0, |r| HudBatch::new([r.config.width, r.config.height]).height);
+        let height = self.renderer.as_ref().map_or(720.0, |r| {
+            HudBatch::new([r.config.width, r.config.height]).height
+        });
         if let Some(screen) = self.ui.chat_screen.as_mut()
             && screen.scroll_suggestions(cursor, height, amount)
         {
@@ -283,7 +379,9 @@ impl Game<'_> {
     }
     pub(super) fn chat_click(&mut self) {
         let cursor = self.cursor;
-        let height = self.renderer.as_ref().map_or(720.0, |r| HudBatch::new([r.config.width, r.config.height]).height);
+        let height = self.renderer.as_ref().map_or(720.0, |r| {
+            HudBatch::new([r.config.width, r.config.height]).height
+        });
         if let Some(screen) = self.ui.chat_screen.as_mut()
             && !screen.click(cursor, height)
             && screen.input.y <= cursor.1
@@ -298,19 +396,33 @@ impl Game<'_> {
         if self.ui.hide_gui && !focused {
             return;
         }
-        self.ui.chat.draw(batch, &self.res.atlas, self.ticks, focused);
+        self.ui
+            .chat
+            .draw(batch, &self.res.atlas, self.ticks, focused);
     }
     pub(super) fn draw_chat_screen(&mut self, batch: &mut HudBatch) {
-        let Some(mut screen) = self.ui.chat_screen.take() else { return };
+        let Some(mut screen) = self.ui.chat_screen.take() else {
+            return;
+        };
         screen.resize(batch.width, batch.height);
         let bg = self.ui.chat.options.background_opacity;
-        screen.draw(batch, &self.res.atlas, vanilla::dispatcher(), &self.ui.registries, self.cursor, bg);
+        screen.draw(
+            batch,
+            &self.res.atlas,
+            vanilla::dispatcher(),
+            &self.ui.registries,
+            self.cursor,
+            bg,
+        );
         self.ui.chat_screen = Some(screen);
     }
     /// Advance the overworld clock (ServerClockManager.tick) when
     /// `advance_time` allows it.
     pub(super) fn advance_clock(&mut self) {
-        if !self.ui.rules.bool("advance_time") || self.ui.clock.paused || self.dim == Dim::Nether && false {
+        if !self.ui.rules.bool("advance_time")
+            || self.ui.clock.paused
+            || self.dim == Dim::Nether && false
+        {
             return;
         }
         let c = &mut self.ui.clock;
@@ -333,7 +445,8 @@ impl Game<'_> {
     }
     /// Apply rules mirrored in other state (natural regeneration, difficulty).
     pub(super) fn sync_rules(&mut self) {
-        self.world.health_rules.natural_regeneration = self.ui.rules.bool("natural_health_regeneration");
+        self.world.health_rules.natural_regeneration =
+            self.ui.rules.bool("natural_health_regeneration");
         use horizon_world::food::Difficulty;
         self.world.health_rules.difficulty = match self.ui.difficulty {
             0 => Difficulty::Peaceful,
@@ -349,8 +462,12 @@ impl Game<'_> {
         self.ui.difficulty = read_difficulty(&self.world_root).unwrap_or(2);
         if let Ok(bytes) = std::fs::read(self.world_root.join("data/minecraft/world_clocks.dat"))
             && let Ok(raw) = horizon_world::compression::Compression::Gzip.decode(&bytes, 1 << 20)
-            && let Ok((root, _)) = horizon_world::nbt::read_named(&raw, horizon_world::nbt::Limits::default())
-            && let Some(c) = root.tag.get("data").and_then(|d| d.get("minecraft:overworld"))
+            && let Ok((root, _)) =
+                horizon_world::nbt::read_named(&raw, horizon_world::nbt::Limits::default())
+            && let Some(c) = root
+                .tag
+                .get("data")
+                .and_then(|d| d.get("minecraft:overworld"))
         {
             use horizon_world::nbt::Tag;
             if let Some(Tag::Float(r)) = c.get("rate") {
@@ -385,7 +502,10 @@ impl Game<'_> {
         ]);
         let root = NamedTag {
             name: "".into(),
-            tag: Tag::compound([("data", Tag::compound([("minecraft:overworld", clock)])), ("DataVersion", Tag::Int(horizon_world::DATA_VERSION))]),
+            tag: Tag::compound([
+                ("data", Tag::compound([("minecraft:overworld", clock)])),
+                ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
+            ]),
         };
         if let Ok(bytes) = horizon_world::nbt::write_named(&root, Limits::default())
             && let Ok(gz) = horizon_world::compression::Compression::Gzip.encode(&bytes)
@@ -405,10 +525,20 @@ impl Game<'_> {
         if !self.ui.rules.bool("show_death_messages") {
             return;
         }
-        let Some(p) = self.player.as_ref() else { return };
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
         let key = cause.unwrap_or_else(|| {
-            let feet = [p.position.x.floor() as i32, p.position.y.floor() as i32, p.position.z.floor() as i32];
-            let fluid = self.res.facts.get(self.world.block(feet[0], feet[1], feet[2])).fluid;
+            let feet = [
+                p.position.x.floor() as i32,
+                p.position.y.floor() as i32,
+                p.position.z.floor() as i32,
+            ];
+            let fluid = self
+                .res
+                .facts
+                .get(self.world.block(feet[0], feet[1], feet[2]))
+                .fluid;
             if p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64) {
                 "death.attack.outOfWorld".into()
             } else if fluid == horizon_client::blocks::Fluid::Lava {
@@ -429,24 +559,32 @@ impl Game<'_> {
     }
     /// F2: ScreenShot.grab into `screenshots/` with vanilla's file name.
     pub(super) fn take_screenshot(&mut self) {
-        let dir = std::env::current_dir().unwrap_or_default().join("screenshots");
+        let dir = std::env::current_dir()
+            .unwrap_or_default()
+            .join("screenshots");
         if std::fs::create_dir_all(&dir).is_err() {
             return;
         }
         let name = screenshot_name(&dir);
-        let Some(renderer) = self.renderer.as_mut() else { return };
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
         renderer.screenshot = Some(dir.join(&name));
         self.ui.screenshot_message = Some(name);
     }
     /// After a frame: report a finished F2 screenshot in chat.
     pub(super) fn finish_screenshot(&mut self, result: &std::result::Result<[u32; 2], String>) {
-        let Some(name) = self.ui.screenshot_message.take() else { return };
+        let Some(name) = self.ui.screenshot_message.take() else {
+            return;
+        };
         let message = match result {
             Ok(_) => Text::translate("screenshot.success", &[Text::literal(name).underlined()]),
             Err(e) => Text::translate("screenshot.failure", &[Text::literal(e.clone())]),
         };
         let focused = self.screen == Screen::Chat;
-        self.ui.chat.add(&self.res.atlas, message, None, self.ticks, focused);
+        self.ui
+            .chat
+            .add(&self.res.atlas, message, None, self.ticks, focused);
     }
     #[allow(dead_code)]
     fn chat_debug_fill(&self, batch: &mut HudBatch) {
@@ -456,7 +594,9 @@ impl Game<'_> {
 /// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, local time
 /// approximated as UTC).
 pub fn screenshot_name(dir: &std::path::Path) -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     let days = (secs / 86400) as i64;
     let (h, m, s) = ((secs % 86400) / 3600, (secs % 3600) / 60, secs % 60);
     let z = days + 719_468;
@@ -471,7 +611,11 @@ pub fn screenshot_name(dir: &std::path::Path) -> String {
     let base = format!("{y}-{mo:02}-{d:02}_{h:02}.{m:02}.{s:02}");
     let mut n = 1;
     loop {
-        let name = if n == 1 { format!("{base}.png") } else { format!("{base}_{n}.png") };
+        let name = if n == 1 {
+            format!("{base}.png")
+        } else {
+            format!("{base}_{n}.png")
+        };
         if !dir.join(&name).exists() {
             return name;
         }
@@ -480,8 +624,11 @@ pub fn screenshot_name(dir: &std::path::Path) -> String {
 }
 fn read_difficulty(world: &std::path::Path) -> Option<u8> {
     let bytes = std::fs::read(world.join("level.dat")).ok()?;
-    let raw = horizon_world::compression::Compression::Gzip.decode(&bytes, 64 << 20).ok()?;
-    let (root, _) = horizon_world::nbt::read_named(&raw, horizon_world::nbt::Limits::default()).ok()?;
+    let raw = horizon_world::compression::Compression::Gzip
+        .decode(&bytes, 64 << 20)
+        .ok()?;
+    let (root, _) =
+        horizon_world::nbt::read_named(&raw, horizon_world::nbt::Limits::default()).ok()?;
     match root.tag.get("Data")?.get("Difficulty")? {
         horizon_world::nbt::Tag::Byte(b) => Some((*b).clamp(0, 3) as u8),
         _ => None,

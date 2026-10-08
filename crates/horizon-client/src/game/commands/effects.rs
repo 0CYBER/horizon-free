@@ -25,7 +25,15 @@ impl Tracker {
 fn namespaced(id: &'static str) -> &'static str {
     static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
     IDS.get_or_init(|| {
-        brewing::EFFECTS.iter().map(|e| (e.id, &*Box::leak(format!("minecraft:{}", e.id).into_boxed_str()))).collect()
+        brewing::EFFECTS
+            .iter()
+            .map(|e| {
+                (
+                    e.id,
+                    &*Box::leak(format!("minecraft:{}", e.id).into_boxed_str()),
+                )
+            })
+            .collect()
     })
     .get(id)
     .copied()
@@ -36,17 +44,32 @@ fn effect_name(id: &str) -> Text {
 }
 impl Game<'_> {
     fn effect_arg(ctx: &Context) -> R<&'static brewing::EffectDef> {
-        let Some(Arg::Resource(id)) = ctx.get("effect") else { return Err(err("argument.resource.invalid_type", &[])) };
-        brewing::effect(id).ok_or_else(|| err("argument.resource.not_found", &[id, &"minecraft:mob_effect"]))
+        let Some(Arg::Resource(id)) = ctx.get("effect") else {
+            return Err(err("argument.resource.invalid_type", &[]));
+        };
+        brewing::effect(id).ok_or_else(|| {
+            err(
+                "argument.resource.not_found",
+                &[id, &"minecraft:mob_effect"],
+            )
+        })
     }
     /// The executing entity for argument-less forms (the player).
     fn living_targets(&mut self, ctx: &Context) -> R<Vec<Target>> {
-        if ctx.get("targets").is_some() { self.entities(ctx, "targets", false) } else { Ok(vec![Target::Player]) }
+        if ctx.get("targets").is_some() {
+            self.entities(ctx, "targets", false)
+        } else {
+            Ok(vec![Target::Player])
+        }
     }
     /// `EffectCommands.giveEffect`.
     pub(super) fn cmd_effect_give(&mut self, ctx: &Context) -> R<i32> {
         let effect = Self::effect_arg(ctx)?;
-        let seconds = if ctx.has("infinite") { Some(-1) } else { Self::int(ctx, "seconds") };
+        let seconds = if ctx.has("infinite") {
+            Some(-1)
+        } else {
+            Self::int(ctx, "seconds")
+        };
         let amplifier = Self::int(ctx, "amplifier").unwrap_or(0);
         let particles = !matches!(ctx.get("hideParticles"), Some(Arg::Bool(true)));
         // computeDurationInTicks
@@ -80,11 +103,19 @@ impl Game<'_> {
             [] => return Err(err("commands.effect.give.failed", &[])),
             [one] => Text::translate(
                 "commands.effect.give.success.single",
-                &[effect_name(effect.id), self.target_name(*one), Text::literal((duration / 20).to_string())],
+                &[
+                    effect_name(effect.id),
+                    self.target_name(*one),
+                    Text::literal((duration / 20).to_string()),
+                ],
             ),
             many => Text::translate(
                 "commands.effect.give.success.multiple",
-                &texts(&[effect_name(effect.id), Text::literal(many.len().to_string()), Text::literal((duration / 20).to_string())]),
+                &texts(&[
+                    effect_name(effect.id),
+                    Text::literal(many.len().to_string()),
+                    Text::literal((duration / 20).to_string()),
+                ]),
             ),
         };
         self.feedback(message);
@@ -92,7 +123,11 @@ impl Game<'_> {
     }
     /// `EffectCommands.clearEffects` / `clearEffect`.
     pub(super) fn cmd_effect_clear(&mut self, ctx: &Context) -> R<i32> {
-        let effect = if ctx.get("effect").is_some() { Some(Self::effect_arg(ctx)?) } else { None };
+        let effect = if ctx.get("effect").is_some() {
+            Some(Self::effect_arg(ctx)?)
+        } else {
+            None
+        };
         let mut tracker = Tracker::default();
         for t in self.living_targets(ctx)? {
             let changed = match (t, effect) {
@@ -109,7 +144,9 @@ impl Game<'_> {
                 (Target::Mob(id), e) => match self.mobs.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
                         let before = m.extra.effects.len();
-                        m.extra.effects.retain(|x| e.is_some_and(|e| x.0 != namespaced(e.id)));
+                        m.extra
+                            .effects
+                            .retain(|x| e.is_some_and(|e| x.0 != namespaced(e.id)));
                         m.extra.effects.len() != before
                     }
                     None => false,
@@ -121,9 +158,18 @@ impl Game<'_> {
         let message = match (tracker.changed.as_slice(), effect) {
             ([], None) => return Err(err("commands.effect.clear.everything.failed", &[])),
             ([], Some(_)) => return Err(err("commands.effect.clear.specific.failed", &[])),
-            ([one], None) => Text::translate("commands.effect.clear.everything.success.single", &[self.target_name(*one)]),
-            (many, None) => Text::translate("commands.effect.clear.everything.success.multiple", &[Text::literal(many.len().to_string())]),
-            ([one], Some(e)) => Text::translate("commands.effect.clear.specific.success.single", &[effect_name(e.id), self.target_name(*one)]),
+            ([one], None) => Text::translate(
+                "commands.effect.clear.everything.success.single",
+                &[self.target_name(*one)],
+            ),
+            (many, None) => Text::translate(
+                "commands.effect.clear.everything.success.multiple",
+                &[Text::literal(many.len().to_string())],
+            ),
+            ([one], Some(e)) => Text::translate(
+                "commands.effect.clear.specific.success.single",
+                &[effect_name(e.id), self.target_name(*one)],
+            ),
             (many, Some(e)) => Text::translate(
                 "commands.effect.clear.specific.success.multiple",
                 &texts(&[effect_name(e.id), Text::literal(many.len().to_string())]),
@@ -135,10 +181,17 @@ impl Game<'_> {
     /// `EnchantCommand.enchant` (mobs hold bare item ids, so only the player's
     /// main hand item can carry the enchantment).
     pub(super) fn cmd_enchant(&mut self, ctx: &Context) -> R<i32> {
-        let Some(Arg::Resource(id)) = ctx.get("enchantment").cloned() else { return Ok(0) };
+        let Some(Arg::Resource(id)) = ctx.get("enchantment").cloned() else {
+            return Ok(0);
+        };
         let level = Self::int(ctx, "level").unwrap_or(1);
         let enchantments = &self.res.stations.enchantments;
-        let Some(def) = enchantments.get(&id) else { return Err(err("argument.resource.not_found", &[&id, &"minecraft:enchantment"])) };
+        let Some(def) = enchantments.get(&id) else {
+            return Err(err(
+                "argument.resource.not_found",
+                &[&id, &"minecraft:enchantment"],
+            ));
+        };
         let max = def.max_level as i32;
         if level > max {
             return Err(err("commands.enchant.failed.level", &[&level, &max]));
@@ -151,13 +204,19 @@ impl Game<'_> {
                 Target::Player => {
                     let Some(stack) = self.inventory[self.selected].clone() else {
                         if single {
-                            return Err(err("commands.enchant.failed.itemless", &[&self.target_name(t).plain()]));
+                            return Err(err(
+                                "commands.enchant.failed.itemless",
+                                &[&self.target_name(t).plain()],
+                            ));
                         }
                         continue;
                     };
                     let e = &self.res.stations.enchantments;
                     let compatible = e.can_enchant(&self.res.items, &id, &stack.item)
-                        && stack.crafting_enchantments().iter().all(|(other, _)| e.compatible(other, &id));
+                        && stack
+                            .crafting_enchantments()
+                            .iter()
+                            .all(|(other, _)| e.compatible(other, &id));
                     if compatible {
                         if let Some(s) = self.inventory[self.selected].as_mut() {
                             s.enchant(&id, level.max(0) as u32);
@@ -165,29 +224,63 @@ impl Game<'_> {
                         tracker.track(t, true);
                     } else if single {
                         // getHoverName().getString(): the custom or item name, no brackets.
-                        return Err(err("commands.enchant.failed.incompatible", &[&stack.custom_name().map_or_else(|| self.res.names.item(&stack.item).to_string(), str::to_owned)]));
+                        return Err(err(
+                            "commands.enchant.failed.incompatible",
+                            &[&stack.custom_name().map_or_else(
+                                || self.res.names.item(&stack.item).to_string(),
+                                str::to_owned,
+                            )],
+                        ));
                     }
                 }
                 Target::Mob(mob) => {
-                    let held = self.mobs.iter().find(|m| m.id == mob).and_then(|m| m.extra.main_hand.clone());
+                    let held = self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == mob)
+                        .and_then(|m| m.extra.main_hand.clone());
                     if single {
                         return Err(match held {
-                            None => err("commands.enchant.failed.itemless", &[&self.target_name(t).plain()]),
-                            Some(item) => err("commands.enchant.failed.incompatible", &[&self.res.names.item(&item)]),
+                            None => err(
+                                "commands.enchant.failed.itemless",
+                                &[&self.target_name(t).plain()],
+                            ),
+                            Some(item) => err(
+                                "commands.enchant.failed.incompatible",
+                                &[&self.res.names.item(&item)],
+                            ),
                         });
                     }
                 }
-                _ if single => return Err(err("commands.enchant.failed.entity", &[&self.target_name(t).plain()])),
+                _ if single => {
+                    return Err(err(
+                        "commands.enchant.failed.entity",
+                        &[&self.target_name(t).plain()],
+                    ));
+                }
                 _ => {}
             }
         }
-        let (name, curse) = self.res.stations.enchantments.full_name(&id, level.max(0) as u32);
-        let style = Style { color: Some(if curse { text::RED } else { text::GRAY }), ..Style::default() };
+        let (name, curse) = self
+            .res
+            .stations
+            .enchantments
+            .full_name(&id, level.max(0) as u32);
+        let style = Style {
+            color: Some(if curse { text::RED } else { text::GRAY }),
+            ..Style::default()
+        };
         let full = Text::styled(name, style);
         let message = match tracker.changed.as_slice() {
             [] => return Err(err("commands.enchant.failed", &[])),
-            [one] => Text::translate("commands.enchant.success.single", &[full, self.target_name(*one)]),
-            many => Text::translate("commands.enchant.success.multiple", &texts(&[full, Text::literal(many.len().to_string())])),
+            [one] => Text::translate(
+                "commands.enchant.success.single",
+                &[full, self.target_name(*one)],
+            ),
+            many => Text::translate(
+                "commands.enchant.success.multiple",
+                &texts(&[full, Text::literal(many.len().to_string())]),
+            ),
         };
         self.feedback(message);
         Ok(tracker.total)

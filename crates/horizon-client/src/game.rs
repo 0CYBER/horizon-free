@@ -1,30 +1,30 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
 mod blockctl;
+mod chat;
+mod commands;
 mod control;
-mod end;
-mod postprocess;
-mod persist;
+mod creatures;
 mod enchant_effects;
-mod potions;
-mod station_control;
-mod stations;
-mod trading;
+mod end;
 mod explosion;
 mod growth;
 mod machines;
-mod tnt;
-mod remote;
-mod chat;
-mod commands;
+mod music;
 mod options;
 mod packs;
-mod screens;
-mod creatures;
+mod persist;
+mod postprocess;
+mod potions;
+mod remote;
 mod render_control;
 mod render_tick;
+mod screens;
 mod sign_edit;
-mod music;
+mod station_control;
+mod stations;
+mod tnt;
+mod trading;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -33,37 +33,37 @@ use horizon_client::{
     blocks::{BlockFacts, Fluid},
     chunk::{HEIGHT, MIN_Y},
     clock::FixedStep,
-    entities::{Arrow, Experience, ExperienceOrb, ItemEntity},
-    mobs::{Mob, MobType, MobTypes},
-    particles::Particle,
-    containers::{BlockEntity, Providers},
-    creative::{Creative, Names},
-    crafting::Recipes,
     collisions,
+    containers::{BlockEntity, Providers},
+    crafting::Recipes,
+    creative::{Creative, Names},
+    entities::{Arrow, Experience, ExperienceOrb, ItemEntity},
     environment::Environment,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
     items::{ItemStack, Items},
     light::LightTables,
     mesher::{MeshTables, Vertex},
+    mobs::{Mob, MobType, MobTypes},
     models,
     motion::{MotionEvent, MotionResources, MotionWorld, PlayerMotion},
-    sprint::Keys,
-    streaming::{Streaming, WorkerContext},
+    particles::Particle,
     save::{Level, Persistent, SaveDir},
     settings::Settings,
-    title::{Action, Title},
+    sprint::Keys,
+    streaming::{Streaming, WorkerContext},
     testgen::TestTerrain,
+    title::{Action, Title},
     vanillagen::VanillaTerrain,
     world::World,
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_core::{geometry::Direction, position::BlockPos};
+use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_world::{
     block_collision::BlockCollisionRegistry,
     level::{
-        Behaviours, Dimension as LevelDimension, LevelAccess, LevelEvent, Landing, PlaceContext, PlaceOutcome, PlayerContext,
-        PlayerEffect, Ticks, flags as level_flags,
+        Behaviours, Dimension as LevelDimension, Landing, LevelAccess, LevelEvent, PlaceContext,
+        PlaceOutcome, PlayerContext, PlayerEffect, Ticks, flags as level_flags,
     },
     registry::BlockStateId,
 };
@@ -150,7 +150,9 @@ impl Options {
                 "--no-pause" => o.no_pause = true,
                 "--control" => o.control = Some(horizon_client::control::default_path()),
                 _ => {
-                    let value = args.next().ok_or_else(|| format!("missing value after {arg}"))?;
+                    let value = args
+                        .next()
+                        .ok_or_else(|| format!("missing value after {arg}"))?;
                     match arg.as_str() {
                         "--resources" => o.resources = value.into(),
                         "--render-distance" | "--radius" => {
@@ -165,7 +167,9 @@ impl Options {
                                 // Text seeds hash like String.hashCode.
                                 value
                                     .encode_utf16()
-                                    .fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c)))
+                                    .fold(0i32, |h, c| {
+                                        h.wrapping_mul(31).wrapping_add(i32::from(c))
+                                    })
                                     .into()
                             })
                         }
@@ -179,7 +183,13 @@ impl Options {
                         "--control-socket" => o.control = Some(value.into()),
                         "--time" => o.time = Some(value.parse()?),
                         "--weather" => o.weather = Some(value),
-                        "--dimension" => o.dimension = Some(if value.contains(':') { value } else { format!("minecraft:{value}") }),
+                        "--dimension" => {
+                            o.dimension = Some(if value.contains(':') {
+                                value
+                            } else {
+                                format!("minecraft:{value}")
+                            })
+                        }
                         "--look" => {
                             let (y, p) = value.split_once(',').ok_or("--look takes YAW,PITCH")?;
                             o.look = Some((y.parse()?, p.parse()?));
@@ -205,7 +215,12 @@ enum Screen {
 #[derive(Clone)]
 enum Icon {
     Flat(String),
-    Cube { top: String, left: String, right: String, tint: u32 },
+    Cube {
+        top: String,
+        left: String,
+        right: String,
+        tint: u32,
+    },
 }
 struct Mining {
     pos: [i32; 3],
@@ -242,7 +257,12 @@ impl LevelAccess for GameLevel<'_> {
     fn is_raining_at(&self, pos: BlockPos) -> bool {
         self.behaviours.is_raining_at(self, pos)
     }
-    fn block_entity_analog_signal(&self, pos: BlockPos, _state: BlockStateId, _direction: Direction) -> i32 {
+    fn block_entity_analog_signal(
+        &self,
+        pos: BlockPos,
+        _state: BlockStateId,
+        _direction: Direction,
+    ) -> i32 {
         machines::container_signal(self.world, self.behaviours, self.items, self.registry, pos)
     }
     fn biome_name(&self, pos: BlockPos) -> Option<&str> {
@@ -273,11 +293,19 @@ impl LevelAccess for GameLevel<'_> {
         self.world.loaded(pos.x, pos.z)
     }
     fn min_y(&self) -> i32 {
-        if self.dimension != LevelDimension::Overworld { 0 } else { MIN_Y }
+        if self.dimension != LevelDimension::Overworld {
+            0
+        } else {
+            MIN_Y
+        }
     }
     fn max_y(&self) -> i32 {
         // Exclusive, as LevelAccess::max_y documents.
-        if self.dimension != LevelDimension::Overworld { 256 } else { MIN_Y + HEIGHT }
+        if self.dimension != LevelDimension::Overworld {
+            256
+        } else {
+            MIN_Y + HEIGHT
+        }
     }
     fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
         &mut self.world.random
@@ -305,12 +333,19 @@ impl LevelAccess for GameLevel<'_> {
     }
     /// Level.isUnobstructed against the player for full-collision blocks.
     fn is_unobstructed(&self, pos: BlockPos, state: BlockStateId) -> bool {
-        let Some((lo, hi)) = self.player_box else { return true };
+        let Some((lo, hi)) = self.player_box else {
+            return true;
+        };
         if !self.facts.get(state).full_collision {
             return true;
         }
         let (x, y, z) = (f64::from(pos.x), f64::from(pos.y), f64::from(pos.z));
-        !(x < hi[0] - 1e-7 && x + 1.0 > lo[0] + 1e-7 && y < hi[1] - 1e-7 && y + 1.0 > lo[1] + 1e-7 && z < hi[2] - 1e-7 && z + 1.0 > lo[2] + 1e-7)
+        !(x < hi[0] - 1e-7
+            && x + 1.0 > lo[0] + 1e-7
+            && y < hi[1] - 1e-7
+            && y + 1.0 > lo[1] + 1e-7
+            && z < hi[2] - 1e-7
+            && z + 1.0 > lo[2] + 1e-7)
     }
     fn emit(&mut self, event: LevelEvent) {
         self.events.push(event);
@@ -517,7 +552,11 @@ fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
 impl Game<'_> {
     fn eye_position(&self) -> Option<[f64; 3]> {
         let p = self.player.as_ref()?;
-        Some([p.position.x, p.position.y + f64::from(p.dimensions.eye_height), p.position.z])
+        Some([
+            p.position.x,
+            p.position.y + f64::from(p.dimensions.eye_height),
+            p.position.z,
+        ])
     }
     fn reach(&self) -> f64 {
         if self.creative { 5.0 } else { 4.5 }
@@ -529,11 +568,25 @@ impl Game<'_> {
         let reach = self.reach();
         let mut pos = origin.map(|v| v.floor() as i32);
         let step = dir.map(|d| if d > 0.0 { 1 } else { -1 });
-        let delta = dir.map(|d| if d == 0.0 { f64::INFINITY } else { (1.0 / d).abs() });
+        let delta = dir.map(|d| {
+            if d == 0.0 {
+                f64::INFINITY
+            } else {
+                (1.0 / d).abs()
+            }
+        });
         let mut t_max = [0.0; 3];
         for i in 0..3 {
-            let boundary = if dir[i] > 0.0 { f64::from(pos[i]) + 1.0 } else { f64::from(pos[i]) };
-            t_max[i] = if dir[i] == 0.0 { f64::INFINITY } else { (boundary - origin[i]) / dir[i] };
+            let boundary = if dir[i] > 0.0 {
+                f64::from(pos[i]) + 1.0
+            } else {
+                f64::from(pos[i])
+            };
+            t_max[i] = if dir[i] == 0.0 {
+                f64::INFINITY
+            } else {
+                (boundary - origin[i]) / dir[i]
+            };
         }
         let mut face = [0; 3];
         let mut t = 0.0;
@@ -541,13 +594,23 @@ impl Game<'_> {
             let state = self.world.block(pos[0], pos[1], pos[2]);
             let f = self.res.facts.get(state);
             if !self.res.facts.is_air(state)
-                && !(f.fluid != Fluid::None && !f.waterlogged && &*f.name != "minecraft:kelp" && f.render_shape != horizon_client::blocks::RenderShape::Model)
-                && !matches!(&*f.name, "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column")
+                && !(f.fluid != Fluid::None
+                    && !f.waterlogged
+                    && &*f.name != "minecraft:kelp"
+                    && f.render_shape != horizon_client::blocks::RenderShape::Model)
+                && !matches!(
+                    &*f.name,
+                    "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column"
+                )
             {
                 return Some(Hit {
                     pos,
                     face,
-                    point: [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t],
+                    point: [
+                        origin[0] + dir[0] * t,
+                        origin[1] + dir[1] * t,
+                        origin[2] + dir[2] * t,
+                    ],
                 });
             }
             let axis = if t_max[0] < t_max[1] {
@@ -572,7 +635,9 @@ impl Game<'_> {
     fn give(&mut self, mut stack: ItemStack) -> Option<ItemStack> {
         let max = self.res.items.get(&stack.item).map_or(64, |i| i.max_stack);
         // Prefer the selected slot, then the hotbar, then the main inventory.
-        let order: Vec<usize> = std::iter::once(self.selected).chain((0..36).filter(|&i| i != self.selected)).collect();
+        let order: Vec<usize> = std::iter::once(self.selected)
+            .chain((0..36).filter(|&i| i != self.selected))
+            .collect();
         for &i in &order {
             if let Some(slot) = &mut self.inventory[i]
                 && slot.same_item_same_components(&stack)
@@ -589,7 +654,10 @@ impl Game<'_> {
         for i in 0..36 {
             if self.inventory[i].is_none() {
                 let moved = stack.count.min(max);
-                self.inventory[i] = Some(ItemStack { count: moved, ..stack.clone() });
+                self.inventory[i] = Some(ItemStack {
+                    count: moved,
+                    ..stack.clone()
+                });
                 stack.count -= moved;
                 if stack.count == 0 {
                     return None;
@@ -602,13 +670,27 @@ impl Game<'_> {
     /// The `particle` texture of a block's first blockstate model (for models without faces).
     fn model_particle(&self, block: &str) -> Option<String> {
         let root = &self.options.resources;
-        let read = |path: String| -> Option<serde_json::Value> { serde_json::from_slice(&std::fs::read(root.join(path)).ok()?).ok() };
+        let read = |path: String| -> Option<serde_json::Value> {
+            serde_json::from_slice(&std::fs::read(root.join(path)).ok()?).ok()
+        };
         let states = read(format!("assets/minecraft/blockstates/{block}.json"))?;
-        let mut model = states["variants"].as_object()?.values().next().and_then(|v| v["model"].as_str().or_else(|| v[0]["model"].as_str()))?.to_owned();
+        let mut model = states["variants"]
+            .as_object()?
+            .values()
+            .next()
+            .and_then(|v| v["model"].as_str().or_else(|| v[0]["model"].as_str()))?
+            .to_owned();
         for _ in 0..8 {
-            let m = read(format!("assets/minecraft/models/{}.json", model.trim_start_matches("minecraft:")))?;
+            let m = read(format!(
+                "assets/minecraft/models/{}.json",
+                model.trim_start_matches("minecraft:")
+            ))?;
             if let Some(p) = m["textures"]["particle"].as_str() {
-                let p = if let Some(alias) = p.strip_prefix('#') { m["textures"][alias].as_str()? } else { p };
+                let p = if let Some(alias) = p.strip_prefix('#') {
+                    m["textures"][alias].as_str()?
+                } else {
+                    p
+                };
                 return Some(p.trim_start_matches("minecraft:").to_owned());
             }
             model = m["parent"].as_str()?.to_owned();
@@ -616,13 +698,25 @@ impl Game<'_> {
         None
     }
     fn particle_sprite(&self, state: BlockStateId) -> Option<(String, u32)> {
-        let models = self.res.assets.model_catalog.collect(state, horizon_core::position::BlockPos::new(0, 0, 0)).ok()?;
-        let face = models.iter().flat_map(|(_, m)| m.faces.iter()).find(|f| f.quad.facing == horizon_assets::model::Direction::Up)
+        let models = self
+            .res
+            .assets
+            .model_catalog
+            .collect(state, horizon_core::position::BlockPos::new(0, 0, 0))
+            .ok()?;
+        let face = models
+            .iter()
+            .flat_map(|(_, m)| m.faces.iter())
+            .find(|f| f.quad.facing == horizon_assets::model::Direction::Up)
             .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next())?;
         let name = self.res.layer_names.get(&face.layer)?.clone();
         let tint = if face.quad.tint_index >= 0 {
             let n = &self.res.facts.get(state).name;
-            if n.contains("leaves") || n.contains("vine") { 0x48B518 } else { 0x91BD59 }
+            if n.contains("leaves") || n.contains("vine") {
+                0x48B518
+            } else {
+                0x91BD59
+            }
         } else {
             0xFFFFFF
         };
@@ -630,14 +724,21 @@ impl Game<'_> {
     }
     /// ParticleEngine.destroy: a 4x4x4 burst.
     fn destroy_particles(&mut self, pos: [i32; 3], state: BlockStateId) {
-        let Some((sprite, tint)) = self.particle_sprite(state) else { return };
+        let Some((sprite, tint)) = self.particle_sprite(state) else {
+            return;
+        };
         for x in 0..4 {
             for y in 0..4 {
                 for z in 0..4 {
                     let d = |i: i32| (f64::from(i) + 0.5) / 4.0;
-                    let p = [f64::from(pos[0]) + d(x), f64::from(pos[1]) + d(y), f64::from(pos[2]) + d(z)];
+                    let p = [
+                        f64::from(pos[0]) + d(x),
+                        f64::from(pos[1]) + d(y),
+                        f64::from(pos[2]) + d(z),
+                    ];
                     let v = [d(x) - 0.5, d(y) - 0.5, d(z) - 0.5];
-                    let particle = Particle::terrain(&mut self.world.random, p, v, sprite.clone(), tint);
+                    let particle =
+                        Particle::terrain(&mut self.world.random, p, v, sprite.clone(), tint);
                     self.particles.push(particle);
                 }
             }
@@ -645,7 +746,9 @@ impl Game<'_> {
     }
     /// ParticleEngine.crack: one crumb on the face being mined.
     fn crack_particle(&mut self, pos: [i32; 3], face: [i32; 3], state: BlockStateId) {
-        let Some((sprite, tint)) = self.particle_sprite(state) else { return };
+        let Some((sprite, tint)) = self.particle_sprite(state) else {
+            return;
+        };
         let r = &mut self.world.random;
         let mut p = [0.0; 3];
         for i in 0..3 {
@@ -664,7 +767,13 @@ impl Game<'_> {
         particle.size *= 0.6;
         self.particles.push(particle);
     }
-    fn spawn_item(&mut self, stack: ItemStack, position: [f64; 3], velocity: [f64; 3], pickup_delay: u32) {
+    fn spawn_item(
+        &mut self,
+        stack: ItemStack,
+        position: [f64; 3],
+        velocity: [f64; 3],
+        pickup_delay: u32,
+    ) {
         self.next_entity += 1;
         let p = Vec3::new(position[0], position[1], position[2]);
         let bob = self.world.random.next_float() * std::f32::consts::PI * 2.0;
@@ -689,20 +798,34 @@ impl Game<'_> {
             f64::from(pos[1]) + 0.5 + offset() - 0.125,
             f64::from(pos[2]) + 0.5 + offset(),
         ];
-        let v = [r.next_double() * 0.2 - 0.1, 0.2, r.next_double() * 0.2 - 0.1];
+        let v = [
+            r.next_double() * 0.2 - 0.1,
+            0.2,
+            r.next_double() * 0.2 - 0.1,
+        ];
         self.spawn_item(stack, p, v, 10);
     }
     /// Player.drop: thrown from the eyes along the view direction.
     fn drop_held(&mut self, all: bool) {
-        let Some(eye) = self.eye_position() else { return };
-        let Some(stack) = self.inventory[self.selected].as_mut() else { return };
+        let Some(eye) = self.eye_position() else {
+            return;
+        };
+        let Some(stack) = self.inventory[self.selected].as_mut() else {
+            return;
+        };
         let count = if all { stack.count } else { 1 };
-        let thrown = ItemStack { count, ..stack.clone() };
+        let thrown = ItemStack {
+            count,
+            ..stack.clone()
+        };
         stack.count -= count;
         if stack.count == 0 {
             self.inventory[self.selected] = None;
         }
-        let (yaw, pitch) = (f64::from(self.yaw).to_radians(), f64::from(self.pitch).to_radians());
+        let (yaw, pitch) = (
+            f64::from(self.yaw).to_radians(),
+            f64::from(self.pitch).to_radians(),
+        );
         let r = &mut self.world.random;
         let spread = f64::from(r.next_float()) * std::f64::consts::TAU;
         let strength = 0.02 * f64::from(r.next_float());
@@ -726,27 +849,44 @@ impl Game<'_> {
         }
         let w = f64::from(p.dimensions.width) / 2.0;
         let (min, max) = (
-            [p.position.x - w - 1.0, p.position.y - 0.5, p.position.z - w - 1.0],
-            [p.position.x + w + 1.0, p.position.y + f64::from(p.dimensions.height) + 0.5, p.position.z + w + 1.0],
+            [
+                p.position.x - w - 1.0,
+                p.position.y - 0.5,
+                p.position.z - w - 1.0,
+            ],
+            [
+                p.position.x + w + 1.0,
+                p.position.y + f64::from(p.dimensions.height) + 0.5,
+                p.position.z + w + 1.0,
+            ],
         );
         let feet = [p.position.x, p.position.y, p.position.z];
         let mut kept = Vec::with_capacity(items.len());
         for mut item in items {
             let b = item.bounds();
-            let touching = b.min_position().x < max[0] && b.max_position().x > min[0]
-                && b.min_position().y < max[1] && b.max_position().y > min[1]
-                && b.min_position().z < max[2] && b.max_position().z > min[2];
+            let touching = b.min_position().x < max[0]
+                && b.max_position().x > min[0]
+                && b.min_position().y < max[1]
+                && b.max_position().y > min[1]
+                && b.min_position().z < max[2]
+                && b.max_position().z > min[2];
             if touching && item.pickup_delay == 0 {
                 let before = item.stack.count;
                 match self.give(item.stack.clone()) {
                     None => {
-                        let pitch = ((self.world.random.next_float() - self.world.random.next_float()) * 0.7 + 1.0) * 2.0;
-                        self.audio.play("minecraft:entity.item.pickup", Some(feet), 0.2, pitch);
+                        let pitch = ((self.world.random.next_float()
+                            - self.world.random.next_float())
+                            * 0.7
+                            + 1.0)
+                            * 2.0;
+                        self.audio
+                            .play("minecraft:entity.item.pickup", Some(feet), 0.2, pitch);
                         continue;
                     }
                     Some(rest) => {
                         if rest.count < before {
-                            self.audio.play("minecraft:entity.item.pickup", Some(feet), 0.2, 1.0);
+                            self.audio
+                                .play("minecraft:entity.item.pickup", Some(feet), 0.2, 1.0);
                         }
                         item.stack = rest;
                     }
@@ -757,12 +897,22 @@ impl Game<'_> {
         self.dropped = kept;
     }
     /// Run vanilla block behaviour against the world through `LevelAccess`.
-    fn with_level<R>(&mut self, f: impl FnOnce(&Behaviours, &mut GameLevel<'_>, &mut Ticks) -> R) -> R {
+    fn with_level<R>(
+        &mut self,
+        f: impl FnOnce(&Behaviours, &mut GameLevel<'_>, &mut Ticks) -> R,
+    ) -> R {
         let darken = self.sky_darken();
         let (rain, thunder) = self.world.weather.levels(1.0);
         let player_box = self.player.as_ref().map(|p| {
             let w = f64::from(p.dimensions.width) / 2.0;
-            ([p.position.x - w, p.position.y, p.position.z - w], [p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w])
+            (
+                [p.position.x - w, p.position.y, p.position.z - w],
+                [
+                    p.position.x + w,
+                    p.position.y + f64::from(p.dimensions.height),
+                    p.position.z + w,
+                ],
+            )
         });
         let dimension = match self.dim {
             Dim::Overworld => LevelDimension::Overworld,
@@ -791,7 +941,13 @@ impl Game<'_> {
     /// Level.setBlock(pos, state, UPDATE_ALL) with neighbour/shape updates.
     fn level_set(&mut self, pos: [i32; 3], state: BlockStateId) -> Result<()> {
         self.with_level(|b, level, ticks| {
-            b.set_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]), state, level_flags::UPDATE_ALL);
+            b.set_block(
+                level,
+                ticks,
+                BlockPos::new(pos[0], pos[1], pos[2]),
+                state,
+                level_flags::UPDATE_ALL,
+            );
         });
         self.process_level_events()
     }
@@ -802,7 +958,8 @@ impl Game<'_> {
             self.register_chunk_ticks(*k);
         }
         for k in self.tick_chunks.difference(&loaded) {
-            self.block_ticks.remove_chunk(horizon_core::position::ChunkPos::new(k.0, k.1));
+            self.block_ticks
+                .remove_chunk(horizon_core::position::ChunkPos::new(k.0, k.1));
         }
         self.tick_chunks = loaded;
     }
@@ -810,8 +967,13 @@ impl Game<'_> {
     /// simulation distance, block events and moving pistons.
     fn tick_blocks(&mut self) -> Result<()> {
         self.sync_tick_chunks();
-        let Some(p) = self.player.as_ref() else { return Ok(()) };
-        let (pcx, pcz) = ((p.position.x.floor() as i32) >> 4, (p.position.z.floor() as i32) >> 4);
+        let Some(p) = self.player.as_ref() else {
+            return Ok(());
+        };
+        let (pcx, pcz) = (
+            (p.position.x.floor() as i32) >> 4,
+            (p.position.z.floor() as i32) >> 4,
+        );
         let simulation = self.settings.render_distance.min(8);
         let mut ticking = Vec::new();
         for (&(x, z), chunk) in &self.world.chunks {
@@ -830,7 +992,12 @@ impl Game<'_> {
         self.with_level(|b, level, ticks| {
             b.tick_scheduled(level, ticks);
             for (x, z, sections) in ticking {
-                b.tick_chunk_random(level, ticks, horizon_core::position::ChunkPos::new(x, z), sections);
+                b.tick_chunk_random(
+                    level,
+                    ticks,
+                    horizon_core::position::ChunkPos::new(x, z),
+                    sections,
+                );
             }
             b.run_block_events(level, ticks);
             b.tick_block_entities(level, ticks);
@@ -842,17 +1009,34 @@ impl Game<'_> {
         let events = std::mem::take(&mut self.level_events);
         for event in events {
             match event {
-                LevelEvent::LevelEvent { id: 2001, pos, data } => {
+                LevelEvent::LevelEvent {
+                    id: 2001,
+                    pos,
+                    data,
+                } => {
                     // LevelRenderer: destroy particles and the block's break sound.
                     let state = BlockStateId(data as u32);
                     let p = [pos.x, pos.y, pos.z];
                     self.destroy_particles(p, state);
                     let sounds = self.res.facts.get(state).sounds.clone();
-                    let c = [f64::from(pos.x) + 0.5, f64::from(pos.y) + 0.5, f64::from(pos.z) + 0.5];
-                    self.audio.play(&sounds.break_sound, Some(c), (sounds.volume + 1.0) / 2.0, sounds.pitch * 0.8);
+                    let c = [
+                        f64::from(pos.x) + 0.5,
+                        f64::from(pos.y) + 0.5,
+                        f64::from(pos.z) + 0.5,
+                    ];
+                    self.audio.play(
+                        &sounds.break_sound,
+                        Some(c),
+                        (sounds.volume + 1.0) / 2.0,
+                        sounds.pitch * 0.8,
+                    );
                 }
                 LevelEvent::LevelEvent { id, pos, .. } => {
-                    let c = Some([f64::from(pos.x) + 0.5, f64::from(pos.y) + 0.5, f64::from(pos.z) + 0.5]);
+                    let c = Some([
+                        f64::from(pos.x) + 0.5,
+                        f64::from(pos.y) + 0.5,
+                        f64::from(pos.z) + 0.5,
+                    ]);
                     let sound = match id {
                         1501 => Some(("minecraft:block.lava.extinguish", 0.5)),
                         1009 => Some(("minecraft:block.fire.extinguish", 0.5)),
@@ -866,13 +1050,31 @@ impl Game<'_> {
                         self.audio.play(name, c, volume, 1.0);
                     }
                 }
-                LevelEvent::Sound { pos, sound, volume, pitch } => {
-                    let c = [f64::from(pos.x) + 0.5, f64::from(pos.y) + 0.5, f64::from(pos.z) + 0.5];
-                    let name = if sound.contains(':') { sound.to_string() } else { format!("minecraft:{sound}") };
+                LevelEvent::Sound {
+                    pos,
+                    sound,
+                    volume,
+                    pitch,
+                } => {
+                    let c = [
+                        f64::from(pos.x) + 0.5,
+                        f64::from(pos.y) + 0.5,
+                        f64::from(pos.z) + 0.5,
+                    ];
+                    let name = if sound.contains(':') {
+                        sound.to_string()
+                    } else {
+                        format!("minecraft:{sound}")
+                    };
                     self.audio.play(&name, Some(c), volume, pitch);
                 }
                 LevelEvent::DropResources { pos, state } => {
-                    let drops = self.res.items.block_drops(&self.res.assets.registry, state, None, &mut self.world.random);
+                    let drops = self.res.items.block_drops(
+                        &self.res.assets.registry,
+                        state,
+                        None,
+                        &mut self.world.random,
+                    );
                     for d in drops {
                         if &*d.item != "minecraft:air" {
                             self.pop_resource([pos.x, pos.y, pos.z], d);
@@ -885,18 +1087,41 @@ impl Game<'_> {
                     }
                 }
                 LevelEvent::FallingBlock { pos, state } => {
-                    let p = Vec3::new(f64::from(pos.x) + 0.5, f64::from(pos.y), f64::from(pos.z) + 0.5);
-                    self.falling.push(FallingBlock { state, position: p, previous: p, velocity: Vec3::ZERO, age: 0 });
+                    let p = Vec3::new(
+                        f64::from(pos.x) + 0.5,
+                        f64::from(pos.y),
+                        f64::from(pos.z) + 0.5,
+                    );
+                    self.falling.push(FallingBlock {
+                        state,
+                        position: p,
+                        previous: p,
+                        velocity: Vec3::ZERO,
+                        age: 0,
+                    });
                 }
                 LevelEvent::Player { pos, effect, .. } => match effect {
                     PlayerEffect::OpenMenu => self.open_menu([pos.x, pos.y, pos.z]),
                     PlayerEffect::Sleep => self.try_sleep([pos.x, pos.y, pos.z]),
                     PlayerEffect::GiveItem(item) => {
-                        if let Some(rest) = self.give(ItemStack { item, count: 1, damage: 0, extra: None }) {
+                        if let Some(rest) = self.give(ItemStack {
+                            item,
+                            count: 1,
+                            damage: 0,
+                            extra: None,
+                        }) {
                             self.pop_resource([pos.x, pos.y, pos.z], rest);
                         }
                     }
-                    PlayerEffect::DropItem(item) => self.pop_resource([pos.x, pos.y + 1, pos.z], ItemStack { item, count: 1, damage: 0, extra: None }),
+                    PlayerEffect::DropItem(item) => self.pop_resource(
+                        [pos.x, pos.y + 1, pos.z],
+                        ItemStack {
+                            item,
+                            count: 1,
+                            damage: 0,
+                            extra: None,
+                        },
+                    ),
                     PlayerEffect::EatCake => {
                         if let Some(p) = self.player.as_mut() {
                             let food = &mut p.health.food;
@@ -907,33 +1132,78 @@ impl Game<'_> {
                     PlayerEffect::InteractLoot(_) | PlayerEffect::RespawnAnchor => {}
                 },
                 LevelEvent::PrimeTnt { pos } => self.spawn_primed_tnt(pos, false),
-                LevelEvent::BlockEvent { pos, state, kind: "dispense" } => self.dispense_from(pos, state)?,
-                LevelEvent::BlockEvent { pos, state, kind: "pop_block_item" } => {
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "dispense",
+                } => self.dispense_from(pos, state)?,
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "pop_block_item",
+                } => {
                     let item = self.res.facts.get(state).item.clone();
-                    self.pop_resource([pos.x, pos.y, pos.z], ItemStack { item, count: 1, damage: 0, extra: None });
+                    self.pop_resource(
+                        [pos.x, pos.y, pos.z],
+                        ItemStack {
+                            item,
+                            count: 1,
+                            damage: 0,
+                            extra: None,
+                        },
+                    );
                 }
-                LevelEvent::GrowTree { .. } | LevelEvent::PlaceFeature { .. } | LevelEvent::BlockEvent { .. } | LevelEvent::GameEvent { .. } => {}
+                LevelEvent::GrowTree { .. }
+                | LevelEvent::PlaceFeature { .. }
+                | LevelEvent::BlockEvent { .. }
+                | LevelEvent::GameEvent { .. } => {}
             }
         }
         Ok(())
     }
     /// Menus opened by PlayerEffect::OpenMenu.
     fn open_menu(&mut self, pos: [i32; 3]) {
-        let name = self.res.facts.get(self.world.block(pos[0], pos[1], pos[2])).name.clone();
+        let name = self
+            .res
+            .facts
+            .get(self.world.block(pos[0], pos[1], pos[2]))
+            .name
+            .clone();
         let key = (pos[0], pos[1], pos[2]);
         if &*name == "minecraft:crafting_table" {
             self.craft_size = 3;
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
-            let sound = if name.contains("chest") { Some("minecraft:block.chest.open") } else if &*name == "minecraft:barrel" { Some("minecraft:block.barrel.open") } else { None };
+            let sound = if name.contains("chest") {
+                Some("minecraft:block.chest.open")
+            } else if &*name == "minecraft:barrel" {
+                Some("minecraft:block.barrel.open")
+            } else {
+                None
+            };
             if let Some(sound) = sound {
-                self.audio.play(sound, Some([f64::from(key.0) + 0.5, f64::from(key.1) + 0.5, f64::from(key.2) + 0.5]), 0.5, 1.0);
+                self.audio.play(
+                    sound,
+                    Some([
+                        f64::from(key.0) + 0.5,
+                        f64::from(key.1) + 0.5,
+                        f64::from(key.2) + 0.5,
+                    ]),
+                    0.5,
+                    1.0,
+                );
             }
         } else if self.open_station(pos, &name) {
             // Workstation menus: game/stations.rs.
         } else {
-            self.message = Some((format!("{} is not available yet", name.trim_start_matches("minecraft:").replace('_', " ")), Instant::now()));
+            self.message = Some((
+                format!(
+                    "{} is not available yet",
+                    name.trim_start_matches("minecraft:").replace('_', " ")
+                ),
+                Instant::now(),
+            ));
             return;
         }
         self.screen = Screen::Inventory;
@@ -948,24 +1218,59 @@ impl Game<'_> {
             f.previous = f.position;
             f.age += 1;
             f.velocity.y -= 0.04;
-            let next = Vec3::new(f.position.x + f.velocity.x, f.position.y + f.velocity.y, f.position.z + f.velocity.z);
-            let below = self.world.block(next.x.floor() as i32, next.y.floor() as i32, next.z.floor() as i32);
+            let next = Vec3::new(
+                f.position.x + f.velocity.x,
+                f.position.y + f.velocity.y,
+                f.position.z + f.velocity.z,
+            );
+            let below = self.world.block(
+                next.x.floor() as i32,
+                next.y.floor() as i32,
+                next.z.floor() as i32,
+            );
             let solid = self.res.facts.get(below).full_collision;
             if solid || f.age > 600 {
-                landed.push((f.state, [next.x.floor() as i32, next.y.floor() as i32 + 1, next.z.floor() as i32]));
+                landed.push((
+                    f.state,
+                    [
+                        next.x.floor() as i32,
+                        next.y.floor() as i32 + 1,
+                        next.z.floor() as i32,
+                    ],
+                ));
                 return false;
             }
             f.position = next;
-            f.velocity = Vec3::new(f.velocity.x * 0.98, f.velocity.y * 0.98, f.velocity.z * 0.98);
+            f.velocity = Vec3::new(
+                f.velocity.x * 0.98,
+                f.velocity.y * 0.98,
+                f.velocity.z * 0.98,
+            );
             true
         });
         self.falling = falling;
         for (state, pos) in landed {
-            let landing = self.with_level(|b, level, ticks| b.falling_block_landed(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]), state, false));
+            let landing = self.with_level(|b, level, ticks| {
+                b.falling_block_landed(
+                    level,
+                    ticks,
+                    BlockPos::new(pos[0], pos[1], pos[2]),
+                    state,
+                    false,
+                )
+            });
             if matches!(landing, Landing::Broken) {
                 let item = self.res.facts.get(state).item.clone();
                 if &*item != "minecraft:air" {
-                    self.pop_resource(pos, ItemStack { item, count: 1, damage: 0, extra: None });
+                    self.pop_resource(
+                        pos,
+                        ItemStack {
+                            item,
+                            count: 1,
+                            damage: 0,
+                            extra: None,
+                        },
+                    );
                 }
             }
         }
@@ -988,21 +1293,39 @@ impl Game<'_> {
                     held.as_ref(),
                     &mut self.world.random,
                 );
-                let silk = held.as_ref().is_some_and(|h| h.enchantment_level("minecraft:silk_touch") > 0);
+                let silk = held
+                    .as_ref()
+                    .is_some_and(|h| h.enchantment_level("minecraft:silk_touch") > 0);
                 for d in drops {
                     if &*d.item != "minecraft:air" {
                         self.pop_resource(pos, d);
                     }
                 }
-                let xp = if silk { 0 } else { self.block_experience(&facts.name) };
+                let xp = if silk {
+                    0
+                } else {
+                    self.block_experience(&facts.name)
+                };
                 if xp > 0 {
-                    self.spawn_orbs([f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5], xp);
+                    self.spawn_orbs(
+                        [
+                            f64::from(pos[0]) + 0.5,
+                            f64::from(pos[1]) + 0.5,
+                            f64::from(pos[2]) + 0.5,
+                        ],
+                        xp,
+                    );
                 }
             }
             // Tools lose durability on blocks with nonzero hardness.
             if facts.hardness > 0.0
                 && let Some(stack) = self.inventory[self.selected].clone()
-                && let Some(max) = self.res.items.get(&stack.item).filter(|i| i.max_damage > 0 && !i.tool.is_empty()).map(|i| i.max_damage)
+                && let Some(max) = self
+                    .res
+                    .items
+                    .get(&stack.item)
+                    .filter(|i| i.max_damage > 0 && !i.tool.is_empty())
+                    .map(|i| i.max_damage)
             {
                 let loss = self.durability_loss(&stack, 1);
                 if let Some(stack) = self.inventory[self.selected].as_mut() {
@@ -1034,7 +1357,12 @@ impl Game<'_> {
         // neighbour and shape updates, and the destroy event (particles, sound).
         let creative = self.creative;
         self.with_level(|b, level, ticks| {
-            b.player_destroy_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]), creative);
+            b.player_destroy_block(
+                level,
+                ticks,
+                BlockPos::new(pos[0], pos[1], pos[2]),
+                creative,
+            );
         });
         self.process_level_events()?;
         Ok(())
@@ -1060,19 +1388,36 @@ impl Game<'_> {
                 yaw: self.yaw,
                 pitch: self.pitch,
                 may_build: true,
-                can_eat: self.creative || self.player.as_ref().is_some_and(|p| p.health.food.food < 20),
+                can_eat: self.creative
+                    || self
+                        .player
+                        .as_ref()
+                        .is_some_and(|p| p.health.food.food < 20),
                 game_master: false,
             };
             let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
-            let result = self.with_level(|b, level, ticks| b.use_without_item(level, ticks, BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]), face, at, player));
+            let result = self.with_level(|b, level, ticks| {
+                b.use_without_item(
+                    level,
+                    ticks,
+                    BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
+                    face,
+                    at,
+                    player,
+                )
+            });
             self.process_level_events()?;
             if result.consumes_action() {
                 self.swing_arm();
                 return Ok(());
             }
         }
-        let Some(stack) = self.held().cloned() else { return Ok(()) };
-        let Some(info) = self.res.items.get(&stack.item).cloned() else { return Ok(()) };
+        let Some(stack) = self.held().cloned() else {
+            return Ok(());
+        };
+        let Some(info) = self.res.items.get(&stack.item).cloned() else {
+            return Ok(());
+        };
         if self.use_potion_item(&stack)? || self.throw_item(&stack)? {
             return Ok(());
         }
@@ -1101,7 +1446,9 @@ impl Game<'_> {
         if self.use_ender_eye(&stack)? {
             return Ok(());
         }
-        let Some(hit) = self.pick() else { return Ok(()) };
+        let Some(hit) = self.pick() else {
+            return Ok(());
+        };
         if info.block.is_none() {
             return Ok(());
         }
@@ -1133,15 +1480,26 @@ impl Game<'_> {
         let target = [pos.x, pos.y, pos.z];
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
             let sign = matches!(entity, BlockEntity::Sign(_));
-            self.world.block_entities.insert((target[0], target[1], target[2]), entity);
+            self.world
+                .block_entities
+                .insert((target[0], target[1], target[2]), entity);
             if sign {
                 self.open_sign_editor((target[0], target[1], target[2]), true);
             }
         }
         self.swing_arm();
         let sounds = self.res.facts.get(state).sounds.clone();
-        let center = [f64::from(target[0]) + 0.5, f64::from(target[1]) + 0.5, f64::from(target[2]) + 0.5];
-        self.audio.play(&sounds.place, Some(center), (sounds.volume + 1.0) / 2.0, sounds.pitch * 0.8);
+        let center = [
+            f64::from(target[0]) + 0.5,
+            f64::from(target[1]) + 0.5,
+            f64::from(target[2]) + 0.5,
+        ];
+        self.audio.play(
+            &sounds.place,
+            Some(center),
+            (sounds.volume + 1.0) / 2.0,
+            sounds.pitch * 0.8,
+        );
         self.process_level_events()?;
         self.consume_held();
         Ok(())
@@ -1158,7 +1516,9 @@ impl Game<'_> {
         }
     }
     fn tick_using(&mut self) {
-        let Some((slot, ticks)) = self.using else { return };
+        let Some((slot, ticks)) = self.using else {
+            return;
+        };
         let Some(stack) = self.inventory[slot].clone() else {
             self.using = None;
             return;
@@ -1187,14 +1547,32 @@ impl Game<'_> {
         let eye = self.eye_position().unwrap_or_default();
         // Consumable.shouldEmitParticlesAndSounds: every 4 ticks in the last 25.
         if remaining <= 25 && remaining % 4 == 0 {
-            let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
-            self.audio.play("minecraft:entity.generic.eat", Some(eye), 0.5 + 0.5 * self.world.random.next_int_bound(2).unwrap_or(0) as f32, pitch);
+            let pitch =
+                (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
+            self.audio.play(
+                "minecraft:entity.generic.eat",
+                Some(eye),
+                0.5 + 0.5 * self.world.random.next_int_bound(2).unwrap_or(0) as f32,
+                pitch,
+            );
             if let Some(Icon::Flat(sprite)) = self.icon(&stack.item) {
-                let (yaw, pitch) = (f64::from(self.yaw).to_radians(), f64::from(self.pitch).to_radians());
-                let at = [eye[0] - yaw.sin() * pitch.cos() * 0.3, eye[1] - 0.1, eye[2] + yaw.cos() * pitch.cos() * 0.3];
+                let (yaw, pitch) = (
+                    f64::from(self.yaw).to_radians(),
+                    f64::from(self.pitch).to_radians(),
+                );
+                let at = [
+                    eye[0] - yaw.sin() * pitch.cos() * 0.3,
+                    eye[1] - 0.1,
+                    eye[2] + yaw.cos() * pitch.cos() * 0.3,
+                ];
                 for _ in 0..5 {
-                    let v = [(f64::from(self.world.random.next_float()) - 0.5) * 0.1, 0.1, (f64::from(self.world.random.next_float()) - 0.5) * 0.1];
-                    let p = Particle::terrain(&mut self.world.random, at, v, sprite.clone(), 0xFFFFFF);
+                    let v = [
+                        (f64::from(self.world.random.next_float()) - 0.5) * 0.1,
+                        0.1,
+                        (f64::from(self.world.random.next_float()) - 0.5) * 0.1,
+                    ];
+                    let p =
+                        Particle::terrain(&mut self.world.random, at, v, sprite.clone(), 0xFFFFFF);
                     self.particles.push(p);
                 }
             }
@@ -1208,7 +1586,12 @@ impl Game<'_> {
                 let food = &mut p.health.food;
                 food.food = (food.food + nutrition as i32).clamp(0, 20);
                 food.saturation = (food.saturation + saturation).clamp(0.0, food.food as f32);
-                self.audio.play("minecraft:entity.player.burp", Some(eye), 0.5, self.world.random.next_float() * 0.1 + 0.9);
+                self.audio.play(
+                    "minecraft:entity.player.burp",
+                    Some(eye),
+                    0.5,
+                    self.world.random.next_float() * 0.1 + 0.9,
+                );
                 self.consume_held();
             }
         } else {
@@ -1238,7 +1621,11 @@ impl Game<'_> {
             return Ok(());
         }
         if self.mining.as_ref().is_none_or(|m| m.pos != hit.pos) {
-            self.mining = Some(Mining { pos: hit.pos, progress: 0.0, ticks: 0 });
+            self.mining = Some(Mining {
+                pos: hit.pos,
+                progress: 0.0,
+                ticks: 0,
+            });
         }
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
         let facts = self.res.facts.get(state);
@@ -1254,7 +1641,17 @@ impl Game<'_> {
             speed /= 5.0;
         }
         let eye = self.eye_position().unwrap_or_default();
-        if self.res.facts.get(self.world.block(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32)).fluid == Fluid::Water {
+        if self
+            .res
+            .facts
+            .get(self.world.block(
+                eye[0].floor() as i32,
+                eye[1].floor() as i32,
+                eye[2].floor() as i32,
+            ))
+            .fluid
+            == Fluid::Water
+        {
             speed *= self.submerged_mining_speed();
         }
         let harvest = !facts.requires_tool || self.res.items.correct_for_drops(held, &facts.name);
@@ -1270,8 +1667,17 @@ impl Game<'_> {
         m.ticks += 1;
         let crack = (m.pos, hit.face);
         if m.ticks % 4 == 1 {
-            let c = [f64::from(m.pos[0]) + 0.5, f64::from(m.pos[1]) + 0.5, f64::from(m.pos[2]) + 0.5];
-            self.audio.play(&hit_sound.hit, Some(c), (hit_sound.volume + 1.0) / 8.0, hit_sound.pitch * 0.5);
+            let c = [
+                f64::from(m.pos[0]) + 0.5,
+                f64::from(m.pos[1]) + 0.5,
+                f64::from(m.pos[2]) + 0.5,
+            ];
+            self.audio.play(
+                &hit_sound.hit,
+                Some(c),
+                (hit_sound.volume + 1.0) / 8.0,
+                hit_sound.pitch * 0.5,
+            );
         }
         self.crack_particle(crack.0, crack.1, state);
         let m = self.mining.as_mut().ok_or("mining")?;
@@ -1314,7 +1720,8 @@ impl Game<'_> {
             // Below the bedrock ceiling: a solid floor with two air blocks above.
             for y in (32..120).rev() {
                 let floor = self.res.facts.get(self.world.block(x, y - 1, z));
-                if floor.full_collision && floor.fluid == Fluid::None
+                if floor.full_collision
+                    && floor.fluid == Fluid::None
                     && self.res.facts.is_air(self.world.block(x, y, z))
                     && self.res.facts.is_air(self.world.block(x, y + 1, z))
                 {
@@ -1328,7 +1735,10 @@ impl Game<'_> {
             let s = self.world.block(x, y, z);
             if !self.res.facts.is_air(s) {
                 let f = self.res.facts.get(s);
-                let ok = f.full_collision && f.fluid == Fluid::None && !f.name.contains("leaves") && f.hardness >= 0.0;
+                let ok = f.full_collision
+                    && f.fluid == Fluid::None
+                    && !f.name.contains("leaves")
+                    && f.hardness >= 0.0;
                 return ok.then_some(y + 1);
             }
             y -= 1;
@@ -1340,7 +1750,10 @@ impl Game<'_> {
             return Ok(());
         }
         if let Some((_, target)) = &self.travelling {
-            let (cx, cz) = ((target.x.floor() as i32) >> 4, (target.z.floor() as i32) >> 4);
+            let (cx, cz) = (
+                (target.x.floor() as i32) >> 4,
+                (target.z.floor() as i32) >> 4,
+            );
             self.streaming.center = (cx, cz);
             if (-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
                 let (player, target) = self.travelling.take().ok_or("travel")?;
@@ -1354,7 +1767,10 @@ impl Game<'_> {
         }
         let saved = self.level.position.map(|p| Vec3::new(p[0], p[1], p[2]));
         if self.spawn.is_none() {
-            self.spawn = self.level.spawn.map(|s| Vec3::new(s[0] + 0.5, s[1], s[2] + 0.5));
+            self.spawn = self
+                .level
+                .spawn
+                .map(|s| Vec3::new(s[0] + 0.5, s[1], s[2] + 0.5));
         }
         let anchor = match saved.or(self.spawn) {
             Some(p) => (p.x.floor() as i32, p.z.floor() as i32),
@@ -1370,7 +1786,9 @@ impl Game<'_> {
             p
         } else if let Some(s) = self.spawn {
             // WorldSpawn: the stored column, lifted onto its current surface.
-            let y = self.land_column(s.x.floor() as i32, s.z.floor() as i32).map_or(s.y, f64::from);
+            let y = self
+                .land_column(s.x.floor() as i32, s.z.floor() as i32)
+                .map_or(s.y, f64::from);
             Vec3::new(s.x, y.max(s.y), s.z)
         } else {
             let mut best: Option<(i64, i32, i32, i32)> = None;
@@ -1429,9 +1847,14 @@ impl Game<'_> {
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
-        let Some(player) = self.player.as_mut() else { return Ok(()) };
+        let Some(player) = self.player.as_mut() else {
+            return Ok(());
+        };
         // Hold position until the surrounding terrain exists.
-        let (cx, cz) = ((player.position.x.floor() as i32) >> 4, (player.position.z.floor() as i32) >> 4);
+        let (cx, cz) = (
+            (player.position.x.floor() as i32) >> 4,
+            (player.position.z.floor() as i32) >> 4,
+        );
         if !self.streaming.is_lit(cx, cz) {
             return Ok(());
         }
@@ -1463,44 +1886,74 @@ impl Game<'_> {
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         for event in events {
             match event {
-                MotionEvent::Emission { position, state, .. } if !crouching => {
+                MotionEvent::Emission {
+                    position, state, ..
+                } if !crouching => {
                     // Entity.playStepSound: the block's step sound at 0.15 volume.
                     let sounds = self.res.facts.get(state).sounds.clone();
-                    self.audio.play(&sounds.step, Some(feet), sounds.volume * 0.15, sounds.pitch);
+                    self.audio
+                        .play(&sounds.step, Some(feet), sounds.volume * 0.15, sounds.pitch);
                     let _ = position;
                 }
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Sound { sound, volume, pitch, .. }) => {
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Sound {
+                    sound,
+                    volume,
+                    pitch,
+                    ..
+                }) => {
                     let name = match sound {
-                        horizon_client::landing::SceneSound::BigFall => "minecraft:entity.player.big_fall",
-                        horizon_client::landing::SceneSound::SmallFall => "minecraft:entity.player.small_fall",
+                        horizon_client::landing::SceneSound::BigFall => {
+                            "minecraft:entity.player.big_fall"
+                        }
+                        horizon_client::landing::SceneSound::SmallFall => {
+                            "minecraft:entity.player.small_fall"
+                        }
                         _ => continue,
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
                 }
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Write { position, flags, .. }) => {
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Write {
+                    position,
+                    flags,
+                    ..
+                }) => {
                     // Landing rules (farmland trampling, turtle eggs) wrote the block raw.
-                    self.with_level(|b, level, ticks| b.notify_written(level, ticks, position, flags as i32));
+                    self.with_level(|b, level, ticks| {
+                        b.notify_written(level, ticks, position, flags as i32)
+                    });
                 }
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Destroy { position, .. }) => {
-                    self.with_level(|b, level, ticks| b.notify_written(level, ticks, position, level_flags::UPDATE_ALL));
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Destroy {
+                    position, ..
+                }) => {
+                    self.with_level(|b, level, ticks| {
+                        b.notify_written(level, ticks, position, level_flags::UPDATE_ALL)
+                    });
                 }
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Damage { .. }) => {
-                    self.audio.play("minecraft:entity.player.hurt", Some(feet), 1.0, 1.0);
+                    self.audio
+                        .play("minecraft:entity.player.hurt", Some(feet), 1.0, 1.0);
                 }
                 _ => {}
             }
         }
-        let Some(player) = self.player.as_mut() else { return Ok(()) };
+        let Some(player) = self.player.as_mut() else {
+            return Ok(());
+        };
         if player.position.y < f64::from(MIN_Y - 64) {
             // Out of the world.
             let _ = player.set_health(0.0, false);
         }
         if player.health.dead_or_dying() && self.screen != Screen::Dead {
             // Inventory.dropAll: every stack thrown in a random direction.
-            let at = [player.position.x, player.position.y + 1.32, player.position.z];
+            let at = [
+                player.position.x,
+                player.position.y + 1.32,
+                player.position.z,
+            ];
             self.death_message();
             if !self.creative && !self.ui.rules.bool("keep_inventory") {
-                let stacks: Vec<ItemStack> = self.inventory.iter_mut().filter_map(Option::take).collect();
+                let stacks: Vec<ItemStack> =
+                    self.inventory.iter_mut().filter_map(Option::take).collect();
                 for stack in stacks {
                     let r = &mut self.world.random;
                     let strength = f64::from(r.next_float()) * 0.5;
@@ -1509,7 +1962,8 @@ impl Game<'_> {
                     self.spawn_item(stack, at, v, 40);
                 }
             }
-            self.audio.play("minecraft:entity.player.death", Some(at), 1.0, 1.0);
+            self.audio
+                .play("minecraft:entity.player.death", Some(at), 1.0, 1.0);
             self.screen = Screen::Dead;
             self.capture(false);
         }
@@ -1531,18 +1985,31 @@ impl Game<'_> {
         self.tick_tnt()?;
         if let Some(p) = &self.player {
             // Player.aiStep bob and Entity.walkDist (0.6 per block).
-            let (dx, dz) = (p.position.x - self.previous_position.x, p.position.z - self.previous_position.z);
+            let (dx, dz) = (
+                p.position.x - self.previous_position.x,
+                p.position.z - self.previous_position.z,
+            );
             let speed = ((dx * dx + dz * dz).sqrt() as f32).min(0.1);
             self.walk.0 = self.walk.1;
             self.walk.1 += (dx * dx + dz * dz).sqrt() as f32 * 0.6;
             self.bob.0 = self.bob.1;
-            let target = if p.ground.on_ground && !p.health.dead_or_dying() { speed } else { 0.0 };
+            let target = if p.ground.on_ground && !p.health.dead_or_dying() {
+                speed
+            } else {
+                0.0
+            };
             self.bob.1 += (target - self.bob.1) * 0.4;
         }
         self.tick_block_entities()?;
         self.tick_brewing_stands()?;
         if let Some(r) = &self.renderer {
-            let eye = self.player.as_ref().map(|p| [p.position.x, p.position.y + f64::from(self.eye), p.position.z]);
+            let eye = self.player.as_ref().map(|p| {
+                [
+                    p.position.x,
+                    p.position.y + f64::from(self.eye),
+                    p.position.z,
+                ]
+            });
             self.res.block_entity_render.tick(r.block_entities(), eye);
         }
         self.tick_particles();
@@ -1577,7 +2044,9 @@ impl Game<'_> {
         let root = &self.options.resources;
         let name = item.trim_start_matches("minecraft:");
         let info = self.res.items.get(item);
-        let model_name = info.map_or(name.to_owned(), |i| i.model.trim_start_matches("minecraft:").to_owned());
+        let model_name = info.map_or(name.to_owned(), |i| {
+            i.model.trim_start_matches("minecraft:").to_owned()
+        });
         let def: serde_json::Value = serde_json::from_slice(
             &std::fs::read(root.join(format!("assets/minecraft/items/{model_name}.json"))).ok()?,
         )
@@ -1589,7 +2058,9 @@ impl Game<'_> {
                     if o.get("type").and_then(|t| t.as_str()) == Some("minecraft:model") {
                         return o.get("model").and_then(|m| m.as_str()).map(str::to_owned);
                     }
-                    for key in ["model", "fallback", "on_false", "on_true", "cases", "entries", "tints"] {
+                    for key in [
+                        "model", "fallback", "on_false", "on_true", "cases", "entries", "tints",
+                    ] {
                         if let Some(m) = o.get(key).and_then(first_model) {
                             return Some(m);
                         }
@@ -1602,15 +2073,28 @@ impl Game<'_> {
         }
         let Some(model) = first_model(&def["model"]) else {
             // Special item models (chests, beds, banners...): show the block's particle texture.
-            let block = self.res.assets.registry.default_state(item).or_else(|| info.and_then(|i| i.block))?;
-            let (sprite, tint) = self.particle_sprite(block).or_else(|| self.model_particle(name).map(|s| (s, 0xFFFFFF)))?;
-            return Some(Icon::Cube { top: sprite.clone(), left: sprite.clone(), right: sprite, tint });
+            let block = self
+                .res
+                .assets
+                .registry
+                .default_state(item)
+                .or_else(|| info.and_then(|i| i.block))?;
+            let (sprite, tint) = self
+                .particle_sprite(block)
+                .or_else(|| self.model_particle(name).map(|s| (s, 0xFFFFFF)))?;
+            return Some(Icon::Cube {
+                top: sprite.clone(),
+                left: sprite.clone(),
+                right: sprite,
+                tint,
+            });
         };
         let path = model.trim_start_matches("minecraft:").to_owned();
         let mut current = path.clone();
         let mut textures = serde_json::Map::new();
         for _ in 0..16 {
-            let text = std::fs::read(root.join(format!("assets/minecraft/models/{current}.json"))).ok()?;
+            let text =
+                std::fs::read(root.join(format!("assets/minecraft/models/{current}.json"))).ok()?;
             let m: serde_json::Value = serde_json::from_slice(&text).ok()?;
             if let Some(t) = m["textures"].as_object() {
                 for (k, v) in t {
@@ -1618,30 +2102,56 @@ impl Game<'_> {
                 }
             }
             match m["parent"].as_str() {
-                Some(p) if p.ends_with("item/generated") || p.ends_with("item/handheld") || p.contains("handheld") => {
+                Some(p)
+                    if p.ends_with("item/generated")
+                        || p.ends_with("item/handheld")
+                        || p.contains("handheld") =>
+                {
                     let layer = textures.get("layer0")?.as_str()?;
-                    return Some(Icon::Flat(layer.trim_start_matches("minecraft:").to_owned()));
+                    return Some(Icon::Flat(
+                        layer.trim_start_matches("minecraft:").to_owned(),
+                    ));
                 }
                 Some(p) => current = p.trim_start_matches("minecraft:").to_owned(),
                 None => break,
             }
         }
         if path.starts_with("block/") {
-            let block = self.res.assets.registry.default_state(&format!("minecraft:{name}"))
+            let block = self
+                .res
+                .assets
+                .registry
+                .default_state(&format!("minecraft:{name}"))
                 .or_else(|| info.and_then(|i| i.block))?;
-            let models = self.res.assets.model_catalog.collect(block, horizon_core::position::BlockPos::new(0, 0, 0)).ok()?;
+            let models = self
+                .res
+                .assets
+                .model_catalog
+                .collect(block, horizon_core::position::BlockPos::new(0, 0, 0))
+                .ok()?;
             let mut faces: HashMap<usize, (u32, i32)> = HashMap::new();
             for (_, m) in &models {
                 for f in &m.faces {
-                    faces.entry(f.quad.facing as usize).or_insert((f.layer, f.quad.tint_index));
+                    faces
+                        .entry(f.quad.facing as usize)
+                        .or_insert((f.layer, f.quad.tint_index));
                 }
             }
             use horizon_assets::model::Direction as D;
-            let get = |d: D| faces.get(&(d as usize)).and_then(|(l, _)| self.res.layer_names.get(l)).cloned();
+            let get = |d: D| {
+                faces
+                    .get(&(d as usize))
+                    .and_then(|(l, _)| self.res.layer_names.get(l))
+                    .cloned()
+            };
             let top = get(D::Up)?;
             let tinted = faces.get(&(D::Up as usize)).is_some_and(|(_, t)| *t >= 0);
             let tint = if tinted {
-                if name.contains("leaves") || name == "vine" { 0x48B518 } else { 0x91BD59 }
+                if name.contains("leaves") || name == "vine" {
+                    0x48B518
+                } else {
+                    0x91BD59
+                }
             } else {
                 0xFFFFFF
             };
@@ -1664,7 +2174,12 @@ impl Game<'_> {
         let atlas = &self.res.atlas;
         match icon {
             Some(Icon::Flat(name)) => batch.sprite_scaled(atlas, &name, x, y, 16.0, 16.0, u32::MAX),
-            Some(Icon::Cube { top, left, right, tint }) => {
+            Some(Icon::Cube {
+                top,
+                left,
+                right,
+                tint,
+            }) => {
                 let color = |b: f32| {
                     let c = |s: u32| (((tint >> s) & 255) as f32 * b) as u8;
                     rgba(c(16), c(8), c(0), 255)
@@ -1672,14 +2187,48 @@ impl Game<'_> {
                 let (cx, top_y) = (x + 8.0, y + 1.0);
                 let quad = |batch: &mut HudBatch, name: &str, p: [[f32; 2]; 4], c: u32| {
                     if let Some(r) = atlas.sprites.get(name).copied() {
-                        batch.quad(p, [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]], c);
+                        batch.quad(
+                            p,
+                            [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]],
+                            c,
+                        );
                     }
                 };
                 let (w, h) = (7.0, 3.6);
-                quad(batch, &top, [[cx, top_y], [cx + w, top_y + h], [cx, top_y + 2.0 * h], [cx - w, top_y + h]], color(1.0));
+                quad(
+                    batch,
+                    &top,
+                    [
+                        [cx, top_y],
+                        [cx + w, top_y + h],
+                        [cx, top_y + 2.0 * h],
+                        [cx - w, top_y + h],
+                    ],
+                    color(1.0),
+                );
                 let side = 8.0;
-                quad(batch, &left, [[cx - w, top_y + h], [cx, top_y + 2.0 * h], [cx, top_y + 2.0 * h + side], [cx - w, top_y + h + side]], color(0.8));
-                quad(batch, &right, [[cx, top_y + 2.0 * h], [cx + w, top_y + h], [cx + w, top_y + h + side], [cx, top_y + 2.0 * h + side]], color(0.6));
+                quad(
+                    batch,
+                    &left,
+                    [
+                        [cx - w, top_y + h],
+                        [cx, top_y + 2.0 * h],
+                        [cx, top_y + 2.0 * h + side],
+                        [cx - w, top_y + h + side],
+                    ],
+                    color(0.8),
+                );
+                quad(
+                    batch,
+                    &right,
+                    [
+                        [cx, top_y + 2.0 * h],
+                        [cx + w, top_y + h],
+                        [cx + w, top_y + h + side],
+                        [cx, top_y + 2.0 * h + side],
+                    ],
+                    color(0.6),
+                );
             }
             None => batch.fill(atlas, x + 2.0, y + 2.0, 12.0, 12.0, rgba(200, 0, 200, 255)),
         }
@@ -1697,7 +2246,10 @@ impl Game<'_> {
             let f = 1.0 - stack.damage as f32 / info.max_damage as f32;
             let width = (13.0 * f).round();
             let hue = f / 3.0;
-            let (r, g) = ((255.0 * (1.0 - hue * 3.0).clamp(0.0, 1.0)) as u8, (255.0 * (hue * 3.0).clamp(0.0, 1.0)) as u8);
+            let (r, g) = (
+                (255.0 * (1.0 - hue * 3.0).clamp(0.0, 1.0)) as u8,
+                (255.0 * (hue * 3.0).clamp(0.0, 1.0)) as u8,
+            );
             batch.fill(atlas, x + 2.0, y + 13.0, 13.0, 2.0, rgba(0, 0, 0, 255));
             batch.fill(atlas, x + 2.0, y + 13.0, width, 1.0, rgba(r, g, 0, 255));
         }
@@ -1719,7 +2271,11 @@ impl Game<'_> {
             return batch;
         }
         if self.player.is_none() {
-            let text = if self.spawn_search > 0 { "Finding a place to spawn..." } else { "Loading terrain..." };
+            let text = if self.spawn_search > 0 {
+                "Finding a place to spawn..."
+            } else {
+                "Loading terrain..."
+            };
             let atlas = &self.res.atlas;
             let tw = HudBatch::text_width(atlas, text);
             batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
@@ -1729,14 +2285,29 @@ impl Game<'_> {
         {
             let atlas = &self.res.atlas;
             // Crosshair.
-            batch.sprite(atlas, "gui/sprites/hud/crosshair", (w - 15.0) / 2.0, (h - 15.0) / 2.0);
+            batch.sprite(
+                atlas,
+                "gui/sprites/hud/crosshair",
+                (w - 15.0) / 2.0,
+                (h - 15.0) / 2.0,
+            );
             // Hotbar.
             batch.sprite(atlas, "gui/sprites/hud/hotbar", w / 2.0 - 91.0, h - 22.0);
-            batch.sprite(atlas, "gui/sprites/hud/hotbar_selection", w / 2.0 - 91.0 - 1.0 + self.selected as f32 * 20.0, h - 23.0);
+            batch.sprite(
+                atlas,
+                "gui/sprites/hud/hotbar_selection",
+                w / 2.0 - 91.0 - 1.0 + self.selected as f32 * 20.0,
+                h - 23.0,
+            );
         }
         for i in 0..9 {
             if let Some(stack) = self.inventory[i].clone() {
-                self.draw_item(&mut batch, &stack, w / 2.0 - 90.0 + i as f32 * 20.0 + 2.0, h - 19.0);
+                self.draw_item(
+                    &mut batch,
+                    &stack,
+                    w / 2.0 - 90.0 + i as f32 * 20.0 + 2.0,
+                    h - 19.0,
+                );
             }
         }
         self.draw_effect_icons(&mut batch);
@@ -1745,10 +2316,21 @@ impl Game<'_> {
             && let Some(p) = &self.player
         {
             // Experience bar and hearts/food (Gui.renderPlayerHealth).
-            batch.sprite(atlas, "gui/sprites/hud/experience_bar_background", w / 2.0 - 91.0, h - 29.0);
+            batch.sprite(
+                atlas,
+                "gui/sprites/hud/experience_bar_background",
+                w / 2.0 - 91.0,
+                h - 29.0,
+            );
             let filled = (self.experience.progress * 183.0).floor() / 182.0;
             if filled > 0.0 {
-                batch.sprite_part(atlas, "gui/sprites/hud/experience_bar_progress", w / 2.0 - 91.0, h - 29.0, filled.min(1.0));
+                batch.sprite_part(
+                    atlas,
+                    "gui/sprites/hud/experience_bar_progress",
+                    w / 2.0 - 91.0,
+                    h - 29.0,
+                    filled.min(1.0),
+                );
             }
             if self.experience.level > 0 {
                 // Gui.renderExperienceLevel: green text with a black outline.
@@ -1764,7 +2346,11 @@ impl Game<'_> {
             let top = h - 39.0;
             for i in 0..10 {
                 let x = w / 2.0 - 91.0 + i as f32 * 8.0;
-                let y = if health <= 4 { top + ((self.ticks + i as u64 * 7) % 3) as f32 - 1.0 } else { top };
+                let y = if health <= 4 {
+                    top + ((self.ticks + i as u64 * 7) % 3) as f32 - 1.0
+                } else {
+                    top
+                };
                 batch.sprite(atlas, "gui/sprites/hud/heart/container", x, y);
                 let v = health - i * 2;
                 if v >= 2 {
@@ -1786,13 +2372,23 @@ impl Game<'_> {
             }
         }
         if self.debug {
-            let p = self.player.as_ref().map(|p| p.position).unwrap_or(Vec3::ZERO);
+            let p = self
+                .player
+                .as_ref()
+                .map(|p| p.position)
+                .unwrap_or(Vec3::ZERO);
             let block = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
             let biome = self
                 .world
                 .chunks
                 .get(&(block[0] >> 4, block[2] >> 4))
-                .map(|c| self.res.biomes.get(c.biome(block[0], block[1], block[2])).name.clone())
+                .map(|c| {
+                    self.res
+                        .biomes
+                        .get(c.biome(block[0], block[1], block[2]))
+                        .name
+                        .clone()
+                })
                 .unwrap_or_default();
             let light = self.world.light(block[0], block[1], block[2]);
             let facing = match ((self.yaw.rem_euclid(360.0) + 45.0) / 90.0) as i32 % 4 {
@@ -1803,24 +2399,69 @@ impl Game<'_> {
             };
             let lines = [
                 format!("Horizon 26.3 (Rust) {:.0} fps", self.fps),
-                format!("C: {} chunks, {} sections drawn / {}", self.world.chunks.len(), self.renderer.as_ref().map_or(0, |r| r.drawn_sections), self.renderer.as_ref().map_or(0, |r| r.section_count())),
+                format!(
+                    "C: {} chunks, {} sections drawn / {}",
+                    self.world.chunks.len(),
+                    self.renderer.as_ref().map_or(0, |r| r.drawn_sections),
+                    self.renderer.as_ref().map_or(0, |r| r.section_count())
+                ),
                 format!("Pending jobs: {}", self.streaming.pending()),
                 String::new(),
                 format!("XYZ: {:.3} / {:.5} / {:.3}", p.x, p.y, p.z),
                 format!("Block: {} {} {}", block[0], block[1], block[2]),
-                format!("Chunk: {} {} {} in {} {} {}", block[0] & 15, block[1] & 15, block[2] & 15, block[0] >> 4, block[1] >> 4, block[2] >> 4),
-                format!("Facing: {facing} ({:.1} / {:.1})", self.yaw.rem_euclid(360.0) - if self.yaw.rem_euclid(360.0) > 180.0 { 360.0 } else { 0.0 }, self.pitch),
-                format!("Light: {} (sky {}, block {})", (light >> 4).max(light & 15), light >> 4, light & 15),
+                format!(
+                    "Chunk: {} {} {} in {} {} {}",
+                    block[0] & 15,
+                    block[1] & 15,
+                    block[2] & 15,
+                    block[0] >> 4,
+                    block[1] >> 4,
+                    block[2] >> 4
+                ),
+                format!(
+                    "Facing: {facing} ({:.1} / {:.1})",
+                    self.yaw.rem_euclid(360.0)
+                        - if self.yaw.rem_euclid(360.0) > 180.0 {
+                            360.0
+                        } else {
+                            0.0
+                        },
+                    self.pitch
+                ),
+                format!(
+                    "Light: {} (sky {}, block {})",
+                    (light >> 4).max(light & 15),
+                    light >> 4,
+                    light & 15
+                ),
                 format!("Biome: {biome}"),
-                format!("Day {} time {}", self.world.day_time / 24000, self.world.day_time % 24000),
+                format!(
+                    "Day {} time {}",
+                    self.world.day_time / 24000,
+                    self.world.day_time % 24000
+                ),
             ];
             for (i, line) in lines.iter().enumerate() {
                 if line.is_empty() {
                     continue;
                 }
                 let tw = HudBatch::text_width(atlas, line);
-                batch.fill(atlas, 1.0, 2.0 + i as f32 * 9.0 - 1.0, tw + 2.0, 9.0, rgba(80, 80, 80, 144));
-                batch.text(atlas, line, 2.0, 2.0 + i as f32 * 9.0, rgba(224, 224, 224, 255), false);
+                batch.fill(
+                    atlas,
+                    1.0,
+                    2.0 + i as f32 * 9.0 - 1.0,
+                    tw + 2.0,
+                    9.0,
+                    rgba(80, 80, 80, 144),
+                );
+                batch.text(
+                    atlas,
+                    line,
+                    2.0,
+                    2.0 + i as f32 * 9.0,
+                    rgba(224, 224, 224, 255),
+                    false,
+                );
             }
         }
         if let Some((text, at)) = &self.message
@@ -1853,11 +2494,15 @@ impl Game<'_> {
         batch
     }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
-        ((batch.width - 176.0) / 2.0, (batch.height - self.screen_height()) / 2.0)
+        (
+            (batch.width - 176.0) / 2.0,
+            (batch.height - self.screen_height()) / 2.0,
+        )
     }
     /// Slot ids: 0..36 player inventory, 100..109 crafting grid, 200 result.
     fn container_kind(&self) -> Option<&BlockEntity> {
-        self.container.and_then(|k| self.world.block_entities.get(&k))
+        self.container
+            .and_then(|k| self.world.block_entities.get(&k))
     }
     /// 300.. are the open container's slots.
     fn slots(&self) -> Vec<usize> {
@@ -1882,21 +2527,42 @@ impl Game<'_> {
     }
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
-        if let Some(p) = self.station_slot_position(i).or_else(|| self.machine_slot_position(i)) {
+        if let Some(p) = self
+            .station_slot_position(i)
+            .or_else(|| self.machine_slot_position(i))
+        {
             return p;
         }
         let table = self.craft_size == 3;
         // ContainerScreen (3 rows) shifts the player inventory down by one pixel.
-        let shift = if matches!(self.container_kind(), Some(BlockEntity::Chest(_))) { 1.0 } else { 0.0 };
+        let shift = if matches!(self.container_kind(), Some(BlockEntity::Chest(_))) {
+            1.0
+        } else {
+            0.0
+        };
         match i {
             0..9 => (8.0 + i as f32 * 18.0, 142.0 + shift),
-            9..36 => (8.0 + ((i - 9) % 9) as f32 * 18.0, 84.0 + shift + ((i - 9) / 9) as f32 * 18.0),
+            9..36 => (
+                8.0 + ((i - 9) % 9) as f32 * 18.0,
+                84.0 + shift + ((i - 9) / 9) as f32 * 18.0,
+            ),
             500..504 => (8.0, 8.0 + (i - 500) as f32 * 18.0),
             300..500 => match self.container_kind() {
-                Some(BlockEntity::Furnace(_)) => [(56.0, 17.0), (56.0, 53.0), (116.0, 35.0)][(i - 300).min(2)],
-                _ => (8.0 + ((i - 300) % 9) as f32 * 18.0, 18.0 + ((i - 300) / 9) as f32 * 18.0),
+                Some(BlockEntity::Furnace(_)) => {
+                    [(56.0, 17.0), (56.0, 53.0), (116.0, 35.0)][(i - 300).min(2)]
+                }
+                _ => (
+                    8.0 + ((i - 300) % 9) as f32 * 18.0,
+                    18.0 + ((i - 300) / 9) as f32 * 18.0,
+                ),
             },
-            200 => if table { (124.0, 35.0) } else { (154.0, 28.0) },
+            200 => {
+                if table {
+                    (124.0, 35.0)
+                } else {
+                    (154.0, 28.0)
+                }
+            }
             _ => {
                 let g = i - 100;
                 let (r, c) = (g / self.craft_size, g % self.craft_size);
@@ -1925,7 +2591,10 @@ impl Game<'_> {
         if i >= 300 {
             let key = self.container;
             return match key.and_then(|k| self.world.block_entities.get_mut(&k)) {
-                Some(e) => e.slots_mut().get_mut(i - 300).unwrap_or(&mut self.scratch_slot),
+                Some(e) => e
+                    .slots_mut()
+                    .get_mut(i - 300)
+                    .unwrap_or(&mut self.scratch_slot),
                 None => &mut self.scratch_slot,
             };
         }
@@ -1947,8 +2616,22 @@ impl Game<'_> {
         let (ox, oy) = self.inventory_origin(batch);
         {
             let atlas = &self.res.atlas;
-            batch.fill(atlas, 0.0, 0.0, batch.width, batch.height, rgba(16, 16, 16, 160));
-            let part = |batch: &mut HudBatch, name: &str, sx: f32, sy: f32, w: f32, h: f32, dx: f32, dy: f32| {
+            batch.fill(
+                atlas,
+                0.0,
+                0.0,
+                batch.width,
+                batch.height,
+                rgba(16, 16, 16, 160),
+            );
+            let part = |batch: &mut HudBatch,
+                        name: &str,
+                        sx: f32,
+                        sy: f32,
+                        w: f32,
+                        h: f32,
+                        dx: f32,
+                        dy: f32| {
                 if let Some(mut r) = atlas.sprites.get(name).copied() {
                     let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
                     r.u0 += sx * du;
@@ -1959,22 +2642,56 @@ impl Game<'_> {
                 }
             };
             let grey = rgba(64, 64, 64, 255);
-            match self.container.and_then(|k| self.world.block_entities.get(&k)) {
+            match self
+                .container
+                .and_then(|k| self.world.block_entities.get(&k))
+            {
                 Some(BlockEntity::Chest(_)) if self.draw_machine_screen(batch, ox, oy) => {}
                 Some(BlockEntity::Chest(_)) => {
                     // ContainerScreen with 3 rows: top 71px, then the player inventory from v=126.
-                    part(batch, "gui/container/generic_54", 0.0, 0.0, 176.0, 71.0, ox, oy);
-                    part(batch, "gui/container/generic_54", 0.0, 126.0, 176.0, 96.0, ox, oy + 71.0);
-                    let name = self.container.map(|k| self.world.block(k.0, k.1, k.2)).map(|s| self.res.facts.get(s).name.clone());
-                    let title = if name.as_deref() == Some("minecraft:barrel") { "Barrel" } else { "Chest" };
+                    part(
+                        batch,
+                        "gui/container/generic_54",
+                        0.0,
+                        0.0,
+                        176.0,
+                        71.0,
+                        ox,
+                        oy,
+                    );
+                    part(
+                        batch,
+                        "gui/container/generic_54",
+                        0.0,
+                        126.0,
+                        176.0,
+                        96.0,
+                        ox,
+                        oy + 71.0,
+                    );
+                    let name = self
+                        .container
+                        .map(|k| self.world.block(k.0, k.1, k.2))
+                        .map(|s| self.res.facts.get(s).name.clone());
+                    let title = if name.as_deref() == Some("minecraft:barrel") {
+                        "Barrel"
+                    } else {
+                        "Chest"
+                    };
                     batch.text(atlas, title, ox + 8.0, oy + 6.0, grey, false);
                     batch.text(atlas, "Inventory", ox + 8.0, oy + 73.0, grey, false);
                 }
                 Some(BlockEntity::Furnace(f)) => {
                     let (tex, title) = match f.kind {
-                        horizon_client::containers::FurnaceKind::Furnace => ("gui/container/furnace", "Furnace"),
-                        horizon_client::containers::FurnaceKind::BlastFurnace => ("gui/container/blast_furnace", "Blast Furnace"),
-                        horizon_client::containers::FurnaceKind::Smoker => ("gui/container/smoker", "Smoker"),
+                        horizon_client::containers::FurnaceKind::Furnace => {
+                            ("gui/container/furnace", "Furnace")
+                        }
+                        horizon_client::containers::FurnaceKind::BlastFurnace => {
+                            ("gui/container/blast_furnace", "Blast Furnace")
+                        }
+                        horizon_client::containers::FurnaceKind::Smoker => {
+                            ("gui/container/smoker", "Smoker")
+                        }
                     };
                     part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
                     let tw = HudBatch::text_width(atlas, title);
@@ -1984,20 +2701,53 @@ impl Game<'_> {
                         // AbstractFurnaceScreen: flame height ceil(lit * 13) + 1.
                         let total = if f.lit_total == 0 { 200 } else { f.lit_total };
                         let h = ((f.lit_remaining as f32 / total as f32) * 13.0).ceil() + 1.0;
-                        part(batch, "gui/sprites/container/furnace/lit_progress", 0.0, 14.0 - h, 14.0, h, ox + 56.0, oy + 36.0 + 14.0 - h);
+                        part(
+                            batch,
+                            "gui/sprites/container/furnace/lit_progress",
+                            0.0,
+                            14.0 - h,
+                            14.0,
+                            h,
+                            ox + 56.0,
+                            oy + 36.0 + 14.0 - h,
+                        );
                     }
                     if f.cooking_timer > 0 && f.cooking_total > 0 {
                         let w = ((f.cooking_timer as f32 / f.cooking_total as f32) * 24.0).ceil();
-                        part(batch, "gui/sprites/container/furnace/burn_progress", 0.0, 0.0, w, 16.0, ox + 79.0, oy + 34.0);
+                        part(
+                            batch,
+                            "gui/sprites/container/furnace/burn_progress",
+                            0.0,
+                            0.0,
+                            w,
+                            16.0,
+                            ox + 79.0,
+                            oy + 34.0,
+                        );
                     }
                 }
                 Some(BlockEntity::Brewing(_)) => {}
                 Some(BlockEntity::Sign(_)) => {}
                 None => {
-                    let texture = if self.craft_size == 3 { "gui/container/crafting_table" } else { "gui/container/inventory" };
+                    let texture = if self.craft_size == 3 {
+                        "gui/container/crafting_table"
+                    } else {
+                        "gui/container/inventory"
+                    };
                     part(batch, texture, 0.0, 0.0, 176.0, 166.0, ox, oy);
-                    let (title, tx) = if self.craft_size == 3 { ("Crafting", 29.0) } else { ("Crafting", 97.0) };
-                    batch.text(atlas, title, ox + tx, oy + if self.craft_size == 3 { 6.0 } else { 8.0 }, grey, false);
+                    let (title, tx) = if self.craft_size == 3 {
+                        ("Crafting", 29.0)
+                    } else {
+                        ("Crafting", 97.0)
+                    };
+                    batch.text(
+                        atlas,
+                        title,
+                        ox + tx,
+                        oy + if self.craft_size == 3 { 6.0 } else { 8.0 },
+                        grey,
+                        false,
+                    );
                     if self.craft_size == 3 {
                         batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
                     }
@@ -2008,16 +2758,32 @@ impl Game<'_> {
             let (sx, sy) = self.slot_position(i);
             if (500..504).contains(&i) && self.armor[i - 500].is_none() {
                 let icon = ["helmet", "chestplate", "leggings", "boots"][i - 500];
-                batch.sprite(&self.res.atlas, &format!("gui/sprites/container/slot/{icon}"), ox + sx, oy + sy);
+                batch.sprite(
+                    &self.res.atlas,
+                    &format!("gui/sprites/container/slot/{icon}"),
+                    ox + sx,
+                    oy + sy,
+                );
             }
-            let stack = if i == 200 { self.craft_result() } else { self.slot_mut(i).clone() };
+            let stack = if i == 200 {
+                self.craft_result()
+            } else {
+                self.slot_mut(i).clone()
+            };
             if let Some(stack) = stack {
                 self.draw_item(batch, &stack, ox + sx, oy + sy);
             }
         }
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
-            batch.fill(&self.res.atlas, ox + sx, oy + sy, 16.0, 16.0, rgba(255, 255, 255, 128));
+            batch.fill(
+                &self.res.atlas,
+                ox + sx,
+                oy + sy,
+                16.0,
+                16.0,
+                rgba(255, 255, 255, 128),
+            );
         }
         if let Some(stack) = self.carried.clone() {
             self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
@@ -2040,10 +2806,30 @@ impl Game<'_> {
         }
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
-            let name = self.res.facts.get(self.world.block(key.0, key.1, key.2)).name.clone();
-            let sound = if name.contains("chest") { Some("minecraft:block.chest.close") } else if &*name == "minecraft:barrel" { Some("minecraft:block.barrel.close") } else { None };
+            let name = self
+                .res
+                .facts
+                .get(self.world.block(key.0, key.1, key.2))
+                .name
+                .clone();
+            let sound = if name.contains("chest") {
+                Some("minecraft:block.chest.close")
+            } else if &*name == "minecraft:barrel" {
+                Some("minecraft:block.barrel.close")
+            } else {
+                None
+            };
             if let Some(sound) = sound {
-                self.audio.play(sound, Some([f64::from(key.0) + 0.5, f64::from(key.1) + 0.5, f64::from(key.2) + 0.5]), 0.5, 1.0);
+                self.audio.play(
+                    sound,
+                    Some([
+                        f64::from(key.0) + 0.5,
+                        f64::from(key.1) + 0.5,
+                        f64::from(key.2) + 0.5,
+                    ]),
+                    0.5,
+                    1.0,
+                );
             }
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
@@ -2055,11 +2841,20 @@ impl Game<'_> {
         if self.remote.is_some() {
             return self.remote_click(right);
         }
-        let Some(size) = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]) else { return };
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return;
+        };
         let batch = HudBatch::new(size);
-        let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else { return };
+        let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
+            return;
+        };
         let max = |items: &Items, s: &ItemStack| items.get(&s.item).map_or(64, |i| i.max_stack);
-        let shift = self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        let shift =
+            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
         if slot >= 300 {
             if let Some(key) = self.container {
                 self.world.modified.insert((key.0 >> 4, key.2 >> 4));
@@ -2068,17 +2863,26 @@ impl Game<'_> {
         let is_furnace = matches!(self.container_kind(), Some(BlockEntity::Furnace(_)));
         if is_furnace && slot == 302 {
             // FurnaceResultSlot: take only.
-            let Some(result) = self.slot_mut(302).take() else { return };
+            let Some(result) = self.slot_mut(302).take() else {
+                return;
+            };
             match &mut self.carried {
                 None => self.carried = Some(result),
-                Some(c) if c.item == result.item && c.count + result.count <= max(&self.res.items, c) => c.count += result.count,
+                Some(c)
+                    if c.item == result.item
+                        && c.count + result.count <= max(&self.res.items, c) =>
+                {
+                    c.count += result.count
+                }
                 _ => *self.slot_mut(302) = Some(result),
             }
             return;
         }
         if is_furnace
             && slot == 300
-            && let Some(BlockEntity::Furnace(f)) = self.container.and_then(|k| self.world.block_entities.get_mut(&k))
+            && let Some(BlockEntity::Furnace(f)) = self
+                .container
+                .and_then(|k| self.world.block_entities.get_mut(&k))
         {
             // Changing the input restarts cooking (AbstractFurnaceBlockEntity.setItem).
             f.cooking_timer = 0;
@@ -2094,7 +2898,12 @@ impl Game<'_> {
                 } else {
                     match &mut self.carried {
                         None => self.carried = Some(result),
-                        Some(c) if c.item == result.item && c.count + result.count <= max(&self.res.items, c) => c.count += result.count,
+                        Some(c)
+                            if c.item == result.item
+                                && c.count + result.count <= max(&self.res.items, c) =>
+                        {
+                            c.count += result.count
+                        }
                         _ => return,
                     }
                 }
@@ -2122,7 +2931,9 @@ impl Game<'_> {
                     if let Some(s) = &mut self.inventory[i]
                         && s.same_item_same_components(&stack)
                     {
-                        let moved = max(&self.res.items, s).saturating_sub(s.count).min(stack.count);
+                        let moved = max(&self.res.items, s)
+                            .saturating_sub(s.count)
+                            .min(stack.count);
                         s.count += moved;
                         stack.count -= moved;
                     }
@@ -2131,7 +2942,10 @@ impl Game<'_> {
                     && let Some(i) = range.clone().find(|&i| self.inventory[i].is_none())
                 {
                     self.inventory[i] = Some(stack);
-                    stack = ItemStack { count: 0, ..self.inventory[i].clone().unwrap() };
+                    stack = ItemStack {
+                        count: 0,
+                        ..self.inventory[i].clone().unwrap()
+                    };
                 }
                 if stack.count > 0 {
                     self.inventory[slot] = Some(stack);
@@ -2141,7 +2955,13 @@ impl Game<'_> {
         }
         if (500..504).contains(&slot) {
             let wanted = ["head", "chest", "legs", "feet"][slot - 500];
-            let fits = self.carried.as_ref().is_none_or(|c| self.res.items.get(&c.item).and_then(|i| i.equip_slot.as_deref()) == Some(wanted));
+            let fits = self.carried.as_ref().is_none_or(|c| {
+                self.res
+                    .items
+                    .get(&c.item)
+                    .and_then(|i| i.equip_slot.as_deref())
+                    == Some(wanted)
+            });
             if !fits {
                 return;
             }
@@ -2156,19 +2976,29 @@ impl Game<'_> {
             (None, Some(mut s)) if right => {
                 let half = s.count.div_ceil(2);
                 s.count -= half;
-                let taken = ItemStack { count: half, ..s.clone() };
+                let taken = ItemStack {
+                    count: half,
+                    ..s.clone()
+                };
                 ((s.count > 0).then_some(s), Some(taken))
             }
             (None, s) => (None, s),
             (Some(mut c), None) if right => {
-                let one = ItemStack { count: 1, ..c.clone() };
+                let one = ItemStack {
+                    count: 1,
+                    ..c.clone()
+                };
                 c.count -= 1;
                 (Some(one), (c.count > 0).then_some(c))
             }
             (Some(c), None) => (Some(c), None),
             (Some(mut c), Some(mut s)) if c.same_item_same_components(&s) => {
                 let room = max(items, &s).saturating_sub(s.count);
-                let moved = if right { 1.min(room).min(c.count) } else { room.min(c.count) };
+                let moved = if right {
+                    1.min(room).min(c.count)
+                } else {
+                    room.min(c.count)
+                };
                 s.count += moved;
                 c.count -= moved;
                 (Some(s), (c.count > 0).then_some(c))
@@ -2196,20 +3026,32 @@ impl Game<'_> {
             let age = item.age as f32 + alpha as f32;
             let bob = (age / 10.0 + item.bob_offset).sin() * 0.1 + 0.1;
             let spin = age / 20.0 + item.bob_offset;
-            let light = self.world.light(q.x.floor() as i32, (q.y + 0.1).floor() as i32, q.z.floor() as i32);
+            let light = self.world.light(
+                q.x.floor() as i32,
+                (q.y + 0.1).floor() as i32,
+                q.z.floor() as i32,
+            );
             let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
             let center = pos.as_vec3() + glam::Vec3::new(0.0, bob + 0.125, 0.0);
             let rot = glam::Mat3::from_rotation_y(spin);
             let icon = self.icon(&item.stack.item);
             let atlas = &self.res.atlas;
             let mut quad = |corners: [glam::Vec3; 4], name: &str, shade: f32, tint: u32| {
-                let Some(r) = atlas.sprites.get(name).copied() else { return };
+                let Some(r) = atlas.sprites.get(name).copied() else {
+                    return;
+                };
                 let uv = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
                 let c = |sft: u32| (((tint >> sft) & 255) as f32 * shade) as u32;
                 let color = 0xFF00_0000 | c(0) << 16 | c(8) << 8 | c(16);
                 for (corner, uv) in corners.iter().zip(uv) {
                     let v = center + rot * *corner;
-                    out.push(Vertex { pos: v.to_array(), uv, layer: 0, color, light: packed });
+                    out.push(Vertex {
+                        pos: v.to_array(),
+                        uv,
+                        layer: 0,
+                        color,
+                        light: packed,
+                    });
                 }
             };
             let copies = match item.stack.count {
@@ -2221,20 +3063,90 @@ impl Game<'_> {
             for k in 0..copies {
                 let o = glam::Vec3::new(k as f32 * 0.03, k as f32 * 0.03, k as f32 * 0.05);
                 match &icon {
-                    Some(Icon::Cube { top, left, right, tint }) => {
+                    Some(Icon::Cube {
+                        top,
+                        left,
+                        right,
+                        tint,
+                    }) => {
                         let h = 0.125;
                         let v = |x: f32, y: f32, z: f32| glam::Vec3::new(x * h, y * h, z * h) + o;
-                        quad([v(-1., 1., 1.), v(1., 1., 1.), v(1., 1., -1.), v(-1., 1., -1.)], top, 1.0, *tint);
-                        quad([v(-1., -1., -1.), v(1., -1., -1.), v(1., -1., 1.), v(-1., -1., 1.)], top, 0.5, *tint);
-                        quad([v(-1., -1., 1.), v(1., -1., 1.), v(1., 1., 1.), v(-1., 1., 1.)], left, 0.8, 0xFFFFFF);
-                        quad([v(1., -1., -1.), v(-1., -1., -1.), v(-1., 1., -1.), v(1., 1., -1.)], left, 0.8, 0xFFFFFF);
-                        quad([v(1., -1., 1.), v(1., -1., -1.), v(1., 1., -1.), v(1., 1., 1.)], right, 0.6, 0xFFFFFF);
-                        quad([v(-1., -1., -1.), v(-1., -1., 1.), v(-1., 1., 1.), v(-1., 1., -1.)], right, 0.6, 0xFFFFFF);
+                        quad(
+                            [
+                                v(-1., 1., 1.),
+                                v(1., 1., 1.),
+                                v(1., 1., -1.),
+                                v(-1., 1., -1.),
+                            ],
+                            top,
+                            1.0,
+                            *tint,
+                        );
+                        quad(
+                            [
+                                v(-1., -1., -1.),
+                                v(1., -1., -1.),
+                                v(1., -1., 1.),
+                                v(-1., -1., 1.),
+                            ],
+                            top,
+                            0.5,
+                            *tint,
+                        );
+                        quad(
+                            [
+                                v(-1., -1., 1.),
+                                v(1., -1., 1.),
+                                v(1., 1., 1.),
+                                v(-1., 1., 1.),
+                            ],
+                            left,
+                            0.8,
+                            0xFFFFFF,
+                        );
+                        quad(
+                            [
+                                v(1., -1., -1.),
+                                v(-1., -1., -1.),
+                                v(-1., 1., -1.),
+                                v(1., 1., -1.),
+                            ],
+                            left,
+                            0.8,
+                            0xFFFFFF,
+                        );
+                        quad(
+                            [
+                                v(1., -1., 1.),
+                                v(1., -1., -1.),
+                                v(1., 1., -1.),
+                                v(1., 1., 1.),
+                            ],
+                            right,
+                            0.6,
+                            0xFFFFFF,
+                        );
+                        quad(
+                            [
+                                v(-1., -1., -1.),
+                                v(-1., -1., 1.),
+                                v(-1., 1., 1.),
+                                v(-1., 1., -1.),
+                            ],
+                            right,
+                            0.6,
+                            0xFFFFFF,
+                        );
                     }
                     Some(Icon::Flat(name)) => {
                         let h = 0.25;
                         let v = |x: f32, y: f32| glam::Vec3::new(x * h, y * h + 0.125, 0.0) + o;
-                        quad([v(-1., -1.), v(1., -1.), v(1., 1.), v(-1., 1.)], name, 1.0, 0xFFFFFF);
+                        quad(
+                            [v(-1., -1.), v(1., -1.), v(1., 1.), v(-1., 1.)],
+                            name,
+                            1.0,
+                            0xFFFFFF,
+                        );
                     }
                     None => {}
                 }
@@ -2243,22 +3155,50 @@ impl Game<'_> {
         // Mobs and their projectiles.
         self.mob_geometry(camera, alpha, &mut out);
         // Arrows: two crossed quads along the flight direction.
-        if let Some(r) = self.res.atlas.sprites.get("entity/projectiles/arrow").copied() {
+        if let Some(r) = self
+            .res
+            .atlas
+            .sprites
+            .get("entity/projectiles/arrow")
+            .copied()
+        {
             for a in &self.arrows {
                 let p = glam::DVec3::new(
                     a.previous.x + (a.position.x - a.previous.x) * alpha,
                     a.previous.y + (a.position.y - a.previous.y) * alpha,
                     a.previous.z + (a.position.z - a.previous.z) * alpha,
                 ) - camera;
-                let dir = glam::Vec3::new(a.velocity.x as f32, a.velocity.y as f32, a.velocity.z as f32).normalize_or(glam::Vec3::X);
+                let dir = glam::Vec3::new(
+                    a.velocity.x as f32,
+                    a.velocity.y as f32,
+                    a.velocity.z as f32,
+                )
+                .normalize_or(glam::Vec3::X);
                 let side = dir.cross(glam::Vec3::Y).normalize_or(glam::Vec3::Z) * 0.08;
                 let up = dir.cross(side).normalize_or(glam::Vec3::Y) * 0.08;
                 let c = p.as_vec3();
-                let (u1, v1) = (r.u0 + (r.u1 - r.u0) * 0.5, r.v0 + (r.v1 - r.v0) * (5.0 / 32.0));
+                let (u1, v1) = (
+                    r.u0 + (r.u1 - r.u0) * 0.5,
+                    r.v0 + (r.v1 - r.v0) * (5.0 / 32.0),
+                );
                 for off in [side, up] {
-                    let q = [c - dir * 0.25 - off, c + dir * 0.25 - off, c + dir * 0.25 + off, c - dir * 0.25 + off];
-                    for (v, uv) in q.iter().zip([[r.u0, v1], [u1, v1], [u1, r.v0], [r.u0, r.v0]]) {
-                        out.push(Vertex { pos: v.to_array(), uv, layer: 0, color: 0xFFFF_FFFF, light: 240 | 240 << 8 });
+                    let q = [
+                        c - dir * 0.25 - off,
+                        c + dir * 0.25 - off,
+                        c + dir * 0.25 + off,
+                        c - dir * 0.25 + off,
+                    ];
+                    for (v, uv) in q
+                        .iter()
+                        .zip([[r.u0, v1], [u1, v1], [u1, r.v0], [r.u0, r.v0]])
+                    {
+                        out.push(Vertex {
+                            pos: v.to_array(),
+                            uv,
+                            layer: 0,
+                            color: 0xFFFF_FFFF,
+                            light: 240 | 240 << 8,
+                        });
                     }
                 }
             }
@@ -2268,19 +3208,52 @@ impl Game<'_> {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
             let darken = self.sky_darken();
             let a = alpha;
-            let lerp = |p: Vec3, q: Vec3| glam::DVec3::new(p.x + (q.x - p.x) * a, p.y + (q.y - p.y) * a, p.z + (q.z - p.z) * a);
-            let mut casters: Vec<(glam::DVec3, &str)> = self.mobs.iter().map(|m| (lerp(m.previous, m.position), m.kind.id.as_str())).collect();
-            casters.extend(self.dropped.iter().map(|i| (lerp(i.previous, i.position), "minecraft:item")));
-            casters.extend(self.orbs.iter().map(|o| (lerp(o.previous, o.position), "minecraft:experience_orb")));
+            let lerp = |p: Vec3, q: Vec3| {
+                glam::DVec3::new(
+                    p.x + (q.x - p.x) * a,
+                    p.y + (q.y - p.y) * a,
+                    p.z + (q.z - p.z) * a,
+                )
+            };
+            let mut casters: Vec<(glam::DVec3, &str)> = self
+                .mobs
+                .iter()
+                .map(|m| (lerp(m.previous, m.position), m.kind.id.as_str()))
+                .collect();
+            casters.extend(
+                self.dropped
+                    .iter()
+                    .map(|i| (lerp(i.previous, i.position), "minecraft:item")),
+            );
+            casters.extend(
+                self.orbs
+                    .iter()
+                    .map(|o| (lerp(o.previous, o.position), "minecraft:experience_orb")),
+            );
             for (pos, id) in casters {
                 let (radius, strength) = horizon_client::shadows::shadow_params(id);
-                horizon_client::shadows::shadow(&self.world, &self.res.facts, sprite, camera, pos, radius, strength, ambient, darken, &mut out);
+                horizon_client::shadows::shadow(
+                    &self.world,
+                    &self.res.facts,
+                    sprite,
+                    camera,
+                    pos,
+                    radius,
+                    strength,
+                    ambient,
+                    darken,
+                    &mut out,
+                );
             }
         }
         // Block entities (BlockEntityRenderers): chests, shulker boxes, banners, skulls...
         if let Some(r) = &self.renderer {
             let lid = |p: [i32; 3]| {
-                let (prev, cur) = self.chest_open.get(&(p[0], p[1], p[2])).copied().unwrap_or((0.0, 0.0));
+                let (prev, cur) = self
+                    .chest_open
+                    .get(&(p[0], p[1], p[2]))
+                    .copied()
+                    .unwrap_or((0.0, 0.0));
                 prev + (cur - prev) * alpha as f32
             };
             let scene = horizon_client::block_entity_render::Scene {
@@ -2297,12 +3270,18 @@ impl Game<'_> {
                 },
                 glyph: &|c| self.res.atlas.glyph(c),
             };
-            self.res.block_entity_render.render(&scene, r.block_entities(), &mut out);
+            self.res
+                .block_entity_render
+                .render(&scene, r.block_entities(), &mut out);
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
         if let Some(r) = self.res.atlas.sprites.get("entity/experience_orb").copied() {
             let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
-            let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
+            let forward = glam::Vec3::new(
+                -yaw.sin() * pitch.cos(),
+                -pitch.sin(),
+                yaw.cos() * pitch.cos(),
+            );
             let right = forward.cross(glam::Vec3::Y).normalize_or_zero();
             let up = right.cross(forward).normalize_or_zero();
             for o in &self.orbs {
@@ -2318,70 +3297,181 @@ impl Game<'_> {
                 let red = ((t.sin() + 1.0) * 0.5 * 255.0) as u32;
                 let blue = (((t + 4.188_79).sin() + 1.0) * 0.1 * 255.0) as u32;
                 let color = 0x8000_0000 | blue << 16 | 255 << 8 | red;
-                let light = self.world.light(o.position.x.floor() as i32, o.position.y.floor() as i32, o.position.z.floor() as i32);
-                let packed = u32::from(light >> 4).max(10) * 16 | (u32::from(light & 15).max(10) * 16) << 8;
+                let light = self.world.light(
+                    o.position.x.floor() as i32,
+                    o.position.y.floor() as i32,
+                    o.position.z.floor() as i32,
+                );
+                let packed =
+                    u32::from(light >> 4).max(10) * 16 | (u32::from(light & 15).max(10) * 16) << 8;
                 let c = p.as_vec3();
                 let s = 0.15;
-                for (k, uv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter().zip([[u0, v0 + dv], [u0 + du, v0 + dv], [u0 + du, v0], [u0, v0]]) {
+                for (k, uv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+                    .iter()
+                    .zip([[u0, v0 + dv], [u0 + du, v0 + dv], [u0 + du, v0], [u0, v0]])
+                {
                     let v = c + right * (k.0 * s) + up * (k.1 * s);
-                    out.push(Vertex { pos: v.to_array(), uv, layer: 0, color, light: packed });
+                    out.push(Vertex {
+                        pos: v.to_array(),
+                        uv,
+                        layer: 0,
+                        color,
+                        light: packed,
+                    });
                 }
             }
         }
         // Falling blocks: a unit cube with the block's texture.
         for f in self.falling.clone() {
-            let Some((sprite, tint)) = self.particle_sprite(f.state) else { continue };
-            let Some(r) = self.res.atlas.sprites.get(&sprite).copied() else { continue };
+            let Some((sprite, tint)) = self.particle_sprite(f.state) else {
+                continue;
+            };
+            let Some(r) = self.res.atlas.sprites.get(&sprite).copied() else {
+                continue;
+            };
             let p = glam::DVec3::new(
                 f.previous.x + (f.position.x - f.previous.x) * alpha - 0.5,
                 f.previous.y + (f.position.y - f.previous.y) * alpha,
                 f.previous.z + (f.position.z - f.previous.z) * alpha - 0.5,
             ) - camera;
             let o = p.as_vec3();
-            let light = self.world.light(f.position.x.floor() as i32, f.position.y.floor() as i32 + 1, f.position.z.floor() as i32);
+            let light = self.world.light(
+                f.position.x.floor() as i32,
+                f.position.y.floor() as i32 + 1,
+                f.position.z.floor() as i32,
+            );
             let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
             let v = |x: f32, y: f32, z: f32| o + glam::Vec3::new(x, y, z);
             let faces = [
-                ([v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)], 1.0),
-                ([v(0., 0., 0.), v(1., 0., 0.), v(1., 0., 1.), v(0., 0., 1.)], 0.5),
-                ([v(1., 0., 0.), v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.)], 0.8),
-                ([v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)], 0.8),
-                ([v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)], 0.6),
-                ([v(1., 0., 1.), v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.)], 0.6),
+                (
+                    [v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)],
+                    1.0,
+                ),
+                (
+                    [v(0., 0., 0.), v(1., 0., 0.), v(1., 0., 1.), v(0., 0., 1.)],
+                    0.5,
+                ),
+                (
+                    [v(1., 0., 0.), v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.)],
+                    0.8,
+                ),
+                (
+                    [v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)],
+                    0.8,
+                ),
+                (
+                    [v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)],
+                    0.6,
+                ),
+                (
+                    [v(1., 0., 1.), v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.)],
+                    0.6,
+                ),
             ];
             for (corners, shade) in faces {
                 let c = |sft: u32| (((tint >> sft) & 255) as f32 * shade) as u32;
                 let color = 0xFF00_0000 | c(0) << 16 | c(8) << 8 | c(16);
-                for (p, uv) in corners.iter().zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]]) {
-                    out.push(Vertex { pos: p.to_array(), uv, layer: 0, color, light: packed });
+                for (p, uv) in
+                    corners
+                        .iter()
+                        .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
+                {
+                    out.push(Vertex {
+                        pos: p.to_array(),
+                        uv,
+                        layer: 0,
+                        color,
+                        light: packed,
+                    });
                 }
             }
         }
         self.tnt_geometry(camera, alpha, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
         let world = &self.world;
-        self.particles.render(camera, self.yaw, self.pitch, alpha as f32, &|b| world.light(b[0], b[1], b[2]), &mut out);
+        self.particles.render(
+            camera,
+            self.yaw,
+            self.pitch,
+            alpha as f32,
+            &|b| world.light(b[0], b[1], b[2]),
+            &mut out,
+        );
         let atlas = &self.res.atlas;
         // Breaking progress overlay (destroy_stage_0..9).
         if let Some(m) = &self.mining
             && m.progress > 0.0
         {
             let stage = ((m.progress * 10.0) as u32).min(9);
-            if let Some(r) = atlas.sprites.get(&format!("block/destroy_stage_{stage}")).copied() {
-                let o = (glam::DVec3::new(f64::from(m.pos[0]), f64::from(m.pos[1]), f64::from(m.pos[2])) - camera).as_vec3();
+            if let Some(r) = atlas
+                .sprites
+                .get(&format!("block/destroy_stage_{stage}"))
+                .copied()
+            {
+                let o = (glam::DVec3::new(
+                    f64::from(m.pos[0]),
+                    f64::from(m.pos[1]),
+                    f64::from(m.pos[2]),
+                ) - camera)
+                    .as_vec3();
                 let e = 0.002;
-                let corner = |x: f32, y: f32, z: f32| o + glam::Vec3::new(x * (1.0 + 2.0 * e) - e, y * (1.0 + 2.0 * e) - e, z * (1.0 + 2.0 * e) - e);
+                let corner = |x: f32, y: f32, z: f32| {
+                    o + glam::Vec3::new(
+                        x * (1.0 + 2.0 * e) - e,
+                        y * (1.0 + 2.0 * e) - e,
+                        z * (1.0 + 2.0 * e) - e,
+                    )
+                };
                 let faces = [
-                    [corner(0., 1., 0.), corner(1., 1., 0.), corner(1., 1., 1.), corner(0., 1., 1.)],
-                    [corner(0., 0., 1.), corner(1., 0., 1.), corner(1., 0., 0.), corner(0., 0., 0.)],
-                    [corner(0., 0., 0.), corner(1., 0., 0.), corner(1., 1., 0.), corner(0., 1., 0.)],
-                    [corner(1., 0., 1.), corner(0., 0., 1.), corner(0., 1., 1.), corner(1., 1., 1.)],
-                    [corner(0., 0., 1.), corner(0., 0., 0.), corner(0., 1., 0.), corner(0., 1., 1.)],
-                    [corner(1., 0., 0.), corner(1., 0., 1.), corner(1., 1., 1.), corner(1., 1., 0.)],
+                    [
+                        corner(0., 1., 0.),
+                        corner(1., 1., 0.),
+                        corner(1., 1., 1.),
+                        corner(0., 1., 1.),
+                    ],
+                    [
+                        corner(0., 0., 1.),
+                        corner(1., 0., 1.),
+                        corner(1., 0., 0.),
+                        corner(0., 0., 0.),
+                    ],
+                    [
+                        corner(0., 0., 0.),
+                        corner(1., 0., 0.),
+                        corner(1., 1., 0.),
+                        corner(0., 1., 0.),
+                    ],
+                    [
+                        corner(1., 0., 1.),
+                        corner(0., 0., 1.),
+                        corner(0., 1., 1.),
+                        corner(1., 1., 1.),
+                    ],
+                    [
+                        corner(0., 0., 1.),
+                        corner(0., 0., 0.),
+                        corner(0., 1., 0.),
+                        corner(0., 1., 1.),
+                    ],
+                    [
+                        corner(1., 0., 0.),
+                        corner(1., 0., 1.),
+                        corner(1., 1., 1.),
+                        corner(1., 1., 0.),
+                    ],
                 ];
                 for f in faces {
-                    for (v, uv) in f.iter().zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]]) {
-                        out.push(Vertex { pos: v.to_array(), uv, layer: 0, color: 0xB4FF_FFFF, light: 15 * 16 | (15 * 16) << 8 });
+                    for (v, uv) in
+                        f.iter()
+                            .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
+                    {
+                        out.push(Vertex {
+                            pos: v.to_array(),
+                            uv,
+                            layer: 0,
+                            color: 0xB4FF_FFFF,
+                            light: 15 * 16 | (15 * 16) << 8,
+                        });
                     }
                 }
             }
@@ -2439,30 +3529,43 @@ impl Game<'_> {
     }
     /// Player.attack with the attack-strength charge, crits and knockback.
     fn attack(&mut self) -> bool {
-        let Some((index, distance)) = self.mob_hit() else { return false };
+        let Some((index, distance)) = self.mob_hit() else {
+            return false;
+        };
         if let Some(hit) = self.pick() {
             let eye = self.eye_position().unwrap_or_default();
-            let d = ((hit.point[0] - eye[0]).powi(2) + (hit.point[1] - eye[1]).powi(2) + (hit.point[2] - eye[2]).powi(2)).sqrt();
+            let d = ((hit.point[0] - eye[0]).powi(2)
+                + (hit.point[1] - eye[1]).powi(2)
+                + (hit.point[2] - eye[2]).powi(2))
+            .sqrt();
             if d < distance {
                 return false;
             }
         }
         let held = self.held().cloned();
-        let modifiers = held.as_ref().and_then(|h| self.res.items.get(&h.item)).map(|i| (i.attack_damage, i.attack_speed)).unwrap_or((0.0, 0.0));
+        let modifiers = held
+            .as_ref()
+            .and_then(|h| self.res.items.get(&h.item))
+            .map(|i| (i.attack_damage, i.attack_speed))
+            .unwrap_or((0.0, 0.0));
         let damage = 1.0 + modifiers.0 + self.effect_attack_bonus();
         let speed = (4.0 + modifiers.1).max(0.1);
         let delay = 20.0 / speed;
         let scale = ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0);
         let mut amount = damage * (0.2 + scale * scale * 0.8);
         let player = self.player.as_ref();
-        let falling = player.is_some_and(|p| !p.ground.on_ground && p.velocity.y < 0.0 && !p.sprinting);
+        let falling =
+            player.is_some_and(|p| !p.ground.on_ground && p.velocity.y < 0.0 && !p.sprinting);
         let crit = scale > 0.9 && falling;
         if crit {
             amount *= 1.5;
         }
         // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
         let target_kind = self.mobs[index].kind.id.clone();
-        amount += self.enchant_damage_bonus(&format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"))) * scale;
+        amount += self.enchant_damage_bonus(&format!(
+            "minecraft:{}",
+            target_kind.trim_start_matches("minecraft:")
+        )) * scale;
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
@@ -2473,28 +3576,63 @@ impl Game<'_> {
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
         self.swing_arm();
         let mob = &mut self.mobs[index];
-        let center = [mob.position.x, mob.position.y + mob.kind.height / 2.0, mob.position.z];
+        let center = [
+            mob.position.x,
+            mob.position.y + mob.kind.height / 2.0,
+            mob.position.z,
+        ];
         if mob.hurt(amount, from, &mut self.world.random) {
             // Player.attack: crit emitter and damage indicator hearts.
-            let (feet, width, height) = ([mob.position.x, mob.position.y, mob.position.z], mob.kind.width, mob.kind.height);
+            let (feet, width, height) = (
+                [mob.position.x, mob.position.y, mob.position.z],
+                mob.kind.width,
+                mob.kind.height,
+            );
             if crit {
-                self.particles.tracking_emitter(horizon_client::particles::ParticleOptions::simple(horizon_client::particles::ParticleType::Crit), feet, width, height);
+                self.particles.tracking_emitter(
+                    horizon_client::particles::ParticleOptions::simple(
+                        horizon_client::particles::ParticleType::Crit,
+                    ),
+                    feet,
+                    width,
+                    height,
+                );
             }
             if amount > 2.0 {
-                let indicator = horizon_client::particles::ParticleOptions::simple(horizon_client::particles::ParticleType::DamageIndicator);
-                self.particles.send_particles(&indicator, [feet[0], feet[1] + height * 0.5, feet[2]], [0.1, 0.0, 0.1], 0.2, (amount * 0.5) as u32);
+                let indicator = horizon_client::particles::ParticleOptions::simple(
+                    horizon_client::particles::ParticleType::DamageIndicator,
+                );
+                self.particles.send_particles(
+                    &indicator,
+                    [feet[0], feet[1] + height * 0.5, feet[2]],
+                    [0.1, 0.0, 0.1],
+                    0.2,
+                    (amount * 0.5) as u32,
+                );
             }
             self.last_hurt_by_player.insert(mob.id);
             let kind = mob.kind.clone();
             let dead = !mob.alive();
-            let sound = if crit { "minecraft:entity.player.attack.crit" } else if scale > 0.9 { "minecraft:entity.player.attack.strong" } else { "minecraft:entity.player.attack.weak" };
+            let sound = if crit {
+                "minecraft:entity.player.attack.crit"
+            } else if scale > 0.9 {
+                "minecraft:entity.player.attack.strong"
+            } else {
+                "minecraft:entity.player.attack.weak"
+            };
             self.audio.play(sound, Some(center), 1.0, 1.0);
             let event = format!("minecraft:{}", kind.sounds[if dead { 2 } else { 1 }]);
-            let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
+            let pitch =
+                (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
             self.audio.play(&event, Some(center), 1.0, pitch);
             self.post_attack(index);
             if let Some(stack) = self.inventory[self.selected].clone()
-                && let Some(max) = self.res.items.get(&stack.item).filter(|i| i.max_damage > 0).map(|i| i.max_damage)
+                && let Some(max) = self
+                    .res
+                    .items
+                    .get(&stack.item)
+                    .filter(|i| i.max_damage > 0)
+                    .map(|i| i.max_damage)
             {
                 let loss = self.durability_loss(&stack, 1);
                 if let Some(stack) = self.inventory[self.selected].as_mut() {
@@ -2511,7 +3649,12 @@ impl Game<'_> {
     /// A mob explosion (`Level.ExplosionInteraction.MOB`: drop decay with the
     /// default mobGriefing rule).
     fn explode(&mut self, center: [f64; 3], radius: f32) -> Result<()> {
-        self.server_explode(center, radius, explosion::BlockInteraction::DestroyWithDecay, false)
+        self.server_explode(
+            center,
+            radius,
+            explosion::BlockInteraction::DestroyWithDecay,
+            false,
+        )
     }
     fn tick_block_entities(&mut self) -> Result<()> {
         self.tick_hoppers()?;
@@ -2522,7 +3665,11 @@ impl Game<'_> {
         let open = self.container;
         self.chest_open.retain(|k, (prev, cur)| {
             *prev = *cur;
-            *cur = if Some(*k) == open { (*cur + 0.1).min(1.0) } else { (*cur - 0.1).max(0.0) };
+            *cur = if Some(*k) == open {
+                (*cur + 0.1).min(1.0)
+            } else {
+                (*cur - 0.1).max(0.0)
+            };
             *cur > 0.0 || *prev > 0.0
         });
         let mut lit_changes = Vec::new();
@@ -2547,7 +3694,10 @@ impl Game<'_> {
         Ok(())
     }
     /// A copy of a chunk carrying its block entities, for saving.
-    fn with_entities(&self, chunk: &Arc<horizon_client::chunk::Chunk>) -> Arc<horizon_client::chunk::Chunk> {
+    fn with_entities(
+        &self,
+        chunk: &Arc<horizon_client::chunk::Chunk>,
+    ) -> Arc<horizon_client::chunk::Chunk> {
         let mut c = (**chunk).clone();
         c.block_entities = self
             .world
@@ -2566,21 +3716,51 @@ impl Game<'_> {
     fn celestial_geometry(&self, sky: &horizon_client::environment::Sky) -> Vec<Vertex> {
         let mut out = Vec::new();
         let atlas = &self.res.atlas;
-        let frame = |angle: f32| glam::Mat4::from_rotation_y((-90.0f32).to_radians()) * glam::Mat4::from_rotation_x(angle.to_radians());
+        let frame = |angle: f32| {
+            glam::Mat4::from_rotation_y((-90.0f32).to_radians())
+                * glam::Mat4::from_rotation_x(angle.to_radians())
+        };
         let mut body = |name: &str, angle: f32, size: f32, color: u32| {
-            let Some(r) = atlas.sprites.get(name).copied() else { return };
+            let Some(r) = atlas.sprites.get(name).copied() else {
+                return;
+            };
             let m = frame(angle);
             let corners = [(-size, -size), (size, -size), (size, size), (-size, size)];
             let uv = [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]];
             for ((x, z), uv) in corners.iter().zip(uv) {
                 let p = m.transform_point3(glam::Vec3::new(*x, 100.0, *z));
-                out.push(Vertex { pos: p.to_array(), uv, layer: 2, color: color, light: 0 });
+                out.push(Vertex {
+                    pos: p.to_array(),
+                    uv,
+                    layer: 2,
+                    color: color,
+                    light: 0,
+                });
             }
         };
-        body("environment/celestial/sun", sky.sun_angle, 30.0, 0xFFFF_FFFF);
-        let phases = ["full_moon", "waning_gibbous", "third_quarter", "waning_crescent", "new_moon", "waxing_crescent", "first_quarter", "waxing_gibbous"];
+        body(
+            "environment/celestial/sun",
+            sky.sun_angle,
+            30.0,
+            0xFFFF_FFFF,
+        );
+        let phases = [
+            "full_moon",
+            "waning_gibbous",
+            "third_quarter",
+            "waning_crescent",
+            "new_moon",
+            "waxing_crescent",
+            "first_quarter",
+            "waxing_gibbous",
+        ];
         let phase = phases[(self.world.day_time / 24000).rem_euclid(8) as usize];
-        body(&format!("environment/celestial/moon/{phase}"), sky.moon_angle, 20.0, 0xFFFF_FFFF);
+        body(
+            &format!("environment/celestial/moon/{phase}"),
+            sky.moon_angle,
+            20.0,
+            0xFFFF_FFFF,
+        );
         if sky.star_brightness > 0.0 {
             let b = (sky.star_brightness.clamp(0.0, 1.0) * 255.0) as u32;
             let color = b << 24 | b << 16 | b << 8 | b;
@@ -2608,7 +3788,13 @@ impl Game<'_> {
                     let (r2, u2) = (right * c + up * s, up * c - right * s);
                     for (a, b) in [(size, -size), (size, size), (-size, size), (-size, -size)] {
                         let p = m.transform_point3(center + r2 * a + u2 * b);
-                        out.push(Vertex { pos: p.to_array(), uv: [cu, cv], layer: 2, color, light: 0 });
+                        out.push(Vertex {
+                            pos: p.to_array(),
+                            uv: [cu, cv],
+                            layer: 2,
+                            color,
+                            light: 0,
+                        });
                     }
                 }
             }
@@ -2616,10 +3802,18 @@ impl Game<'_> {
         out
     }
     /// CloudRenderer (fancy): 12x4x12 cells from clouds.png drifting east.
-    fn cloud_geometry(&self, sky: &horizon_client::environment::Sky, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+    fn cloud_geometry(
+        &self,
+        sky: &horizon_client::environment::Sky,
+        camera: glam::DVec3,
+        alpha: f64,
+        out: &mut Vec<Vertex>,
+    ) {
         let (w, h, cells) = &self.res.clouds;
         let (w, h) = (i64::from(*w), i64::from(*h));
-        let Some(white) = self.res.atlas.sprites.get("horizon/white").copied() else { return };
+        let Some(white) = self.res.atlas.sprites.get("horizon/white").copied() else {
+            return;
+        };
         let uv = [(white.u0 + white.u1) / 2.0, (white.v0 + white.v1) / 2.0];
         let cloud_height = 192.33;
         let offset = (self.world.game_time.rem_euclid(w * 400)) as f64 + alpha;
@@ -2656,28 +3850,58 @@ impl Game<'_> {
                 let mut quad = |p: [[f32; 3]; 4], shade: f32| {
                     for v in p {
                         // Overlay 4: clouds (unlit, faded by the cloud fog end).
-                        out.push(Vertex { pos: v, uv, layer: 4, color: color(shade), light });
+                        out.push(Vertex {
+                            pos: v,
+                            uv,
+                            layer: 4,
+                            color: color(shade),
+                            light,
+                        });
                     }
                 };
-                quad([[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]], 1.0);
-                quad([[x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [x0, y0, z0]], 0.7);
+                quad(
+                    [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
+                    1.0,
+                );
+                quad(
+                    [[x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [x0, y0, z0]],
+                    0.7,
+                );
                 if !filled(cx, cz - 1) {
-                    quad([[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]], 0.8);
+                    quad(
+                        [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
+                        0.8,
+                    );
                 }
                 if !filled(cx, cz + 1) {
-                    quad([[x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1]], 0.8);
+                    quad(
+                        [[x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1]],
+                        0.8,
+                    );
                 }
                 if !filled(cx - 1, cz) {
-                    quad([[x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0]], 0.9);
+                    quad(
+                        [[x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0]],
+                        0.9,
+                    );
                 }
                 if !filled(cx + 1, cz) {
-                    quad([[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]], 0.9);
+                    quad(
+                        [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
+                        0.9,
+                    );
                 }
             }
         }
     }
     /// Load (or create) a world folder under saves/ and start streaming it.
-    fn open_world(&mut self, folder: &str, name: Option<&str>, seed: Option<i64>, creative: bool) -> Result<()> {
+    fn open_world(
+        &mut self,
+        folder: &str,
+        name: Option<&str>,
+        seed: Option<i64>,
+        creative: bool,
+    ) -> Result<()> {
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         horizon_client::save::migrate_legacy(&save_root)?;
         self.persist = Default::default();
@@ -2685,7 +3909,9 @@ impl Game<'_> {
             name: name.unwrap_or(folder).to_owned(),
             // WorldOptions.randomSeed when no seed was given.
             seed: seed.unwrap_or_else(|| {
-                let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+                let t = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as u64);
                 (t ^ (t >> 29)).wrapping_mul(0x9E37_79B9_7F4A_7C15) as i64
             }),
             creative,
@@ -2724,7 +3950,12 @@ impl Game<'_> {
         let mut inventory = vec![None; 36];
         self.armor = [None, None, None, None];
         for (slot, id, count, damage) in &level.inventory {
-            let stack = ItemStack { item: Arc::from(id.as_str()), count: *count, damage: *damage, extra: level.inventory_components.get(slot).cloned() };
+            let stack = ItemStack {
+                item: Arc::from(id.as_str()),
+                count: *count,
+                damage: *damage,
+                extra: level.inventory_components.get(slot).cloned(),
+            };
             if (100..104).contains(slot) {
                 self.armor[usize::from(103 - slot)] = Some(stack);
             } else if let Some(cell) = inventory.get_mut(usize::from(*slot)) {
@@ -2732,11 +3963,32 @@ impl Game<'_> {
             }
         }
         if self.creative && level.inventory.is_empty() && level.position.is_none() {
-            for (i, name) in ["minecraft:grass_block", "minecraft:stone", "minecraft:oak_planks", "minecraft:glass", "minecraft:torch", "minecraft:oak_log", "minecraft:chest", "minecraft:furnace", "minecraft:diamond_pickaxe"].iter().enumerate() {
-                inventory[i] = Some(ItemStack { item: Arc::from(*name), count: 1, damage: 0, extra: None });
+            for (i, name) in [
+                "minecraft:grass_block",
+                "minecraft:stone",
+                "minecraft:oak_planks",
+                "minecraft:glass",
+                "minecraft:torch",
+                "minecraft:oak_log",
+                "minecraft:chest",
+                "minecraft:furnace",
+                "minecraft:diamond_pickaxe",
+            ]
+            .iter()
+            .enumerate()
+            {
+                inventory[i] = Some(ItemStack {
+                    item: Arc::from(*name),
+                    count: 1,
+                    damage: 0,
+                    extra: None,
+                });
             }
         }
-        let (yaw, pitch) = self.options.look.unwrap_or((level.rotation[0], level.rotation[1]));
+        let (yaw, pitch) = self
+            .options
+            .look
+            .unwrap_or((level.rotation[0], level.rotation[1]));
         self.yaw = yaw;
         self.pitch = pitch;
         self.selected = level.selected_slot.clamp(0, 8) as usize;
@@ -2761,7 +4013,11 @@ impl Game<'_> {
         self.dropped.clear();
         self.particles.clear();
         self.orbs.clear();
-        self.experience = Experience { level: self.level.xp_level, progress: self.level.xp_progress, total: self.level.xp_total };
+        self.experience = Experience {
+            level: self.level.xp_level,
+            progress: self.level.xp_progress,
+            total: self.level.xp_total,
+        };
         self.restore_effects();
         self.mining = None;
         self.container = None;
@@ -2783,18 +4039,45 @@ impl Game<'_> {
         Ok(())
     }
     /// Streaming and region storage for one dimension of a world.
-    fn make_streaming(&self, world_root: &std::path::Path, dim: Dim, seed: i64) -> Result<(Streaming, Arc<SaveDir>)> {
-        let save = Arc::new(SaveDir::new(horizon_client::save::dimension_dir(world_root, dim.id())));
+    fn make_streaming(
+        &self,
+        world_root: &std::path::Path,
+        dim: Dim,
+        seed: i64,
+    ) -> Result<(Streaming, Arc<SaveDir>)> {
+        let save = Arc::new(SaveDir::new(horizon_client::save::dimension_dir(
+            world_root,
+            dim.id(),
+        )));
         let res = &*self.res;
         let mut streaming = if self.options.test_terrain && dim == Dim::Overworld {
             let inner = Arc::new(TestTerrain::new(res.assets.registry, &res.biomes)?);
-            Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
+            Streaming::new(
+                Arc::new(Persistent {
+                    inner,
+                    save: save.clone(),
+                    registry: res.assets.clone(),
+                    biomes: res.biomes.clone(),
+                }),
+                res.context.clone(),
+                res.threads,
+            )
         } else {
             let inner = Arc::new(VanillaTerrain::for_dimension(&self.options.resources.join("worldgen"), res.assets.registry, &res.biomes, seed, dim.id()).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with: python3 tools/prepare_native_client.py")
             })?);
-            self.end.set_locator((dim == Dim::Overworld).then(|| inner.clone()));
-            Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
+            self.end
+                .set_locator((dim == Dim::Overworld).then(|| inner.clone()));
+            Streaming::new(
+                Arc::new(Persistent {
+                    inner,
+                    save: save.clone(),
+                    registry: res.assets.clone(),
+                    biomes: res.biomes.clone(),
+                }),
+                res.context.clone(),
+                res.threads,
+            )
         };
         streaming.radius = self.settings.render_distance;
         streaming.sky_light = dim != Dim::Nether;
@@ -2804,11 +4087,18 @@ impl Game<'_> {
     /// Change dimension through a portal (Entity.changeDimension with
     /// PortalForcer placement once the destination has loaded).
     fn enter_dimension(&mut self, target: Dim) -> Result<()> {
-        let Some(player) = self.player.take() else { return Ok(()) };
+        let Some(player) = self.player.take() else {
+            return Ok(());
+        };
         // Save the departing dimension's changed chunks.
         let keys: Vec<_> = self.world.modified.drain().collect();
-        let chunks: Vec<_> = keys.iter().filter_map(|k| self.world.chunks.get(k)).map(|c| self.with_entities(c)).collect();
-        self.save.save(&chunks, &self.res.assets.registry, &self.res.biomes)?;
+        let chunks: Vec<_> = keys
+            .iter()
+            .filter_map(|k| self.world.chunks.get(k))
+            .map(|c| self.with_entities(c))
+            .collect();
+        self.save
+            .save(&chunks, &self.res.assets.registry, &self.res.biomes)?;
         self.save_dimension_entities()?;
         // Coordinates scale by 8 between the Overworld and the Nether.
         let scale = match (self.dim, target) {
@@ -2817,9 +4107,14 @@ impl Game<'_> {
             (Dim::End, Dim::Nether) => 1.0 / 8.0,
             _ => 1.0,
         };
-        let destination = self.end_destination(target).unwrap_or(Vec3::new(player.position.x * scale, player.position.y, player.position.z * scale));
+        let destination = self.end_destination(target).unwrap_or(Vec3::new(
+            player.position.x * scale,
+            player.position.y,
+            player.position.z * scale,
+        ));
         let from_end = self.dim == Dim::End;
-        let (streaming, save) = self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
+        let (streaming, save) =
+            self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
         let mut world = World::new(self.res.facts.air, self.level.seed);
         world.game_time = self.world.game_time;
         world.day_time = self.world.day_time;
@@ -2850,10 +4145,23 @@ impl Game<'_> {
     }
     /// PortalShape: an obsidian frame around 2..=21 by 3..=21 empty blocks.
     fn portal_shape(&self, start: [i32; 3], x_axis: bool) -> Option<([i32; 3], i32, i32)> {
-        let name = |p: [i32; 3]| self.res.facts.get(self.world.block(p[0], p[1], p[2])).name.clone();
+        let name = |p: [i32; 3]| {
+            self.res
+                .facts
+                .get(self.world.block(p[0], p[1], p[2]))
+                .name
+                .clone()
+        };
         let empty = |p: [i32; 3]| {
             let n = name(p);
-            matches!(&*n, "minecraft:air" | "minecraft:cave_air" | "minecraft:fire" | "minecraft:soul_fire" | "minecraft:nether_portal")
+            matches!(
+                &*n,
+                "minecraft:air"
+                    | "minecraft:cave_air"
+                    | "minecraft:fire"
+                    | "minecraft:soul_fire"
+                    | "minecraft:nether_portal"
+            )
         };
         let frame = |p: [i32; 3]| &*name(p) == "minecraft:obsidian";
         let d = if x_axis { [1, 0, 0] } else { [0, 0, 1] };
@@ -2883,13 +4191,17 @@ impl Game<'_> {
             }
             width += 1;
         }
-        if !(2..=21).contains(&width) || !frame([left[0] + d[0] * width, left[1], left[2] + d[2] * width]) {
+        if !(2..=21).contains(&width)
+            || !frame([left[0] + d[0] * width, left[1], left[2] + d[2] * width])
+        {
             return None;
         }
         let mut height = 0;
         'rows: while height <= 21 {
             let y = left[1] + height;
-            if !frame([left[0] - d[0], y, left[2] - d[2]]) || !frame([left[0] + d[0] * width, y, left[2] + d[2] * width]) {
+            if !frame([left[0] - d[0], y, left[2] - d[2]])
+                || !frame([left[0] + d[0] * width, y, left[2] + d[2] * width])
+            {
                 break;
             }
             for i in 0..width {
@@ -2899,7 +4211,8 @@ impl Game<'_> {
             }
             height += 1;
         }
-        let top_ok = (0..width).all(|i| frame([left[0] + d[0] * i, left[1] + height, left[2] + d[2] * i]));
+        let top_ok =
+            (0..width).all(|i| frame([left[0] + d[0] * i, left[1] + height, left[2] + d[2] * i]));
         ((3..=21).contains(&height) && top_ok).then_some((left, width, height))
     }
     /// BaseFireBlock.onPlace: lighting fire inside a frame creates a portal.
@@ -2908,13 +4221,22 @@ impl Game<'_> {
             if let Some((origin, width, height)) = self.portal_shape(at, x_axis) {
                 let d = if x_axis { [1, 0, 0] } else { [0, 0, 1] };
                 let registry = &self.res.assets.registry;
-                let Some(default) = registry.default_state("minecraft:nether_portal") else { return Ok(false) };
+                let Some(default) = registry.default_state("minecraft:nether_portal") else {
+                    return Ok(false);
+                };
                 let mut portal = registry.state(default).cloned().ok_or("portal state")?;
-                portal.properties.insert("axis".into(), if x_axis { "x" } else { "z" }.into());
+                portal
+                    .properties
+                    .insert("axis".into(), if x_axis { "x" } else { "z" }.into());
                 let id = registry.resolve(&portal).unwrap_or(default);
                 for h in 0..height {
                     for w in 0..width {
-                        self.world.set(origin[0] + d[0] * w, origin[1] + h, origin[2] + d[2] * w, id)?;
+                        self.world.set(
+                            origin[0] + d[0] * w,
+                            origin[1] + h,
+                            origin[2] + d[2] * w,
+                            id,
+                        )?;
                     }
                 }
                 return Ok(true);
@@ -2926,7 +4248,11 @@ impl Game<'_> {
     fn place_after_travel(&mut self, mut player: PlayerMotion, target: Vec3) -> Result<()> {
         let (tx, tz) = (target.x.floor() as i32, target.z.floor() as i32);
         let radius = if self.dim == Dim::Nether { 16 } else { 32 };
-        let (min_y, max_y) = if self.dim == Dim::Nether { (1, 126) } else { (MIN_Y + 1, MIN_Y + HEIGHT - 3) };
+        let (min_y, max_y) = if self.dim == Dim::Nether {
+            (1, 126)
+        } else {
+            (MIN_Y + 1, MIN_Y + HEIGHT - 3)
+        };
         let portal_name = "minecraft:nether_portal";
         let mut best: Option<(i64, [i32; 3])> = None;
         for z in tz - radius..=tz + radius {
@@ -2938,7 +4264,9 @@ impl Game<'_> {
                     if &*self.res.facts.get(self.world.block(x, y, z)).name == portal_name
                         && &*self.res.facts.get(self.world.block(x, y - 1, z)).name != portal_name
                     {
-                        let d = i64::from(x - tx).pow(2) + i64::from(z - tz).pow(2) + i64::from(y - target.y as i32).pow(2);
+                        let d = i64::from(x - tx).pow(2)
+                            + i64::from(z - tz).pow(2)
+                            + i64::from(y - target.y as i32).pow(2);
                         if best.is_none_or(|b| d < b.0) {
                             best = Some((d, [x, y, z]));
                         }
@@ -2976,24 +4304,40 @@ impl Game<'_> {
                 [tx, y, tz]
             }
         };
-        player.position = Vec3::new(f64::from(spot[0]) + 0.5, f64::from(spot[1]), f64::from(spot[2]) + 0.5);
+        player.position = Vec3::new(
+            f64::from(spot[0]) + 0.5,
+            f64::from(spot[1]),
+            f64::from(spot[2]) + 0.5,
+        );
         player.velocity = Vec3::ZERO;
         self.previous_position = player.position;
         self.player = Some(player);
         self.apply_equipment();
         let at = [f64::from(spot[0]), f64::from(spot[1]), f64::from(spot[2])];
-        self.audio.play("minecraft:block.portal.travel", Some(at), 0.25, 1.0);
+        self.audio
+            .play("minecraft:block.portal.travel", Some(at), 0.25, 1.0);
         Ok(())
     }
     fn tick_portal(&mut self) -> Result<()> {
-        let Some(p) = self.player.as_ref() else { return Ok(()) };
+        let Some(p) = self.player.as_ref() else {
+            return Ok(());
+        };
         let w = f64::from(p.dimensions.width) / 2.0;
-        let (lo, hi) = ([p.position.x - w, p.position.y, p.position.z - w], [p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w]);
+        let (lo, hi) = (
+            [p.position.x - w, p.position.y, p.position.z - w],
+            [
+                p.position.x + w,
+                p.position.y + f64::from(p.dimensions.height),
+                p.position.z + w,
+            ],
+        );
         let mut inside = false;
         for x in lo[0].floor() as i32..=hi[0].floor() as i32 {
             for y in lo[1].floor() as i32..=hi[1].floor() as i32 {
                 for z in lo[2].floor() as i32..=hi[2].floor() as i32 {
-                    if &*self.res.facts.get(self.world.block(x, y, z)).name == "minecraft:nether_portal" {
+                    if &*self.res.facts.get(self.world.block(x, y, z)).name
+                        == "minecraft:nether_portal"
+                    {
                         inside = true;
                     }
                 }
@@ -3009,7 +4353,12 @@ impl Game<'_> {
         }
         if self.portal_ticks == 0 {
             let at = self.eye_position();
-            self.audio.play("minecraft:block.portal.trigger", at, 0.25, self.world.random.next_float() * 0.4 + 0.8);
+            self.audio.play(
+                "minecraft:block.portal.trigger",
+                at,
+                0.25,
+                self.world.random.next_float() * 0.4 + 0.8,
+            );
         }
         self.portal_ticks += 1;
         // Player.getPortalWaitTime: 80 ticks, or 1 when invulnerable (creative).
@@ -3017,7 +4366,11 @@ impl Game<'_> {
         if self.portal_ticks >= wait {
             self.portal_ticks = 0;
             // NetherPortalBlock: the Nether leads to the Overworld, anywhere else to the Nether.
-            let target = if self.dim == Dim::Nether { Dim::Overworld } else { Dim::Nether };
+            let target = if self.dim == Dim::Nether {
+                Dim::Overworld
+            } else {
+                Dim::Nether
+            };
             self.end_portal_travel = false;
             self.enter_dimension(target)?;
         }
@@ -3050,33 +4403,104 @@ impl Game<'_> {
         let mut out = Vec::new();
         let d = 100.0;
         let faces: [(&str, [glam::Vec3; 4]); 6] = [
-            ("0", [glam::Vec3::new(-d, d, -d), glam::Vec3::new(d, d, -d), glam::Vec3::new(d, -d, -d), glam::Vec3::new(-d, -d, -d)]),
-            ("1", [glam::Vec3::new(d, d, -d), glam::Vec3::new(d, d, d), glam::Vec3::new(d, -d, d), glam::Vec3::new(d, -d, -d)]),
-            ("2", [glam::Vec3::new(d, d, d), glam::Vec3::new(-d, d, d), glam::Vec3::new(-d, -d, d), glam::Vec3::new(d, -d, d)]),
-            ("3", [glam::Vec3::new(-d, d, d), glam::Vec3::new(-d, d, -d), glam::Vec3::new(-d, -d, -d), glam::Vec3::new(-d, -d, d)]),
-            ("4", [glam::Vec3::new(-d, d, d), glam::Vec3::new(d, d, d), glam::Vec3::new(d, d, -d), glam::Vec3::new(-d, d, -d)]),
-            ("5", [glam::Vec3::new(-d, -d, -d), glam::Vec3::new(d, -d, -d), glam::Vec3::new(d, -d, d), glam::Vec3::new(-d, -d, d)]),
+            (
+                "0",
+                [
+                    glam::Vec3::new(-d, d, -d),
+                    glam::Vec3::new(d, d, -d),
+                    glam::Vec3::new(d, -d, -d),
+                    glam::Vec3::new(-d, -d, -d),
+                ],
+            ),
+            (
+                "1",
+                [
+                    glam::Vec3::new(d, d, -d),
+                    glam::Vec3::new(d, d, d),
+                    glam::Vec3::new(d, -d, d),
+                    glam::Vec3::new(d, -d, -d),
+                ],
+            ),
+            (
+                "2",
+                [
+                    glam::Vec3::new(d, d, d),
+                    glam::Vec3::new(-d, d, d),
+                    glam::Vec3::new(-d, -d, d),
+                    glam::Vec3::new(d, -d, d),
+                ],
+            ),
+            (
+                "3",
+                [
+                    glam::Vec3::new(-d, d, d),
+                    glam::Vec3::new(-d, d, -d),
+                    glam::Vec3::new(-d, -d, -d),
+                    glam::Vec3::new(-d, -d, d),
+                ],
+            ),
+            (
+                "4",
+                [
+                    glam::Vec3::new(-d, d, d),
+                    glam::Vec3::new(d, d, d),
+                    glam::Vec3::new(d, d, -d),
+                    glam::Vec3::new(-d, d, -d),
+                ],
+            ),
+            (
+                "5",
+                [
+                    glam::Vec3::new(-d, -d, -d),
+                    glam::Vec3::new(d, -d, -d),
+                    glam::Vec3::new(d, -d, d),
+                    glam::Vec3::new(-d, -d, d),
+                ],
+            ),
         ];
         for (index, corners) in faces {
-            let Some(r) = self.res.atlas.sprites.get(&format!("gui/title/background/panorama_{index}")).copied() else { continue };
+            let Some(r) = self
+                .res
+                .atlas
+                .sprites
+                .get(&format!("gui/title/background/panorama_{index}"))
+                .copied()
+            else {
+                continue;
+            };
             let uv = [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]];
             for (p, uv) in corners.iter().zip(uv) {
-                out.push(Vertex { pos: p.to_array(), uv, layer: 2, color: 0xFFFF_FFFF, light: 0 });
+                out.push(Vertex {
+                    pos: p.to_array(),
+                    uv,
+                    layer: 2,
+                    color: 0xFFFF_FFFF,
+                    light: 0,
+                });
             }
         }
         out
     }
     /// Equipment attribute modifiers (LivingEntity.collectEquipmentChanges).
     fn apply_equipment(&mut self) {
-        let Some(player) = self.player.as_mut() else { return };
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
         for (attribute, id) in std::mem::take(&mut self.applied_modifiers) {
             let _ = player.set_modifier(&attribute, &id, 0.0, "add_value", false);
         }
         let slots = ["head", "chest", "legs", "feet"];
-        let mut equipped: Vec<(Option<&ItemStack>, &str)> = self.armor.iter().zip(slots).map(|(s, n)| (s.as_ref(), n)).collect();
+        let mut equipped: Vec<(Option<&ItemStack>, &str)> = self
+            .armor
+            .iter()
+            .zip(slots)
+            .map(|(s, n)| (s.as_ref(), n))
+            .collect();
         equipped.push((self.inventory[self.selected].as_ref(), "mainhand"));
         for (stack, slot) in equipped {
-            let Some(info) = stack.and_then(|s| self.res.items.get(&s.item)) else { continue };
+            let Some(info) = stack.and_then(|s| self.res.items.get(&s.item)) else {
+                continue;
+            };
             for (attribute, id, amount, op, group) in &info.modifiers {
                 let matches = group == slot
                     || group == "any"
@@ -3086,7 +4510,10 @@ impl Game<'_> {
                 if !matches || slot == "mainhand" {
                     continue;
                 }
-                if player.set_modifier(attribute, id, *amount, op, true).is_ok() {
+                if player
+                    .set_modifier(attribute, id, *amount, op, true)
+                    .is_ok()
+                {
                     self.applied_modifiers.push((attribute.clone(), id.clone()));
                 }
             }
@@ -3097,7 +4524,13 @@ impl Game<'_> {
     fn hurt_armor(&mut self, damage: f32) {
         let amount = ((damage / 4.0) as u32).max(1);
         let mut broke = false;
-        let losses: Vec<u32> = (0..4).map(|i| self.armor[i].clone().map_or(amount, |s| self.durability_loss(&s, amount))).collect();
+        let losses: Vec<u32> = (0..4)
+            .map(|i| {
+                self.armor[i]
+                    .clone()
+                    .map_or(amount, |s| self.durability_loss(&s, amount))
+            })
+            .collect();
         for (slot, amount) in self.armor.iter_mut().zip(losses) {
             if let Some(stack) = slot.as_mut()
                 && let Some(info) = self.res.items.get(&stack.item)
@@ -3112,7 +4545,12 @@ impl Game<'_> {
         }
         if broke {
             if let Some(eye) = self.eye_position() {
-                self.audio.play("minecraft:entity.item.break", Some(eye), 0.8, 0.8 + self.world.random.next_float() * 0.4);
+                self.audio.play(
+                    "minecraft:entity.item.break",
+                    Some(eye),
+                    0.8,
+                    0.8 + self.world.random.next_float() * 0.4,
+                );
             }
             self.apply_equipment();
         }
@@ -3124,17 +4562,34 @@ impl Game<'_> {
         let mut t = 0.0;
         let mut last = origin.map(|v| v.floor() as i32);
         while t <= self.reach() {
-            let p = [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
+            let p = [
+                origin[0] + dir[0] * t,
+                origin[1] + dir[1] * t,
+                origin[2] + dir[2] * t,
+            ];
             let b = p.map(|v| v.floor() as i32);
             if b != last {
                 let state = self.world.block(b[0], b[1], b[2]);
                 let f = self.res.facts.get(state);
                 let face = [last[0] - b[0], last[1] - b[1], last[2] - b[2]];
-                if f.fluid != Fluid::None && f.fluid_level == 8 && !f.fluid_falling && !f.waterlogged && f.render_shape != horizon_client::blocks::RenderShape::Model {
-                    return Some(Hit { pos: b, face, point: p });
+                if f.fluid != Fluid::None
+                    && f.fluid_level == 8
+                    && !f.fluid_falling
+                    && !f.waterlogged
+                    && f.render_shape != horizon_client::blocks::RenderShape::Model
+                {
+                    return Some(Hit {
+                        pos: b,
+                        face,
+                        point: p,
+                    });
                 }
                 if !self.res.facts.is_air(state) && f.fluid == Fluid::None {
-                    return Some(Hit { pos: b, face, point: p });
+                    return Some(Hit {
+                        pos: b,
+                        face,
+                        point: p,
+                    });
                 }
                 last = b;
             }
@@ -3145,7 +4600,9 @@ impl Game<'_> {
     fn set_state_named(&mut self, pos: [i32; 3], name: &str, keep: &[&str]) -> Result<bool> {
         let registry = &self.res.assets.registry;
         let old = self.world.block(pos[0], pos[1], pos[2]);
-        let Some(default) = registry.default_state(name) else { return Ok(false) };
+        let Some(default) = registry.default_state(name) else {
+            return Ok(false);
+        };
         let mut state = registry.state(default).cloned().ok_or("state")?;
         if let Some(previous) = registry.state(old) {
             for k in keep {
@@ -3174,7 +4631,12 @@ impl Game<'_> {
             if stack.damage >= info.max_damage {
                 self.inventory[self.selected] = None;
                 if let Some(eye) = self.eye_position() {
-                    self.audio.play("minecraft:entity.item.break", Some(eye), 0.8, 0.8 + self.world.random.next_float() * 0.4);
+                    self.audio.play(
+                        "minecraft:entity.item.break",
+                        Some(eye),
+                        0.8,
+                        0.8 + self.world.random.next_float() * 0.4,
+                    );
                 }
             }
         }
@@ -3182,9 +4644,17 @@ impl Game<'_> {
     /// Item use on blocks for tools, buckets and fire starters; returns true if handled.
     fn use_tool(&mut self, stack: &ItemStack) -> Result<bool> {
         let item = stack.item.trim_start_matches("minecraft:").to_owned();
-        let at = |p: [i32; 3]| [f64::from(p[0]) + 0.5, f64::from(p[1]) + 0.5, f64::from(p[2]) + 0.5];
+        let at = |p: [i32; 3]| {
+            [
+                f64::from(p[0]) + 0.5,
+                f64::from(p[1]) + 0.5,
+                f64::from(p[2]) + 0.5,
+            ]
+        };
         if item == "bucket" {
-            let Some(hit) = self.pick_fluid() else { return Ok(false) };
+            let Some(hit) = self.pick_fluid() else {
+                return Ok(false);
+            };
             let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
             let f = self.res.facts.get(state).clone();
             if f.fluid == Fluid::None || f.fluid_level != 8 || f.fluid_falling {
@@ -3194,11 +4664,17 @@ impl Game<'_> {
                 Fluid::Water => ("minecraft:water_bucket", "minecraft:item.bucket.fill"),
                 _ => ("minecraft:lava_bucket", "minecraft:item.bucket.fill_lava"),
             };
-            self.world.set(hit.pos[0], hit.pos[1], hit.pos[2], self.world.air)?;
+            self.world
+                .set(hit.pos[0], hit.pos[1], hit.pos[2], self.world.air)?;
             self.audio.play(sound, Some(at(hit.pos)), 1.0, 1.0);
             if !self.creative {
                 self.consume_held();
-                let filled = ItemStack { item: Arc::from(filled), count: 1, damage: 0, extra: None };
+                let filled = ItemStack {
+                    item: Arc::from(filled),
+                    count: 1,
+                    damage: 0,
+                    extra: None,
+                };
                 if self.inventory[self.selected].is_none() {
                     self.inventory[self.selected] = Some(filled);
                 } else if let Some(rest) = self.give(filled)
@@ -3209,22 +4685,54 @@ impl Game<'_> {
             }
             return Ok(true);
         }
-        let Some(hit) = self.pick() else { return Ok(false) };
+        let Some(hit) = self.pick() else {
+            return Ok(false);
+        };
         let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        let name = self.res.facts.get(clicked).name.trim_start_matches("minecraft:").to_owned();
-        let above_air = self.res.facts.is_air(self.world.block(hit.pos[0], hit.pos[1] + 1, hit.pos[2]));
+        let name = self
+            .res
+            .facts
+            .get(clicked)
+            .name
+            .trim_start_matches("minecraft:")
+            .to_owned();
+        let above_air =
+            self.res
+                .facts
+                .is_air(self.world.block(hit.pos[0], hit.pos[1] + 1, hit.pos[2]));
         if item == "water_bucket" || item == "lava_bucket" {
-            let target = if self.res.facts.get(clicked).replaceable { hit.pos } else { [hit.pos[0] + hit.face[0], hit.pos[1] + hit.face[1], hit.pos[2] + hit.face[2]] };
+            let target = if self.res.facts.get(clicked).replaceable {
+                hit.pos
+            } else {
+                [
+                    hit.pos[0] + hit.face[0],
+                    hit.pos[1] + hit.face[1],
+                    hit.pos[2] + hit.face[2],
+                ]
+            };
             let existing = self.world.block(target[0], target[1], target[2]);
             if !self.res.facts.get(existing).replaceable && !self.res.facts.is_air(existing) {
                 return Ok(true);
             }
-            let fluid = if item == "water_bucket" { "minecraft:water" } else { "minecraft:lava" };
+            let fluid = if item == "water_bucket" {
+                "minecraft:water"
+            } else {
+                "minecraft:lava"
+            };
             self.set_state_named(target, fluid, &[])?;
-            let sound = if item == "water_bucket" { "minecraft:item.bucket.empty" } else { "minecraft:item.bucket.empty_lava" };
+            let sound = if item == "water_bucket" {
+                "minecraft:item.bucket.empty"
+            } else {
+                "minecraft:item.bucket.empty_lava"
+            };
             self.audio.play(sound, Some(at(target)), 1.0, 1.0);
             if !self.creative {
-                self.inventory[self.selected] = Some(ItemStack { item: Arc::from("minecraft:bucket"), count: 1, damage: 0, extra: None });
+                self.inventory[self.selected] = Some(ItemStack {
+                    item: Arc::from("minecraft:bucket"),
+                    count: 1,
+                    damage: 0,
+                    extra: None,
+                });
             }
             return Ok(true);
         }
@@ -3238,41 +4746,78 @@ impl Game<'_> {
             if let Some(result) = result {
                 self.set_state_named(hit.pos, result, &[])?;
                 if name == "rooted_dirt" {
-                    self.pop_resource([hit.pos[0], hit.pos[1] - 1, hit.pos[2]], ItemStack { item: Arc::from("minecraft:hanging_roots"), count: 1, damage: 0, extra: None });
+                    self.pop_resource(
+                        [hit.pos[0], hit.pos[1] - 1, hit.pos[2]],
+                        ItemStack {
+                            item: Arc::from("minecraft:hanging_roots"),
+                            count: 1,
+                            damage: 0,
+                            extra: None,
+                        },
+                    );
                 }
-                self.audio.play("minecraft:item.hoe.till", Some(at(hit.pos)), 1.0, 1.0);
+                self.audio
+                    .play("minecraft:item.hoe.till", Some(at(hit.pos)), 1.0, 1.0);
                 self.damage_held(1);
                 return Ok(true);
             }
         }
-        if item.ends_with("_shovel") && hit.face != [0, -1, 0] && above_air
-            && matches!(name.as_str(), "grass_block" | "dirt" | "podzol" | "coarse_dirt" | "mycelium" | "rooted_dirt")
+        if item.ends_with("_shovel")
+            && hit.face != [0, -1, 0]
+            && above_air
+            && matches!(
+                name.as_str(),
+                "grass_block" | "dirt" | "podzol" | "coarse_dirt" | "mycelium" | "rooted_dirt"
+            )
         {
             // ShovelItem.FLATTENABLES
             self.set_state_named(hit.pos, "minecraft:dirt_path", &[])?;
-            self.audio.play("minecraft:item.shovel.flatten", Some(at(hit.pos)), 1.0, 1.0);
+            self.audio
+                .play("minecraft:item.shovel.flatten", Some(at(hit.pos)), 1.0, 1.0);
             self.damage_held(1);
             return Ok(true);
         }
         if item.ends_with("_axe") && !name.starts_with("stripped_") {
             // AxeItem.STRIPPABLES
-            let strippable = name.ends_with("_log") || name.ends_with("_wood") || name.ends_with("_stem") || name.ends_with("_hyphae") || name == "bamboo_block";
+            let strippable = name.ends_with("_log")
+                || name.ends_with("_wood")
+                || name.ends_with("_stem")
+                || name.ends_with("_hyphae")
+                || name == "bamboo_block";
             let stripped = format!("minecraft:stripped_{name}");
             if strippable && self.res.assets.registry.default_state(&stripped).is_some() {
                 self.set_state_named(hit.pos, &stripped, &["axis"])?;
-                self.audio.play("minecraft:item.axe.strip", Some(at(hit.pos)), 1.0, 1.0);
+                self.audio
+                    .play("minecraft:item.axe.strip", Some(at(hit.pos)), 1.0, 1.0);
                 self.damage_held(1);
                 return Ok(true);
             }
         }
         if item == "flint_and_steel" || item == "fire_charge" {
-            let target = [hit.pos[0] + hit.face[0], hit.pos[1] + hit.face[1], hit.pos[2] + hit.face[2]];
-            if self.res.facts.is_air(self.world.block(target[0], target[1], target[2])) {
+            let target = [
+                hit.pos[0] + hit.face[0],
+                hit.pos[1] + hit.face[1],
+                hit.pos[2] + hit.face[2],
+            ];
+            if self
+                .res
+                .facts
+                .is_air(self.world.block(target[0], target[1], target[2]))
+            {
                 if !self.try_light_portal(target)? {
                     self.set_state_named(target, "minecraft:fire", &[])?;
                 }
-                let sound = if item == "fire_charge" { "minecraft:item.firecharge.use" } else { "minecraft:item.flintandsteel.use" };
-                self.audio.play(sound, Some(at(target)), 1.0, self.world.random.next_float() * 0.4 + 0.8);
+                let sound = if item == "fire_charge" {
+                    "minecraft:item.firecharge.use"
+                } else {
+                    "minecraft:item.flintandsteel.use"
+                };
+                self.audio.play(
+                    sound,
+                    Some(at(target)),
+                    1.0,
+                    self.world.random.next_float() * 0.4 + 0.8,
+                );
                 if item == "fire_charge" {
                     self.consume_held();
                 } else {
@@ -3282,7 +4827,12 @@ impl Game<'_> {
             }
         }
         // Equippable items swap into their armor slot (Equippable.swapWithEquipmentSlot).
-        if let Some(slot) = self.res.items.get(&stack.item).and_then(|i| i.equip_slot.clone()) {
+        if let Some(slot) = self
+            .res
+            .items
+            .get(&stack.item)
+            .and_then(|i| i.equip_slot.clone())
+        {
             let index = match slot.as_str() {
                 "head" => 0,
                 "chest" => 1,
@@ -3294,7 +4844,8 @@ impl Game<'_> {
             self.inventory[self.selected] = self.armor[index].take();
             self.armor[index] = held;
             if let Some(eye) = self.eye_position() {
-                self.audio.play("minecraft:item.armor.equip_generic", Some(eye), 1.0, 1.0);
+                self.audio
+                    .play("minecraft:item.armor.equip_generic", Some(eye), 1.0, 1.0);
             }
             self.apply_equipment();
             return Ok(true);
@@ -3311,7 +4862,11 @@ impl Game<'_> {
             self.orbs.push(ExperienceOrb {
                 position: p,
                 previous: p,
-                velocity: Vec3::new((r.next_double() * 0.2 - 0.1) * 2.0, r.next_double() * 0.2 * 2.0, (r.next_double() * 0.2 - 0.1) * 2.0),
+                velocity: Vec3::new(
+                    (r.next_double() * 0.2 - 0.1) * 2.0,
+                    r.next_double() * 0.2 * 2.0,
+                    (r.next_double() * 0.2 - 0.1) * 2.0,
+                ),
                 value: v,
                 age: 0,
                 on_ground: false,
@@ -3324,10 +4879,14 @@ impl Game<'_> {
             "coal_ore" | "deepslate_coal_ore" => (0, 2),
             "nether_gold_ore" => (0, 1),
             "lapis_ore" | "deepslate_lapis_ore" | "nether_quartz_ore" => (2, 5),
-            "diamond_ore" | "deepslate_diamond_ore" | "emerald_ore" | "deepslate_emerald_ore" => (3, 7),
+            "diamond_ore" | "deepslate_diamond_ore" | "emerald_ore" | "deepslate_emerald_ore" => {
+                (3, 7)
+            }
             "redstone_ore" | "deepslate_redstone_ore" => (1, 5),
             "sculk" => (1, 1),
-            "sculk_catalyst" | "sculk_sensor" | "calibrated_sculk_sensor" | "sculk_shrieker" => (5, 5),
+            "sculk_catalyst" | "sculk_sensor" | "calibrated_sculk_sensor" | "sculk_shrieker" => {
+                (5, 5)
+            }
             "spawner" => (15, 43),
             _ => (0, 0),
         };
@@ -3341,19 +4900,35 @@ impl Game<'_> {
             self.xp_delay -= 1;
         }
         let player = self.player.as_ref().filter(|p| !p.health.dead_or_dying());
-        let target = player.map(|p| [p.position.x, p.position.y + f64::from(p.dimensions.eye_height) / 2.0, p.position.z]);
+        let target = player.map(|p| {
+            [
+                p.position.x,
+                p.position.y + f64::from(p.dimensions.eye_height) / 2.0,
+                p.position.z,
+            ]
+        });
         let bounds = player.map(|p| {
             let w = f64::from(p.dimensions.width) / 2.0;
-            ([p.position.x - w, p.position.y, p.position.z - w], [p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w])
+            (
+                [p.position.x - w, p.position.y, p.position.z - w],
+                [
+                    p.position.x + w,
+                    p.position.y + f64::from(p.dimensions.height),
+                    p.position.z + w,
+                ],
+            )
         });
         let mut orbs = std::mem::take(&mut self.orbs);
         orbs.retain_mut(|o| o.tick(&self.world, &self.res.facts, self.collision, target));
         let mut gained = 0;
         if let Some((min, max)) = bounds {
             orbs.retain(|o| {
-                let touching = o.position.x + 0.25 > min[0] && o.position.x - 0.25 < max[0]
-                    && o.position.y + 0.5 > min[1] && o.position.y < max[1]
-                    && o.position.z + 0.25 > min[2] && o.position.z - 0.25 < max[2];
+                let touching = o.position.x + 0.25 > min[0]
+                    && o.position.x - 0.25 < max[0]
+                    && o.position.y + 0.5 > min[1]
+                    && o.position.y < max[1]
+                    && o.position.z + 0.25 > min[2]
+                    && o.position.z - 0.25 < max[2];
                 if touching && self.xp_delay == 0 {
                     // ExperienceOrb.playerTouch: one orb every 2 ticks.
                     self.xp_delay = 2;
@@ -3369,12 +4944,22 @@ impl Game<'_> {
         }
         if gained > 0 {
             let at = self.eye_position();
-            let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.35 + 0.9;
-            self.audio.play("minecraft:entity.experience_orb.pickup", at, 0.1, pitch);
-            if self.experience.give(gained as i32) && self.experience.level % 5 == 0 && self.ticks > self.last_level_up + 100 {
+            let pitch =
+                (self.world.random.next_float() - self.world.random.next_float()) * 0.35 + 0.9;
+            self.audio
+                .play("minecraft:entity.experience_orb.pickup", at, 0.1, pitch);
+            if self.experience.give(gained as i32)
+                && self.experience.level % 5 == 0
+                && self.ticks > self.last_level_up + 100
+            {
                 self.last_level_up = self.ticks;
-                let volume = if self.experience.level > 30 { 1.0 } else { self.experience.level as f32 / 30.0 };
-                self.audio.play("minecraft:entity.player.levelup", at, volume * 0.75, 1.0);
+                let volume = if self.experience.level > 30 {
+                    1.0
+                } else {
+                    self.experience.level as f32 / 30.0
+                };
+                self.audio
+                    .play("minecraft:entity.player.levelup", at, volume * 0.75, 1.0);
             }
         }
     }
@@ -3385,21 +4970,47 @@ impl Game<'_> {
         if power < 0.1 {
             return;
         }
-        let arrow_slot = self.inventory.iter().position(|s| s.as_ref().is_some_and(|s| &*s.item == "minecraft:arrow"));
+        let arrow_slot = self
+            .inventory
+            .iter()
+            .position(|s| s.as_ref().is_some_and(|s| &*s.item == "minecraft:arrow"));
         if arrow_slot.is_none() && !self.creative {
             return;
         }
-        let Some(eye) = self.eye_position() else { return };
+        let Some(eye) = self.eye_position() else {
+            return;
+        };
         // BowItem.shootProjectile: shootFromRotation(power * 3, inaccuracy 1).
         let p = Vec3::new(eye[0], eye[1] - 0.1, eye[2]);
         let (power_bonus, infinity) = self.bow_enchantments();
-        let kind = horizon_client::projectiles::ProjectileKind::Arrow { base_damage: 2.0 + power_bonus, critical: power >= 1.0, effect: None };
-        let mut arrow = horizon_client::projectiles::Projectile::new(kind, p, Some(horizon_client::mobs::Who::Player));
-        let (velocity, on_ground) = self.player.as_ref().map_or((Vec3::ZERO, true), |pl| (pl.velocity, pl.ground.on_ground));
-        arrow.shoot_from_rotation(&mut self.world.random, self.pitch, self.yaw, 0.0, power * 3.0, 1.0, velocity, on_ground);
+        let kind = horizon_client::projectiles::ProjectileKind::Arrow {
+            base_damage: 2.0 + power_bonus,
+            critical: power >= 1.0,
+            effect: None,
+        };
+        let mut arrow = horizon_client::projectiles::Projectile::new(
+            kind,
+            p,
+            Some(horizon_client::mobs::Who::Player),
+        );
+        let (velocity, on_ground) = self
+            .player
+            .as_ref()
+            .map_or((Vec3::ZERO, true), |pl| (pl.velocity, pl.ground.on_ground));
+        arrow.shoot_from_rotation(
+            &mut self.world.random,
+            self.pitch,
+            self.yaw,
+            0.0,
+            power * 3.0,
+            1.0,
+            velocity,
+            on_ground,
+        );
         self.creatures.projectiles.push(arrow);
         let pitch = 1.0 / (self.world.random.next_float() * 0.4 + 1.2) + power * 0.5;
-        self.audio.play("minecraft:entity.arrow.shoot", Some(eye), 1.0, pitch);
+        self.audio
+            .play("minecraft:entity.arrow.shoot", Some(eye), 1.0, pitch);
         if !self.creative
             && !infinity
             && let Some(i) = arrow_slot
@@ -3450,9 +5061,14 @@ impl Game<'_> {
         }
         let root = &self.options.resources;
         let name = item.trim_start_matches("minecraft:");
-        let model_name = self.res.items.get(item).map_or(name.to_owned(), |i| i.model.trim_start_matches("minecraft:").to_owned());
+        let model_name = self.res.items.get(item).map_or(name.to_owned(), |i| {
+            i.model.trim_start_matches("minecraft:").to_owned()
+        });
         let mut found = None;
-        let def: Option<serde_json::Value> = std::fs::read(root.join(format!("assets/minecraft/items/{model_name}.json"))).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        let def: Option<serde_json::Value> =
+            std::fs::read(root.join(format!("assets/minecraft/items/{model_name}.json")))
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok());
         let mut current = def.and_then(|d| {
             fn first(v: &serde_json::Value) -> Option<String> {
                 match v {
@@ -3471,12 +5087,22 @@ impl Game<'_> {
         for _ in 0..16 {
             let Some(m) = current.take() else { break };
             let path = m.trim_start_matches("minecraft:").to_owned();
-            let Some(model) = std::fs::read(root.join(format!("assets/minecraft/models/{path}.json"))).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) else { break };
+            let Some(model) =
+                std::fs::read(root.join(format!("assets/minecraft/models/{path}.json")))
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            else {
+                break;
+            };
             let d = &model["display"]["firstperson_righthand"];
             if d.is_object() {
                 let v = |k: &str, default: f32| -> [f32; 3] {
                     let a = d[k].as_array();
-                    std::array::from_fn(|i| a.and_then(|a| a.get(i)).and_then(|x| x.as_f64()).map_or(default, |x| x as f32))
+                    std::array::from_fn(|i| {
+                        a.and_then(|a| a.get(i))
+                            .and_then(|x| x.as_f64())
+                            .map_or(default, |x| x as f32)
+                    })
                 };
                 found = Some((v("rotation", 0.0), v("translation", 0.0), v("scale", 1.0)));
                 break;
@@ -3490,27 +5116,54 @@ impl Game<'_> {
     /// space, converted to camera-relative world space.
     fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
         let mut out = Vec::new();
-        if self.player.as_ref().is_none_or(|p| p.health.dead_or_dying()) || self.screen == Screen::Dead {
+        if self
+            .player
+            .as_ref()
+            .is_none_or(|p| p.health.dead_or_dying())
+            || self.screen == Screen::Dead
+        {
             return out;
         }
         let a = alpha as f32;
         let attack = self.swing_anim.0 + (self.swing_anim.1 - self.swing_anim.0) * a;
-        let attack = if self.swing.is_none() && self.swing_anim.1 == 0.0 { 0.0 } else { attack };
+        let attack = if self.swing.is_none() && self.swing_anim.1 == 0.0 {
+            0.0
+        } else {
+            attack
+        };
         let height = self.hand_height.0 + (self.hand_height.1 - self.hand_height.0) * a;
         let inverse_height = 1.0 - height;
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
-        let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
+        let forward = glam::Vec3::new(
+            -yaw.sin() * pitch.cos(),
+            -pitch.sin(),
+            yaw.cos() * pitch.cos(),
+        );
         let view = glam::Mat4::look_to_rh(glam::Vec3::ZERO, forward, glam::Vec3::Y);
         let to_world = view.inverse();
         let eye = self.eye_position().unwrap_or_default();
-        let light = self.world.light(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32);
+        let light = self.world.light(
+            eye[0].floor() as i32,
+            eye[1].floor() as i32,
+            eye[2].floor() as i32,
+        );
         let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
         let deg = |d: f32| d.to_radians();
         let sqrt_attack = attack.sqrt();
         match self.hand_item.clone() {
             None => {
-                let Some(arm) = self.res.player_arm.clone() else { return out };
-                let Some(r) = self.res.atlas.sprites.get("entity/player/wide/steve").copied() else { return out };
+                let Some(arm) = self.res.player_arm.clone() else {
+                    return out;
+                };
+                let Some(r) = self
+                    .res
+                    .atlas
+                    .sprites
+                    .get("entity/player/wide/steve")
+                    .copied()
+                else {
+                    return out;
+                };
                 // renderPlayerArm (right arm)
                 let x_swing = -0.3 * (sqrt_attack * std::f32::consts::PI).sin();
                 let y_swing = 0.4 * (sqrt_attack * std::f32::consts::TAU).sin();
@@ -3518,7 +5171,11 @@ impl Game<'_> {
                 let z_rot = (attack * attack * std::f32::consts::PI).sin();
                 let y_rot = (sqrt_attack * std::f32::consts::PI).sin();
                 let m = to_world
-                    * glam::Mat4::from_translation(glam::Vec3::new(x_swing + 0.64, y_swing - 0.6 + inverse_height * -0.6, z_swing - 0.72))
+                    * glam::Mat4::from_translation(glam::Vec3::new(
+                        x_swing + 0.64,
+                        y_swing - 0.6 + inverse_height * -0.6,
+                        z_swing - 0.72,
+                    ))
                     * glam::Mat4::from_rotation_y(deg(45.0))
                     * glam::Mat4::from_rotation_y(deg(y_rot * 70.0))
                     * glam::Mat4::from_rotation_z(deg(z_rot * -20.0))
@@ -3534,10 +5191,20 @@ impl Game<'_> {
                     pose[5] = 0.0;
                     pose
                 };
-                horizon_client::mobs::render_model(&arm, m, &pose, [r.u0, r.v0, r.u1, r.v1], packed, 0, &mut out);
+                horizon_client::mobs::render_model(
+                    &arm,
+                    m,
+                    &pose,
+                    [r.u0, r.v0, r.u1, r.v1],
+                    packed,
+                    0,
+                    &mut out,
+                );
             }
             Some(stack) => {
-                let display = self.display_transform(&stack.item).unwrap_or(([0.0; 3], [0.0; 3], [1.0; 3]));
+                let display = self
+                    .display_transform(&stack.item)
+                    .unwrap_or(([0.0; 3], [0.0; 3], [1.0; 3]));
                 let icon = self.icon(&stack.item);
                 // applyItemArmTransform + swingArm (applyItemArmAttackTransform)
                 let x = -0.4 * (sqrt_attack * std::f32::consts::PI).sin();
@@ -3559,27 +5226,85 @@ impl Game<'_> {
                     * glam::Mat4::from_scale(glam::Vec3::from(scale))
                     * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
                 let atlas = &self.res.atlas;
-                let quad = |corners: [glam::Vec3; 4], name: &str, shade: f32, tint: u32, out: &mut Vec<Vertex>| {
-                    let Some(r) = atlas.sprites.get(name).copied() else { return };
+                let quad = |corners: [glam::Vec3; 4],
+                            name: &str,
+                            shade: f32,
+                            tint: u32,
+                            out: &mut Vec<Vertex>| {
+                    let Some(r) = atlas.sprites.get(name).copied() else {
+                        return;
+                    };
                     let uv = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
                     let c = |sft: u32| (((tint >> sft) & 255) as f32 * shade) as u32;
                     let color = 0xFF00_0000 | c(0) << 16 | c(8) << 8 | c(16);
                     for (p, uv) in corners.iter().zip(uv) {
-                        out.push(Vertex { pos: m.transform_point3(*p).to_array(), uv, layer: 0, color, light: packed });
+                        out.push(Vertex {
+                            pos: m.transform_point3(*p).to_array(),
+                            uv,
+                            layer: 0,
+                            color,
+                            light: packed,
+                        });
                     }
                 };
                 let v = glam::Vec3::new;
                 match icon {
-                    Some(Icon::Cube { top, left, right, tint }) => {
-                        quad([v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)], &top, 1.0, tint, &mut out);
-                        quad([v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)], &left, 0.8, 0xFFFFFF, &mut out);
-                        quad([v(1., 0., 0.), v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.)], &left, 0.8, 0xFFFFFF, &mut out);
-                        quad([v(1., 0., 1.), v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.)], &right, 0.6, 0xFFFFFF, &mut out);
-                        quad([v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)], &right, 0.6, 0xFFFFFF, &mut out);
+                    Some(Icon::Cube {
+                        top,
+                        left,
+                        right,
+                        tint,
+                    }) => {
+                        quad(
+                            [v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)],
+                            &top,
+                            1.0,
+                            tint,
+                            &mut out,
+                        );
+                        quad(
+                            [v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)],
+                            &left,
+                            0.8,
+                            0xFFFFFF,
+                            &mut out,
+                        );
+                        quad(
+                            [v(1., 0., 0.), v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.)],
+                            &left,
+                            0.8,
+                            0xFFFFFF,
+                            &mut out,
+                        );
+                        quad(
+                            [v(1., 0., 1.), v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.)],
+                            &right,
+                            0.6,
+                            0xFFFFFF,
+                            &mut out,
+                        );
+                        quad(
+                            [v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)],
+                            &right,
+                            0.6,
+                            0xFFFFFF,
+                            &mut out,
+                        );
                     }
                     Some(Icon::Flat(name)) => {
                         // Generated item models are a sprite on the z = 8/16 plane.
-                        quad([v(0., 0., 0.5), v(1., 0., 0.5), v(1., 1., 0.5), v(0., 1., 0.5)], &name, 1.0, 0xFFFFFF, &mut out);
+                        quad(
+                            [
+                                v(0., 0., 0.5),
+                                v(1., 0., 0.5),
+                                v(1., 1., 0.5),
+                                v(0., 1., 0.5),
+                            ],
+                            &name,
+                            1.0,
+                            0xFFFFFF,
+                            &mut out,
+                        );
                     }
                     None => {}
                 }
@@ -3590,7 +5315,10 @@ impl Game<'_> {
     fn apply_settings(&mut self) {
         self.streaming.radius = self.settings.render_distance;
         self.audio.master = self.settings.master_volume;
-        horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, std::sync::atomic::Ordering::Relaxed);
+        horizon_client::hud::GUI_SCALE.store(
+            self.settings.gui_scale,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.apply_ui_settings();
     }
     /// Whether precipitation at a column is snow (Biome.coldEnoughToSnow:
@@ -3601,7 +5329,11 @@ impl Game<'_> {
         if !b.precipitation {
             return None;
         }
-        let t = if y > 80 { b.temperature - (y - 80) as f32 * 0.05 / 40.0 } else { b.temperature };
+        let t = if y > 80 {
+            b.temperature - (y - 80) as f32 * 0.05 / 40.0
+        } else {
+            b.temperature
+        };
         Some(t < 0.15)
     }
     /// The first motion-blocking block from the top (Heightmap MOTION_BLOCKING).
@@ -3622,30 +5354,66 @@ impl Game<'_> {
             self.flash -= 1;
         }
         let (rain, thunder) = self.world.weather.levels(1.0);
-        let Some(eye) = self.eye_position() else { return };
+        let Some(eye) = self.eye_position() else {
+            return;
+        };
         // WeatherEffectRenderer.tickRainParticles: occasional rain sounds.
         if rain > 0.0 && self.world.random.next_int_bound(3).unwrap_or(1) < (rain * 3.0) as i32 {
             let r = &mut self.world.random;
-            let (dx, dz) = (r.next_int_bound(21).unwrap_or(10) - 10, r.next_int_bound(21).unwrap_or(10) - 10);
+            let (dx, dz) = (
+                r.next_int_bound(21).unwrap_or(10) - 10,
+                r.next_int_bound(21).unwrap_or(10) - 10,
+            );
             let (x, z) = (eye[0].floor() as i32 + dx, eye[2].floor() as i32 + dz);
             let top = self.rain_height(x, z, eye[1] as i32 + 10);
-            if self.precipitation(x, top, z) == Some(false) && (top - eye[1] as i32).abs() < 10 && self.world.random.next_int_bound(5).unwrap_or(1) == 0 {
+            if self.precipitation(x, top, z) == Some(false)
+                && (top - eye[1] as i32).abs() < 10
+                && self.world.random.next_int_bound(5).unwrap_or(1) == 0
+            {
                 let above = f64::from(top) > eye[1] + 1.0;
-                let (name, volume, pitch) = if above { ("minecraft:weather.rain.above", 0.1, 0.5) } else { ("minecraft:weather.rain", 0.2, 1.0) };
-                self.audio.play(name, Some([f64::from(x) + 0.5, f64::from(top), f64::from(z) + 0.5]), volume, pitch);
+                let (name, volume, pitch) = if above {
+                    ("minecraft:weather.rain.above", 0.1, 0.5)
+                } else {
+                    ("minecraft:weather.rain", 0.2, 1.0)
+                };
+                self.audio.play(
+                    name,
+                    Some([f64::from(x) + 0.5, f64::from(top), f64::from(z) + 0.5]),
+                    volume,
+                    pitch,
+                );
             }
         }
         // ServerLevel.tickChunk lightning: 1 in 100000 per chunk per tick while thundering.
         if thunder > 0.0 && self.world.weather.thundering {
             let chunks = self.world.chunks.len().max(1) as i32;
-            if self.world.random.next_int_bound((100_000 / chunks).max(1)).unwrap_or(1) == 0 {
+            if self
+                .world
+                .random
+                .next_int_bound((100_000 / chunks).max(1))
+                .unwrap_or(1)
+                == 0
+            {
                 self.flash = 2;
                 let r = &mut self.world.random;
-                let (dx, dz) = (f64::from(r.next_int_bound(160).unwrap_or(0) - 80), f64::from(r.next_int_bound(160).unwrap_or(0) - 80));
+                let (dx, dz) = (
+                    f64::from(r.next_int_bound(160).unwrap_or(0) - 80),
+                    f64::from(r.next_int_bound(160).unwrap_or(0) - 80),
+                );
                 let at = [eye[0] + dx, eye[1], eye[2] + dz];
                 let pitch = 0.8 + self.world.random.next_float() * 0.2;
-                self.audio.play("minecraft:entity.lightning_bolt.thunder", Some(at), 10000.0, pitch);
-                self.audio.play("minecraft:entity.lightning_bolt.impact", Some(at), 2.0, 0.5 + self.world.random.next_float() * 0.2);
+                self.audio.play(
+                    "minecraft:entity.lightning_bolt.thunder",
+                    Some(at),
+                    10000.0,
+                    pitch,
+                );
+                self.audio.play(
+                    "minecraft:entity.lightning_bolt.impact",
+                    Some(at),
+                    2.0,
+                    0.5 + self.world.random.next_float() * 0.2,
+                );
             }
         }
     }
@@ -3656,8 +5424,17 @@ impl Game<'_> {
             return;
         }
         let atlas = &self.res.atlas;
-        let (Some(rain_tex), Some(snow_tex)) = (atlas.sprites.get("environment/rain").copied(), atlas.sprites.get("environment/snow").copied()) else { return };
-        let (cx, cy, cz) = (camera.x.floor() as i32, camera.y.floor() as i32, camera.z.floor() as i32);
+        let (Some(rain_tex), Some(snow_tex)) = (
+            atlas.sprites.get("environment/rain").copied(),
+            atlas.sprites.get("environment/snow").copied(),
+        ) else {
+            return;
+        };
+        let (cx, cy, cz) = (
+            camera.x.floor() as i32,
+            camera.y.floor() as i32,
+            camera.z.floor() as i32,
+        );
         let radius = 10;
         let time = self.ticks as f32 + alpha as f32;
         for dz in -radius..=radius {
@@ -3673,8 +5450,17 @@ impl Game<'_> {
                 if y0 >= y1 {
                     continue;
                 }
-                let Some(snow) = self.precipitation(x, top, z) else { continue };
-                let hash = (x.wrapping_mul(x).wrapping_mul(3121).wrapping_add(x.wrapping_mul(45_238_971)) ^ z.wrapping_mul(z).wrapping_mul(418_711).wrapping_add(z.wrapping_mul(13761))) & 31;
+                let Some(snow) = self.precipitation(x, top, z) else {
+                    continue;
+                };
+                let hash = (x
+                    .wrapping_mul(x)
+                    .wrapping_mul(3121)
+                    .wrapping_add(x.wrapping_mul(45_238_971))
+                    ^ z.wrapping_mul(z)
+                        .wrapping_mul(418_711)
+                        .wrapping_add(z.wrapping_mul(13761)))
+                    & 31;
                 let r = if snow { snow_tex } else { rain_tex };
                 // Columns face the camera horizontally.
                 let (fx, fz) = (f64::from(x) + 0.5 - camera.x, f64::from(z) + 0.5 - camera.z);
@@ -3691,7 +5477,10 @@ impl Game<'_> {
                 let color = a << 24 | 0xFF_FFFF;
                 let light = self.world.light(x, top.max(cy), z);
                 let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
-                let (b, t) = ((f64::from(y0) - camera.y) as f32, (f64::from(y1) - camera.y) as f32);
+                let (b, t) = (
+                    (f64::from(y0) - camera.y) as f32,
+                    (f64::from(y1) - camera.y) as f32,
+                );
                 let vh = r.v1 - r.v0;
                 let corners = [
                     center + glam::Vec3::new(-sx, b, -sz),
@@ -3705,7 +5494,13 @@ impl Game<'_> {
                 let uv1 = r.v0 + vh * (s0 + 0.25);
                 let uvs = [[r.u0, uv1], [r.u1, uv1], [r.u1, uv0], [r.u0, uv0]];
                 for (p, uv) in corners.iter().zip(uvs) {
-                    out.push(Vertex { pos: p.to_array(), uv, layer: 0, color, light: packed });
+                    out.push(Vertex {
+                        pos: p.to_array(),
+                        uv,
+                        layer: 0,
+                        color,
+                        light: packed,
+                    });
                 }
             }
         }
@@ -3713,46 +5508,88 @@ impl Game<'_> {
     /// Player.startSleepInBed: night or thunder, no monsters within 8 blocks;
     /// the bed becomes the respawn point either way.
     fn try_sleep(&mut self, pos: [i32; 3]) {
-        let Some(p) = self.player.as_ref() else { return };
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
         let time = self.world.day_time.rem_euclid(24000);
         let night = (12542..23460).contains(&time) || self.world.weather.thundering;
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let props = self.res.assets.registry.state(state).map(|s| s.properties.clone()).unwrap_or_default();
+        let props = self
+            .res
+            .assets
+            .registry
+            .state(state)
+            .map(|s| s.properties.clone())
+            .unwrap_or_default();
         let head = if props.get("part").map(String::as_str) == Some("foot") {
             let d = facing_offset(props.get("facing").map_or("north", String::as_str));
             [pos[0] + d[0], pos[1], pos[2] + d[2]]
         } else {
             pos
         };
-        self.spawn = Some(Vec3::new(f64::from(head[0]) + 0.5, f64::from(head[1]) + 0.6, f64::from(head[2]) + 0.5));
-        self.level.spawn = Some([f64::from(head[0]), f64::from(head[1]) + 1.0, f64::from(head[2])]);
-        let dist = ((p.position.x - f64::from(head[0]) - 0.5).powi(2) + (p.position.z - f64::from(head[2]) - 0.5).powi(2)).sqrt();
+        self.spawn = Some(Vec3::new(
+            f64::from(head[0]) + 0.5,
+            f64::from(head[1]) + 0.6,
+            f64::from(head[2]) + 0.5,
+        ));
+        self.level.spawn = Some([
+            f64::from(head[0]),
+            f64::from(head[1]) + 1.0,
+            f64::from(head[2]),
+        ]);
+        let dist = ((p.position.x - f64::from(head[0]) - 0.5).powi(2)
+            + (p.position.z - f64::from(head[2]) - 0.5).powi(2))
+        .sqrt();
         if !night {
-            self.message = Some(("You can sleep only at night or during thunderstorms".into(), Instant::now()));
+            self.message = Some((
+                "You can sleep only at night or during thunderstorms".into(),
+                Instant::now(),
+            ));
             return;
         }
         if dist > 3.0 {
-            self.message = Some(("You may not rest now; the bed is too far away".into(), Instant::now()));
+            self.message = Some((
+                "You may not rest now; the bed is too far away".into(),
+                Instant::now(),
+            ));
             return;
         }
         let monsters = self.mobs.iter().any(|m| {
-            m.hostile() && m.alive() && (m.position.x - p.position.x).abs() < 8.0 && (m.position.y - p.position.y).abs() < 5.0 && (m.position.z - p.position.z).abs() < 8.0
+            m.hostile()
+                && m.alive()
+                && (m.position.x - p.position.x).abs() < 8.0
+                && (m.position.y - p.position.y).abs() < 5.0
+                && (m.position.z - p.position.z).abs() < 8.0
         });
         if monsters {
-            self.message = Some(("You may not rest now; there are monsters nearby".into(), Instant::now()));
+            self.message = Some((
+                "You may not rest now; there are monsters nearby".into(),
+                Instant::now(),
+            ));
             return;
         }
         self.message = Some(("Respawn point set".into(), Instant::now()));
         self.sleeping = Some((head, 0));
     }
     fn tick_sleep(&mut self) {
-        let Some((head, ticks)) = self.sleeping else { return };
-        if self.keys.contains(&KeyCode::ShiftLeft) || self.player.as_ref().is_none_or(|p| p.health.dead_or_dying()) {
+        let Some((head, ticks)) = self.sleeping else {
+            return;
+        };
+        if self.keys.contains(&KeyCode::ShiftLeft)
+            || self
+                .player
+                .as_ref()
+                .is_none_or(|p| p.health.dead_or_dying())
+        {
             self.sleeping = None;
             return;
         }
         if let Some(p) = self.player.as_mut() {
-            p.position = Vec3::new(f64::from(head[0]) + 0.5, f64::from(head[1]) + 0.5625, f64::from(head[2]) + 0.5);
+            p.position = Vec3::new(
+                f64::from(head[0]) + 0.5,
+                f64::from(head[1]) + 0.5625,
+                f64::from(head[2]) + 0.5,
+            );
             p.velocity = Vec3::ZERO;
         }
         let ticks = ticks + 1;
@@ -3770,7 +5607,10 @@ impl Game<'_> {
         }
     }
     fn creative_origin(batch: &HudBatch) -> (f32, f32) {
-        ((batch.width - Creative::WIDTH) / 2.0, (batch.height - Creative::HEIGHT) / 2.0)
+        (
+            (batch.width - Creative::WIDTH) / 2.0,
+            (batch.height - Creative::HEIGHT) / 2.0,
+        )
     }
     /// Vanilla tooltip: dark box with a purple gradient border.
     fn tooltip(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32) {
@@ -3788,9 +5628,21 @@ impl Game<'_> {
         let tabs = self.creative_screen.tabs.clone();
         let tab = self.creative_screen.tab().clone();
         let tab_sprite = |t: &horizon_client::creative::Tab, on: bool| {
-            format!("gui/sprites/container/creative_inventory/tab_{}_{}_{}", if t.top { "top" } else { "bottom" }, if on { "selected" } else { "unselected" }, t.column + 1)
+            format!(
+                "gui/sprites/container/creative_inventory/tab_{}_{}_{}",
+                if t.top { "top" } else { "bottom" },
+                if on { "selected" } else { "unselected" },
+                t.column + 1
+            )
         };
-        batch.fill(&self.res.atlas, 0.0, 0.0, batch.width, batch.height, rgba(16, 16, 16, 160));
+        batch.fill(
+            &self.res.atlas,
+            0.0,
+            0.0,
+            batch.width,
+            batch.height,
+            rgba(16, 16, 16, 160),
+        );
         // Unselected tabs behind the panel, then the panel, then the selected tab.
         for (i, t) in tabs.iter().enumerate() {
             if i != selected {
@@ -3814,11 +5666,28 @@ impl Game<'_> {
         batch.sprite(&self.res.atlas, &tab_sprite(&tab, true), ox + tx, oy + ty);
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
-            let stack = ItemStack { item: Arc::from(t.icon.as_str()), count: 1, damage: 0, extra: None };
-            self.draw_item(batch, &stack, ox + tx + 5.0, oy + ty + if t.top { 9.0 } else { 7.0 });
+            let stack = ItemStack {
+                item: Arc::from(t.icon.as_str()),
+                count: 1,
+                damage: 0,
+                extra: None,
+            };
+            self.draw_item(
+                batch,
+                &stack,
+                ox + tx + 5.0,
+                oy + ty + if t.top { 9.0 } else { 7.0 },
+            );
         }
         let atlas = &self.res.atlas;
-        batch.text(atlas, &tab.title, ox + 8.0, oy + 6.0, rgba(64, 64, 64, 255), false);
+        batch.text(
+            atlas,
+            &tab.title,
+            ox + 8.0,
+            oy + 6.0,
+            rgba(64, 64, 64, 255),
+            false,
+        );
         if tab.search {
             let shown = format!("{}_", self.creative_screen.search);
             batch.text(atlas, &shown, ox + 82.0, oy + 6.0, u32::MAX, true);
@@ -3828,11 +5697,22 @@ impl Game<'_> {
         let mut hovered: Option<String> = None;
         for r in 0..5 {
             for c in 0..9 {
-                let Some(item) = items.get((first + r) * 9 + c) else { continue };
+                let Some(item) = items.get((first + r) * 9 + c) else {
+                    continue;
+                };
                 let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
-                let stack = ItemStack { item: Arc::from(item.as_str()), count: 1, damage: 0, extra: None };
+                let stack = ItemStack {
+                    item: Arc::from(item.as_str()),
+                    count: 1,
+                    damage: 0,
+                    extra: None,
+                };
                 self.draw_item(batch, &stack, x, y);
-                if self.cursor.0 >= x && self.cursor.0 < x + 16.0 && self.cursor.1 >= y && self.cursor.1 < y + 16.0 {
+                if self.cursor.0 >= x
+                    && self.cursor.0 < x + 16.0
+                    && self.cursor.1 >= y
+                    && self.cursor.1 < y + 16.0
+                {
                     batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
                     hovered = Some(item.clone());
                 }
@@ -3842,7 +5722,11 @@ impl Game<'_> {
             let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
             if let Some(stack) = self.inventory[c].clone() {
                 self.draw_item(batch, &stack, x, y);
-                if self.cursor.0 >= x && self.cursor.0 < x + 16.0 && self.cursor.1 >= y && self.cursor.1 < y + 16.0 {
+                if self.cursor.0 >= x
+                    && self.cursor.0 < x + 16.0
+                    && self.cursor.1 >= y
+                    && self.cursor.1 < y + 16.0
+                {
                     hovered = Some(stack.item.to_string());
                 }
             }
@@ -3853,10 +5737,19 @@ impl Game<'_> {
         } else {
             "gui/sprites/container/creative_inventory/scroller_disabled"
         };
-        batch.sprite(&self.res.atlas, scroller, ox + 175.0, oy + 18.0 + self.creative_screen.scroll * (112.0 - 15.0));
+        batch.sprite(
+            &self.res.atlas,
+            scroller,
+            ox + 175.0,
+            oy + 18.0 + self.creative_screen.scroll * (112.0 - 15.0),
+        );
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
-            if self.cursor.0 >= ox + tx && self.cursor.0 < ox + tx + 26.0 && self.cursor.1 >= oy + ty && self.cursor.1 < oy + ty + 32.0 {
+            if self.cursor.0 >= ox + tx
+                && self.cursor.0 < ox + tx + 26.0
+                && self.cursor.1 >= oy + ty
+                && self.cursor.1 < oy + ty + 32.0
+            {
                 self.tooltip(batch, &t.title, self.cursor.0, self.cursor.1);
             }
         }
@@ -3868,7 +5761,13 @@ impl Game<'_> {
         }
     }
     fn click_creative(&mut self, right: bool) {
-        let Some(size) = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]) else { return };
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return;
+        };
         let batch = HudBatch::new(size);
         let (ox, oy) = Self::creative_origin(&batch);
         let (cx, cy) = self.cursor;
@@ -3902,9 +5801,16 @@ impl Game<'_> {
                 if self.carried.take().is_some() {
                     return;
                 }
-                let Some(item) = items.get((first + r) * 9 + c) else { return };
+                let Some(item) = items.get((first + r) * 9 + c) else {
+                    return;
+                };
                 let max = self.res.items.get(item).map_or(64, |i| i.max_stack);
-                let stack = ItemStack { item: Arc::from(item.as_str()), count: if right { 1 } else { max }, damage: 0, extra: None };
+                let stack = ItemStack {
+                    item: Arc::from(item.as_str()),
+                    count: if right { 1 } else { max },
+                    damage: 0,
+                    extra: None,
+                };
                 if shift {
                     let _ = self.give(stack);
                 } else {
@@ -3935,7 +5841,8 @@ impl Game<'_> {
             .filter_map(|k| self.world.chunks.get(k))
             .map(|c| self.with_entities(c))
             .collect();
-        self.save.save(&chunks, &self.res.assets.registry, &self.res.biomes)?;
+        self.save
+            .save(&chunks, &self.res.assets.registry, &self.res.biomes)?;
         self.save_entities()?;
         self.level.selected_slot = self.selected as i32;
         let level = &mut self.level;
@@ -3958,27 +5865,55 @@ impl Game<'_> {
             .inventory
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| s.as_ref().map(|s| (i as u8, s.item.to_string(), s.count, s.damage)))
+            .filter_map(|(i, s)| {
+                s.as_ref()
+                    .map(|s| (i as u8, s.item.to_string(), s.count, s.damage))
+            })
             .collect();
-        level.inventory_components = self.inventory.iter().enumerate().filter_map(|(i, s)| Some((i as u8, s.as_ref()?.extra.clone()?))).collect();
+        level.inventory_components = self
+            .inventory
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| Some((i as u8, s.as_ref()?.extra.clone()?)))
+            .collect();
         // Vanilla stores armor in slots 100 (feet) to 103 (head).
         for (i, s) in self.armor.iter().enumerate() {
             if let Some(s) = s {
-                level.inventory.push((103 - i as u8, s.item.to_string(), s.count, s.damage));
+                level
+                    .inventory
+                    .push((103 - i as u8, s.item.to_string(), s.count, s.damage));
                 if let Some(extra) = s.extra.clone() {
                     level.inventory_components.insert(103 - i as u8, extra);
                 }
             }
         }
         level.dimension = self.dim.id().to_owned();
-        level.active_effects = self.potions.effects.list.iter().map(|e| (format!("minecraft:{}", e.id), e.duration, e.amplifier, e.ambient, e.visible)).collect();
+        level.active_effects = self
+            .potions
+            .effects
+            .list
+            .iter()
+            .map(|e| {
+                (
+                    format!("minecraft:{}", e.id),
+                    e.duration,
+                    e.amplifier,
+                    e.ambient,
+                    e.visible,
+                )
+            })
+            .collect();
         level.write(&self.world_root)?;
         self.save_world_state();
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())
     }
     fn render(&mut self) -> Result<bool> {
-        let Some(size) = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]) else {
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
             return Ok(false);
         };
         let alpha = self.clock.fraction();
@@ -3991,14 +5926,20 @@ impl Game<'_> {
                     a.y + (b.y - a.y) * alpha + f64::from(eye),
                     a.z + (b.z - a.z) * alpha,
                 );
-                let s = self.world.block(c.x.floor() as i32, c.y.floor() as i32, c.z.floor() as i32);
+                let s =
+                    self.world
+                        .block(c.x.floor() as i32, c.y.floor() as i32, c.z.floor() as i32);
                 (c, self.res.facts.get(s).fluid == Fluid::Water)
             }
             None => (glam::DVec3::new(0.5, 100.0, 0.5), false),
         };
         self.audio.listener = [camera.x, camera.y, camera.z];
         self.audio.listener_yaw = self.yaw;
-        let block = [camera.x.floor() as i32, camera.y.floor() as i32, camera.z.floor() as i32];
+        let block = [
+            camera.x.floor() as i32,
+            camera.y.floor() as i32,
+            camera.z.floor() as i32,
+        ];
         let biome = self
             .world
             .chunks
@@ -4008,7 +5949,11 @@ impl Game<'_> {
         let info = self.res.biomes.get(biome).clone();
         let environment = self.dim_environment();
         let mut sky = environment.sample(self.world.day_time, info.sky, info.fog);
-        let (rain, thunder) = if self.dim == Dim::Overworld { self.world.weather.levels(alpha as f32) } else { (0.0, 0.0) };
+        let (rain, thunder) = if self.dim == Dim::Overworld {
+            self.world.weather.levels(alpha as f32)
+        } else {
+            (0.0, 0.0)
+        };
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
         self.end_flash_sky(&mut sky, alpha);
         if self.flash > 0 {
@@ -4026,7 +5971,11 @@ impl Game<'_> {
         };
         let hud = self.hud(size);
         let title = self.title.is_some();
-        let entities = if title { Vec::new() } else { self.entity_geometry(camera, alpha) };
+        let entities = if title {
+            Vec::new()
+        } else {
+            self.entity_geometry(camera, alpha)
+        };
         let celestial = if title {
             self.panorama_geometry()
         } else if self.dim == Dim::Overworld {
@@ -4036,8 +5985,16 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
-        let hand = if title || self.screen == Screen::Inventory { Vec::new() } else { self.hand_geometry(alpha) };
-        let screen = if title { Vec::new() } else { self.screen_quads(alpha as f32, size) };
+        let hand = if title || self.screen == Screen::Inventory {
+            Vec::new()
+        } else {
+            self.hand_geometry(alpha)
+        };
+        let screen = if title {
+            Vec::new()
+        } else {
+            self.screen_quads(alpha as f32, size)
+        };
         let mut entities = entities;
         if !title {
             self.end_geometry(camera, &mut entities);
@@ -4047,10 +6004,18 @@ impl Game<'_> {
             self.weather_geometry(camera, alpha, &mut entities);
         }
         // PanoramaRenderer: the title cube spins at 0.1 degrees per tick, pitched 10 degrees.
-        let (yaw, pitch) = if title { (-(self.started.elapsed().as_secs_f32() * 2.0) % 360.0, 10.0) } else { (self.yaw, self.pitch) };
+        let (yaw, pitch) = if title {
+            (-(self.started.elapsed().as_secs_f32() * 2.0) % 360.0, 10.0)
+        } else {
+            (self.yaw, self.pitch)
+        };
         let water_fog = {
             let c = info.water_fog;
-            [(c >> 16 & 255) as f32 / 255.0, (c >> 8 & 255) as f32 / 255.0, (c & 255) as f32 / 255.0]
+            [
+                (c >> 16 & 255) as f32 / 255.0,
+                (c >> 8 & 255) as f32 / 255.0,
+                (c & 255) as f32 / 255.0,
+            ]
         };
         let frame = Frame {
             camera,
@@ -4059,7 +6024,10 @@ impl Game<'_> {
             fov_degrees: if title { 85.0 } else { self.settings.fov },
             bob: (self.settings.view_bobbing && !title && self.player.is_some()).then(|| {
                 let a = alpha as f32;
-                (self.walk.0 + (self.walk.1 - self.walk.0) * a, self.bob.0 + (self.bob.1 - self.bob.0) * a)
+                (
+                    self.walk.0 + (self.walk.1 - self.walk.0) * a,
+                    self.bob.0 + (self.bob.1 - self.bob.0) * a,
+                )
             }),
             sky,
             distance: (self.streaming.radius * 16) as f32,
@@ -4069,7 +6037,11 @@ impl Game<'_> {
             end_sky: self.dim == Dim::End,
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
             // The camera inside an opaque block sees nothing through it: disable.
-            cave_culling: !self.res.facts.get(self.world.block(block[0], block[1], block[2])).solid_render,
+            cave_culling: !self
+                .res
+                .facts
+                .get(self.world.block(block[0], block[1], block[2]))
+                .solid_render,
             water_fog,
             fog: Some(self.frame_fog(camera, &sky, biome)),
             dark_disc: self.dark_disc(camera),
@@ -4114,10 +6086,15 @@ impl Game<'_> {
             KeyCode::F1 => self.toggle_hide_gui(),
             KeyCode::F11 => self.toggle_fullscreen(),
             KeyCode::F2 => self.take_screenshot(),
-            KeyCode::KeyE if self.screen == Screen::Creative && self.creative_screen.tab().search => {}
+            KeyCode::KeyE
+                if self.screen == Screen::Creative && self.creative_screen.tab().search => {}
             KeyCode::KeyE => match self.screen {
                 Screen::Playing => {
-                    self.screen = if self.creative { Screen::Creative } else { Screen::Inventory };
+                    self.screen = if self.creative {
+                        Screen::Creative
+                    } else {
+                        Screen::Inventory
+                    };
                     self.capture(false);
                 }
                 Screen::Creative => {
@@ -4139,7 +6116,15 @@ impl Game<'_> {
                 let all = self.keys.contains(&KeyCode::ControlLeft);
                 self.drop_held(all);
             }
-            KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 | KeyCode::Digit5 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
+            KeyCode::Digit1
+            | KeyCode::Digit2
+            | KeyCode::Digit3
+            | KeyCode::Digit4
+            | KeyCode::Digit5
+            | KeyCode::Digit6
+            | KeyCode::Digit7
+            | KeyCode::Digit8
+            | KeyCode::Digit9 => {
                 self.selected = match key {
                     KeyCode::Digit1 => 0,
                     KeyCode::Digit2 => 1,
@@ -4183,7 +6168,12 @@ impl Game<'_> {
                     let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
                     let item = self.res.facts.get(state).item.clone();
                     if &*item != "minecraft:air" {
-                        self.inventory[self.selected] = Some(ItemStack { item, count: 1, damage: 0, extra: None });
+                        self.inventory[self.selected] = Some(ItemStack {
+                            item,
+                            count: 1,
+                            damage: 0,
+                            extra: None,
+                        });
                     }
                 }
             }
@@ -4196,7 +6186,10 @@ impl Game<'_> {
             eprintln!("Horizon: {e}");
         }
         if let Some(p) = &self.player {
-            self.streaming.center = ((p.position.x.floor() as i32) >> 4, (p.position.z.floor() as i32) >> 4);
+            self.streaming.center = (
+                (p.position.x.floor() as i32) >> 4,
+                (p.position.z.floor() as i32) >> 4,
+            );
         }
         let (uploads, unloaded) = self.streaming.update(&mut self.world);
         let dirty: Vec<_> = unloaded
@@ -4207,10 +6200,14 @@ impl Game<'_> {
         let modified: Vec<_> = dirty.iter().map(|c| self.with_entities(c)).collect();
         self.unload_entities(&unloaded);
         for c in &unloaded {
-            self.world.block_entities.retain(|p, _| !(p.0 >> 4 == c.x && p.2 >> 4 == c.z));
+            self.world
+                .block_entities
+                .retain(|p, _| !(p.0 >> 4 == c.x && p.2 >> 4 == c.z));
         }
         if !modified.is_empty()
-            && let Err(e) = self.save.save(&modified, &self.res.assets.registry, &self.res.biomes)
+            && let Err(e) = self
+                .save
+                .save(&modified, &self.res.assets.registry, &self.res.biomes)
         {
             eprintln!("Horizon: failed to save unloaded chunks: {e}");
         }
@@ -4250,7 +6247,11 @@ impl ApplicationHandler for Game<'_> {
             assets.sprite_size,
             assets.texture_layers,
             &assets.animations,
-            (&self.res.atlas.pixels, self.res.atlas.width, self.res.atlas.height),
+            (
+                &self.res.atlas.pixels,
+                self.res.atlas.width,
+                self.res.atlas.height,
+            ),
         )) {
             Ok(r) => self.renderer = Some(r),
             Err(e) => {
@@ -4286,7 +6287,10 @@ impl ApplicationHandler for Game<'_> {
                         self.left = false;
                         self.right = false;
                         self.capture(false);
-                        if self.screen == Screen::Playing && self.player.is_some() && !self.options.no_pause {
+                        if self.screen == Screen::Playing
+                            && self.player.is_some()
+                            && !self.options.no_pause
+                        {
                             self.screen = Screen::Paused;
                         }
                     }
@@ -4313,42 +6317,70 @@ impl ApplicationHandler for Game<'_> {
                         self.options_scroll(d);
                     }
                     if self.screen == Screen::Creative && d != 0.0 {
-                        let rows = self.creative_screen.rows(&self.res.names).saturating_sub(5).max(1) as f32;
-                        self.creative_screen.scroll = (self.creative_screen.scroll - d.signum() / rows).clamp(0.0, 1.0);
+                        let rows = self
+                            .creative_screen
+                            .rows(&self.res.names)
+                            .saturating_sub(5)
+                            .max(1) as f32;
+                        self.creative_screen.scroll =
+                            (self.creative_screen.scroll - d.signum() / rows).clamp(0.0, 1.0);
                     }
                     if self.screen == Screen::Inventory && d != 0.0 {
                         self.station_scroll(d);
                     }
                     if self.screen == Screen::Playing && d != 0.0 {
-                        self.selected = (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
+                        self.selected =
+                            (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
                     }
                 }
                 WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
                     if self.options_waiting_for_key() && state == ElementState::Pressed {
                         self.options_bind_mouse(button)?;
                     } else if matches!(button, MouseButton::Left | MouseButton::Right) {
-                        self.options_mouse(state == ElementState::Pressed, button == MouseButton::Right)?;
+                        self.options_mouse(
+                            state == ElementState::Pressed,
+                            button == MouseButton::Right,
+                        )?;
                     }
                 }
-                WindowEvent::MouseInput { state, button: MouseButton::Left, .. }
-                    if self.title.is_some() && state == ElementState::Pressed =>
-                {
-                    let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
+                WindowEvent::MouseInput {
+                    state,
+                    button: MouseButton::Left,
+                    ..
+                } if self.title.is_some() && state == ElementState::Pressed => {
+                    let size = self
+                        .renderer
+                        .as_ref()
+                        .map(|r| [r.config.width, r.config.height])
+                        .unwrap_or([1, 1]);
                     let b = HudBatch::new(size);
-                    let action = self.title.as_mut().map_or(Action::None, |t| t.click(self.cursor.0, self.cursor.1, (b.width, b.height)));
+                    let action = self.title.as_mut().map_or(Action::None, |t| {
+                        t.click(self.cursor.0, self.cursor.1, (b.width, b.height))
+                    });
                     match action {
                         Action::Quit => event_loop.exit(),
                         Action::Options => self.open_options(true),
                         Action::Play { folder } => self.open_world(&folder, None, None, false)?,
-                        Action::Create { folder, name, seed, creative } => self.open_world(&folder, Some(&name), seed, creative)?,
-                        Action::Connect { address } => self.connect_server(&address, &self.options.player_name.clone())?,
+                        Action::Create {
+                            folder,
+                            name,
+                            seed,
+                            creative,
+                        } => self.open_world(&folder, Some(&name), seed, creative)?,
+                        Action::Connect { address } => {
+                            self.connect_server(&address, &self.options.player_name.clone())?
+                        }
                         Action::None => {}
                     }
                 }
                 WindowEvent::MouseInput { .. } if self.title.is_some() => {}
                 WindowEvent::MouseInput { state, button, .. } if self.sign_edit.is_some() => {
                     if state == ElementState::Pressed && button == MouseButton::Left {
-                        let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
+                        let size = self
+                            .renderer
+                            .as_ref()
+                            .map(|r| [r.config.width, r.config.height])
+                            .unwrap_or([1, 1]);
                         self.sign_edit_click(size);
                     }
                 }
@@ -4387,7 +6419,9 @@ impl ApplicationHandler for Game<'_> {
                         _ => {}
                     }
                 }
-                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Chat && self.title.is_none() => {
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.screen == Screen::Chat && self.title.is_none() =>
+                {
                     if let PhysicalKey::Code(key) = event.physical_key {
                         if event.state == ElementState::Pressed {
                             self.keys.insert(key);
@@ -4397,9 +6431,13 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                 }
-                WindowEvent::KeyboardInput { event, .. } if self.sign_edit.is_some() => self.sign_edit_key(&event),
+                WindowEvent::KeyboardInput { event, .. } if self.sign_edit.is_some() => {
+                    self.sign_edit_key(&event)
+                }
                 WindowEvent::KeyboardInput { event, .. }
-                    if self.screen == Screen::Creative && self.creative_screen.tab().search && event.state == ElementState::Pressed
+                    if self.screen == Screen::Creative
+                        && self.creative_screen.tab().search
+                        && event.state == ElementState::Pressed
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
                     match event.physical_key {
@@ -4408,21 +6446,26 @@ impl ApplicationHandler for Game<'_> {
                         }
                         _ => {
                             if let Some(text) = &event.text {
-                                self.creative_screen.search.extend(text.chars().filter(|c| !c.is_control()));
+                                self.creative_screen
+                                    .search
+                                    .extend(text.chars().filter(|c| !c.is_control()));
                             }
                         }
                     }
                     self.creative_screen.scroll = 0.0;
                 }
                 WindowEvent::KeyboardInput { event, .. }
-                    if self.station_typing() && event.state == ElementState::Pressed
+                    if self.station_typing()
+                        && event.state == ElementState::Pressed
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
                     // The anvil rename box takes every key but Escape (AnvilScreen.keyPressed).
                     let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
                     self.station_text(event.text.as_deref(), backspace);
                 }
-                WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => self.remote_chat_key(&event),
+                WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => {
+                    self.remote_chat_key(&event)
+                }
                 WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Options => {
                     if event.state == ElementState::Pressed
                         && let PhysicalKey::Code(key) = event.physical_key
@@ -4447,7 +6490,9 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
-                    let PhysicalKey::Code(key) = event.physical_key else { return Ok(()) };
+                    let PhysicalKey::Code(key) = event.physical_key else {
+                        return Ok(());
+                    };
                     // Key binds: act as the default key of the bound mapping.
                     let key = match self.settings.keys.translate(key) {
                         Some(Ok(k)) => k,
@@ -4476,8 +6521,11 @@ impl ApplicationHandler for Game<'_> {
                     // Arrow keys turn the camera (accessibility / scripted testing).
                     let turn = |k| f32::from(u8::from(self.keys.contains(&k)));
                     let secs = elapsed.as_secs_f32().min(0.1);
-                    self.yaw += (turn(KeyCode::ArrowRight) - turn(KeyCode::ArrowLeft)) * 90.0 * secs;
-                    self.pitch = (self.pitch + (turn(KeyCode::ArrowDown) - turn(KeyCode::ArrowUp)) * 90.0 * secs).clamp(-90.0, 90.0);
+                    self.yaw +=
+                        (turn(KeyCode::ArrowRight) - turn(KeyCode::ArrowLeft)) * 90.0 * secs;
+                    self.pitch = (self.pitch
+                        + (turn(KeyCode::ArrowDown) - turn(KeyCode::ArrowUp)) * 90.0 * secs)
+                        .clamp(-90.0, 90.0);
                     if self.title.is_none() {
                         self.update_world();
                         self.spawn_player()?;
@@ -4491,7 +6539,10 @@ impl ApplicationHandler for Game<'_> {
                         self.tick_music();
                     }
                     let rendered = self.render()?;
-                    let finished = self.renderer.as_mut().and_then(|r| r.screenshot_result.take());
+                    let finished = self
+                        .renderer
+                        .as_mut()
+                        .and_then(|r| r.screenshot_result.take());
                     if let Some(result) = &finished
                         && self.ui.screenshot_message.is_some()
                     {
@@ -4500,10 +6551,15 @@ impl ApplicationHandler for Game<'_> {
                     if let Some(result) = finished
                         && let Some(reply) = self.pending_screenshot.take()
                     {
-                        let _ = reply.send(match result {
-                            Ok([w, h]) => serde_json::json!({ "ok": true, "width": w, "height": h }),
-                            Err(e) => serde_json::json!({ "error": e }),
-                        }.to_string());
+                        let _ = reply.send(
+                            match result {
+                                Ok([w, h]) => {
+                                    serde_json::json!({ "ok": true, "width": w, "height": h })
+                                }
+                                Err(e) => serde_json::json!({ "error": e }),
+                            }
+                            .to_string(),
+                        );
                     }
                     if rendered {
                         self.frame_stats.record(elapsed.as_secs_f32() * 1000.0);
@@ -4559,7 +6615,9 @@ impl ApplicationHandler for Game<'_> {
     }
 }
 pub fn run() -> Result<()> {
-    let Some(mut options) = Options::read()? else { return Ok(()) };
+    let Some(mut options) = Options::read()? else {
+        return Ok(());
+    };
     let started = Instant::now();
     let vanilla_root = options.resources.clone();
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
@@ -4585,7 +6643,10 @@ pub fn run() -> Result<()> {
     eprintln!("load tables: {:.2}s", started.elapsed().as_secs_f32());
     let atlas = HudAtlas::build(&root)?;
     horizon_client::ui::load_metadata(&root);
-    horizon_client::lang::set(horizon_client::lang::Language::load(&[&root], &early_settings.language));
+    horizon_client::lang::set(horizon_client::lang::Language::load(
+        &[&root],
+        &early_settings.language,
+    ));
     eprintln!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
     let layer_names = assets
         .sprite_layers
@@ -4595,14 +6656,20 @@ pub fn run() -> Result<()> {
     let registry_owner = assets.clone();
     let collision = collisions::load(&root, &registry_owner.registry)?;
     let motion = MotionResources::load(&root, &registry_owner)?;
-    eprintln!("load collision+motion: {:.2}s", started.elapsed().as_secs_f32());
+    eprintln!(
+        "load collision+motion: {:.2}s",
+        started.elapsed().as_secs_f32()
+    );
     let context = Arc::new(WorkerContext {
         assets: assets.clone(),
         tables,
         biomes: biomes.clone(),
         light,
     });
-    let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).saturating_sub(1).max(1);
+    let threads = std::thread::available_parallelism()
+        .map_or(2, |n| n.get())
+        .saturating_sub(1)
+        .max(1);
     eprintln!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
@@ -4619,12 +6686,17 @@ pub fn run() -> Result<()> {
     );
     streaming.paused = true;
     let level = Level::default();
-    let save = Arc::new(SaveDir::new(std::env::current_dir()?.join("saves").join(".horizon-title")));
+    let save = Arc::new(SaveDir::new(
+        std::env::current_dir()?
+            .join("saves")
+            .join(".horizon-title"),
+    ));
     let audio = Audio::new(&root);
     let world = World::new(facts.air, 0);
     let creative = options.creative;
     let stations = horizon_client::stations::StationData::load(&root, &items);
-    let animate = horizon_client::animate_tick::AnimateTables::load(&root, registry_owner.registry, &biomes)?;
+    let animate =
+        horizon_client::animate_tick::AnimateTables::load(&root, registry_owner.registry, &biomes)?;
     let fog = horizon_client::fog::FogRenderer::load(&root, &biomes);
     let mut resources = Resources {
         stations,
@@ -4638,7 +6710,10 @@ pub fn run() -> Result<()> {
         icons: HashMap::new(),
         layer_names,
         providers: Providers::load(&root),
-        block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(&root, &registry_owner.registry)?,
+        block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
+            &root,
+            &registry_owner.registry,
+        )?,
         animate,
         fog,
         music: horizon_client::music::MusicTables::load(&root),
@@ -4648,10 +6723,16 @@ pub fn run() -> Result<()> {
         end_environment: Environment::load_dimension(&root, "the_end", false)?,
         behaviours: Behaviours::load(registry_owner.registry, &root)?,
         names: Names::load(&root),
-        clouds: horizon_client::hud::decode(&root.join("assets/minecraft/textures/environment/clouds.png"))
-            .map(|(w, h, px)| (w, h, px.chunks_exact(4).map(|p| p[3] > 0).collect()))
-            .unwrap_or((1, 1, vec![false])),
-        mob_types: MobTypes::load(&root)?.types.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
+        clouds: horizon_client::hud::decode(
+            &root.join("assets/minecraft/textures/environment/clouds.png"),
+        )
+        .map(|(w, h, px)| (w, h, px.chunks_exact(4).map(|p| p[3] > 0).collect()))
+        .unwrap_or((1, 1, vec![false])),
+        mob_types: MobTypes::load(&root)?
+            .types
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect(),
         mob_data,
         context,
         threads,
@@ -4785,7 +6866,10 @@ pub fn run() -> Result<()> {
     }
     match game.options.world.clone() {
         _ if game.options.server.is_some() => {
-            let (address, name) = (game.options.server.clone().unwrap_or_default(), game.options.player_name.clone());
+            let (address, name) = (
+                game.options.server.clone().unwrap_or_default(),
+                game.options.player_name.clone(),
+            );
             game.connect_server(&address, &name)?;
         }
         Some(folder) => {

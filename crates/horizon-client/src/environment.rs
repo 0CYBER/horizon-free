@@ -17,7 +17,8 @@ impl Easing {
             Self::Linear => x,
             Self::Constant => 0.0,
             Self::Bezier([x1, y1, x2, y2]) => {
-                let curve = |c1: f32, c2: f32| (3.0 * c1 - 3.0 * c2 + 1.0, -6.0 * c1 + 3.0 * c2, 3.0 * c1);
+                let curve =
+                    |c1: f32, c2: f32| (3.0 * c1 - 3.0 * c2 + 1.0, -6.0 * c1 + 3.0 * c2, 3.0 * c1);
                 let (ax, bx, cx) = curve(x1, x2);
                 let (ay, by, cy) = curve(y1, y2);
                 let sample = |(a, b, c): (f32, f32, f32), t: f32| ((a * t + b) * t + c) * t;
@@ -108,7 +109,9 @@ impl Track {
         if t >= to_t {
             return to;
         }
-        let alpha = self.easing.apply((t - from_t) as f32 / (to_t - from_t) as f32);
+        let alpha = self
+            .easing
+            .apply((t - from_t) as f32 / (to_t - from_t) as f32);
         std::array::from_fn(|i| from[i] + (to[i] - from[i]) * alpha)
     }
 }
@@ -156,9 +159,9 @@ impl Environment {
             let easing = match &track["ease"] {
                 Value::String(s) if s == "constant" => Easing::Constant,
                 Value::Object(o) => match o.get("cubic_bezier").and_then(Value::as_array) {
-                    Some(a) if a.len() == 4 => Easing::Bezier(std::array::from_fn(|i| {
-                        a[i].as_f64().unwrap_or(0.0) as f32
-                    })),
+                    Some(a) if a.len() == 4 => {
+                        Easing::Bezier(std::array::from_fn(|i| a[i].as_f64().unwrap_or(0.0) as f32))
+                    }
                     _ => Easing::Linear,
                 },
                 _ => Easing::Linear,
@@ -189,9 +192,15 @@ impl Environment {
         .into_iter()
         .filter_map(|(k, v)| Some((k.to_owned(), parse_value(&Value::String(v.into()))?)))
         .collect();
-        base.insert("minecraft:visual/sky_light_factor".into(), [1.0, 0.0, 0.0, 0.0]);
+        base.insert(
+            "minecraft:visual/sky_light_factor".into(),
+            [1.0, 0.0, 0.0, 0.0],
+        );
         // Sky light level in light levels (the timeline multiplies it).
-        base.insert("minecraft:gameplay/sky_light_level".into(), [15.0, 0.0, 0.0, 0.0]);
+        base.insert(
+            "minecraft:gameplay/sky_light_level".into(),
+            [15.0, 0.0, 0.0, 0.0],
+        );
         for (k, v) in dimension["attributes"].as_object().into_iter().flatten() {
             if let Some(v) = parse_value(v) {
                 base.insert(k.clone(), v);
@@ -233,7 +242,11 @@ impl Environment {
         let three = |a: [f32; 4]| [a[0], a[1], a[2]];
         let scalar = |name: &str| {
             let b = self.base(name);
-            let b = if self.base.contains_key(name) { b } else { [1.0, 0.0, 0.0, 0.0] };
+            let b = if self.base.contains_key(name) {
+                b
+            } else {
+                [1.0, 0.0, 0.0, 0.0]
+            };
             let t = self.tracks.get(name);
             match t {
                 Some(t) if t.multiply => b[0] * t.sample(ticks, self.period)[0],
@@ -269,8 +282,14 @@ impl Environment {
                 self.base("minecraft:visual/cloud_color"),
             ),
             sky_light_level: scalar("minecraft:gameplay/sky_light_level") / 15.0,
-            fog_start: self.base.get("minecraft:visual/fog_start_distance").map_or(0.0, |v| v[0]),
-            fog_end: self.base.get("minecraft:visual/fog_end_distance").map_or(1024.0, |v| v[0]),
+            fog_start: self
+                .base
+                .get("minecraft:visual/fog_start_distance")
+                .map_or(0.0, |v| v[0]),
+            fog_end: self
+                .base
+                .get("minecraft:visual/fog_end_distance")
+                .map_or(1024.0, |v| v[0]),
         }
     }
 }
@@ -278,14 +297,32 @@ impl Environment {
 /// (rain counts only the part not covered by thunder).
 pub fn apply_weather(sky: &mut Sky, rain: f32, thunder: f32) {
     let grey = |c: [f32; 3]| c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
-    let lerp3 = |t: f32, a: [f32; 3], b: [f32; 3]| -> [f32; 3] { std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t) };
-    let lerp4 = |t: f32, a: [f32; 4], b: [f32; 4]| -> [f32; 4] { std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t) };
+    let lerp3 = |t: f32, a: [f32; 3], b: [f32; 3]| -> [f32; 3] {
+        std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
+    };
+    let lerp4 = |t: f32, a: [f32; 4], b: [f32; 4]| -> [f32; 4] {
+        std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
+    };
     let lerp = |t: f32, a: f32, b: f32| a + (b - a) * t;
     let night = [0.48, 0.48, 1.0];
     // (level, sky gray (brightness, factor), fog multiplier, cloud gray, alpha, sunrise multiplier)
     let layers = [
-        (rain - thunder, (0.6, 0.75), [0.5, 0.5, 0.6], (0.24, 0.5), 0.3125, [0.5, 0.5, 0.6]),
-        (thunder, (0.24, 0.94), [0.25, 0.25, 0.3], (0.095, 0.94), 0.527_343_75, [0.25, 0.25, 0.3]),
+        (
+            rain - thunder,
+            (0.6, 0.75),
+            [0.5, 0.5, 0.6],
+            (0.24, 0.5),
+            0.3125,
+            [0.5, 0.5, 0.6],
+        ),
+        (
+            thunder,
+            (0.24, 0.94),
+            [0.25, 0.25, 0.3],
+            (0.095, 0.94),
+            0.527_343_75,
+            [0.25, 0.25, 0.3],
+        ),
     ];
     for (level, (sb, sf), fog, (cb, cf), alpha, sunrise) in layers {
         if level <= 0.0 {
@@ -299,14 +336,35 @@ pub fn apply_weather(sky: &mut Sky, rain: f32, thunder: f32) {
         let cloud3 = [sky.cloud_color[0], sky.cloud_color[1], sky.cloud_color[2]];
         let g = grey(cloud3) * cb;
         let c = lerp3(cf, cloud3, [g; 3]);
-        sky.cloud_color = lerp4(level, sky.cloud_color, [c[0], c[1], c[2], sky.cloud_color[3]]);
+        sky.cloud_color = lerp4(
+            level,
+            sky.cloud_color,
+            [c[0], c[1], c[2], sky.cloud_color[3]],
+        );
         // sky_light_level is a fraction of 15 here; the layer blends towards level 4.
         let target_level = lerp(alpha, sky.sky_light_level * 15.0, 4.0) / 15.0;
         sky.sky_light_level = lerp(level, sky.sky_light_level, target_level);
-        sky.sky_light_color = lerp3(level, sky.sky_light_color, lerp3(alpha, sky.sky_light_color, night));
-        sky.sky_light_factor = lerp(level, sky.sky_light_factor, lerp(alpha, sky.sky_light_factor, 0.24));
+        sky.sky_light_color = lerp3(
+            level,
+            sky.sky_light_color,
+            lerp3(alpha, sky.sky_light_color, night),
+        );
+        sky.sky_light_factor = lerp(
+            level,
+            sky.sky_light_factor,
+            lerp(alpha, sky.sky_light_factor, 0.24),
+        );
         sky.star_brightness = lerp(level, sky.star_brightness, 0.0);
         let s = sky.sunrise_color;
-        sky.sunrise_color = lerp4(level, s, [s[0] * sunrise[0], s[1] * sunrise[1], s[2] * sunrise[2], s[3]]);
+        sky.sunrise_color = lerp4(
+            level,
+            s,
+            [
+                s[0] * sunrise[0],
+                s[1] * sunrise[1],
+                s[2] * sunrise[2],
+                s[3],
+            ],
+        );
     }
 }

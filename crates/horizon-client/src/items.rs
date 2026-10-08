@@ -69,7 +69,10 @@ pub(crate) fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashS
             } else if p.extension().is_some_and(|e| e == "json") {
                 let name = format!(
                     "minecraft:{}",
-                    p.strip_prefix(base)?.with_extension("").to_string_lossy().replace('\\', "/")
+                    p.strip_prefix(base)?
+                        .with_extension("")
+                        .to_string_lossy()
+                        .replace('\\', "/")
                 );
                 let v: Value = serde_json::from_slice(&fs::read(&p)?)?;
                 let values = v["values"]
@@ -86,7 +89,12 @@ pub(crate) fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashS
     if dir.exists() {
         walk(&dir, &dir, &mut raw)?;
     }
-    fn resolve(name: &str, raw: &HashMap<String, Vec<String>>, out: &mut HashSet<String>, depth: u32) {
+    fn resolve(
+        name: &str,
+        raw: &HashMap<String, Vec<String>>,
+        out: &mut HashSet<String>,
+        depth: u32,
+    ) {
         if depth > 32 {
             return;
         }
@@ -115,7 +123,9 @@ impl Items {
         for (i, s) in facts.states.iter().enumerate() {
             let default = registry.default_state(&s.name);
             if default == Some(BlockStateId(i as u32)) && &*s.item != "minecraft:air" {
-                block_for_item.entry(&s.item).or_insert(BlockStateId(i as u32));
+                block_for_item
+                    .entry(&s.item)
+                    .or_insert(BlockStateId(i as u32));
             }
         }
         let mut items = HashMap::new();
@@ -129,7 +139,10 @@ impl Items {
                 .map(|r| ToolRule {
                     blocks: match &r["blocks"] {
                         Value::String(s) => vec![s.clone()],
-                        Value::Array(a) => a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect(),
+                        Value::Array(a) => a
+                            .iter()
+                            .filter_map(|v| v.as_str().map(str::to_owned))
+                            .collect(),
                         _ => vec![],
                     },
                     speed: r["speed"].as_f64().map(|v| v as f32),
@@ -141,7 +154,10 @@ impl Items {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter(|m| m["type"].as_str() == Some(kind) && m["operation"].as_str() == Some("add_value"))
+                    .filter(|m| {
+                        m["type"].as_str() == Some(kind)
+                            && m["operation"].as_str() == Some("add_value")
+                    })
                     .filter_map(|m| m["amount"].as_f64())
                     .sum::<f64>() as f32
             };
@@ -163,8 +179,13 @@ impl Items {
                         .as_f64()
                         .unwrap_or(1.0) as f32,
                     food,
-                    model: c["minecraft:item_model"].as_str().unwrap_or(name).to_owned(),
-                    equip_slot: c["minecraft:equippable"]["slot"].as_str().map(str::to_owned),
+                    model: c["minecraft:item_model"]
+                        .as_str()
+                        .unwrap_or(name)
+                        .to_owned(),
+                    equip_slot: c["minecraft:equippable"]["slot"]
+                        .as_str()
+                        .map(str::to_owned),
                     modifiers: c["minecraft:attribute_modifiers"]
                         .as_array()
                         .into_iter()
@@ -179,9 +200,17 @@ impl Items {
                             ))
                         })
                         .collect(),
-                    fuel: c.get("minecraft:cooking_fuel").map(|f| (f["burn_time"].clone(), f["speed_multiplier"].clone())),
-                    brewing_fuel: c.get("minecraft:brewing_fuel").map(|f| (f["uses"].clone(), f["speed_multiplier"].clone())),
-                    remainder: c["minecraft:use_remainder"]["id"].as_str().or(c["minecraft:crafting_remainder"]["id"].as_str()).or(c["minecraft:crafting_remainder"].as_str()).map(str::to_owned),
+                    fuel: c
+                        .get("minecraft:cooking_fuel")
+                        .map(|f| (f["burn_time"].clone(), f["speed_multiplier"].clone())),
+                    brewing_fuel: c
+                        .get("minecraft:brewing_fuel")
+                        .map(|f| (f["uses"].clone(), f["speed_multiplier"].clone())),
+                    remainder: c["minecraft:use_remainder"]["id"]
+                        .as_str()
+                        .or(c["minecraft:crafting_remainder"]["id"].as_str())
+                        .or(c["minecraft:crafting_remainder"].as_str())
+                        .map(str::to_owned),
                     attack_damage: modifier("minecraft:attack_damage"),
                     attack_speed: modifier("minecraft:attack_speed"),
                 },
@@ -197,8 +226,15 @@ impl Items {
                 if p.is_dir() {
                     walk_loot(&p, base, loot)?;
                 } else if p.extension().is_some_and(|e| e == "json") {
-                    let id = p.strip_prefix(base)?.with_extension("").to_string_lossy().replace('\\', "/");
-                    loot.insert(format!("minecraft:{id}"), serde_json::from_slice(&fs::read(&p)?)?);
+                    let id = p
+                        .strip_prefix(base)?
+                        .with_extension("")
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    loot.insert(
+                        format!("minecraft:{id}"),
+                        serde_json::from_slice(&fs::read(&p)?)?,
+                    );
                 }
             }
             Ok(())
@@ -218,12 +254,24 @@ impl Items {
     }
     /// Only the block and item tags, for tools that need tag membership.
     pub fn tags_only(root: &Path) -> Result<Self> {
-        Ok(Self { items: HashMap::new(), order: Vec::new(), block_tags: load_tags(root, "block")?, item_tags: load_tags(root, "item")?, loot: HashMap::new() })
+        Ok(Self {
+            items: HashMap::new(),
+            order: Vec::new(),
+            block_tags: load_tags(root, "block")?,
+            item_tags: load_tags(root, "item")?,
+            loot: HashMap::new(),
+        })
     }
     /// An item table with only tags, for unit tests of item rules.
     #[cfg(test)]
     pub fn for_tests(item_tags: HashMap<String, HashSet<String>>) -> Self {
-        Self { items: HashMap::new(), order: Vec::new(), block_tags: HashMap::new(), item_tags, loot: HashMap::new() }
+        Self {
+            items: HashMap::new(),
+            order: Vec::new(),
+            block_tags: HashMap::new(),
+            item_tags,
+            loot: HashMap::new(),
+        }
     }
     fn block_matches(&self, spec: &str, block: &str) -> bool {
         match spec.strip_prefix('#') {
@@ -289,13 +337,33 @@ impl Items {
     }
     /// Evaluate an entity's loot table (`minecraft:entities/<name>`).
     /// Evaluate any loot table by id (e.g. `minecraft:gameplay/chicken_lay`).
-    pub fn loot_table(&self, id: &str, killed_by_player: bool, held: Option<&ItemStack>, random: &mut LegacyRandom) -> Vec<ItemStack> {
-        let Some(table) = self.loot.get(id) else { return vec![] };
+    pub fn loot_table(
+        &self,
+        id: &str,
+        killed_by_player: bool,
+        held: Option<&ItemStack>,
+        random: &mut LegacyRandom,
+    ) -> Vec<ItemStack> {
+        let Some(table) = self.loot.get(id) else {
+            return vec![];
+        };
         let empty = BTreeMap::new();
-        let ctx = LootContext { items: self, block: "", properties: &empty, held, killed_by_player };
+        let ctx = LootContext {
+            items: self,
+            block: "",
+            properties: &empty,
+            held,
+            killed_by_player,
+        };
         ctx.evaluate(table, random)
     }
-    pub fn entity_drops(&self, entity: &str, killed_by_player: bool, held: Option<&ItemStack>, random: &mut LegacyRandom) -> Vec<ItemStack> {
+    pub fn entity_drops(
+        &self,
+        entity: &str,
+        killed_by_player: bool,
+        held: Option<&ItemStack>,
+        random: &mut LegacyRandom,
+    ) -> Vec<ItemStack> {
         let name = entity.trim_start_matches("minecraft:");
         let Some(table) = self.loot.get(&format!("minecraft:entities/{name}")) else {
             return vec![];
@@ -322,7 +390,11 @@ impl LootContext<'_> {
             let rolls = ctx.number(&pool["rolls"], random).max(0.0) as u32;
             for _ in 0..rolls {
                 let mut produced = Vec::new();
-                ctx.choose(pool["entries"].as_array().map_or(&[][..], Vec::as_slice), random, &mut produced);
+                ctx.choose(
+                    pool["entries"].as_array().map_or(&[][..], Vec::as_slice),
+                    random,
+                    &mut produced,
+                );
                 for mut stack in produced {
                     ctx.modifiers(&pool["modifier"], &mut stack, random);
                     ctx.modifiers(&table["modifier"], &mut stack, random);
@@ -350,8 +422,14 @@ impl LootContext<'_> {
     fn number(&self, v: &Value, random: &mut LegacyRandom) -> f32 {
         match v {
             Value::Number(n) => n.as_f64().unwrap_or(0.0) as f32,
-            Value::Object(o) => match o.get("type").and_then(Value::as_str).unwrap_or("minecraft:uniform") {
-                "minecraft:constant" => o.get("value").and_then(Value::as_f64).unwrap_or(0.0) as f32,
+            Value::Object(o) => match o
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("minecraft:uniform")
+            {
+                "minecraft:constant" => {
+                    o.get("value").and_then(Value::as_f64).unwrap_or(0.0) as f32
+                }
                 "minecraft:uniform" => {
                     let min = self.number(o.get("min").unwrap_or(&Value::Null), random);
                     let max = self.number(o.get("max").unwrap_or(&Value::Null), random);
@@ -374,7 +452,10 @@ impl LootContext<'_> {
     }
     fn int_number(&self, v: &Value, random: &mut LegacyRandom) -> i32 {
         if let Value::Object(o) = v
-            && o.get("type").and_then(Value::as_str).unwrap_or("minecraft:uniform") == "minecraft:uniform"
+            && o.get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("minecraft:uniform")
+                == "minecraft:uniform"
         {
             let min = self.int_number(o.get("min").unwrap_or(&Value::Null), random);
             let max = self.int_number(o.get("max").unwrap_or(&Value::Null), random);
@@ -397,14 +478,26 @@ impl LootContext<'_> {
             "minecraft:tool/can_silk_touch" => self.enchantment_level("minecraft:silk_touch") > 0,
             "minecraft:tool/can_shear" => self.held.is_some_and(|h| &*h.item == "minecraft:shears"),
             "minecraft:inverted" => !self.condition(&c["term"], random),
-            "minecraft:any_of" => c["terms"].as_array().into_iter().flatten().any(|t| self.condition(t, random)),
-            "minecraft:all_of" => c["terms"].as_array().into_iter().flatten().all(|t| self.condition(t, random)),
+            "minecraft:any_of" => c["terms"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|t| self.condition(t, random)),
+            "minecraft:all_of" => c["terms"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .all(|t| self.condition(t, random)),
             "minecraft:random_chance" => random.next_float() < self.number(&c["chance"], random),
             "minecraft:table_bonus" => {
                 // BonusLevelTableCondition: chances[min(level, len - 1)].
-                let level = self.enchantment_level(c["enchantment"].as_str().unwrap_or("")) as usize;
+                let level =
+                    self.enchantment_level(c["enchantment"].as_str().unwrap_or("")) as usize;
                 let chances = c["chances"].as_array().map_or(&[][..], Vec::as_slice);
-                let chance = chances.get(level.min(chances.len().saturating_sub(1))).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+                let chance = chances
+                    .get(level.min(chances.len().saturating_sub(1)))
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0) as f32;
                 random.next_float() < chance
             }
             "minecraft:match_block" | "minecraft:block_state_property" => {
@@ -413,41 +506,63 @@ impl LootContext<'_> {
                     None => true,
                 };
                 blocks_ok
-                    && c["state"].as_object().into_iter().flatten().chain(c["properties"].as_object().into_iter().flatten()).all(|(k, v)| {
-                        let have = self.properties.get(k).map(String::as_str);
-                        match v {
-                            Value::String(s) => have == Some(s.as_str()),
-                            Value::Object(r) => {
-                                let have: i64 = have.and_then(|h| h.parse().ok()).unwrap_or(0);
-                                r.get("min").and_then(Value::as_i64).is_none_or(|m| have >= m)
-                                    && r.get("max").and_then(Value::as_i64).is_none_or(|m| have <= m)
+                    && c["state"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .chain(c["properties"].as_object().into_iter().flatten())
+                        .all(|(k, v)| {
+                            let have = self.properties.get(k).map(String::as_str);
+                            match v {
+                                Value::String(s) => have == Some(s.as_str()),
+                                Value::Object(r) => {
+                                    let have: i64 = have.and_then(|h| h.parse().ok()).unwrap_or(0);
+                                    r.get("min")
+                                        .and_then(Value::as_i64)
+                                        .is_none_or(|m| have >= m)
+                                        && r.get("max")
+                                            .and_then(Value::as_i64)
+                                            .is_none_or(|m| have <= m)
+                                }
+                                _ => true,
                             }
-                            _ => true,
-                        }
-                    })
+                        })
             }
             "minecraft:match_tool" => {
                 let items = &c["predicate"]["items"];
                 let items_ok = match (self.held, items) {
                     (_, Value::Null) => self.held.is_some(),
                     (Some(h), Value::String(s)) => match s.strip_prefix('#') {
-                        Some(tag) => self.items.item_tags.get(tag).is_some_and(|t| t.contains(&*h.item)),
+                        Some(tag) => self
+                            .items
+                            .item_tags
+                            .get(tag)
+                            .is_some_and(|t| t.contains(&*h.item)),
                         None => **s == *h.item,
                     },
                     _ => false,
                 };
                 // ItemPredicate "minecraft:enchantments": each entry needs a level in range.
-                let enchants_ok = c["predicate"]["predicates"]["minecraft:enchantments"].as_array().into_iter().flatten().all(|e| {
-                    let level = self.enchantment_level(e["enchantments"].as_str().unwrap_or(""));
-                    let min = e["levels"]["min"].as_u64().unwrap_or(1) as u32;
-                    let max = e["levels"]["max"].as_u64().map_or(u32::MAX, |m| m as u32);
-                    level >= min.max(1) && level <= max
-                });
+                let enchants_ok = c["predicate"]["predicates"]["minecraft:enchantments"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .all(|e| {
+                        let level =
+                            self.enchantment_level(e["enchantments"].as_str().unwrap_or(""));
+                        let min = e["levels"]["min"].as_u64().unwrap_or(1) as u32;
+                        let max = e["levels"]["max"].as_u64().map_or(u32::MAX, |m| m as u32);
+                        level >= min.max(1) && level <= max
+                    });
                 items_ok && enchants_ok
             }
             "minecraft:killed_by_player" => self.killed_by_player,
             "minecraft:random_chance_with_enchanted_bonus" => {
-                let level = if self.killed_by_player && self.block.is_empty() { self.enchantment_level(c["enchantment"].as_str().unwrap_or("")) } else { 0 };
+                let level = if self.killed_by_player && self.block.is_empty() {
+                    self.enchantment_level(c["enchantment"].as_str().unwrap_or(""))
+                } else {
+                    0
+                };
                 let chance = if level > 0 {
                     crate::enchant::level_value(&c["enchanted_chance"], level)
                 } else {
@@ -474,7 +589,12 @@ impl LootContext<'_> {
             .all(|c| self.condition(c, random))
     }
     /// Expand entries; returns whether an entry succeeded (for alternatives).
-    fn expand(&self, e: &Value, random: &mut LegacyRandom, out: &mut Vec<(i32, ItemStack, Value)>) -> bool {
+    fn expand(
+        &self,
+        e: &Value,
+        random: &mut LegacyRandom,
+        out: &mut Vec<(i32, ItemStack, Value)>,
+    ) -> bool {
         if !self.conditions(e, random) {
             return false;
         }
@@ -515,7 +635,16 @@ impl LootContext<'_> {
                 true
             }
             "minecraft:empty" => {
-                out.push((e["weight"].as_i64().unwrap_or(1) as i32, ItemStack { item: Arc::from("minecraft:air"), count: 0, damage: 0, extra: None }, Value::Null));
+                out.push((
+                    e["weight"].as_i64().unwrap_or(1) as i32,
+                    ItemStack {
+                        item: Arc::from("minecraft:air"),
+                        count: 0,
+                        damage: 0,
+                        extra: None,
+                    },
+                    Value::Null,
+                ));
                 true
             }
             _ => false,
@@ -561,11 +690,16 @@ impl LootContext<'_> {
             match f["type"].as_str().or(f["function"].as_str()).unwrap_or("") {
                 "minecraft:set_count" => {
                     let n = self.int_number(&f["count"], random);
-                    let base = if f["add"].as_bool() == Some(true) { stack.count as i32 } else { 0 };
+                    let base = if f["add"].as_bool() == Some(true) {
+                        stack.count as i32
+                    } else {
+                        0
+                    };
                     stack.count = (base + n).max(0) as u32;
                 }
                 "minecraft:apply_bonus" => {
-                    let level = self.enchantment_level(f["enchantment"].as_str().unwrap_or("")) as i32;
+                    let level =
+                        self.enchantment_level(f["enchantment"].as_str().unwrap_or("")) as i32;
                     let count = stack.count as i32;
                     let params = &f["parameters"];
                     stack.count = match f["formula"].as_str().unwrap_or("") {
@@ -578,7 +712,10 @@ impl LootContext<'_> {
                             count + random.next_int_bound(multiplier * level + 1).unwrap_or(0)
                         }
                         "minecraft:binomial_with_bonus_count" => {
-                            let (extra, p) = (params["extra"].as_i64().unwrap_or(0) as i32, params["probability"].as_f64().unwrap_or(0.0) as f32);
+                            let (extra, p) = (
+                                params["extra"].as_i64().unwrap_or(0) as i32,
+                                params["probability"].as_f64().unwrap_or(0.0) as f32,
+                            );
                             let mut n = count;
                             for _ in 0..level + extra {
                                 if random.next_float() < p {
@@ -622,8 +759,19 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn ctx<'a>(items: &'a Items, held: Option<&'a ItemStack>, props: &'a BTreeMap<String, String>, block: &'a str) -> LootContext<'a> {
-        LootContext { items, block, properties: props, held, killed_by_player: block.is_empty() }
+    fn ctx<'a>(
+        items: &'a Items,
+        held: Option<&'a ItemStack>,
+        props: &'a BTreeMap<String, String>,
+        block: &'a str,
+    ) -> LootContext<'a> {
+        LootContext {
+            items,
+            block,
+            properties: props,
+            held,
+            killed_by_player: block.is_empty(),
+        }
     }
 
     #[test]
@@ -637,16 +785,26 @@ mod tests {
             {"type":"minecraft:item","name":"minecraft:diamond","modifier":[{"type":"minecraft:apply_bonus","enchantment":"minecraft:fortune","formula":"minecraft:ore_drops"}]}]}]}]});
         let mut random = LegacyRandom::new(7);
         let n = 20000;
-        let total: u32 = (0..n).map(|_| ctx(&items, Some(&pick), &props, "minecraft:diamond_ore").evaluate(&ore, &mut random).iter().map(|s| s.count).sum::<u32>()).sum();
+        let total: u32 = (0..n)
+            .map(|_| {
+                ctx(&items, Some(&pick), &props, "minecraft:diamond_ore")
+                    .evaluate(&ore, &mut random)
+                    .iter()
+                    .map(|s| s.count)
+                    .sum::<u32>()
+            })
+            .sum();
         // Fortune III ore drops average (1 + 1 + 2 + 3 + 4) / 5 = 2.2 diamonds.
         let mean = f64::from(total) / f64::from(n);
         assert!((mean - 2.2).abs() < 0.05, "{mean}");
         let mut silk = ItemStack::new("minecraft:diamond_pickaxe", 1);
         silk.enchant("minecraft:silk_touch", 1);
-        let drops = ctx(&items, Some(&silk), &props, "minecraft:diamond_ore").evaluate(&ore, &mut random);
+        let drops =
+            ctx(&items, Some(&silk), &props, "minecraft:diamond_ore").evaluate(&ore, &mut random);
         assert_eq!(&*drops[0].item, "minecraft:diamond_ore");
         let plain = ItemStack::new("minecraft:diamond_pickaxe", 1);
-        let drops = ctx(&items, Some(&plain), &props, "minecraft:diamond_ore").evaluate(&ore, &mut random);
+        let drops =
+            ctx(&items, Some(&plain), &props, "minecraft:diamond_ore").evaluate(&ore, &mut random);
         assert_eq!((&*drops[0].item, drops[0].count), ("minecraft:diamond", 1));
         // Looting III adds level x uniform(0, 1) on player kills.
         let flesh = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:rotten_flesh","modifier":[
@@ -654,12 +812,37 @@ mod tests {
             {"type":"minecraft:enchanted_count_increase","count":{"type":"minecraft:uniform","min":0.0,"max":1.0},"enchantment":"minecraft:looting"}]}]}]});
         let mut sword = ItemStack::new("minecraft:iron_sword", 1);
         sword.enchant("minecraft:looting", 3);
-        let looted: u32 = (0..n).map(|_| ctx(&items, Some(&sword), &props, "").evaluate(&flesh, &mut random).iter().map(|s| s.count).sum::<u32>()).sum();
-        let base: u32 = (0..n).map(|_| ctx(&items, None, &props, "").evaluate(&flesh, &mut random).iter().map(|s| s.count).sum::<u32>()).sum();
+        let looted: u32 = (0..n)
+            .map(|_| {
+                ctx(&items, Some(&sword), &props, "")
+                    .evaluate(&flesh, &mut random)
+                    .iter()
+                    .map(|s| s.count)
+                    .sum::<u32>()
+            })
+            .sum();
+        let base: u32 = (0..n)
+            .map(|_| {
+                ctx(&items, None, &props, "")
+                    .evaluate(&flesh, &mut random)
+                    .iter()
+                    .map(|s| s.count)
+                    .sum::<u32>()
+            })
+            .sum();
         assert!(f64::from(looted) / f64::from(n) > f64::from(base) / f64::from(n) + 1.0);
         // Table bonus uses the chance for the tool's level.
         let leaves = json!({"pools":[{"rolls":1,"conditions":[{"type":"minecraft:table_bonus","enchantment":"minecraft:fortune","chances":[0.0,0.0,0.0,1.0]}],"entries":[{"type":"minecraft:item","name":"minecraft:apple"}]}]});
-        assert_eq!(ctx(&items, Some(&pick), &props, "minecraft:oak_leaves").evaluate(&leaves, &mut random).len(), 1);
-        assert!(ctx(&items, Some(&plain), &props, "minecraft:oak_leaves").evaluate(&leaves, &mut random).is_empty());
+        assert_eq!(
+            ctx(&items, Some(&pick), &props, "minecraft:oak_leaves")
+                .evaluate(&leaves, &mut random)
+                .len(),
+            1
+        );
+        assert!(
+            ctx(&items, Some(&plain), &props, "minecraft:oak_leaves")
+                .evaluate(&leaves, &mut random)
+                .is_empty()
+        );
     }
 }

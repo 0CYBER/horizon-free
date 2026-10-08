@@ -796,7 +796,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.set_block(upper_pos, upper, 3);
         }
     }
-    pub(crate) fn growing_plant_can_grow_into(&self, plant: BlockStateId, state: BlockStateId) -> bool {
+    pub(crate) fn growing_plant_can_grow_into(
+        &self,
+        plant: BlockStateId,
+        state: BlockStateId,
+    ) -> bool {
         let b = self.b;
         let data = b.data(plant);
         if data.is(Class::Kelp) {

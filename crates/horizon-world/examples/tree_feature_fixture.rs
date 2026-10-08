@@ -609,9 +609,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .copied()
         .collect();
     let faceless_vine = by_name.get("minecraft:vine").and_then(|ids| {
-        ids.iter()
-            .copied()
-            .find(|id| registry.state(*id).is_some_and(|s| s.properties.values().all(|v| v == "false")))
+        ids.iter().copied().find(|id| {
+            registry
+                .state(*id)
+                .is_some_and(|s| s.properties.values().all(|v| v == "false"))
+        })
     });
     let water_mask = fluid_tags.tags["minecraft:water"]
         .iter()

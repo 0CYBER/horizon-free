@@ -18,10 +18,14 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 fn u16_at(d: &[u8], at: usize) -> io::Result<u16> {
-    d.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]])).ok_or_else(|| invalid("truncated zip"))
+    d.get(at..at + 2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .ok_or_else(|| invalid("truncated zip"))
 }
 fn u32_at(d: &[u8], at: usize) -> io::Result<u32> {
-    d.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).ok_or_else(|| invalid("truncated zip"))
+    d.get(at..at + 4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .ok_or_else(|| invalid("truncated zip"))
 }
 impl Zip {
     pub fn open(path: &Path) -> io::Result<Self> {
@@ -48,10 +52,20 @@ impl Zip {
             let extra_len = usize::from(u16_at(&data, at + 30)?);
             let comment_len = usize::from(u16_at(&data, at + 32)?);
             let header = u32_at(&data, at + 42)? as usize;
-            let name = data.get(at + 46..at + 46 + name_len).ok_or_else(|| invalid("truncated zip name"))?;
+            let name = data
+                .get(at + 46..at + 46 + name_len)
+                .ok_or_else(|| invalid("truncated zip name"))?;
             let name = String::from_utf8_lossy(name).replace('\\', "/");
             if !name.ends_with('/') {
-                entries.insert(name, Entry { method, compressed, size, header });
+                entries.insert(
+                    name,
+                    Entry {
+                        method,
+                        compressed,
+                        size,
+                        header,
+                    },
+                );
             }
             at += 46 + name_len + extra_len + comment_len;
         }
@@ -64,17 +78,29 @@ impl Zip {
         self.entries.contains_key(name)
     }
     pub fn read(&self, name: &str) -> io::Result<Vec<u8>> {
-        let e = *self.entries.get(name).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, name.to_owned()))?;
+        let e = *self
+            .entries
+            .get(name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, name.to_owned()))?;
         if u32_at(&self.data, e.header)? != 0x0403_4b50 {
             return Err(invalid("bad local file header"));
         }
-        let start = e.header + 30 + usize::from(u16_at(&self.data, e.header + 26)?) + usize::from(u16_at(&self.data, e.header + 28)?);
-        let raw = self.data.get(start..start + e.compressed).ok_or_else(|| invalid("truncated zip entry"))?;
+        let start = e.header
+            + 30
+            + usize::from(u16_at(&self.data, e.header + 26)?)
+            + usize::from(u16_at(&self.data, e.header + 28)?);
+        let raw = self
+            .data
+            .get(start..start + e.compressed)
+            .ok_or_else(|| invalid("truncated zip entry"))?;
         match e.method {
             0 => Ok(raw.to_vec()),
             8 => {
-                let out = miniz_oxide::inflate::decompress_to_vec_with_limit(raw, e.size.max(1) * 2 + 1024)
-                    .map_err(|_| invalid("corrupt deflate stream"))?;
+                let out = miniz_oxide::inflate::decompress_to_vec_with_limit(
+                    raw,
+                    e.size.max(1) * 2 + 1024,
+                )
+                .map_err(|_| invalid("corrupt deflate stream"))?;
                 Ok(out)
             }
             _ => Err(invalid("unsupported zip compression")),
@@ -87,11 +113,18 @@ mod tests {
     use super::*;
     /// A hand-built archive with one stored and one deflated entry.
     fn archive() -> Vec<u8> {
-        let files: [(&str, &[u8], bool); 2] = [("pack.mcmeta", b"{\"pack\":{}}", false), ("a/b.txt", b"hello hello hello hello", true)];
+        let files: [(&str, &[u8], bool); 2] = [
+            ("pack.mcmeta", b"{\"pack\":{}}", false),
+            ("a/b.txt", b"hello hello hello hello", true),
+        ];
         let mut out = Vec::new();
         let mut central = Vec::new();
         for (name, body, deflate) in files {
-            let data = if deflate { miniz_oxide::deflate::compress_to_vec(body, 6) } else { body.to_vec() };
+            let data = if deflate {
+                miniz_oxide::deflate::compress_to_vec(body, 6)
+            } else {
+                body.to_vec()
+            };
             let offset = out.len() as u32;
             let local = |v: &mut Vec<u8>, sig: u32| {
                 v.extend(sig.to_le_bytes());

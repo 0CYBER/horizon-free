@@ -316,7 +316,9 @@ impl ServerDamageEnvironment<Attributes> for Environment<'_> {
         Ok(self.status.resistance.is_some())
     }
     fn resistance_amplifier(&mut self) -> io::Result<i32> {
-        self.status.resistance.ok_or_else(|| io::Error::other("no resistance effect"))
+        self.status
+            .resistance
+            .ok_or_else(|| io::Error::other("no resistance effect"))
     }
     fn award_resisted(&mut self, value: i32) -> io::Result<()> {
         self.stat("resisted", value)

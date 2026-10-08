@@ -31,7 +31,12 @@ impl StackData {
 
 impl ItemStack {
     pub fn new(item: &str, count: u32) -> Self {
-        Self { item: Arc::from(item), count, damage: 0, extra: None }
+        Self {
+            item: Arc::from(item),
+            count,
+            damage: 0,
+            extra: None,
+        }
     }
     pub fn data(&self) -> Option<&StackData> {
         self.extra.as_deref()
@@ -53,11 +58,18 @@ impl ItemStack {
     }
     /// `EnchantmentHelper.getItemEnchantmentLevel` (0 when absent).
     pub fn enchantment_level(&self, id: &str) -> u32 {
-        self.enchantments().iter().find(|(e, _)| &**e == id).map_or(0, |(_, l)| *l)
+        self.enchantments()
+            .iter()
+            .find(|(e, _)| &**e == id)
+            .map_or(0, |(_, l)| *l)
     }
     /// The component an anvil/grindstone works on: stored for books.
     pub fn crafting_enchantments(&self) -> &[(Arc<str>, u32)] {
-        if &*self.item == "minecraft:enchanted_book" { self.stored_enchantments() } else { self.enchantments() }
+        if &*self.item == "minecraft:enchanted_book" {
+            self.stored_enchantments()
+        } else {
+            self.enchantments()
+        }
     }
     pub fn set_crafting_enchantments(&mut self, levels: Levels) {
         if &*self.item == "minecraft:enchanted_book" {
@@ -71,7 +83,11 @@ impl ItemStack {
     pub fn enchant(&mut self, id: &str, level: u32) {
         let book = &*self.item == "minecraft:enchanted_book";
         let data = self.data_mut();
-        let list = if book { &mut data.stored_enchantments } else { &mut data.enchantments };
+        let list = if book {
+            &mut data.stored_enchantments
+        } else {
+            &mut data.enchantments
+        };
         upgrade(list, id, level);
     }
     pub fn has_any_enchantments(&self) -> bool {
@@ -96,7 +112,11 @@ impl ItemStack {
     }
     /// `ItemStack.transmuteCopy`: another item keeping every component.
     pub fn transmute(&self, item: &str, count: u32) -> Self {
-        let mut stack = Self { item: Arc::from(item), count, ..self.clone() };
+        let mut stack = Self {
+            item: Arc::from(item),
+            count,
+            ..self.clone()
+        };
         stack.tidy();
         stack
     }
@@ -142,12 +162,29 @@ fn string(t: &Tag) -> Option<String> {
     }
 }
 fn read_levels(t: Option<&Tag>) -> Levels {
-    let Some(Tag::Compound(map)) = t else { return Vec::new() };
+    let Some(Tag::Compound(map)) = t else {
+        return Vec::new();
+    };
     // Pre-1.21.5 worlds wrap the map in {levels: {...}}.
     if let Some(Tag::Compound(inner)) = map.get(&JavaString::from("levels")) {
-        return inner.iter().filter_map(|(k, v)| Some((Arc::from(k.to_string_lossy().as_str()), int(v)?.clamp(1, 255) as u32))).collect();
+        return inner
+            .iter()
+            .filter_map(|(k, v)| {
+                Some((
+                    Arc::from(k.to_string_lossy().as_str()),
+                    int(v)?.clamp(1, 255) as u32,
+                ))
+            })
+            .collect();
     }
-    map.iter().filter_map(|(k, v)| Some((Arc::from(k.to_string_lossy().as_str()), int(v)?.clamp(1, 255) as u32))).collect()
+    map.iter()
+        .filter_map(|(k, v)| {
+            Some((
+                Arc::from(k.to_string_lossy().as_str()),
+                int(v)?.clamp(1, 255) as u32,
+            ))
+        })
+        .collect()
 }
 /// A text component as stored by vanilla: a plain string or `{"text": ...}`.
 fn read_text(t: &Tag) -> Option<String> {
@@ -173,7 +210,10 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
             entries.push(("minecraft:enchantments", levels_tag(&d.enchantments)));
         }
         if !d.stored_enchantments.is_empty() {
-            entries.push(("minecraft:stored_enchantments", levels_tag(&d.stored_enchantments)));
+            entries.push((
+                "minecraft:stored_enchantments",
+                levels_tag(&d.stored_enchantments),
+            ));
         }
         if d.repair_cost > 0 {
             entries.push(("minecraft:repair_cost", Tag::Int(d.repair_cost as i32)));
@@ -182,12 +222,18 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
             entries.push(("minecraft:custom_name", Tag::String(name.as_str().into())));
         }
         if let Some(potion) = &d.potion {
-            entries.push(("minecraft:potion_contents", Tag::compound([("potion", Tag::String((&**potion).into()))])));
+            entries.push((
+                "minecraft:potion_contents",
+                Tag::compound([("potion", Tag::String((&**potion).into()))]),
+            ));
         }
         if let Some((material, pattern)) = &d.trim {
             entries.push((
                 "minecraft:trim",
-                Tag::compound([("material", Tag::String((&**material).into())), ("pattern", Tag::String((&**pattern).into()))]),
+                Tag::compound([
+                    ("material", Tag::String((&**material).into())),
+                    ("pattern", Tag::String((&**pattern).into())),
+                ]),
             ));
         }
     }
@@ -195,21 +241,33 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
 }
 /// Damage and extra components from a stack's `components` compound.
 pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData>>) {
-    let Some(c) = components else { return (0, None) };
+    let Some(c) = components else {
+        return (0, None);
+    };
     let damage = c.get("minecraft:damage").and_then(int).unwrap_or(0).max(0) as u32;
     let potion = match c.get("minecraft:potion_contents") {
         Some(Tag::String(s)) => Some(Arc::from(s.to_string_lossy().as_str())),
-        Some(t) => t.get("potion").and_then(string).map(|s| Arc::from(s.as_str())),
+        Some(t) => t
+            .get("potion")
+            .and_then(string)
+            .map(|s| Arc::from(s.as_str())),
         None => None,
     };
     let data = StackData {
         enchantments: read_levels(c.get("minecraft:enchantments")),
         stored_enchantments: read_levels(c.get("minecraft:stored_enchantments")),
-        repair_cost: c.get("minecraft:repair_cost").and_then(int).unwrap_or(0).max(0) as u32,
+        repair_cost: c
+            .get("minecraft:repair_cost")
+            .and_then(int)
+            .unwrap_or(0)
+            .max(0) as u32,
         custom_name: c.get("minecraft:custom_name").and_then(read_text),
         potion,
         trim: c.get("minecraft:trim").and_then(|t| {
-            Some((Arc::from(t.get("material").and_then(string)?.as_str()), Arc::from(t.get("pattern").and_then(string)?.as_str())))
+            Some((
+                Arc::from(t.get("material").and_then(string)?.as_str()),
+                Arc::from(t.get("pattern").and_then(string)?.as_str()),
+            ))
         }),
     };
     (damage, (!data.is_empty()).then(|| Box::new(data)))
@@ -230,7 +288,11 @@ mod tests {
         let tag = encode_components(&stack).expect("components");
         let (damage, extra) = decode_components(Some(&tag));
         assert_eq!(damage, 12);
-        let back = ItemStack { damage, extra, ..ItemStack::new("minecraft:diamond_sword", 1) };
+        let back = ItemStack {
+            damage,
+            extra,
+            ..ItemStack::new("minecraft:diamond_sword", 1)
+        };
         assert_eq!(back.enchantment_level("minecraft:sharpness"), 3);
         assert_eq!(back.enchantment_level("minecraft:unbreaking"), 2);
         assert_eq!(back.repair_cost(), 3);
@@ -253,7 +315,11 @@ mod tests {
         book.enchant("minecraft:mending", 1);
         assert!(book.enchantments().is_empty());
         assert_eq!(book.stored_enchantments().len(), 1);
-        upgrade(&mut book.data_mut().stored_enchantments, "minecraft:mending", 1);
+        upgrade(
+            &mut book.data_mut().stored_enchantments,
+            "minecraft:mending",
+            1,
+        );
         assert_eq!(book.crafting_enchantments()[0].1, 1);
         let book = ItemStack::new("minecraft:book", 1).transmute("minecraft:enchanted_book", 1);
         assert!(book.extra.is_none());

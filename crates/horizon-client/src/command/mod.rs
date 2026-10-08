@@ -21,13 +21,23 @@ pub struct CommandError {
 }
 impl CommandError {
     pub fn new(message: Text) -> Self {
-        Self { message, input: None, cursor: 0, literal_incorrect: false }
+        Self {
+            message,
+            input: None,
+            cursor: 0,
+            literal_incorrect: false,
+        }
     }
     pub fn tr(key: &str, args: &[&dyn std::fmt::Display]) -> Self {
         Self::new(Text::tr(key, args))
     }
     pub fn at(message: Text, reader: &Reader) -> Self {
-        Self { message, input: Some(reader.string.to_owned()), cursor: reader.cursor, literal_incorrect: false }
+        Self {
+            message,
+            input: Some(reader.string.to_owned()),
+            cursor: reader.cursor,
+            literal_incorrect: false,
+        }
     }
     pub fn tr_at(key: &str, args: &[&dyn std::fmt::Display], reader: &Reader) -> Self {
         Self::at(Text::tr(key, args), reader)
@@ -49,7 +59,14 @@ impl CommandError {
     /// The message as shown by command suggestions ("... at position N: ...").
     pub fn with_context(&self) -> Text {
         match self.context() {
-            Some(context) => Text::translate("command.context.parse_error", &[self.message.clone(), Text::literal(self.cursor.to_string()), Text::literal(context)]),
+            Some(context) => Text::translate(
+                "command.context.parse_error",
+                &[
+                    self.message.clone(),
+                    Text::literal(self.cursor.to_string()),
+                    Text::literal(context),
+                ],
+            ),
             None => self.message.clone(),
         }
     }
@@ -76,7 +93,10 @@ impl<'a> Reader<'a> {
         self.string[self.cursor..].chars().next().unwrap_or('\0')
     }
     pub fn peek_at(&self, offset: usize) -> char {
-        self.string[self.cursor..].chars().nth(offset).unwrap_or('\0')
+        self.string[self.cursor..]
+            .chars()
+            .nth(offset)
+            .unwrap_or('\0')
     }
     pub fn skip(&mut self) {
         self.cursor += self.peek().len_utf8();
@@ -111,14 +131,22 @@ impl<'a> Reader<'a> {
         let start = self.cursor;
         let text = self.read_number_text();
         if text.is_empty() {
-            return Err(CommandError::tr_at(&format!("parsing.{kind}.expected"), &[], self));
+            return Err(CommandError::tr_at(
+                &format!("parsing.{kind}.expected"),
+                &[],
+                self,
+            ));
         }
         // Java's parsers reject a trailing '.'-less exponent etc. the same way.
         match text.parse::<T>() {
             Ok(v) if !(kind == "int" || kind == "long") || !text.contains('.') => Ok(v),
             _ => {
                 self.cursor = start;
-                Err(CommandError::tr_at(&format!("parsing.{kind}.invalid"), &[&text], self))
+                Err(CommandError::tr_at(
+                    &format!("parsing.{kind}.invalid"),
+                    &[&text],
+                    self,
+                ))
             }
         }
     }
@@ -170,7 +198,11 @@ impl<'a> Reader<'a> {
         }
         let next = self.peek();
         if next != '"' && next != '\'' {
-            return Err(CommandError::tr_at("parsing.quote.expected.start", &[], self));
+            return Err(CommandError::tr_at(
+                "parsing.quote.expected.start",
+                &[],
+                self,
+            ));
         }
         self.skip();
         self.read_string_until(next)
@@ -264,7 +296,15 @@ pub struct Context {
 }
 impl Context {
     fn new(root: usize, start: usize) -> Self {
-        Self { root, nodes: Vec::new(), args: Vec::new(), command: None, range: (start, start), child: None, literals: Vec::new() }
+        Self {
+            root,
+            nodes: Vec::new(),
+            args: Vec::new(),
+            command: None,
+            range: (start, start),
+            child: None,
+            literals: Vec::new(),
+        }
     }
     /// Whether the literal `word` was parsed (in this context).
     pub fn has(&self, word: &str) -> bool {
@@ -282,7 +322,11 @@ impl Context {
         c
     }
     pub fn get(&self, name: &str) -> Option<&Arg> {
-        self.args.iter().rev().find(|a| a.name == name).map(|a| &a.value)
+        self.args
+            .iter()
+            .rev()
+            .find(|a| a.name == name)
+            .map(|a| &a.value)
     }
     /// CommandContextBuilder.findSuggestionContext: the node whose children
     /// complete the text at `cursor`, and where that text starts.
@@ -325,7 +369,10 @@ impl ParseResults {
         if self.errors.len() == 1 {
             return Some(self.errors[0].1.clone());
         }
-        let reader = Reader { string: &self.input, cursor: self.cursor };
+        let reader = Reader {
+            string: &self.input,
+            cursor: self.cursor,
+        };
         Some(if self.context.range.0 == self.context.range.1 {
             CommandError::tr_at("command.unknown.command", &[], &reader)
         } else {
@@ -340,7 +387,14 @@ impl ParseResults {
         let last = self.context.last_child();
         match last.command {
             Some(id) => Ok((last, id)),
-            None => Err(CommandError::tr_at("command.unknown.command", &[], &Reader { string: &self.input, cursor: self.cursor })),
+            None => Err(CommandError::tr_at(
+                "command.unknown.command",
+                &[],
+                &Reader {
+                    string: &self.input,
+                    cursor: self.cursor,
+                },
+            )),
         }
     }
 }
@@ -366,7 +420,11 @@ pub struct SuggestionsBuilder<'a> {
 }
 impl<'a> SuggestionsBuilder<'a> {
     pub fn new(input: &'a str, start: usize) -> Self {
-        Self { input, start: start.min(input.len()), out: Vec::new() }
+        Self {
+            input,
+            start: start.min(input.len()),
+            out: Vec::new(),
+        }
     }
     pub fn remaining(&self) -> &'a str {
         &self.input[self.start..]
@@ -377,13 +435,21 @@ impl<'a> SuggestionsBuilder<'a> {
     pub fn suggest(&mut self, text: impl Into<String>) {
         let text = text.into();
         if text != self.remaining() {
-            self.out.push(Suggestion { range: (self.start, self.input.len()), text, tooltip: None });
+            self.out.push(Suggestion {
+                range: (self.start, self.input.len()),
+                text,
+                tooltip: None,
+            });
         }
     }
     pub fn suggest_tooltip(&mut self, text: impl Into<String>, tooltip: impl Into<String>) {
         let text = text.into();
         if text != self.remaining() {
-            self.out.push(Suggestion { range: (self.start, self.input.len()), text, tooltip: Some(tooltip.into()) });
+            self.out.push(Suggestion {
+                range: (self.start, self.input.len()),
+                text,
+                tooltip: Some(tooltip.into()),
+            });
         }
     }
     pub fn offset(&self, start: usize) -> SuggestionsBuilder<'a> {
@@ -409,8 +475,17 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
     let mut out: Vec<Suggestion> = Vec::new();
     for s in list {
         // Suggestion.expand: pad the text with the input around it.
-        let text = format!("{}{}{}", &input[start..s.range.0], s.text, &input[s.range.1..end]);
-        let expanded = Suggestion { range: (start, end), text, tooltip: s.tooltip };
+        let text = format!(
+            "{}{}{}",
+            &input[start..s.range.0],
+            s.text,
+            &input[s.range.1..end]
+        );
+        let expanded = Suggestion {
+            range: (start, end),
+            text,
+            tooltip: s.tooltip,
+        };
         if !out.iter().any(|o| o.text == expanded.text) {
             out.push(expanded);
         }
@@ -431,7 +506,15 @@ impl Default for Dispatcher {
 }
 impl Dispatcher {
     pub fn new() -> Self {
-        Self { nodes: vec![Node { kind: NodeKind::Root, children: Vec::new(), command: None, redirect: None, permission: 0 }] }
+        Self {
+            nodes: vec![Node {
+                kind: NodeKind::Root,
+                children: Vec::new(),
+                command: None,
+                redirect: None,
+                permission: 0,
+            }],
+        }
     }
     fn add(&mut self, parent: usize, kind: NodeKind) -> usize {
         let name = match &kind {
@@ -440,11 +523,21 @@ impl Dispatcher {
             NodeKind::Root => String::new(),
         };
         // CommandNode.addChild merges same-named children.
-        if let Some(&existing) = self.nodes[parent].children.iter().find(|&&c| self.nodes[c].name() == name) {
+        if let Some(&existing) = self.nodes[parent]
+            .children
+            .iter()
+            .find(|&&c| self.nodes[c].name() == name)
+        {
             return existing;
         }
         let permission = self.nodes[parent].permission;
-        self.nodes.push(Node { kind, children: Vec::new(), command: None, redirect: None, permission });
+        self.nodes.push(Node {
+            kind,
+            children: Vec::new(),
+            command: None,
+            redirect: None,
+            permission,
+        });
         let id = self.nodes.len() - 1;
         self.nodes[parent].children.push(id);
         id
@@ -453,7 +546,13 @@ impl Dispatcher {
         self.add(parent, NodeKind::Literal(name.to_owned()))
     }
     pub fn argument(&mut self, parent: usize, name: &str, ty: ArgType) -> usize {
-        self.add(parent, NodeKind::Argument { name: name.to_owned(), ty })
+        self.add(
+            parent,
+            NodeKind::Argument {
+                name: name.to_owned(),
+                ty,
+            },
+        )
     }
     pub fn executes(&mut self, node: usize, command: &'static str) -> usize {
         self.nodes[node].command = Some(command);
@@ -469,12 +568,24 @@ impl Dispatcher {
     }
     /// A root literal by name.
     pub fn find(&self, name: &str) -> Option<usize> {
-        self.nodes[0].children.iter().copied().find(|&c| self.nodes[c].name() == name)
+        self.nodes[0]
+            .children
+            .iter()
+            .copied()
+            .find(|&c| self.nodes[c].name() == name)
     }
     fn relevant(&self, node: usize, reader: &Reader) -> Vec<usize> {
         let children = &self.nodes[node].children;
-        let literals: Vec<usize> = children.iter().copied().filter(|&c| matches!(self.nodes[c].kind, NodeKind::Literal(_))).collect();
-        let arguments: Vec<usize> = children.iter().copied().filter(|&c| matches!(self.nodes[c].kind, NodeKind::Argument { .. })).collect();
+        let literals: Vec<usize> = children
+            .iter()
+            .copied()
+            .filter(|&c| matches!(self.nodes[c].kind, NodeKind::Literal(_)))
+            .collect();
+        let arguments: Vec<usize> = children
+            .iter()
+            .copied()
+            .filter(|&c| matches!(self.nodes[c].kind, NodeKind::Argument { .. }))
+            .collect();
         if literals.is_empty() {
             return arguments;
         }
@@ -485,7 +596,13 @@ impl Dispatcher {
             None => arguments,
         }
     }
-    fn parse_node(&self, node: usize, reader: &mut Reader, context: &mut Context, reg: &Registries) -> CmdResult<()> {
+    fn parse_node(
+        &self,
+        node: usize,
+        reader: &mut Reader,
+        context: &mut Context,
+        reg: &Registries,
+    ) -> CmdResult<()> {
         let start = reader.cursor;
         match &self.nodes[node].kind {
             NodeKind::Root => Ok(()),
@@ -507,29 +624,50 @@ impl Dispatcher {
             NodeKind::Argument { name, ty } => {
                 let value = ty.parse(reader, reg)?;
                 let range = (start, reader.cursor);
-                context.args.push(ParsedArg { name: name.clone(), value, range });
+                context.args.push(ParsedArg {
+                    name: name.clone(),
+                    value,
+                    range,
+                });
                 context.with_node(node, range);
                 Ok(())
             }
         }
     }
-    fn parse_nodes(&self, node: usize, input: &str, cursor: usize, so_far: &Context, reg: &Registries, level: u8) -> ParseResults {
+    fn parse_nodes(
+        &self,
+        node: usize,
+        input: &str,
+        cursor: usize,
+        so_far: &Context,
+        reg: &Registries,
+        level: u8,
+    ) -> ParseResults {
         let mut errors = Vec::new();
         let mut potentials: Vec<ParseResults> = Vec::new();
-        let original = Reader { string: input, cursor };
+        let original = Reader {
+            string: input,
+            cursor,
+        };
         for child in self.relevant(node, &original) {
             if self.nodes[child].permission > level {
                 continue;
             }
             let mut context = so_far.clone();
             let mut reader = original.clone();
-            let parsed = self.parse_node(child, &mut reader, &mut context, reg).and_then(|()| {
-                if reader.can_read() && reader.peek() != ' ' {
-                    Err(CommandError::tr_at("command.expected.separator", &[], &reader))
-                } else {
-                    Ok(())
-                }
-            });
+            let parsed = self
+                .parse_node(child, &mut reader, &mut context, reg)
+                .and_then(|()| {
+                    if reader.can_read() && reader.peek() != ' ' {
+                        Err(CommandError::tr_at(
+                            "command.expected.separator",
+                            &[],
+                            &reader,
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                });
             if let Err(e) = parsed {
                 errors.push((child, e));
                 continue;
@@ -540,13 +678,31 @@ impl Dispatcher {
                 reader.skip();
                 if let Some(target) = redirect {
                     let child_context = Context::new(target, reader.cursor);
-                    let parse = self.parse_nodes(target, input, reader.cursor, &child_context, reg, level);
+                    let parse =
+                        self.parse_nodes(target, input, reader.cursor, &child_context, reg, level);
                     context.child = Some(Box::new(parse.context));
-                    return ParseResults { context, input: input.to_owned(), cursor: parse.cursor, errors: parse.errors };
+                    return ParseResults {
+                        context,
+                        input: input.to_owned(),
+                        cursor: parse.cursor,
+                        errors: parse.errors,
+                    };
                 }
-                potentials.push(self.parse_nodes(child, input, reader.cursor, &context, reg, level));
+                potentials.push(self.parse_nodes(
+                    child,
+                    input,
+                    reader.cursor,
+                    &context,
+                    reg,
+                    level,
+                ));
             } else {
-                potentials.push(ParseResults { context, input: input.to_owned(), cursor: reader.cursor, errors: Vec::new() });
+                potentials.push(ParseResults {
+                    context,
+                    input: input.to_owned(),
+                    cursor: reader.cursor,
+                    errors: Vec::new(),
+                });
             }
         }
         if !potentials.is_empty() {
@@ -554,7 +710,12 @@ impl Dispatcher {
             potentials.sort_by_key(|p| (p.can_read(), !p.errors.is_empty()));
             return potentials.swap_remove(0);
         }
-        ParseResults { context: so_far.clone(), input: input.to_owned(), cursor, errors }
+        ParseResults {
+            context: so_far.clone(),
+            input: input.to_owned(),
+            cursor,
+            errors,
+        }
     }
     /// CommandDispatcher.parse from the start of `input` (no leading slash).
     pub fn parse(&self, input: &str, reg: &Registries) -> ParseResults {
@@ -566,7 +727,12 @@ impl Dispatcher {
         self.parse_nodes(0, input, start, &context, reg, reg.permission)
     }
     /// CommandDispatcher.getCompletionSuggestions at `cursor`.
-    pub fn suggestions(&self, parse: &ParseResults, cursor: usize, reg: &Registries) -> (Range, Vec<Suggestion>) {
+    pub fn suggestions(
+        &self,
+        parse: &ParseResults,
+        cursor: usize,
+        reg: &Registries,
+    ) -> (Range, Vec<Suggestion>) {
         let (parent, start, context) = parse.context.suggestion_context(cursor);
         let start = start.min(cursor);
         let truncated = &parse.input[..cursor.min(parse.input.len())];
@@ -594,17 +760,36 @@ impl Dispatcher {
         if n.permission > level {
             return None;
         }
-        let this = if optional { format!("[{}]", n.usage_text()) } else { n.usage_text() };
+        let this = if optional {
+            format!("[{}]", n.usage_text())
+        } else {
+            n.usage_text()
+        };
         let child_optional = n.command.is_some();
-        let (open, close) = if child_optional { ("[", "]") } else { ("(", ")") };
+        let (open, close) = if child_optional {
+            ("[", "]")
+        } else {
+            ("(", ")")
+        };
         if !deep {
             if let Some(r) = n.redirect {
-                let target = if r == 0 { "...".to_owned() } else { format!("-> {}", self.nodes[r].usage_text()) };
+                let target = if r == 0 {
+                    "...".to_owned()
+                } else {
+                    format!("-> {}", self.nodes[r].usage_text())
+                };
                 return Some(format!("{this} {target}"));
             }
-            let children: Vec<usize> = n.children.iter().copied().filter(|&c| self.nodes[c].permission <= level).collect();
+            let children: Vec<usize> = n
+                .children
+                .iter()
+                .copied()
+                .filter(|&c| self.nodes[c].permission <= level)
+                .collect();
             if children.len() == 1 {
-                if let Some(usage) = self.smart_usage_of(children[0], child_optional, child_optional, level) {
+                if let Some(usage) =
+                    self.smart_usage_of(children[0], child_optional, child_optional, level)
+                {
                     return Some(format!("{this} {usage}"));
                 }
             } else if children.len() > 1 {
@@ -618,10 +803,20 @@ impl Dispatcher {
                 }
                 if child_usage.len() == 1 {
                     let usage = &child_usage[0];
-                    return Some(format!("{this} {}", if child_optional { format!("[{usage}]") } else { usage.clone() }));
+                    return Some(format!(
+                        "{this} {}",
+                        if child_optional {
+                            format!("[{usage}]")
+                        } else {
+                            usage.clone()
+                        }
+                    ));
                 }
                 if child_usage.len() > 1 {
-                    let alternatives: Vec<String> = children.iter().map(|&c| self.nodes[c].usage_text()).collect();
+                    let alternatives: Vec<String> = children
+                        .iter()
+                        .map(|&c| self.nodes[c].usage_text())
+                        .collect();
                     return Some(format!("{this} {open}{}{close}", alternatives.join("|")));
                 }
             }
@@ -631,7 +826,14 @@ impl Dispatcher {
     /// CommandDispatcher.getSmartUsage: one line per child of `node`.
     pub fn smart_usage(&self, node: usize, level: u8) -> Vec<(usize, String)> {
         let optional = self.nodes[node].command.is_some();
-        self.nodes[node].children.iter().filter_map(|&c| self.smart_usage_of(c, optional, false, level).map(|u| (c, u))).collect()
+        self.nodes[node]
+            .children
+            .iter()
+            .filter_map(|&c| {
+                self.smart_usage_of(c, optional, false, level)
+                    .map(|u| (c, u))
+            })
+            .collect()
     }
 }
 

@@ -8,12 +8,7 @@ use horizon_client::{
     entity_nbt,
     save::{ChunkExtras, random_uuid},
 };
-use horizon_core::{
-    geometry::Vec3,
-    position::ChunkPos,
-    random::RandomSource,
-    ticks::ChunkTicks,
-};
+use horizon_core::{geometry::Vec3, position::ChunkPos, random::RandomSource, ticks::ChunkTicks};
 use horizon_world::{chunk::BlockState, nbt::Tag, registry::BlockStateId};
 use std::{
     collections::{HashMap, HashSet},
@@ -60,9 +55,20 @@ impl Game<'_> {
     pub(super) fn register_chunk_ticks(&mut self, key: (i32, i32)) {
         let pos = ChunkPos::new(key.0, key.1);
         let saved = self.world.chunks.get(&key).and_then(|c| c.saved.clone());
-        let (blocks, fluids) = saved.as_deref().map_or((Vec::new(), Vec::new()), |s| (s.block_ticks.clone(), s.fluid_ticks.clone()));
+        let (blocks, fluids) = saved.as_deref().map_or((Vec::new(), Vec::new()), |s| {
+            (s.block_ticks.clone(), s.fluid_ticks.clone())
+        });
         let loaded = !blocks.is_empty() || !fluids.is_empty();
-        if self.block_ticks.add_chunk(pos, ChunkTicks::from_saved(blocks), ChunkTicks::from_saved(fluids)).is_ok() && loaded {
+        if self
+            .block_ticks
+            .add_chunk(
+                pos,
+                ChunkTicks::from_saved(blocks),
+                ChunkTicks::from_saved(fluids),
+            )
+            .is_ok()
+            && loaded
+        {
             let time = self.world.game_time;
             self.block_ticks.blocks.unpack_chunk(pos, time);
             self.block_ticks.fluids.unpack_chunk(pos, time);
@@ -89,7 +95,9 @@ impl Game<'_> {
                     "minecraft:item" => {
                         self.next_entity += 1;
                         let bob = self.world.random.next_float() * std::f32::consts::PI * 2.0;
-                        if let Some(e) = entity_nbt::item_entity_from_nbt(&tag, self.next_entity, bob) {
+                        if let Some(e) =
+                            entity_nbt::item_entity_from_nbt(&tag, self.next_entity, bob)
+                        {
                             self.remember(e.id, uuid, tag);
                             self.dropped.push(e);
                         }
@@ -101,15 +109,24 @@ impl Game<'_> {
                         }
                     }
                     "minecraft:falling_block" => {
-                        if let Some((state, position, velocity, age)) = entity_nbt::falling_block_from_nbt(&tag)
+                        if let Some((state, position, velocity, age)) =
+                            entity_nbt::falling_block_from_nbt(&tag)
                             && let Some(state) = self.state_from_nbt(&state)
                         {
-                            self.falling.push(FallingBlock { state, position, previous: position, velocity, age });
+                            self.falling.push(FallingBlock {
+                                state,
+                                position,
+                                previous: position,
+                                velocity,
+                                age,
+                            });
                         }
                     }
                     _ if self.res.mob_types.contains_key(&kind) => {
                         self.next_entity += 1;
-                        if let Some(m) = entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, self.next_entity) {
+                        if let Some(m) =
+                            entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, self.next_entity)
+                        {
                             self.remember(m.id, uuid, tag);
                             self.mobs.push(m);
                         }
@@ -147,12 +164,16 @@ impl Game<'_> {
             },
             _ => BlockState::from_nbt(tag).ok()?,
         };
-        registry.id(&state).or_else(|| registry.default_state(&state.name))
+        registry
+            .id(&state)
+            .or_else(|| registry.default_state(&state.name))
     }
     fn state_to_nbt(&self, state: BlockStateId) -> Tag {
         let registry = self.res.assets.registry;
         match registry.state(state) {
-            Some(s) if registry.default_state(&s.name) == Some(state) => Tag::String(s.name.as_str().into()),
+            Some(s) if registry.default_state(&s.name) == Some(state) => {
+                Tag::String(s.name.as_str().into())
+            }
             Some(s) => s.to_nbt(),
             None => Tag::String("minecraft:air".into()),
         }
@@ -160,42 +181,70 @@ impl Game<'_> {
     /// The entity NBT of every simulated entity in `keys`, plus the unknown
     /// entities kept for them. With `remove`, the entities leave the world
     /// (their chunks unload).
-    fn entity_chunks(&mut self, keys: &HashSet<(i32, i32)>, remove: bool) -> Vec<((i32, i32), Vec<Tag>)> {
-        let mut out: HashMap<(i32, i32), Vec<Tag>> = keys.iter().map(|k| (*k, Vec::new())).collect();
+    fn entity_chunks(
+        &mut self,
+        keys: &HashSet<(i32, i32)>,
+        remove: bool,
+    ) -> Vec<((i32, i32), Vec<Tag>)> {
+        let mut out: HashMap<(i32, i32), Vec<Tag>> =
+            keys.iter().map(|k| (*k, Vec::new())).collect();
         let player_uuid = self.level.player_uuid;
-        let mobs: Vec<usize> = (0..self.mobs.len()).filter(|&i| keys.contains(&chunk_of(self.mobs[i].position)) && self.mobs[i].alive()).collect();
+        let mobs: Vec<usize> = (0..self.mobs.len())
+            .filter(|&i| keys.contains(&chunk_of(self.mobs[i].position)) && self.mobs[i].alive())
+            .collect();
         for i in mobs {
             let id = self.mobs[i].id;
             let uuid = self.uuid_for(id);
             let tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
-            out.entry(chunk_of(self.mobs[i].position)).or_default().push(tag);
+            out.entry(chunk_of(self.mobs[i].position))
+                .or_default()
+                .push(tag);
         }
-        let items: Vec<usize> = (0..self.dropped.len()).filter(|&i| keys.contains(&chunk_of(self.dropped[i].position))).collect();
+        let items: Vec<usize> = (0..self.dropped.len())
+            .filter(|&i| keys.contains(&chunk_of(self.dropped[i].position)))
+            .collect();
         for i in items {
             let id = self.dropped[i].id;
             let uuid = self.uuid_for(id);
-            let tag = entity_nbt::item_entity_to_nbt(&self.dropped[i], uuid, self.persist.raw.get(&id));
-            out.entry(chunk_of(self.dropped[i].position)).or_default().push(tag);
+            let tag =
+                entity_nbt::item_entity_to_nbt(&self.dropped[i], uuid, self.persist.raw.get(&id));
+            out.entry(chunk_of(self.dropped[i].position))
+                .or_default()
+                .push(tag);
         }
         for o in &self.orbs {
             if keys.contains(&chunk_of(o.position)) {
-                out.entry(chunk_of(o.position)).or_default().push(entity_nbt::orb_to_nbt(o, random_uuid()));
+                out.entry(chunk_of(o.position))
+                    .or_default()
+                    .push(entity_nbt::orb_to_nbt(o, random_uuid()));
             }
         }
         for a in &self.arrows {
             if keys.contains(&chunk_of(a.position)) {
                 let owner = if a.from_player { player_uuid } else { None };
-                out.entry(chunk_of(a.position)).or_default().push(entity_nbt::arrow_to_nbt(a, random_uuid(), owner));
+                out.entry(chunk_of(a.position))
+                    .or_default()
+                    .push(entity_nbt::arrow_to_nbt(a, random_uuid(), owner));
             }
         }
         for f in &self.falling {
             if keys.contains(&chunk_of(f.position)) {
-                let tag = entity_nbt::falling_block_to_nbt(self.state_to_nbt(f.state), f.position, f.velocity, f.age, random_uuid());
+                let tag = entity_nbt::falling_block_to_nbt(
+                    self.state_to_nbt(f.state),
+                    f.position,
+                    f.velocity,
+                    f.age,
+                    random_uuid(),
+                );
                 out.entry(chunk_of(f.position)).or_default().push(tag);
             }
         }
         for key in keys {
-            let unknown = if remove { self.persist.unknown.remove(key) } else { self.persist.unknown.get(key).cloned() };
+            let unknown = if remove {
+                self.persist.unknown.remove(key)
+            } else {
+                self.persist.unknown.get(key).cloned()
+            };
             if let Some(list) = unknown {
                 out.entry(*key).or_default().extend(list);
             }
@@ -233,7 +282,12 @@ impl Game<'_> {
         let keys: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
         let chunks = self.entity_chunks(&keys, false);
         // Forget entities that no longer exist.
-        let alive: HashSet<u32> = self.mobs.iter().map(|m| m.id).chain(self.dropped.iter().map(|e| e.id)).collect();
+        let alive: HashSet<u32> = self
+            .mobs
+            .iter()
+            .map(|m| m.id)
+            .chain(self.dropped.iter().map(|e| e.id))
+            .collect();
         self.persist.uuids.retain(|id, _| alive.contains(id));
         self.persist.raw.retain(|id, _| alive.contains(id));
         self.save.save_entities(chunks)

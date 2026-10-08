@@ -274,15 +274,26 @@ impl Game<'_> {
                 }
                 self.require_world()?;
                 self.handle_chat_input(text);
-                Ok(Some(json!({ "ok": true, "chat": self.ui.chat.recent_lines(5) })))
+                Ok(Some(
+                    json!({ "ok": true, "chat": self.ui.chat.recent_lines(5) }),
+                ))
             }
             "type" => {
                 self.require_world()?;
-                let text = line.trim_start().strip_prefix("type").unwrap_or("").strip_prefix(' ').unwrap_or("");
+                let text = line
+                    .trim_start()
+                    .strip_prefix("type")
+                    .unwrap_or("")
+                    .strip_prefix(' ')
+                    .unwrap_or("");
                 match self.screen {
                     Screen::Chat => self.chat_type(text),
                     Screen::Options => self.ui.options.type_text(text),
-                    _ => return Err("type needs the chat screen (key t tap) or the language search".into()),
+                    _ => {
+                        return Err(
+                            "type needs the chat screen (key t tap) or the language search".into(),
+                        );
+                    }
                 }
                 ok()
             }
@@ -346,7 +357,9 @@ impl Game<'_> {
                 if self.title.is_none() {
                     return Err("leave the current world first".into());
                 }
-                let name = words.get(2).map_or_else(|| self.options.player_name.clone(), |n| (*n).to_owned());
+                let name = words
+                    .get(2)
+                    .map_or_else(|| self.options.player_name.clone(), |n| (*n).to_owned());
                 self.connect_server(arg(1)?, &name)?;
                 ok()
             }

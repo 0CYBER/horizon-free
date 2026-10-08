@@ -128,7 +128,9 @@ pub fn spawn_rules_ok(
         S::GlowSquid => y <= 63 - 33 && light == 0 && w.block_name(x, y, z) == "minecraft:water",
         S::Squid | S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish | S::Dolphin => {
             // WaterAnimal.checkSurfaceWaterAnimalSpawnRules: sea level - 13 ..= sea level.
-            (50..=63).contains(&y) && w.fluid(x, y - 1, z) == Fluid::Water && w.block_name(x, y + 1, z) == "minecraft:water"
+            (50..=63).contains(&y)
+                && w.fluid(x, y - 1, z) == Fluid::Water
+                && w.block_name(x, y + 1, z) == "minecraft:water"
         }
         S::Axolotl => w.block_name(x, y - 1, z) == "minecraft:clay",
         S::Strider => w.fluid(x, y, z) == Fluid::Lava,

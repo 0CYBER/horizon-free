@@ -44,7 +44,8 @@ pub struct Weather {
 impl Weather {
     pub fn tick(&mut self, random: &mut horizon_core::random::LegacyRandom) {
         use horizon_core::random::RandomSource;
-        let mut uniform = |min: i32, max: i32| min + random.next_int_bound(max - min + 1).unwrap_or(0);
+        let mut uniform =
+            |min: i32, max: i32| min + random.next_int_bound(max - min + 1).unwrap_or(0);
         if self.clear_time > 0 {
             self.clear_time -= 1;
             self.thunder_time = if self.thundering { 0 } else { 1 };
@@ -74,14 +75,17 @@ impl Weather {
             }
         }
         self.thunder_level.0 = self.thunder_level.1;
-        self.thunder_level.1 = (self.thunder_level.1 + if self.thundering { 0.01 } else { -0.01 }).clamp(0.0, 1.0);
+        self.thunder_level.1 =
+            (self.thunder_level.1 + if self.thundering { 0.01 } else { -0.01 }).clamp(0.0, 1.0);
         self.rain_level.0 = self.rain_level.1;
-        self.rain_level.1 = (self.rain_level.1 + if self.raining { 0.01 } else { -0.01 }).clamp(0.0, 1.0);
+        self.rain_level.1 =
+            (self.rain_level.1 + if self.raining { 0.01 } else { -0.01 }).clamp(0.0, 1.0);
     }
     /// Level.getRainLevel / getThunderLevel (thunder scales with rain).
     pub fn levels(&self, partial: f32) -> (f32, f32) {
         let rain = self.rain_level.0 + (self.rain_level.1 - self.rain_level.0) * partial;
-        let thunder = self.thunder_level.0 + (self.thunder_level.1 - self.thunder_level.0) * partial;
+        let thunder =
+            self.thunder_level.0 + (self.thunder_level.1 - self.thunder_level.0) * partial;
         (rain, thunder * rain)
     }
 }
@@ -107,11 +111,16 @@ impl World {
     /// A controlled blockstate scene for the native scene probes: material
     /// layers, a stepped pyramid and the model gallery. Not generated terrain.
     pub fn test_scene(assets: &crate::assets::Assets, radius: i32) -> crate::Result<Self> {
-        let air = assets.registry.default_state("minecraft:air").ok_or("missing air state")?;
+        let air = assets
+            .registry
+            .default_state("minecraft:air")
+            .ok_or("missing air state")?;
         let mut world = Self::new(air, 0);
         for cz in -radius..=radius {
             for cx in -radius..=radius {
-                world.chunks.insert((cx, cz), Arc::new(Chunk::empty(cx, cz)));
+                world
+                    .chunks
+                    .insert((cx, cz), Arc::new(Chunk::empty(cx, cz)));
                 for z in 0..16 {
                     for x in 0..16 {
                         for y in 0..4 {
@@ -121,7 +130,12 @@ impl World {
                                 _ if (cx + cz) & 1 == 0 => 2,
                                 _ => 3,
                             };
-                            world.set(cx * 16 + x, y, cz * 16 + z, assets.material_states[layer])?;
+                            world.set(
+                                cx * 16 + x,
+                                y,
+                                cz * 16 + z,
+                                assets.material_states[layer],
+                            )?;
                         }
                     }
                 }
@@ -131,7 +145,12 @@ impl World {
             for z in -10_i32..=10 {
                 for x in -10_i32..=10 {
                     if x.abs().max(z.abs()) <= 10 - (y - 4) {
-                        world.set(x, y, z, assets.material_states[if y & 1 == 0 { 4 } else { 5 }])?;
+                        world.set(
+                            x,
+                            y,
+                            z,
+                            assets.material_states[if y & 1 == 0 { 4 } else { 5 }],
+                        )?;
                     }
                 }
             }

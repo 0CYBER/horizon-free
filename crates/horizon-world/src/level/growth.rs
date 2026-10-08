@@ -205,11 +205,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         false
     }
     /// `TreeGrower.findTwoByTwoSaplingPos`.
-    fn two_by_two(
-        &self,
-        state: BlockStateId,
-        pos: BlockPos,
-    ) -> Option<(i32, i32, Saplings)> {
+    fn two_by_two(&self, state: BlockStateId, pos: BlockPos) -> Option<(i32, i32, Saplings)> {
         let block = self.b.block(state);
         for dx in [0, -1] {
             for dz in [0, -1] {

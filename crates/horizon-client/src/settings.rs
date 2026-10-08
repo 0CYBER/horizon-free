@@ -5,7 +5,10 @@ use crate::keybinds::KeyBinds;
 use std::{collections::BTreeMap, fs, path::Path};
 
 /// SoundSource names in vanilla order.
-pub const SOUND_SOURCES: [&str; 11] = ["master", "music", "record", "weather", "block", "hostile", "neutral", "player", "ambient", "voice", "ui"];
+pub const SOUND_SOURCES: [&str; 11] = [
+    "master", "music", "record", "weather", "block", "hostile", "neutral", "player", "ambient",
+    "voice", "ui",
+];
 
 /// Per-source volumes for the mixer (soundCategory_* except master).
 static SOURCE_VOLUMES: std::sync::RwLock<[f32; 11]> = std::sync::RwLock::new([1.0; 11]);
@@ -18,8 +21,30 @@ pub fn sound_source(event: &str) -> usize {
     let e = event.trim_start_matches("minecraft:");
     let index = |name: &str| SOUND_SOURCES.iter().position(|n| *n == name).unwrap_or(0);
     const HOSTILE: [&str; 24] = [
-        "zombie", "skeleton", "creeper", "spider", "cave_spider", "enderman", "witch", "slime", "magma_cube", "blaze", "ghast", "drowned", "husk", "stray",
-        "phantom", "pillager", "vindicator", "evoker", "ravager", "guardian", "elder_guardian", "silverfish", "zombified_piglin", "wither_skeleton",
+        "zombie",
+        "skeleton",
+        "creeper",
+        "spider",
+        "cave_spider",
+        "enderman",
+        "witch",
+        "slime",
+        "magma_cube",
+        "blaze",
+        "ghast",
+        "drowned",
+        "husk",
+        "stray",
+        "phantom",
+        "pillager",
+        "vindicator",
+        "evoker",
+        "ravager",
+        "guardian",
+        "elder_guardian",
+        "silverfish",
+        "zombified_piglin",
+        "wither_skeleton",
     ];
     if e.starts_with("music_disc.") {
         index("record")
@@ -33,11 +58,20 @@ pub fn sound_source(event: &str) -> usize {
         index("ambient")
     } else if e.starts_with("ui.") {
         index("ui")
-    } else if e.starts_with("entity.player.") || e.starts_with("item.") || e.starts_with("entity.item.") || e.starts_with("entity.experience_orb") || e.starts_with("entity.arrow") {
+    } else if e.starts_with("entity.player.")
+        || e.starts_with("item.")
+        || e.starts_with("entity.item.")
+        || e.starts_with("entity.experience_orb")
+        || e.starts_with("entity.arrow")
+    {
         index("player")
     } else if let Some(rest) = e.strip_prefix("entity.") {
         let mob = rest.split('.').next().unwrap_or("");
-        if HOSTILE.contains(&mob) { index("hostile") } else { index("neutral") }
+        if HOSTILE.contains(&mob) {
+            index("hostile")
+        } else {
+            index("neutral")
+        }
     } else {
         index("master")
     }
@@ -45,7 +79,11 @@ pub fn sound_source(event: &str) -> usize {
 /// Volume multiplier of an event's source (master applied separately).
 pub fn event_volume(event: &str) -> f32 {
     let i = sound_source(event);
-    if i == 0 { 1.0 } else { SOURCE_VOLUMES.read().unwrap_or_else(|e| e.into_inner())[i] }
+    if i == 0 {
+        1.0
+    } else {
+        SOURCE_VOLUMES.read().unwrap_or_else(|e| e.into_inner())[i]
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -189,20 +227,26 @@ impl Default for Settings {
     }
 }
 fn unquote(v: &str) -> &str {
-    v.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(v)
+    v.strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(v)
 }
 fn parse_list(v: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(v).unwrap_or_default()
 }
 impl Settings {
     pub fn load(path: &Path) -> Self {
-        let Ok(text) = fs::read_to_string(path) else { return Self::default() };
+        let Ok(text) = fs::read_to_string(path) else {
+            return Self::default();
+        };
         Self::parse(&text)
     }
     pub fn parse(text: &str) -> Self {
         let mut s = Self::default();
         for line in text.lines() {
-            let Some((k, v)) = line.split_once(':') else { continue };
+            let Some((k, v)) = line.split_once(':') else {
+                continue;
+            };
             let f = |d: f32| v.parse::<f32>().unwrap_or(d);
             let b = |d: bool| match v {
                 "true" => true,
@@ -212,7 +256,11 @@ impl Settings {
             let i = |d: i32| v.parse::<i32>().unwrap_or(d);
             match k {
                 "version" => {}
-                "fov" => s.fov = v.parse::<f32>().map_or(70.0, |f| (f * 40.0 + 70.0).round().clamp(30.0, 110.0)),
+                "fov" => {
+                    s.fov = v
+                        .parse::<f32>()
+                        .map_or(70.0, |f| (f * 40.0 + 70.0).round().clamp(30.0, 110.0))
+                }
                 "renderDistance" => s.render_distance = i(12).clamp(2, 32),
                 "simulationDistance" => s.simulation_distance = i(12).clamp(5, 32),
                 "mouseSensitivity" => s.sensitivity = f(0.5).clamp(0.0, 1.0),
@@ -239,7 +287,9 @@ impl Settings {
                 "improvedTransparency" => s.improved_transparency = b(false),
                 "attackIndicator" => s.attack_indicator = v.parse::<u8>().unwrap_or(1).min(2),
                 "inactivityFpsLimit" => s.inactivity_fps_limit = unquote(v).to_owned(),
-                "prioritizeChunkUpdates" => s.prioritize_chunk_updates = v.parse::<u8>().unwrap_or(0).min(2),
+                "prioritizeChunkUpdates" => {
+                    s.prioritize_chunk_updates = v.parse::<u8>().unwrap_or(0).min(2)
+                }
                 "menuBackgroundBlurriness" => s.menu_blur = i(5).clamp(0, 10),
                 "invertYMouse" => s.invert_y = b(false),
                 "mouseWheelSensitivity" => s.mouse_wheel_sensitivity = f(1.0).clamp(0.01, 10.0),
@@ -295,63 +345,123 @@ impl Settings {
             ("chunkSectionFadeInTime".into(), self.chunk_fade.to_string()),
             ("cutoutLeaves".into(), self.cutout_leaves.to_string()),
             ("enableVsync".into(), self.vsync.to_string()),
-            ("entityDistanceScaling".into(), self.entity_distance.to_string()),
+            (
+                "entityDistanceScaling".into(),
+                self.entity_distance.to_string(),
+            ),
             ("entityShadows".into(), self.entity_shadows.to_string()),
             ("forceUnicodeFont".into(), self.force_unicode.to_string()),
-            ("japaneseGlyphVariants".into(), self.japanese_glyphs.to_string()),
+            (
+                "japaneseGlyphVariants".into(),
+                self.japanese_glyphs.to_string(),
+            ),
             ("fov".into(), ((self.fov - 70.0) / 40.0).to_string()),
-            ("graphicsPreset".into(), format!("\"{}\"", self.graphics_preset)),
-            ("prioritizeChunkUpdates".into(), self.prioritize_chunk_updates.to_string()),
+            (
+                "graphicsPreset".into(),
+                format!("\"{}\"", self.graphics_preset),
+            ),
+            (
+                "prioritizeChunkUpdates".into(),
+                self.prioritize_chunk_updates.to_string(),
+            ),
             ("fullscreen".into(), self.fullscreen.to_string()),
             ("gamma".into(), self.gamma.to_string()),
             ("guiScale".into(), self.gui_scale.to_string()),
             ("maxFps".into(), self.max_fps.to_string()),
-            ("improvedTransparency".into(), self.improved_transparency.to_string()),
-            ("inactivityFpsLimit".into(), format!("\"{}\"", self.inactivity_fps_limit)),
+            (
+                "improvedTransparency".into(),
+                self.improved_transparency.to_string(),
+            ),
+            (
+                "inactivityFpsLimit".into(),
+                format!("\"{}\"", self.inactivity_fps_limit),
+            ),
             ("mipmapLevels".into(), self.mipmap_levels.to_string()),
             ("particles".into(), self.particles.to_string()),
-            ("reducedDebugInfo".into(), self.reduced_debug_info.to_string()),
+            (
+                "reducedDebugInfo".into(),
+                self.reduced_debug_info.to_string(),
+            ),
             ("renderClouds".into(), format!("\"{}\"", self.clouds)),
             ("cloudRange".into(), self.cloud_range.to_string()),
             ("renderDistance".into(), self.render_distance.to_string()),
-            ("simulationDistance".into(), self.simulation_distance.to_string()),
+            (
+                "simulationDistance".into(),
+                self.simulation_distance.to_string(),
+            ),
             ("vignette".into(), self.vignette.to_string()),
             ("weatherRadius".into(), self.weather_radius.to_string()),
             ("autoJump".into(), self.auto_jump.to_string()),
             ("autoSuggestions".into(), self.auto_suggestions.to_string()),
             ("chatColors".into(), self.chat_colors.to_string()),
             ("chatLinks".into(), self.chat_links.to_string()),
-            ("discrete_mouse_scroll".into(), self.discrete_scroll.to_string()),
+            (
+                "discrete_mouse_scroll".into(),
+                self.discrete_scroll.to_string(),
+            ),
             ("invertYMouse".into(), self.invert_y.to_string()),
             ("bobView".into(), self.view_bobbing.to_string()),
             ("toggleCrouch".into(), self.toggle_crouch.to_string()),
             ("toggleSprint".into(), self.toggle_sprint.to_string()),
             ("mouseSensitivity".into(), self.sensitivity.to_string()),
             ("highContrast".into(), self.high_contrast.to_string()),
-            ("resourcePacks".into(), serde_json::to_string(&self.resource_packs).unwrap_or_else(|_| "[]".into())),
+            (
+                "resourcePacks".into(),
+                serde_json::to_string(&self.resource_packs).unwrap_or_else(|_| "[]".into()),
+            ),
             ("lang".into(), self.language.clone()),
             ("chatVisibility".into(), self.chat_visibility.to_string()),
             ("chatOpacity".into(), self.chat_opacity.to_string()),
             ("chatLineSpacing".into(), self.chat_line_spacing.to_string()),
-            ("textBackgroundOpacity".into(), self.text_background_opacity.to_string()),
-            ("chatHeightFocused".into(), self.chat_height_focused.to_string()),
-            ("chatHeightUnfocused".into(), self.chat_height_unfocused.to_string()),
+            (
+                "textBackgroundOpacity".into(),
+                self.text_background_opacity.to_string(),
+            ),
+            (
+                "chatHeightFocused".into(),
+                self.chat_height_focused.to_string(),
+            ),
+            (
+                "chatHeightUnfocused".into(),
+                self.chat_height_unfocused.to_string(),
+            ),
             ("chatScale".into(), self.chat_scale.to_string()),
             ("chatWidth".into(), self.chat_width.to_string()),
-            ("mainHand".into(), if self.main_hand_left { "\"left\"".into() } else { "\"right\"".into() }),
+            (
+                "mainHand".into(),
+                if self.main_hand_left {
+                    "\"left\"".into()
+                } else {
+                    "\"right\"".into()
+                },
+            ),
             ("attackIndicator".into(), self.attack_indicator.to_string()),
-            ("mouseWheelSensitivity".into(), self.mouse_wheel_sensitivity.to_string()),
-            ("showAutosaveIndicator".into(), self.autosave_indicator.to_string()),
-            ("menuBackgroundBlurriness".into(), self.menu_blur.to_string()),
+            (
+                "mouseWheelSensitivity".into(),
+                self.mouse_wheel_sensitivity.to_string(),
+            ),
+            (
+                "showAutosaveIndicator".into(),
+                self.autosave_indicator.to_string(),
+            ),
+            (
+                "menuBackgroundBlurriness".into(),
+                self.menu_blur.to_string(),
+            ),
         ];
         for (name, key) in self.keys.saved() {
             lines.push((format!("key_{name}"), key));
         }
         for (i, source) in SOUND_SOURCES.iter().enumerate() {
-            let v = if i == 0 { self.master_volume } else { self.volumes[i] };
+            let v = if i == 0 {
+                self.master_volume
+            } else {
+                self.volumes[i]
+            };
             lines.push((format!("soundCategory_{source}"), v.to_string()));
         }
-        let known: std::collections::BTreeSet<String> = lines.iter().map(|(k, _)| k.clone()).collect();
+        let known: std::collections::BTreeSet<String> =
+            lines.iter().map(|(k, _)| k.clone()).collect();
         for (k, v) in &self.extra {
             if !known.contains(k) {
                 lines.push((k.clone(), v.clone()));
@@ -368,7 +478,16 @@ impl Settings {
     }
     /// Volume of a sound source (master excluded).
     pub fn volume(&self, source: &str) -> f32 {
-        SOUND_SOURCES.iter().position(|n| *n == source).map_or(1.0, |i| if i == 0 { self.master_volume } else { self.volumes[i] })
+        SOUND_SOURCES
+            .iter()
+            .position(|n| *n == source)
+            .map_or(1.0, |i| {
+                if i == 0 {
+                    self.master_volume
+                } else {
+                    self.volumes[i]
+                }
+            })
     }
     pub fn chat_options(&self) -> crate::chat::ChatOptions {
         crate::chat::ChatOptions {

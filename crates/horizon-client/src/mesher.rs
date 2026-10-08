@@ -45,7 +45,12 @@ pub struct SectionMesh {
 }
 impl Default for SectionMesh {
     fn default() -> Self {
-        Self { solid: Vec::new(), translucent: Vec::new(), visibility: ALL_VISIBLE, block_entities: Vec::new() }
+        Self {
+            solid: Vec::new(),
+            translucent: Vec::new(),
+            visibility: ALL_VISIBLE,
+            block_entities: Vec::new(),
+        }
     }
 }
 pub const ALL_VISIBLE: u64 = (1 << 36) - 1;
@@ -56,7 +61,11 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
     let opaque = |x: i32, y: i32, z: i32| info[pad.blocks[pi(x, y, z)] as usize].solid;
     let mut stack = Vec::new();
     for start in 0..4096usize {
-        let (x, y, z) = ((start & 15) as i32, (start >> 8) as i32, ((start >> 4) & 15) as i32);
+        let (x, y, z) = (
+            (start & 15) as i32,
+            (start >> 8) as i32,
+            ((start >> 4) & 15) as i32,
+        );
         if seen[start] || opaque(x, y, z) {
             continue;
         }
@@ -65,13 +74,32 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
         stack.push(start);
         while let Some(c) = stack.pop() {
             let (x, y, z) = ((c & 15) as i32, (c >> 8) as i32, ((c >> 4) & 15) as i32);
-            if y == 0 { faces |= 1 << 0; }
-            if y == 15 { faces |= 1 << 1; }
-            if z == 0 { faces |= 1 << 2; }
-            if z == 15 { faces |= 1 << 3; }
-            if x == 0 { faces |= 1 << 4; }
-            if x == 15 { faces |= 1 << 5; }
-            for (dx, dy, dz) in [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)] {
+            if y == 0 {
+                faces |= 1 << 0;
+            }
+            if y == 15 {
+                faces |= 1 << 1;
+            }
+            if z == 0 {
+                faces |= 1 << 2;
+            }
+            if z == 15 {
+                faces |= 1 << 3;
+            }
+            if x == 0 {
+                faces |= 1 << 4;
+            }
+            if x == 15 {
+                faces |= 1 << 5;
+            }
+            for (dx, dy, dz) in [
+                (1, 0, 0),
+                (-1, 0, 0),
+                (0, 1, 0),
+                (0, -1, 0),
+                (0, 0, 1),
+                (0, 0, -1),
+            ] {
                 let (nx, ny, nz) = (x + dx, y + dy, z + dz);
                 if !(0..16).contains(&nx) || !(0..16).contains(&ny) || !(0..16).contains(&nz) {
                     continue;
@@ -460,7 +488,10 @@ impl Mesher<'_> {
                     }
                     let state = &info[id as usize];
                     if state.block_entity {
-                        out.block_entities.push(([center.x * 16 + x, base_y + y, center.z * 16 + z], u32::from(id)));
+                        out.block_entities.push((
+                            [center.x * 16 + x, base_y + y, center.z * 16 + z],
+                            u32::from(id),
+                        ));
                     }
                     if state.solid
                         && Direction::ALL.iter().all(|d| {
@@ -479,7 +510,10 @@ impl Mesher<'_> {
                         continue;
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);
-                    let Ok(models) = self.assets.model_catalog.collect(BlockStateId(id.into()), world)
+                    let Ok(models) = self
+                        .assets
+                        .model_catalog
+                        .collect(BlockStateId(id.into()), world)
                     else {
                         continue;
                     };

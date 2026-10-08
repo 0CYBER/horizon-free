@@ -34,7 +34,11 @@ pub struct SignText {
 }
 impl Default for SignText {
     fn default() -> Self {
-        Self { lines: Default::default(), color: BLACK, glowing: false }
+        Self {
+            lines: Default::default(),
+            color: BLACK,
+            glowing: false,
+        }
     }
 }
 impl SignText {
@@ -67,7 +71,11 @@ pub struct SignData {
 }
 impl SignData {
     pub fn id(&self) -> &'static str {
-        if self.hanging { "minecraft:hanging_sign" } else { "minecraft:sign" }
+        if self.hanging {
+            "minecraft:hanging_sign"
+        } else {
+            "minecraft:sign"
+        }
     }
     /// `SignBlockEntity.getMaxTextLineWidth`.
     pub fn max_line_width(&self) -> f32 {
@@ -81,12 +89,27 @@ impl SignData {
     pub fn encode(&self) -> Vec<(&'static str, Tag)> {
         let side = |t: &SignText| {
             Tag::compound([
-                ("messages", Tag::List(t.lines.iter().map(|l| Tag::String(l.as_str().into())).collect())),
-                ("color", Tag::String(DYE_TEXT[usize::from(t.color.min(15))].0.into())),
+                (
+                    "messages",
+                    Tag::List(
+                        t.lines
+                            .iter()
+                            .map(|l| Tag::String(l.as_str().into()))
+                            .collect(),
+                    ),
+                ),
+                (
+                    "color",
+                    Tag::String(DYE_TEXT[usize::from(t.color.min(15))].0.into()),
+                ),
                 ("has_glowing_text", Tag::Byte(i8::from(t.glowing))),
             ])
         };
-        vec![("front_text", side(&self.front)), ("back_text", side(&self.back)), ("is_waxed", Tag::Byte(i8::from(self.waxed)))]
+        vec![
+            ("front_text", side(&self.front)),
+            ("back_text", side(&self.back)),
+            ("is_waxed", Tag::Byte(i8::from(self.waxed))),
+        ]
     }
     pub fn decode(&mut self, tag: &Tag) {
         let side = |t: Option<&Tag>| -> SignText {
@@ -118,7 +141,9 @@ fn component_text(tag: &Tag) -> String {
             let s = s.to_string_lossy();
             match serde_json::from_str::<serde_json::Value>(&s) {
                 Ok(serde_json::Value::String(text)) => text,
-                Ok(v) if v.get("text").is_some() => v["text"].as_str().unwrap_or_default().to_owned(),
+                Ok(v) if v.get("text").is_some() => {
+                    v["text"].as_str().unwrap_or_default().to_owned()
+                }
                 _ => s,
             }
         }
@@ -156,7 +181,10 @@ mod tests {
     use super::*;
     #[test]
     fn round_trips_nbt() {
-        let mut data = SignData { hanging: false, ..SignData::default() };
+        let mut data = SignData {
+            hanging: false,
+            ..SignData::default()
+        };
         data.front.lines[0] = "Hello".into();
         data.front.color = 14;
         data.back.glowing = true;
@@ -173,7 +201,10 @@ mod tests {
         assert_eq!(sign_kind("minecraft:stone"), None);
         assert_eq!(wood_type("minecraft:dark_oak_wall_sign"), "dark_oak");
         assert_eq!(SignText::default().dark_color(), 0);
-        let red = SignText { color: 14, ..SignText::default() };
+        let red = SignText {
+            color: 14,
+            ..SignText::default()
+        };
         assert_eq!(red.dark_color(), 0x660000);
     }
 }

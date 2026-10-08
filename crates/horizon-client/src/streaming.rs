@@ -129,7 +129,11 @@ pub struct WorkerContext {
     pub light: Arc<LightTables>,
 }
 impl Streaming {
-    pub fn new<G: ChunkGenerator>(generator: Arc<G>, context: Arc<WorkerContext>, threads: usize) -> Self {
+    pub fn new<G: ChunkGenerator>(
+        generator: Arc<G>,
+        context: Arc<WorkerContext>,
+        threads: usize,
+    ) -> Self {
         let shared = Arc::new(Shared {
             queue: Mutex::new(BinaryHeap::new()),
             ready: Condvar::new(),
@@ -177,9 +181,12 @@ impl Streaming {
                                     Done::Decorated(x, z, region)
                                 }
                                 Job::Finish(proto) => Done::Generated(generator.finish(proto)),
-                                Job::Light(x, z, region, seq, sky) => {
-                                    Done::Lit(x, z, light_chunk(&borrow(&region), &context.light, sky), seq)
-                                }
+                                Job::Light(x, z, region, seq, sky) => Done::Lit(
+                                    x,
+                                    z,
+                                    light_chunk(&borrow(&region), &context.light, sky),
+                                    seq,
+                                ),
                                 Job::Mesh(x, sy, z, region, seq, nether) => {
                                     mesher.nether_shading = nether;
                                     Done::Meshed(x, sy, z, mesher.mesh(&borrow(&region), sy), seq)
@@ -262,7 +269,12 @@ impl Streaming {
         let mut region: Region = Default::default();
         for dz in 0..3 {
             for dx in 0..3 {
-                region[dz][dx] = Some(world.chunks.get(&(x + dx as i32 - 1, z + dz as i32 - 1))?.clone());
+                region[dz][dx] = Some(
+                    world
+                        .chunks
+                        .get(&(x + dx as i32 - 1, z + dz as i32 - 1))?
+                        .clone(),
+                );
             }
         }
         Some(Box::new(region))
@@ -275,7 +287,10 @@ impl Streaming {
     }
     /// Advance streaming: collect finished work, then schedule more.
     /// Returns meshes ready for upload and columns that were unloaded.
-    pub fn update(&mut self, world: &mut World) -> (Vec<((i32, i32, i32), SectionMesh)>, Vec<Arc<Chunk>>) {
+    pub fn update(
+        &mut self,
+        world: &mut World,
+    ) -> (Vec<((i32, i32, i32), SectionMesh)>, Vec<Arc<Chunk>>) {
         let mut uploads = Vec::new();
         if self.paused {
             return (uploads, Vec::new());
@@ -302,7 +317,9 @@ impl Streaming {
                 }
                 Done::Generated(mut chunk) => {
                     let key = (chunk.x, chunk.z);
-                    world.block_entities.extend(std::mem::take(&mut chunk.block_entities));
+                    world
+                        .block_entities
+                        .extend(std::mem::take(&mut chunk.block_entities));
                     let entities = std::mem::take(&mut chunk.entities);
                     if !entities.is_empty() {
                         world.loaded_entities.push(((chunk.x, chunk.z), entities));
@@ -381,19 +398,30 @@ impl Streaming {
             p.is_none() || d <= r4 * r4
         });
         let (protos, finishing) = (&self.protos, &self.finishing);
-        self.decorated
-            .retain(|k| protos.contains_key(k) || finishing.contains(k) || world.chunks.contains_key(k));
+        self.decorated.retain(|k| {
+            protos.contains_key(k) || finishing.contains(k) || world.chunks.contains_key(k)
+        });
         // Finalize chunks whose neighbourhood is decorated.
         let candidates: Vec<(i32, i32)> = self.protos.keys().copied().collect();
         for (x, z) in candidates {
-            if world.chunks.contains_key(&(x, z)) || self.finishing.contains(&(x, z)) || !self.in_range(x, z, 1) {
+            if world.chunks.contains_key(&(x, z))
+                || self.finishing.contains(&(x, z))
+                || !self.in_range(x, z, 1)
+            {
                 continue;
             }
             let ready = (-1..=1).all(|dz| {
-                (-1..=1).all(|dx| self.decorated.contains(&(x + dx, z + dz)) || world.chunks.contains_key(&(x + dx, z + dz)))
+                (-1..=1).all(|dx| {
+                    self.decorated.contains(&(x + dx, z + dz))
+                        || world.chunks.contains_key(&(x + dx, z + dz))
+                })
             });
             if ready && let Some(Some(_)) = self.protos.get(&(x, z)) {
-                let proto = self.protos.remove(&(x, z)).flatten().expect("present proto");
+                let proto = self
+                    .protos
+                    .remove(&(x, z))
+                    .flatten()
+                    .expect("present proto");
                 self.finishing.insert((x, z));
                 self.submit(self.distance(x, z) * 4, Job::Finish(proto));
             }
@@ -404,7 +432,9 @@ impl Streaming {
             let mut wanted: Vec<(i64, i32, i32)> = self
                 .protos
                 .iter()
-                .filter(|(k, p)| p.is_some() && !self.decorated.contains(k) && self.in_range(k.0, k.1, 2))
+                .filter(|(k, p)| {
+                    p.is_some() && !self.decorated.contains(k) && self.in_range(k.0, k.1, 2)
+                })
                 .map(|(k, _)| (self.distance(k.0, k.1), k.0, k.1))
                 .collect();
             wanted.sort_unstable();
@@ -412,18 +442,27 @@ impl Streaming {
                 if self.decorating >= workers * 2 {
                     break;
                 }
-                let keys: Vec<(i32, i32)> = (0..9).map(|i| (x + (i % 3) - 1, z + (i / 3) - 1)).collect();
+                let keys: Vec<(i32, i32)> =
+                    (0..9).map(|i| (x + (i % 3) - 1, z + (i / 3) - 1)).collect();
                 // A final (saved) neighbour cannot receive writes: skip decoration.
                 if keys.iter().any(|k| world.chunks.contains_key(k)) {
                     self.decorated.insert((x, z));
                     continue;
                 }
-                if !keys.iter().all(|k| matches!(self.protos.get(k), Some(Some(_)))) {
+                if !keys
+                    .iter()
+                    .all(|k| matches!(self.protos.get(k), Some(Some(_))))
+                {
                     continue;
                 }
                 let region: Vec<Proto> = keys
                     .iter()
-                    .map(|k| self.protos.insert(*k, None).flatten().expect("present proto"))
+                    .map(|k| {
+                        self.protos
+                            .insert(*k, None)
+                            .flatten()
+                            .expect("present proto")
+                    })
                     .collect();
                 let region: Box<[Proto; 9]> = match region.try_into() {
                     Ok(r) => Box::new(r),
@@ -471,8 +510,12 @@ impl Streaming {
             world.dirty_light.remove(&(x, z));
             self.sequence += 1;
             self.lighting.insert((x, z), self.sequence);
-            self.light_snapshots.insert((x, z), self.light_edit_sequence);
-            self.submit(self.distance(x, z) * 4 + 1, Job::Light(x, z, region, self.sequence, self.sky_light));
+            self.light_snapshots
+                .insert((x, z), self.light_edit_sequence);
+            self.submit(
+                self.distance(x, z) * 4 + 1,
+                Job::Light(x, z, region, self.sequence, self.sky_light),
+            );
         }
         // Meshing once the column and its neighbours are lit.
         let dirty: Vec<_> = world.dirty_sections.iter().copied().collect();
@@ -489,7 +532,9 @@ impl Streaming {
             let region = columns
                 .entry((x, z))
                 .or_insert_with(|| Self::region(world, x, z));
-            let Some(region) = region.clone() else { continue };
+            let Some(region) = region.clone() else {
+                continue;
+            };
             world.dirty_sections.remove(&(x, sy, z));
             let first = self.meshed.insert((x, z));
             self.sequence += 1;
@@ -516,7 +561,13 @@ impl Streaming {
         if positions.is_empty() {
             return;
         }
-        let changed = crate::light::relight(&mut world.chunks, &self.light_tables, self.sky_light, &positions, false);
+        let changed = crate::light::relight(
+            &mut world.chunks,
+            &self.light_tables,
+            self.sky_light,
+            &positions,
+            false,
+        );
         Self::mark_light_changes(world, &changed);
         if !self.light_snapshots.is_empty() {
             for p in positions {
@@ -531,11 +582,19 @@ impl Streaming {
         let positions: Vec<(i32, i32, i32)> = self
             .light_log
             .iter()
-            .filter(|(seq, p)| *seq > snapshot && ((p.0 >> 4) - x).abs() <= 1 && ((p.2 >> 4) - z).abs() <= 1)
+            .filter(|(seq, p)| {
+                *seq > snapshot && ((p.0 >> 4) - x).abs() <= 1 && ((p.2 >> 4) - z).abs() <= 1
+            })
             .map(|(_, p)| *p)
             .collect();
         if !positions.is_empty() {
-            let changed = crate::light::relight(&mut world.chunks, &self.light_tables, self.sky_light, &positions, true);
+            let changed = crate::light::relight(
+                &mut world.chunks,
+                &self.light_tables,
+                self.sky_light,
+                &positions,
+                true,
+            );
             Self::mark_light_changes(world, &changed);
         }
         let oldest = self.light_snapshots.values().copied().min();
@@ -552,7 +611,11 @@ impl Streaming {
             for dz in -1..=1 {
                 for dy in -1..=1 {
                     for dx in -1..=1 {
-                        let s = ((y + dy - crate::chunk::MIN_Y) >> 4, (x + dx) >> 4, (z + dz) >> 4);
+                        let s = (
+                            (y + dy - crate::chunk::MIN_Y) >> 4,
+                            (x + dx) >> 4,
+                            (z + dz) >> 4,
+                        );
                         if last == Some(s) || !(0..SECTIONS as i32).contains(&s.0) {
                             continue;
                         }

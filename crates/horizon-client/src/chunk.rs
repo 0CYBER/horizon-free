@@ -111,7 +111,9 @@ impl Chunk {
         Self {
             x,
             z,
-            sections: (0..SECTIONS).map(|_| Arc::new(Section::default())).collect(),
+            sections: (0..SECTIONS)
+                .map(|_| Arc::new(Section::default()))
+                .collect(),
             biomes: Arc::new(vec![0; 16 * (HEIGHT as usize / 4)]),
             heights: Arc::new([MIN_Y as i16; 256]),
             lit: false,

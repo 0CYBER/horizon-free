@@ -42,7 +42,11 @@ pub fn component(v: &serde_json::Value) -> Text {
             let mut t = if let Some(s) = o.get("text").and_then(|s| s.as_str()) {
                 Text::legacy(s)
             } else if let Some(k) = o.get("translate").and_then(|s| s.as_str()) {
-                let args: Vec<Text> = o.get("with").and_then(|w| w.as_array()).map(|a| a.iter().map(component).collect()).unwrap_or_default();
+                let args: Vec<Text> = o
+                    .get("with")
+                    .and_then(|w| w.as_array())
+                    .map(|a| a.iter().map(component).collect())
+                    .unwrap_or_default();
                 Text::translate(k, &args)
             } else {
                 Text::empty()
@@ -51,7 +55,10 @@ pub fn component(v: &serde_json::Value) -> Text {
                 t.push(component(extra));
             }
             if let Some(c) = o.get("color").and_then(|c| c.as_str()) {
-                let rgb = crate::text::named_color(c).or_else(|| c.strip_prefix('#').and_then(|h| u32::from_str_radix(h, 16).ok()));
+                let rgb = crate::text::named_color(c).or_else(|| {
+                    c.strip_prefix('#')
+                        .and_then(|h| u32::from_str_radix(h, 16).ok())
+                });
                 if let Some(rgb) = rgb {
                     t = t.with_color(rgb);
                 }
@@ -66,7 +73,10 @@ pub fn component(v: &serde_json::Value) -> Text {
 fn format_of(v: &serde_json::Value) -> Option<(i64, i64)> {
     match v {
         serde_json::Value::Number(n) => Some((n.as_i64()?, 0)),
-        serde_json::Value::Array(a) => Some((a.first()?.as_i64()?, a.get(1).and_then(|m| m.as_i64()).unwrap_or(0))),
+        serde_json::Value::Array(a) => Some((
+            a.first()?.as_i64()?,
+            a.get(1).and_then(|m| m.as_i64()).unwrap_or(0),
+        )),
         _ => None,
     }
 }
@@ -75,11 +85,18 @@ fn format_of(v: &serde_json::Value) -> Option<(i64, i64)> {
 pub fn compatible(meta: &serde_json::Value) -> bool {
     let pack = &meta["pack"];
     let current = RESOURCE_FORMAT;
-    if let (Some(min), Some(max)) = (format_of(&pack["min_format"]), format_of(&pack["max_format"])) {
-        return min <= current && current <= (max.0, max.1.max(if max.1 == 0 { i64::MAX } else { max.1 }));
+    if let (Some(min), Some(max)) = (
+        format_of(&pack["min_format"]),
+        format_of(&pack["max_format"]),
+    ) {
+        return min <= current
+            && current <= (max.0, max.1.max(if max.1 == 0 { i64::MAX } else { max.1 }));
     }
     if let Some(range) = pack["supported_formats"].as_array()
-        && let (Some(lo), Some(hi)) = (range.first().and_then(|v| v.as_i64()), range.get(1).and_then(|v| v.as_i64()))
+        && let (Some(lo), Some(hi)) = (
+            range.first().and_then(|v| v.as_i64()),
+            range.get(1).and_then(|v| v.as_i64()),
+        )
     {
         return lo <= current.0 && current.0 <= hi;
     }
@@ -94,13 +111,22 @@ fn read_meta(source: &Source) -> Option<serde_json::Value> {
 }
 fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
     let meta = read_meta(&source)?;
-    Some(Pack { id, title, description: component(&meta["pack"]["description"]), compatible: compatible(&meta), source })
+    Some(Pack {
+        id,
+        title,
+        description: component(&meta["pack"]["description"]),
+        compatible: compatible(&meta),
+        source,
+    })
 }
 /// Built-in and `resourcepacks/` packs (vanilla itself excluded), sorted like
 /// the pack screen (built-ins first, then by name).
 pub fn discover(resources: &Path, packs_dir: &Path) -> Vec<Pack> {
     let mut out = Vec::new();
-    for (id, key) in [("programmer_art", "resourcePack.programmer_art.name"), ("high_contrast", "resourcePack.high_contrast.name")] {
+    for (id, key) in [
+        ("programmer_art", "resourcePack.programmer_art.name"),
+        ("high_contrast", "resourcePack.high_contrast.name"),
+    ] {
         let z = resources.join(format!("assets/minecraft/resourcepacks/{id}.zip"));
         if z.exists()
             && let Some(p) = pack(id.into(), Text::translate(key, &[]), Source::Zip(z))
@@ -136,7 +162,9 @@ fn pack_files(source: &Source) -> io::Result<BTreeMap<String, Option<PathBuf>>> 
         Source::Dir(d) => {
             let mut stack = vec![d.join("assets")];
             while let Some(dir) = stack.pop() {
-                let Ok(entries) = fs::read_dir(&dir) else { continue };
+                let Ok(entries) = fs::read_dir(&dir) else {
+                    continue;
+                };
                 for e in entries.flatten() {
                     let p = e.path();
                     if p.is_dir() {
@@ -163,7 +191,11 @@ fn link(target: &Path, at: &Path) -> io::Result<()> {
 }
 #[cfg(not(unix))]
 fn link(target: &Path, at: &Path) -> io::Result<()> {
-    if target.is_dir() { Ok(()) } else { fs::copy(target, at).map(|_| ()) }
+    if target.is_dir() {
+        Ok(())
+    } else {
+        fs::copy(target, at).map(|_| ())
+    }
 }
 /// Build `out` as `vanilla` with the packs' files layered on top (packs in
 /// load order, last wins). Untouched directories are symlinks into vanilla.
@@ -186,16 +218,48 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
             (1..parts.len()).map(move |n| parts[..n].join("/"))
         })
         .collect();
-    let zips: Vec<Option<Zip>> = packs.iter().map(|p| if let Source::Zip(z) = &p.source { Zip::open(z).ok() } else { None }).collect();
-    fn mirror(rel: &str, vanilla: &Path, out: &Path, touched: &BTreeSet<String>, files: &BTreeMap<String, (usize, Option<PathBuf>)>, zips: &[Option<Zip>]) -> io::Result<()> {
-        let src = if rel.is_empty() { vanilla.to_path_buf() } else { vanilla.join(rel) };
-        let dst = if rel.is_empty() { out.to_path_buf() } else { out.join(rel) };
+    let zips: Vec<Option<Zip>> = packs
+        .iter()
+        .map(|p| {
+            if let Source::Zip(z) = &p.source {
+                Zip::open(z).ok()
+            } else {
+                None
+            }
+        })
+        .collect();
+    fn mirror(
+        rel: &str,
+        vanilla: &Path,
+        out: &Path,
+        touched: &BTreeSet<String>,
+        files: &BTreeMap<String, (usize, Option<PathBuf>)>,
+        zips: &[Option<Zip>],
+    ) -> io::Result<()> {
+        let src = if rel.is_empty() {
+            vanilla.to_path_buf()
+        } else {
+            vanilla.join(rel)
+        };
+        let dst = if rel.is_empty() {
+            out.to_path_buf()
+        } else {
+            out.join(rel)
+        };
         fs::create_dir_all(&dst)?;
         let mut names: BTreeSet<String> = BTreeSet::new();
         if let Ok(entries) = fs::read_dir(&src) {
-            names.extend(entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()));
+            names.extend(
+                entries
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned()),
+            );
         }
-        let prefix = if rel.is_empty() { String::new() } else { format!("{rel}/") };
+        let prefix = if rel.is_empty() {
+            String::new()
+        } else {
+            format!("{rel}/")
+        };
         for f in files.keys().filter_map(|f| f.strip_prefix(&prefix)) {
             names.insert(f.split('/').next().unwrap_or("").to_owned());
         }
@@ -223,15 +287,24 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
 }
 /// The packs to apply for an options.txt `resourcePacks` list (bottom first).
 pub fn enabled(all: &[Pack], ids: &[String]) -> Vec<Pack> {
-    ids.iter().filter(|id| *id != "vanilla").filter_map(|id| all.iter().find(|p| &p.id == id).cloned()).collect()
+    ids.iter()
+        .filter(|id| *id != "vanilla")
+        .filter_map(|id| all.iter().find(|p| &p.id == id).cloned())
+        .collect()
 }
 /// Resource root for a pack selection: vanilla itself when no pack is on.
 pub fn resource_root(vanilla: &Path, packs: &[Pack], cache: &Path) -> PathBuf {
     if packs.is_empty() {
         return vanilla.to_path_buf();
     }
-    let key: String = packs.iter().map(|p| p.id.as_str()).collect::<Vec<_>>().join("|");
-    let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+    let key: String = packs
+        .iter()
+        .map(|p| p.id.as_str())
+        .collect::<Vec<_>>()
+        .join("|");
+    let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+    });
     let out = cache.join(format!("{hash:016x}"));
     match build_overlay(vanilla, packs, &out) {
         Ok(()) => out,
@@ -248,12 +321,21 @@ mod tests {
     #[test]
     fn compatibility_ranges() {
         let v = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
-        assert!(compatible(&v(r#"{"pack":{"min_format":97,"max_format":98}}"#)));
-        assert!(compatible(&v(r#"{"pack":{"min_format":[97,0],"max_format":[97,1]}}"#)));
-        assert!(!compatible(&v(r#"{"pack":{"min_format":[97,2],"max_format":99}}"#)));
+        assert!(compatible(&v(
+            r#"{"pack":{"min_format":97,"max_format":98}}"#
+        )));
+        assert!(compatible(&v(
+            r#"{"pack":{"min_format":[97,0],"max_format":[97,1]}}"#
+        )));
+        assert!(!compatible(&v(
+            r#"{"pack":{"min_format":[97,2],"max_format":99}}"#
+        )));
         assert!(compatible(&v(r#"{"pack":{"pack_format":97}}"#)));
         assert!(!compatible(&v(r#"{"pack":{"pack_format":34}}"#)));
-        assert_eq!(component(&v(r#"["a",{"text":"b","color":"red"}]"#)).plain(), "ab");
+        assert_eq!(
+            component(&v(r#"["a",{"text":"b","color":"red"}]"#)).plain(),
+            "ab"
+        );
     }
     #[test]
     fn overlay_layers_packs_over_vanilla() {
@@ -262,22 +344,47 @@ mod tests {
         let vanilla = base.join("vanilla");
         fs::create_dir_all(vanilla.join("assets/minecraft/textures/block")).unwrap();
         fs::create_dir_all(vanilla.join("assets/minecraft/lang")).unwrap();
-        fs::write(vanilla.join("assets/minecraft/textures/block/stone.png"), b"vanilla").unwrap();
-        fs::write(vanilla.join("assets/minecraft/textures/block/dirt.png"), b"vanilla dirt").unwrap();
+        fs::write(
+            vanilla.join("assets/minecraft/textures/block/stone.png"),
+            b"vanilla",
+        )
+        .unwrap();
+        fs::write(
+            vanilla.join("assets/minecraft/textures/block/dirt.png"),
+            b"vanilla dirt",
+        )
+        .unwrap();
         fs::write(vanilla.join("assets/minecraft/lang/en_us.json"), b"{}").unwrap();
         fs::write(vanilla.join("facts.json"), b"[]").unwrap();
         let pack_dir = base.join("packs/Mine");
         fs::create_dir_all(pack_dir.join("assets/minecraft/textures/block")).unwrap();
-        fs::write(pack_dir.join("pack.mcmeta"), br#"{"pack":{"description":"mine","pack_format":97}}"#).unwrap();
-        fs::write(pack_dir.join("assets/minecraft/textures/block/stone.png"), b"pack").unwrap();
+        fs::write(
+            pack_dir.join("pack.mcmeta"),
+            br#"{"pack":{"description":"mine","pack_format":97}}"#,
+        )
+        .unwrap();
+        fs::write(
+            pack_dir.join("assets/minecraft/textures/block/stone.png"),
+            b"pack",
+        )
+        .unwrap();
         let packs = discover(&vanilla, &base.join("packs"));
         assert_eq!(packs.len(), 1);
         assert_eq!(packs[0].id, "file/Mine");
         let out = base.join("overlay");
         build_overlay(&vanilla, &packs, &out).unwrap();
-        assert_eq!(fs::read(out.join("assets/minecraft/textures/block/stone.png")).unwrap(), b"pack");
-        assert_eq!(fs::read(out.join("assets/minecraft/textures/block/dirt.png")).unwrap(), b"vanilla dirt");
-        assert_eq!(fs::read(out.join("assets/minecraft/lang/en_us.json")).unwrap(), b"{}");
+        assert_eq!(
+            fs::read(out.join("assets/minecraft/textures/block/stone.png")).unwrap(),
+            b"pack"
+        );
+        assert_eq!(
+            fs::read(out.join("assets/minecraft/textures/block/dirt.png")).unwrap(),
+            b"vanilla dirt"
+        );
+        assert_eq!(
+            fs::read(out.join("assets/minecraft/lang/en_us.json")).unwrap(),
+            b"{}"
+        );
         assert_eq!(fs::read(out.join("facts.json")).unwrap(), b"[]");
         let _ = fs::remove_dir_all(base);
     }

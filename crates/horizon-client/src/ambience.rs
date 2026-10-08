@@ -25,7 +25,8 @@ pub struct AmbientSounds {
 impl AmbientSounds {
     fn parse(v: &Value) -> Self {
         let mood = &v["mood"];
-        let addition = |a: &Value| Some((a["sound"].as_str()?.to_owned(), a["tick_chance"].as_f64()?));
+        let addition =
+            |a: &Value| Some((a["sound"].as_str()?.to_owned(), a["tick_chance"].as_f64()?));
         Self {
             r#loop: v["loop"].as_str().map(str::to_owned),
             mood: mood["sound"].as_str().map(|sound| Mood {
@@ -51,7 +52,9 @@ pub struct AmbientTables {
 impl AmbientTables {
     pub fn load(root: &Path) -> Self {
         let read = |dir: &str| -> HashMap<String, AmbientSounds> {
-            let Ok(entries) = fs::read_dir(root.join("data/minecraft").join(dir)) else { return HashMap::new() };
+            let Ok(entries) = fs::read_dir(root.join("data/minecraft").join(dir)) else {
+                return HashMap::new();
+            };
             entries
                 .flatten()
                 .filter_map(|e| {
@@ -63,11 +66,18 @@ impl AmbientTables {
                 })
                 .collect()
         };
-        Self { dimensions: read("dimension_type"), biomes: read("worldgen/biome") }
+        Self {
+            dimensions: read("dimension_type"),
+            biomes: read("worldgen/biome"),
+        }
     }
     /// `EnvironmentAttributes.AMBIENT_SOUNDS` at a position.
     pub fn get(&self, dimension: &str, biome: &str) -> AmbientSounds {
-        self.biomes.get(biome).or_else(|| self.dimensions.get(dimension)).cloned().unwrap_or_default()
+        self.biomes
+            .get(biome)
+            .or_else(|| self.dimensions.get(dimension))
+            .cloned()
+            .unwrap_or_default()
     }
 }
 /// The sound engine side of the handlers.
@@ -147,7 +157,9 @@ pub struct Ambience {
 }
 impl Default for Ambience {
     fn default() -> Self {
-        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as i64);
         Self::new(seed)
     }
 }
@@ -191,7 +203,9 @@ impl Ambience {
             if let Some((id, _)) = self.underwater_loop.take() {
                 out.stop(id);
             }
-            self.underwater_loop = out.play_tracked("minecraft:ambient.underwater.loop", 0.0, true).map(|id| (id, 0));
+            self.underwater_loop = out
+                .play_tracked("minecraft:ambient.underwater.loop", 0.0, true)
+                .map(|id| (id, 0));
         }
         if self.was_underwater && !ctx.underwater {
             out.play_at("minecraft:ambient.underwater.exit", feet);
@@ -233,7 +247,15 @@ impl Ambience {
             if let Some(event) = &sounds.r#loop {
                 if !self.loops.iter().any(|(e, _)| e == event) {
                     let id = out.play_tracked(event, 0.0, true);
-                    self.loops.push((event.clone(), LoopSound { id, fade: 0, direction: 0, stopped: false }));
+                    self.loops.push((
+                        event.clone(),
+                        LoopSound {
+                            id,
+                            fade: 0,
+                            direction: 0,
+                            stopped: false,
+                        },
+                    ));
                 }
                 if let Some((_, l)) = self.loops.iter_mut().find(|(e, _)| e == event) {
                     l.fade_in();
@@ -350,8 +372,18 @@ mod tests {
             self.at.push(event.to_owned());
         }
     }
-    fn ctx<'a>(sounds: &'a AmbientSounds, underwater: bool, light: &'a dyn Fn([i32; 3]) -> (u8, u8)) -> AmbientContext<'a> {
-        AmbientContext { sounds, position: [0.5, 10.0, 0.5], eye_y: 11.62, underwater, light }
+    fn ctx<'a>(
+        sounds: &'a AmbientSounds,
+        underwater: bool,
+        light: &'a dyn Fn([i32; 3]) -> (u8, u8),
+    ) -> AmbientContext<'a> {
+        AmbientContext {
+            sounds,
+            position: [0.5, 10.0, 0.5],
+            eye_y: 11.62,
+            underwater,
+            light,
+        }
     }
 
     #[test]
@@ -359,22 +391,34 @@ mod tests {
         let mut a = Ambience::new(1);
         let mut out = Fake::default();
         let dark = |_: [i32; 3]| (15u8, 0u8);
-        let crimson = AmbientSounds { r#loop: Some("crimson".into()), ..Default::default() };
+        let crimson = AmbientSounds {
+            r#loop: Some("crimson".into()),
+            ..Default::default()
+        };
         for _ in 0..40 {
             a.tick(&ctx(&crimson, false, &dark), &mut out);
         }
         assert_eq!(out.live.values().map(|v| v.1).collect::<Vec<_>>(), [1.0]);
-        let warped = AmbientSounds { r#loop: Some("warped".into()), ..Default::default() };
+        let warped = AmbientSounds {
+            r#loop: Some("warped".into()),
+            ..Default::default()
+        };
         for _ in 0..20 {
             a.tick(&ctx(&warped, false, &dark), &mut out);
         }
         let mut volumes: Vec<_> = out.live.values().map(|v| (v.0.clone(), v.1)).collect();
         volumes.sort_by(|x, y| x.0.cmp(&y.0));
-        assert_eq!(volumes, [("crimson".to_owned(), 0.5), ("warped".to_owned(), 0.5)]);
+        assert_eq!(
+            volumes,
+            [("crimson".to_owned(), 0.5), ("warped".to_owned(), 0.5)]
+        );
         for _ in 0..30 {
             a.tick(&ctx(&warped, false, &dark), &mut out);
         }
-        assert_eq!(out.live.values().map(|v| v.0.as_str()).collect::<Vec<_>>(), ["warped"]);
+        assert_eq!(
+            out.live.values().map(|v| v.0.as_str()).collect::<Vec<_>>(),
+            ["warped"]
+        );
     }
 
     #[test]
@@ -383,7 +427,12 @@ mod tests {
         let mut out = Fake::default();
         let cave = |_: [i32; 3]| (0u8, 0u8);
         let sounds = AmbientSounds {
-            mood: Some(Mood { sound: "minecraft:ambient.cave".into(), tick_delay: 6000, block_search_extent: 8, offset: 2.0 }),
+            mood: Some(Mood {
+                sound: "minecraft:ambient.cave".into(),
+                tick_delay: 6000,
+                block_search_extent: 8,
+                offset: 2.0,
+            }),
             ..Default::default()
         };
         // Block light 0: +1/6000 per tick (float), so the sound plays around tick 6000.

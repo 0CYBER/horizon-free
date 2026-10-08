@@ -674,7 +674,10 @@ fn try_generate(
                 super::Rotation::Clockwise180 => (-5, -5),
                 super::Rotation::Counterclockwise90 => (5, -5),
             };
-            let y = corner_heights(context, x, sx, z, sz).into_iter().min().unwrap_or(0);
+            let y = corner_heights(context, x, sx, z, sz)
+                .into_iter()
+                .min()
+                .unwrap_or(0);
             if y < 60 {
                 return None;
             }
@@ -775,12 +778,18 @@ fn try_generate(
                 super::Rotation::Clockwise180 => (-5, -5),
                 super::Rotation::Counterclockwise90 => (5, -5),
             };
-            let y = corner_heights(context, x, sx, z, sz).into_iter().min().unwrap_or(0);
+            let y = corner_heights(context, x, sx, z, sz)
+                .into_iter()
+                .min()
+                .unwrap_or(0);
             if y < 60 {
                 return None;
             }
             let start = [x, y, z];
-            if !def.biomes.contains(&context.noise_biome(start.map(|v| v >> 2))) {
+            if !def
+                .biomes
+                .contains(&context.noise_biome(start.map(|v| v >> 2)))
+            {
                 return None;
             }
             let pieces = super::end_city::pieces(resources, start, rotation, &mut random)?;

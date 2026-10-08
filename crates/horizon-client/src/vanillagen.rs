@@ -25,13 +25,29 @@ enum VanillaProto {
     Failed(i32, i32),
 }
 impl VanillaTerrain {
-    pub fn new(dir: &Path, registry: &'static BlockRegistry, biomes: &Biomes, seed: i64) -> crate::Result<Self> {
+    pub fn new(
+        dir: &Path,
+        registry: &'static BlockRegistry,
+        biomes: &Biomes,
+        seed: i64,
+    ) -> crate::Result<Self> {
         Self::for_dimension(dir, registry, biomes, seed, "minecraft:overworld")
     }
-    pub fn for_dimension(dir: &Path, registry: &'static BlockRegistry, biomes: &Biomes, seed: i64, dimension: &str) -> crate::Result<Self> {
+    pub fn for_dimension(
+        dir: &Path,
+        registry: &'static BlockRegistry,
+        biomes: &Biomes,
+        seed: i64,
+        dimension: &str,
+    ) -> crate::Result<Self> {
         let data: Arc<GeneratorData> = shared_data(dir, registry)?;
-        let biome_map = data.biome_names().iter().map(|name| biomes.id(name)).collect();
-        let generator = OverworldGenerator::for_dimension(data, seed, "minecraft:normal", dimension)?;
+        let biome_map = data
+            .biome_names()
+            .iter()
+            .map(|name| biomes.id(name))
+            .collect();
+        let generator =
+            OverworldGenerator::for_dimension(data, seed, "minecraft:normal", dimension)?;
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             eprintln!(
@@ -46,7 +62,11 @@ impl VanillaTerrain {
             }
         }
         let loot = dir.parent().and_then(crate::structure_blocks::loot_data);
-        Ok(Self { generator, biome_map, loot })
+        Ok(Self {
+            generator,
+            biome_map,
+            loot,
+        })
     }
     /// Concentric ring positions of a structure set (strongholds), once known.
     pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
@@ -55,8 +75,12 @@ impl VanillaTerrain {
 }
 /// The worldgen bundle at `dir`, loaded once and shared by every generator
 /// and by live feature placement (sapling growth, bone meal).
-pub fn shared_data(dir: &Path, registry: &'static BlockRegistry) -> crate::Result<Arc<GeneratorData>> {
-    static CACHE: std::sync::Mutex<Vec<(std::path::PathBuf, Arc<GeneratorData>)>> = std::sync::Mutex::new(Vec::new());
+pub fn shared_data(
+    dir: &Path,
+    registry: &'static BlockRegistry,
+) -> crate::Result<Arc<GeneratorData>> {
+    static CACHE: std::sync::Mutex<Vec<(std::path::PathBuf, Arc<GeneratorData>)>> =
+        std::sync::Mutex::new(Vec::new());
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, data)) = cache.iter().find(|(path, _)| path == dir) {
         return Ok(data.clone());
@@ -126,7 +150,10 @@ impl ChunkGenerator for VanillaTerrain {
         let mut out = Chunk::empty(pos.x, pos.z);
         let (bx, bz) = (pos.x * 16, pos.z * 16);
         // Only the generated range (the Nether is 0..256) is copied.
-        let (lo, hi) = (chunk.terrain.min_y().max(MIN_Y), (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT));
+        let (lo, hi) = (
+            chunk.terrain.min_y().max(MIN_Y),
+            (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
+        );
         for y in lo..hi {
             for z in 0..16 {
                 for x in 0..16 {
@@ -144,7 +171,8 @@ impl ChunkGenerator for VanillaTerrain {
                 let p = i32::from(packed);
                 let y = sy + ((p >> 4) & 15);
                 if (lo..hi).contains(&y) {
-                    out.postprocess.push([bx + (p & 15), y, bz + ((p >> 8) & 15)]);
+                    out.postprocess
+                        .push([bx + (p & 15), y, bz + ((p >> 8) & 15)]);
                 }
             }
         }
@@ -155,7 +183,8 @@ impl ChunkGenerator for VanillaTerrain {
                     let y = (MIN_Y + qy * 4).clamp(lo, hi - 1);
                     let id = chunk.biome_id_at(bx + qx * 4, y, bz + qz * 4);
                     let index = id.0 as usize;
-                    biomes[(qy * 16 + qz * 4 + qx) as usize] = self.biome_map.get(index).copied().unwrap_or(0);
+                    biomes[(qy * 16 + qz * 4 + qx) as usize] =
+                        self.biome_map.get(index).copied().unwrap_or(0);
                 }
             }
         }

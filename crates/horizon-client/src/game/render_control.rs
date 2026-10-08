@@ -105,7 +105,12 @@ impl Game<'_> {
             }
             "signedit" => {
                 let key = (int(1)?, int(2)?, int(3)?);
-                let name = self.res.facts.get(self.world.block(key.0, key.1, key.2)).name.clone();
+                let name = self
+                    .res
+                    .facts
+                    .get(self.world.block(key.0, key.1, key.2))
+                    .name
+                    .clone();
                 let entity = horizon_client::containers::BlockEntity::for_block(&name)
                     .filter(|e| matches!(e, horizon_client::containers::BlockEntity::Sign(_)))
                     .ok_or("no sign there")?;

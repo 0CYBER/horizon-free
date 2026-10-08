@@ -35,7 +35,11 @@ fn texts(args: &[Text]) -> Vec<Text> {
 }
 /// Java's String.valueOf(float/double) for the values commands print.
 fn java_float(v: f64) -> String {
-    if v == v.trunc() && v.abs() < 1.0e7 { format!("{v:.1}") } else { format!("{v}") }
+    if v == v.trunc() && v.abs() < 1.0e7 {
+        format!("{v:.1}")
+    } else {
+        format!("{v}")
+    }
 }
 /// String.format(Locale.ROOT, "%f").
 fn format_double(v: f64) -> String {
@@ -69,7 +73,10 @@ impl Game<'_> {
         self.command_failure(e.message.clone());
         let Some(input) = &e.input else { return };
         let cursor = e.cursor.min(input.len());
-        let suggest = Style { suggest: Some(format!("/{command}")), ..Style::default() };
+        let suggest = Style {
+            suggest: Some(format!("/{command}")),
+            ..Style::default()
+        };
         let mut context = Text::empty();
         if cursor > 10 {
             context.push("...");
@@ -77,9 +84,17 @@ impl Game<'_> {
         let start = input.floor_char_boundary(cursor.saturating_sub(10));
         context.push(&input[start..cursor]);
         if cursor < input.len() {
-            context.push(Text::literal(&input[cursor..]).with_color(text::RED).underlined());
+            context.push(
+                Text::literal(&input[cursor..])
+                    .with_color(text::RED)
+                    .underlined(),
+            );
         }
-        context.push(Text::translate("command.context.here", &[]).with_color(text::RED).italic());
+        context.push(
+            Text::translate("command.context.here", &[])
+                .with_color(text::RED)
+                .italic(),
+        );
         self.command_failure(context.with_color(text::GRAY).with_style(&suggest));
     }
     /// CommandSourceStack.sendFailure: red text.
@@ -108,16 +123,21 @@ impl Game<'_> {
         }
     }
     fn position_arg(&self, ctx: &Context, name: &str) -> Option<[f64; 3]> {
-        self.coords(ctx, name).map(|c| c.position(self.source_position(), self.source_rotation()))
+        self.coords(ctx, name)
+            .map(|c| c.position(self.source_position(), self.source_rotation()))
     }
     /// BlockPosArgument.getLoadedBlockPos.
     fn block_pos_arg(&self, ctx: &Context, name: &str) -> R<[i32; 3]> {
-        let c = self.coords(ctx, name).ok_or_else(|| err("argument.pos.missing.int", &[]))?;
+        let c = self
+            .coords(ctx, name)
+            .ok_or_else(|| err("argument.pos.missing.int", &[]))?;
         let p = c.block(self.source_position(), self.source_rotation());
         if !self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4)) {
             return Err(err("argument.pos.unloaded", &[]));
         }
-        if p[1] < horizon_client::chunk::MIN_Y || p[1] >= horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT {
+        if p[1] < horizon_client::chunk::MIN_Y
+            || p[1] >= horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT
+        {
             return Err(err("argument.pos.outofworld", &[]));
         }
         Ok(p)
@@ -132,17 +152,40 @@ impl Game<'_> {
 
     fn target_position(&self, t: Target) -> Option<[f64; 3]> {
         match t {
-            Target::Player => self.player.as_ref().map(|p| [p.position.x, p.position.y, p.position.z]),
-            Target::Mob(id) => self.mobs.iter().find(|m| m.id == id).map(|m| [m.position.x, m.position.y, m.position.z]),
-            Target::Item(id) => self.dropped.iter().find(|i| i.id == id).map(|i| [i.position.x, i.position.y, i.position.z]),
-            Target::Orb(i) => self.orbs.get(i).map(|o| [o.position.x, o.position.y, o.position.z]),
-            Target::Arrow(i) => self.arrows.get(i).map(|a| [a.position.x, a.position.y, a.position.z]),
+            Target::Player => self
+                .player
+                .as_ref()
+                .map(|p| [p.position.x, p.position.y, p.position.z]),
+            Target::Mob(id) => self
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| [m.position.x, m.position.y, m.position.z]),
+            Target::Item(id) => self
+                .dropped
+                .iter()
+                .find(|i| i.id == id)
+                .map(|i| [i.position.x, i.position.y, i.position.z]),
+            Target::Orb(i) => self
+                .orbs
+                .get(i)
+                .map(|o| [o.position.x, o.position.y, o.position.z]),
+            Target::Arrow(i) => self
+                .arrows
+                .get(i)
+                .map(|a| [a.position.x, a.position.y, a.position.z]),
         }
     }
     fn target_type(&self, t: Target) -> String {
         match t {
             Target::Player => "minecraft:player".into(),
-            Target::Mob(id) => self.mobs.iter().find(|m| m.id == id).map_or_else(String::new, |m| horizon_client::command::args::normalize(&m.kind.id)),
+            Target::Mob(id) => self
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .map_or_else(String::new, |m| {
+                    horizon_client::command::args::normalize(&m.kind.id)
+                }),
             Target::Item(_) => "minecraft:item".into(),
             Target::Orb(_) => "minecraft:experience_orb".into(),
             Target::Arrow(_) => "minecraft:arrow".into(),
@@ -153,7 +196,12 @@ impl Game<'_> {
         match t {
             Target::Player => Text::literal(PLAYER_NAME),
             Target::Item(id) => {
-                let item = self.dropped.iter().find(|i| i.id == id).map(|i| i.stack.item.to_string()).unwrap_or_default();
+                let item = self
+                    .dropped
+                    .iter()
+                    .find(|i| i.id == id)
+                    .map(|i| i.stack.item.to_string())
+                    .unwrap_or_default();
                 Text::literal(self.res.names.item(&item))
             }
             other => {
@@ -165,18 +213,31 @@ impl Game<'_> {
     /// EntitySelector.findEntities.
     fn select(&mut self, s: &Selector) -> Vec<Target> {
         if let Some(name) = &s.player_name {
-            return if name.eq_ignore_ascii_case(PLAYER_NAME) && self.player.is_some() { vec![Target::Player] } else { Vec::new() };
+            return if name.eq_ignore_ascii_case(PLAYER_NAME) && self.player.is_some() {
+                vec![Target::Player]
+            } else {
+                Vec::new()
+            };
         }
         let origin = {
             let p = self.source_position();
-            [s.pos[0].unwrap_or(p[0]), s.pos[1].unwrap_or(p[1]), s.pos[2].unwrap_or(p[2])]
+            [
+                s.pos[0].unwrap_or(p[0]),
+                s.pos[1].unwrap_or(p[1]),
+                s.pos[2].unwrap_or(p[2]),
+            ]
         };
         let mut candidates: Vec<Target> = Vec::new();
         if self.player.is_some() {
             candidates.push(Target::Player);
         }
         if s.kind != 's' {
-            candidates.extend(self.mobs.iter().filter(|m| m.death_time == 0).map(|m| Target::Mob(m.id)));
+            candidates.extend(
+                self.mobs
+                    .iter()
+                    .filter(|m| m.death_time == 0)
+                    .map(|m| Target::Mob(m.id)),
+            );
             candidates.extend(self.dropped.iter().map(|i| Target::Item(i.id)));
             candidates.extend((0..self.orbs.len()).map(Target::Orb));
             candidates.extend((0..self.arrows.len()).map(Target::Arrow));
@@ -190,12 +251,21 @@ impl Game<'_> {
                 let ty = self.target_type(t);
                 // type=: every positive must match, no negative may match.
                 for (want, neg) in &s.types {
-                    let matches = if let Some(tag) = want.strip_prefix('#') { self.entity_tag_matches(tag, &ty) } else { *want == ty };
+                    let matches = if let Some(tag) = want.strip_prefix('#') {
+                        self.entity_tag_matches(tag, &ty)
+                    } else {
+                        *want == ty
+                    };
                     if matches == *neg {
                         return None;
                     }
                 }
-                if !s.include_entities && t != Target::Player && s.types.iter().all(|(w, n)| *n || w != &ty) && s.kind != 'e' && s.kind != 'n' {
+                if !s.include_entities
+                    && t != Target::Player
+                    && s.types.iter().all(|(w, n)| *n || w != &ty)
+                    && s.kind != 'e'
+                    && s.kind != 'n'
+                {
                     return None;
                 }
                 for (name, neg) in &s.names {
@@ -210,7 +280,10 @@ impl Game<'_> {
                     }
                 }
                 if let Some((lo, hi)) = s.level {
-                    if t != Target::Player || lo.is_some_and(|l| level < l) || hi.is_some_and(|h| level > h) {
+                    if t != Target::Player
+                        || lo.is_some_and(|l| level < l)
+                        || hi.is_some_and(|h| level > h)
+                    {
                         return None;
                     }
                 }
@@ -220,7 +293,9 @@ impl Game<'_> {
                         return None;
                     }
                 }
-                let d2 = (p[0] - origin[0]).powi(2) + (p[1] - origin[1]).powi(2) + (p[2] - origin[2]).powi(2);
+                let d2 = (p[0] - origin[0]).powi(2)
+                    + (p[1] - origin[1]).powi(2)
+                    + (p[2] - origin[2]).powi(2);
                 if let Some((lo, hi)) = s.distance
                     && (lo.is_some_and(|l| d2 < l * l) || hi.is_some_and(|h| d2 > h * h))
                 {
@@ -229,7 +304,10 @@ impl Game<'_> {
                 if s.delta.iter().any(Option::is_some) {
                     let d = s.delta.map(|v| v.unwrap_or(0.0));
                     for i in 0..3 {
-                        let (a, b) = (origin[i].min(origin[i] + d[i]), origin[i].max(origin[i] + d[i]) + 1.0);
+                        let (a, b) = (
+                            origin[i].min(origin[i] + d[i]),
+                            origin[i].max(origin[i] + d[i]) + 1.0,
+                        );
                         if p[i] < a || p[i] >= b {
                             return None;
                         }
@@ -249,20 +327,43 @@ impl Game<'_> {
             }
             Sort::Arbitrary => {}
         }
-        out.into_iter().take(s.limit.max(1)).map(|(t, _)| t).collect()
+        out.into_iter()
+            .take(s.limit.max(1))
+            .map(|(t, _)| t)
+            .collect()
     }
     fn entity_tag_matches(&self, tag: &str, ty: &str) -> bool {
-        let path = self.options.resources.join(format!("data/minecraft/tags/entity_type/{}.json", tag.trim_start_matches("minecraft:")));
+        let path = self.options.resources.join(format!(
+            "data/minecraft/tags/entity_type/{}.json",
+            tag.trim_start_matches("minecraft:")
+        ));
         serde_json::from_slice::<serde_json::Value>(&std::fs::read(path).unwrap_or_default())
             .ok()
-            .is_some_and(|v| v["values"].as_array().is_some_and(|a| a.iter().any(|e| e.as_str() == Some(ty))))
+            .is_some_and(|v| {
+                v["values"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|e| e.as_str() == Some(ty)))
+            })
     }
     /// EntityArgument.getEntities / getPlayers / getEntity / getPlayer.
     fn entities(&mut self, ctx: &Context, name: &str, players: bool) -> R<Vec<Target>> {
-        let Some(Arg::Entity(s)) = ctx.get(name).cloned() else { return Ok(vec![Target::Player]) };
-        let found: Vec<Target> = self.select(&s).into_iter().filter(|t| !players || *t == Target::Player).collect();
+        let Some(Arg::Entity(s)) = ctx.get(name).cloned() else {
+            return Ok(vec![Target::Player]);
+        };
+        let found: Vec<Target> = self
+            .select(&s)
+            .into_iter()
+            .filter(|t| !players || *t == Target::Player)
+            .collect();
         if found.is_empty() {
-            return Err(err(if players { "argument.entity.notfound.player" } else { "argument.entity.notfound.entity" }, &[]));
+            return Err(err(
+                if players {
+                    "argument.entity.notfound.player"
+                } else {
+                    "argument.entity.notfound.entity"
+                },
+                &[],
+            ));
         }
         Ok(found)
     }
@@ -273,12 +374,20 @@ impl Game<'_> {
             "help" => self.cmd_help(ctx),
             "gamemode" => self.cmd_gamemode(ctx),
             "defaultgamemode" => {
-                let Some(Arg::GameMode(m)) = ctx.get("gamemode") else { return Ok(0) };
-                self.feedback(Text::translate("commands.defaultgamemode.success", &[Text::translate(&format!("gameMode.{}", m.name()), &[])]));
+                let Some(Arg::GameMode(m)) = ctx.get("gamemode") else {
+                    return Ok(0);
+                };
+                self.feedback(Text::translate(
+                    "commands.defaultgamemode.success",
+                    &[Text::translate(&format!("gameMode.{}", m.name()), &[])],
+                ));
                 Ok(0)
             }
             "give" => self.cmd_give(ctx),
-            "teleport.location" | "teleport.destination" | "teleport.targets.location" | "teleport.targets.destination" => self.cmd_teleport(id, ctx),
+            "teleport.location"
+            | "teleport.destination"
+            | "teleport.targets.location"
+            | "teleport.targets.destination" => self.cmd_teleport(id, ctx),
             id if id.starts_with("time.") => self.cmd_time(id, ctx),
             "weather" => self.cmd_weather(ctx),
             "kill" => self.cmd_kill(ctx),
@@ -294,8 +403,14 @@ impl Game<'_> {
             "difficulty" => self.cmd_difficulty(ctx),
             "seed" => {
                 let seed = self.level.seed.to_string();
-                let green = Style { color: Some(text::GREEN), suggest: None, ..Style::default() };
-                let value = Text::literal("[").append(Text::styled(seed.clone(), green)).append("]");
+                let green = Style {
+                    color: Some(text::GREEN),
+                    suggest: None,
+                    ..Style::default()
+                };
+                let value = Text::literal("[")
+                    .append(Text::styled(seed.clone(), green))
+                    .append("]");
                 self.system_message(Text::translate("commands.seed.success", &[value]));
                 Ok(self.level.seed as i32)
             }
@@ -306,11 +421,20 @@ impl Game<'_> {
             "say" | "me" | "msg" => self.cmd_say(id, ctx),
             "list" => {
                 let names = if ctx.has("uuids") {
-                    Text::translate("commands.list.nameAndId", &[Text::literal(PLAYER_NAME), Text::literal("00000000-0000-0000-0000-000000000000")])
+                    Text::translate(
+                        "commands.list.nameAndId",
+                        &[
+                            Text::literal(PLAYER_NAME),
+                            Text::literal("00000000-0000-0000-0000-000000000000"),
+                        ],
+                    )
                 } else {
                     Text::literal(PLAYER_NAME)
                 };
-                self.system_message(Text::translate("commands.list.players", &[Text::literal("1"), Text::literal("8"), names]));
+                self.system_message(Text::translate(
+                    "commands.list.players",
+                    &[Text::literal("1"), Text::literal("8"), names],
+                ));
                 Ok(1)
             }
             _ => Err(err("command.failed", &[])),
@@ -359,8 +483,14 @@ impl Game<'_> {
         true
     }
     fn cmd_gamemode(&mut self, ctx: &Context) -> R<i32> {
-        let Some(Arg::GameMode(mode)) = ctx.get("gamemode").cloned() else { return Ok(0) };
-        let targets = if ctx.get("target").is_some() { self.entities(ctx, "target", true)? } else { vec![Target::Player] };
+        let Some(Arg::GameMode(mode)) = ctx.get("gamemode").cloned() else {
+            return Ok(0);
+        };
+        let targets = if ctx.get("target").is_some() {
+            self.entities(ctx, "target", true)?
+        } else {
+            vec![Target::Player]
+        };
         let mut count = 0;
         for t in targets {
             if t != Target::Player || !self.set_game_mode(mode) {
@@ -369,10 +499,16 @@ impl Game<'_> {
             count += 1;
             let mode_name = Text::translate(&format!("gameMode.{}", mode.name()), &[]);
             if ctx.get("target").is_none() {
-                self.feedback(Text::translate("commands.gamemode.success.self", &[mode_name]));
+                self.feedback(Text::translate(
+                    "commands.gamemode.success.self",
+                    &[mode_name],
+                ));
             } else {
                 self.system_message(Text::translate("gameMode.changed", &[mode_name.clone()]));
-                self.feedback(Text::translate("commands.gamemode.success.other", &[Text::literal(PLAYER_NAME), mode_name]));
+                self.feedback(Text::translate(
+                    "commands.gamemode.success.other",
+                    &[Text::literal(PLAYER_NAME), mode_name],
+                ));
             }
         }
         Ok(count)
@@ -386,32 +522,60 @@ impl Game<'_> {
             "epic" => text::LIGHT_PURPLE,
             _ => text::WHITE,
         };
-        Text::literal("[").append(Text::literal(self.res.names.item(item))).append("]").with_color(color)
+        Text::literal("[")
+            .append(Text::literal(self.res.names.item(item)))
+            .append("]")
+            .with_color(color)
     }
     fn item_rarity(&self, item: &str) -> String {
-        static RARITY: std::sync::OnceLock<std::collections::HashMap<String, String>> = std::sync::OnceLock::new();
+        static RARITY: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+            std::sync::OnceLock::new();
         let map = RARITY.get_or_init(|| {
-            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(self.options.resources.join("items.json")).unwrap_or_default()).unwrap_or_default();
+            let v: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(self.options.resources.join("items.json")).unwrap_or_default(),
+            )
+            .unwrap_or_default();
             v.as_object()
-                .map(|o| o.iter().filter_map(|(k, c)| c["minecraft:rarity"].as_str().map(|r| (k.clone(), r.to_owned()))).collect())
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, c)| {
+                            c["minecraft:rarity"]
+                                .as_str()
+                                .map(|r| (k.clone(), r.to_owned()))
+                        })
+                        .collect()
+                })
                 .unwrap_or_default()
         });
         map.get(item).cloned().unwrap_or_else(|| "common".into())
     }
     fn cmd_give(&mut self, ctx: &Context) -> R<i32> {
-        let Some(Arg::Item(ItemInput { id, .. })) = ctx.get("item").cloned() else { return Ok(0) };
+        let Some(Arg::Item(ItemInput { id, .. })) = ctx.get("item").cloned() else {
+            return Ok(0);
+        };
         let count = Self::int(ctx, "count").unwrap_or(1);
         let targets = self.entities(ctx, "targets", true)?;
         let max_stack = self.res.items.get(&id).map_or(64, |i| i.max_stack) as i32;
         if count > max_stack * 100 {
-            return Err(CommandError::new(Text::translate("commands.give.failed.toomanyitems", &[Text::literal((max_stack * 100).to_string()), self.item_display_name(&id)])));
+            return Err(CommandError::new(Text::translate(
+                "commands.give.failed.toomanyitems",
+                &[
+                    Text::literal((max_stack * 100).to_string()),
+                    self.item_display_name(&id),
+                ],
+            )));
         }
         for _ in &targets {
             let mut remaining = count;
             while remaining > 0 {
                 let size = remaining.min(max_stack);
                 remaining -= size;
-                let left = self.give(ItemStack { item: id.as_str().into(), count: size as u32, damage: 0, extra: None });
+                let left = self.give(ItemStack {
+                    item: id.as_str().into(),
+                    count: size as u32,
+                    damage: 0,
+                    extra: None,
+                });
                 if let Some(rest) = left {
                     // Inventory full: drop the rest at the player's feet without pickup delay.
                     let p = self.source_position();
@@ -420,15 +584,30 @@ impl Game<'_> {
                     let r = &mut self.world.random;
                     let pitch = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
                     let p = self.source_position();
-                    self.audio.play("minecraft:entity.item.pickup", Some(p), 0.2, pitch);
+                    self.audio
+                        .play("minecraft:entity.item.pickup", Some(p), 0.2, pitch);
                 }
             }
         }
         let name = self.item_display_name(&id);
         let message = if targets.len() == 1 {
-            Text::translate("commands.give.success.single", &[Text::literal(count.to_string()), name, Text::literal(PLAYER_NAME)])
+            Text::translate(
+                "commands.give.success.single",
+                &[
+                    Text::literal(count.to_string()),
+                    name,
+                    Text::literal(PLAYER_NAME),
+                ],
+            )
         } else {
-            Text::translate("commands.give.success.multiple", &texts(&[Text::literal(count.to_string()), name, Text::literal(targets.len().to_string())]))
+            Text::translate(
+                "commands.give.success.multiple",
+                &texts(&[
+                    Text::literal(count.to_string()),
+                    name,
+                    Text::literal(targets.len().to_string()),
+                ]),
+            )
         };
         self.feedback(message);
         Ok(targets.len() as i32)
@@ -480,7 +659,11 @@ impl Game<'_> {
         }
     }
     fn cmd_teleport(&mut self, id: &str, ctx: &Context) -> R<i32> {
-        let targets = if id.starts_with("teleport.targets") { self.entities(ctx, "targets", false)? } else { vec![Target::Player] };
+        let targets = if id.starts_with("teleport.targets") {
+            self.entities(ctx, "targets", false)?
+        } else {
+            vec![Target::Player]
+        };
         if id.ends_with("destination") {
             let dest = self.entities(ctx, "destination", false)?[0];
             let pos = self.target_position(dest).unwrap_or(self.source_position());
@@ -488,15 +671,29 @@ impl Game<'_> {
                 self.teleport_to(t, pos, None);
             }
             let message = if targets.len() == 1 {
-                Text::translate("commands.teleport.success.entity.single", &[self.target_name(targets[0]), self.target_name(dest)])
+                Text::translate(
+                    "commands.teleport.success.entity.single",
+                    &[self.target_name(targets[0]), self.target_name(dest)],
+                )
             } else {
-                Text::translate("commands.teleport.success.entity.multiple", &[Text::literal(targets.len().to_string()), self.target_name(dest)])
+                Text::translate(
+                    "commands.teleport.success.entity.multiple",
+                    &[
+                        Text::literal(targets.len().to_string()),
+                        self.target_name(dest),
+                    ],
+                )
             };
             self.feedback(message);
             return Ok(targets.len() as i32);
         }
-        let pos = self.position_arg(ctx, "location").unwrap_or(self.source_position());
-        if !(-30_000_000.0..30_000_000.0).contains(&pos[0]) || !(-30_000_000.0..30_000_000.0).contains(&pos[2]) || !(-20_000_000.0..20_000_000.0).contains(&pos[1]) {
+        let pos = self
+            .position_arg(ctx, "location")
+            .unwrap_or(self.source_position());
+        if !(-30_000_000.0..30_000_000.0).contains(&pos[0])
+            || !(-30_000_000.0..30_000_000.0).contains(&pos[2])
+            || !(-20_000_000.0..20_000_000.0).contains(&pos[1])
+        {
             return Err(err("commands.teleport.invalidPosition", &[]));
         }
         let mut rotation = match ctx.get("rotation") {
@@ -505,7 +702,9 @@ impl Game<'_> {
         };
         // facing: look from the new position at a location or entity.
         let facing = self.position_arg(ctx, "facingLocation").or_else(|| {
-            let Some(Arg::Entity(_)) = ctx.get("facingEntity") else { return None };
+            let Some(Arg::Entity(_)) = ctx.get("facingEntity") else {
+                return None;
+            };
             None
         });
         let facing = match (facing, ctx.get("facingEntity")) {
@@ -513,7 +712,8 @@ impl Game<'_> {
             (None, Some(_)) => {
                 let e = self.entities(ctx, "facingEntity", false)?[0];
                 let eyes = matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true)));
-                self.target_position(e).map(|p| [p[0], p[1] + if eyes { 1.62 } else { 0.0 }, p[2]])
+                self.target_position(e)
+                    .map(|p| [p[0], p[1] + if eyes { 1.62 } else { 0.0 }, p[2]])
             }
             _ => None,
         };
@@ -521,16 +721,25 @@ impl Game<'_> {
             let eye = pos[1] + 1.62;
             let (dx, dy, dz) = (f[0] - pos[0], f[1] - eye, f[2] - pos[2]);
             let horizontal = (dx * dx + dz * dz).sqrt();
-            rotation = Some([((dz.atan2(dx).to_degrees()) - 90.0) as f32, (-(dy.atan2(horizontal).to_degrees())) as f32]);
+            rotation = Some([
+                ((dz.atan2(dx).to_degrees()) - 90.0) as f32,
+                (-(dy.atan2(horizontal).to_degrees())) as f32,
+            ]);
         }
         for &t in &targets {
             self.teleport_to(t, pos, rotation);
         }
         let [x, y, z] = pos.map(|v| Text::literal(format_double(v)));
         let message = if targets.len() == 1 {
-            Text::translate("commands.teleport.success.location.single", &[self.target_name(targets[0]), x, y, z])
+            Text::translate(
+                "commands.teleport.success.location.single",
+                &[self.target_name(targets[0]), x, y, z],
+            )
         } else {
-            Text::translate("commands.teleport.success.location.multiple", &[Text::literal(targets.len().to_string()), x, y, z])
+            Text::translate(
+                "commands.teleport.success.location.multiple",
+                &[Text::literal(targets.len().to_string()), x, y, z],
+            )
         };
         self.feedback(message);
         Ok(targets.len() as i32)
@@ -546,7 +755,10 @@ impl Game<'_> {
             Some(Arg::Resource(c)) => c.clone(),
             _ => {
                 if self.dim == Dim::Nether {
-                    return Err(err("commands.time.no_default_clock", &[&"minecraft:the_nether"]));
+                    return Err(err(
+                        "commands.time.no_default_clock",
+                        &[&"minecraft:the_nether"],
+                    ));
                 }
                 "minecraft:overworld".to_owned()
             }
@@ -568,16 +780,27 @@ impl Game<'_> {
                 Ok(t as i32)
             }
             "time.set.marker" => {
-                let Some(Arg::Resource(marker)) = ctx.get("timemarker").cloned() else { return Ok(0) };
+                let Some(Arg::Resource(marker)) = ctx.get("timemarker").cloned() else {
+                    return Ok(0);
+                };
                 let Some(m) = self.ui.markers.get(&marker).copied() else {
-                    return Err(err("commands.time.no_time_marker_found", &[&marker, &clock]));
+                    return Err(err(
+                        "commands.time.no_time_marker_found",
+                        &[&marker, &clock],
+                    ));
                 };
                 if m.occurs_at(total) {
-                    return Err(err("commands.time.set.already_at_time_marker", &[&clock, &marker]));
+                    return Err(err(
+                        "commands.time.set.already_at_time_marker",
+                        &[&clock, &marker],
+                    ));
                 }
                 self.world.day_time = m.resolve(total);
                 self.ui.clock.partial = 0.0;
-                self.feedback(Text::tr("commands.time.set.time_marker", &[&clock, &marker]));
+                self.feedback(Text::tr(
+                    "commands.time.set.time_marker",
+                    &[&clock, &marker],
+                ));
                 Ok((self.world.day_time % i64::from(i32::MAX)) as i32)
             }
             "time.add" => {
@@ -590,10 +813,24 @@ impl Game<'_> {
             "time.pause" | "time.resume" => {
                 let pause = id == "time.pause";
                 if self.ui.clock.paused == pause {
-                    return Err(err(if pause { "commands.time.pause.already_paused" } else { "commands.time.pause.already_running" }, &[&clock]));
+                    return Err(err(
+                        if pause {
+                            "commands.time.pause.already_paused"
+                        } else {
+                            "commands.time.pause.already_running"
+                        },
+                        &[&clock],
+                    ));
                 }
                 self.ui.clock.paused = pause;
-                self.feedback(Text::tr(if pause { "commands.time.pause" } else { "commands.time.resume" }, &[&clock]));
+                self.feedback(Text::tr(
+                    if pause {
+                        "commands.time.pause"
+                    } else {
+                        "commands.time.resume"
+                    },
+                    &[&clock],
+                ));
                 Ok(1)
             }
             "time.rate" => {
@@ -602,10 +839,16 @@ impl Game<'_> {
                     _ => 1.0,
                 };
                 if self.ui.clock.rate == rate {
-                    return Err(err("commands.time.rate.already_same", &[&clock, &java_float(f64::from(rate))]));
+                    return Err(err(
+                        "commands.time.rate.already_same",
+                        &[&clock, &java_float(f64::from(rate))],
+                    ));
                 }
                 self.ui.clock.rate = rate;
-                self.feedback(Text::tr("commands.time.rate", &[&clock, &java_float(f64::from(rate))]));
+                self.feedback(Text::tr(
+                    "commands.time.rate",
+                    &[&clock, &java_float(f64::from(rate))],
+                ));
                 Ok(1)
             }
             "time.query.time" => {
@@ -613,17 +856,28 @@ impl Game<'_> {
                 Ok((total % i64::from(i32::MAX)) as i32)
             }
             "time.query.timeline" | "time.query.repetition" => {
-                let Some(Arg::Resource(timeline)) = ctx.get("timeline").cloned() else { return Ok(0) };
+                let Some(Arg::Resource(timeline)) = ctx.get("timeline").cloned() else {
+                    return Ok(0);
+                };
                 let Some(period) = self.ui.timelines.get(&timeline).copied() else {
-                    return Err(err("commands.time.wrong_timeline_for_clock", &[&clock, &timeline]));
+                    return Err(err(
+                        "commands.time.wrong_timeline_for_clock",
+                        &[&clock, &timeline],
+                    ));
                 };
                 if id == "time.query.timeline" {
                     let ticks = period.map_or(total, |p| total.rem_euclid(p));
-                    self.system_message(Text::tr("commands.time.query.timeline", &[&timeline, &ticks]));
+                    self.system_message(Text::tr(
+                        "commands.time.query.timeline",
+                        &[&timeline, &ticks],
+                    ));
                     Ok(ticks as i32)
                 } else {
                     let reps = period.map_or(0, |p| total / p);
-                    self.system_message(Text::tr("commands.time.query.timeline.repetitions", &[&timeline, &reps]));
+                    self.system_message(Text::tr(
+                        "commands.time.query.timeline.repetitions",
+                        &[&timeline, &reps],
+                    ));
                     Ok(reps as i32)
                 }
             }
@@ -632,15 +886,35 @@ impl Game<'_> {
     }
     fn cmd_weather(&mut self, ctx: &Context) -> R<i32> {
         let duration = Self::int(ctx, "duration");
-        let sample = |min: i32, max: i32, r: &mut horizon_core::random::LegacyRandom| min + r.next_int_bound(max - min + 1).unwrap_or(0);
+        let sample = |min: i32, max: i32, r: &mut horizon_core::random::LegacyRandom| {
+            min + r.next_int_bound(max - min + 1).unwrap_or(0)
+        };
         let w = &mut self.world.weather;
         let r = &mut self.world.random;
         let (key, clear, time, raining, thundering) = if ctx.has("clear") {
-            ("commands.weather.set.clear", duration.unwrap_or_else(|| sample(12_000, 180_000, r)), 0, false, false)
+            (
+                "commands.weather.set.clear",
+                duration.unwrap_or_else(|| sample(12_000, 180_000, r)),
+                0,
+                false,
+                false,
+            )
         } else if ctx.has("rain") {
-            ("commands.weather.set.rain", 0, duration.unwrap_or_else(|| sample(12_000, 24_000, r)), true, false)
+            (
+                "commands.weather.set.rain",
+                0,
+                duration.unwrap_or_else(|| sample(12_000, 24_000, r)),
+                true,
+                false,
+            )
         } else {
-            ("commands.weather.set.thunder", 0, duration.unwrap_or_else(|| sample(3_600, 15_600, r)), true, true)
+            (
+                "commands.weather.set.thunder",
+                0,
+                duration.unwrap_or_else(|| sample(3_600, 15_600, r)),
+                true,
+                true,
+            )
         };
         // ServerLevel.setWeatherParameters.
         w.clear_time = clear;
@@ -681,14 +955,20 @@ impl Game<'_> {
         }
     }
     fn cmd_kill(&mut self, ctx: &Context) -> R<i32> {
-        let targets = if ctx.get("targets").is_some() { self.entities(ctx, "targets", false)? } else { vec![Target::Player] };
+        let targets = if ctx.get("targets").is_some() {
+            self.entities(ctx, "targets", false)?
+        } else {
+            vec![Target::Player]
+        };
         let names: Vec<Text> = targets.iter().map(|&t| self.target_name(t)).collect();
         // Remove indexed entities from the back so earlier indices stay valid.
         let mut ordered = targets.clone();
-        ordered.sort_by_key(|t| std::cmp::Reverse(match t {
-            Target::Orb(i) | Target::Arrow(i) => *i,
-            _ => 0,
-        }));
+        ordered.sort_by_key(|t| {
+            std::cmp::Reverse(match t {
+                Target::Orb(i) | Target::Arrow(i) => *i,
+                _ => 0,
+            })
+        });
         for t in ordered {
             self.kill_target(t);
         }
@@ -703,15 +983,27 @@ impl Game<'_> {
         Ok(targets.len() as i32)
     }
     fn cmd_summon(&mut self, ctx: &Context) -> R<i32> {
-        let Some(Arg::Resource(kind)) = ctx.get("entity").cloned() else { return Ok(0) };
-        let pos = self.position_arg(ctx, "pos").unwrap_or(self.source_position());
+        let Some(Arg::Resource(kind)) = ctx.get("entity").cloned() else {
+            return Ok(0);
+        };
+        let pos = self
+            .position_arg(ctx, "pos")
+            .unwrap_or(self.source_position());
         let block_y = pos[1].floor() as i32;
-        if !(-30_000_000.0..30_000_000.0).contains(&pos[0]) || !(-20_000_000..20_000_000).contains(&block_y) || !(-30_000_000.0..30_000_000.0).contains(&pos[2]) {
+        if !(-30_000_000.0..30_000_000.0).contains(&pos[0])
+            || !(-20_000_000..20_000_000).contains(&block_y)
+            || !(-30_000_000.0..30_000_000.0).contains(&pos[2])
+        {
             return Err(err("commands.summon.invalidPosition", &[]));
         }
         let short = kind.trim_start_matches("minecraft:").to_owned();
         let name;
-        if let Some(t) = self.res.mob_types.get(&format!("minecraft:{short}")).cloned() {
+        if let Some(t) = self
+            .res
+            .mob_types
+            .get(&format!("minecraft:{short}"))
+            .cloned()
+        {
             if self.ui.difficulty == 0 && t.category == "monster" {
                 return Err(err("commands.summon.failed.peaceful", &[]));
             }
@@ -742,19 +1034,38 @@ impl Game<'_> {
     }
     /// BlockStateArgument -> registry state.
     fn block_state(&self, b: &BlockInput) -> R<BlockStateId> {
-        let state = horizon_world::chunk::BlockState { name: b.id.clone(), properties: b.properties.iter().cloned().collect() };
-        self.res.assets.registry.resolve(&state).map_err(|_| err("argument.block.id.invalid", &[&b.id]))
+        let state = horizon_world::chunk::BlockState {
+            name: b.id.clone(),
+            properties: b.properties.iter().cloned().collect(),
+        };
+        self.res
+            .assets
+            .registry
+            .resolve(&state)
+            .map_err(|_| err("argument.block.id.invalid", &[&b.id]))
     }
     /// BlockPredicateArgument test.
     fn block_matches(&self, b: &BlockInput, state: BlockStateId) -> bool {
-        let Some(s) = self.res.assets.registry.state(state) else { return false };
+        let Some(s) = self.res.assets.registry.state(state) else {
+            return false;
+        };
         let name_ok = if b.tag {
             let tag = b.id.trim_start_matches("minecraft:");
-            self.res.items.block_tags.get(tag).or_else(|| self.res.items.block_tags.get(&b.id)).is_some_and(|set| set.contains(&s.name) || set.contains(s.name.trim_start_matches("minecraft:")))
+            self.res
+                .items
+                .block_tags
+                .get(tag)
+                .or_else(|| self.res.items.block_tags.get(&b.id))
+                .is_some_and(|set| {
+                    set.contains(&s.name) || set.contains(s.name.trim_start_matches("minecraft:"))
+                })
         } else {
             s.name == b.id
         };
-        name_ok && b.properties.iter().all(|(k, v)| s.properties.get(k) == Some(v))
+        name_ok
+            && b.properties
+                .iter()
+                .all(|(k, v)| s.properties.get(k) == Some(v))
     }
     /// Place a state like BlockInput.place: false when nothing changed.
     fn place_state(&mut self, pos: [i32; 3], state: BlockStateId, strict: bool) -> R<bool> {
@@ -763,17 +1074,28 @@ impl Game<'_> {
         }
         if strict {
             self.with_level(|b, level, ticks| {
-                b.set_block(level, ticks, horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]), state, horizon_world::level::flags::UPDATE_CLIENTS | horizon_world::level::flags::UPDATE_SKIP_ALL_SIDEEFFECTS);
+                b.set_block(
+                    level,
+                    ticks,
+                    horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+                    state,
+                    horizon_world::level::flags::UPDATE_CLIENTS
+                        | horizon_world::level::flags::UPDATE_SKIP_ALL_SIDEEFFECTS,
+                );
             });
-            self.process_level_events().map_err(|e| CommandError::new(Text::literal(e.to_string())))?;
+            self.process_level_events()
+                .map_err(|e| CommandError::new(Text::literal(e.to_string())))?;
         } else {
-            self.level_set(pos, state).map_err(|e| CommandError::new(Text::literal(e.to_string())))?;
+            self.level_set(pos, state)
+                .map_err(|e| CommandError::new(Text::literal(e.to_string())))?;
         }
         Ok(true)
     }
     fn cmd_setblock(&mut self, ctx: &Context) -> R<i32> {
         let pos = self.block_pos_arg(ctx, "pos")?;
-        let Some(Arg::Block(b)) = ctx.get("block").cloned() else { return Ok(0) };
+        let Some(Arg::Block(b)) = ctx.get("block").cloned() else {
+            return Ok(0);
+        };
         let state = self.block_state(&b)?;
         let current = self.world.block(pos[0], pos[1], pos[2]);
         if ctx.has("keep") && current != self.world.air {
@@ -788,27 +1110,40 @@ impl Game<'_> {
         if !self.place_state(pos, state, ctx.has("strict"))? {
             return Err(err("commands.setblock.failed", &[]));
         }
-        self.feedback(Text::tr("commands.setblock.success", &[&pos[0], &pos[1], &pos[2]]));
+        self.feedback(Text::tr(
+            "commands.setblock.success",
+            &[&pos[0], &pos[1], &pos[2]],
+        ));
         Ok(1)
     }
     fn cmd_fill(&mut self, ctx: &Context) -> R<i32> {
         let a = self.block_pos_arg(ctx, "from")?;
         let b = self.block_pos_arg(ctx, "to")?;
-        let Some(Arg::Block(block)) = ctx.get("block").cloned() else { return Ok(0) };
+        let Some(Arg::Block(block)) = ctx.get("block").cloned() else {
+            return Ok(0);
+        };
         let filter = match ctx.get("filter") {
             Some(Arg::Block(f)) => Some(f.clone()),
             _ => None,
         };
         let min = [a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])];
         let max = [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])];
-        let area = (0..3).map(|i| i64::from(max[i] - min[i] + 1)).product::<i64>();
+        let area = (0..3)
+            .map(|i| i64::from(max[i] - min[i] + 1))
+            .product::<i64>();
         let limit = self.ui.rules.int("max_block_modifications");
         if area > i64::from(limit) {
             return Err(err("commands.fill.toobig", &[&limit, &area]));
         }
         let state = self.block_state(&block)?;
         let air = self.world.air;
-        let (hollow, outline, destroy, strict, keep) = (ctx.has("hollow"), ctx.has("outline"), ctx.has("destroy"), ctx.has("strict"), ctx.has("keep"));
+        let (hollow, outline, destroy, strict, keep) = (
+            ctx.has("hollow"),
+            ctx.has("outline"),
+            ctx.has("destroy"),
+            ctx.has("strict"),
+            ctx.has("keep"),
+        );
         let mut count = 0;
         for y in min[1]..=max[1] {
             for z in min[2]..=max[2] {
@@ -822,7 +1157,12 @@ impl Game<'_> {
                     {
                         continue;
                     }
-                    let edge = x == min[0] || x == max[0] || y == min[1] || y == max[1] || z == min[2] || z == max[2];
+                    let edge = x == min[0]
+                        || x == max[0]
+                        || y == min[1]
+                        || y == max[1]
+                        || z == min[2]
+                        || z == max[2];
                     let mut affected = false;
                     if destroy && current != air {
                         let creative = self.creative;
@@ -896,7 +1236,15 @@ impl Game<'_> {
                     {
                         continue;
                     }
-                    copies.push(([x, y, z], [dest[0] + x - min[0], dest[1] + y - min[1], dest[2] + z - min[2]], s));
+                    copies.push((
+                        [x, y, z],
+                        [
+                            dest[0] + x - min[0],
+                            dest[1] + y - min[1],
+                            dest[2] + z - min[2],
+                        ],
+                        s,
+                    ));
                 }
             }
         }
@@ -934,7 +1282,8 @@ impl Game<'_> {
             }
         }
         while e.progress >= 1.0 {
-            e.progress = (e.progress - 1.0) * horizon_client::entities::Experience::needed(e.level) as f32;
+            e.progress =
+                (e.progress - 1.0) * horizon_client::entities::Experience::needed(e.level) as f32;
             e.level += 1;
             e.progress /= horizon_client::entities::Experience::needed(e.level) as f32;
         }
@@ -945,8 +1294,15 @@ impl Game<'_> {
         if ctx.has("query") {
             let _ = self.entities(ctx, "target", true)?;
             let e = &self.experience;
-            let value = if levels { e.level } else { (e.progress * horizon_client::entities::Experience::needed(e.level) as f32) as i32 };
-            self.system_message(Text::translate(&format!("commands.experience.query.{unit}"), &[Text::literal(PLAYER_NAME), Text::literal(value.to_string())]));
+            let value = if levels {
+                e.level
+            } else {
+                (e.progress * horizon_client::entities::Experience::needed(e.level) as f32) as i32
+            };
+            self.system_message(Text::translate(
+                &format!("commands.experience.query.{unit}"),
+                &[Text::literal(PLAYER_NAME), Text::literal(value.to_string())],
+            ));
             return Ok(value);
         }
         let targets = self.entities(ctx, "target", true)?;
@@ -970,13 +1326,30 @@ impl Game<'_> {
             }
             self.experience.progress = amount as f32 / needed as f32;
         }
-        let key = format!("commands.experience.{op}.{unit}.success.{}", if targets.len() == 1 { "single" } else { "multiple" });
-        self.feedback(Text::translate(&key, &[Text::literal(amount.to_string()), Text::literal(PLAYER_NAME)]));
+        let key = format!(
+            "commands.experience.{op}.{unit}.success.{}",
+            if targets.len() == 1 {
+                "single"
+            } else {
+                "multiple"
+            }
+        );
+        self.feedback(Text::translate(
+            &key,
+            &[
+                Text::literal(amount.to_string()),
+                Text::literal(PLAYER_NAME),
+            ],
+        ));
         Ok(targets.len() as i32)
     }
     fn cmd_gamerule(&mut self, ctx: &Context) -> R<i32> {
-        let Some(name) = ctx.literals.get(1).cloned() else { return Ok(0) };
-        let Some(rule) = gamerules::rule(&name) else { return Ok(0) };
+        let Some(name) = ctx.literals.get(1).cloned() else {
+            return Ok(0);
+        };
+        let Some(rule) = gamerules::rule(&name) else {
+            return Ok(0);
+        };
         let current = self.ui.rules.get(rule.name).unwrap_or(rule.default);
         let value = match ctx.get("value") {
             Some(Arg::Bool(b)) => Value::Bool(*b),
@@ -1001,15 +1374,26 @@ impl Game<'_> {
         })
     }
     fn cmd_difficulty(&mut self, ctx: &Context) -> R<i32> {
-        let name = |d: u8| Text::translate(&format!("options.difficulty.{}", DIFFICULTIES[d as usize]), &[]);
+        let name = |d: u8| {
+            Text::translate(
+                &format!("options.difficulty.{}", DIFFICULTIES[d as usize]),
+                &[],
+            )
+        };
         let Some(i) = DIFFICULTIES.iter().position(|d| ctx.has(d)) else {
             let current = self.ui.difficulty;
-            self.system_message(Text::translate("commands.difficulty.query", &[name(current)]));
+            self.system_message(Text::translate(
+                "commands.difficulty.query",
+                &[name(current)],
+            ));
             return Ok(i32::from(current));
         };
         let i = i as u8;
         if self.ui.difficulty == i {
-            return Err(CommandError::new(Text::translate("commands.difficulty.failure", &[Text::literal(DIFFICULTIES[i as usize])])));
+            return Err(CommandError::new(Text::translate(
+                "commands.difficulty.failure",
+                &[Text::literal(DIFFICULTIES[i as usize])],
+            )));
         }
         self.ui.difficulty = i;
         self.sync_rules();
@@ -1021,12 +1405,20 @@ impl Game<'_> {
         Ok(0)
     }
     fn cmd_spawnpoint(&mut self, ctx: &Context) -> R<i32> {
-        let targets = if ctx.get("targets").is_some() { self.entities(ctx, "targets", true)? } else { vec![Target::Player] };
+        let targets = if ctx.get("targets").is_some() {
+            self.entities(ctx, "targets", true)?
+        } else {
+            vec![Target::Player]
+        };
         let pos = if ctx.get("pos").is_some() {
             self.block_pos_arg(ctx, "pos")?
         } else {
             let p = self.source_position();
-            [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32]
+            [
+                p[0].floor() as i32,
+                p[1].floor() as i32,
+                p[2].floor() as i32,
+            ]
         };
         let rot = match ctx.get("rotation") {
             Some(Arg::Coords(c)) => c.rotation(self.source_rotation()),
@@ -1034,10 +1426,21 @@ impl Game<'_> {
         };
         let yaw = ((rot[0] + 180.0).rem_euclid(360.0)) - 180.0;
         let pitch = rot[1].clamp(-90.0, 90.0);
-        self.spawn = Some(Vec3::new(f64::from(pos[0]) + 0.5, f64::from(pos[1]), f64::from(pos[2]) + 0.5));
+        self.spawn = Some(Vec3::new(
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]),
+            f64::from(pos[2]) + 0.5,
+        ));
         let dim = Text::literal(self.dim.id());
         let p = pos.map(|v| Text::literal(v.to_string()));
-        let mut args = vec![p[0].clone(), p[1].clone(), p[2].clone(), Text::literal(java_float(f64::from(yaw))), Text::literal(java_float(f64::from(pitch))), dim];
+        let mut args = vec![
+            p[0].clone(),
+            p[1].clone(),
+            p[2].clone(),
+            Text::literal(java_float(f64::from(yaw))),
+            Text::literal(java_float(f64::from(pitch))),
+            dim,
+        ];
         let key = if targets.len() == 1 {
             args.push(Text::literal(PLAYER_NAME));
             "commands.spawnpoint.success.single"
@@ -1053,7 +1456,11 @@ impl Game<'_> {
             self.block_pos_arg(ctx, "pos")?
         } else {
             let p = self.source_position();
-            [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32]
+            [
+                p[0].floor() as i32,
+                p[1].floor() as i32,
+                p[2].floor() as i32,
+            ]
         };
         if self.dim != Dim::Overworld {
             return Err(err("commands.setworldspawn.failure.not_overworld", &[]));
@@ -1080,15 +1487,32 @@ impl Game<'_> {
         }
         if predicate.tag {
             let tag = predicate.id.trim_start_matches("minecraft:");
-            return self.res.items.item_tags.get(tag).or_else(|| self.res.items.item_tags.get(&predicate.id)).is_some_and(|s| s.contains(item) || s.contains(item.trim_start_matches("minecraft:")));
+            return self
+                .res
+                .items
+                .item_tags
+                .get(tag)
+                .or_else(|| self.res.items.item_tags.get(&predicate.id))
+                .is_some_and(|s| {
+                    s.contains(item) || s.contains(item.trim_start_matches("minecraft:"))
+                });
         }
         predicate.id == item
     }
     fn cmd_clear(&mut self, ctx: &Context) -> R<i32> {
-        let targets = if ctx.get("targets").is_some() { self.entities(ctx, "targets", true)? } else { vec![Target::Player] };
+        let targets = if ctx.get("targets").is_some() {
+            self.entities(ctx, "targets", true)?
+        } else {
+            vec![Target::Player]
+        };
         let predicate = match ctx.get("item") {
             Some(Arg::Item(i)) => i.clone(),
-            _ => ItemInput { id: "*".into(), tag: false, any: true, components: None },
+            _ => ItemInput {
+                id: "*".into(),
+                tag: false,
+                any: true,
+                components: None,
+            },
         };
         let max = Self::int(ctx, "maxCount").unwrap_or(-1);
         let counting = max == 0;
@@ -1108,7 +1532,11 @@ impl Game<'_> {
             if predicate.tag {
                 continue;
             }
-            let take = if counting { stack.count as i32 } else { (stack.count as i32).min(budget) };
+            let take = if counting {
+                stack.count as i32
+            } else {
+                (stack.count as i32).min(budget)
+            };
             removed += take;
             if !counting {
                 budget -= take;
@@ -1125,12 +1553,21 @@ impl Game<'_> {
             // Tag predicates: match against item tags.
             let pred = predicate.clone();
             let mut budget = if max < 0 { i32::MAX } else { max };
-            let items: Vec<(usize, String, u32)> = self.inventory.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|s| (i, s.item.to_string(), s.count))).collect();
+            let items: Vec<(usize, String, u32)> = self
+                .inventory
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| s.as_ref().map(|s| (i, s.item.to_string(), s.count)))
+                .collect();
             for (i, item, count) in items {
                 if !self.item_matches(&pred, &item) {
                     continue;
                 }
-                let take = if counting { count as i32 } else { (count as i32).min(budget) };
+                let take = if counting {
+                    count as i32
+                } else {
+                    (count as i32).min(budget)
+                };
                 removed += take;
                 if !counting && let Some(s) = self.inventory[i].as_mut() {
                     budget -= take;
@@ -1143,19 +1580,30 @@ impl Game<'_> {
         }
         if removed == 0 {
             return Err(if targets.len() == 1 {
-                CommandError::new(Text::translate("clear.failed.single", &[Text::literal(PLAYER_NAME)]))
+                CommandError::new(Text::translate(
+                    "clear.failed.single",
+                    &[Text::literal(PLAYER_NAME)],
+                ))
             } else {
                 err("clear.failed.multiple", &[&targets.len()])
             });
         }
         let kind = if counting { "test" } else { "success" };
-        self.feedback(Text::translate(&format!("commands.clear.{kind}.single"), &[Text::literal(removed.to_string()), Text::literal(PLAYER_NAME)]));
+        self.feedback(Text::translate(
+            &format!("commands.clear.{kind}.single"),
+            &[
+                Text::literal(removed.to_string()),
+                Text::literal(PLAYER_NAME),
+            ],
+        ));
         Ok(removed)
     }
     fn cmd_locate(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let origin = self.source_position();
         if id == "locate.biome" {
-            let Some(Arg::Resource(biome)) = ctx.get("biome").cloned() else { return Ok(0) };
+            let Some(Arg::Resource(biome)) = ctx.get("biome").cloned() else {
+                return Ok(0);
+            };
             // Search loaded chunks around the player (BiomeSource.findClosestBiome3d
             // samples a 6400-block radius; Horizon searches what is generated).
             let (px, pz) = (origin[0].floor() as i32, origin[2].floor() as i32);
@@ -1174,16 +1622,38 @@ impl Game<'_> {
                 }
             }
             let Some((p, d2)) = best else {
-                return Err(CommandError::new(Text::tr("commands.locate.biome.not_found", &[&biome])));
+                return Err(CommandError::new(Text::tr(
+                    "commands.locate.biome.not_found",
+                    &[&biome],
+                )));
             };
             let coords = Text::tr("chat.coordinates", &[&p[0], &p[1], &p[2]]);
-            let link = Text::literal("[").append(coords).append("]").with_style(&Style { color: Some(text::GREEN), suggest: Some(format!("/tp @s {} {} {}", p[0], p[1], p[2])), ..Style::default() });
+            let link = Text::literal("[")
+                .append(coords)
+                .append("]")
+                .with_style(&Style {
+                    color: Some(text::GREEN),
+                    suggest: Some(format!("/tp @s {} {} {}", p[0], p[1], p[2])),
+                    ..Style::default()
+                });
             let distance = d2.sqrt().floor() as i32;
-            self.system_message(Text::translate("commands.locate.biome.success", &[Text::literal(biome), link, Text::literal(distance.to_string())]));
+            self.system_message(Text::translate(
+                "commands.locate.biome.success",
+                &[
+                    Text::literal(biome),
+                    link,
+                    Text::literal(distance.to_string()),
+                ],
+            ));
             return Ok(distance);
         }
-        let Some(Arg::Resource(s)) = ctx.get("structure").cloned() else { return Ok(0) };
-        Err(CommandError::new(Text::tr("commands.locate.structure.not_found", &[&s])))
+        let Some(Arg::Resource(s)) = ctx.get("structure").cloned() else {
+            return Ok(0);
+        };
+        Err(CommandError::new(Text::tr(
+            "commands.locate.structure.not_found",
+            &[&s],
+        )))
     }
     fn cmd_say(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let raw = match ctx.get(if id == "me" { "action" } else { "message" }) {
@@ -1192,18 +1662,33 @@ impl Game<'_> {
         };
         let message = self.expand_selectors(&raw);
         let line = match id {
-            "say" => Text::translate("chat.type.announcement", &[Text::literal(PLAYER_NAME), message]),
+            "say" => Text::translate(
+                "chat.type.announcement",
+                &[Text::literal(PLAYER_NAME), message],
+            ),
             "me" => Text::translate("chat.type.emote", &[Text::literal(PLAYER_NAME), message]),
             _ => {
                 let _ = self.entities(ctx, "targets", true)?;
                 // Whispering to yourself: the incoming and outgoing lines.
-                let out = Text::translate("commands.message.display.outgoing", &[Text::literal(PLAYER_NAME), message.clone()]).with_color(text::GRAY).italic();
+                let out = Text::translate(
+                    "commands.message.display.outgoing",
+                    &[Text::literal(PLAYER_NAME), message.clone()],
+                )
+                .with_color(text::GRAY)
+                .italic();
                 self.system_message(out);
-                Text::translate("commands.message.display.incoming", &[Text::literal(PLAYER_NAME), message]).with_color(text::GRAY).italic()
+                Text::translate(
+                    "commands.message.display.incoming",
+                    &[Text::literal(PLAYER_NAME), message],
+                )
+                .with_color(text::GRAY)
+                .italic()
             }
         };
         let focused = self.screen == Screen::Chat;
-        self.ui.chat.add(&self.res.atlas, line, None, self.ticks, focused);
+        self.ui
+            .chat
+            .add(&self.res.atlas, line, None, self.ticks, focused);
         Ok(1)
     }
     /// MessageArgument: `@p`-style selectors in a message become names.
@@ -1213,7 +1698,12 @@ impl Game<'_> {
         while let Some(at) = rest.find('@') {
             out.push(&rest[..at]);
             let mut reader = Reader::new(&rest[at..]);
-            match (horizon_client::command::ArgType::Entity { single: false, players: false }).parse(&mut reader, &self.ui.registries) {
+            match (horizon_client::command::ArgType::Entity {
+                single: false,
+                players: false,
+            })
+            .parse(&mut reader, &self.ui.registries)
+            {
                 Ok(Arg::Entity(s)) if reader.cursor > 1 => {
                     let found = self.select(&s);
                     for (i, t) in found.iter().enumerate() {

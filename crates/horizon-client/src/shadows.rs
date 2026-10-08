@@ -13,17 +13,20 @@ pub fn shadow_params(entity: &str) -> (f32, f32) {
         "tadpole" => 0.14,
         "pufferfish" => 0.2,
         "slime" | "magma_cube" | "bat" => 0.25,
-        "chicken" | "cod" | "parrot" | "rabbit" | "frog" | "silverfish" | "endermite" | "vex" => 0.3,
-        "cat" | "ocelot" | "fox" | "bee" | "allay" | "salmon" => 0.4,
-        "zombie" | "husk" | "drowned" | "zombie_villager" | "zombified_piglin" | "skeleton" | "stray" | "wither_skeleton" | "bogged"
-        | "creeper" | "enderman" | "villager" | "wandering_trader" | "witch" | "pillager" | "vindicator" | "evoker" | "illusioner"
-        | "blaze" | "breeze" | "snow_golem" | "copper_golem" | "strider" | "wolf" | "axolotl" | "tnt" | "falling_block" | "end_crystal" => {
-            0.5
+        "chicken" | "cod" | "parrot" | "rabbit" | "frog" | "silverfish" | "endermite" | "vex" => {
+            0.3
         }
+        "cat" | "ocelot" | "fox" | "bee" | "allay" | "salmon" => 0.4,
+        "zombie" | "husk" | "drowned" | "zombie_villager" | "zombified_piglin" | "skeleton"
+        | "stray" | "wither_skeleton" | "bogged" | "creeper" | "enderman" | "villager"
+        | "wandering_trader" | "witch" | "pillager" | "vindicator" | "evoker" | "illusioner"
+        | "blaze" | "breeze" | "snow_golem" | "copper_golem" | "strider" | "wolf" | "axolotl"
+        | "tnt" | "falling_block" | "end_crystal" => 0.5,
         "cave_spider" => 0.56,
         "creaking" => 0.6,
-        "pig" | "cow" | "mooshroom" | "sheep" | "goat" | "llama" | "trader_llama" | "iron_golem" | "camel" | "camel_husk" | "squid"
-        | "glow_squid" | "dolphin" | "turtle" | "hoglin" | "zoglin" | "nautilus" | "zombie_nautilus" | "minecart" => 0.7,
+        "pig" | "cow" | "mooshroom" | "sheep" | "goat" | "llama" | "trader_llama"
+        | "iron_golem" | "camel" | "camel_husk" | "squid" | "glow_squid" | "dolphin" | "turtle"
+        | "hoglin" | "zoglin" | "nautilus" | "zombie_nautilus" | "minecart" => 0.7,
         "horse" | "donkey" | "mule" | "skeleton_horse" | "zombie_horse" | "phantom" => 0.75,
         "spider" | "boat" => 0.8,
         "polar_bear" | "panda" | "warden" => 0.9,
@@ -32,7 +35,11 @@ pub fn shadow_params(entity: &str) -> (f32, f32) {
         "ghast" => 1.5,
         _ => 0.5,
     };
-    let strength = if matches!(id, "item" | "experience_orb") { 0.75 } else { 1.0 };
+    let strength = if matches!(id, "item" | "experience_orb") {
+        0.75
+    } else {
+        1.0
+    };
     (radius, strength)
 }
 
@@ -63,12 +70,17 @@ pub fn shadow(
     let (x0, x1) = ((pos.x - r).floor() as i32, (pos.x + r).floor() as i32);
     let (z0, z1) = ((pos.z - r).floor() as i32, (pos.z + r).floor() as i32);
     let depth = (pow / 0.5 - 1.0).min(radius);
-    let (y0, y1) = ((pos.y - f64::from(depth)).floor() as i32, pos.y.floor() as i32);
+    let (y0, y1) = (
+        (pos.y - f64::from(depth)).floor() as i32,
+        pos.y.floor() as i32,
+    );
     for z in z0..=z1 {
         for x in x0..=x1 {
             for y in y0..=y1 {
                 let below = facts.get(world.block(x, y - 1, z));
-                if below.render_shape == crate::blocks::RenderShape::Invisible || !below.full_collision {
+                if below.render_shape == crate::blocks::RenderShape::Invisible
+                    || !below.full_collision
+                {
                     continue;
                 }
                 let packed = world.light(x, y, z);
@@ -77,7 +89,10 @@ pub fn shadow(
                     continue;
                 }
                 let power_at_depth = pow - (pos.y - f64::from(y)) as f32 * 0.5;
-                let alpha = (power_at_depth * 0.5 * crate::screen_effects::lightmap_brightness(ambient_light, raw as u8)).clamp(0.0, 1.0);
+                let alpha = (power_at_depth
+                    * 0.5
+                    * crate::screen_effects::lightmap_brightness(ambient_light, raw as u8))
+                .clamp(0.0, 1.0);
                 // The block top, clipped to the shadow square so the UVs stay inside the sprite.
                 let (bx0, bx1) = (f64::from(x).max(pos.x - r), f64::from(x + 1).min(pos.x + r));
                 let (bz0, bz1) = (f64::from(z).max(pos.z - r), f64::from(z + 1).min(pos.z + r));
@@ -93,7 +108,10 @@ pub fn shadow(
                     let p = DVec3::new(wx, top, wz) - camera;
                     out.push(Vertex {
                         pos: p.as_vec3().to_array(),
-                        uv: [sprite.u0 + (sprite.u1 - sprite.u0) * u(wx), sprite.v0 + (sprite.v1 - sprite.v0) * v(wz)],
+                        uv: [
+                            sprite.u0 + (sprite.u1 - sprite.u0) * u(wx),
+                            sprite.v0 + (sprite.v1 - sprite.v0) * v(wz),
+                        ],
                         layer: 0,
                         color,
                         light: 240 | 240 << 8,

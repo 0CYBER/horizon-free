@@ -27,7 +27,11 @@ pub enum Event {
     /// Progress text for the connecting screen.
     Status(String),
     /// Configuration finished: the play state begins with these registries.
-    Joined { registries: Arc<Dynamic>, uuid: u128, name: String },
+    Joined {
+        registries: Arc<Dynamic>,
+        uuid: u128,
+        name: String,
+    },
     Packet(Box<play::Clientbound>),
     /// A packet that failed to decode (skipped, like vanilla's skippable packets).
     DecodeError(String),
@@ -57,7 +61,15 @@ impl Session {
         let thread = std::thread::Builder::new()
             .name("horizon-net".into())
             .spawn(move || {
-                let reason = match run(&address_owned, &name_owned, view_distance, &lang, &send, &thread_writer, &thread_counters) {
+                let reason = match run(
+                    &address_owned,
+                    &name_owned,
+                    view_distance,
+                    &lang,
+                    &send,
+                    &thread_writer,
+                    &thread_counters,
+                ) {
                     Ok(reason) => reason,
                     Err(e) => e,
                 };
@@ -68,7 +80,15 @@ impl Session {
             })
             .ok();
         let debug = std::env::var_os("HORIZON_NET_DEBUG").is_some();
-        Self { events, writer, thread, address: address.to_owned(), name: name.to_owned(), counters, debug }
+        Self {
+            events,
+            writer,
+            thread,
+            address: address.to_owned(),
+            name: name.to_owned(),
+            counters,
+            debug,
+        }
     }
     /// Everything received since the last poll.
     pub fn poll(&self) -> Vec<Event> {
@@ -76,7 +96,14 @@ impl Session {
     }
     /// Send a play packet; silently dropped once the connection is gone.
     pub fn send(&self, packet: play::Serverbound) {
-        if self.debug && !matches!(packet, play::Serverbound::ClientTickEnd(_) | play::Serverbound::MovePlayerPos(_) | play::Serverbound::MovePlayerPosRot(_)) {
+        if self.debug
+            && !matches!(
+                packet,
+                play::Serverbound::ClientTickEnd(_)
+                    | play::Serverbound::MovePlayerPos(_)
+                    | play::Serverbound::MovePlayerPosRot(_)
+            )
+        {
             eprintln!("[net] -> {packet:?}");
         }
         if let Some(w) = self.writer.lock().unwrap().as_mut()
@@ -114,57 +141,106 @@ fn run(
     shared_writer: &Mutex<Option<ConnWriter>>,
     shared_counters: &Mutex<Option<Arc<Counters>>>,
 ) -> Result<String, String> {
-    let (host, port) = parse_address(address).ok_or_else(|| format!("Invalid server address: {address}"))?;
+    let (host, port) =
+        parse_address(address).ok_or_else(|| format!("Invalid server address: {address}"))?;
     status(send, "Connecting to the server...");
-    let mut c = Connection::connect(&host, port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+    let mut c =
+        Connection::connect(&host, port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
     *shared_counters.lock().unwrap() = Some(c.reader.counters.clone());
     let e = |e: horizon_protocol::Error| e.to_string();
     c.send(
-        &handshake::Serverbound::Intention(handshake::Intention { protocol: PROTOCOL_VERSION, host: host.clone(), port, intent: handshake::LOGIN })
-            .encode(),
+        &handshake::Serverbound::Intention(handshake::Intention {
+            protocol: PROTOCOL_VERSION,
+            host: host.clone(),
+            port,
+            intent: handshake::LOGIN,
+        })
+        .encode(),
     )
     .map_err(e)?;
     status(send, "Logging in...");
     let uuid = offline_uuid(name);
-    c.send(&login::Serverbound::Hello(login::ServerHello { name: name.to_owned(), uuid }).encode()).map_err(e)?;
+    c.send(
+        &login::Serverbound::Hello(login::ServerHello {
+            name: name.to_owned(),
+            uuid,
+        })
+        .encode(),
+    )
+    .map_err(e)?;
     let profile = loop {
         let (id, payload) = c.recv().map_err(e)?;
         match login::Clientbound::decode(id, &payload).map_err(e)? {
             login::Clientbound::Compression(p) => c.set_compression(p.threshold),
             login::Clientbound::LoginFinished(p) => {
-                c.send(&login::Serverbound::LoginAcknowledged(Empty).encode()).map_err(e)?;
+                c.send(&login::Serverbound::LoginAcknowledged(Empty).encode())
+                    .map_err(e)?;
                 break p.profile;
             }
             login::Clientbound::Disconnect(p) => {
-                let reason = serde_json::from_str::<serde_json::Value>(&p.reason_json).map(|v| json_text(&v, lang)).unwrap_or(p.reason_json);
+                let reason = serde_json::from_str::<serde_json::Value>(&p.reason_json)
+                    .map(|v| json_text(&v, lang))
+                    .unwrap_or(p.reason_json);
                 return Err(reason);
             }
             login::Clientbound::Hello(_) => {
                 return Err("This server is in online mode. Horizon only joins offline-mode servers (online-mode=false).".into());
             }
             login::Clientbound::CustomQuery(q) => {
-                c.send(&login::Serverbound::CustomQueryAnswer(login::CustomQueryAnswer { transaction: q.transaction, payload: None }).encode())
-                    .map_err(e)?;
+                c.send(
+                    &login::Serverbound::CustomQueryAnswer(login::CustomQueryAnswer {
+                        transaction: q.transaction,
+                        payload: None,
+                    })
+                    .encode(),
+                )
+                .map_err(e)?;
             }
             login::Clientbound::CookieRequest(q) => {
-                c.send(&login::Serverbound::CookieResponse(login::CookieResponse { key: q.key, payload: None }).encode()).map_err(e)?;
+                c.send(
+                    &login::Serverbound::CookieResponse(login::CookieResponse {
+                        key: q.key,
+                        payload: None,
+                    })
+                    .encode(),
+                )
+                .map_err(e)?;
             }
             login::Clientbound::Unknown(..) => {}
         }
     };
     status(send, "Joining world...");
-    c.send(&cfg::Serverbound::ClientInformation(cfg::ClientInformation::new(view_distance)).encode()).map_err(e)?;
-    c.send(&cfg::Serverbound::CustomPayload(cfg::CustomPayload { channel: "minecraft:brand".into(), data: brand() }).encode()).map_err(e)?;
+    c.send(
+        &cfg::Serverbound::ClientInformation(cfg::ClientInformation::new(view_distance)).encode(),
+    )
+    .map_err(e)?;
+    c.send(
+        &cfg::Serverbound::CustomPayload(cfg::CustomPayload {
+            channel: "minecraft:brand".into(),
+            data: brand(),
+        })
+        .encode(),
+    )
+    .map_err(e)?;
     let (mut reader, writer) = c.split();
     *shared_writer.lock().unwrap() = Some(writer);
     let registries = configure(&mut reader, shared_writer, lang)?;
-    let _ = send.send(Event::Joined { registries: Arc::new(registries), uuid: profile.uuid, name: profile.name });
+    let _ = send.send(Event::Joined {
+        registries: Arc::new(registries),
+        uuid: profile.uuid,
+        name: profile.name,
+    });
     loop {
         let (id, payload) = reader.recv().map_err(e)?;
         let packet = match play::Clientbound::decode(id, &payload) {
             Ok(p) => p,
             Err(err) => {
-                let name = horizon_protocol::ids::name(horizon_protocol::State::Play, horizon_protocol::Direction::Clientbound, id).unwrap_or("?");
+                let name = horizon_protocol::ids::name(
+                    horizon_protocol::State::Play,
+                    horizon_protocol::Direction::Clientbound,
+                    id,
+                )
+                .unwrap_or("?");
                 let _ = send.send(Event::DecodeError(format!("{name}: {err}")));
                 continue;
             }
@@ -180,7 +256,10 @@ fn run(
             play::Clientbound::BundleDelimiter(_) => {}
             play::Clientbound::ResourcePackPush(p) => {
                 // Declined: Horizon has no server resource packs.
-                reply(play::Serverbound::ResourcePack(cfg::ResourcePackResponse { id: p.id, action: 1 }));
+                reply(play::Serverbound::ResourcePack(cfg::ResourcePackResponse {
+                    id: p.id,
+                    action: 1,
+                }));
             }
             play::Clientbound::StartConfiguration(_) => {
                 reply(play::Serverbound::ConfigurationAcknowledged(Empty));
@@ -199,7 +278,11 @@ fn run(
 
 /// The configuration phase: registries, tags and known packs until the
 /// server finishes it (ClientConfigurationPacketListenerImpl).
-fn configure(reader: &mut ConnReader, writer: &Mutex<Option<ConnWriter>>, lang: &Language) -> Result<Dynamic, String> {
+fn configure(
+    reader: &mut ConnReader,
+    writer: &Mutex<Option<ConnWriter>>,
+    lang: &Language,
+) -> Result<Dynamic, String> {
     let mut registries = Dynamic::default();
     let reply = |p: cfg::Serverbound| -> Result<(), String> {
         match writer.lock().unwrap().as_mut() {
@@ -213,11 +296,27 @@ fn configure(reader: &mut ConnReader, writer: &Mutex<Option<ConnWriter>>, lang: 
             cfg::Clientbound::KeepAlive(k) => reply(cfg::Serverbound::KeepAlive(k))?,
             cfg::Clientbound::Ping(p) => reply(cfg::Serverbound::Pong(p))?,
             // Know no packs: the server then sends every registry entry in full.
-            cfg::Clientbound::SelectKnownPacks(_) => reply(cfg::Serverbound::SelectKnownPacks(cfg::SelectKnownPacks { packs: vec![] }))?,
+            cfg::Clientbound::SelectKnownPacks(_) => {
+                reply(cfg::Serverbound::SelectKnownPacks(cfg::SelectKnownPacks {
+                    packs: vec![],
+                }))?
+            }
             cfg::Clientbound::RegistryData(r) => registries.add(r),
-            cfg::Clientbound::CodeOfConduct(_) => reply(cfg::Serverbound::AcceptCodeOfConduct(Empty))?,
-            cfg::Clientbound::ResourcePackPush(p) => reply(cfg::Serverbound::ResourcePack(cfg::ResourcePackResponse { id: p.id, action: 1 }))?,
-            cfg::Clientbound::CookieRequest(q) => reply(cfg::Serverbound::CookieResponse(cfg::CookieResponse { key: q.key, payload: None }))?,
+            cfg::Clientbound::CodeOfConduct(_) => {
+                reply(cfg::Serverbound::AcceptCodeOfConduct(Empty))?
+            }
+            cfg::Clientbound::ResourcePackPush(p) => {
+                reply(cfg::Serverbound::ResourcePack(cfg::ResourcePackResponse {
+                    id: p.id,
+                    action: 1,
+                }))?
+            }
+            cfg::Clientbound::CookieRequest(q) => {
+                reply(cfg::Serverbound::CookieResponse(cfg::CookieResponse {
+                    key: q.key,
+                    payload: None,
+                }))?
+            }
             cfg::Clientbound::Disconnect(d) => return Err(plain(&d.reason, lang)),
             cfg::Clientbound::FinishConfiguration(_) => {
                 reply(cfg::Serverbound::FinishConfiguration(Empty))?;
@@ -244,8 +343,20 @@ pub fn json_text(v: &serde_json::Value, lang: &Language) -> String {
             let mut out = if let Some(t) = o.get("text").and_then(|t| t.as_str()) {
                 t.to_owned()
             } else if let Some(key) = o.get("translate").and_then(|t| t.as_str()) {
-                let args: Vec<String> = o.get("with").and_then(|w| w.as_array()).map(|a| a.iter().map(|e| json_text(e, lang)).collect()).unwrap_or_default();
-                let pattern = lang.get(key).cloned().or_else(|| o.get("fallback").and_then(|f| f.as_str()).map(str::to_owned)).unwrap_or_else(|| key.to_owned());
+                let args: Vec<String> = o
+                    .get("with")
+                    .and_then(|w| w.as_array())
+                    .map(|a| a.iter().map(|e| json_text(e, lang)).collect())
+                    .unwrap_or_default();
+                let pattern = lang
+                    .get(key)
+                    .cloned()
+                    .or_else(|| {
+                        o.get("fallback")
+                            .and_then(|f| f.as_str())
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| key.to_owned());
                 horizon_protocol::text::format_java(&pattern, &args)
             } else {
                 String::new()
@@ -275,21 +386,32 @@ pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128
     use horizon_protocol::packets::status;
     let (host, port) = parse_address(address).ok_or("Invalid address")?;
     let mut c = Connection::connect(&host, port, timeout).map_err(|e| e.to_string())?;
-    c.reader.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+    c.reader
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| e.to_string())?;
     let e = |e: horizon_protocol::Error| e.to_string();
     c.send(
-        &handshake::Serverbound::Intention(handshake::Intention { protocol: PROTOCOL_VERSION, host: host.clone(), port, intent: handshake::STATUS })
-            .encode(),
+        &handshake::Serverbound::Intention(handshake::Intention {
+            protocol: PROTOCOL_VERSION,
+            host: host.clone(),
+            port,
+            intent: handshake::STATUS,
+        })
+        .encode(),
     )
     .map_err(e)?;
-    c.send(&status::Serverbound::StatusRequest(Empty).encode()).map_err(e)?;
+    c.send(&status::Serverbound::StatusRequest(Empty).encode())
+        .map_err(e)?;
     let (id, payload) = c.recv().map_err(e)?;
     let json = match status::Clientbound::decode(id, &payload).map_err(e)? {
-        status::Clientbound::StatusResponse(s) => serde_json::from_str(&s.json).map_err(|e| e.to_string())?,
+        status::Clientbound::StatusResponse(s) => {
+            serde_json::from_str(&s.json).map_err(|e| e.to_string())?
+        }
         _ => return Err("unexpected status reply".into()),
     };
     let start = std::time::Instant::now();
-    c.send(&status::Serverbound::PingRequest(status::Ping { time: 1 }).encode()).map_err(e)?;
+    c.send(&status::Serverbound::PingRequest(status::Ping { time: 1 }).encode())
+        .map_err(e)?;
     let _ = c.recv().map_err(e)?;
     Ok((json, start.elapsed().as_millis()))
 }

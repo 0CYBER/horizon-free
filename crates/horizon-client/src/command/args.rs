@@ -70,15 +70,29 @@ impl Resource {
 #[derive(Clone, Debug)]
 pub enum ArgType {
     Bool,
-    Integer { min: i32, max: i32 },
-    Float { min: f32, max: f32 },
-    Double { min: f64, max: f64 },
+    Integer {
+        min: i32,
+        max: i32,
+    },
+    Float {
+        min: f32,
+        max: f32,
+    },
+    Double {
+        min: f64,
+        max: f64,
+    },
     Word,
     Str,
     Greedy,
-    Entity { single: bool, players: bool },
+    Entity {
+        single: bool,
+        players: bool,
+    },
     BlockPos,
-    Vec3 { center: bool },
+    Vec3 {
+        center: bool,
+    },
     Rotation,
     Angle,
     Item,
@@ -88,7 +102,9 @@ pub enum ArgType {
     Resource(Resource),
     /// A plain identifier; suggestions come from the named list.
     Id(&'static str),
-    Time { min: i32 },
+    Time {
+        min: i32,
+    },
     GameMode,
     Message,
     Dimension,
@@ -107,7 +123,11 @@ pub struct Coord {
 }
 impl Coord {
     pub fn get(self, base: f64) -> f64 {
-        if self.relative { base + self.value } else { self.value }
+        if self.relative {
+            base + self.value
+        } else {
+            self.value
+        }
     }
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -130,10 +150,22 @@ impl Coordinates {
                 let sin_p = (-pitch * d).sin();
                 let cos_p2 = ((-pitch + 90.0) * d).cos();
                 let sin_p2 = ((-pitch + 90.0) * d).sin();
-                let f = [f64::from(cos_y * cos_p), f64::from(sin_p), f64::from(sin_y * cos_p)];
-                let u = [f64::from(cos_y * cos_p2), f64::from(sin_p2), f64::from(sin_y * cos_p2)];
+                let f = [
+                    f64::from(cos_y * cos_p),
+                    f64::from(sin_p),
+                    f64::from(sin_y * cos_p),
+                ];
+                let u = [
+                    f64::from(cos_y * cos_p2),
+                    f64::from(sin_p2),
+                    f64::from(sin_y * cos_p2),
+                ];
                 // left = -(forward x up)
-                let l = [-(f[1] * u[2] - f[2] * u[1]), -(f[2] * u[0] - f[0] * u[2]), -(f[0] * u[1] - f[1] * u[0])];
+                let l = [
+                    -(f[1] * u[2] - f[2] * u[1]),
+                    -(f[2] * u[0] - f[0] * u[2]),
+                    -(f[0] * u[1] - f[1] * u[0]),
+                ];
                 [
                     pos[0] + f[0] * forwards + u[0] * up + l[0] * left,
                     pos[1] + f[1] * forwards + u[1] * up + l[1] * left,
@@ -144,12 +176,19 @@ impl Coordinates {
     }
     pub fn block(&self, pos: [f64; 3], rot: [f32; 2]) -> [i32; 3] {
         let p = self.position(pos, rot);
-        [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32]
+        [
+            p[0].floor() as i32,
+            p[1].floor() as i32,
+            p[2].floor() as i32,
+        ]
     }
     /// RotationArgument: (yaw, pitch) from the source rotation.
     pub fn rotation(&self, rot: [f32; 2]) -> [f32; 2] {
         match self {
-            Coordinates::World(c) => [c[0].get(f64::from(rot[0])) as f32, c[1].get(f64::from(rot[1])) as f32],
+            Coordinates::World(c) => [
+                c[0].get(f64::from(rot[0])) as f32,
+                c[1].get(f64::from(rot[1])) as f32,
+            ],
             Coordinates::Local(_) => rot,
         }
     }
@@ -215,7 +254,12 @@ pub enum GameMode {
     Spectator,
 }
 impl GameMode {
-    pub const ALL: [GameMode; 4] = [GameMode::Survival, GameMode::Creative, GameMode::Adventure, GameMode::Spectator];
+    pub const ALL: [GameMode; 4] = [
+        GameMode::Survival,
+        GameMode::Creative,
+        GameMode::Adventure,
+        GameMode::Spectator,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             GameMode::Survival => "survival",
@@ -257,7 +301,10 @@ pub fn read_id(reader: &mut Reader) -> CmdResult<String> {
         reader.skip();
     }
     let raw = &reader.string[start..reader.cursor];
-    let valid = !raw.is_empty() && raw.matches(':').count() <= 1 && !raw.ends_with(':') && !raw.split(':').next().unwrap_or("").contains('/');
+    let valid = !raw.is_empty()
+        && raw.matches(':').count() <= 1
+        && !raw.ends_with(':')
+        && !raw.split(':').next().unwrap_or("").contains('/');
     if !valid {
         reader.cursor = start;
         return Err(CommandError::tr_at("argument.id.invalid", &[], reader));
@@ -286,15 +333,23 @@ pub fn matches_sub_str(input: &str, candidate: &str) -> bool {
     }
 }
 /// SharedSuggestionProvider.suggestResource.
-pub fn suggest_resources<'a>(builder: &mut SuggestionsBuilder, ids: impl IntoIterator<Item = &'a String>, prefix: &str) {
+pub fn suggest_resources<'a>(
+    builder: &mut SuggestionsBuilder,
+    ids: impl IntoIterator<Item = &'a String>,
+    prefix: &str,
+) {
     let remaining = builder.remaining_lower();
-    let remaining = remaining.strip_prefix(prefix).unwrap_or(&remaining).to_owned();
+    let remaining = remaining
+        .strip_prefix(prefix)
+        .unwrap_or(&remaining)
+        .to_owned();
     for id in ids {
         let matched = if remaining.contains(':') {
             matches_sub_str(&remaining, id)
         } else {
             let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
-            matches_sub_str(&remaining, ns) || (ns == "minecraft" && matches_sub_str(&remaining, path))
+            matches_sub_str(&remaining, ns)
+                || (ns == "minecraft" && matches_sub_str(&remaining, path))
         };
         if matched {
             builder.suggest(format!("{prefix}{id}"));
@@ -303,7 +358,10 @@ pub fn suggest_resources<'a>(builder: &mut SuggestionsBuilder, ids: impl IntoIte
 }
 fn range_double(reader: &mut Reader) -> CmdResult<DoubleRange> {
     let (a, b) = read_range(reader)?;
-    let parse = |s: &str, reader: &Reader| s.parse::<f64>().map_err(|_| CommandError::tr_at("parsing.double.invalid", &[&s], reader));
+    let parse = |s: &str, reader: &Reader| {
+        s.parse::<f64>()
+            .map_err(|_| CommandError::tr_at("parsing.double.invalid", &[&s], reader))
+    };
     let lo = a.map(|s| parse(&s, reader)).transpose()?;
     let hi = b.map(|s| parse(&s, reader)).transpose()?;
     if let (Some(l), Some(h)) = (lo, hi)
@@ -319,7 +377,8 @@ fn range_int(reader: &mut Reader) -> CmdResult<IntRange> {
         if s.contains('.') {
             return Err(CommandError::tr_at("argument.range.ints", &[], reader));
         }
-        s.parse::<i32>().map_err(|_| CommandError::tr_at("parsing.int.invalid", &[&s], reader))
+        s.parse::<i32>()
+            .map_err(|_| CommandError::tr_at("parsing.int.invalid", &[&s], reader))
     };
     let lo = a.map(|s| parse(&s, reader)).transpose()?;
     let hi = b.map(|s| parse(&s, reader)).transpose()?;
@@ -337,7 +396,11 @@ fn read_range(reader: &mut Reader) -> CmdResult<(Option<String>, Option<String>)
     }
     let number = |reader: &mut Reader| {
         let start = reader.cursor;
-        while reader.can_read() && (reader.peek().is_ascii_digit() || reader.peek() == '-' || (reader.peek() == '.' && reader.peek_at(1) != '.')) {
+        while reader.can_read()
+            && (reader.peek().is_ascii_digit()
+                || reader.peek() == '-'
+                || (reader.peek() == '.' && reader.peek_at(1) != '.'))
+        {
             reader.skip();
         }
         let s = &reader.string[start..reader.cursor];
@@ -368,7 +431,11 @@ fn parse_coord_int(reader: &mut Reader) -> CmdResult<Coord> {
         reader.skip();
     }
     let value = if reader.can_read() && reader.peek() != ' ' {
-        if relative { reader.read_double()? } else { f64::from(reader.read_int()?) }
+        if relative {
+            reader.read_double()?
+        } else {
+            f64::from(reader.read_int()?)
+        }
     } else {
         0.0
     };
@@ -379,17 +446,28 @@ fn parse_coord_double(reader: &mut Reader, center: bool) -> CmdResult<Coord> {
         return Err(CommandError::tr_at("argument.pos.mixed", &[], reader));
     }
     if !reader.can_read() {
-        return Err(CommandError::tr_at("argument.pos.missing.double", &[], reader));
+        return Err(CommandError::tr_at(
+            "argument.pos.missing.double",
+            &[],
+            reader,
+        ));
     }
     let relative = reader.peek() == '~';
     if relative {
         reader.skip();
     }
     let start = reader.cursor;
-    let mut value = if reader.can_read() && reader.peek() != ' ' { reader.read_double()? } else { 0.0 };
+    let mut value = if reader.can_read() && reader.peek() != ' ' {
+        reader.read_double()?
+    } else {
+        0.0
+    };
     let number = &reader.string[start..reader.cursor];
     if relative && number.is_empty() {
-        return Ok(Coord { relative, value: 0.0 });
+        return Ok(Coord {
+            relative,
+            value: 0.0,
+        });
     }
     if !number.contains('.') && !relative && center {
         value += 0.5;
@@ -403,7 +481,11 @@ fn parse_local(reader: &mut Reader) -> CmdResult<Coordinates> {
         if i > 0 {
             if !reader.can_read() || reader.peek() != ' ' {
                 reader.cursor = start;
-                return Err(CommandError::tr_at("argument.pos3d.incomplete", &[], reader));
+                return Err(CommandError::tr_at(
+                    "argument.pos3d.incomplete",
+                    &[],
+                    reader,
+                ));
             }
             reader.skip();
         }
@@ -412,22 +494,37 @@ fn parse_local(reader: &mut Reader) -> CmdResult<Coordinates> {
             return Err(CommandError::tr_at("argument.pos.mixed", &[], reader));
         }
         reader.skip();
-        *slot = if reader.can_read() && reader.peek() != ' ' { reader.read_double()? } else { 0.0 };
+        *slot = if reader.can_read() && reader.peek() != ' ' {
+            reader.read_double()?
+        } else {
+            0.0
+        };
     }
     Ok(Coordinates::Local(v))
 }
 fn parse_world(reader: &mut Reader, block: bool, center: bool) -> CmdResult<Coordinates> {
     let start = reader.cursor;
-    let mut c = [Coord { relative: false, value: 0.0 }; 3];
+    let mut c = [Coord {
+        relative: false,
+        value: 0.0,
+    }; 3];
     for (i, slot) in c.iter_mut().enumerate() {
         if i > 0 {
             if !reader.can_read() || reader.peek() != ' ' {
                 reader.cursor = start;
-                return Err(CommandError::tr_at("argument.pos3d.incomplete", &[], reader));
+                return Err(CommandError::tr_at(
+                    "argument.pos3d.incomplete",
+                    &[],
+                    reader,
+                ));
             }
             reader.skip();
         }
-        *slot = if block { parse_coord_int(reader)? } else { parse_coord_double(reader, center && i != 1)? };
+        *slot = if block {
+            parse_coord_int(reader)?
+        } else {
+            parse_coord_double(reader, center && i != 1)?
+        };
     }
     Ok(Coordinates::World(c))
 }
@@ -470,7 +567,22 @@ const SELECTORS: [(&str, &str); 6] = [
     ("@s", "argument.entity.selector.self"),
 ];
 const OPTIONS: [&str; 16] = [
-    "name", "distance", "level", "x", "y", "z", "dx", "dy", "dz", "x_rotation", "y_rotation", "limit", "sort", "gamemode", "tag", "type",
+    "name",
+    "distance",
+    "level",
+    "x",
+    "y",
+    "z",
+    "dx",
+    "dy",
+    "dz",
+    "x_rotation",
+    "y_rotation",
+    "limit",
+    "sort",
+    "gamemode",
+    "tag",
+    "type",
 ];
 fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> {
     let start = reader.cursor;
@@ -481,14 +593,27 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
             reader.cursor = start;
             return Err(CommandError::tr_at("argument.entity.invalid", &[], reader));
         }
-        return Ok(Selector { player_name: Some(name), kind: '\0', limit: 1, include_entities: false, ..Selector::default() });
+        return Ok(Selector {
+            player_name: Some(name),
+            kind: '\0',
+            limit: 1,
+            include_entities: false,
+            ..Selector::default()
+        });
     }
     reader.skip();
     if !reader.can_read() {
-        return Err(CommandError::tr_at("argument.entity.selector.missing", &[], reader));
+        return Err(CommandError::tr_at(
+            "argument.entity.selector.missing",
+            &[],
+            reader,
+        ));
     }
     let kind = reader.read();
-    let mut s = Selector { kind, ..Selector::default() };
+    let mut s = Selector {
+        kind,
+        ..Selector::default()
+    };
     match kind {
         'p' => {
             s.limit = 1;
@@ -519,7 +644,11 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
         }
         other => {
             reader.cursor = start;
-            return Err(CommandError::tr_at("argument.entity.selector.unknown", &[&format!("@{other}")], reader));
+            return Err(CommandError::tr_at(
+                "argument.entity.selector.unknown",
+                &[&format!("@{other}")],
+                reader,
+            ));
         }
     }
     if reader.can_read() && reader.peek() == '[' {
@@ -531,12 +660,20 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
             let option = reader.read_string()?;
             if !OPTIONS.contains(&option.as_str()) {
                 reader.cursor = option_start;
-                return Err(CommandError::tr_at("argument.entity.options.unknown", &[&option], reader));
+                return Err(CommandError::tr_at(
+                    "argument.entity.options.unknown",
+                    &[&option],
+                    reader,
+                ));
             }
             reader.skip_whitespace();
             if !reader.can_read() || reader.peek() != '=' {
                 reader.cursor = option_start;
-                return Err(CommandError::tr_at("argument.entity.options.valueless", &[&option], reader));
+                return Err(CommandError::tr_at(
+                    "argument.entity.options.valueless",
+                    &[&option],
+                    reader,
+                ));
             }
             reader.skip();
             reader.skip_whitespace();
@@ -560,18 +697,30 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
                     let r = range_double(reader)?;
                     if r.0.is_some_and(|v| v < 0.0) || r.1.is_some_and(|v| v < 0.0) {
                         reader.cursor = option_start;
-                        return Err(CommandError::tr_at("argument.entity.options.distance.negative", &[], reader));
+                        return Err(CommandError::tr_at(
+                            "argument.entity.options.distance.negative",
+                            &[],
+                            reader,
+                        ));
                     }
                     s.distance = Some(r);
                     if s.kind != 's' {
-                        s.sort = if s.sort == Sort::Arbitrary { Sort::Arbitrary } else { s.sort };
+                        s.sort = if s.sort == Sort::Arbitrary {
+                            Sort::Arbitrary
+                        } else {
+                            s.sort
+                        };
                     }
                 }
                 "level" => {
                     let r = range_int(reader)?;
                     if r.0.is_some_and(|v| v < 0) || r.1.is_some_and(|v| v < 0) {
                         reader.cursor = option_start;
-                        return Err(CommandError::tr_at("argument.entity.options.level.negative", &[], reader));
+                        return Err(CommandError::tr_at(
+                            "argument.entity.options.level.negative",
+                            &[],
+                            reader,
+                        ));
                     }
                     s.level = Some(r);
                     s.include_entities = false;
@@ -591,7 +740,11 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
                     let n = reader.read_int()?;
                     if n < 1 {
                         reader.cursor = at;
-                        return Err(CommandError::tr_at("argument.entity.options.limit.toosmall", &[], reader));
+                        return Err(CommandError::tr_at(
+                            "argument.entity.options.limit.toosmall",
+                            &[],
+                            reader,
+                        ));
                     }
                     s.limit = n as usize;
                 }
@@ -605,7 +758,11 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
                         "arbitrary" => Sort::Arbitrary,
                         _ => {
                             reader.cursor = at;
-                            return Err(CommandError::tr_at("argument.entity.options.sort.irreversible", &[&v], reader));
+                            return Err(CommandError::tr_at(
+                                "argument.entity.options.sort.irreversible",
+                                &[&v],
+                                reader,
+                            ));
                         }
                     };
                 }
@@ -615,7 +772,11 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
                     let v = reader.read_unquoted_string().to_owned();
                     if GameMode::from_name(&v).is_none() {
                         reader.cursor = at;
-                        return Err(CommandError::tr_at("argument.entity.options.mode.invalid", &[&v], reader));
+                        return Err(CommandError::tr_at(
+                            "argument.entity.options.mode.invalid",
+                            &[&v],
+                            reader,
+                        ));
                     }
                     s.gamemodes.push((v, neg));
                     s.include_entities = false;
@@ -635,7 +796,11 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
                     let id = read_id(reader)?;
                     if !tag && !reg.entity_types.is_empty() && !reg.entity_types.contains(&id) {
                         reader.cursor = at;
-                        return Err(CommandError::tr_at("argument.entity.options.type.invalid", &[&id], reader));
+                        return Err(CommandError::tr_at(
+                            "argument.entity.options.type.invalid",
+                            &[&id],
+                            reader,
+                        ));
                     }
                     let id = if tag { format!("#{id}") } else { id };
                     if s.kind == 'p' || s.kind == 'a' || s.kind == 'r' {
@@ -654,11 +819,19 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
                 continue;
             }
             if !reader.can_read() || reader.peek() != ']' {
-                return Err(CommandError::tr_at("argument.entity.options.unterminated", &[], reader));
+                return Err(CommandError::tr_at(
+                    "argument.entity.options.unterminated",
+                    &[],
+                    reader,
+                ));
             }
         }
         if !reader.can_read() {
-            return Err(CommandError::tr_at("argument.entity.options.unterminated", &[], reader));
+            return Err(CommandError::tr_at(
+                "argument.entity.options.unterminated",
+                &[],
+                reader,
+            ));
         }
         reader.skip();
     }
@@ -682,7 +855,8 @@ fn suggest_selector(builder: &mut SuggestionsBuilder, reg: &Registries) {
             let complete = match name {
                 "type" => {
                     let v = value.trim_start_matches('#');
-                    !v.is_empty() && (reg.entity_types.contains(&normalize(v)) || value.starts_with('#'))
+                    !v.is_empty()
+                        && (reg.entity_types.contains(&normalize(v)) || value.starts_with('#'))
                 }
                 "sort" => ["nearest", "furthest", "random", "arbitrary"].contains(&value),
                 "gamemode" => GameMode::from_name(value).is_some(),
@@ -716,7 +890,10 @@ fn suggest_selector(builder: &mut SuggestionsBuilder, reg: &Registries) {
             let lower = part.trim_start().to_lowercase();
             for o in OPTIONS {
                 if o.starts_with(&lower) {
-                    b.suggest_tooltip(format!("{o}="), crate::lang::get(&format!("argument.entity.options.{o}.description")));
+                    b.suggest_tooltip(
+                        format!("{o}="),
+                        crate::lang::get(&format!("argument.entity.options.{o}.description")),
+                    );
                 }
             }
             if part.is_empty() {
@@ -745,16 +922,28 @@ fn parse_block(reader: &mut Reader, reg: &Registries, tags: bool) -> CmdResult<B
     let start = reader.cursor;
     let tag = tags && reader.can_read() && reader.peek() == '#';
     if !tags && reader.can_read() && reader.peek() == '#' {
-        return Err(CommandError::tr_at("argument.block.tag.disallowed", &[], reader));
+        return Err(CommandError::tr_at(
+            "argument.block.tag.disallowed",
+            &[],
+            reader,
+        ));
     }
     if tag {
         reader.skip();
     }
     let id = read_id(reader)?;
-    let known = if tag { reg.block_tags.contains(&id) || reg.block_tags.is_empty() } else { reg.blocks.contains_key(&id) || reg.blocks.is_empty() };
+    let known = if tag {
+        reg.block_tags.contains(&id) || reg.block_tags.is_empty()
+    } else {
+        reg.blocks.contains_key(&id) || reg.blocks.is_empty()
+    };
     if !known {
         reader.cursor = start;
-        let key = if tag { "arguments.block.tag.unknown" } else { "argument.block.id.invalid" };
+        let key = if tag {
+            "arguments.block.tag.unknown"
+        } else {
+            "argument.block.id.invalid"
+        };
         return Err(CommandError::tr_at(key, &[&id], reader));
     }
     let mut properties = Vec::new();
@@ -769,15 +958,30 @@ fn parse_block(reader: &mut Reader, reg: &Registries, tags: bool) -> CmdResult<B
             let property = allowed.and_then(|p| p.iter().find(|(n, _)| *n == name));
             if !tag && allowed.is_some() && property.is_none() {
                 reader.cursor = at;
-                return Err(CommandError::tr_at("argument.block.property.unknown", &[&id, &name], reader));
+                return Err(CommandError::tr_at(
+                    "argument.block.property.unknown",
+                    &[&id, &name],
+                    reader,
+                ));
             }
-            if properties.iter().any(|(n, _): &(String, String)| *n == name) {
+            if properties
+                .iter()
+                .any(|(n, _): &(String, String)| *n == name)
+            {
                 reader.cursor = at;
-                return Err(CommandError::tr_at("argument.block.property.duplicate", &[&name, &id], reader));
+                return Err(CommandError::tr_at(
+                    "argument.block.property.duplicate",
+                    &[&name, &id],
+                    reader,
+                ));
             }
             reader.skip_whitespace();
             if !reader.can_read() || reader.peek() != '=' {
-                return Err(CommandError::tr_at("argument.block.property.novalue", &[&name, &id], reader));
+                return Err(CommandError::tr_at(
+                    "argument.block.property.novalue",
+                    &[&name, &id],
+                    reader,
+                ));
             }
             reader.skip();
             reader.skip_whitespace();
@@ -787,7 +991,11 @@ fn parse_block(reader: &mut Reader, reg: &Registries, tags: bool) -> CmdResult<B
                 && !values.contains(&value)
             {
                 reader.cursor = vat;
-                return Err(CommandError::tr_at("argument.block.property.invalid", &[&id, &value, &name], reader));
+                return Err(CommandError::tr_at(
+                    "argument.block.property.invalid",
+                    &[&id, &value, &name],
+                    reader,
+                ));
             }
             properties.push((name, value));
             reader.skip_whitespace();
@@ -796,16 +1004,33 @@ fn parse_block(reader: &mut Reader, reg: &Registries, tags: bool) -> CmdResult<B
                 continue;
             }
             if !reader.can_read() || reader.peek() != ']' {
-                return Err(CommandError::tr_at("argument.block.property.unclosed", &[], reader));
+                return Err(CommandError::tr_at(
+                    "argument.block.property.unclosed",
+                    &[],
+                    reader,
+                ));
             }
         }
         if !reader.can_read() {
-            return Err(CommandError::tr_at("argument.block.property.unclosed", &[], reader));
+            return Err(CommandError::tr_at(
+                "argument.block.property.unclosed",
+                &[],
+                reader,
+            ));
         }
         reader.skip();
     }
-    let nbt = if reader.can_read() && reader.peek() == '{' { Some(read_braced(reader, '{', '}')?) } else { None };
-    Ok(BlockInput { id, properties, tag, nbt })
+    let nbt = if reader.can_read() && reader.peek() == '{' {
+        Some(read_braced(reader, '{', '}')?)
+    } else {
+        None
+    };
+    Ok(BlockInput {
+        id,
+        properties,
+        tag,
+        nbt,
+    })
 }
 /// Skip a balanced bracketed section (SNBT or component list) and return it.
 fn read_braced(reader: &mut Reader, open: char, close: char) -> CmdResult<String> {
@@ -832,13 +1057,19 @@ fn read_braced(reader: &mut Reader, open: char, close: char) -> CmdResult<String
             None => {}
         }
     }
-    Err(CommandError::tr_at("argument.nbt.expected.compound", &[], reader))
+    Err(CommandError::tr_at(
+        "argument.nbt.expected.compound",
+        &[],
+        reader,
+    ))
 }
 fn suggest_block(builder: &mut SuggestionsBuilder, reg: &Registries, tags: bool) {
     let remaining = builder.remaining().to_owned();
     if let Some(open) = remaining.find('[') {
         let id = normalize(&remaining[..open]);
-        let Some(props) = reg.blocks.get(&id) else { return };
+        let Some(props) = reg.blocks.get(&id) else {
+            return;
+        };
         let inside = &remaining[open + 1..];
         if inside.contains(']') {
             return;
@@ -846,7 +1077,10 @@ fn suggest_block(builder: &mut SuggestionsBuilder, reg: &Registries, tags: bool)
         let part_start = inside.rfind(',').map_or(0, |i| i + 1);
         let part = &inside[part_start..];
         let base = builder.start + open + 1 + part_start;
-        let used: Vec<&str> = inside.split(',').filter_map(|p| p.split_once('=').map(|(n, _)| n.trim())).collect();
+        let used: Vec<&str> = inside
+            .split(',')
+            .filter_map(|p| p.split_once('=').map(|(n, _)| n.trim()))
+            .collect();
         match part.split_once('=') {
             Some((name, value)) => {
                 let mut b = builder.offset(base + name.len() + 1);
@@ -895,24 +1129,50 @@ fn parse_item(reader: &mut Reader, reg: &Registries, predicate: bool) -> CmdResu
     let start = reader.cursor;
     if predicate && reader.can_read() && reader.peek() == '*' {
         reader.skip();
-        return Ok(ItemInput { id: "*".into(), tag: false, any: true, components: None });
+        return Ok(ItemInput {
+            id: "*".into(),
+            tag: false,
+            any: true,
+            components: None,
+        });
     }
     let tag = reader.can_read() && reader.peek() == '#';
     if tag && !predicate {
-        return Err(CommandError::tr_at("argument.item.tag.disallowed", &[], reader));
+        return Err(CommandError::tr_at(
+            "argument.item.tag.disallowed",
+            &[],
+            reader,
+        ));
     }
     if tag {
         reader.skip();
     }
     let id = read_id(reader)?;
-    let known = if tag { reg.item_tags.is_empty() || reg.item_tags.contains(&id) } else { reg.items.is_empty() || reg.items.contains(&id) };
+    let known = if tag {
+        reg.item_tags.is_empty() || reg.item_tags.contains(&id)
+    } else {
+        reg.items.is_empty() || reg.items.contains(&id)
+    };
     if !known {
         reader.cursor = start;
-        let key = if tag { "arguments.item.tag.unknown" } else { "argument.item.id.invalid" };
+        let key = if tag {
+            "arguments.item.tag.unknown"
+        } else {
+            "argument.item.id.invalid"
+        };
         return Err(CommandError::tr_at(key, &[&id], reader));
     }
-    let components = if reader.can_read() && reader.peek() == '[' { Some(read_braced(reader, '[', ']')?) } else { None };
-    Ok(ItemInput { id, tag, any: false, components })
+    let components = if reader.can_read() && reader.peek() == '[' {
+        Some(read_braced(reader, '[', ']')?)
+    } else {
+        None
+    };
+    Ok(ItemInput {
+        id,
+        tag,
+        any: false,
+        components,
+    })
 }
 /// TimeArgument units.
 fn time_unit(unit: &str) -> Option<i32> {
@@ -933,11 +1193,19 @@ impl ArgType {
                 let v = reader.read_int()?;
                 if v < *min {
                     reader.cursor = start;
-                    return Err(CommandError::tr_at("argument.integer.low", &[min, &v], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.integer.low",
+                        &[min, &v],
+                        reader,
+                    ));
                 }
                 if v > *max {
                     reader.cursor = start;
-                    return Err(CommandError::tr_at("argument.integer.big", &[max, &v], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.integer.big",
+                        &[max, &v],
+                        reader,
+                    ));
                 }
                 Arg::Int(v)
             }
@@ -945,11 +1213,19 @@ impl ArgType {
                 let v = reader.read_float()?;
                 if v < *min {
                     reader.cursor = start;
-                    return Err(CommandError::tr_at("argument.float.low", &[min, &v], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.float.low",
+                        &[min, &v],
+                        reader,
+                    ));
                 }
                 if v > *max {
                     reader.cursor = start;
-                    return Err(CommandError::tr_at("argument.float.big", &[max, &v], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.float.big",
+                        &[max, &v],
+                        reader,
+                    ));
                 }
                 Arg::Float(v)
             }
@@ -957,11 +1233,19 @@ impl ArgType {
                 let v = reader.read_double()?;
                 if v < *min {
                     reader.cursor = start;
-                    return Err(CommandError::tr_at("argument.double.low", &[min, &v], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.double.low",
+                        &[min, &v],
+                        reader,
+                    ));
                 }
                 if v > *max {
                     reader.cursor = start;
-                    return Err(CommandError::tr_at("argument.double.big", &[max, &v], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.double.big",
+                        &[max, &v],
+                        reader,
+                    ));
                 }
                 Arg::Double(v)
             }
@@ -976,7 +1260,11 @@ impl ArgType {
                 let s = parse_selector(reader, reg)?;
                 if s.limit > 1 && *single {
                     reader.cursor = start;
-                    let key = if *players { "argument.player.toomany" } else { "argument.entity.toomany" };
+                    let key = if *players {
+                        "argument.player.toomany"
+                    } else {
+                        "argument.entity.toomany"
+                    };
                     return Err(CommandError::tr_at(key, &[], reader));
                 }
                 if s.include_entities && *players && !s.is_self() {
@@ -1001,26 +1289,49 @@ impl ArgType {
             }
             ArgType::Rotation => {
                 if !reader.can_read() {
-                    return Err(CommandError::tr_at("argument.rotation.incomplete", &[], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.rotation.incomplete",
+                        &[],
+                        reader,
+                    ));
                 }
                 let yaw = parse_coord_double(reader, false)?;
                 if !reader.can_read() || reader.peek() != ' ' {
                     reader.cursor = start;
-                    return Err(CommandError::tr_at("argument.rotation.incomplete", &[], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.rotation.incomplete",
+                        &[],
+                        reader,
+                    ));
                 }
                 reader.skip();
                 let pitch = parse_coord_double(reader, false)?;
-                Arg::Coords(Coordinates::World([yaw, pitch, Coord { relative: true, value: 0.0 }]))
+                Arg::Coords(Coordinates::World([
+                    yaw,
+                    pitch,
+                    Coord {
+                        relative: true,
+                        value: 0.0,
+                    },
+                ]))
             }
             ArgType::Angle => {
                 if !reader.can_read() {
-                    return Err(CommandError::tr_at("argument.angle.incomplete", &[], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.angle.incomplete",
+                        &[],
+                        reader,
+                    ));
                 }
                 let relative = reader.peek() == '~';
                 if relative {
                     reader.skip();
                 }
-                let value = if reader.can_read() && reader.peek() != ' ' { f64::from(reader.read_float()?) } else { 0.0 };
+                let value = if reader.can_read() && reader.peek() != ' ' {
+                    f64::from(reader.read_float()?)
+                } else {
+                    0.0
+                };
                 if value.is_nan() || value.is_infinite() {
                     return Err(CommandError::tr_at("argument.angle.invalid", &[], reader));
                 }
@@ -1035,7 +1346,10 @@ impl ArgType {
                 let values = kind.values(reg);
                 if !values.is_empty() && !values.contains(&id) {
                     reader.cursor = start;
-                    return Err(CommandError::new(crate::text::Text::tr("argument.resource.not_found", &[&id, &kind.registry()])));
+                    return Err(CommandError::new(crate::text::Text::tr(
+                        "argument.resource.not_found",
+                        &[&id, &kind.registry()],
+                    )));
                 }
                 Arg::Resource(id)
             }
@@ -1055,7 +1369,10 @@ impl ArgType {
                 };
                 let ticks = (v * m as f32).round() as i32;
                 if ticks < *min {
-                    return Err(CommandError::tr("argument.time.tick_count_too_low", &[min, &ticks]));
+                    return Err(CommandError::tr(
+                        "argument.time.tick_count_too_low",
+                        &[min, &ticks],
+                    ));
                 }
                 Arg::Int(ticks)
             }
@@ -1065,13 +1382,21 @@ impl ArgType {
                     Some(m) => Arg::GameMode(m),
                     None => {
                         reader.cursor = start;
-                        return Err(CommandError::tr_at("argument.gamemode.invalid", &[&name], reader));
+                        return Err(CommandError::tr_at(
+                            "argument.gamemode.invalid",
+                            &[&name],
+                            reader,
+                        ));
                     }
                 }
             }
             ArgType::Nbt => {
                 if !reader.can_read() || reader.peek() != '{' {
-                    return Err(CommandError::tr_at("argument.nbt.expected.compound", &[], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.nbt.expected.compound",
+                        &[],
+                        reader,
+                    ));
                 }
                 Arg::Str(read_braced(reader, '{', '}')?)
             }
@@ -1082,13 +1407,23 @@ impl ArgType {
                     "feet" => Arg::Anchor(false),
                     _ => {
                         reader.cursor = start;
-                        return Err(CommandError::tr_at("argument.anchor.invalid", &[&name], reader));
+                        return Err(CommandError::tr_at(
+                            "argument.anchor.invalid",
+                            &[&name],
+                            reader,
+                        ));
                     }
                 }
             }
         })
     }
-    pub fn suggest(&self, builder: &mut SuggestionsBuilder, reg: &Registries, context: &Context, _name: &str) {
+    pub fn suggest(
+        &self,
+        builder: &mut SuggestionsBuilder,
+        reg: &Registries,
+        context: &Context,
+        _name: &str,
+    ) {
         let _ = context;
         match self {
             ArgType::Bool => builder.suggest_matching(["true", "false"]),

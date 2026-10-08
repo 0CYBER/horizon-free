@@ -24,7 +24,15 @@ pub struct ChatOptions {
 }
 impl Default for ChatOptions {
     fn default() -> Self {
-        Self { opacity: 1.0, background_opacity: 0.5, scale: 1.0, width: 1.0, height_focused: 1.0, height_unfocused: 70.0 / 160.0, line_spacing: 0.0 }
+        Self {
+            opacity: 1.0,
+            background_opacity: 0.5,
+            scale: 1.0,
+            width: 1.0,
+            height_focused: 1.0,
+            height_unfocused: 70.0 / 160.0,
+            line_spacing: 0.0,
+        }
     }
 }
 impl ChatOptions {
@@ -33,7 +41,13 @@ impl ChatOptions {
         (self.width * 280.0 + 40.0).floor()
     }
     pub fn height_px(&self, focused: bool) -> f32 {
-        ((if focused { self.height_focused } else { self.height_unfocused }) * 160.0 + 20.0).floor()
+        ((if focused {
+            self.height_focused
+        } else {
+            self.height_unfocused
+        }) * 160.0
+            + 20.0)
+            .floor()
     }
     pub fn line_height(&self) -> f32 {
         (9.0 * (self.line_spacing + 1.0)).floor()
@@ -72,11 +86,22 @@ impl Chat {
         (self.options.width_px() / self.options.scale.max(0.01)).floor()
     }
     /// ChatComponent.addMessage: wrap, prepend and trim to 100 lines.
-    pub fn add(&mut self, atlas: &HudAtlas, content: Text, indicator: Option<u32>, ticks: u64, focused: bool) {
+    pub fn add(
+        &mut self,
+        atlas: &HudAtlas,
+        content: Text,
+        indicator: Option<u32>,
+        ticks: u64,
+        focused: bool,
+    ) {
         if self.log {
             println!("[CHAT] {}", content.plain());
         }
-        let message = Message { added: ticks, content, indicator };
+        let message = Message {
+            added: ticks,
+            content,
+            indicator,
+        };
         self.add_lines(atlas, &message, focused);
         self.messages.insert(0, message);
         self.messages.truncate(100);
@@ -88,7 +113,14 @@ impl Chat {
                 self.new_since_scroll = true;
                 self.scroll_by(1, focused);
             }
-            self.lines.insert(0, Line { added: message.added, content: line, indicator: message.indicator });
+            self.lines.insert(
+                0,
+                Line {
+                    added: message.added,
+                    content: line,
+                    indicator: message.indicator,
+                },
+            );
         }
         self.lines.truncate(100);
     }
@@ -120,7 +152,10 @@ impl Chat {
         self.new_since_scroll = false;
     }
     pub fn scroll_by(&mut self, dir: i32, focused: bool) {
-        let max = self.lines.len().saturating_sub(self.lines_per_page(focused)) as i32;
+        let max = self
+            .lines
+            .len()
+            .saturating_sub(self.lines_per_page(focused)) as i32;
         let pos = (self.scroll as i32 + dir).min(max);
         if pos <= 0 {
             self.scroll = 0;
@@ -149,7 +184,8 @@ impl Chat {
             if focused {
                 return 1.0;
             }
-            let t = ((1.0 - (ticks.saturating_sub(line.added)) as f64 / 200.0) * 10.0).clamp(0.0, 1.0);
+            let t =
+                ((1.0 - (ticks.saturating_sub(line.added)) as f64 / 200.0) * 10.0).clamp(0.0, 1.0);
             (t * t) as f32
         };
         let visible = self.lines.len().saturating_sub(self.scroll).min(per_page);
@@ -165,7 +201,14 @@ impl Chat {
             count += 1;
             let bottom = chat_bottom - i as f32 * entry_height;
             let top = bottom - entry_height;
-            batch.fill(atlas, 0.0, s(top), s(max_width + 8.0), s(entry_height), rgba(0, 0, 0, (alpha * o.background_opacity * 255.0) as u8));
+            batch.fill(
+                atlas,
+                0.0,
+                s(top),
+                s(max_width + 8.0),
+                s(entry_height),
+                rgba(0, 0, 0, (alpha * o.background_opacity * 255.0) as u8),
+            );
         }
         for i in (0..visible).rev() {
             let line = &self.lines[i + self.scroll];
@@ -178,10 +221,24 @@ impl Chat {
             let text_top = bottom - bottom_to_text;
             let a = (alpha * text_opacity * 255.0) as u8;
             if let Some(c) = line.indicator {
-                batch.fill(atlas, 0.0, s(top), s(2.0), s(entry_height), rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, a));
+                batch.fill(
+                    atlas,
+                    0.0,
+                    s(top),
+                    s(2.0),
+                    s(entry_height),
+                    rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, a),
+                );
             }
             if a > 3 {
-                batch.text_styled(atlas, &line.content, s(4.0), s(text_top), rgba(255, 255, 255, a), true);
+                batch.text_styled(
+                    atlas,
+                    &line.content,
+                    s(4.0),
+                    s(text_top),
+                    rgba(255, 255, 255, a),
+                    true,
+                );
             }
         }
         // Scroll bar while focused and scrolled content exists.
@@ -193,16 +250,38 @@ impl Chat {
                 let y = self.scroll as f32 * chat_height / total - chat_bottom;
                 let height = chat_height * chat_height / virtual_height;
                 let alpha = if y > 0.0 { 170 } else { 96 };
-                let c = if self.new_since_scroll { 0xCC3333 } else { 0x3333AA };
+                let c = if self.new_since_scroll {
+                    0xCC3333
+                } else {
+                    0x3333AA
+                };
                 let x = max_width + 4.0 + 4.0;
-                batch.fill(atlas, s(x), s(-y - height), s(2.0), s(height), rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, alpha));
-                batch.fill(atlas, s(x + 1.0), s(-y - height), s(1.0), s(height), rgba(0xCC, 0xCC, 0xCC, alpha));
+                batch.fill(
+                    atlas,
+                    s(x),
+                    s(-y - height),
+                    s(2.0),
+                    s(height),
+                    rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, alpha),
+                );
+                batch.fill(
+                    atlas,
+                    s(x + 1.0),
+                    s(-y - height),
+                    s(1.0),
+                    s(height),
+                    rgba(0xCC, 0xCC, 0xCC, alpha),
+                );
             }
         }
     }
     /// Plain text of the newest messages (for tests and the control socket).
     pub fn recent_lines(&self, n: usize) -> Vec<String> {
-        self.messages.iter().take(n).map(|m| m.content.plain()).collect()
+        self.messages
+            .iter()
+            .take(n)
+            .map(|m| m.content.plain())
+            .collect()
     }
 }
 
@@ -292,7 +371,10 @@ impl ChatScreen {
         self.usage.clear();
         self.pending.clear();
         let cursor_chars = self.input.cursor;
-        let cursor = command.char_indices().nth(cursor_chars).map_or(command.len(), |(i, _)| i);
+        let cursor = command
+            .char_indices()
+            .nth(cursor_chars)
+            .map_or(command.len(), |(i, _)| i);
         if !command.starts_with('/') {
             return;
         }
@@ -317,8 +399,19 @@ impl ChatScreen {
                         }
                     }
                     if literals > 0 {
-                        let reader = crate::command::Reader { string: &parse.input, cursor: parse.cursor };
-                        self.usage.push(crate::command::CommandError::tr_at("command.unknown.argument", &[], &reader).with_context().with_color(text::RED));
+                        let reader = crate::command::Reader {
+                            string: &parse.input,
+                            cursor: parse.cursor,
+                        };
+                        self.usage.push(
+                            crate::command::CommandError::tr_at(
+                                "command.unknown.argument",
+                                &[],
+                                &reader,
+                            )
+                            .with_context()
+                            .with_color(text::RED),
+                        );
                     }
                 } else if parse.can_read() {
                     trailing = true;
@@ -329,7 +422,9 @@ impl ChatScreen {
                 let mut lines: Vec<Text> = d
                     .smart_usage(node, reg.permission)
                     .into_iter()
-                    .filter(|(n, _)| !matches!(d.nodes[*n].kind, crate::command::NodeKind::Literal(_)))
+                    .filter(|(n, _)| {
+                        !matches!(d.nodes[*n].kind, crate::command::NodeKind::Literal(_))
+                    })
                     .map(|(_, u)| Text::colored(u, text::GRAY))
                     .collect();
                 if lines.is_empty()
@@ -340,12 +435,20 @@ impl ChatScreen {
                 }
                 self.usage = lines;
             }
-            let usage_width = self.usage.iter().map(|u| atlas.font.width_text(u)).fold(0.0, f32::max);
+            let usage_width = self
+                .usage
+                .iter()
+                .map(|u| atlas.font.width_text(u))
+                .fold(0.0, f32::max);
             let start_chars = char_len(&command[..start.min(command.len())]);
             self.usage_x = if self.usage.is_empty() {
                 0.0
             } else {
-                self.input.screen_x(atlas, start_chars).clamp(0.0, (self.input.screen_x(atlas, 0) + self.input.inner_width() - usage_width).max(0.0))
+                self.input.screen_x(atlas, start_chars).clamp(
+                    0.0,
+                    (self.input.screen_x(atlas, 0) + self.input.inner_width() - usage_width)
+                        .max(0.0),
+                )
             };
             self.suggestions = None;
             if self.allow_suggestions && self.auto_suggestions {
@@ -359,18 +462,39 @@ impl ChatScreen {
             return;
         }
         let value = self.input.value.clone();
-        let width = self.pending.iter().map(|s| atlas.font.width(&s.text)).fold(0.0, f32::max);
+        let width = self
+            .pending
+            .iter()
+            .map(|s| atlas.font.width(&s.text))
+            .fold(0.0, f32::max);
         let start_chars = char_len(&value[..self.pending_start.min(value.len())]);
-        let x = self.input.screen_x(atlas, start_chars).clamp(0.0, (self.input.screen_x(atlas, 0) + self.input.inner_width() - width).max(0.0));
+        let x = self.input.screen_x(atlas, start_chars).clamp(
+            0.0,
+            (self.input.screen_x(atlas, 0) + self.input.inner_width() - width).max(0.0),
+        );
         // Sort: suggestions starting with the last word first.
-        let cursor = value.char_indices().nth(self.input.cursor).map_or(value.len(), |(i, _)| i);
+        let cursor = value
+            .char_indices()
+            .nth(self.input.cursor)
+            .map_or(value.len(), |(i, _)| i);
         let partial = &value[..cursor];
         let last_word = partial.rfind(char::is_whitespace).map_or(0, |i| i + 1);
         let word = partial[last_word..].to_lowercase();
         let (mut first, partial_matches): (Vec<Suggestion>, Vec<Suggestion>) =
-            self.pending.iter().cloned().partition(|s| s.text.starts_with(&word) || s.text.starts_with(&format!("minecraft:{word}")));
+            self.pending.iter().cloned().partition(|s| {
+                s.text.starts_with(&word) || s.text.starts_with(&format!("minecraft:{word}"))
+            });
         first.extend(partial_matches);
-        let mut list = SuggestionList { x: x - 1.0, width: width + 1.0, list: first, offset: 0, current: 0, original: value, tab_cycles: false, last_mouse: (-1.0, -1.0) };
+        let mut list = SuggestionList {
+            x: x - 1.0,
+            width: width + 1.0,
+            list: first,
+            offset: 0,
+            current: 0,
+            original: value,
+            tab_cycles: false,
+            last_mouse: (-1.0, -1.0),
+        };
         self.select(&mut list, 0);
         self.suggestions = Some(list);
     }
@@ -378,7 +502,10 @@ impl ChatScreen {
         let n = list.list.len() as isize;
         list.current = index.rem_euclid(n.max(1)) as usize;
         let applied = list.list[list.current].apply(&list.original);
-        self.input.suggestion = applied.strip_prefix(self.input.value.as_str()).filter(|s| !s.is_empty()).map(str::to_owned);
+        self.input.suggestion = applied
+            .strip_prefix(self.input.value.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
     }
     fn cycle(&mut self, list: &mut SuggestionList, dir: isize) {
         self.select(list, list.current as isize + dir);
@@ -395,7 +522,8 @@ impl ChatScreen {
         self.keep_suggestions = true;
         let applied = s.apply(&list.original);
         self.input.set_value(&applied);
-        let end = char_len(&list.original[..s.range.0.min(list.original.len())]) + char_len(&s.text);
+        let end =
+            char_len(&list.original[..s.range.0.min(list.original.len())]) + char_len(&s.text);
         self.input.set_cursor(end, false);
         self.dirty = true;
         self.select(list, list.current as isize);
@@ -403,7 +531,14 @@ impl ChatScreen {
         list.tab_cycles = true;
     }
     /// Suggestion-list keys (CommandSuggestions.keyPressed). Returns true if handled.
-    pub fn suggestion_key(&mut self, atlas: &HudAtlas, d: &Dispatcher, reg: &Registries, key: winit::keyboard::KeyCode, shift: bool) -> bool {
+    pub fn suggestion_key(
+        &mut self,
+        atlas: &HudAtlas,
+        d: &Dispatcher,
+        reg: &Registries,
+        key: winit::keyboard::KeyCode,
+        shift: bool,
+    ) -> bool {
         use winit::keyboard::KeyCode as K;
         self.update(atlas, d, reg);
         if let Some(mut list) = self.suggestions.take() {
@@ -470,7 +605,9 @@ impl ChatScreen {
     }
     /// Mouse wheel over the suggestion list.
     pub fn scroll_suggestions(&mut self, cursor: (f32, f32), height: f32, amount: f32) -> bool {
-        let Some(list) = &mut self.suggestions else { return false };
+        let Some(list) = &mut self.suggestions else {
+            return false;
+        };
         let n = list.list.len().min(10);
         let top = height - 12.0 - 3.0 - n as f32 * 12.0;
         if crate::ui::hovered(cursor, list.x, top, list.width, n as f32 * 12.0) {
@@ -482,7 +619,9 @@ impl ChatScreen {
     }
     /// Click on a suggestion row.
     pub fn click(&mut self, cursor: (f32, f32), height: f32) -> bool {
-        let Some(mut list) = self.suggestions.take() else { return false };
+        let Some(mut list) = self.suggestions.take() else {
+            return false;
+        };
         let n = list.list.len().min(10);
         let top = height - 12.0 - 3.0 - n as f32 * 12.0;
         if crate::ui::hovered(cursor, list.x, top, list.width, n as f32 * 12.0) {
@@ -501,7 +640,13 @@ impl ChatScreen {
     fn formatted(&self) -> Option<Text> {
         let parse = self.parse.as_ref()?;
         let value = &self.input.value;
-        let styles = [text::AQUA, text::YELLOW, text::GREEN, text::LIGHT_PURPLE, text::GOLD];
+        let styles = [
+            text::AQUA,
+            text::YELLOW,
+            text::GREEN,
+            text::LIGHT_PURPLE,
+            text::GOLD,
+        ];
         let mut colors = vec![text::GRAY; value.len()];
         let ctx = parse.context.last_child();
         for (i, arg) in ctx.args.iter().enumerate() {
@@ -522,10 +667,25 @@ impl ChatScreen {
         Some(out)
     }
     /// ChatScreen.extractRenderState minus the chat lines.
-    pub fn draw(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, d: &Dispatcher, reg: &Registries, cursor: (f32, f32), background_opacity: f32) {
+    pub fn draw(
+        &mut self,
+        batch: &mut HudBatch,
+        atlas: &HudAtlas,
+        d: &Dispatcher,
+        reg: &Registries,
+        cursor: (f32, f32),
+        background_opacity: f32,
+    ) {
         self.update(atlas, d, reg);
         let (w, h) = (batch.width, batch.height);
-        batch.fill(atlas, 2.0, h - 14.0, w - 4.0, 12.0, rgba(0, 0, 0, (background_opacity * 255.0) as u8));
+        batch.fill(
+            atlas,
+            2.0,
+            h - 14.0,
+            w - 4.0,
+            12.0,
+            rgba(0, 0, 0, (background_opacity * 255.0) as u8),
+        );
         let formatted = self.formatted();
         self.input.draw(batch, atlas, formatted.as_ref());
         let fill = fill_color();
@@ -538,13 +698,27 @@ impl ChatScreen {
             list.last_mouse = cursor;
             if has_prev || has_next {
                 batch.fill(atlas, list.x, top - 1.0, list.width, 1.0, fill);
-                batch.fill(atlas, list.x, top + limit as f32 * 12.0, list.width, 1.0, fill);
+                batch.fill(
+                    atlas,
+                    list.x,
+                    top + limit as f32 * 12.0,
+                    list.width,
+                    1.0,
+                    fill,
+                );
                 for x in (0..list.width as i32).step_by(2) {
                     if has_prev {
                         batch.fill(atlas, list.x + x as f32, top - 1.0, 1.0, 1.0, u32::MAX);
                     }
                     if has_next {
-                        batch.fill(atlas, list.x + x as f32, top + limit as f32 * 12.0, 1.0, 1.0, u32::MAX);
+                        batch.fill(
+                            atlas,
+                            list.x + x as f32,
+                            top + limit as f32 * 12.0,
+                            1.0,
+                            1.0,
+                            u32::MAX,
+                        );
                     }
                 }
             }
@@ -552,7 +726,11 @@ impl ChatScreen {
             for i in 0..limit {
                 let y = top + 12.0 * i as f32;
                 batch.fill(atlas, list.x, y, list.width, 12.0, fill);
-                if cursor.0 > list.x && cursor.0 < list.x + list.width && cursor.1 > y && cursor.1 < y + 12.0 {
+                if cursor.0 > list.x
+                    && cursor.0 < list.x + list.width
+                    && cursor.1 > y
+                    && cursor.1 < y + 12.0
+                {
                     hovered_row = Some(i + list.offset);
                 }
             }
@@ -561,8 +739,19 @@ impl ChatScreen {
             }
             for i in 0..limit {
                 let s = &list.list[i + list.offset];
-                let color = if i + list.offset == list.current { rgba(255, 255, 0, 255) } else { rgba(0xAA, 0xAA, 0xAA, 255) };
-                batch.text(atlas, &s.text, list.x + 1.0, top + 2.0 + 12.0 * i as f32, color, true);
+                let color = if i + list.offset == list.current {
+                    rgba(255, 255, 0, 255)
+                } else {
+                    rgba(0xAA, 0xAA, 0xAA, 255)
+                };
+                batch.text(
+                    atlas,
+                    &s.text,
+                    list.x + 1.0,
+                    top + 2.0 + 12.0 * i as f32,
+                    color,
+                    true,
+                );
             }
             if hovered_row.is_some()
                 && let Some(tip) = &list.list[list.current].tooltip
@@ -581,7 +770,12 @@ impl ChatScreen {
     }
     /// ChatScreen.normalizeChatMessage.
     pub fn normalized(&self) -> String {
-        let collapsed = self.input.value.split_whitespace().collect::<Vec<_>>().join(" ");
+        let collapsed = self
+            .input
+            .value
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         collapsed.chars().take(256).collect()
     }
     pub fn suggestions_visible(&self) -> bool {

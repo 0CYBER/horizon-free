@@ -192,7 +192,13 @@ impl Assets {
         let models = crate::models::prepare(root, registry, &mut sprites)?;
         // Fluids are drawn by the fluid renderer, not block models; breaking
         // progress uses the destroy-stage overlays.
-        for name in ["water_still", "water_flow", "water_overlay", "lava_still", "lava_flow"] {
+        for name in [
+            "water_still",
+            "water_flow",
+            "water_overlay",
+            "lava_still",
+            "lava_flow",
+        ] {
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
         for stage in 0..10 {

@@ -41,7 +41,10 @@ impl ResourceSource for std::path::PathBuf {
 
 impl Language {
     pub fn from_map(code: &str, map: HashMap<String, String>) -> Self {
-        Self { code: code.to_owned(), map }
+        Self {
+            code: code.to_owned(),
+            map,
+        }
     }
     /// ClientLanguage.loadFrom: en_us first, then the selected language, each
     /// from every source in priority order (later sources override).
@@ -53,13 +56,18 @@ impl Language {
         }
         for c in codes {
             for source in sources {
-                let Some(bytes) = source.read(&format!("assets/minecraft/lang/{c}.json")) else { continue };
+                let Some(bytes) = source.read(&format!("assets/minecraft/lang/{c}.json")) else {
+                    continue;
+                };
                 if let Ok(entries) = serde_json::from_slice::<HashMap<String, String>>(&bytes) {
                     map.extend(entries);
                 }
             }
         }
-        Self { code: code.to_owned(), map }
+        Self {
+            code: code.to_owned(),
+            map,
+        }
     }
     pub fn get(&self, key: &str) -> Option<&str> {
         self.map.get(key).map(String::as_str)
@@ -77,12 +85,21 @@ pub fn available(sources: &[&dyn ResourceSource]) -> Vec<LanguageInfo> {
     let mut found: BTreeMap<String, LanguageInfo> = BTreeMap::new();
     found.insert(
         DEFAULT.into(),
-        LanguageInfo { code: DEFAULT.into(), name: "English".into(), region: "US".into(), bidirectional: false },
+        LanguageInfo {
+            code: DEFAULT.into(),
+            name: "English".into(),
+            region: "US".into(),
+            bidirectional: false,
+        },
     );
     for source in sources {
         for path in ["assets/pack.mcmeta", "pack.mcmeta"] {
-            let Some(bytes) = source.read(path) else { continue };
-            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
+            let Some(bytes) = source.read(path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                continue;
+            };
             for (code, info) in value["language"].as_object().into_iter().flatten() {
                 // Only languages whose file exists somewhere are selectable.
                 let file = format!("assets/minecraft/lang/{code}.json");
@@ -115,11 +132,15 @@ pub fn code() -> String {
 }
 /// Language.getOrDefault: the translation, or the key itself.
 pub fn get(key: &str) -> String {
-    current().and_then(|l| l.get(key).map(str::to_owned)).unwrap_or_else(|| key.to_owned())
+    current()
+        .and_then(|l| l.get(key).map(str::to_owned))
+        .unwrap_or_else(|| key.to_owned())
 }
 /// The translation, or `fallback` when the key is missing.
 pub fn get_or(key: &str, fallback: &str) -> String {
-    current().and_then(|l| l.get(key).map(str::to_owned)).unwrap_or_else(|| fallback.to_owned())
+    current()
+        .and_then(|l| l.get(key).map(str::to_owned))
+        .unwrap_or_else(|| fallback.to_owned())
 }
 pub fn has(key: &str) -> bool {
     current().is_some_and(|l| l.get(key).is_some())
@@ -145,14 +166,20 @@ mod tests {
             ("assets/minecraft/lang/fr_fr.json".into(), br#"{"a":"Pomme"}"#.to_vec()),
             ("assets/pack.mcmeta".into(), r#"{"language":{"fr_fr":{"name":"Français","region":"France"},"de_de":{"name":"Deutsch","region":"Deutschland"}}}"#.as_bytes().to_vec()),
         ]));
-        let pack = Mem(HashMap::from([("assets/minecraft/lang/fr_fr.json".into(), br#"{"b":"Banane"}"#.to_vec())]));
+        let pack = Mem(HashMap::from([(
+            "assets/minecraft/lang/fr_fr.json".into(),
+            br#"{"b":"Banane"}"#.to_vec(),
+        )]));
         let sources: [&dyn ResourceSource; 2] = [&base, &pack];
         let fr = Language::load(&sources, "fr_fr");
         assert_eq!(fr.get("a"), Some("Pomme"));
         assert_eq!(fr.get("b"), Some("Banane"));
         let langs = available(&sources);
         // de_de has no file, so only English and French are offered.
-        assert_eq!(langs.iter().map(|l| l.code.as_str()).collect::<Vec<_>>(), ["en_us", "fr_fr"]);
+        assert_eq!(
+            langs.iter().map(|l| l.code.as_str()).collect::<Vec<_>>(),
+            ["en_us", "fr_fr"]
+        );
         assert_eq!(langs[1].label(), "Français (France)");
     }
 }

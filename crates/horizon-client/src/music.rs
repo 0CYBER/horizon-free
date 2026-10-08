@@ -16,7 +16,12 @@ pub struct Music {
 }
 impl Music {
     fn new(sound: &str, min_delay: i32, max_delay: i32, replace_current_music: bool) -> Self {
-        Self { sound: sound.to_owned(), min_delay, max_delay, replace_current_music }
+        Self {
+            sound: sound.to_owned(),
+            min_delay,
+            max_delay,
+            replace_current_music,
+        }
     }
     /// `Musics.MENU`.
     pub fn menu() -> Self {
@@ -34,7 +39,12 @@ impl Music {
     fn parse(v: &Value) -> Option<Self> {
         let sound = v["sound"].as_str()?;
         let int = |k: &str| v[k].as_i64().unwrap_or(0) as i32;
-        Some(Self::new(sound, int("min_delay"), int("max_delay"), v["replace_current_music"].as_bool().unwrap_or(false)))
+        Some(Self::new(
+            sound,
+            int("min_delay"),
+            int("max_delay"),
+            v["replace_current_music"].as_bool().unwrap_or(false),
+        ))
     }
 }
 /// `BackgroundMusic`: the attribute value.
@@ -74,7 +84,9 @@ impl Layer {
         let music = &attributes["minecraft:audio/background_music"];
         Self {
             music: (!music.is_null()).then(|| BackgroundMusic::parse(music)),
-            volume: attributes["minecraft:audio/music_volume"].as_f64().map(|v| v.clamp(0.0, 1.0) as f32),
+            volume: attributes["minecraft:audio/music_volume"]
+                .as_f64()
+                .map(|v| v.clamp(0.0, 1.0) as f32),
         }
     }
 }
@@ -87,7 +99,9 @@ pub struct MusicTables {
 impl MusicTables {
     pub fn load(root: &Path) -> Self {
         let read = |dir: &str| -> HashMap<String, Layer> {
-            let Ok(entries) = fs::read_dir(root.join("data/minecraft").join(dir)) else { return HashMap::new() };
+            let Ok(entries) = fs::read_dir(root.join("data/minecraft").join(dir)) else {
+                return HashMap::new();
+            };
             entries
                 .flatten()
                 .filter_map(|e| {
@@ -98,7 +112,10 @@ impl MusicTables {
                 })
                 .collect()
         };
-        Self { dimensions: read("dimension_type"), biomes: read("worldgen/biome") }
+        Self {
+            dimensions: read("dimension_type"),
+            biomes: read("worldgen/biome"),
+        }
     }
     /// `EnvironmentAttributes.BACKGROUND_MUSIC` at a position.
     pub fn background(&self, dimension: &str, biome: &str) -> BackgroundMusic {
@@ -141,7 +158,9 @@ impl MusicFrequency {
         }
     }
     fn next_song_delay(self, music: Option<&Music>, random: &mut LegacyRandom) -> i32 {
-        let Some(music) = music else { return self.max_frequency() };
+        let Some(music) = music else {
+            return self.max_frequency();
+        };
         if self == Self::Constant {
             return 100;
         }
@@ -152,7 +171,11 @@ impl MusicFrequency {
 }
 /// `Mth.nextInt(random, min, max)`: inclusive.
 fn next_int(random: &mut LegacyRandom, min: i32, max: i32) -> i32 {
-    if min >= max { min } else { random.next_int_bound(max - min + 1).unwrap_or(0) + min }
+    if min >= max {
+        min
+    } else {
+        random.next_int_bound(max - min + 1).unwrap_or(0) + min
+    }
 }
 /// What the music manager drives (the sound engine's music channel).
 pub trait MusicOutput {
@@ -189,7 +212,9 @@ pub struct MusicManager {
 impl Default for MusicManager {
     fn default() -> Self {
         // RandomSource.create(): seeded from the clock, not the world.
-        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as i64);
         Self::new(seed)
     }
 }
@@ -208,7 +233,13 @@ impl MusicManager {
     }
     /// `MusicManager.tick` with the situational music and music volume;
     /// `loading` holds back a new track (`LevelLoadingScreen`).
-    pub fn tick(&mut self, music: Option<&Music>, volume: f32, loading: bool, out: &mut impl MusicOutput) {
+    pub fn tick(
+        &mut self,
+        music: Option<&Music>,
+        volume: f32,
+        loading: bool,
+        out: &mut impl MusicOutput,
+    ) {
         if self.current.is_some() && self.current_gain != volume && !self.fade(volume, music, out) {
             return;
         }
@@ -223,7 +254,9 @@ impl MusicManager {
             }
             if !out.is_active() {
                 self.current = None;
-                let delay = self.frequency.next_song_delay(Some(music), &mut self.random);
+                let delay = self
+                    .frequency
+                    .next_song_delay(Some(music), &mut self.random);
                 self.next_song_delay = self.next_song_delay.min(delay);
             }
         }
@@ -248,10 +281,18 @@ impl MusicManager {
         if self.current.take().is_some() {
             out.stop();
         }
-        self.next_song_delay = self.frequency.next_song_delay(situational, &mut self.random) + 100;
+        self.next_song_delay = self
+            .frequency
+            .next_song_delay(situational, &mut self.random)
+            + 100;
     }
     /// `MusicManager.fadePlaying`: false once the track faded out and stopped.
-    fn fade(&mut self, volume: f32, situational: Option<&Music>, out: &mut impl MusicOutput) -> bool {
+    fn fade(
+        &mut self,
+        volume: f32,
+        situational: Option<&Music>,
+        out: &mut impl MusicOutput,
+    ) -> bool {
         if self.current.is_none() {
             return false;
         }

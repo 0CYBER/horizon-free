@@ -9,9 +9,7 @@ use super::{
     start::StartContext,
 };
 use crate::{
-    heightmap::HeightmapType,
-    registry::BlockStateId,
-    worldgen::block_feature::FeatureBlockBindings,
+    heightmap::HeightmapType, registry::BlockStateId, worldgen::block_feature::FeatureBlockBindings,
 };
 use horizon_core::{geometry::Direction, position::ChunkPos, random::RandomSource};
 use serde_json::{Value, json};
@@ -190,7 +188,9 @@ pub fn start(
     };
     let rule = |source: &str, probability: Option<f32>, target: &str| {
         let input = match probability {
-            Some(p) => json!({"predicate_type": "minecraft:random_block_match", "block": source, "probability": p}),
+            Some(p) => {
+                json!({"predicate_type": "minecraft:random_block_match", "block": source, "probability": p})
+            }
             None => json!({"predicate_type": "minecraft:block_match", "block": source}),
         };
         json!({"input_predicate": input, "location_predicate": {"predicate_type": "minecraft:always_true"}, "output_state": target})
@@ -204,7 +204,11 @@ pub fn start(
         rule("minecraft:lava", Some(0.2), "minecraft:magma_block")
     });
     if !cold {
-        rules.push(rule("minecraft:netherrack", Some(0.07), "minecraft:magma_block"));
+        rules.push(rule(
+            "minecraft:netherrack",
+            Some(0.07),
+            "minecraft:magma_block",
+        ));
     }
     let mut list = vec![
         json!({"processor_type": "minecraft:rule", "rules": rules}),
@@ -215,9 +219,12 @@ pub fn start(
     if setup.blackstone {
         list.push(json!({"processor_type": "minecraft:blackstone_replace"}));
     }
-    let processors =
-        ProcessorList::decode(&json!({ "processors": list }).to_string(), resources, bindings)
-            .ok()?;
+    let processors = ProcessorList::decode(
+        &json!({ "processors": list }).to_string(),
+        resources,
+        bindings,
+    )
+    .ok()?;
     let mut ignore = vec!["minecraft:structure_block".to_owned()];
     if !air_pocket {
         ignore.push("minecraft:air".into());
@@ -331,7 +338,11 @@ pub fn post_process(piece: &TemplatePiece, c: &mut PieceContext<'_>) -> Result<(
             }
             if c.random.double() < f64::from(NETHERRACK_BY_DISTANCE[adjusted as usize]) {
                 let surface = c.world.height(props.placement.heightmap(), x, z)? - 1;
-                let y = if follow { surface } else { b.min[1].min(surface) };
+                let y = if follow {
+                    surface
+                } else {
+                    b.min[1].min(surface)
+                };
                 let pos = [x, y, z];
                 let state = c.world.block(pos)?;
                 if (y - b.min[1]).abs() <= 3 && replaceable(c, props, state) {

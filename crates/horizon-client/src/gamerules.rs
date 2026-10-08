@@ -29,10 +29,22 @@ pub struct Rule {
     pub max: i32,
 }
 const fn b(name: &'static str, category: &'static str, default: bool) -> Rule {
-    Rule { name, category, default: Value::Bool(default), min: 0, max: 0 }
+    Rule {
+        name,
+        category,
+        default: Value::Bool(default),
+        min: 0,
+        max: 0,
+    }
 }
 const fn i(name: &'static str, category: &'static str, default: i32, min: i32, max: i32) -> Rule {
-    Rule { name, category, default: Value::Int(default), min, max }
+    Rule {
+        name,
+        category,
+        default: Value::Int(default),
+        min,
+        max,
+    }
 }
 /// Every rule available without experimental features, in registration order.
 pub const RULES: &[Rule] = &[
@@ -49,7 +61,13 @@ pub const RULES: &[Rule] = &[
     b("entity_drops", "drops", true),
     b("fall_damage", "player", true),
     b("fire_damage", "player", true),
-    i("fire_spread_radius_around_player", "updates", 128, -1, i32::MAX),
+    i(
+        "fire_spread_radius_around_player",
+        "updates",
+        128,
+        -1,
+        i32::MAX,
+    ),
     b("forgive_dead_players", "mobs", true),
     b("freeze_damage", "player", true),
     b("global_sound_events", "misc", true),
@@ -69,8 +87,20 @@ pub const RULES: &[Rule] = &[
     b("mob_griefing", "mobs", true),
     b("natural_health_regeneration", "player", true),
     b("player_movement_check", "player", true),
-    i("players_nether_portal_creative_delay", "player", 0, 0, i32::MAX),
-    i("players_nether_portal_default_delay", "player", 80, 0, i32::MAX),
+    i(
+        "players_nether_portal_creative_delay",
+        "player",
+        0,
+        0,
+        i32::MAX,
+    ),
+    i(
+        "players_nether_portal_default_delay",
+        "player",
+        80,
+        0,
+        i32::MAX,
+    ),
     i("players_sleeping_percentage", "player", 100, 0, i32::MAX),
     b("projectiles_can_break_blocks", "drops", true),
     b("pvp", "player", true),
@@ -144,14 +174,25 @@ impl GameRules {
                     Value::Bool(b) => Tag::Byte(i8::from(b)),
                     Value::Int(i) => Tag::Int(i),
                 };
-                (horizon_world::nbt::JavaString::from(format!("minecraft:{}", r.name).as_str()), tag)
+                (
+                    horizon_world::nbt::JavaString::from(format!("minecraft:{}", r.name).as_str()),
+                    tag,
+                )
             })
             .collect();
-        NamedTag { name: "".into(), tag: Tag::compound([("data", Tag::compound(data)), ("DataVersion", Tag::Int(DATA_VERSION))]) }
+        NamedTag {
+            name: "".into(),
+            tag: Tag::compound([
+                ("data", Tag::compound(data)),
+                ("DataVersion", Tag::Int(DATA_VERSION)),
+            ]),
+        }
     }
     pub fn from_nbt(root: &Tag) -> Self {
         let mut rules = Self::default();
-        let Some(data) = root.get("data") else { return rules };
+        let Some(data) = root.get("data") else {
+            return rules;
+        };
         for r in RULES {
             let key = format!("minecraft:{}", r.name);
             let value = data.get(&key).or_else(|| data.get(r.name));
@@ -168,8 +209,12 @@ impl GameRules {
         rules
     }
     pub fn load(world: &Path) -> Self {
-        let Ok(bytes) = fs::read(world.join("data/minecraft/game_rules.dat")) else { return Self::default() };
-        let Ok(raw) = Compression::Gzip.decode(&bytes, 16 << 20) else { return Self::default() };
+        let Ok(bytes) = fs::read(world.join("data/minecraft/game_rules.dat")) else {
+            return Self::default();
+        };
+        let Ok(raw) = Compression::Gzip.decode(&bytes, 16 << 20) else {
+            return Self::default();
+        };
         match nbt::read_named(&raw, Limits::default()) {
             Ok((root, _)) => Self::from_nbt(&root.tag),
             Err(_) => Self::default(),
@@ -178,8 +223,12 @@ impl GameRules {
     pub fn save(&self, world: &Path) -> crate::Result<()> {
         let dir = world.join("data/minecraft");
         fs::create_dir_all(&dir)?;
-        let bytes = nbt::write_named(&self.to_nbt(), Limits::default()).map_err(|e| e.to_string())?;
-        fs::write(dir.join("game_rules.dat"), Compression::Gzip.encode(&bytes)?)?;
+        let bytes =
+            nbt::write_named(&self.to_nbt(), Limits::default()).map_err(|e| e.to_string())?;
+        fs::write(
+            dir.join("game_rules.dat"),
+            Compression::Gzip.encode(&bytes)?,
+        )?;
         Ok(())
     }
 }

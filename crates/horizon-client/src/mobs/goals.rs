@@ -559,7 +559,10 @@ impl Stroll {
     }
     /// RandomSwimmingGoal(speed, interval)
     pub fn swimming(speed: f64, interval: i32) -> Self {
-        Self { swim: true, ..Self::new(speed).interval(interval) }
+        Self {
+            swim: true,
+            ..Self::new(speed).interval(interval)
+        }
     }
 }
 impl Goal for Stroll {
@@ -591,7 +594,11 @@ impl Goal for Stroll {
                 let mut p = m.default_random_pos(cx.w, 10, 7);
                 let mut count = 0;
                 while let Some(q) = p {
-                    let s = cx.w.world.block(q[0].floor() as i32, q[1].floor() as i32, q[2].floor() as i32);
+                    let s = cx.w.world.block(
+                        q[0].floor() as i32,
+                        q[1].floor() as i32,
+                        q[2].floor() as i32,
+                    );
                     if cx.w.data.state(s).flags & super::data::WATER != 0 || count >= 10 {
                         break;
                     }
@@ -1662,18 +1669,28 @@ impl Goal for EatBlock {
 pub struct BreathAir;
 impl BreathAir {
     fn find_air(m: &mut Mob, cx: &mut Cx) {
-        let (x, y, z) = (m.position.x.floor() as i32, m.position.y.floor() as i32, m.position.z.floor() as i32);
+        let (x, y, z) = (
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        );
         let mut dest = None;
         for yy in y..=y + 8 {
             let s = cx.w.world.block(x, yy, z);
             let f = cx.w.facts.get(s);
-            if (f.fluid == crate::blocks::Fluid::None || &*f.name == "minecraft:bubble_column") && cx.w.data.state(s).flags & super::data::LAND != 0 {
+            if (f.fluid == crate::blocks::Fluid::None || &*f.name == "minecraft:bubble_column")
+                && cx.w.data.state(s).flags & super::data::LAND != 0
+            {
                 dest = Some([x, yy, z]);
                 break;
             }
         }
         let d = dest.unwrap_or([x, (m.position.y + 8.0).floor() as i32, z]);
-        m.nav_move_to(cx.w, [f64::from(d[0]), f64::from(d[1] + 1), f64::from(d[2])], 1.0);
+        m.nav_move_to(
+            cx.w,
+            [f64::from(d[0]), f64::from(d[1] + 1), f64::from(d[2])],
+            1.0,
+        );
     }
 }
 impl Goal for BreathAir {
@@ -1693,7 +1710,11 @@ impl Goal for BreathAir {
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         Self::find_air(m, cx);
-        let input = Vec3::new(f64::from(m.ai.xxa), f64::from(m.ai.yya), f64::from(m.ai.zza));
+        let input = Vec3::new(
+            f64::from(m.ai.xxa),
+            f64::from(m.ai.yya),
+            f64::from(m.ai.zza),
+        );
         m.move_relative(0.02, input);
         let mut ev = Vec::new();
         m.do_move(cx.w, &mut ev);
@@ -1714,9 +1735,17 @@ impl Goal for TryFindWater {
         if !m.on_ground || m.fluids.in_water {
             return false;
         }
-        let (bx, by, bz) = (m.position.x.floor() as i32, m.position.y.floor() as i32, m.position.z.floor() as i32);
+        let (bx, by, bz) = (
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        );
         for _ in 0..10 {
-            let p = [bx + m.random.next_int_bound(20).unwrap_or(0) - 10, by + 2 - m.random.next_int_bound(8).unwrap_or(0), bz + m.random.next_int_bound(20).unwrap_or(0) - 10];
+            let p = [
+                bx + m.random.next_int_bound(20).unwrap_or(0) - 10,
+                by + 2 - m.random.next_int_bound(8).unwrap_or(0),
+                bz + m.random.next_int_bound(20).unwrap_or(0) - 10,
+            ];
             if cx.w.fluid(p[0], p[1], p[2]) == crate::blocks::Fluid::Water {
                 self.wanted = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])];
                 return true;

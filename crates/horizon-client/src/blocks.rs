@@ -72,8 +72,9 @@ pub struct BlockFacts {
 }
 impl BlockFacts {
     pub fn load(root: &Path, registry: &BlockRegistry) -> Result<Self> {
-        let raw: Value =
-            serde_json::from_reader(BufReader::new(File::open(root.join("gameplay-facts.json"))?))?;
+        let raw: Value = serde_json::from_reader(BufReader::new(File::open(
+            root.join("gameplay-facts.json"),
+        )?))?;
         let entries = raw["states"]
             .as_array()
             .ok_or("missing gameplay state facts")?;
@@ -143,8 +144,11 @@ impl BlockFacts {
                         (kind, 8 - level, false)
                     }
                 }
-                "minecraft:bubble_column" | "minecraft:kelp" | "minecraft:kelp_plant"
-                | "minecraft:seagrass" | "minecraft:tall_seagrass" => (Fluid::Water, 8, false),
+                "minecraft:bubble_column"
+                | "minecraft:kelp"
+                | "minecraft:kelp_plant"
+                | "minecraft:seagrass"
+                | "minecraft:tall_seagrass" => (Fluid::Water, 8, false),
                 _ if prop("waterlogged") == Some("true") => (Fluid::Water, 8, false),
                 _ => (Fluid::None, 0, false),
             };

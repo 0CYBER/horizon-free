@@ -11,10 +11,22 @@ use crate::gamerules::{RULES, Value};
 pub const ALL: u8 = 0;
 pub const GAMEMASTERS: u8 = 2;
 
-const PLAYERS: ArgType = ArgType::Entity { single: false, players: true };
-const PLAYER: ArgType = ArgType::Entity { single: true, players: true };
-const ENTITIES: ArgType = ArgType::Entity { single: false, players: false };
-const ENTITY: ArgType = ArgType::Entity { single: true, players: false };
+const PLAYERS: ArgType = ArgType::Entity {
+    single: false,
+    players: true,
+};
+const PLAYER: ArgType = ArgType::Entity {
+    single: true,
+    players: true,
+};
+const ENTITIES: ArgType = ArgType::Entity {
+    single: false,
+    players: false,
+};
+const ENTITY: ArgType = ArgType::Entity {
+    single: true,
+    players: false,
+};
 
 pub const DIFFICULTIES: [&str; 4] = ["peaceful", "easy", "normal", "hard"];
 
@@ -117,7 +129,14 @@ pub fn build() -> Dispatcher {
     let t = d.argument(give, "targets", ENTITIES);
     let e = d.argument(t, "effect", ArgType::Resource(Resource::Effect));
     d.executes(e, "effect.give");
-    let seconds = d.argument(e, "seconds", ArgType::Integer { min: 1, max: 1_000_000 });
+    let seconds = d.argument(
+        e,
+        "seconds",
+        ArgType::Integer {
+            min: 1,
+            max: 1_000_000,
+        },
+    );
     let infinite = d.literal(e, "infinite");
     for duration in [seconds, infinite] {
         d.executes(duration, "effect.give");
@@ -211,7 +230,10 @@ pub fn build() -> Dispatcher {
             d.executes(r, "gamerule");
             let ty = match rule.default {
                 Value::Bool(_) => ArgType::Bool,
-                Value::Int(_) => ArgType::Integer { min: rule.min, max: rule.max },
+                Value::Int(_) => ArgType::Integer {
+                    min: rule.min,
+                    max: rule.max,
+                },
             };
             let v = d.argument(r, "value", ty);
             d.executes(v, "gamerule");
@@ -310,7 +332,14 @@ fn clock_nodes(d: &mut Dispatcher, node: usize) {
     let resume = d.literal(node, "resume");
     d.executes(resume, "time.resume");
     let rate = d.literal(node, "rate");
-    let r = d.argument(rate, "rate", ArgType::Float { min: 1.0e-5, max: 1000.0 });
+    let r = d.argument(
+        rate,
+        "rate",
+        ArgType::Float {
+            min: 1.0e-5,
+            max: 1000.0,
+        },
+    );
     d.executes(r, "time.rate");
     let query = d.literal(node, "query");
     let time = d.literal(query, "time");

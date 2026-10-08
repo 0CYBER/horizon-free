@@ -7,7 +7,10 @@
 use crate::{
     entities::{Arrow, ExperienceOrb, ItemEntity},
     mobs::{Mob, MobType},
-    save::{doubles, float, floats, item_from_nbt, item_to_nbt, number, put, read_doubles, text, uuid_from_tag},
+    save::{
+        doubles, float, floats, item_from_nbt, item_to_nbt, number, put, read_doubles, text,
+        uuid_from_tag,
+    },
 };
 use horizon_core::geometry::Vec3;
 use horizon_world::nbt::{Compound, Tag};
@@ -54,8 +57,14 @@ impl Base<'_> {
         for (key, value) in [
             ("id", string(self.id)),
             ("UUID", Tag::IntArray(self.uuid.to_vec())),
-            ("Pos", doubles(&[self.position.x, self.position.y, self.position.z])),
-            ("Motion", doubles(&[self.motion.x, self.motion.y, self.motion.z])),
+            (
+                "Pos",
+                doubles(&[self.position.x, self.position.y, self.position.z]),
+            ),
+            (
+                "Motion",
+                doubles(&[self.motion.x, self.motion.y, self.motion.z]),
+            ),
             ("Rotation", floats(&self.rotation)),
             ("OnGround", Tag::Byte(i8::from(self.on_ground))),
             ("fall_distance", Tag::Double(self.fall_distance.to_bits())),
@@ -63,7 +72,12 @@ impl Base<'_> {
             put(&mut tag, key, value);
         }
         if let Tag::Compound(map) = &mut tag {
-            for (key, value) in [("Fire", Tag::Short(-1)), ("Air", Tag::Short(300)), ("Invulnerable", Tag::Byte(0)), ("PortalCooldown", Tag::Int(0))] {
+            for (key, value) in [
+                ("Fire", Tag::Short(-1)),
+                ("Air", Tag::Short(300)),
+                ("Invulnerable", Tag::Byte(0)),
+                ("PortalCooldown", Tag::Int(0)),
+            ] {
                 map.entry(key.into()).or_insert(value);
             }
         }
@@ -85,41 +99,72 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let mut tag = base.tag(raw);
     for (key, value) in [
         ("Health", Tag::Float(m.health.max(0.0).to_bits())),
-        ("HurtTime", Tag::Short(m.hurt_time.clamp(0, i32::from(i16::MAX)) as i16)),
-        ("DeathTime", Tag::Short(m.death_time.clamp(0, i32::from(i16::MAX)) as i16)),
+        (
+            "HurtTime",
+            Tag::Short(m.hurt_time.clamp(0, i32::from(i16::MAX)) as i16),
+        ),
+        (
+            "DeathTime",
+            Tag::Short(m.death_time.clamp(0, i32::from(i16::MAX)) as i16),
+        ),
         ("PersistenceRequired", Tag::Byte(i8::from(m.persistent))),
     ] {
         put(&mut tag, key, value);
     }
-    let Tag::Compound(map) = &mut tag else { return tag };
+    let Tag::Compound(map) = &mut tag else {
+        return tag;
+    };
     for (key, value) in [
         ("AbsorptionAmount", Tag::Float(0)),
         ("FallFlying", Tag::Byte(0)),
         ("CanPickUpLoot", Tag::Byte(0)),
         ("LeftHanded", Tag::Byte(0)),
-        ("Brain", Tag::compound([("memories", Tag::Compound(Compound::new()))])),
+        (
+            "Brain",
+            Tag::compound([("memories", Tag::Compound(Compound::new()))]),
+        ),
     ] {
         map.entry(key.into()).or_insert(value);
     }
     let id = m.kind.id.as_str();
     if m.kind.category == "creature" {
-        for (key, value) in [("Age", Tag::Int(0)), ("ForcedAge", Tag::Int(0)), ("InLove", Tag::Int(0)), ("AgeLocked", Tag::Byte(0))] {
+        for (key, value) in [
+            ("Age", Tag::Int(0)),
+            ("ForcedAge", Tag::Int(0)),
+            ("InLove", Tag::Int(0)),
+            ("AgeLocked", Tag::Byte(0)),
+        ] {
             map.entry(key.into()).or_insert(value);
         }
     }
     match id {
         "minecraft:creeper" => {
-            for (key, value) in [("Fuse", Tag::Short(30)), ("ExplosionRadius", Tag::Byte(3)), ("powered", Tag::Byte(0)), ("ignited", Tag::Byte(0))] {
+            for (key, value) in [
+                ("Fuse", Tag::Short(30)),
+                ("ExplosionRadius", Tag::Byte(3)),
+                ("powered", Tag::Byte(0)),
+                ("ignited", Tag::Byte(0)),
+            ] {
                 map.entry(key.into()).or_insert(value);
             }
         }
         // Skeletons are spawned holding a bow (finalizeSpawn); a mob loaded
         // from NBT keeps only its saved equipment.
         "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged" => {
-            map.entry("equipment".into()).or_insert_with(|| Tag::compound([("mainhand", Tag::compound([("id", string("minecraft:bow")), ("count", Tag::Int(1))]))]));
+            map.entry("equipment".into()).or_insert_with(|| {
+                Tag::compound([(
+                    "mainhand",
+                    Tag::compound([("id", string("minecraft:bow")), ("count", Tag::Int(1))]),
+                )])
+            });
         }
         "minecraft:zombie" => {
-            for (key, value) in [("IsBaby", Tag::Byte(0)), ("CanBreakDoors", Tag::Byte(0)), ("DrownedConversionTime", Tag::Int(-1)), ("InWaterTime", Tag::Int(-1))] {
+            for (key, value) in [
+                ("IsBaby", Tag::Byte(0)),
+                ("CanBreakDoors", Tag::Byte(0)),
+                ("DrownedConversionTime", Tag::Int(-1)),
+                ("InWaterTime", Tag::Int(-1)),
+            ] {
                 map.entry(key.into()).or_insert(value);
             }
         }
@@ -169,7 +214,10 @@ pub fn item_entity_to_nbt(e: &ItemEntity, uuid: [i32; 4], raw: Option<&Tag>) -> 
     for (key, value) in [
         ("Item", item_to_nbt(&e.stack)),
         ("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16)),
-        ("PickupDelay", Tag::Short(e.pickup_delay.min(i16::MAX as u32) as i16)),
+        (
+            "PickupDelay",
+            Tag::Short(e.pickup_delay.min(i16::MAX as u32) as i16),
+        ),
     ] {
         put(&mut tag, key, value);
     }
@@ -219,7 +267,9 @@ pub fn orb_to_nbt(o: &ExperienceOrb, uuid: [i32; 4]) -> Tag {
 }
 /// One Horizon orb per counted orb (vanilla merges orbs of equal value).
 pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
-    let Some(position) = position(tag) else { return Vec::new() };
+    let Some(position) = position(tag) else {
+        return Vec::new();
+    };
     let count = number(tag.get("Count")).unwrap_or(1).clamp(1, 64) as usize;
     let orb = ExperienceOrb {
         position,
@@ -236,7 +286,10 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
 pub fn arrow_to_nbt(a: &Arrow, uuid: [i32; 4], owner: Option<[i32; 4]>) -> Tag {
     let v = a.velocity;
     let horizontal = (v.x * v.x + v.z * v.z).sqrt();
-    let rotation = [(v.x.atan2(v.z).to_degrees()) as f32, (v.y.atan2(horizontal).to_degrees()) as f32];
+    let rotation = [
+        (v.x.atan2(v.z).to_degrees()) as f32,
+        (v.y.atan2(horizontal).to_degrees()) as f32,
+    ];
     let base = Base {
         id: "minecraft:arrow",
         uuid,
@@ -251,14 +304,20 @@ pub fn arrow_to_nbt(a: &Arrow, uuid: [i32; 4], owner: Option<[i32; 4]>) -> Tag {
         ("damage", Tag::Double(a.base_damage.to_bits())),
         ("crit", Tag::Byte(i8::from(a.critical))),
         ("inGround", Tag::Byte(i8::from(a.stuck))),
-        ("life", Tag::Short(if a.stuck { a.age.min(1200) as i16 } else { 0 })),
+        (
+            "life",
+            Tag::Short(if a.stuck { a.age.min(1200) as i16 } else { 0 }),
+        ),
         // Pickup: allowed for the player's arrows, disallowed for mobs'.
         ("pickup", Tag::Byte(i8::from(a.from_player))),
         ("shake", Tag::Byte(0)),
         ("PierceLevel", Tag::Byte(0)),
         ("HasBeenShot", Tag::Byte(1)),
         ("SoundEvent", string("minecraft:entity.arrow.hit")),
-        ("item", Tag::compound([("id", string("minecraft:arrow")), ("count", Tag::Int(1))])),
+        (
+            "item",
+            Tag::compound([("id", string("minecraft:arrow")), ("count", Tag::Int(1))]),
+        ),
     ] {
         put(&mut tag, key, value);
     }
@@ -271,19 +330,30 @@ pub fn arrow_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Arrow> {
     let position = position(tag)?;
     let stuck = flag(tag, "inGround");
     Some(Arrow {
-        from_player: player.is_some() && uuid_from_tag(tag.get("Owner")) == player || number(tag.get("pickup")) == Some(1),
+        from_player: player.is_some() && uuid_from_tag(tag.get("Owner")) == player
+            || number(tag.get("pickup")) == Some(1),
         critical: flag(tag, "crit"),
         position,
         previous: position,
         velocity: motion(tag),
         stuck,
-        age: if stuck { number(tag.get("life")).unwrap_or(0).max(0) as u32 } else { 0 },
+        age: if stuck {
+            number(tag.get("life")).unwrap_or(0).max(0) as u32
+        } else {
+            0
+        },
         base_damage: float(tag.get("damage")).unwrap_or(2.0),
     })
 }
 
 /// `FallingBlockEntity`: BlockState, Time, DropItem, HurtEntities.
-pub fn falling_block_to_nbt(state: Tag, position: Vec3, motion: Vec3, time: u32, uuid: [i32; 4]) -> Tag {
+pub fn falling_block_to_nbt(
+    state: Tag,
+    position: Vec3,
+    motion: Vec3,
+    time: u32,
+    uuid: [i32; 4],
+) -> Tag {
     let base = Base {
         id: "minecraft:falling_block",
         uuid,
@@ -309,7 +379,12 @@ pub fn falling_block_to_nbt(state: Tag, position: Vec3, motion: Vec3, time: u32,
 }
 /// (block state tag, position, motion, time)
 pub fn falling_block_from_nbt(tag: &Tag) -> Option<(Tag, Vec3, Vec3, u32)> {
-    Some((tag.get("BlockState")?.clone(), position(tag)?, motion(tag), number(tag.get("Time")).unwrap_or(0).max(0) as u32))
+    Some((
+        tag.get("BlockState")?.clone(),
+        position(tag)?,
+        motion(tag),
+        number(tag.get("Time")).unwrap_or(0).max(0) as u32,
+    ))
 }
 
 #[cfg(test)]
@@ -321,7 +396,12 @@ mod tests {
     fn item_entities_round_trip() {
         let e = ItemEntity {
             id: 7,
-            stack: ItemStack { item: Arc::from("minecraft:diamond_pickaxe"), count: 1, damage: 5, extra: None },
+            stack: ItemStack {
+                item: Arc::from("minecraft:diamond_pickaxe"),
+                count: 1,
+                damage: 5,
+                extra: None,
+            },
             position: Vec3::new(100.5, 64.0, -31.5),
             previous: Vec3::ZERO,
             velocity: Vec3::new(0.0, -0.04, 0.0),
@@ -335,12 +415,23 @@ mod tests {
         assert_eq!(uuid(&tag), Some([1, 2, 3, 4]));
         let back = item_entity_from_nbt(&tag, 9, 0.0).unwrap();
         assert_eq!(back.stack.damage, 5);
-        assert_eq!((back.age, back.pickup_delay, back.on_ground), (120, 10, true));
+        assert_eq!(
+            (back.age, back.pickup_delay, back.on_ground),
+            (120, 10, true)
+        );
         assert_eq!(back.position.x, 100.5);
     }
     #[test]
     fn unknown_fields_survive() {
-        let raw = Tag::compound([("id", string("minecraft:item")), ("CustomName", string("x")), ("Pos", doubles(&[0.5, 64.0, 0.5])), ("Item", Tag::compound([("id", string("minecraft:stone")), ("count", Tag::Int(3))]))]);
+        let raw = Tag::compound([
+            ("id", string("minecraft:item")),
+            ("CustomName", string("x")),
+            ("Pos", doubles(&[0.5, 64.0, 0.5])),
+            (
+                "Item",
+                Tag::compound([("id", string("minecraft:stone")), ("count", Tag::Int(3))]),
+            ),
+        ]);
         let e = item_entity_from_nbt(&raw, 1, 0.0).unwrap();
         let tag = item_entity_to_nbt(&e, [0; 4], Some(&raw));
         assert_eq!(text(tag.get("CustomName")).as_deref(), Some("x"));
@@ -348,7 +439,14 @@ mod tests {
     }
     #[test]
     fn orbs_expand_their_count() {
-        let o = ExperienceOrb { position: Vec3::new(1.0, 2.0, 3.0), previous: Vec3::ZERO, velocity: Vec3::ZERO, value: 7, age: 3, on_ground: false };
+        let o = ExperienceOrb {
+            position: Vec3::new(1.0, 2.0, 3.0),
+            previous: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            value: 7,
+            age: 3,
+            on_ground: false,
+        };
         let mut tag = orb_to_nbt(&o, [0; 4]);
         put(&mut tag, "Count", Tag::Int(3));
         let back = orbs_from_nbt(&tag);

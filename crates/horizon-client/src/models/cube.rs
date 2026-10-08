@@ -27,7 +27,11 @@ pub fn cube_styles(faces: &[BakedFace]) -> Option<[CubeStyle; 6]> {
     }
     let mut styles = [None; 6];
     for face in faces {
-        if !face.opaque || face.translucent || face.quad.tint_index != -1 || face.quad.light_emission != 0 {
+        if !face.opaque
+            || face.translucent
+            || face.quad.tint_index != -1
+            || face.quad.light_emission != 0
+        {
             return None;
         }
         let q = &face.quad;

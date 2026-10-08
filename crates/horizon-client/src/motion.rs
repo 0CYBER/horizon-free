@@ -234,11 +234,22 @@ impl PlayerMotion {
     }
     /// Add (or remove) a transient attribute modifier, e.g. from equipment
     /// (`LivingEntity.collectEquipmentChanges` applying item modifiers).
-    pub fn set_modifier(&mut self, attribute: &str, id: &str, amount: f64, operation: &str, present: bool) -> Result<()> {
+    pub fn set_modifier(
+        &mut self,
+        attribute: &str,
+        id: &str,
+        amount: f64,
+        operation: &str,
+        present: bool,
+    ) -> Result<()> {
         let Some(key) = self.attributes.key(attribute) else {
             return Ok(());
         };
-        let Some(handle) = self.attributes.get_instance(Some(key)).map_err(attribute_error)? else {
+        let Some(handle) = self
+            .attributes
+            .get_instance(Some(key))
+            .map_err(attribute_error)?
+        else {
             return Ok(());
         };
         let operation = match operation {
@@ -976,7 +987,10 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
         Ok(self.player.status.jump_boost.is_some())
     }
     fn jump_boost_amplifier(&mut self) -> Result<i32> {
-        self.player.status.jump_boost.ok_or_else(|| "absent jump boost".into())
+        self.player
+            .status
+            .jump_boost
+            .ok_or_else(|| "absent jump boost".into())
     }
     fn sprinting(&mut self) -> Result<bool> {
         Ok(self.player.sprinting)

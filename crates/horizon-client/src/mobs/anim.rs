@@ -325,7 +325,9 @@ pub fn setup(
 ) {
     let _ = w_anims;
     match m.kind.anim {
-        Anim::Squid | Anim::Fish | Anim::Pufferfish | Anim::Dolphin => super::aquatic::anim(m, s, p),
+        Anim::Squid | Anim::Fish | Anim::Pufferfish | Anim::Dolphin => {
+            super::aquatic::anim(m, s, p)
+        }
         Anim::Quadruped | Anim::PolarBear | Anim::Panda | Anim::Goat => quadruped(p, s),
         Anim::Sheep => {
             quadruped(p, s);

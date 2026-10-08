@@ -53,7 +53,10 @@ pub struct Style {
 }
 impl Style {
     pub fn color(c: u32) -> Self {
-        Self { color: Some(c), ..Self::default() }
+        Self {
+            color: Some(c),
+            ..Self::default()
+        }
     }
     /// Fill unset fields from `base` (Style.applyTo).
     pub fn inherit(&mut self, base: &Style) {
@@ -106,7 +109,12 @@ impl Text {
         if text.is_empty() {
             return Self::default();
         }
-        Self { spans: vec![Span { text, style: Style::default() }] }
+        Self {
+            spans: vec![Span {
+                text,
+                style: Style::default(),
+            }],
+        }
     }
     pub fn styled(s: impl Into<String>, style: Style) -> Self {
         let mut t = Self::literal(s);
@@ -145,13 +153,22 @@ impl Text {
         self.with_style(&Style::color(color))
     }
     pub fn italic(self) -> Self {
-        self.with_style(&Style { italic: Some(true), ..Style::default() })
+        self.with_style(&Style {
+            italic: Some(true),
+            ..Style::default()
+        })
     }
     pub fn underlined(self) -> Self {
-        self.with_style(&Style { underlined: Some(true), ..Style::default() })
+        self.with_style(&Style {
+            underlined: Some(true),
+            ..Style::default()
+        })
     }
     pub fn bold(self) -> Self {
-        self.with_style(&Style { bold: Some(true), ..Style::default() })
+        self.with_style(&Style {
+            bold: Some(true),
+            ..Style::default()
+        })
     }
     /// Component.getString: the plain characters.
     pub fn plain(&self) -> String {
@@ -173,7 +190,10 @@ impl Text {
             }
             let Some(code) = chars.next() else { break };
             if !current.is_empty() {
-                out.spans.push(Span { text: std::mem::take(&mut current), style: style.clone() });
+                out.spans.push(Span {
+                    text: std::mem::take(&mut current),
+                    style: style.clone(),
+                });
             }
             let code = code.to_ascii_lowercase();
             if let Some(c) = COLORS.iter().find(|c| c.0 == code) {
@@ -192,13 +212,18 @@ impl Text {
             }
         }
         if !current.is_empty() {
-            out.spans.push(Span { text: current, style });
+            out.spans.push(Span {
+                text: current,
+                style,
+            });
         }
         out
     }
     /// Characters with their effective styles.
     pub fn chars(&self) -> impl Iterator<Item = (char, &Style)> {
-        self.spans.iter().flat_map(|s| s.text.chars().map(move |c| (c, &s.style)))
+        self.spans
+            .iter()
+            .flat_map(|s| s.text.chars().map(move |c| (c, &s.style)))
     }
     /// Sub-range of characters [from, to) keeping styles.
     pub fn slice(&self, from: usize, to: usize) -> Text {
@@ -213,7 +238,10 @@ impl Text {
                 index += 1;
             }
             if !part.is_empty() {
-                out.spans.push(Span { text: part, style: span.style.clone() });
+                out.spans.push(Span {
+                    text: part,
+                    style: span.style.clone(),
+                });
             }
         }
         out
@@ -246,7 +274,11 @@ pub fn format_translation(template: &str, args: &[Text]) -> Text {
             j += 1;
         }
         if j > digits_start && j < chars.len() && chars[j] == '$' {
-            number = chars[digits_start..j].iter().collect::<String>().parse::<usize>().ok();
+            number = chars[digits_start..j]
+                .iter()
+                .collect::<String>()
+                .parse::<usize>()
+                .ok();
             j += 1;
         } else {
             j = digits_start;
@@ -274,7 +306,10 @@ pub fn format_translation(template: &str, args: &[Text]) -> Text {
                     return Text::literal(template);
                 };
                 if !literal.is_empty() {
-                    out.spans.push(Span { text: std::mem::take(&mut literal), style: Style::default() });
+                    out.spans.push(Span {
+                        text: std::mem::take(&mut literal),
+                        style: Style::default(),
+                    });
                 }
                 out.spans.extend(arg.spans.iter().cloned());
                 i = j + 1;
@@ -283,7 +318,10 @@ pub fn format_translation(template: &str, args: &[Text]) -> Text {
         }
     }
     if !literal.is_empty() {
-        out.spans.push(Span { text: literal, style: Style::default() });
+        out.spans.push(Span {
+            text: literal,
+            style: Style::default(),
+        });
     }
     out
 }
@@ -294,13 +332,25 @@ mod tests {
     #[test]
     fn formats_like_translatable_contents() {
         let a = [Text::literal("Steve"), Text::colored("Zombie", RED)];
-        assert_eq!(format_translation("%s was slain by %s", &a).plain(), "Steve was slain by Zombie");
-        assert_eq!(format_translation("%2$s then %1$s", &a).plain(), "Zombie then Steve");
-        assert_eq!(format_translation("100%% sure %s", &a).plain(), "100% sure Steve");
+        assert_eq!(
+            format_translation("%s was slain by %s", &a).plain(),
+            "Steve was slain by Zombie"
+        );
+        assert_eq!(
+            format_translation("%2$s then %1$s", &a).plain(),
+            "Zombie then Steve"
+        );
+        assert_eq!(
+            format_translation("100%% sure %s", &a).plain(),
+            "100% sure Steve"
+        );
         // Missing arguments or unknown conversions show the template.
         assert_eq!(format_translation("%s %s %s", &a).plain(), "%s %s %s");
         assert_eq!(format_translation("%d", &a).plain(), "%d");
-        assert_eq!(format_translation("50% off %s", &a).plain(), "50% off Steve");
+        assert_eq!(
+            format_translation("50% off %s", &a).plain(),
+            "50% off Steve"
+        );
         assert_eq!(format_translation("end %", &a).plain(), "end %");
         let t = format_translation("%s was slain by %s", &a);
         assert_eq!(t.spans.last().unwrap().style.color, Some(RED));
@@ -312,7 +362,9 @@ mod tests {
         assert_eq!(t.spans[0].style.color, Some(GREEN));
         assert!(t.spans[1].style.is_bold());
         assert_eq!(t.spans[2].style, Style::default());
-        let t = Text::literal("x").append(Text::colored("y", GOLD)).with_color(RED);
+        let t = Text::literal("x")
+            .append(Text::colored("y", GOLD))
+            .with_color(RED);
         assert_eq!(t.spans[0].style.color, Some(RED));
         assert_eq!(t.spans[1].style.color, Some(GOLD));
         assert_eq!(t.slice(1, 2).plain(), "y");

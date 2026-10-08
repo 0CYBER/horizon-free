@@ -56,7 +56,12 @@ impl Creative {
         let mut tabs = Vec::new();
         let mut all_items: Vec<String> = Vec::new();
         for t in raw.as_array().into_iter().flatten() {
-            let items: Vec<String> = t["items"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+            let items: Vec<String> = t["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect();
             for i in &items {
                 if !all_items.contains(i) {
                     all_items.push(i.clone());
@@ -77,7 +82,13 @@ impl Creative {
                 inventory: kind == "INVENTORY",
             });
         }
-        Ok(Self { tabs, selected: 0, scroll: 0.0, search: String::new(), all_items })
+        Ok(Self {
+            tabs,
+            selected: 0,
+            scroll: 0.0,
+            search: String::new(),
+            all_items,
+        })
     }
     pub fn tab(&self) -> &Tab {
         &self.tabs[self.selected.min(self.tabs.len() - 1)]
@@ -87,7 +98,16 @@ impl Creative {
         let tab = self.tab();
         if tab.search {
             let query = self.search.to_lowercase();
-            return self.all_items.iter().filter(|i| query.is_empty() || names.item(i).to_lowercase().contains(&query) || i.contains(&query)).cloned().collect();
+            return self
+                .all_items
+                .iter()
+                .filter(|i| {
+                    query.is_empty()
+                        || names.item(i).to_lowercase().contains(&query)
+                        || i.contains(&query)
+                })
+                .cloned()
+                .collect();
         }
         tab.items.clone()
     }

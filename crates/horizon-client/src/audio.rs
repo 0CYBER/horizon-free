@@ -73,7 +73,12 @@ fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
     let mut hint = Hint::new();
     hint.with_extension("ogg");
     let probed = symphonia::default::get_probe()
-        .format(&hint, stream, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            stream,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .ok()?;
     let mut format = probed.format;
     let track = format.default_track()?;
@@ -87,7 +92,9 @@ fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
         if packet.track_id() != id {
             continue;
         }
-        let Ok(buffer) = decoder.decode(&packet) else { continue };
+        let Ok(buffer) = decoder.decode(&packet) else {
+            continue;
+        };
         let spec = *buffer.spec();
         let channels = spec.channels.count().max(1);
         let mut samples = SampleBuffer::<f32>::new(buffer.capacity() as u64, spec);
@@ -131,7 +138,10 @@ impl Audio {
                 events.insert(format!("minecraft:{name}"), variants);
             }
         }
-        let mixer = Arc::new(Mutex::new(Mixer { music_gain: 1.0, ..Mixer::default() }));
+        let mixer = Arc::new(Mutex::new(Mixer {
+            music_gain: 1.0,
+            ..Mixer::default()
+        }));
         let (stream, rate) = match Self::open(mixer.clone()) {
             Ok(v) => (Some(v.0), v.1),
             Err(e) => {
@@ -156,7 +166,9 @@ impl Audio {
     }
     fn open(mixer: Arc<Mutex<Mixer>>) -> Result<(cpal::Stream, u32)> {
         let host = cpal::default_host();
-        let device = host.default_output_device().ok_or("no audio output device")?;
+        let device = host
+            .default_output_device()
+            .ok_or("no audio output device")?;
         let config = device.default_output_config()?;
         let rate = config.sample_rate().0;
         let channels = config.channels() as usize;
@@ -211,9 +223,17 @@ impl Audio {
                         frame[0] = ((l + r) / 2.0).clamp(-1.0, 1.0);
                     }
                 }
-                mixer.voices.retain(|v| (v.position as usize) + 1 < v.samples.len());
-                mixer.tracked.retain(|t| t.looping || (t.voice.position as usize) + 1 < t.voice.samples.len());
-                if mixer.music.as_ref().is_some_and(|v| (v.position as usize) + 1 >= v.samples.len()) {
+                mixer
+                    .voices
+                    .retain(|v| (v.position as usize) + 1 < v.samples.len());
+                mixer.tracked.retain(|t| {
+                    t.looping || (t.voice.position as usize) + 1 < t.voice.samples.len()
+                });
+                if mixer
+                    .music
+                    .as_ref()
+                    .is_some_and(|v| (v.position as usize) + 1 >= v.samples.len())
+                {
                     mixer.music = None;
                 }
             },
@@ -245,7 +265,11 @@ impl Audio {
             }
         })?;
         if chosen.is_event && depth < 4 {
-            let name = if chosen.name.contains(':') { chosen.name.clone() } else { format!("minecraft:{}", chosen.name) };
+            let name = if chosen.name.contains(':') {
+                chosen.name.clone()
+            } else {
+                format!("minecraft:{}", chosen.name)
+            };
             let mut inner = self.resolve(&name, depth + 1)?;
             inner.volume *= chosen.volume;
             inner.pitch *= chosen.pitch;
@@ -258,17 +282,32 @@ impl Audio {
         if self._stream.is_none() {
             return;
         }
-        let Some(variant) = self.resolve(event, 0) else { return };
+        let Some(variant) = self.resolve(event, 0) else {
+            return;
+        };
         let file = variant.name.trim_start_matches("minecraft:").to_owned();
         let entry = self.cache.entry(file.clone()).or_insert_with(|| {
-            decode(&self.root.join(format!("assets/minecraft/sounds/{file}.ogg"))).map(|(s, r)| (Arc::new(s), r))
+            decode(
+                &self
+                    .root
+                    .join(format!("assets/minecraft/sounds/{file}.ogg")),
+            )
+            .map(|(s, r)| (Arc::new(s), r))
         });
-        let Some((samples, rate)) = entry.clone() else { return };
-        let volume = (volume * variant.volume).clamp(0.0, 1.0) * self.master * crate::settings::event_volume(event);
+        let Some((samples, rate)) = entry.clone() else {
+            return;
+        };
+        let volume = (volume * variant.volume).clamp(0.0, 1.0)
+            * self.master
+            * crate::settings::event_volume(event);
         let pitch = (pitch * variant.pitch).clamp(0.5, 2.0);
         let (mut left, mut right) = (volume, volume);
         if let Some(p) = at {
-            let d = [p[0] - self.listener[0], p[1] - self.listener[1], p[2] - self.listener[2]];
+            let d = [
+                p[0] - self.listener[0],
+                p[1] - self.listener[1],
+                p[2] - self.listener[2],
+            ];
             let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
             let range = variant.attenuation * volume.max(1.0);
             let gain = (1.0 - distance / range).clamp(0.0, 1.0);
@@ -277,7 +316,8 @@ impl Audio {
             }
             let yaw = self.listener_yaw.to_radians();
             // Right vector of a Minecraft yaw.
-            let side = (-(yaw.cos()) as f64 * d[0] - (yaw.sin()) as f64 * d[2]) as f32 / distance.max(0.001);
+            let side = (-(yaw.cos()) as f64 * d[0] - (yaw.sin()) as f64 * d[2]) as f32
+                / distance.max(0.001);
             let pan = side.clamp(-1.0, 1.0);
             left = volume * gain * (1.0 - pan.max(0.0) * 0.6);
             right = volume * gain * (1.0 + pan.min(0.0) * 0.6);
@@ -304,9 +344,15 @@ impl Audio {
         if self._stream.is_none() {
             return false;
         }
-        let Some(variant) = self.resolve(event, 0) else { return false };
-        let path = self.root.join(format!("assets/minecraft/sounds/{}.ogg", variant.name.trim_start_matches("minecraft:")));
-        let volume = variant.volume.clamp(0.0, 1.0) * self.master * crate::settings::event_volume(event);
+        let Some(variant) = self.resolve(event, 0) else {
+            return false;
+        };
+        let path = self.root.join(format!(
+            "assets/minecraft/sounds/{}.ogg",
+            variant.name.trim_start_matches("minecraft:")
+        ));
+        let volume =
+            variant.volume.clamp(0.0, 1.0) * self.master * crate::settings::event_volume(event);
         let step_scale = f64::from(variant.pitch.clamp(0.5, 2.0)) / f64::from(self.rate);
         let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (mixer, done) = (self.mixer.clone(), ready.clone());
@@ -325,14 +371,19 @@ impl Audio {
             }
             done.store(true, std::sync::atomic::Ordering::Release);
         });
-        self.music = Some(MusicTrack { event: event.to_owned(), ready });
+        self.music = Some(MusicTrack {
+            event: event.to_owned(),
+            ready,
+        });
         true
     }
     /// `SoundManager.stop` of the music instance.
     pub fn stop_music(&mut self) {
         if let Some(track) = self.music.take() {
             // A decoder still running sees the flag and drops its result.
-            track.ready.store(true, std::sync::atomic::Ordering::Release);
+            track
+                .ready
+                .store(true, std::sync::atomic::Ordering::Release);
         }
         if let Ok(mut m) = self.mixer.lock() {
             m.music = None;
@@ -340,7 +391,9 @@ impl Audio {
     }
     /// `SoundManager.isActive`: decoding or still sounding.
     pub fn music_active(&mut self) -> bool {
-        let Some(track) = &self.music else { return false };
+        let Some(track) = &self.music else {
+            return false;
+        };
         if !track.ready.load(std::sync::atomic::Ordering::Acquire) {
             return true;
         }
@@ -370,16 +423,27 @@ impl Audio {
         let (samples, rate) = self
             .cache
             .entry(file.clone())
-            .or_insert_with(|| decode(&root.join(format!("assets/minecraft/sounds/{file}.ogg"))).map(|(s, r)| (Arc::new(s), r)))
+            .or_insert_with(|| {
+                decode(&root.join(format!("assets/minecraft/sounds/{file}.ogg")))
+                    .map(|(s, r)| (Arc::new(s), r))
+            })
             .clone()?;
-        let gain = variant.volume.clamp(0.0, 1.0) * self.master * crate::settings::event_volume(event);
-        let step = f64::from(rate) / f64::from(self.rate) * f64::from(variant.pitch.clamp(0.5, 2.0));
+        let gain =
+            variant.volume.clamp(0.0, 1.0) * self.master * crate::settings::event_volume(event);
+        let step =
+            f64::from(rate) / f64::from(self.rate) * f64::from(variant.pitch.clamp(0.5, 2.0));
         self.next_tracked += 1;
         let id = self.next_tracked;
         let mut m = self.mixer.lock().ok()?;
         m.tracked.push(Tracked {
             id,
-            voice: Voice { samples, position: 0.0, step, left: gain, right: gain },
+            voice: Voice {
+                samples,
+                position: 0.0,
+                step,
+                left: gain,
+                right: gain,
+            },
             looping,
             volume: volume.clamp(0.0, 1.0),
         });
@@ -400,6 +464,8 @@ impl Audio {
     }
     /// Still sounding (a finished one-shot is gone).
     pub fn tracked_active(&self, id: u64) -> bool {
-        self.mixer.lock().is_ok_and(|m| m.tracked.iter().any(|t| t.id == id))
+        self.mixer
+            .lock()
+            .is_ok_and(|m| m.tracked.iter().any(|t| t.id == id))
     }
 }

@@ -105,10 +105,31 @@ impl LegacyPiece for DesertPyramidPiece {
         let south = stairs(c, "south");
         let east = stairs(c, "east");
         let west = stairs(c, "west");
-        f.generate_box(c, [0, -4, 0], [w - 1, 0, d - 1], sandstone, sandstone, false)?;
+        f.generate_box(
+            c,
+            [0, -4, 0],
+            [w - 1, 0, d - 1],
+            sandstone,
+            sandstone,
+            false,
+        )?;
         for p in 1..=9 {
-            f.generate_box(c, [p, p, p], [w - 1 - p, p, d - 1 - p], sandstone, sandstone, false)?;
-            f.generate_box(c, [p + 1, p, p + 1], [w - 2 - p, p, d - 2 - p], air, air, false)?;
+            f.generate_box(
+                c,
+                [p, p, p],
+                [w - 1 - p, p, d - 1 - p],
+                sandstone,
+                sandstone,
+                false,
+            )?;
+            f.generate_box(
+                c,
+                [p + 1, p, p + 1],
+                [w - 2 - p, p, d - 2 - p],
+                air,
+                air,
+                false,
+            )?;
         }
         for x in 0..w {
             for z in 0..d {
@@ -122,7 +143,14 @@ impl LegacyPiece for DesertPyramidPiece {
         f.place(c, east, 0, 10, 2)?;
         f.place(c, west, 4, 10, 2)?;
         f.generate_box(c, [w - 5, 0, 0], [w - 1, 9, 4], sandstone, air, false)?;
-        f.generate_box(c, [w - 4, 10, 1], [w - 2, 10, 3], sandstone, sandstone, false)?;
+        f.generate_box(
+            c,
+            [w - 4, 10, 1],
+            [w - 2, 10, 3],
+            sandstone,
+            sandstone,
+            false,
+        )?;
         f.place(c, north, w - 3, 10, 0)?;
         f.place(c, south, w - 3, 10, 4)?;
         f.place(c, east, w - 5, 10, 2)?;
@@ -142,9 +170,23 @@ impl LegacyPiece for DesertPyramidPiece {
             f.generate_box(c, [x, 1, z], [x, 3, z], cut, cut, false)?;
         }
         f.generate_box(c, [1, 1, 5], [4, 4, 11], sandstone, sandstone, false)?;
-        f.generate_box(c, [w - 5, 1, 5], [w - 2, 4, 11], sandstone, sandstone, false)?;
+        f.generate_box(
+            c,
+            [w - 5, 1, 5],
+            [w - 2, 4, 11],
+            sandstone,
+            sandstone,
+            false,
+        )?;
         f.generate_box(c, [6, 7, 9], [6, 7, 11], sandstone, sandstone, false)?;
-        f.generate_box(c, [w - 7, 7, 9], [w - 7, 7, 11], sandstone, sandstone, false)?;
+        f.generate_box(
+            c,
+            [w - 7, 7, 9],
+            [w - 7, 7, 11],
+            sandstone,
+            sandstone,
+            false,
+        )?;
         f.generate_box(c, [5, 5, 9], [5, 7, 11], cut, cut, false)?;
         f.generate_box(c, [w - 6, 5, 9], [w - 6, 7, 11], cut, cut, false)?;
         f.place(c, air, 5, 5, 10)?;
@@ -169,7 +211,14 @@ impl LegacyPiece for DesertPyramidPiece {
         f.place(c, west, 2, 1, 2)?;
         f.place(c, east, w - 3, 1, 2)?;
         f.generate_box(c, [4, 3, 5], [4, 3, 17], sandstone, sandstone, false)?;
-        f.generate_box(c, [w - 5, 3, 5], [w - 5, 3, 17], sandstone, sandstone, false)?;
+        f.generate_box(
+            c,
+            [w - 5, 3, 5],
+            [w - 5, 3, 17],
+            sandstone,
+            sandstone,
+            false,
+        )?;
         f.generate_box(c, [3, 1, 5], [4, 2, 16], air, air, false)?;
         f.generate_box(c, [w - 6, 1, 5], [w - 5, 2, 16], air, air, false)?;
         for z in (5..=17).step_by(2) {
@@ -232,7 +281,12 @@ impl LegacyPiece for DesertPyramidPiece {
         f.generate_box(c, [9, -11, 9], [11, -1, 11], air, air, false)?;
         f.place(c, c.state("stone_pressure_plate"), 10, -11, 10)?;
         f.generate_box(c, [9, -13, 9], [11, -13, 11], c.state("tnt"), air, false)?;
-        for [x, z, ox, oz] in [[8, 10, 7, 10], [12, 10, 13, 10], [10, 8, 10, 7], [10, 12, 10, 13]] {
+        for [x, z, ox, oz] in [
+            [8, 10, 7, 10],
+            [12, 10, 13, 10],
+            [10, 8, 10, 7],
+            [10, 12, 10, 13],
+        ] {
             f.place(c, air, x, -11, z)?;
             f.place(c, air, x, -10, z)?;
             f.place(c, chiseled, ox, -10, oz)?;
@@ -263,16 +317,50 @@ impl LegacyPiece for DesertPyramidPiece {
             f.place(c, sand, x + dx, y + 4, z + 4)?;
         }
         f.place(c, sand, x - 2, y + 3, z + 4)?;
-        f.place(c, if variant { sand } else { sandstone }, x - 1, y + 3, z + 4)?;
+        f.place(
+            c,
+            if variant { sand } else { sandstone },
+            x - 1,
+            y + 3,
+            z + 4,
+        )?;
         f.place(c, if variant { sandstone } else { sand }, x, y + 3, z + 4)?;
         f.place(c, sand, x - 1, y + 2, z + 4)?;
         f.place(c, sandstone, x, y + 2, z + 4)?;
         f.place(c, sand, x, y + 1, z + 4)?;
         for (state, yy) in [(cut, y + 1), (chiseled, y + 2), (cut, -1)] {
-            f.generate_box(c, [x - 3, yy, z - 3], [x - 3, yy, z + 2], state, state, true)?;
-            f.generate_box(c, [x + 3, yy, z - 3], [x + 3, yy, z + 2], state, state, true)?;
-            f.generate_box(c, [x - 3, yy, z - 3], [x + 3, yy, z - 2], state, state, true)?;
-            f.generate_box(c, [x - 3, yy, z + 3], [x + 3, yy, z + 3], state, state, true)?;
+            f.generate_box(
+                c,
+                [x - 3, yy, z - 3],
+                [x - 3, yy, z + 2],
+                state,
+                state,
+                true,
+            )?;
+            f.generate_box(
+                c,
+                [x + 3, yy, z - 3],
+                [x + 3, yy, z + 2],
+                state,
+                state,
+                true,
+            )?;
+            f.generate_box(
+                c,
+                [x - 3, yy, z - 3],
+                [x + 3, yy, z - 2],
+                state,
+                state,
+                true,
+            )?;
+            f.generate_box(
+                c,
+                [x - 3, yy, z + 3],
+                [x + 3, yy, z + 3],
+                state,
+                state,
+                true,
+            )?;
         }
         for px in x - 2..=x + 2 {
             for pz in z - 2..=z + 2 {
@@ -285,7 +373,16 @@ impl LegacyPiece for DesertPyramidPiece {
             }
         }
         f.place(c, blue, x, y, z)?;
-        for [dx, dz] in [[1, -1], [1, 1], [-1, -1], [-1, 1], [2, 0], [-2, 0], [0, 2], [0, -2]] {
+        for [dx, dz] in [
+            [1, -1],
+            [1, 1],
+            [-1, -1],
+            [-1, 1],
+            [2, 0],
+            [-2, 0],
+            [0, 2],
+            [0, -2],
+        ] {
             f.place(c, orange, x + dx, y, z + dz)?;
         }
         f.place(c, orange, x + 3, y, z)?;
@@ -364,7 +461,11 @@ impl LegacyPiece for JungleTemplePiece {
         let air = c.state("air");
         let stone = |c: &mut PieceContext<'_>, a: [i32; 3], b: [i32; 3]| {
             f.generate_box_selector(c, a, b, false, &mut |c, _, _, _, _| {
-                if c.random.float() < 0.4 { cobble } else { mossy }
+                if c.random.float() < 0.4 {
+                    cobble
+                } else {
+                    mossy
+                }
             })
         };
         stone(c, [0, -4, 0], [11, 0, 14])?;
@@ -427,8 +528,9 @@ impl LegacyPiece for JungleTemplePiece {
         ] {
             stone(c, a, b)?;
         }
-        let stairs =
-            |c: &PieceContext<'_>, facing: &str| c.state_with("cobblestone_stairs", &[("facing", facing)]);
+        let stairs = |c: &PieceContext<'_>, facing: &str| {
+            c.state_with("cobblestone_stairs", &[("facing", facing)])
+        };
         let east = stairs(c, "east");
         let west = stairs(c, "west");
         let south = stairs(c, "south");
@@ -479,9 +581,13 @@ impl LegacyPiece for JungleTemplePiece {
             c.state_with("tripwire_hook", &[("facing", facing), ("attached", "true")])
         };
         let wire = |c: &PieceContext<'_>, a: &str, b: &str| {
-            c.state_with("tripwire", &[(a, "true"), (b, "true"), ("attached", "true")])
+            c.state_with(
+                "tripwire",
+                &[(a, "true"), (b, "true"), ("attached", "true")],
+            )
         };
-        let redstone = |c: &PieceContext<'_>, sides: &[(&str, &str)]| c.state_with("redstone_wire", sides);
+        let redstone =
+            |c: &PieceContext<'_>, sides: &[(&str, &str)]| c.state_with("redstone_wire", sides);
         f.place(c, hook(c, "east"), 1, -3, 8)?;
         f.place(c, hook(c, "west"), 4, -3, 8)?;
         f.place(c, wire(c, "east", "west"), 2, -3, 8)?;
@@ -490,8 +596,20 @@ impl LegacyPiece for JungleTemplePiece {
         for z in (2..=7).rev() {
             f.place(c, ns, 5, -3, z)?;
         }
-        f.place(c, redstone(c, &[("north", "side"), ("west", "side")]), 5, -3, 1)?;
-        f.place(c, redstone(c, &[("east", "side"), ("west", "side")]), 4, -3, 1)?;
+        f.place(
+            c,
+            redstone(c, &[("north", "side"), ("west", "side")]),
+            5,
+            -3,
+            1,
+        )?;
+        f.place(
+            c,
+            redstone(c, &[("east", "side"), ("west", "side")]),
+            4,
+            -3,
+            1,
+        )?;
         f.place(c, mossy, 3, -3, 1)?;
         let dispenser = "minecraft:chests/jungle_temple_dispenser";
         if !self.placed.lock().unwrap()[2] {
@@ -504,9 +622,27 @@ impl LegacyPiece for JungleTemplePiece {
         for z in 2..=4 {
             f.place(c, wire(c, "north", "south"), 7, -3, z)?;
         }
-        f.place(c, redstone(c, &[("east", "side"), ("west", "side")]), 8, -3, 6)?;
-        f.place(c, redstone(c, &[("west", "side"), ("south", "side")]), 9, -3, 6)?;
-        f.place(c, redstone(c, &[("north", "side"), ("south", "up")]), 9, -3, 5)?;
+        f.place(
+            c,
+            redstone(c, &[("east", "side"), ("west", "side")]),
+            8,
+            -3,
+            6,
+        )?;
+        f.place(
+            c,
+            redstone(c, &[("west", "side"), ("south", "side")]),
+            9,
+            -3,
+            6,
+        )?;
+        f.place(
+            c,
+            redstone(c, &[("north", "side"), ("south", "up")]),
+            9,
+            -3,
+            5,
+        )?;
         f.place(c, mossy, 9, -3, 4)?;
         f.place(c, ns, 9, -2, 4)?;
         if !self.placed.lock().unwrap()[3] {
@@ -552,17 +688,34 @@ impl LegacyPiece for JungleTemplePiece {
             c,
             redstone(
                 c,
-                &[("north", "side"), ("south", "side"), ("east", "side"), ("west", "side")],
+                &[
+                    ("north", "side"),
+                    ("south", "side"),
+                    ("east", "side"),
+                    ("west", "side"),
+                ],
             ),
             10,
             -1,
             9,
         )?;
-        f.place(c, c.state_with("sticky_piston", &[("facing", "up")]), 9, -2, 8)?;
+        f.place(
+            c,
+            c.state_with("sticky_piston", &[("facing", "up")]),
+            9,
+            -2,
+            8,
+        )?;
         let piston_west = c.state_with("sticky_piston", &[("facing", "west")]);
         f.place(c, piston_west, 10, -2, 8)?;
         f.place(c, piston_west, 10, -1, 8)?;
-        f.place(c, c.state_with("repeater", &[("facing", "north")]), 10, -2, 10)?;
+        f.place(
+            c,
+            c.state_with("repeater", &[("facing", "north")]),
+            10,
+            -2,
+            10,
+        )?;
         if !self.placed.lock().unwrap()[1] {
             let placed = f.create_chest(c, 9, -3, 10, "minecraft:chests/jungle_temple")?;
             self.placed.lock().unwrap()[1] = placed;

@@ -1,15 +1,29 @@
 use super::{args::*, vanilla, *};
 
 fn reg() -> Registries {
-    let mut r = Registries { permission: 4, ..Registries::default() };
-    r.items = vec!["minecraft:diamond".into(), "minecraft:diamond_sword".into(), "minecraft:stone".into()];
+    let mut r = Registries {
+        permission: 4,
+        ..Registries::default()
+    };
+    r.items = vec![
+        "minecraft:diamond".into(),
+        "minecraft:diamond_sword".into(),
+        "minecraft:stone".into(),
+    ];
     r.blocks.insert("minecraft:stone".into(), vec![]);
     r.blocks.insert(
         "minecraft:oak_stairs".into(),
-        vec![("facing".into(), vec!["north".into(), "south".into()]), ("half".into(), vec!["top".into(), "bottom".into()])],
+        vec![
+            ("facing".into(), vec!["north".into(), "south".into()]),
+            ("half".into(), vec!["top".into(), "bottom".into()]),
+        ],
     );
     r.summonable = vec!["minecraft:pig".into(), "minecraft:zombie".into()];
-    r.entity_types = vec!["minecraft:pig".into(), "minecraft:player".into(), "minecraft:zombie".into()];
+    r.entity_types = vec![
+        "minecraft:pig".into(),
+        "minecraft:player".into(),
+        "minecraft:zombie".into(),
+    ];
     r.players = vec!["Player".into()];
     r.dimensions = vec!["minecraft:overworld".into()];
     r.time_markers = vec!["minecraft:day".into(), "minecraft:noon".into()];
@@ -19,13 +33,20 @@ fn run(input: &str) -> CmdResult<(String, Vec<String>)> {
     let reg = reg();
     let parse = vanilla::dispatcher().parse(input, &reg);
     let (ctx, id) = parse.executable()?;
-    Ok((id.to_owned(), ctx.args.iter().map(|a| a.name.clone()).collect()))
+    Ok((
+        id.to_owned(),
+        ctx.args.iter().map(|a| a.name.clone()).collect(),
+    ))
 }
 fn suggestions(input: &str) -> Vec<String> {
     let reg = reg();
     let d = vanilla::dispatcher();
     let parse = d.parse(input, &reg);
-    d.suggestions(&parse, input.len(), &reg).1.into_iter().map(|s| s.text).collect()
+    d.suggestions(&parse, input.len(), &reg)
+        .1
+        .into_iter()
+        .map(|s| s.text)
+        .collect()
 }
 
 #[test]
@@ -47,12 +68,21 @@ fn reader_matches_brigadier() {
 #[test]
 fn parses_vanilla_commands() {
     assert_eq!(run("gamemode creative").unwrap().0, "gamemode");
-    assert_eq!(run("gamemode creative @s").unwrap().1, ["gamemode", "target"]);
-    assert_eq!(run("give @s minecraft:diamond 64").unwrap().1, ["targets", "item", "count"]);
+    assert_eq!(
+        run("gamemode creative @s").unwrap().1,
+        ["gamemode", "target"]
+    );
+    assert_eq!(
+        run("give @s minecraft:diamond 64").unwrap().1,
+        ["targets", "item", "count"]
+    );
     assert_eq!(run("tp 1 2 3").unwrap().0, "teleport.location");
     assert_eq!(run("tp Player").unwrap().0, "teleport.destination");
     assert_eq!(run("tp @s ~ ~10 ~").unwrap().0, "teleport.targets.location");
-    assert_eq!(run("teleport @e[type=pig,limit=2] ^ ^ ^5 90 0").unwrap().0, "teleport.targets.location");
+    assert_eq!(
+        run("teleport @e[type=pig,limit=2] ^ ^ ^5 90 0").unwrap().0,
+        "teleport.targets.location"
+    );
     assert_eq!(run("time set 1000").unwrap().0, "time.set");
     assert_eq!(run("time set 1d").unwrap().0, "time.set");
     assert_eq!(run("time set day").unwrap().0, "time.set.marker");
@@ -60,16 +90,31 @@ fn parses_vanilla_commands() {
     assert_eq!(run("weather rain 10s").unwrap().0, "weather");
     assert_eq!(run("xp add @s 5 levels").unwrap().0, "experience");
     assert_eq!(run("gamerule keep_inventory true").unwrap().0, "gamerule");
-    assert_eq!(run("gamerule minecraft:random_tick_speed 10").unwrap().0, "gamerule");
+    assert_eq!(
+        run("gamerule minecraft:random_tick_speed 10").unwrap().0,
+        "gamerule"
+    );
     assert_eq!(run("fill ~ ~ ~ ~1 ~1 ~1 stone hollow").unwrap().0, "fill");
-    assert_eq!(run("fill 0 0 0 1 1 1 minecraft:oak_stairs[facing=north] replace stone").unwrap().0, "fill");
-    assert_eq!(run("clone 0 0 0 1 1 1 5 5 5 masked move").unwrap().0, "clone");
-    assert_eq!(run("setblock ~ ~1 ~ oak_stairs[half=top] keep").unwrap().0, "setblock");
+    assert_eq!(
+        run("fill 0 0 0 1 1 1 minecraft:oak_stairs[facing=north] replace stone")
+            .unwrap()
+            .0,
+        "fill"
+    );
+    assert_eq!(
+        run("clone 0 0 0 1 1 1 5 5 5 masked move").unwrap().0,
+        "clone"
+    );
+    assert_eq!(
+        run("setblock ~ ~1 ~ oak_stairs[half=top] keep").unwrap().0,
+        "setblock"
+    );
     assert_eq!(run("summon zombie ~ ~ ~ {NoAI:1b}").unwrap().0, "summon");
     assert_eq!(run("difficulty hard").unwrap().0, "difficulty");
     assert_eq!(run("say hello @p").unwrap().0, "say");
     let reg = reg();
-    let parse = vanilla::dispatcher().parse("clone 0 0 0 1 1 1 5 5 5 strict filtered stone force", &reg);
+    let parse =
+        vanilla::dispatcher().parse("clone 0 0 0 1 1 1 5 5 5 strict filtered stone force", &reg);
     let (ctx, _) = parse.executable().unwrap();
     assert!(ctx.has("strict") && ctx.has("filtered") && ctx.has("force") && !ctx.has("move"));
 }
@@ -99,9 +144,15 @@ fn suggestions_like_vanilla() {
     let root = suggestions("");
     assert!(root.contains(&"gamemode".to_owned()) && root.contains(&"tp".to_owned()));
     assert_eq!(suggestions("game"), ["gamemode", "gamerule"]);
-    assert_eq!(suggestions("gamemode "), ["adventure", "creative", "spectator", "survival"]);
+    assert_eq!(
+        suggestions("gamemode "),
+        ["adventure", "creative", "spectator", "survival"]
+    );
     assert_eq!(suggestions("gamemode c"), ["creative"]);
-    assert_eq!(suggestions("give @s dia"), ["minecraft:diamond", "minecraft:diamond_sword"]);
+    assert_eq!(
+        suggestions("give @s dia"),
+        ["minecraft:diamond", "minecraft:diamond_sword"]
+    );
     // Underscore-separated parts match too (SharedSuggestionProvider.matchesSubStr).
     assert_eq!(suggestions("give @s sword"), ["minecraft:diamond_sword"]);
     assert_eq!(suggestions("kill @"), ["@a", "@e", "@n", "@p", "@r", "@s"]);
@@ -111,20 +162,34 @@ fn suggestions_like_vanilla() {
     assert_eq!(suggestions("kill @e[type=pig"), [",", "]"]);
     assert_eq!(suggestions("setblock 0 0 0 oak_stairs[fa"), ["facing="]);
     assert_eq!(suggestions("setblock 0 0 0 oak_stairs[facing=n"), ["north"]);
-    assert_eq!(suggestions("tp "), ["@a", "@e", "@n", "@p", "@r", "@s", "Player", "~", "~ ~", "~ ~ ~"]);
+    assert_eq!(
+        suggestions("tp "),
+        [
+            "@a", "@e", "@n", "@p", "@r", "@s", "Player", "~", "~ ~", "~ ~ ~"
+        ]
+    );
     assert_eq!(suggestions("time set 5"), ["d", "s", "t"]);
     assert!(suggestions("time set ").contains(&"minecraft:day".to_owned()));
 }
 #[test]
 fn smart_usage_matches_brigadier() {
     let d = vanilla::dispatcher();
-    let usage = |name: &str| d.smart_usage(0, 4).into_iter().find(|(n, _)| d.nodes[*n].name() == name).unwrap().1;
+    let usage = |name: &str| {
+        d.smart_usage(0, 4)
+            .into_iter()
+            .find(|(n, _)| d.nodes[*n].name() == name)
+            .unwrap()
+            .1
+    };
     assert_eq!(usage("gamemode"), "gamemode <gamemode> [<target>]");
     assert_eq!(usage("give"), "give <targets> <item> [<count>]");
     assert_eq!(usage("kill"), "kill [<targets>]");
     assert_eq!(usage("weather"), "weather (clear|rain|thunder)");
     assert_eq!(usage("tp"), "tp -> teleport");
-    assert_eq!(usage("difficulty"), "difficulty [peaceful|easy|normal|hard]");
+    assert_eq!(
+        usage("difficulty"),
+        "difficulty [peaceful|easy|normal|hard]"
+    );
 }
 #[test]
 fn local_coordinates_follow_view() {
@@ -134,6 +199,19 @@ fn local_coordinates_follow_view() {
     // ^1 (left) while facing south is +X.
     let p = Coordinates::Local([1.0, 0.0, 0.0]).position([0.0, 64.0, 0.0], [0.0, 0.0]);
     assert!((p[0] - 1.0).abs() < 1e-6, "{p:?}");
-    let w = Coordinates::World([Coord { relative: true, value: 1.0 }, Coord { relative: false, value: 5.0 }, Coord { relative: true, value: 0.0 }]);
+    let w = Coordinates::World([
+        Coord {
+            relative: true,
+            value: 1.0,
+        },
+        Coord {
+            relative: false,
+            value: 5.0,
+        },
+        Coord {
+            relative: true,
+            value: 0.0,
+        },
+    ]);
     assert_eq!(w.position([10.0, 64.0, 3.0], [0.0, 0.0]), [11.0, 5.0, 3.0]);
 }

@@ -26,7 +26,11 @@ pub const MAPPINGS: &[(&str, &str, &str)] = &[
     ("key.friends", "key.keyboard.o", "multiplayer"),
     ("key.socialInteractions", "key.keyboard.p", "multiplayer"),
     ("key.toggleGui", "key.keyboard.f1", "misc"),
-    ("key.toggleSpectatorShaderEffects", "key.keyboard.f4", "misc"),
+    (
+        "key.toggleSpectatorShaderEffects",
+        "key.keyboard.f4",
+        "misc",
+    ),
     ("key.screenshot", "key.keyboard.f2", "misc"),
     ("key.togglePerspective", "key.keyboard.f5", "misc"),
     ("key.smoothCamera", "key.keyboard.unknown", "misc"),
@@ -50,7 +54,16 @@ pub const MAPPINGS: &[(&str, &str, &str)] = &[
     ("key.hotbar.9", "key.keyboard.9", "inventory"),
 ];
 /// KeyMapping.Category sort order.
-pub const CATEGORIES: [&str; 8] = ["movement", "misc", "multiplayer", "gameplay", "inventory", "creative", "spectator", "debug"];
+pub const CATEGORIES: [&str; 8] = [
+    "movement",
+    "misc",
+    "multiplayer",
+    "gameplay",
+    "inventory",
+    "creative",
+    "spectator",
+    "debug",
+];
 
 /// InputConstants key names <-> winit physical keys.
 const KEYS: &[(&str, KeyCode)] = &[
@@ -228,15 +241,25 @@ pub struct KeyBinds {
 }
 impl Default for KeyBinds {
     fn default() -> Self {
-        Self { keys: MAPPINGS.iter().map(|(n, d, _)| (*n, (*d).to_owned())).collect() }
+        Self {
+            keys: MAPPINGS
+                .iter()
+                .map(|(n, d, _)| (*n, (*d).to_owned()))
+                .collect(),
+        }
     }
 }
 impl KeyBinds {
     pub fn get(&self, name: &str) -> &str {
-        self.keys.get(name).map_or("key.keyboard.unknown", String::as_str)
+        self.keys
+            .get(name)
+            .map_or("key.keyboard.unknown", String::as_str)
     }
     pub fn default_of(name: &str) -> &'static str {
-        MAPPINGS.iter().find(|m| m.0 == name).map_or("key.keyboard.unknown", |m| m.1)
+        MAPPINGS
+            .iter()
+            .find(|m| m.0 == name)
+            .map_or("key.keyboard.unknown", |m| m.1)
     }
     pub fn is_default(&self, name: &str) -> bool {
         self.get(name) == Self::default_of(name)
@@ -256,7 +279,10 @@ impl KeyBinds {
         }
     }
     pub fn saved(&self) -> Vec<(&'static str, String)> {
-        MAPPINGS.iter().map(|(n, _, _)| (*n, self.get(n).to_owned())).collect()
+        MAPPINGS
+            .iter()
+            .map(|(n, _, _)| (*n, self.get(n).to_owned()))
+            .collect()
     }
     pub fn reset_all(&mut self) {
         *self = Self::default();
@@ -269,7 +295,9 @@ impl KeyBinds {
         }
         MAPPINGS
             .iter()
-            .filter(|(n, _, _)| *n != name && self.get(n) == key && (!self.is_default(n) || !self.is_default(name)))
+            .filter(|(n, _, _)| {
+                *n != name && self.get(n) == key && (!self.is_default(n) || !self.is_default(name))
+            })
             .map(|(n, _, _)| *n)
             .collect()
     }
@@ -282,7 +310,9 @@ impl KeyBinds {
     /// player's bindings. `None` means the key now does nothing; mouse
     /// mappings bound to keys come back as `Err(button)`.
     pub fn translate(&self, key: KeyCode) -> Option<Result<KeyCode, MouseButton>> {
-        let Some(name) = key_name(key) else { return Some(Ok(key)) };
+        let Some(name) = key_name(key) else {
+            return Some(Ok(key));
+        };
         if let Some(mapping) = self.mapping_for(name) {
             let default = Self::default_of(mapping);
             if let Some(code) = key_code(default) {
@@ -291,7 +321,10 @@ impl KeyBinds {
             return mouse_button(default).map(Err);
         }
         // An unbound key whose default meaning was moved elsewhere is inert.
-        if MAPPINGS.iter().any(|(n, d, _)| *d == name && !self.is_default(n)) {
+        if MAPPINGS
+            .iter()
+            .any(|(n, d, _)| *d == name && !self.is_default(n))
+        {
             return None;
         }
         Some(Ok(key))
@@ -306,7 +339,10 @@ impl KeyBinds {
             }
             return key_code(default).map(Ok);
         }
-        if MAPPINGS.iter().any(|(n, d, _)| *d == name && !self.is_default(n)) {
+        if MAPPINGS
+            .iter()
+            .any(|(n, d, _)| *d == name && !self.is_default(n))
+        {
             return None;
         }
         Some(Err(button))

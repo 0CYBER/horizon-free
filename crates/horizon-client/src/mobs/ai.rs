@@ -70,9 +70,22 @@ pub fn family(s: Species) -> Family {
     use Species as S;
     match s {
         S::Pig | S::Cow | S::Mooshroom | S::Sheep | S::Chicken => Family::Farm,
-        S::Zombie | S::Husk | S::Drowned | S::ZombieVillager | S::Skeleton | S::Stray | S::Bogged | S::WitherSkeleton => Family::Undead,
+        S::Zombie
+        | S::Husk
+        | S::Drowned
+        | S::ZombieVillager
+        | S::Skeleton
+        | S::Stray
+        | S::Bogged
+        | S::WitherSkeleton => Family::Undead,
         S::Creeper | S::Spider | S::CaveSpider => Family::Hostile,
-        S::Squid | S::GlowSquid | S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish | S::Dolphin => Family::Aquatic,
+        S::Squid
+        | S::GlowSquid
+        | S::Cod
+        | S::Salmon
+        | S::TropicalFish
+        | S::Pufferfish
+        | S::Dolphin => Family::Aquatic,
         _ => Family::Generic,
     }
 }
@@ -590,13 +603,17 @@ fn tick_effects(m: &mut Mob) {
     for (effect, ticks, amp) in &mut effects {
         let interval = |base: i32| (base >> (*amp).max(0)).max(1);
         match *effect {
-            "minecraft:poison" if *ticks % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 => {
+            "minecraft:poison"
+                if *ticks % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 =>
+            {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
             "minecraft:wither" if *ticks % interval(40) == 0 => {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
-            "minecraft:regeneration" if *ticks % interval(50) == 0 && !m.kind.flags.undead && m.alive() => {
+            "minecraft:regeneration"
+                if *ticks % interval(50) == 0 && !m.kind.flags.undead && m.alive() =>
+            {
                 m.health = (m.health + 1.0).min(m.attrs.max_health);
             }
             _ => {}

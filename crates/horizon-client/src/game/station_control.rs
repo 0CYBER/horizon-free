@@ -20,7 +20,11 @@ pub(super) const HELP: &[&str] = &[
     "close                          close the open menu",
 ];
 fn id(name: &str) -> String {
-    if name.contains(':') { name.to_owned() } else { format!("minecraft:{name}") }
+    if name.contains(':') {
+        name.to_owned()
+    } else {
+        format!("minecraft:{name}")
+    }
 }
 fn stack_json(s: &ItemStack) -> Value {
     json!({
@@ -52,12 +56,21 @@ impl Game<'_> {
         self.cursor = saved;
     }
     fn gui_origin(&self) -> Result<(f32, f32)> {
-        let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).ok_or("no renderer yet")?;
+        let size = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+            .ok_or("no renderer yet")?;
         Ok(self.inventory_origin(&horizon_client::hud::HudBatch::new(size)))
     }
     /// Commands not known to control.rs; None when unknown here too.
     pub(super) fn station_command(&mut self, words: &[&str]) -> Result<Option<Value>> {
-        let arg = |i: usize| words.get(i).copied().ok_or_else(|| format!("{} needs more arguments", words[0]));
+        let arg = |i: usize| {
+            words
+                .get(i)
+                .copied()
+                .ok_or_else(|| format!("{} needs more arguments", words[0]))
+        };
         let flag = |name: &str| words.iter().skip(1).any(|w| *w == name);
         let ok = || Ok(Some(json!({ "ok": true })));
         match words.first().copied().unwrap_or("") {
@@ -73,7 +86,9 @@ impl Game<'_> {
                     return Err(format!("cannot place {name}").into());
                 }
                 if let Some(entity) = horizon_client::containers::BlockEntity::for_block(&name) {
-                    self.world.block_entities.insert((pos[0], pos[1], pos[2]), entity);
+                    self.world
+                        .block_entities
+                        .insert((pos[0], pos[1], pos[2]), entity);
                 }
                 self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
                 ok()
@@ -81,7 +96,9 @@ impl Game<'_> {
             "use" => {
                 let pos = [arg(1)?.parse()?, arg(2)?.parse()?, arg(3)?.parse()?];
                 self.open_menu(pos);
-                Ok(Some(json!({ "ok": true, "station": self.station.as_ref().map(|s| format!("{:?}", s.kind)) })))
+                Ok(Some(
+                    json!({ "ok": true, "station": self.station.as_ref().map(|s| format!("{:?}", s.kind)) }),
+                ))
             }
             "click-slot" => {
                 let slot: usize = arg(1)?.parse()?;
@@ -111,7 +128,9 @@ impl Game<'_> {
                 if self.res.stations.enchantments.get(&e).is_none() {
                     return Err(format!("unknown enchantment {e}").into());
                 }
-                let held = self.inventory[self.selected].as_mut().ok_or("no held item")?;
+                let held = self.inventory[self.selected]
+                    .as_mut()
+                    .ok_or("no held item")?;
                 held.enchant(&e, level);
                 self.apply_equipment();
                 ok()
@@ -126,7 +145,11 @@ impl Game<'_> {
                     .slots()
                     .into_iter()
                     .filter_map(|i| {
-                        let s = if i == 200 { self.craft_result() } else { self.slot_mut(i).clone() };
+                        let s = if i == 200 {
+                            self.craft_result()
+                        } else {
+                            self.slot_mut(i).clone()
+                        };
                         s.map(|s| json!({ "slot": i, "stack": stack_json(&s) }))
                     })
                     .collect();
@@ -149,7 +172,13 @@ impl Game<'_> {
                 let def = horizon_client::brewing::effect(arg(1)?).ok_or("unknown effect")?;
                 let seconds: i32 = arg(2)?.parse()?;
                 let amp: i32 = words.get(3).map_or(Ok(0), |a| a.parse())?;
-                self.potions.effects.add(horizon_client::effects::EffectInstance::new(def.id, seconds * 20, amp));
+                self.potions
+                    .effects
+                    .add(horizon_client::effects::EffectInstance::new(
+                        def.id,
+                        seconds * 20,
+                        amp,
+                    ));
                 ok()
             }
             "trade" => {
@@ -162,7 +191,9 @@ impl Game<'_> {
                 self.open_merchant(&profession, &variant, level);
                 ok()
             }
-            "effects" => Ok(Some(json!({ "effects": self.effects_json(), "health": self.player.as_ref().map(|p| p.health.health()) }))),
+            "effects" => Ok(Some(
+                json!({ "effects": self.effects_json(), "health": self.player.as_ref().map(|p| p.health.health()) }),
+            )),
             "close" => {
                 self.close_container();
                 self.screen = Screen::Playing;
