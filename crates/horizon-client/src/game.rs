@@ -8,7 +8,7 @@ use horizon_client::{
     blocks::{BlockFacts, Fluid},
     chunk::{HEIGHT, MIN_Y},
     clock::FixedStep,
-    entities::{Arrow, ArrowHit, ItemEntity},
+    entities::{Arrow, ArrowHit, Experience, ExperienceOrb, ItemEntity},
     mobs::{Mob, MobEvent, MobType, MobTypes, MobWorld},
     particles::Particle,
     containers::{BlockEntity, Providers},
@@ -236,6 +236,10 @@ struct Game<'a> {
     /// Armor slots: head, chest, legs, feet.
     armor: [Option<ItemStack>; 4],
     applied_modifiers: Vec<(String, String)>,
+    experience: Experience,
+    orbs: Vec<ExperienceOrb>,
+    xp_delay: u32,
+    last_level_up: u64,
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -485,10 +489,15 @@ impl Game<'_> {
                     held.as_ref(),
                     &mut self.world.random,
                 );
+                let silk = false;
                 for d in drops {
                     if &*d.item != "minecraft:air" {
                         self.pop_resource(pos, d);
                     }
+                }
+                let xp = if silk { 0 } else { self.block_experience(&facts.name) };
+                if xp > 0 {
+                    self.spawn_orbs([f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5], xp);
                 }
             }
             // Tools lose durability on blocks with nonzero hardness.
@@ -664,6 +673,12 @@ impl Game<'_> {
         }
         let Some(stack) = self.held().cloned() else { return Ok(()) };
         let Some(info) = self.res.items.get(&stack.item).cloned() else { return Ok(()) };
+        if &*stack.item == "minecraft:bow" {
+            if self.using.is_none() {
+                self.using = Some((self.selected, 0));
+            }
+            return Ok(());
+        }
         if info.food.is_some()
             && let Some(p) = self.player.as_ref()
             && (p.health.food.food < 20 || self.creative)
@@ -749,6 +764,9 @@ impl Game<'_> {
             return;
         };
         if !self.right || slot != self.selected || self.screen != Screen::Playing {
+            if &*stack.item == "minecraft:bow" && slot == self.selected {
+                self.release_bow(ticks);
+            }
             self.using = None;
             return;
         }
@@ -756,6 +774,10 @@ impl Game<'_> {
             self.using = None;
             return;
         };
+        if &*stack.item == "minecraft:bow" {
+            self.using = Some((slot, ticks + 1));
+            return;
+        }
         let duration = 32;
         let ticks = ticks + 1;
         let remaining = duration - ticks.min(duration);
@@ -1049,6 +1071,7 @@ impl Game<'_> {
         self.tick_mining()?;
         self.tick_items();
         self.tick_mobs()?;
+        self.tick_experience();
         self.tick_block_entities()?;
         let facts = &self.res.facts;
         let world = &self.world;
@@ -1242,6 +1265,20 @@ impl Game<'_> {
         {
             // Experience bar and hearts/food (Gui.renderPlayerHealth).
             batch.sprite(atlas, "gui/sprites/hud/experience_bar_background", w / 2.0 - 91.0, h - 29.0);
+            let filled = (self.experience.progress * 183.0).floor() / 182.0;
+            if filled > 0.0 {
+                batch.sprite_part(atlas, "gui/sprites/hud/experience_bar_progress", w / 2.0 - 91.0, h - 29.0, filled.min(1.0));
+            }
+            if self.experience.level > 0 {
+                // Gui.renderExperienceLevel: green text with a black outline.
+                let text = self.experience.level.to_string();
+                let tw = HudBatch::text_width(atlas, &text);
+                let (x, y) = ((w - tw) / 2.0, h - 31.0 - 4.0);
+                for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                    batch.text(atlas, &text, x + dx, y + dy, rgba(0, 0, 0, 255), false);
+                }
+                batch.text(atlas, &text, x, y, rgba(128, 255, 32, 255), false);
+            }
             let health = p.health.health().ceil() as i32;
             let top = h - 39.0;
             for i in 0..10 {
@@ -1781,6 +1818,35 @@ impl Game<'_> {
                 horizon_client::mobs::render_model(model, base, &pose, [r.u0, r.v0, r.u1, r.v1], packed, 0, &mut out);
             }
         }
+        // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
+        if let Some(r) = self.res.atlas.sprites.get("entity/experience_orb").copied() {
+            let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
+            let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
+            let right = forward.cross(glam::Vec3::Y).normalize_or_zero();
+            let up = right.cross(forward).normalize_or_zero();
+            for o in &self.orbs {
+                let p = glam::DVec3::new(
+                    o.previous.x + (o.position.x - o.previous.x) * alpha,
+                    o.previous.y + (o.position.y - o.previous.y) * alpha + 0.1,
+                    o.previous.z + (o.position.z - o.previous.z) * alpha,
+                ) - camera;
+                let icon = o.icon();
+                let (du, dv) = ((r.u1 - r.u0) / 4.0, (r.v1 - r.v0) / 4.0);
+                let (u0, v0) = (r.u0 + (icon % 4) as f32 * du, r.v0 + (icon / 4) as f32 * dv);
+                let t = (o.age as f32 + alpha as f32) / 2.0;
+                let red = ((t.sin() + 1.0) * 0.5 * 255.0) as u32;
+                let blue = (((t + 4.188_79).sin() + 1.0) * 0.1 * 255.0) as u32;
+                let color = 0x8000_0000 | blue << 16 | 255 << 8 | red;
+                let light = self.world.light(o.position.x.floor() as i32, o.position.y.floor() as i32, o.position.z.floor() as i32);
+                let packed = u32::from(light >> 4).max(10) * 16 | (u32::from(light & 15).max(10) * 16) << 8;
+                let c = p.as_vec3();
+                let s = 0.15;
+                for (k, uv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter().zip([[u0, v0 + dv], [u0 + du, v0 + dv], [u0 + du, v0], [u0, v0]]) {
+                    let v = c + right * (k.0 * s) + up * (k.1 * s);
+                    out.push(Vertex { pos: v.to_array(), uv, layer: 0, color, light: packed });
+                }
+            }
+        }
         // Camera-facing particle quads.
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
         let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
@@ -2191,6 +2257,12 @@ impl Game<'_> {
                 for d in drops {
                     self.spawn_item(d, [pos[0], pos[1] + 0.5, pos[2]], [0.0, 0.2, 0.0], 10);
                 }
+                if by_player {
+                    // Animal: 1 + random(3); Monster: 5.
+                    let hostile = self.res.mob_types.get(&kind).is_some_and(|t| t.category == "monster");
+                    let xp = if hostile { 5 } else { 1 + self.world.random.next_int_bound(3).unwrap_or(0) as u32 };
+                    self.spawn_orbs([pos[0], pos[1] + 0.5, pos[2]], xp);
+                }
             }
         }
         self.mobs = mobs;
@@ -2224,7 +2296,7 @@ impl Game<'_> {
                     let mut gauss = || f64::from(r.next_float() + r.next_float() - 1.0) * spread;
                     let v = [(dx / len + gauss()) * 1.6, (dy / len + gauss()) * 1.6, (dz / len + gauss()) * 1.6];
                     let p = Vec3::new(from[0], from[1] - 0.1, from[2]);
-                    self.arrows.push(Arrow { position: p, previous: p, velocity: Vec3::new(v[0], v[1], v[2]), stuck: false, age: 0, base_damage: 2.0 });
+                    self.arrows.push(Arrow { from_player: false, critical: false, position: p, previous: p, velocity: Vec3::new(v[0], v[1], v[2]), stuck: false, age: 0, base_damage: 2.0 });
                     self.audio.play("minecraft:entity.skeleton.shoot", Some(from), 1.0, 1.0 / (self.world.random.next_float() * 0.4 + 0.8));
                 }
                 MobEvent::Explode(at, radius) => self.explode(at, radius)?,
@@ -2240,14 +2312,44 @@ impl Game<'_> {
         });
         let mut arrows = std::mem::take(&mut self.arrows);
         let mut hits = Vec::new();
+        let mobs = &mut self.mobs;
+        let mut random_state = self.world.random.clone();
+        let random = &mut random_state;
+        let mut mob_hits = Vec::new();
         arrows.retain_mut(|a| {
-            let (keep, hit) = a.tick(&self.world, &self.res.facts, bounds);
+            if a.from_player && !a.stuck {
+                let (keep, _) = a.tick(&self.world, &self.res.facts, None);
+                for m in mobs.iter_mut().filter(|m| m.alive()) {
+                    let b = m.bounds();
+                    let (lo, hi) = (b.min_position(), b.max_position());
+                    let p = a.position;
+                    if p.x > lo.x - 0.3 && p.x < hi.x + 0.3 && p.y > lo.y - 0.3 && p.y < hi.y + 0.3 && p.z > lo.z - 0.3 && p.z < hi.z + 0.3 {
+                        // AbstractArrow.onHitEntity: ceil(speed * base), crits add random(damage / 2 + 2).
+                        let speed = (a.velocity.x.powi(2) + a.velocity.y.powi(2) + a.velocity.z.powi(2)).sqrt();
+                        let mut damage = (speed * a.base_damage).ceil().max(0.0) as i32;
+                        if a.critical {
+                            damage += random.next_int_bound(damage / 2 + 2).unwrap_or(0);
+                        }
+                        if m.hurt(damage as f32, Some([a.previous.x, a.previous.y, a.previous.z]), random) {
+                            mob_hits.push((m.id, [p.x, p.y, p.z]));
+                        }
+                        return false;
+                    }
+                }
+                return keep;
+            }
+            let (keep, hit) = a.tick(&self.world, &self.res.facts, if a.from_player { None } else { bounds });
             if let ArrowHit::Player(d) = hit {
                 hits.push(d);
             }
             keep
         });
         self.arrows = arrows;
+        self.world.random = random_state;
+        for (id, at) in mob_hits {
+            self.last_hurt_by_player.insert(id);
+            self.audio.play("minecraft:entity.arrow.hit", Some(at), 1.0, 1.2 / (self.world.random.next_float() * 0.2 + 0.9));
+        }
         for d in hits {
             if self.creative {
                 continue;
@@ -2439,6 +2541,8 @@ impl Game<'_> {
         self.arrows.clear();
         self.dropped.clear();
         self.particles.clear();
+        self.orbs.clear();
+        self.experience = Experience { level: self.level.xp_level, progress: self.level.xp_progress, total: self.level.xp_total };
         self.mining = None;
         self.container = None;
         self.carried = None;
@@ -2720,6 +2824,113 @@ impl Game<'_> {
         }
         Ok(false)
     }
+    /// ExperienceOrb.award: split into vanilla orb sizes.
+    fn spawn_orbs(&mut self, at: [f64; 3], mut value: u32) {
+        while value > 0 {
+            let v = ExperienceOrb::split(value);
+            value -= v;
+            let r = &mut self.world.random;
+            let p = Vec3::new(at[0], at[1], at[2]);
+            self.orbs.push(ExperienceOrb {
+                position: p,
+                previous: p,
+                velocity: Vec3::new((r.next_double() * 0.2 - 0.1) * 2.0, r.next_double() * 0.2 * 2.0, (r.next_double() * 0.2 - 0.1) * 2.0),
+                value: v,
+                age: 0,
+                on_ground: false,
+            });
+        }
+    }
+    /// DropExperienceBlock / RedStoneOreBlock / SculkBlock experience ranges.
+    fn block_experience(&mut self, name: &str) -> u32 {
+        let (min, max) = match name.trim_start_matches("minecraft:") {
+            "coal_ore" | "deepslate_coal_ore" => (0, 2),
+            "nether_gold_ore" => (0, 1),
+            "lapis_ore" | "deepslate_lapis_ore" | "nether_quartz_ore" => (2, 5),
+            "diamond_ore" | "deepslate_diamond_ore" | "emerald_ore" | "deepslate_emerald_ore" => (3, 7),
+            "redstone_ore" | "deepslate_redstone_ore" => (1, 5),
+            "sculk" => (1, 1),
+            "sculk_catalyst" | "sculk_sensor" | "calibrated_sculk_sensor" | "sculk_shrieker" => (5, 5),
+            "spawner" => (15, 43),
+            _ => (0, 0),
+        };
+        if max == 0 {
+            return 0;
+        }
+        (min + self.world.random.next_int_bound(max - min + 1).unwrap_or(0)) as u32
+    }
+    fn tick_experience(&mut self) {
+        if self.xp_delay > 0 {
+            self.xp_delay -= 1;
+        }
+        let player = self.player.as_ref().filter(|p| !p.health.dead_or_dying());
+        let target = player.map(|p| [p.position.x, p.position.y + f64::from(p.dimensions.eye_height) / 2.0, p.position.z]);
+        let bounds = player.map(|p| {
+            let w = f64::from(p.dimensions.width) / 2.0;
+            ([p.position.x - w, p.position.y, p.position.z - w], [p.position.x + w, p.position.y + f64::from(p.dimensions.height), p.position.z + w])
+        });
+        let mut orbs = std::mem::take(&mut self.orbs);
+        orbs.retain_mut(|o| o.tick(&self.world, &self.res.facts, self.collision, target));
+        let mut gained = 0;
+        if let Some((min, max)) = bounds {
+            orbs.retain(|o| {
+                let touching = o.position.x + 0.25 > min[0] && o.position.x - 0.25 < max[0]
+                    && o.position.y + 0.5 > min[1] && o.position.y < max[1]
+                    && o.position.z + 0.25 > min[2] && o.position.z - 0.25 < max[2];
+                if touching && self.xp_delay == 0 {
+                    // ExperienceOrb.playerTouch: one orb every 2 ticks.
+                    self.xp_delay = 2;
+                    gained += o.value;
+                    return false;
+                }
+                true
+            });
+        }
+        self.orbs = orbs;
+        if gained > 0 {
+            let at = self.eye_position();
+            let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.35 + 0.9;
+            self.audio.play("minecraft:entity.experience_orb.pickup", at, 0.1, pitch);
+            if self.experience.give(gained as i32) && self.experience.level % 5 == 0 && self.ticks > self.last_level_up + 100 {
+                self.last_level_up = self.ticks;
+                let volume = if self.experience.level > 30 { 1.0 } else { self.experience.level as f32 / 30.0 };
+                self.audio.play("minecraft:entity.player.levelup", at, volume * 0.75, 1.0);
+            }
+        }
+    }
+    /// BowItem.releaseUsing: power from charge time, arrows at power * 3.
+    fn release_bow(&mut self, ticks: u32) {
+        let f = ticks as f32 / 20.0;
+        let power = ((f * f + f * 2.0) / 3.0).min(1.0);
+        if power < 0.1 {
+            return;
+        }
+        let arrow_slot = self.inventory.iter().position(|s| s.as_ref().is_some_and(|s| &*s.item == "minecraft:arrow"));
+        if arrow_slot.is_none() && !self.creative {
+            return;
+        }
+        let Some(eye) = self.eye_position() else { return };
+        let dir = view_vector(self.yaw, self.pitch);
+        // Projectile.shoot: inaccuracy 1.0 as gaussian * 0.0075.
+        let r = &mut self.world.random;
+        let mut jitter = || f64::from(r.next_float() + r.next_float() - 1.0) * 0.0075;
+        let speed = f64::from(power) * 3.0;
+        let v = [(dir[0] + jitter()) * speed, (dir[1] + jitter()) * speed, (dir[2] + jitter()) * speed];
+        let p = Vec3::new(eye[0], eye[1] - 0.1, eye[2]);
+        self.arrows.push(Arrow { from_player: true, critical: power >= 1.0, position: p, previous: p, velocity: Vec3::new(v[0], v[1], v[2]), stuck: false, age: 0, base_damage: 2.0 });
+        let pitch = 1.0 / (self.world.random.next_float() * 0.4 + 1.2) + power * 0.5;
+        self.audio.play("minecraft:entity.arrow.shoot", Some(eye), 1.0, pitch);
+        if !self.creative
+            && let Some(i) = arrow_slot
+            && let Some(s) = self.inventory[i].as_mut()
+        {
+            s.count -= 1;
+            if s.count == 0 {
+                self.inventory[i] = None;
+            }
+        }
+        self.damage_held(1);
+    }
     fn save_game(&mut self) -> Result<()> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys
@@ -2734,6 +2945,9 @@ impl Game<'_> {
         level.day_time = self.world.day_time;
         level.spawn = self.spawn.map(|s| [s.x, s.y, s.z]);
         level.rotation = [self.yaw, self.pitch];
+        level.xp_level = self.experience.level;
+        level.xp_progress = self.experience.progress;
+        level.xp_total = self.experience.total;
         if let Some(p) = &self.player {
             level.position = Some([p.position.x, p.position.y, p.position.z]);
             level.health = p.health.health();
@@ -3298,6 +3512,10 @@ pub fn run() -> Result<()> {
         title: None,
         armor: [None, None, None, None],
         applied_modifiers: Vec::new(),
+        experience: Experience::default(),
+        orbs: Vec::new(),
+        xp_delay: 0,
+        last_level_up: 0,
     };
     match game.options.world.clone() {
         Some(folder) => {

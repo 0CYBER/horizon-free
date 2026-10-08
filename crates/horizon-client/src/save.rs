@@ -362,6 +362,9 @@ pub struct Level {
     pub food: i32,
     pub saturation: f32,
     pub inventory: Vec<(u8, String, u32, u32)>,
+    pub xp_level: i32,
+    pub xp_progress: f32,
+    pub xp_total: i32,
 }
 impl Level {
     pub fn read(dir: &Path) -> Option<Self> {
@@ -415,6 +418,9 @@ impl Level {
             health: player.map_or(20.0, |p| float(p.get("Health"))),
             food: player.map_or(20, |p| long(p.get("foodLevel")) as i32),
             saturation: player.map_or(5.0, |p| float(p.get("foodSaturationLevel"))),
+            xp_level: player.map_or(0, |p| long(p.get("XpLevel")) as i32),
+            xp_progress: player.map_or(0.0, |p| float(p.get("XpP"))),
+            xp_total: player.map_or(0, |p| long(p.get("XpTotal")) as i32),
             inventory,
         })
     }
@@ -425,6 +431,9 @@ impl Level {
             ("Health", Tag::Float(self.health.to_bits())),
             ("foodLevel", Tag::Int(self.food)),
             ("foodSaturationLevel", Tag::Float(self.saturation.to_bits())),
+            ("XpLevel", Tag::Int(self.xp_level)),
+            ("XpP", Tag::Float(self.xp_progress.to_bits())),
+            ("XpTotal", Tag::Int(self.xp_total)),
             ("playerGameType", Tag::Int(i32::from(self.creative))),
             (
                 "Rotation",

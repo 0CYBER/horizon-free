@@ -101,6 +101,9 @@ impl ItemEntity {
 /// Arrows (`AbstractArrow.tick`): 0.99 drag, 0.05 gravity, sticking in blocks.
 #[derive(Clone, Debug)]
 pub struct Arrow {
+    /// Shot by the player (hits mobs) rather than a mob (hits the player).
+    pub from_player: bool,
+    pub critical: bool,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -145,5 +148,113 @@ impl Arrow {
         }
         self.velocity = Vec3::new(self.velocity.x * 0.99, self.velocity.y * 0.99 - 0.05, self.velocity.z * 0.99);
         (self.position.y > -128.0 && self.age < 1200, ArrowHit::None)
+    }
+}
+/// ExperienceOrb: gravity 0.03, homing towards the player within 8 blocks.
+#[derive(Clone, Debug)]
+pub struct ExperienceOrb {
+    pub position: Vec3,
+    pub previous: Vec3,
+    pub velocity: Vec3,
+    pub value: u32,
+    pub age: u32,
+    pub on_ground: bool,
+}
+impl ExperienceOrb {
+    /// ExperienceOrb.getExperienceValue: the largest orb size not above `value`.
+    pub fn split(value: u32) -> u32 {
+        [2477, 1237, 617, 307, 149, 73, 37, 17, 7, 3, 1]
+            .into_iter()
+            .find(|&v| value >= v)
+            .unwrap_or(1)
+    }
+    /// ExperienceOrb.getIcon
+    pub fn icon(&self) -> u32 {
+        match self.value {
+            2477.. => 10,
+            1237.. => 9,
+            617.. => 8,
+            307.. => 7,
+            149.. => 6,
+            73.. => 5,
+            37.. => 4,
+            17.. => 3,
+            7.. => 2,
+            3.. => 1,
+            _ => 0,
+        }
+    }
+    pub fn tick(&mut self, world: &World, facts: &BlockFacts, collision: &BlockCollisionRegistry<'_>, player: Option<[f64; 3]>) -> bool {
+        self.previous = self.position;
+        let block = world.block(self.position.x.floor() as i32, self.position.y.floor() as i32, self.position.z.floor() as i32);
+        if facts.get(block).fluid == Fluid::Water {
+            self.velocity = Vec3::new(self.velocity.x * 0.99, (self.velocity.y + 5.0e-4).min(0.06), self.velocity.z * 0.99);
+        } else {
+            self.velocity.y -= 0.03;
+        }
+        if let Some(p) = player {
+            let d = [(p[0] - self.position.x) / 8.0, (p[1] - self.position.y) / 8.0, (p[2] - self.position.z) / 8.0];
+            let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            let power = 1.0 - length;
+            if power > 0.0 && length > 1e-6 {
+                let power = power * power;
+                self.velocity = Vec3::new(
+                    self.velocity.x + d[0] / length * power * 0.1,
+                    self.velocity.y + d[1] / length * power * 0.1,
+                    self.velocity.z + d[2] / length * power * 0.1,
+                );
+            }
+        }
+        let h = 0.25;
+        let bounds = Aabb::new(
+            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
+            Vec3::new(self.position.x + h, self.position.y + 0.5, self.position.z + h),
+        );
+        let mut scene = SceneCollisions { world, binding: collision };
+        let wanted = self.velocity;
+        let moved = scene.resolve(bounds, wanted, 0.0, self.on_ground).unwrap_or(Vec3::ZERO);
+        self.position = Vec3::new(self.position.x + moved.x, self.position.y + moved.y, self.position.z + moved.z);
+        self.on_ground = wanted.y < 0.0 && moved.y != wanted.y;
+        let mut friction = 0.98;
+        if self.on_ground {
+            let below = world.block(self.position.x.floor() as i32, (self.position.y - 1.0).floor() as i32, self.position.z.floor() as i32);
+            friction = f64::from(facts.get(below).friction) * 0.98;
+        }
+        self.velocity = Vec3::new(self.velocity.x * friction, self.velocity.y * 0.98, self.velocity.z * friction);
+        if self.on_ground {
+            self.velocity.y *= -0.9;
+        }
+        self.age += 1;
+        self.age < 6000
+    }
+}
+/// Player experience (Player.giveExperiencePoints / getXpNeededForNextLevel).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Experience {
+    pub level: i32,
+    pub progress: f32,
+    pub total: i32,
+}
+impl Experience {
+    pub fn needed(level: i32) -> i32 {
+        if level >= 30 {
+            112 + (level - 30) * 9
+        } else if level >= 15 {
+            37 + (level - 15) * 5
+        } else {
+            7 + level * 2
+        }
+    }
+    /// Returns true when a level was gained.
+    pub fn give(&mut self, points: i32) -> bool {
+        let start = self.level;
+        self.progress += points as f32 / Self::needed(self.level) as f32;
+        self.total = self.total.saturating_add(points).max(0);
+        while self.progress >= 1.0 {
+            self.progress = (self.progress - 1.0) * Self::needed(self.level) as f32;
+            self.level += 1;
+            self.progress /= Self::needed(self.level) as f32;
+        }
+        self.level > start
     }
 }
