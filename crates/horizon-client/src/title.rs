@@ -23,6 +23,7 @@ pub enum Mode {
 pub enum Action {
     None,
     Quit,
+    Options,
     Play { folder: String },
     Create { folder: String, name: String, seed: Option<i64>, creative: bool },
 }
@@ -80,7 +81,7 @@ impl Title {
                     b(w / 2.0 - 100.0, y, 200.0, "Singleplayer", true, 1),
                     b(w / 2.0 - 100.0, y + 24.0, 200.0, "Multiplayer", false, 0),
                     b(w / 2.0 - 100.0, y + 48.0, 200.0, "Minecraft Realms", false, 0),
-                    b(w / 2.0 - 100.0, y + 84.0, 98.0, "Options...", false, 0),
+                    b(w / 2.0 - 100.0, y + 84.0, 98.0, "Options...", true, 3),
                     b(w / 2.0 + 2.0, y + 84.0, 98.0, "Quit Game", true, 2),
                 ]
             }
@@ -192,6 +193,7 @@ impl Title {
                 Action::None
             }
             (Mode::Main, Some(2)) => Action::Quit,
+            (Mode::Main, Some(3)) => Action::Options,
             (Mode::Select { worlds, selected }, Some(10)) => match selected.and_then(|i| worlds.get(i)) {
                 Some(world) => Action::Play { folder: world.folder.clone() },
                 None => Action::None,

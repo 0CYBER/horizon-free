@@ -25,6 +25,7 @@ use horizon_client::{
     sprint::Keys,
     streaming::{Streaming, WorkerContext},
     save::{Level, Persistent, SaveDir},
+    settings::Settings,
     title::{Action, Title},
     testgen::TestTerrain,
     vanillagen::VanillaTerrain,
@@ -49,6 +50,7 @@ use winit::{
 struct Options {
     resources: PathBuf,
     distance: i32,
+    distance_override: Option<i32>,
     seed: i64,
     creative: bool,
     test_terrain: bool,
@@ -73,6 +75,7 @@ impl Options {
                 PathBuf::from(".local/horizon-client/26.3")
             },
             distance: 12,
+            distance_override: None,
             seed: 0,
             creative: false,
             test_terrain: false,
@@ -101,6 +104,7 @@ impl Options {
                         "--resources" => o.resources = value.into(),
                         "--render-distance" | "--radius" => {
                             o.distance = value.parse()?;
+                            o.distance_override = Some(o.distance);
                             if !(2..=64).contains(&o.distance) {
                                 return Err("render distance must be 2..64".into());
                             }
@@ -136,6 +140,7 @@ impl Options {
 enum Screen {
     Playing,
     Paused,
+    Options,
     Inventory,
     Dead,
 }
@@ -249,6 +254,12 @@ struct Game<'a> {
     /// Main-hand equip height (previous, current) and the item it shows.
     hand_height: (f32, f32),
     hand_item: Option<ItemStack>,
+    settings: Settings,
+    /// Where the options screen returns: true = title, false = pause menu.
+    options_from_title: bool,
+    dragging: bool,
+    walk: (f32, f32),
+    bob: (f32, f32),
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -1084,6 +1095,16 @@ impl Game<'_> {
         self.tick_mobs()?;
         self.tick_experience();
         self.tick_hand();
+        if let Some(p) = &self.player {
+            // Player.aiStep bob and Entity.walkDist (0.6 per block).
+            let (dx, dz) = (p.position.x - self.previous_position.x, p.position.z - self.previous_position.z);
+            let speed = ((dx * dx + dz * dz).sqrt() as f32).min(0.1);
+            self.walk.0 = self.walk.1;
+            self.walk.1 += (dx * dx + dz * dz).sqrt() as f32 * 0.6;
+            self.bob.0 = self.bob.1;
+            let target = if p.ground.on_ground && !p.health.dead_or_dying() { speed } else { 0.0 };
+            self.bob.1 += (target - self.bob.1) * 0.4;
+        }
         self.tick_block_entities()?;
         let facts = &self.res.facts;
         let world = &self.world;
@@ -1244,6 +1265,10 @@ impl Game<'_> {
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
         let (w, h) = (batch.width, batch.height);
+        if self.screen == Screen::Options {
+            self.settings.draw(&self.res.atlas, &mut batch, self.cursor);
+            return batch;
+        }
         if let Some(title) = &self.title {
             title.draw(&self.res.atlas, &mut batch, self.cursor);
             return batch;
@@ -1366,7 +1391,7 @@ impl Game<'_> {
                 let title = "Game Menu";
                 let tw = HudBatch::text_width(atlas, title);
                 batch.text(atlas, title, (w - tw) / 2.0, 40.0, u32::MAX, true);
-                for (i, label) in ["Back to Game", "Save and Quit to Title"].iter().enumerate() {
+                for (i, label) in ["Back to Game", "Options...", "Save and Quit to Title"].iter().enumerate() {
                     let (bx, by) = (w / 2.0 - 100.0, h / 4.0 + 24.0 + i as f32 * 24.0 + 16.0);
                     let hover = self.cursor.0 >= bx && self.cursor.0 < bx + 200.0 && self.cursor.1 >= by && self.cursor.1 < by + 20.0;
                     let sprite = if hover { "gui/sprites/widget/button_highlighted" } else { "gui/sprites/widget/button" };
@@ -1389,7 +1414,7 @@ impl Game<'_> {
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
             }
-            Screen::Playing => {}
+            Screen::Playing | Screen::Options => {}
         }
         batch
     }
@@ -2519,7 +2544,7 @@ impl Game<'_> {
             })?);
             Streaming::new(Arc::new(Persistent { inner, save: save.clone(), registry: res.assets.clone(), biomes: res.biomes.clone() }), res.context.clone(), res.threads)
         };
-        streaming.radius = self.options.distance;
+        streaming.radius = self.settings.render_distance;
         let mut world = World::new(self.res.facts.air, level.seed);
         world.game_time = level.time;
         world.day_time = self.options.time.unwrap_or(level.day_time);
@@ -2565,6 +2590,7 @@ impl Game<'_> {
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
+        self.apply_settings();
         // New worlds get their level.dat right away.
         if !save_root.join("level.dat").exists() {
             self.level.write(&save_root)?;
@@ -3119,6 +3145,11 @@ impl Game<'_> {
         }
         out
     }
+    fn apply_settings(&mut self) {
+        self.streaming.radius = self.settings.render_distance;
+        self.audio.master = self.settings.master_volume;
+        horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, std::sync::atomic::Ordering::Relaxed);
+    }
     fn save_game(&mut self) -> Result<()> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys
@@ -3215,7 +3246,11 @@ impl Game<'_> {
             camera,
             yaw,
             pitch,
-            fov_degrees: if title { 85.0 } else { 70.0 },
+            fov_degrees: if title { 85.0 } else { self.settings.fov },
+            bob: (self.settings.view_bobbing && !title && self.player.is_some()).then(|| {
+                let a = alpha as f32;
+                (self.walk.0 + (self.walk.1 - self.walk.0) * a, self.bob.0 + (self.bob.1 - self.bob.0) * a)
+            }),
             sky,
             distance: (self.streaming.radius * 16) as f32,
             underwater,
@@ -3331,8 +3366,12 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     if let Some(r) = &self.renderer {
-                        let scale = HudBatch::new([r.config.width, r.config.height]).scale;
-                        self.cursor = (position.x as f32 / scale, position.y as f32 / scale);
+                        let b = HudBatch::new([r.config.width, r.config.height]);
+                        self.cursor = (position.x as f32 / b.scale, position.y as f32 / b.scale);
+                        if self.dragging && self.screen == Screen::Options {
+                            self.settings.click(self.cursor.0, self.cursor.1, (b.width, b.height), true);
+                            self.apply_settings();
+                        }
                     }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
@@ -3344,6 +3383,19 @@ impl ApplicationHandler for Game<'_> {
                         self.selected = (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
                     }
                 }
+                WindowEvent::MouseInput { state, button: MouseButton::Left, .. } if self.screen == Screen::Options => {
+                    self.dragging = state == ElementState::Pressed;
+                    if self.dragging {
+                        let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
+                        let b = HudBatch::new(size);
+                        if self.settings.click(self.cursor.0, self.cursor.1, (b.width, b.height), false) {
+                            self.settings.save(&std::env::current_dir()?.join("options.txt"));
+                            self.screen = if self.options_from_title { Screen::Playing } else { Screen::Paused };
+                            self.dragging = false;
+                        }
+                        self.apply_settings();
+                    }
+                }
                 WindowEvent::MouseInput { state, button: MouseButton::Left, .. }
                     if self.title.is_some() && state == ElementState::Pressed =>
                 {
@@ -3352,6 +3404,10 @@ impl ApplicationHandler for Game<'_> {
                     let action = self.title.as_mut().map_or(Action::None, |t| t.click(self.cursor.0, self.cursor.1, (b.width, b.height)));
                     match action {
                         Action::Quit => event_loop.exit(),
+                        Action::Options => {
+                            self.screen = Screen::Options;
+                            self.options_from_title = true;
+                        }
                         Action::Play { folder } => self.open_world(&folder, None, None, false)?,
                         Action::Create { folder, name, seed, creative } => self.open_world(&folder, Some(&name), seed, creative)?,
                         Action::None => {}
@@ -3401,12 +3457,15 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Paused if pressed => {
                             let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
                             let b = HudBatch::new(size);
-                            for i in 0..2 {
+                            for i in 0..3 {
                                 let (bx, by) = (b.width / 2.0 - 100.0, b.height / 4.0 + 24.0 + i as f32 * 24.0 + 16.0);
                                 if self.cursor.0 >= bx && self.cursor.0 < bx + 200.0 && self.cursor.1 >= by && self.cursor.1 < by + 20.0 {
                                     if i == 0 {
                                         self.screen = Screen::Playing;
                                         self.capture(true);
+                                    } else if i == 1 {
+                                        self.screen = Screen::Options;
+                                        self.options_from_title = false;
                                     } else {
                                         self.close_world()?;
                                     }
@@ -3450,6 +3509,10 @@ impl ApplicationHandler for Game<'_> {
                     }
                     match key {
                         KeyCode::Escape => match self.screen {
+                            Screen::Options => {
+                                self.settings.save(&std::env::current_dir()?.join("options.txt"));
+                                self.screen = if self.options_from_title { Screen::Playing } else { Screen::Paused };
+                            }
                             Screen::Playing => {
                                 self.screen = Screen::Paused;
                                 self.capture(false);
@@ -3542,7 +3605,7 @@ impl ApplicationHandler for Game<'_> {
             && let DeviceEvent::MouseMotion { delta: (x, y) } = event
         {
             // MouseHandler.turnPlayer at default sensitivity 0.5: 0.15 degrees per count.
-            let s = 0.5_f64 * 0.6 + 0.2;
+            let s = f64::from(self.settings.sensitivity) * 0.6 + 0.2;
             let f = s * s * s * 8.0;
             self.yaw += (x * f * 0.15) as f32;
             self.pitch = (self.pitch + (y * f * 0.15) as f32).clamp(-90.0, 90.0);
@@ -3643,6 +3706,10 @@ pub fn run() -> Result<()> {
     };
     let inventory = vec![None; 36];
     let now = Instant::now();
+    let mut settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
+    if let Some(d) = options.distance_override {
+        settings.render_distance = d;
+    }
     let look = options.look;
     let mut game = Game {
         res: &mut resources,
@@ -3713,6 +3780,11 @@ pub fn run() -> Result<()> {
         swing_anim: (0.0, 0.0),
         hand_height: (1.0, 1.0),
         hand_item: None,
+        settings,
+        options_from_title: false,
+        dragging: false,
+        walk: (0.0, 0.0),
+        bob: (0.0, 0.0),
     };
     match game.options.world.clone() {
         Some(folder) => {
