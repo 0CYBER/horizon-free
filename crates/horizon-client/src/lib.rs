@@ -29,6 +29,7 @@ pub mod models;
 pub mod motion;
 pub mod particles;
 pub mod pose;
+pub mod projectiles;
 pub mod save;
 pub mod settings;
 pub mod sprint;

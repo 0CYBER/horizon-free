@@ -54,7 +54,7 @@ pub struct Items {
     pub item_tags: HashMap<String, HashSet<String>>,
     loot: HashMap<String, Value>,
 }
-fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashSet<String>>> {
+pub(crate) fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashSet<String>>> {
     let dir = root.join(format!("data/minecraft/tags/{kind}"));
     let mut raw: HashMap<String, Vec<String>> = HashMap::new();
     fn walk(dir: &Path, base: &Path, raw: &mut HashMap<String, Vec<String>>) -> Result<()> {
@@ -184,17 +184,22 @@ impl Items {
             order.push(id);
         }
         let mut loot = HashMap::new();
-        for kind in ["blocks", "entities"] {
-            let dir = root.join(format!("data/minecraft/loot_table/{kind}"));
-            for entry in fs::read_dir(&dir)?.flatten() {
+        // Every loot table, keyed by its id (blocks/stone, entities/sheep/white,
+        // gameplay/chicken_lay, shearing/sheep/red...).
+        fn walk_loot(dir: &Path, base: &Path, loot: &mut HashMap<String, Value>) -> Result<()> {
+            for entry in fs::read_dir(dir)?.flatten() {
                 let p = entry.path();
-                if p.extension().is_some_and(|e| e == "json")
-                    && let Some(stem) = p.file_stem().and_then(|s| s.to_str())
-                {
-                    loot.insert(format!("minecraft:{kind}/{stem}"), serde_json::from_slice(&fs::read(&p)?)?);
+                if p.is_dir() {
+                    walk_loot(&p, base, loot)?;
+                } else if p.extension().is_some_and(|e| e == "json") {
+                    let id = p.strip_prefix(base)?.with_extension("").to_string_lossy().replace('\\', "/");
+                    loot.insert(format!("minecraft:{id}"), serde_json::from_slice(&fs::read(&p)?)?);
                 }
             }
+            Ok(())
         }
+        let loot_root = root.join("data/minecraft/loot_table");
+        walk_loot(&loot_root, &loot_root, &mut loot)?;
         Ok(Self {
             items,
             order,
@@ -269,6 +274,13 @@ impl Items {
         ctx.evaluate(table, random)
     }
     /// Evaluate an entity's loot table (`minecraft:entities/<name>`).
+    /// Evaluate any loot table by id (e.g. `minecraft:gameplay/chicken_lay`).
+    pub fn loot_table(&self, id: &str, killed_by_player: bool, held: Option<&ItemStack>, random: &mut LegacyRandom) -> Vec<ItemStack> {
+        let Some(table) = self.loot.get(id) else { return vec![] };
+        let empty = BTreeMap::new();
+        let ctx = LootContext { items: self, block: "", properties: &empty, held, killed_by_player };
+        ctx.evaluate(table, random)
+    }
     pub fn entity_drops(&self, entity: &str, killed_by_player: bool, held: Option<&ItemStack>, random: &mut LegacyRandom) -> Vec<ItemStack> {
         let name = entity.trim_start_matches("minecraft:");
         let Some(table) = self.loot.get(&format!("minecraft:entities/{name}")) else {
