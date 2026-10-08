@@ -32,10 +32,14 @@ pub struct SectionMesh {
     /// VisGraph: bit `a * 6 + b` is set when faces `a` and `b` (Direction
     /// order) are connected through non-opaque blocks.
     pub visibility: u64,
+    /// Blocks with a block-entity renderer (world position, state id), drawn
+    /// each frame by `block_entity_render` like vanilla's per-section
+    /// `SectionCompiler.Results.blockEntities`.
+    pub block_entities: Vec<([i32; 3], u32)>,
 }
 impl Default for SectionMesh {
     fn default() -> Self {
-        Self { solid: Vec::new(), translucent: Vec::new(), visibility: ALL_VISIBLE }
+        Self { solid: Vec::new(), translucent: Vec::new(), visibility: ALL_VISIBLE, block_entities: Vec::new() }
     }
 }
 pub const ALL_VISIBLE: u64 = (1 << 36) - 1;
@@ -109,6 +113,8 @@ struct Info {
     fluid: Fluid,
     level: u8,
     model: bool,
+    /// The state has a block entity (candidates for block-entity renderers).
+    block_entity: bool,
     tints: [Tint; 2],
 }
 pub struct MeshTables {
@@ -189,6 +195,7 @@ impl MeshTables {
                     fluid: s.fluid,
                     level: s.fluid_level,
                     model: s.render_shape == RenderShape::Model,
+                    block_entity: s.block_entity,
                     tints,
                 }
             })
@@ -336,6 +343,9 @@ impl Mesher<'_> {
                         continue;
                     }
                     let state = info[id as usize];
+                    if state.block_entity {
+                        out.block_entities.push(([center.x * 16 + x, base_y + y, center.z * 16 + z], u32::from(id)));
+                    }
                     if state.solid
                         && Direction::ALL.iter().all(|d| {
                             let [dx, dy, dz] = d.normal();

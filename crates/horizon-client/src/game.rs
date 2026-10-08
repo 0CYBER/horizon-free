@@ -1,6 +1,7 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
 mod control;
+mod render_control;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -276,7 +277,7 @@ pub struct Resources {
     layer_names: HashMap<u32, String>,
     mob_types: HashMap<String, Arc<MobType>>,
     providers: Providers,
-    chest_model: Option<horizon_client::mobs::Part>,
+    block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer,
     nether_environment: Environment,
     behaviours: Behaviours,
     names: Names,
@@ -1392,6 +1393,10 @@ impl Game<'_> {
             self.bob.1 += (target - self.bob.1) * 0.4;
         }
         self.tick_block_entities()?;
+        if let Some(r) = &self.renderer {
+            let eye = self.player.as_ref().map(|p| [p.position.x, p.position.y + f64::from(self.eye), p.position.z]);
+            self.res.block_entity_render.tick(r.block_entities(), eye);
+        }
         let facts = &self.res.facts;
         let world = &self.world;
         self.particles.retain_mut(|p| p.tick(world, |id| facts.states[id as usize].full_collision));
@@ -2110,49 +2115,22 @@ impl Game<'_> {
                 }
             }
         }
-        // Chests (ChestRenderer): rotate by facing around the block centre, lift the lid.
-        if let Some(model) = &self.res.chest_model {
-            for (pos, entity) in &self.world.block_entities {
-                if !matches!(entity, BlockEntity::Chest(_)) {
-                    continue;
-                }
-                let state = self.world.block(pos.0, pos.1, pos.2);
-                let name = &self.res.facts.get(state).name;
-                let texture = match &**name {
-                    "minecraft:chest" => "entity/chest/normal",
-                    "minecraft:trapped_chest" => "entity/chest/trapped",
-                    _ => continue,
-                };
-                let origin = glam::DVec3::new(f64::from(pos.0), f64::from(pos.1), f64::from(pos.2)) - camera;
-                if origin.length_squared() > 64.0 * 64.0 {
-                    continue;
-                }
-                let Some(r) = self.res.atlas.sprites.get(texture).copied() else { continue };
-                let facing = self.res.assets.registry.state(state).and_then(|s| s.properties.get("facing").cloned()).unwrap_or_default();
-                let yrot: f32 = match facing.as_str() {
-                    "west" => 90.0,
-                    "north" => 180.0,
-                    "east" => 270.0,
-                    _ => 0.0,
-                };
-                let (prev, cur) = self.chest_open.get(pos).copied().unwrap_or((0.0, 0.0));
-                let o = prev + (cur - prev) * alpha as f32;
-                let open = 1.0 - (1.0 - o).powi(3);
-                let base = glam::Mat4::from_translation(origin.as_vec3())
-                    * glam::Mat4::from_translation(glam::Vec3::new(0.5, 0.0, 0.5))
-                    * glam::Mat4::from_rotation_y((-yrot).to_radians())
-                    * glam::Mat4::from_translation(glam::Vec3::new(-0.5, 0.0, -0.5));
-                let light = self.world.light(pos.0, pos.1, pos.2);
-                let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
-                let pose = |part: &horizon_client::mobs::Part| {
-                    let mut p = part.pose;
-                    if part.name == "lid" || part.name == "lock" {
-                        p[3] = -(open * std::f32::consts::FRAC_PI_2);
-                    }
-                    p
-                };
-                horizon_client::mobs::render_model(model, base, &pose, [r.u0, r.v0, r.u1, r.v1], packed, 0, &mut out);
-            }
+        // Block entities (BlockEntityRenderers): chests, shulker boxes, banners, skulls...
+        if let Some(r) = &self.renderer {
+            let lid = |p: [i32; 3]| {
+                let (prev, cur) = self.chest_open.get(&(p[0], p[1], p[2])).copied().unwrap_or((0.0, 0.0));
+                prev + (cur - prev) * alpha as f32
+            };
+            let scene = horizon_client::block_entity_render::Scene {
+                camera,
+                partial: alpha as f32,
+                game_time: self.world.game_time,
+                world: &self.world,
+                sprites: &self.res.atlas.sprites,
+                nether: self.dim == Dim::Nether,
+                lid: &lid,
+            };
+            self.res.block_entity_render.render(&scene, r.block_entities(), &mut out);
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
         if let Some(r) = self.res.atlas.sprites.get("entity/experience_orb").copied() {
@@ -4691,7 +4669,7 @@ pub fn run() -> Result<()> {
         icons: HashMap::new(),
         layer_names,
         providers: Providers::load(&root),
-        chest_model: horizon_client::mobs::load_model(&root, "minecraft:chest#main"),
+        block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(&root, &registry_owner.registry)?,
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         behaviours: Behaviours::load(registry_owner.registry, &root)?,
         names: Names::load(&root),

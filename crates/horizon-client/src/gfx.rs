@@ -93,6 +93,8 @@ pub struct Renderer {
     outline: wgpu::Buffer,
     depth: wgpu::TextureView,
     sections: HashMap<SectionKey, SectionGpu>,
+    /// Block-entity blocks per meshed section (world position, state id).
+    block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// VisGraph face connectivity per meshed section (cave culling).
     visibility: HashMap<SectionKey, u64>,
     reachable: std::collections::HashSet<SectionKey>,
@@ -686,6 +688,7 @@ impl Renderer {
             outline,
             depth,
             sections: HashMap::new(),
+            block_entities: HashMap::new(),
             visibility: HashMap::new(),
             reachable: std::collections::HashSet::new(),
             reachable_from: None,
@@ -748,6 +751,11 @@ impl Renderer {
         if self.visibility.insert(key, mesh.visibility) != Some(mesh.visibility) {
             self.visibility_dirty = true;
         }
+        if mesh.block_entities.is_empty() {
+            self.block_entities.remove(&key);
+        } else {
+            self.block_entities.insert(key, mesh.block_entities.clone());
+        }
         let solid = (mesh.solid.len() / 4) as u32;
         let translucent = (mesh.translucent.len() / 4) as u32;
         if solid + translucent == 0 {
@@ -780,7 +788,12 @@ impl Renderer {
             },
         );
     }
+    /// Block-entity blocks of every meshed section (see `SectionMesh::block_entities`).
+    pub fn block_entities(&self) -> impl Iterator<Item = &([i32; 3], u32)> {
+        self.block_entities.values().flatten()
+    }
     pub fn clear_sections(&mut self) {
+        self.block_entities.clear();
         self.sections.clear();
         self.visibility.clear();
         self.visibility_dirty = true;
@@ -820,6 +833,7 @@ impl Renderer {
         self.visibility_dirty = false;
     }
     pub fn remove(&mut self, key: SectionKey) {
+        self.block_entities.remove(&key);
         self.visibility.remove(&key);
         self.visibility_dirty = true;
         self.sections.remove(&key);

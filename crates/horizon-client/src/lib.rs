@@ -5,6 +5,7 @@ pub mod assets;
 pub mod attribute_updates;
 pub mod audio;
 pub mod biome;
+pub mod block_entity_render;
 pub mod blocks;
 pub mod chunk;
 pub mod clock;
