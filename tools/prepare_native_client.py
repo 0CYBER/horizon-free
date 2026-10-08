@@ -215,7 +215,6 @@ def main():
                            check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
         (root/'render-definitions.json').write_bytes((export/'definitions.json').read_bytes())
         (root/'occlusion.nbt').write_bytes((export/'occlusion.nbt').read_bytes())
-    prepare_worldgen(root, jars, lab.LOCAL)
     count = 0
     # The playable client needs every client asset (textures, models, fonts, GUI)
     # and every data-pack resource (worldgen, recipes, loot tables, tags).
@@ -248,6 +247,21 @@ def main():
             subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
                             'dev.horizonlab.parity.VanillaGameplayFactsExporter', str(gameplay)],
                            check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+    # Entity dimensions, categories and default attributes for the client's mobs.
+    entity_types = root / 'entity-types.json'
+    entity_types_oracle = oracle.with_name('VanillaEntityTypesExporter.java')
+    entity_types_sources = base.source_hashes([entity_types_oracle])
+    if not (previous.get('entity_types_exporters_sha256') == entity_types_sources and entity_types.exists()
+            and previous.get('server_sha256') == origin['server_sha256']):
+        classes = lab.LOCAL / 'entity-types' / 'classes'; classes.mkdir(parents=True, exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+        with (root / 'entity-types-export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(entity_types_oracle)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
+                            'dev.horizonlab.parity.VanillaEntityTypesExporter', str(entity_types)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
     # Block classes, instance configuration and per-state support/signal/fluid
     # facts for horizon-world's level behaviour (level::Behaviours::load).
     behaviours = root / 'block-behaviours.json'
@@ -279,6 +293,8 @@ def main():
         (root / 'biome-parameters').mkdir(exist_ok=True)
         for f in (reports / 'biome_parameters' / 'minecraft').glob('*.json'):
             (root / 'biome-parameters' / f.name).write_bytes(f.read_bytes())
+    # Biome parameter tables come from the data generator reports above.
+    prepare_worldgen(root, jars, lab.LOCAL)
     entity_models = root / 'entity-models.json'
     entity_oracle = oracle.with_name('VanillaEntityModelExporter.java')
     entity_sources = base.source_hashes([entity_oracle])
@@ -305,6 +321,7 @@ def main():
                              'model_state_exporters_sha256': binding_sources,
                              'gameplay_exporters_sha256': gameplay_sources,
                              'entity_model_exporters_sha256': entity_sources,
+                             'entity_types_exporters_sha256': entity_types_sources,
                              'behaviour_exporters_sha256': behaviour_sources,
                              'model_states_sha256': lab.digest(model_states, 'sha256'), 'data_version': version['world_version'],
                              'facts_sha256': lab.digest(facts, 'sha256'),
