@@ -113,6 +113,7 @@ mod query;
 mod rails;
 mod redstone;
 mod shapes;
+mod signals;
 mod speleothem;
 mod survive;
 mod tick;

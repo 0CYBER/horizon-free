@@ -4,6 +4,7 @@ mod blockctl;
 mod control;
 mod explosion;
 mod growth;
+mod machines;
 mod tnt;
 use horizon_client::{
     Result,
@@ -202,8 +203,14 @@ struct GameLevel<'w> {
     player_box: Option<([f64; 3], [f64; 3])>,
     biomes: &'w Biomes,
     seed: i64,
+    behaviours: &'w Behaviours,
+    items: &'w Items,
+    registry: &'static horizon_world::registry::BlockRegistry,
 }
 impl LevelAccess for GameLevel<'_> {
+    fn block_entity_analog_signal(&self, pos: BlockPos, _state: BlockStateId, _direction: Direction) -> i32 {
+        machines::container_signal(self.world, self.behaviours, self.items, self.registry, pos)
+    }
     fn biome_name(&self, pos: BlockPos) -> Option<&str> {
         let chunk = self.world.chunks.get(&(pos.x >> 4, pos.z >> 4))?;
         Some(&self.biomes.get(chunk.biome(pos.x, pos.y, pos.z)).name)
@@ -396,6 +403,7 @@ struct Game<'a> {
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
     tnts: Vec<tnt::PrimedTnt>,
+    hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
     frame_stats: horizon_client::control::FrameStats,
@@ -703,6 +711,9 @@ impl Game<'_> {
             player_box,
             biomes: &self.res.biomes,
             seed: self.level.seed,
+            behaviours: &self.res.behaviours,
+            items: &self.res.items,
+            registry: self.res.assets.registry,
         };
         f(&self.res.behaviours, &mut level, &mut self.block_ticks)
     }
@@ -825,6 +836,7 @@ impl Game<'_> {
                     PlayerEffect::InteractLoot(_) | PlayerEffect::RespawnAnchor => {}
                 },
                 LevelEvent::PrimeTnt { pos } => self.spawn_primed_tnt(pos, false),
+                LevelEvent::BlockEvent { pos, state, kind: "dispense" } => self.dispense_from(pos, state)?,
                 LevelEvent::BlockEvent { pos, state, kind: "pop_block_item" } => {
                     let item = self.res.facts.get(state).item.clone();
                     self.pop_resource([pos.x, pos.y, pos.z], ItemStack { item, count: 1, damage: 0 });
@@ -1741,7 +1753,7 @@ impl Game<'_> {
         batch
     }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
-        ((batch.width - 176.0) / 2.0, (batch.height - 166.0) / 2.0)
+        ((batch.width - 176.0) / 2.0, (batch.height - self.screen_height()) / 2.0)
     }
     /// Slot ids: 0..36 player inventory, 100..109 crafting grid, 200 result.
     fn container_kind(&self) -> Option<&BlockEntity> {
@@ -1765,6 +1777,9 @@ impl Game<'_> {
     }
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
+        if let Some(p) = self.machine_slot_position(i) {
+            return p;
+        }
         let table = self.craft_size == 3;
         // ContainerScreen (3 rows) shifts the player inventory down by one pixel.
         let shift = if matches!(self.container_kind(), Some(BlockEntity::Chest(_))) { 1.0 } else { 0.0 };
@@ -1834,6 +1849,7 @@ impl Game<'_> {
             };
             let grey = rgba(64, 64, 64, 255);
             match self.container.and_then(|k| self.world.block_entities.get(&k)) {
+                Some(BlockEntity::Chest(_)) if self.draw_machine_screen(batch, ox, oy) => {}
                 Some(BlockEntity::Chest(_)) => {
                     // ContainerScreen with 3 rows: top 71px, then the player inventory from v=126.
                     part(batch, "gui/container/generic_54", 0.0, 0.0, 176.0, 71.0, ox, oy);
@@ -2497,6 +2513,7 @@ impl Game<'_> {
         self.server_explode(center, radius, explosion::BlockInteraction::DestroyWithDecay, false)
     }
     fn tick_block_entities(&mut self) -> Result<()> {
+        self.tick_hoppers()?;
         // ChestLidController: 0.1 per tick towards open/closed.
         if let Some(key) = self.container {
             self.chest_open.entry(key).or_insert((0.0, 0.0));
@@ -4424,6 +4441,9 @@ impl ApplicationHandler for Game<'_> {
                         }
                         Screen::Inventory if pressed => {
                             self.click_inventory(button == MouseButton::Right);
+                            if let Some(key) = self.container {
+                                self.container_changed(key);
+                            }
                         }
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
@@ -4754,6 +4774,7 @@ pub fn run() -> Result<()> {
         level_events: Vec::new(),
         falling: Vec::new(),
         tnts: Vec::new(),
+        hoppers: HashMap::new(),
         creative_screen: Creative::load(&game_root)?,
         control: None,
         frame_stats: Default::default(),

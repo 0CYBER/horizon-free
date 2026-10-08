@@ -125,7 +125,7 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
     let pos = (int("x")?, int("y")?, int("z")?);
     let mut entity = BlockEntity::for_block(&id)?;
     match &mut entity {
-        BlockEntity::Chest(items) => *items = decode_items(tag.get("Items"), 27),
+        BlockEntity::Chest(items) => *items = decode_items(tag.get("Items"), items.len()),
         BlockEntity::Furnace(f) => {
             let items = decode_items(tag.get("Items"), 3);
             f.items = [items[0].clone(), items[1].clone(), items[2].clone()];
@@ -209,7 +209,15 @@ pub fn encode(chunk: &Chunk, registry: &BlockRegistry, biomes: &Biomes) -> Named
             ("InhabitedTime", Tag::Long(0)),
             ("isLightOn", Tag::Byte(0)),
             ("sections", Tag::List(sections)),
-            ("block_entities", Tag::List(chunk.block_entities.iter().map(|(p, e)| encode_block_entity(*p, e)).collect())),
+            ("block_entities", Tag::List(chunk.block_entities.iter().map(|(p, e)| {
+                // The block's own entity id (barrels, droppers, trapped chests).
+                let mut tag = encode_block_entity(*p, e);
+                let state = chunk.block(p.0 & 15, p.1, p.2 & 15);
+                if let (Tag::Compound(entries), Some(id)) = (&mut tag, registry.state(state).and_then(|s| crate::containers::BlockEntity::id_for_block(&s.name))) {
+                    entries.insert("id".into(), string(id));
+                }
+                tag
+            }).collect())),
         ]),
     }
 }
