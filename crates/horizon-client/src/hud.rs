@@ -75,6 +75,7 @@ impl HudAtlas {
         walk(&textures.join("font"), &mut files);
         walk(&textures.join("environment"), &mut files);
         walk(&textures.join("misc"), &mut files);
+        walk(&textures.join("painting"), &mut files);
         walk(&textures.join("entity"), &mut files);
         walk(&textures.join("particle"), &mut files);
         walk(&textures.join("mob_effect"), &mut files);

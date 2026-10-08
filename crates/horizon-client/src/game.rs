@@ -14,6 +14,7 @@ mod machines;
 mod music;
 mod options;
 mod packs;
+mod paintings;
 mod persist;
 mod postprocess;
 mod potions;
@@ -516,6 +517,8 @@ struct Game<'a> {
     tick_chunks: HashSet<(i32, i32)>,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
+    paintings: Vec<horizon_client::entities::Painting>,
+    painting_variants: paintings::PaintingVariants,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     creative_screen: Creative,
@@ -1467,6 +1470,11 @@ impl Game<'_> {
         if self.use_tool(&stack)? {
             return Ok(());
         }
+        if let Some(hit) = self.pick()
+            && self.place_painting(&hit, &stack)
+        {
+            return Ok(());
+        }
         if self.use_ender_eye(&stack)? {
             return Ok(());
         }
@@ -2034,6 +2042,7 @@ impl Game<'_> {
         self.tick_burning();
         self.tick_using();
         self.titles.tick();
+        self.tick_paintings();
         self.tick_mining()?;
         self.tick_items();
         self.spawn_loaded_entities();
@@ -3491,6 +3500,7 @@ impl Game<'_> {
             }
         }
         self.tnt_geometry(camera, alpha, &mut out);
+        self.painting_geometry(camera, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
         let world = &self.world;
         self.particles.render(
@@ -3633,6 +3643,21 @@ impl Game<'_> {
     }
     /// Player.attack with the attack-strength charge, crits and knockback.
     fn attack(&mut self) -> bool {
+        // A painting nearer than the targeted block and mob breaks instead.
+        if let Some((i, d)) = self.painting_hit()
+            && self.mob_hit().is_none_or(|m| d < m.1)
+            && self.pick().is_none_or(|h| {
+                let eye = self.eye_position().unwrap_or_default();
+                (0..3)
+                    .map(|a| (h.point[a] - eye[a]).powi(2))
+                    .sum::<f64>()
+                    .sqrt()
+                    > d
+            })
+        {
+            self.break_painting(i, true);
+            return true;
+        }
         let Some((index, distance)) = self.mob_hit() else {
             return false;
         };
@@ -6983,6 +7008,8 @@ pub fn run() -> Result<()> {
         tick_chunks: HashSet::new(),
         level_events: Vec::new(),
         falling: Vec::new(),
+        paintings: Vec::new(),
+        painting_variants: paintings::PaintingVariants::load(&root),
         tnts: Vec::new(),
         hoppers: HashMap::new(),
         creative_screen: Creative::load(&game_root)?,

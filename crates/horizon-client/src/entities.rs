@@ -330,3 +330,56 @@ impl Experience {
         self.level > start
     }
 }
+/// A painting (`Painting`, a `HangingEntity`): the block it hangs in, the
+/// 2D data value of the direction it faces, and its variant.
+#[derive(Clone, Debug)]
+pub struct Painting {
+    pub id: u32,
+    pub pos: [i32; 3],
+    /// Direction.get2DDataValue: south 0, west 1, north 2, east 3.
+    pub facing: u8,
+    pub variant: std::sync::Arc<str>,
+    pub width: i32,
+    pub height: i32,
+    /// BlockAttachedEntity.checkInterval.
+    pub check_interval: u32,
+}
+impl Painting {
+    pub fn step(&self) -> [i32; 3] {
+        [[0, 0, 1], [-1, 0, 0], [0, 0, -1], [1, 0, 0]][usize::from(self.facing & 3)]
+    }
+    /// Direction.getCounterClockWise (the painting's left as it faces out).
+    pub fn left(&self) -> [i32; 3] {
+        [[1, 0, 0], [0, 0, 1], [-1, 0, 0], [0, 0, -1]][usize::from(self.facing & 3)]
+    }
+    /// Painting.calculateBoundingBox: (min, max).
+    pub fn bounds(&self) -> ([f64; 3], [f64; 3]) {
+        let s = self.step().map(f64::from);
+        let l = self.left().map(f64::from);
+        let off = |n: i32| if n % 2 == 0 { 0.5 } else { 0.0 };
+        let (h, v) = (off(self.width), off(self.height));
+        let c = [
+            f64::from(self.pos[0]) + 0.5 - s[0] * 0.46875 + l[0] * h,
+            f64::from(self.pos[1]) + 0.5 + v,
+            f64::from(self.pos[2]) + 0.5 - s[2] * 0.46875 + l[2] * h,
+        ];
+        let along_x = s[0] != 0.0;
+        let size = [
+            if along_x {
+                0.0625
+            } else {
+                f64::from(self.width)
+            },
+            f64::from(self.height),
+            if along_x {
+                f64::from(self.width)
+            } else {
+                0.0625
+            },
+        ];
+        (
+            std::array::from_fn(|i| c[i] - size[i] / 2.0),
+            std::array::from_fn(|i| c[i] + size[i] / 2.0),
+        )
+    }
+}

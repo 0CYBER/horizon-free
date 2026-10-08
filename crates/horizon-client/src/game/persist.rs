@@ -27,6 +27,14 @@ pub struct EntityMemory {
     unknown: HashMap<(i32, i32), Vec<Tag>>,
 }
 
+fn painting_center(p: &horizon_client::entities::Painting) -> Vec3 {
+    let (lo, hi) = p.bounds();
+    Vec3::new(
+        (lo[0] + hi[0]) / 2.0,
+        (lo[1] + hi[1]) / 2.0,
+        (lo[2] + hi[2]) / 2.0,
+    )
+}
 fn chunk_of(p: Vec3) -> (i32, i32) {
     ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
 }
@@ -120,6 +128,26 @@ impl Game<'_> {
                                 velocity,
                                 age,
                             });
+                        }
+                    }
+                    "minecraft:painting" => {
+                        if let Some((pos, facing, variant)) = entity_nbt::painting_from_nbt(&tag)
+                            && let Some(v) = self.painting_variants.get(&variant).cloned()
+                        {
+                            self.next_entity += 1;
+                            let id = self.next_entity;
+                            self.remember(id, uuid, tag);
+                            self.paintings.push(horizon_client::entities::Painting {
+                                id,
+                                pos,
+                                facing,
+                                variant: v.id,
+                                width: v.width,
+                                height: v.height,
+                                check_interval: 0,
+                            });
+                        } else {
+                            self.persist.unknown.entry(key).or_default().push(tag);
                         }
                     }
                     _ if self.res.mob_types.contains_key(&kind) => {
@@ -239,6 +267,19 @@ impl Game<'_> {
                 out.entry(chunk_of(f.position)).or_default().push(tag);
             }
         }
+        for p in &self.paintings {
+            let at = painting_center(p);
+            if keys.contains(&chunk_of(at)) {
+                let uuid = self
+                    .persist
+                    .uuids
+                    .get(&p.id)
+                    .copied()
+                    .unwrap_or_else(random_uuid);
+                let tag = entity_nbt::painting_to_nbt(p, uuid, self.persist.raw.get(&p.id));
+                out.entry(chunk_of(at)).or_default().push(tag);
+            }
+        }
         for key in keys {
             let unknown = if remove {
                 self.persist.unknown.remove(key)
@@ -252,6 +293,13 @@ impl Game<'_> {
         if remove {
             let gone = |p: Vec3| keys.contains(&chunk_of(p));
             let mut removed: Vec<u32> = Vec::new();
+            self.paintings.retain(|p| {
+                let keep = !gone(painting_center(p));
+                if !keep {
+                    removed.push(p.id);
+                }
+                keep
+            });
             self.mobs.retain(|m| {
                 let keep = !gone(m.position);
                 if !keep {

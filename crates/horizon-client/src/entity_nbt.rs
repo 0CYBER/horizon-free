@@ -5,7 +5,7 @@
 //! Horizon does not model (variants, attributes, equipment, custom names)
 //! survive a Horizon save.
 use crate::{
-    entities::{Arrow, ExperienceOrb, ItemEntity},
+    entities::{Arrow, ExperienceOrb, ItemEntity, Painting},
     mobs::{Mob, MobType},
     save::{
         doubles, float, floats, item_from_nbt, item_to_nbt, number, put, read_doubles, text,
@@ -453,4 +453,35 @@ mod tests {
         assert_eq!(back.len(), 3);
         assert_eq!(back[0].value, 7);
     }
+}
+/// Painting.addAdditionalSaveData: `facing`, `variant` and `block_pos`.
+pub fn painting_to_nbt(p: &Painting, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
+    let (lo, hi) = p.bounds();
+    let base = Base {
+        id: "minecraft:painting",
+        uuid,
+        position: Vec3::new(
+            (lo[0] + hi[0]) / 2.0,
+            (lo[1] + hi[1]) / 2.0,
+            (lo[2] + hi[2]) / 2.0,
+        ),
+        motion: Vec3::ZERO,
+        rotation: [f32::from(p.facing) * 90.0, 0.0],
+        on_ground: false,
+        fall_distance: 0.0,
+    };
+    let mut tag = base.tag(raw);
+    put(&mut tag, "facing", Tag::Byte(p.facing as i8));
+    put(&mut tag, "variant", string(&p.variant));
+    put(&mut tag, "block_pos", Tag::IntArray(p.pos.to_vec()));
+    tag
+}
+/// The block position, facing and variant of a saved painting.
+pub fn painting_from_nbt(tag: &Tag) -> Option<([i32; 3], u8, String)> {
+    let pos = match tag.get("block_pos") {
+        Some(Tag::IntArray(v)) if v.len() == 3 => [v[0], v[1], v[2]],
+        _ => return None,
+    };
+    let facing = (number(tag.get("facing")).unwrap_or(0) & 3) as u8;
+    Some((pos, facing, text(tag.get("variant"))?))
 }
