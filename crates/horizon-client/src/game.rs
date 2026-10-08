@@ -21,6 +21,7 @@ mod remote;
 mod render_control;
 mod render_tick;
 mod screens;
+mod shield;
 mod sign_edit;
 mod station_control;
 mod stations;
@@ -472,6 +473,10 @@ struct Game<'a> {
     title: Option<Title>,
     /// Armor slots: head, chest, legs, feet.
     armor: [Option<ItemStack>; 4],
+    /// The off hand (Inventory slot 40, saved as slot 150; menu slot 504 here).
+    offhand: Option<ItemStack>,
+    /// The shield's item cooldown after an axe disabled it (ticks).
+    shield_cooldown: u32,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
     orbs: Vec<ExperienceOrb>,
@@ -1420,12 +1425,16 @@ impl Game<'_> {
             }
         }
         let Some(stack) = self.held().cloned() else {
+            self.use_offhand();
             return Ok(());
         };
         let Some(info) = self.res.items.get(&stack.item).cloned() else {
             return Ok(());
         };
         if self.use_potion_item(&stack)? || self.throw_item(&stack)? {
+            return Ok(());
+        }
+        if self.raise_shield(self.selected) {
             return Ok(());
         }
         if &*stack.item == "minecraft:spyglass" {
@@ -1461,6 +1470,7 @@ impl Game<'_> {
             return Ok(());
         };
         if info.block.is_none() {
+            self.use_offhand();
             return Ok(());
         }
         let face = match hit.face {
@@ -1527,14 +1537,18 @@ impl Game<'_> {
         }
     }
     fn tick_using(&mut self) {
+        // ItemCooldowns.tick for the shield.
+        self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
         let Some((slot, ticks)) = self.using else {
             return;
         };
-        let Some(stack) = self.inventory[slot].clone() else {
+        let Some(stack) = self.stack_in(slot).cloned() else {
             self.using = None;
             return;
         };
-        if !self.right || slot != self.selected || self.screen != Screen::Playing {
+        // Switching hotbar slots only ends a main-hand use.
+        let hand_changed = slot != self.selected && slot != shield::OFFHAND_SLOT;
+        if !self.right || hand_changed || self.screen != Screen::Playing {
             if &*stack.item == "minecraft:bow" && slot == self.selected {
                 self.release_bow(ticks);
             }
@@ -1548,6 +1562,11 @@ impl Game<'_> {
             self.using = None;
             return;
         };
+        if info.blocks_attacks.is_some() {
+            // ShieldItem: used for 72000 ticks, i.e. until released.
+            self.using = Some((slot, ticks + 1));
+            return;
+        }
         if self.tick_drinking(slot, ticks, &stack) {
             return;
         }
@@ -1895,6 +1914,18 @@ impl Game<'_> {
         };
         self.previous_position = player.position;
         player.yaw = self.yaw;
+        // LocalPlayer.modifyInput: walking while using an item.
+        player.item_use_speed = self
+            .using
+            .and_then(|(slot, _)| {
+                if slot == shield::OFFHAND_SLOT {
+                    self.offhand.as_ref()
+                } else {
+                    self.inventory.get(slot)?.as_ref()
+                }
+            })
+            .and_then(|s| self.res.items.get(&s.item))
+            .map(|i| i.use_speed);
         MotionWorld {
             player,
             scene: &mut self.world,
@@ -1976,8 +2007,12 @@ impl Game<'_> {
             ];
             self.death_message();
             if !self.creative && !self.ui.rules.bool("keep_inventory") {
-                let stacks: Vec<ItemStack> =
+                // Inventory.dropAll: slots 0..36, armor feet to head (36..39), off hand (40).
+                let mut stacks: Vec<ItemStack> =
                     self.inventory.iter_mut().filter_map(Option::take).collect();
+                stacks.extend(self.armor.iter_mut().rev().filter_map(Option::take));
+                stacks.extend(self.offhand.take());
+                self.apply_equipment();
                 for stack in stacks {
                     let r = &mut self.world.random;
                     let strength = f64::from(r.next_float()) * 0.5;
@@ -2339,6 +2374,16 @@ impl Game<'_> {
                 h - 23.0,
             );
         }
+        // Hud.extractItemHotbar: the off hand left of the hotbar (right-handed).
+        if let Some(stack) = self.offhand.clone() {
+            batch.sprite(
+                &self.res.atlas,
+                "gui/sprites/hud/hotbar_offhand_left",
+                w / 2.0 - 91.0 - 29.0,
+                h - 23.0,
+            );
+            self.draw_item(&mut batch, &stack, w / 2.0 - 91.0 - 26.0, h - 19.0);
+        }
         for i in 0..9 {
             if let Some(stack) = self.inventory[i].clone() {
                 self.draw_item(
@@ -2558,7 +2603,7 @@ impl Game<'_> {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
                 v.push(200);
                 if self.craft_size == 2 {
-                    v.extend(500..504);
+                    v.extend(500..505);
                 }
             }
         }
@@ -2586,6 +2631,8 @@ impl Game<'_> {
                 84.0 + shift + ((i - 9) / 9) as f32 * 18.0,
             ),
             500..504 => (8.0, 8.0 + (i - 500) as f32 * 18.0),
+            // InventoryMenu: the shield slot.
+            504 => (77.0, 62.0),
             300..500 => match self.container_kind() {
                 Some(BlockEntity::Furnace(_)) => {
                     [(56.0, 17.0), (56.0, 53.0), (116.0, 35.0)][(i - 300).min(2)]
@@ -2626,6 +2673,9 @@ impl Game<'_> {
         }
         if (500..504).contains(&i) {
             return &mut self.armor[i - 500];
+        }
+        if i == 504 {
+            return &mut self.offhand;
         }
         if i >= 300 {
             let key = self.container;
@@ -2795,6 +2845,14 @@ impl Game<'_> {
         }
         for i in self.slots() {
             let (sx, sy) = self.slot_position(i);
+            if i == 504 && self.offhand.is_none() {
+                batch.sprite(
+                    &self.res.atlas,
+                    "gui/sprites/container/slot/shield",
+                    ox + sx,
+                    oy + sy,
+                );
+            }
             if (500..504).contains(&i) && self.armor[i - 500].is_none() {
                 let icon = ["helmet", "chestplate", "leggings", "boots"][i - 500];
                 batch.sprite(
@@ -3988,6 +4046,7 @@ impl Game<'_> {
         self.creative = level.creative;
         let mut inventory = vec![None; 36];
         self.armor = [None, None, None, None];
+        self.offhand = None;
         for (slot, id, count, damage) in &level.inventory {
             let stack = ItemStack {
                 item: Arc::from(id.as_str()),
@@ -3997,6 +4056,8 @@ impl Game<'_> {
             };
             if (100..104).contains(slot) {
                 self.armor[usize::from(103 - slot)] = Some(stack);
+            } else if *slot == 150 {
+                self.offhand = Some(stack);
             } else if let Some(cell) = inventory.get_mut(usize::from(*slot)) {
                 *cell = Some(stack);
             }
@@ -5915,6 +5976,14 @@ impl Game<'_> {
             .enumerate()
             .filter_map(|(i, s)| Some((i as u8, s.as_ref()?.extra.clone()?)))
             .collect();
+        if let Some(s) = &self.offhand {
+            level
+                .inventory
+                .push((150, s.item.to_string(), s.count, s.damage));
+            if let Some(extra) = s.extra.clone() {
+                level.inventory_components.insert(150, extra);
+            }
+        }
         // Vanilla stores armor in slots 100 (feet) to 103 (head).
         for (i, s) in self.armor.iter().enumerate() {
             if let Some(s) = s {
@@ -6155,6 +6224,11 @@ impl Game<'_> {
                 _ => {}
             },
             KeyCode::F3 => self.debug = !self.debug,
+            // key.swapOffhand: ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND.
+            KeyCode::KeyF if self.screen == Screen::Playing => {
+                std::mem::swap(&mut self.offhand, &mut self.inventory[self.selected]);
+                self.using = None;
+            }
             KeyCode::KeyQ if self.screen == Screen::Playing => {
                 let all = self.keys.contains(&KeyCode::ControlLeft);
                 self.drop_held(all);
@@ -6870,6 +6944,8 @@ pub fn run() -> Result<()> {
         frame_ticks: 0.0,
         title: None,
         armor: [None, None, None, None],
+        offhand: None,
+        shield_cooldown: 0,
         applied_modifiers: Vec::new(),
         experience: Experience::default(),
         orbs: Vec::new(),

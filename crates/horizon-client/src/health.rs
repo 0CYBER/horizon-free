@@ -217,6 +217,18 @@ impl PlayerMotion {
         source: DamageTypeId,
         amount: f32,
     ) -> Result<bool> {
+        Ok(self
+            .hurt_blocking(resources, rules, source, amount, None)?
+            .hurt)
+    }
+    pub fn hurt_blocking(
+        &mut self,
+        resources: &HealthResources,
+        rules: HealthRules,
+        source: DamageTypeId,
+        amount: f32,
+        blocking: Option<Blocking>,
+    ) -> Result<BlockOutcome> {
         let source = resources
             .damage
             .source::<()>(source, None, None, None)
@@ -230,15 +242,23 @@ impl PlayerMotion {
             sync_velocity: &mut h.sync_velocity,
             game_time: h.game_time,
             status: self.status.clone(),
+            blocking,
+            blocked: 0.0,
+            block_sound: false,
         };
-        Ok(ServerPlayerCombat::new(
+        let hurt = ServerPlayerCombat::new(
             &mut self.attributes,
             &mut h.data,
             &mut h.food,
             h.ids,
             &mut environment,
         )?
-        .hurt(&mut h.hurt, amount)?)
+        .hurt(&mut h.hurt, amount)?;
+        Ok(BlockOutcome {
+            hurt,
+            blocked: environment.blocked,
+            sound: environment.block_sound,
+        })
     }
     pub fn set_health(&mut self, value: f32, absorption: bool) -> Result<()> {
         let h = &mut self.health;
@@ -267,6 +287,38 @@ pub(crate) struct Environment<'a> {
     pub(crate) game_time: i64,
     /// Resistance, fire resistance and armor protection (effects.rs).
     pub(crate) status: crate::effects::StatusFlags,
+    /// The raised blocking item, if any, and what it blocked.
+    pub(crate) blocking: Option<Blocking>,
+    pub(crate) blocked: f32,
+    pub(crate) block_sound: bool,
+}
+/// `LivingEntity.applyItemBlocking` inputs for a raised `BlocksAttacks` item:
+/// reductions whose damage-type sets are already matched against the source.
+#[derive(Clone, Debug)]
+pub struct Blocking {
+    pub rules: horizon_world::blocking_rules::BlockingRules<bool>,
+    /// `bypassed_by` contains the source's damage type.
+    pub bypassed: bool,
+    /// The direct entity is an arrow with piercing.
+    pub pierce: bool,
+    /// Angle between the head's view and the source position (pi without one).
+    pub angle: f64,
+}
+/// The outcome of a hurt with a raised blocking item.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BlockOutcome {
+    pub hurt: bool,
+    pub blocked: f32,
+    /// `BlocksAttacks.onBlocked` ran (the block sound plays).
+    pub sound: bool,
+}
+struct MatchedSets;
+impl horizon_world::blocking_rules::TypeMatchWorld for MatchedSets {
+    type Error = io::Error;
+    type Set = bool;
+    fn source_in_set(&mut self, set: bool) -> io::Result<bool> {
+        Ok(set)
+    }
 }
 impl Environment<'_> {
     fn event(&mut self, event: HealthEvent) {
@@ -442,8 +494,15 @@ impl HurtWorld for Environment<'_> {
     fn use_item(&mut self, _: &mut State) -> io::Result<()> {
         Ok(())
     }
-    fn apply_blocking(&mut self, _: &mut State, _: f32) -> io::Result<f32> {
-        Ok(0.0)
+    fn apply_blocking(&mut self, _: &mut State, damage: f32) -> io::Result<f32> {
+        let Some(b) = &self.blocking else {
+            return Ok(0.0);
+        };
+        if damage <= 0.0 || b.bypassed || b.pierce {
+            return Ok(0.0);
+        }
+        self.blocked = b.rules.resolve(&mut MatchedSets, damage, b.angle)?;
+        Ok(self.blocked)
     }
     fn freeze_hurts_extra(&mut self, _: &mut State) -> io::Result<bool> {
         Ok(false)
@@ -464,9 +523,10 @@ impl HurtWorld for Environment<'_> {
         Ok(())
     }
     fn blocking_component(&mut self, _: ()) -> Option<()> {
-        None
+        self.blocking.as_ref().map(|_| ())
     }
     fn on_blocked(&mut self, _: &mut State, _: ()) -> io::Result<()> {
+        self.block_sound = true;
         Ok(())
     }
     fn broadcast_damage(&mut self, _: &mut State) -> io::Result<()> {

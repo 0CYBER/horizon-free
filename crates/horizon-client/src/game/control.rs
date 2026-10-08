@@ -466,6 +466,7 @@ impl Game<'_> {
             "target": target,
             "selected": self.selected + 1,
             "held": self.held().map(|s| json!({ "item": &*s.item, "count": s.count })),
+            "offhand": self.offhand.as_ref().map(|s| json!({ "item": &*s.item, "count": s.count, "damage": s.damage })),
             "keys": self.keys.iter().map(|k| format!("{k:?}")).collect::<Vec<_>>(),
             "fps": self.fps,
             "frames": self.frames,

@@ -41,6 +41,86 @@ pub struct ItemInfo {
     pub equip_slot: Option<String>,
     /// All `attribute_modifiers`: (attribute, id, amount, operation, slot group).
     pub modifiers: Vec<(String, String, f64, String, String)>,
+    /// `blocks_attacks` (shields).
+    pub blocks_attacks: Option<BlocksAttacks>,
+    /// `weapon.disable_blocking_for_seconds` (axes).
+    pub disable_blocking_seconds: f32,
+    /// `use_effects.speed_multiplier` (UseEffects.DEFAULT: 0.2).
+    pub use_speed: f32,
+}
+/// A reduction of `blocks_attacks.damage_reductions`.
+#[derive(Clone, Debug)]
+pub struct BlockReduction {
+    pub horizontal_angle: f32,
+    /// Damage type ids or `#tags`; None blocks every type.
+    pub types: Option<Vec<String>>,
+    pub base: f32,
+    pub factor: f32,
+}
+/// The `blocks_attacks` component.
+#[derive(Clone, Debug)]
+pub struct BlocksAttacks {
+    pub delay_seconds: f32,
+    pub disable_scale: f32,
+    pub reductions: Vec<BlockReduction>,
+    /// item_damage: (threshold, base, factor)
+    pub item_damage: (f32, f32, f32),
+    pub bypassed_by: Option<String>,
+    pub block_sound: Option<String>,
+    pub disabled_sound: Option<String>,
+}
+impl BlocksAttacks {
+    fn parse(v: &Value) -> Option<Self> {
+        if !v.is_object() {
+            return None;
+        }
+        let f = |v: &Value, d: f64| v.as_f64().unwrap_or(d) as f32;
+        let text = |v: &Value| v.as_str().map(str::to_owned);
+        let reductions = match v["damage_reductions"].as_array() {
+            Some(list) => list
+                .iter()
+                .map(|r| BlockReduction {
+                    horizontal_angle: f(&r["horizontal_blocking_angle"], 90.0),
+                    types: match &r["type"] {
+                        Value::String(s) => Some(vec![s.clone()]),
+                        Value::Array(a) => Some(
+                            a.iter()
+                                .filter_map(|t| t.as_str().map(str::to_owned))
+                                .collect(),
+                        ),
+                        _ => None,
+                    },
+                    base: f(&r["base"], 0.0),
+                    factor: f(&r["factor"], 0.0),
+                })
+                .collect(),
+            // BlocksAttacks.CODEC default: block everything within 90 degrees.
+            None => vec![BlockReduction {
+                horizontal_angle: 90.0,
+                types: None,
+                base: 0.0,
+                factor: 1.0,
+            }],
+        };
+        let d = &v["item_damage"];
+        Some(Self {
+            delay_seconds: f(&v["block_delay_seconds"], 0.0),
+            disable_scale: f(&v["disable_cooldown_scale"], 1.0),
+            reductions,
+            item_damage: if d.is_object() {
+                (
+                    f(&d["threshold"], 1.0),
+                    f(&d["base"], 0.0),
+                    f(&d["factor"], 1.0),
+                )
+            } else {
+                (1.0, 0.0, 1.0)
+            },
+            bypassed_by: text(&v["bypassed_by"]),
+            block_sound: text(&v["block_sound"]),
+            disabled_sound: text(&v["disabled_sound"]),
+        })
+    }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ItemStack {
@@ -183,6 +263,13 @@ impl Items {
                         .as_str()
                         .unwrap_or(name)
                         .to_owned(),
+                    use_speed: c["minecraft:use_effects"]["speed_multiplier"]
+                        .as_f64()
+                        .unwrap_or(0.2) as f32,
+                    blocks_attacks: BlocksAttacks::parse(&c["minecraft:blocks_attacks"]),
+                    disable_blocking_seconds: c["minecraft:weapon"]["disable_blocking_for_seconds"]
+                        .as_f64()
+                        .unwrap_or(0.0) as f32,
                     equip_slot: c["minecraft:equippable"]["slot"]
                         .as_str()
                         .map(str::to_owned),

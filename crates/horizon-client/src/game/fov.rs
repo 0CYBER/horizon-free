@@ -16,7 +16,7 @@ impl Game<'_> {
     /// `Player.isScoping`: using a spyglass.
     pub(super) fn scoping(&self) -> bool {
         self.using
-            .and_then(|(slot, _)| self.inventory[slot].as_ref())
+            .and_then(|(slot, _)| self.stack_in(slot))
             .is_some_and(|s| &*s.item == "minecraft:spyglass")
     }
     /// `AbstractClientPlayer.getFieldOfViewModifier` (first person).
@@ -26,7 +26,7 @@ impl Game<'_> {
         // Movement speed (sprinting, speed and slowness) relative to walking.
         modifier *= (p.speed / WALKING_SPEED + 1.0) / 2.0;
         if let Some((slot, ticks)) = self.using
-            && let Some(stack) = &self.inventory[slot]
+            && let Some(stack) = self.stack_in(slot)
         {
             match &*stack.item {
                 "minecraft:bow" => {

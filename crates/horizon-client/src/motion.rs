@@ -145,6 +145,8 @@ pub struct PlayerMotion {
     pub pose: crate::pose::Pose,
     pub dimensions: crate::pose::Dimensions,
     pub speed: f32,
+    /// `LocalPlayer.itemUseSpeedMultiplier` while using an item (not riding).
+    pub item_use_speed: Option<f32>,
     pub last_climbable: Option<BlockPos>,
     pub needs_sync: bool,
     pub sync_position: bool,
@@ -212,6 +214,7 @@ impl PlayerMotion {
             pose: crate::pose::Pose::Standing,
             dimensions: crate::pose::Pose::Standing.dimensions(1.0),
             speed: 0.0,
+            item_use_speed: None,
             last_climbable: None,
             needs_sync: false,
             sync_position: false,
@@ -467,7 +470,7 @@ impl MotionWorld<'_, '_, '_> {
             None
         };
         self.simulation_tick(
-            crate::input::modify_input(direction, None, sneak),
+            crate::input::modify_input(direction, self.player.item_use_speed, sneak),
             keys.jump,
         )
     }

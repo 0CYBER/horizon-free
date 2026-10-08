@@ -815,11 +815,44 @@ impl Game<'_> {
         if self.creative {
             return;
         }
+        let projectile = self
+            .res
+            .stations
+            .enchantments
+            .damage_tags
+            .get("minecraft:is_projectile")
+            .is_some_and(|t| t.contains(damage_type));
+        let blocking = self.player_blocking(Some(from), damage_type, false);
+        let raised = blocking.is_some();
+        // Melee: the attacker stands at `from`.
+        let attacker = (!projectile)
+            .then(|| {
+                self.mobs
+                    .iter()
+                    .filter(|m| m.alive())
+                    .min_by(|a, b| {
+                        let d = |m: &horizon_client::mobs::Mob| {
+                            (m.position.x - from[0]).powi(2) + (m.position.z - from[2]).powi(2)
+                        };
+                        d(a).total_cmp(&d(b))
+                    })
+                    .map(|m| m.id)
+            })
+            .flatten();
+        let mut outcome = horizon_client::health::BlockOutcome::default();
         if let Some(player) = self.player.as_mut()
             && let Some(id) = self.motion.health.damage.id(damage_type)
-            && player
-                .hurt(&self.motion.health, self.world.health_rules, id, amount)
-                .unwrap_or(false)
+            && let Ok(o) = player.hurt_blocking(
+                &self.motion.health,
+                self.world.health_rules,
+                id,
+                amount,
+                blocking,
+            )
+            && {
+                outcome = o;
+                o.hurt
+            }
         {
             let (dx, dz) = (player.position.x - from[0], player.position.z - from[2]);
             let l = (dx * dx + dz * dz).sqrt().max(1e-4);
@@ -833,6 +866,9 @@ impl Game<'_> {
                 .play("minecraft:entity.player.hurt", Some(at), 1.0, 1.0);
             self.hurt_armor(amount);
             self.thorns(from);
+        }
+        if raised {
+            self.after_block(outcome, amount, attacker, projectile);
         }
     }
     /// Poison, wither, hunger and burning applied to the player by mobs.
