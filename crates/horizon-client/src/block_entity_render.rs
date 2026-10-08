@@ -286,6 +286,12 @@ enum Kind {
         pose: &'static str,
         facing: &'static str,
     },
+    /// Sign text (`StandingSignRenderer` / `HangingSignRenderer`); the boards are block models.
+    Sign {
+        hanging: bool,
+        wall: bool,
+        angle: f32,
+    },
 }
 fn intern(facing: &str) -> &'static str {
     match facing {
@@ -324,6 +330,15 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Kind {
             double_with: other,
         }
     };
+    if let Some(hanging) = crate::signs::sign_kind(name) {
+        let wall = name.contains("_wall_");
+        let angle = if wall {
+            y_rot(facing())
+        } else {
+            prop("rotation").and_then(|r| r.parse::<f32>().ok()).unwrap_or(0.0) * 22.5
+        };
+        return Kind::Sign { hanging, wall, angle };
+    }
     let unwaxed = name.strip_prefix("waxed_").unwrap_or(name);
     match unwaxed {
         "chest" => {
@@ -581,6 +596,58 @@ fn frac(x: f32) -> f32 {
     x - x.floor()
 }
 
+/// `AbstractSignRenderer.submitSignText`: four centred lines, glowing text
+/// full-bright with an 8x outline in the dark colour.
+fn sign_text(scene: &Scene, data: &crate::signs::SignData, text: &crate::signs::SignText, m: Mat4, packed: u8, near: bool, out: &mut Vec<Vertex>) {
+    let line_height = data.line_height();
+    let midpoint = (4.0 * line_height / 2.0).floor();
+    let dark = text.dark_color();
+    let (color, outline, light) = if text.glowing {
+        let c = text.text_color();
+        (c, (c == 0 || near).then_some(dark), 240 | 240 << 8)
+    } else {
+        (dark, None, vertex_light(packed))
+    };
+    let width = |s: &str| s.chars().map(|c| (scene.glyph)(c).map_or(6.0, |g| g.1)).sum::<f32>();
+    for (i, line) in text.lines.iter().enumerate() {
+        // Font.split(line, maxWidth).get(0): keep what fits.
+        let mut shown = String::new();
+        for ch in line.chars() {
+            shown.push(ch);
+            if width(&shown) > data.max_line_width() {
+                shown.pop();
+                break;
+            }
+        }
+        let x0 = -(width(&shown) as i32 / 2) as f32;
+        let y0 = i as f32 * line_height - midpoint;
+        let mut emit = |dx: f32, dy: f32, rgb: u32| {
+            let mut x = x0 + dx;
+            for ch in shown.chars() {
+                let Some((r, advance)) = (scene.glyph)(ch) else {
+                    x += 6.0;
+                    continue;
+                };
+                if ch != ' ' {
+                    let corners = [(x, y0 + dy + 8.0), (x + 8.0, y0 + dy + 8.0), (x + 8.0, y0 + dy), (x, y0 + dy)];
+                    let uvs = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
+                    let c = 0xFF00_0000 | (rgb & 255) << 16 | (rgb >> 8 & 255) << 8 | (rgb >> 16 & 255);
+                    for ((cx, cy), uv) in corners.into_iter().zip(uvs) {
+                        out.push(Vertex { pos: m.transform_point3(Vec3::new(cx, cy, 0.0)).to_array(), uv, layer: 0, color: c, light });
+                    }
+                }
+                x += advance;
+            }
+        };
+        if let Some(o) = outline {
+            for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
+                emit(dx, dy, o);
+            }
+        }
+        emit(0.0, 0.0, color);
+    }
+}
+
 /// Inputs from the game for one frame of block-entity rendering.
 pub struct Scene<'a> {
     pub camera: DVec3,
@@ -591,6 +658,10 @@ pub struct Scene<'a> {
     pub nether: bool,
     /// Chest lid openness (`ChestLidController.getOpenNess`) at a position.
     pub lid: &'a dyn Fn([i32; 3]) -> f32,
+    /// Sign block-entity data at a position.
+    pub sign: &'a dyn Fn([i32; 3]) -> Option<&'a crate::signs::SignData>,
+    /// Font glyph cell and advance.
+    pub glyph: &'a dyn Fn(char) -> Option<(Rect, f32)>,
 }
 
 pub struct BlockEntityRenderer {
@@ -734,6 +805,38 @@ impl BlockEntityRenderer {
         let none = |_: &str, _: &mut [f32; 9]| {};
         match kind {
             Kind::None => {}
+            Kind::Sign { hanging, wall, angle } => {
+                let Some(data) = (scene.sign)(pos) else { return };
+                let s = Vec3::new(1.0, -1.0, 1.0);
+                for (front, text) in [(true, &data.front), (false, &data.back)] {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let mut m = base;
+                    if *hanging {
+                        // HangingSignRenderer.textTransformation.
+                        m *= Mat4::from_translation(Vec3::new(0.5, 0.9375, 0.5))
+                            * Mat4::from_rotation_y((-angle).to_radians())
+                            * Mat4::from_translation(Vec3::new(0.0, -0.3125, 0.0));
+                        if !front {
+                            m *= Mat4::from_rotation_y(PI);
+                        }
+                        m *= Mat4::from_translation(Vec3::new(0.0, -0.32, 0.073)) * Mat4::from_scale(s * 0.014_062_5);
+                    } else {
+                        // StandingSignRenderer.textTransformation.
+                        m *= Mat4::from_translation(Vec3::splat(0.5)) * Mat4::from_rotation_y((-angle).to_radians());
+                        if *wall {
+                            m *= Mat4::from_translation(Vec3::new(0.0, -0.3125, -0.4375));
+                        }
+                        if !front {
+                            m *= Mat4::from_rotation_y(PI);
+                        }
+                        m *= Mat4::from_translation(Vec3::new(0.0, 1.0 / 3.0, 0.046_666_667)) * Mat4::from_scale(s * 0.010_416_667);
+                    }
+                    let near = DVec3::new(f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5).distance_squared(scene.camera) < 256.0;
+                    sign_text(scene, data, text, m, packed, near, out);
+                }
+            }
             Kind::Chest {
                 texture,
                 part,

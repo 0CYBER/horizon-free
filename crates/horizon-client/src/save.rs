@@ -110,6 +110,7 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity) -
             entries.push(("cooking_time_spent", Tag::Short(f.cooking_timer as i16)));
             entries.push(("cooking_total_time", Tag::Short(f.cooking_total as i16)));
         }
+        BlockEntity::Sign(sign) => entries.extend(sign.encode()),
     }
     Tag::compound(entries)
 }
@@ -134,6 +135,7 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             f.cooking_timer = int("cooking_time_spent").unwrap_or(0);
             f.cooking_total = int("cooking_total_time").unwrap_or(200);
         }
+        BlockEntity::Sign(sign) => sign.decode(tag),
     }
     Some((pos, entity))
 }

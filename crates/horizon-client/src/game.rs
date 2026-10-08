@@ -3,6 +3,7 @@
 mod control;
 mod render_control;
 mod render_tick;
+mod sign_edit;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -345,6 +346,8 @@ struct Game<'a> {
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: horizon_client::particles::ParticleEngine,
+    /// Sign text being edited (`SignEditScreen`).
+    sign_edit: Option<sign_edit::SignEditor>,
     spawn_search: u32,
     mobs: Vec<Mob>,
     arrows: Vec<Arrow>,
@@ -1020,7 +1023,11 @@ impl Game<'_> {
         };
         let target = [pos.x, pos.y, pos.z];
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
+            let sign = matches!(entity, BlockEntity::Sign(_));
             self.world.block_entities.insert((target[0], target[1], target[2]), entity);
+            if sign {
+                self.open_sign_editor((target[0], target[1], target[2]), true);
+            }
         }
         self.swing_arm();
         let sounds = self.res.facts.get(state).sounds.clone();
@@ -1718,6 +1725,7 @@ impl Game<'_> {
             }
             Screen::Playing | Screen::Options => {}
         }
+        self.draw_sign_editor(&mut batch);
         batch
     }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
@@ -1733,6 +1741,7 @@ impl Game<'_> {
         match self.container_kind() {
             Some(BlockEntity::Chest(items)) => v.extend((0..items.len()).map(|i| 300 + i)),
             Some(BlockEntity::Furnace(_)) => v.extend(300..303),
+            Some(BlockEntity::Sign(_)) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
                 v.push(200);
@@ -1844,6 +1853,7 @@ impl Game<'_> {
                         part(batch, "gui/sprites/container/furnace/burn_progress", 0.0, 0.0, w, 16.0, ox + 79.0, oy + 34.0);
                     }
                 }
+                Some(BlockEntity::Sign(_)) => {}
                 None => {
                     let texture = if self.craft_size == 3 { "gui/container/crafting_table" } else { "gui/container/inventory" };
                     part(batch, texture, 0.0, 0.0, 176.0, 166.0, ox, oy);
@@ -2141,6 +2151,11 @@ impl Game<'_> {
                 sprites: &self.res.atlas.sprites,
                 nether: self.dim == Dim::Nether,
                 lid: &lid,
+                sign: &|p| match self.world.block_entities.get(&(p[0], p[1], p[2])) {
+                    Some(BlockEntity::Sign(sign)) => Some(sign),
+                    _ => None,
+                },
+                glyph: &|c| self.res.atlas.glyph(c),
             };
             self.res.block_entity_render.render(&scene, r.block_entities(), &mut out);
         }
@@ -4440,6 +4455,12 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::MouseInput { .. } if self.title.is_some() => {}
+                WindowEvent::MouseInput { state, button, .. } if self.sign_edit.is_some() => {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
+                        self.sign_edit_click(size);
+                    }
+                }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
                     match self.screen {
@@ -4483,6 +4504,7 @@ impl ApplicationHandler for Game<'_> {
                         _ => {}
                     }
                 }
+                WindowEvent::KeyboardInput { event, .. } if self.sign_edit.is_some() => self.sign_edit_key(&event),
                 WindowEvent::KeyboardInput { event, .. }
                     if self.screen == Screen::Creative && self.creative_screen.tab().search && event.state == ElementState::Pressed
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
@@ -4753,6 +4775,7 @@ pub fn run() -> Result<()> {
         dropped: Vec::new(),
         next_entity: 0,
         particles,
+        sign_edit: None,
         spawn_search: 0,
         mobs: Vec::new(),
         arrows: Vec::new(),

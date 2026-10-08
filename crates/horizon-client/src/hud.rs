@@ -61,6 +61,10 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 impl HudAtlas {
+    /// A font glyph's atlas cell (8x8 GUI pixels) and advance.
+    pub fn glyph(&self, ch: char) -> Option<(Rect, f32)> {
+        self.glyphs.get(&ch).map(|g| (g.rect, g.advance))
+    }
     pub fn build(root: &Path) -> Result<Self> {
         let textures = root.join("assets/minecraft/textures");
         let mut files = Vec::new();

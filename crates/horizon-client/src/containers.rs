@@ -49,9 +49,14 @@ pub struct Furnace {
 pub enum BlockEntity {
     Chest(Vec<Option<ItemStack>>),
     Furnace(Furnace),
+    /// Signs and hanging signs (`SignBlockEntity`).
+    Sign(crate::signs::SignData),
 }
 impl BlockEntity {
     pub fn for_block(name: &str) -> Option<Self> {
+        if let Some(hanging) = crate::signs::sign_kind(name) {
+            return Some(Self::Sign(crate::signs::SignData { hanging, ..Default::default() }));
+        }
         if let Some(kind) = FurnaceKind::from_block(name) {
             return Some(Self::Furnace(Furnace {
                 kind,
@@ -77,18 +82,21 @@ impl BlockEntity {
                 FurnaceKind::BlastFurnace => "minecraft:blast_furnace",
                 FurnaceKind::Smoker => "minecraft:smoker",
             },
+            Self::Sign(s) => s.id(),
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
         match self {
             Self::Chest(items) => items.iter().flatten().cloned().collect(),
             Self::Furnace(f) => f.items.iter().flatten().cloned().collect(),
+            Self::Sign(_) => Vec::new(),
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
         match self {
             Self::Chest(items) => items,
             Self::Furnace(f) => &mut f.items,
+            Self::Sign(_) => &mut [],
         }
     }
 }

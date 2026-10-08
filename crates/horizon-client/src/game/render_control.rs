@@ -10,6 +10,7 @@ pub const HELP: &[&str] = &[
     "setblock X Y Z STATE           set a block state (name[prop=value,...]) without updates",
     "fill X1 Y1 Z1 X2 Y2 Z2 STATE   fill a box with a block state without updates",
     "particle NAME X Y Z [DX DY DZ] [COUNT]  spawn particles (vanilla /particle spread)",
+    "signedit X Y Z [front|back]    open the sign editor for the sign at X Y Z",
 ];
 
 impl Game<'_> {
@@ -101,6 +102,16 @@ impl Game<'_> {
                     self.particles.create(&options, p, [0.0; 3]);
                 }
                 Ok(Some(json!({ "ok": true, "live": self.particles.len() })))
+            }
+            "signedit" => {
+                let key = (int(1)?, int(2)?, int(3)?);
+                let name = self.res.facts.get(self.world.block(key.0, key.1, key.2)).name.clone();
+                let entity = horizon_client::containers::BlockEntity::for_block(&name)
+                    .filter(|e| matches!(e, horizon_client::containers::BlockEntity::Sign(_)))
+                    .ok_or("no sign there")?;
+                self.world.block_entities.entry(key).or_insert(entity);
+                self.open_sign_editor(key, words.get(4) != Some(&"back"));
+                Ok(Some(json!({ "ok": true })))
             }
             other => Err(format!("unknown render command {other}").into()),
         }
