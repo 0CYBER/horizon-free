@@ -264,6 +264,18 @@ struct Game<'a> {
     walk: (f32, f32),
     bob: (f32, f32),
     flash: u32,
+    /// Sleeping in a bed: (bed head position, ticks asleep).
+    sleeping: Option<([i32; 3], u32)>,
+}
+fn facing_offset(facing: &str) -> [i32; 3] {
+    match facing {
+        "north" => [0, 0, -1],
+        "south" => [0, 0, 1],
+        "west" => [-1, 0, 0],
+        "east" => [1, 0, 0],
+        "up" => [0, 1, 0],
+        _ => [0, -1, 0],
+    }
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -573,6 +585,17 @@ impl Game<'_> {
                 }
             }
         }
+        // BedBlock: breaking one part removes the other.
+        if let Some(props) = self.res.assets.registry.state(state).map(|s| s.properties.clone())
+            && let (Some(part), Some(facing)) = (props.get("part"), props.get("facing"))
+        {
+            let d = facing_offset(facing);
+            let sign = if part == "foot" { 1 } else { -1 };
+            let other = [pos[0] + d[0] * sign, pos[1], pos[2] + d[2] * sign];
+            if self.res.facts.get(self.world.block(other[0], other[1], other[2])).name == facts.name {
+                self.world.set(other[0], other[1], other[2], self.world.air)?;
+            }
+        }
         // Unsupported plants above fall (snow, flowers, grass): simple support rule.
         let above = self.world.block(pos[0], pos[1] + 1, pos[2]);
         let af = self.res.facts.get(above);
@@ -624,7 +647,7 @@ impl Game<'_> {
             }
         }
         if let Some(f) = props.get("facing").cloned() {
-            let wants = if name.ends_with("_stairs") || name.contains("fence_gate") || name.ends_with("_door") || name.ends_with("_trapdoor") {
+            let wants = if name.ends_with("_stairs") || name.contains("fence_gate") || name.ends_with("_door") || name.ends_with("_trapdoor") || name.ends_with("_bed") {
                 facing.to_owned()
             } else if name.ends_with("torch") || name.ends_with("ladder") || name.contains("wall_") {
                 clicked.to_owned()
@@ -675,6 +698,11 @@ impl Game<'_> {
             let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
             let name = self.res.facts.get(clicked).name.clone();
             let key = (hit.pos[0], hit.pos[1], hit.pos[2]);
+            if name.ends_with("_bed") {
+                self.try_sleep(hit.pos);
+                self.right = false;
+                return Ok(());
+            }
             if let Some(entity) = BlockEntity::for_block(&name) {
                 self.world.block_entities.entry(key).or_insert(entity);
                 self.container = Some(key);
@@ -756,6 +784,25 @@ impl Game<'_> {
         let sounds = self.res.facts.get(state).sounds.clone();
         let center = [f64::from(target[0]) + 0.5, f64::from(target[1]) + 0.5, f64::from(target[2]) + 0.5];
         self.audio.play(&sounds.place, Some(center), (sounds.volume + 1.0) / 2.0, sounds.pitch * 0.8);
+        // BedItem: the head goes one block in the facing direction.
+        if let Some(s) = self.res.assets.registry.state(state)
+            && s.properties.get("part").map(String::as_str) == Some("foot")
+            && let Some(facing) = s.properties.get("facing")
+        {
+            let d = facing_offset(facing);
+            let head_pos = [target[0] + d[0], target[1], target[2] + d[2]];
+            let mut head = s.clone();
+            head.properties.insert("part".into(), "head".into());
+            if let Ok(h) = self.res.assets.registry.resolve(&head)
+                && self.res.facts.get(self.world.block(head_pos[0], head_pos[1], head_pos[2])).replaceable
+            {
+                self.world.set(head_pos[0], head_pos[1], head_pos[2], h)?;
+            } else {
+                // No room for the head: undo.
+                self.world.set(target[0], target[1], target[2], existing)?;
+                return Ok(());
+            }
+        }
         // Two-block items place their upper half.
         if let Some(s) = self.res.assets.registry.state(state)
             && s.properties.get("half").map(String::as_str) == Some("lower")
@@ -1101,6 +1148,7 @@ impl Game<'_> {
         self.tick_mobs()?;
         self.tick_experience();
         self.tick_hand();
+        self.tick_sleep();
         if let Some(p) = &self.player {
             // Player.aiStep bob and Entity.walkDist (0.6 per block).
             let (dx, dz) = (p.position.x - self.previous_position.x, p.position.z - self.previous_position.z);
@@ -1390,6 +1438,11 @@ impl Game<'_> {
         {
             let tw = HudBatch::text_width(atlas, text);
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
+        }
+        if let Some((_, ticks)) = self.sleeping {
+            // Gui sleep overlay fading in over 100 ticks.
+            let a = ((ticks as f32 / 100.0).min(1.0) * 204.0) as u8;
+            batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 32, a));
         }
         match self.screen {
             Screen::Paused => {
@@ -3289,6 +3342,65 @@ impl Game<'_> {
             }
         }
     }
+    /// Player.startSleepInBed: night or thunder, no monsters within 8 blocks;
+    /// the bed becomes the respawn point either way.
+    fn try_sleep(&mut self, pos: [i32; 3]) {
+        let Some(p) = self.player.as_ref() else { return };
+        let time = self.world.day_time.rem_euclid(24000);
+        let night = (12542..23460).contains(&time) || self.world.weather.thundering;
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let props = self.res.assets.registry.state(state).map(|s| s.properties.clone()).unwrap_or_default();
+        let head = if props.get("part").map(String::as_str) == Some("foot") {
+            let d = facing_offset(props.get("facing").map_or("north", String::as_str));
+            [pos[0] + d[0], pos[1], pos[2] + d[2]]
+        } else {
+            pos
+        };
+        self.spawn = Some(Vec3::new(f64::from(head[0]) + 0.5, f64::from(head[1]) + 0.6, f64::from(head[2]) + 0.5));
+        self.level.spawn = Some([f64::from(head[0]), f64::from(head[1]) + 1.0, f64::from(head[2])]);
+        let dist = ((p.position.x - f64::from(head[0]) - 0.5).powi(2) + (p.position.z - f64::from(head[2]) - 0.5).powi(2)).sqrt();
+        if !night {
+            self.message = Some(("You can sleep only at night or during thunderstorms".into(), Instant::now()));
+            return;
+        }
+        if dist > 3.0 {
+            self.message = Some(("You may not rest now; the bed is too far away".into(), Instant::now()));
+            return;
+        }
+        let monsters = self.mobs.iter().any(|m| {
+            m.hostile() && m.alive() && (m.position.x - p.position.x).abs() < 8.0 && (m.position.y - p.position.y).abs() < 5.0 && (m.position.z - p.position.z).abs() < 8.0
+        });
+        if monsters {
+            self.message = Some(("You may not rest now; there are monsters nearby".into(), Instant::now()));
+            return;
+        }
+        self.message = Some(("Respawn point set".into(), Instant::now()));
+        self.sleeping = Some((head, 0));
+    }
+    fn tick_sleep(&mut self) {
+        let Some((head, ticks)) = self.sleeping else { return };
+        if self.keys.contains(&KeyCode::ShiftLeft) || self.player.as_ref().is_none_or(|p| p.health.dead_or_dying()) {
+            self.sleeping = None;
+            return;
+        }
+        if let Some(p) = self.player.as_mut() {
+            p.position = Vec3::new(f64::from(head[0]) + 0.5, f64::from(head[1]) + 0.5625, f64::from(head[2]) + 0.5);
+            p.velocity = Vec3::ZERO;
+        }
+        let ticks = ticks + 1;
+        // ServerLevel: once everyone has slept 100 ticks, skip to morning and clear weather.
+        if ticks >= 100 {
+            let t = self.world.day_time;
+            self.world.day_time = t + 24000 - t.rem_euclid(24000);
+            self.world.weather.raining = false;
+            self.world.weather.thundering = false;
+            self.world.weather.rain_time = 0;
+            self.world.weather.thunder_time = 0;
+            self.sleeping = None;
+        } else {
+            self.sleeping = Some((head, ticks));
+        }
+    }
     fn save_game(&mut self) -> Result<()> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys
@@ -3934,6 +4046,7 @@ pub fn run() -> Result<()> {
         walk: (0.0, 0.0),
         bob: (0.0, 0.0),
         flash: 0,
+        sleeping: None,
     };
     match game.options.world.clone() {
         Some(folder) => {
