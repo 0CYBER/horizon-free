@@ -229,6 +229,32 @@ impl PlayerMotion {
             .value(Some(key), ValueKind::Computed)
             .map_err(attribute_error)?)
     }
+    /// Add (or remove) a transient attribute modifier, e.g. from equipment
+    /// (`LivingEntity.collectEquipmentChanges` applying item modifiers).
+    pub fn set_modifier(&mut self, attribute: &str, id: &str, amount: f64, operation: &str, present: bool) -> Result<()> {
+        let Some(key) = self.attributes.key(attribute) else {
+            return Ok(());
+        };
+        let Some(handle) = self.attributes.get_instance(Some(key)).map_err(attribute_error)? else {
+            return Ok(());
+        };
+        let operation = match operation {
+            "add_multiplied_base" => Operation::AddMultipliedBase,
+            "add_multiplied_total" => Operation::AddMultipliedTotal,
+            _ => Operation::AddValue,
+        };
+        let modifier = Modifier::new(id, amount, operation)?;
+        self.attributes
+            .edit(&handle, |value, observer| {
+                value.remove(modifier.id(), observer)?;
+                if present {
+                    value.add_transient(modifier, observer)?;
+                }
+                Ok(())
+            })
+            .map_err(attribute_error)?;
+        Ok(())
+    }
     pub fn set_sprinting(&mut self, sprinting: bool) -> Result<()> {
         self.sprinting = sprinting;
         let key = self

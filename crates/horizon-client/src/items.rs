@@ -35,6 +35,10 @@ pub struct ItemInfo {
     pub fuel: Option<(Value, Value)>,
     /// Item left behind after crafting/fuel use (e.g. bucket).
     pub remainder: Option<String>,
+    /// `equippable.slot` (head, chest, legs, feet, ...).
+    pub equip_slot: Option<String>,
+    /// All `attribute_modifiers`: (attribute, id, amount, operation, slot group).
+    pub modifiers: Vec<(String, String, f64, String, String)>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ItemStack {
@@ -156,6 +160,21 @@ impl Items {
                         .unwrap_or(1.0) as f32,
                     food,
                     model: c["minecraft:item_model"].as_str().unwrap_or(name).to_owned(),
+                    equip_slot: c["minecraft:equippable"]["slot"].as_str().map(str::to_owned),
+                    modifiers: c["minecraft:attribute_modifiers"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|m| {
+                            Some((
+                                m["type"].as_str()?.to_owned(),
+                                m["id"].as_str()?.to_owned(),
+                                m["amount"].as_f64()?,
+                                m["operation"].as_str().unwrap_or("add_value").to_owned(),
+                                m["slot"].as_str().unwrap_or("any").to_owned(),
+                            ))
+                        })
+                        .collect(),
                     fuel: c.get("minecraft:cooking_fuel").map(|f| (f["burn_time"].clone(), f["speed_multiplier"].clone())),
                     remainder: c["minecraft:use_remainder"]["id"].as_str().or(c["minecraft:crafting_remainder"]["id"].as_str()).or(c["minecraft:crafting_remainder"].as_str()).map(str::to_owned),
                     attack_damage: modifier("minecraft:attack_damage"),

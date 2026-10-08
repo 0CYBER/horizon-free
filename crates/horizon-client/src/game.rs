@@ -233,6 +233,9 @@ struct Game<'a> {
     /// Item being used (eaten): hotbar slot and ticks used.
     using: Option<(usize, u32)>,
     title: Option<Title>,
+    /// Armor slots: head, chest, legs, feet.
+    armor: [Option<ItemStack>; 4],
+    applied_modifiers: Vec<(String, String)>,
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -671,6 +674,9 @@ impl Game<'_> {
             }
             return Ok(());
         }
+        if self.use_tool(&stack)? {
+            return Ok(());
+        }
         let Some(hit) = self.pick() else { return Ok(()) };
         let Some(block) = info.block else { return Ok(()) };
         let clicked_state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
@@ -947,6 +953,7 @@ impl Game<'_> {
         }
         self.previous_position = feet;
         self.player = Some(player);
+        self.apply_equipment();
         self.eye = 1.62;
         self.previous_eye = 1.62;
         self.clock.reset();
@@ -1353,6 +1360,9 @@ impl Game<'_> {
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
                 v.push(200);
+                if self.craft_size == 2 {
+                    v.extend(500..504);
+                }
             }
         }
         v
@@ -1365,7 +1375,8 @@ impl Game<'_> {
         match i {
             0..9 => (8.0 + i as f32 * 18.0, 142.0 + shift),
             9..36 => (8.0 + ((i - 9) % 9) as f32 * 18.0, 84.0 + shift + ((i - 9) / 9) as f32 * 18.0),
-            300.. => match self.container_kind() {
+            500..504 => (8.0, 8.0 + (i - 500) as f32 * 18.0),
+            300..500 => match self.container_kind() {
                 Some(BlockEntity::Furnace(_)) => [(56.0, 17.0), (56.0, 53.0), (116.0, 35.0)][(i - 300).min(2)],
                 _ => (8.0 + ((i - 300) % 9) as f32 * 18.0, 18.0 + ((i - 300) / 9) as f32 * 18.0),
             },
@@ -1389,6 +1400,9 @@ impl Game<'_> {
         })
     }
     fn slot_mut(&mut self, i: usize) -> &mut Option<ItemStack> {
+        if (500..504).contains(&i) {
+            return &mut self.armor[i - 500];
+        }
         if i >= 300 {
             let key = self.container;
             return match key.and_then(|k| self.world.block_entities.get_mut(&k)) {
@@ -1467,6 +1481,10 @@ impl Game<'_> {
         }
         for i in self.slots() {
             let (sx, sy) = self.slot_position(i);
+            if (500..504).contains(&i) && self.armor[i - 500].is_none() {
+                let icon = ["helmet", "chestplate", "leggings", "boots"][i - 500];
+                batch.sprite(&self.res.atlas, &format!("gui/sprites/container/slot/{icon}"), ox + sx, oy + sy);
+            }
             let stack = if i == 200 { self.craft_result() } else { self.slot_mut(i).clone() };
             if let Some(stack) = stack {
                 self.draw_item(batch, &stack, ox + sx, oy + sy);
@@ -1584,6 +1602,16 @@ impl Game<'_> {
                     self.inventory[slot] = Some(stack);
                 }
             }
+            return;
+        }
+        if (500..504).contains(&slot) {
+            let wanted = ["head", "chest", "legs", "feet"][slot - 500];
+            let fits = self.carried.as_ref().is_none_or(|c| self.res.items.get(&c.item).and_then(|i| i.equip_slot.as_deref()) == Some(wanted));
+            if !fits {
+                return;
+            }
+            std::mem::swap(&mut self.carried, &mut self.armor[slot - 500]);
+            self.apply_equipment();
             return;
         }
         let carried = self.carried.take();
@@ -2049,6 +2077,7 @@ impl Game<'_> {
         self.audio.play("minecraft:entity.generic.explode", Some(center), 4.0, (1.0 + (self.world.random.next_float() - self.world.random.next_float()) * 0.2) * 0.7);
         // Entity damage by distance (exposure approximated as unobstructed).
         let diameter = f64::from(radius) * 2.0;
+        let mut armor_damage = None;
         if let Some(player) = self.player.as_mut() {
             let p = [player.position.x, player.position.y, player.position.z];
             let dist = ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2) + (p[2] - center[2]).powi(2)).sqrt() / diameter;
@@ -2057,11 +2086,17 @@ impl Game<'_> {
                 let damage = ((impact * impact + impact) / 2.0 * 7.0 * diameter + 1.0) as f32;
                 if let Some(id) = self.motion.health.damage.id("minecraft:explosion") {
                     let _ = player.hurt(&self.motion.health, self.world.health_rules, id, damage);
+                    armor_damage = Some(damage);
                 }
                 let (dx, dy, dz) = (p[0] - center[0], p[1] - center[1], p[2] - center[2]);
                 let l = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-4);
                 player.velocity = Vec3::new(player.velocity.x + dx / l * impact, player.velocity.y + dy / l * impact, player.velocity.z + dz / l * impact);
             }
+        }
+        if let Some(d) = armor_damage
+            && !self.creative
+        {
+            self.hurt_armor(d);
         }
         for m in &mut self.mobs {
             let dist = ((m.position.x - center[0]).powi(2) + (m.position.y - center[1]).powi(2) + (m.position.z - center[2]).powi(2)).sqrt() / diameter;
@@ -2175,6 +2210,7 @@ impl Game<'_> {
                         player.velocity = Vec3::new(player.velocity.x / 2.0 + dx / l * 0.4, (player.velocity.y / 2.0 + 0.4).min(0.4), player.velocity.z / 2.0 + dz / l * 0.4);
                         let at = [player.position.x, player.position.y, player.position.z];
                         self.audio.play("minecraft:entity.player.hurt", Some(at), 1.0, 1.0);
+                        self.hurt_armor(amount);
                     }
                 }
                 MobEvent::Shoot(from, target) => {
@@ -2222,6 +2258,7 @@ impl Game<'_> {
                 let _ = player.hurt(&self.motion.health, self.world.health_rules, id, d);
                 let at = [player.position.x, player.position.y, player.position.z];
                 self.audio.play("minecraft:entity.arrow.hit_player", Some(at), 1.0, 1.0);
+                self.hurt_armor(d);
             }
         }
         Ok(())
@@ -2373,9 +2410,13 @@ impl Game<'_> {
         world.day_time = self.options.time.unwrap_or(level.day_time);
         self.creative = level.creative;
         let mut inventory = vec![None; 36];
+        self.armor = [None, None, None, None];
         for (slot, id, count, damage) in &level.inventory {
-            if let Some(cell) = inventory.get_mut(usize::from(*slot)) {
-                *cell = Some(ItemStack { item: Arc::from(id.as_str()), count: *count, damage: *damage });
+            let stack = ItemStack { item: Arc::from(id.as_str()), count: *count, damage: *damage };
+            if (100..104).contains(slot) {
+                self.armor[usize::from(103 - slot)] = Some(stack);
+            } else if let Some(cell) = inventory.get_mut(usize::from(*slot)) {
+                *cell = Some(stack);
             }
         }
         if self.creative && level.inventory.is_empty() && level.position.is_none() {
@@ -2452,6 +2493,233 @@ impl Game<'_> {
         }
         out
     }
+    /// Equipment attribute modifiers (LivingEntity.collectEquipmentChanges).
+    fn apply_equipment(&mut self) {
+        let Some(player) = self.player.as_mut() else { return };
+        for (attribute, id) in std::mem::take(&mut self.applied_modifiers) {
+            let _ = player.set_modifier(&attribute, &id, 0.0, "add_value", false);
+        }
+        let slots = ["head", "chest", "legs", "feet"];
+        let mut equipped: Vec<(Option<&ItemStack>, &str)> = self.armor.iter().zip(slots).map(|(s, n)| (s.as_ref(), n)).collect();
+        equipped.push((self.inventory[self.selected].as_ref(), "mainhand"));
+        for (stack, slot) in equipped {
+            let Some(info) = stack.and_then(|s| self.res.items.get(&s.item)) else { continue };
+            for (attribute, id, amount, op, group) in &info.modifiers {
+                let matches = group == slot
+                    || group == "any"
+                    || (group == "armor" && slot != "mainhand")
+                    || (group == "hand" && slot == "mainhand");
+                // Main-hand attack modifiers are read by the attack code directly.
+                if !matches || slot == "mainhand" {
+                    continue;
+                }
+                if player.set_modifier(attribute, id, *amount, op, true).is_ok() {
+                    self.applied_modifiers.push((attribute.clone(), id.clone()));
+                }
+            }
+        }
+    }
+    /// Inventory.hurtArmor: each piece loses max(1, damage / 4) durability.
+    fn hurt_armor(&mut self, damage: f32) {
+        let amount = ((damage / 4.0) as u32).max(1);
+        let mut broke = false;
+        for slot in &mut self.armor {
+            if let Some(stack) = slot.as_mut()
+                && let Some(info) = self.res.items.get(&stack.item)
+                && info.max_damage > 0
+            {
+                stack.damage += amount;
+                if stack.damage >= info.max_damage {
+                    *slot = None;
+                    broke = true;
+                }
+            }
+        }
+        if broke {
+            if let Some(eye) = self.eye_position() {
+                self.audio.play("minecraft:entity.item.break", Some(eye), 0.8, 0.8 + self.world.random.next_float() * 0.4);
+            }
+            self.apply_equipment();
+        }
+    }
+    /// Voxel traversal that also stops at fluid source blocks (bucket pick).
+    fn pick_fluid(&self) -> Option<Hit> {
+        let origin = self.eye_position()?;
+        let dir = view_vector(self.yaw, self.pitch);
+        let mut t = 0.0;
+        let mut last = origin.map(|v| v.floor() as i32);
+        while t <= self.reach() {
+            let p = [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
+            let b = p.map(|v| v.floor() as i32);
+            if b != last {
+                let state = self.world.block(b[0], b[1], b[2]);
+                let f = self.res.facts.get(state);
+                let face = [last[0] - b[0], last[1] - b[1], last[2] - b[2]];
+                if f.fluid != Fluid::None && f.fluid_level == 8 && !f.fluid_falling && !f.waterlogged && f.render_shape != horizon_client::blocks::RenderShape::Model {
+                    return Some(Hit { pos: b, face, point: p });
+                }
+                if !self.res.facts.is_air(state) && f.fluid == Fluid::None {
+                    return Some(Hit { pos: b, face, point: p });
+                }
+                last = b;
+            }
+            t += 0.05;
+        }
+        None
+    }
+    fn set_state_named(&mut self, pos: [i32; 3], name: &str, keep: &[&str]) -> Result<bool> {
+        let registry = &self.res.assets.registry;
+        let old = self.world.block(pos[0], pos[1], pos[2]);
+        let Some(default) = registry.default_state(name) else { return Ok(false) };
+        let mut state = registry.state(default).cloned().ok_or("state")?;
+        if let Some(previous) = registry.state(old) {
+            for k in keep {
+                if let Some(v) = previous.properties.get(*k) {
+                    state.properties.insert((*k).to_owned(), v.clone());
+                }
+            }
+        }
+        let id = registry.resolve(&state).unwrap_or(default);
+        self.world.set(pos[0], pos[1], pos[2], id)?;
+        Ok(true)
+    }
+    fn damage_held(&mut self, amount: u32) {
+        if self.creative {
+            return;
+        }
+        if let Some(stack) = self.inventory[self.selected].as_mut()
+            && let Some(info) = self.res.items.get(&stack.item)
+            && info.max_damage > 0
+        {
+            stack.damage += amount;
+            if stack.damage >= info.max_damage {
+                self.inventory[self.selected] = None;
+                if let Some(eye) = self.eye_position() {
+                    self.audio.play("minecraft:entity.item.break", Some(eye), 0.8, 0.8 + self.world.random.next_float() * 0.4);
+                }
+            }
+        }
+    }
+    /// Item use on blocks for tools, buckets and fire starters; returns true if handled.
+    fn use_tool(&mut self, stack: &ItemStack) -> Result<bool> {
+        let item = stack.item.trim_start_matches("minecraft:").to_owned();
+        let at = |p: [i32; 3]| [f64::from(p[0]) + 0.5, f64::from(p[1]) + 0.5, f64::from(p[2]) + 0.5];
+        if item == "bucket" {
+            let Some(hit) = self.pick_fluid() else { return Ok(false) };
+            let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+            let f = self.res.facts.get(state).clone();
+            if f.fluid == Fluid::None || f.fluid_level != 8 || f.fluid_falling {
+                return Ok(false);
+            }
+            let (filled, sound) = match f.fluid {
+                Fluid::Water => ("minecraft:water_bucket", "minecraft:item.bucket.fill"),
+                _ => ("minecraft:lava_bucket", "minecraft:item.bucket.fill_lava"),
+            };
+            self.world.set(hit.pos[0], hit.pos[1], hit.pos[2], self.world.air)?;
+            self.audio.play(sound, Some(at(hit.pos)), 1.0, 1.0);
+            if !self.creative {
+                self.consume_held();
+                let filled = ItemStack { item: Arc::from(filled), count: 1, damage: 0 };
+                if self.inventory[self.selected].is_none() {
+                    self.inventory[self.selected] = Some(filled);
+                } else if let Some(rest) = self.give(filled)
+                    && let Some(eye) = self.eye_position()
+                {
+                    self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
+                }
+            }
+            return Ok(true);
+        }
+        let Some(hit) = self.pick() else { return Ok(false) };
+        let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+        let name = self.res.facts.get(clicked).name.trim_start_matches("minecraft:").to_owned();
+        let above_air = self.res.facts.is_air(self.world.block(hit.pos[0], hit.pos[1] + 1, hit.pos[2]));
+        if item == "water_bucket" || item == "lava_bucket" {
+            let target = if self.res.facts.get(clicked).replaceable { hit.pos } else { [hit.pos[0] + hit.face[0], hit.pos[1] + hit.face[1], hit.pos[2] + hit.face[2]] };
+            let existing = self.world.block(target[0], target[1], target[2]);
+            if !self.res.facts.get(existing).replaceable && !self.res.facts.is_air(existing) {
+                return Ok(true);
+            }
+            let fluid = if item == "water_bucket" { "minecraft:water" } else { "minecraft:lava" };
+            self.set_state_named(target, fluid, &[])?;
+            let sound = if item == "water_bucket" { "minecraft:item.bucket.empty" } else { "minecraft:item.bucket.empty_lava" };
+            self.audio.play(sound, Some(at(target)), 1.0, 1.0);
+            if !self.creative {
+                self.inventory[self.selected] = Some(ItemStack { item: Arc::from("minecraft:bucket"), count: 1, damage: 0 });
+            }
+            return Ok(true);
+        }
+        if item.ends_with("_hoe") && hit.face != [0, -1, 0] && above_air {
+            // HoeItem.TILLABLES
+            let result = match name.as_str() {
+                "grass_block" | "dirt_path" | "dirt" => Some("minecraft:farmland"),
+                "coarse_dirt" | "rooted_dirt" => Some("minecraft:dirt"),
+                _ => None,
+            };
+            if let Some(result) = result {
+                self.set_state_named(hit.pos, result, &[])?;
+                if name == "rooted_dirt" {
+                    self.pop_resource([hit.pos[0], hit.pos[1] - 1, hit.pos[2]], ItemStack { item: Arc::from("minecraft:hanging_roots"), count: 1, damage: 0 });
+                }
+                self.audio.play("minecraft:item.hoe.till", Some(at(hit.pos)), 1.0, 1.0);
+                self.damage_held(1);
+                return Ok(true);
+            }
+        }
+        if item.ends_with("_shovel") && hit.face != [0, -1, 0] && above_air
+            && matches!(name.as_str(), "grass_block" | "dirt" | "podzol" | "coarse_dirt" | "mycelium" | "rooted_dirt")
+        {
+            // ShovelItem.FLATTENABLES
+            self.set_state_named(hit.pos, "minecraft:dirt_path", &[])?;
+            self.audio.play("minecraft:item.shovel.flatten", Some(at(hit.pos)), 1.0, 1.0);
+            self.damage_held(1);
+            return Ok(true);
+        }
+        if item.ends_with("_axe") && !name.starts_with("stripped_") {
+            // AxeItem.STRIPPABLES
+            let strippable = name.ends_with("_log") || name.ends_with("_wood") || name.ends_with("_stem") || name.ends_with("_hyphae") || name == "bamboo_block";
+            let stripped = format!("minecraft:stripped_{name}");
+            if strippable && self.res.assets.registry.default_state(&stripped).is_some() {
+                self.set_state_named(hit.pos, &stripped, &["axis"])?;
+                self.audio.play("minecraft:item.axe.strip", Some(at(hit.pos)), 1.0, 1.0);
+                self.damage_held(1);
+                return Ok(true);
+            }
+        }
+        if item == "flint_and_steel" || item == "fire_charge" {
+            let target = [hit.pos[0] + hit.face[0], hit.pos[1] + hit.face[1], hit.pos[2] + hit.face[2]];
+            if self.res.facts.is_air(self.world.block(target[0], target[1], target[2])) {
+                self.set_state_named(target, "minecraft:fire", &[])?;
+                let sound = if item == "fire_charge" { "minecraft:item.firecharge.use" } else { "minecraft:item.flintandsteel.use" };
+                self.audio.play(sound, Some(at(target)), 1.0, self.world.random.next_float() * 0.4 + 0.8);
+                if item == "fire_charge" {
+                    self.consume_held();
+                } else {
+                    self.damage_held(1);
+                }
+                return Ok(true);
+            }
+        }
+        // Equippable items swap into their armor slot (Equippable.swapWithEquipmentSlot).
+        if let Some(slot) = self.res.items.get(&stack.item).and_then(|i| i.equip_slot.clone()) {
+            let index = match slot.as_str() {
+                "head" => 0,
+                "chest" => 1,
+                "legs" => 2,
+                "feet" => 3,
+                _ => return Ok(false),
+            };
+            let held = self.inventory[self.selected].take();
+            self.inventory[self.selected] = self.armor[index].take();
+            self.armor[index] = held;
+            if let Some(eye) = self.eye_position() {
+                self.audio.play("minecraft:item.armor.equip_generic", Some(eye), 1.0, 1.0);
+            }
+            self.apply_equipment();
+            return Ok(true);
+        }
+        Ok(false)
+    }
     fn save_game(&mut self) -> Result<()> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys
@@ -2478,6 +2746,12 @@ impl Game<'_> {
             .enumerate()
             .filter_map(|(i, s)| s.as_ref().map(|s| (i as u8, s.item.to_string(), s.count, s.damage)))
             .collect();
+        // Vanilla stores armor in slots 100 (feet) to 103 (head).
+        for (i, s) in self.armor.iter().enumerate() {
+            if let Some(s) = s {
+                level.inventory.push((103 - i as u8, s.item.to_string(), s.count, s.damage));
+            }
+        }
         level.write(&self.save.root)?;
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())
@@ -3022,6 +3296,8 @@ pub fn run() -> Result<()> {
         chest_open: HashMap::new(),
         using: None,
         title: None,
+        armor: [None, None, None, None],
+        applied_modifiers: Vec::new(),
     };
     match game.options.world.clone() {
         Some(folder) => {
