@@ -43,7 +43,7 @@ fn rains_at(world: &World, biomes: &Biomes, x: i32, y: i32, z: i32) -> bool {
 }
 
 impl Game<'_> {
-    fn forward(&self) -> [f64; 3] {
+    pub(super) fn forward(&self) -> [f64; 3] {
         let (yaw, pitch) = (
             f64::from(self.yaw).to_radians(),
             f64::from(self.pitch).to_radians(),

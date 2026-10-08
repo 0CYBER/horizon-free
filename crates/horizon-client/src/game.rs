@@ -8,6 +8,7 @@ mod creatures;
 mod enchant_effects;
 mod end;
 mod explosion;
+mod fov;
 mod growth;
 mod machines;
 mod music;
@@ -462,6 +463,12 @@ struct Game<'a> {
     chest_open: HashMap<(i32, i32, i32), (f32, f32)>,
     /// Item being used (eaten): hotbar slot and ticks used.
     using: Option<(usize, u32)>,
+    /// Camera.oldFovModifier / fovModifier.
+    fov_modifier: [f32; 2],
+    /// Hud.scopeScale (spyglass overlay size).
+    scope_scale: f32,
+    /// Duration of the last frame in ticks (GUI easing).
+    frame_ticks: f32,
     title: Option<Title>,
     /// Armor slots: head, chest, legs, feet.
     armor: [Option<ItemStack>; 4],
@@ -1421,6 +1428,10 @@ impl Game<'_> {
         if self.use_potion_item(&stack)? || self.throw_item(&stack)? {
             return Ok(());
         }
+        if &*stack.item == "minecraft:spyglass" {
+            self.use_spyglass();
+            return Ok(());
+        }
         if &*stack.item == "minecraft:bow" {
             if self.using.is_none() {
                 self.using = Some((self.selected, 0));
@@ -1527,6 +1538,9 @@ impl Game<'_> {
             if &*stack.item == "minecraft:bow" && slot == self.selected {
                 self.release_bow(ticks);
             }
+            if &*stack.item == "minecraft:spyglass" {
+                self.stop_spyglass();
+            }
             self.using = None;
             return;
         }
@@ -1539,6 +1553,16 @@ impl Game<'_> {
         }
         if &*stack.item == "minecraft:bow" {
             self.using = Some((slot, ticks + 1));
+            return;
+        }
+        if &*stack.item == "minecraft:spyglass" {
+            // SpyglassItem.USE_DURATION, then finishUsingItem.
+            if ticks + 1 >= 1200 {
+                self.stop_spyglass();
+                self.using = None;
+            } else {
+                self.using = Some((slot, ticks + 1));
+            }
             return;
         }
         let duration = 32;
@@ -2058,6 +2082,20 @@ impl Game<'_> {
                     if o.get("type").and_then(|t| t.as_str()) == Some("minecraft:model") {
                         return o.get("model").and_then(|m| m.as_str()).map(str::to_owned);
                     }
+                    // A display_context select: the inventory shows the `gui` case.
+                    if o.get("property").and_then(|t| t.as_str())
+                        == Some("minecraft:display_context")
+                        && let Some(case) =
+                            o.get("cases").and_then(|c| c.as_array()).and_then(|cases| {
+                                cases.iter().find(|c| match &c["when"] {
+                                    serde_json::Value::String(w) => w == "gui",
+                                    serde_json::Value::Array(ws) => ws.iter().any(|w| w == "gui"),
+                                    _ => false,
+                                })
+                            })
+                    {
+                        return first_model(&case["model"]);
+                    }
                     for key in [
                         "model", "fallback", "on_false", "on_true", "cases", "entries", "tints",
                     ] {
@@ -2282,6 +2320,7 @@ impl Game<'_> {
             batch.text(atlas, text, (w - tw) / 2.0, h / 2.0 - 4.0, u32::MAX, true);
             return batch;
         }
+        self.draw_spyglass(&mut batch);
         {
             let atlas = &self.res.atlas;
             // Crosshair.
@@ -5985,7 +6024,7 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
-        let hand = if title || self.screen == Screen::Inventory {
+        let hand = if title || self.screen == Screen::Inventory || self.scoping() {
             Vec::new()
         } else {
             self.hand_geometry(alpha)
@@ -6021,7 +6060,11 @@ impl Game<'_> {
             camera,
             yaw,
             pitch,
-            fov_degrees: if title { 85.0 } else { self.settings.fov },
+            fov_degrees: if title {
+                85.0
+            } else {
+                self.fov_degrees(alpha as f32, camera.to_array())
+            },
             bob: (self.settings.view_bobbing && !title && self.player.is_some()).then(|| {
                 let a = alpha as f32;
                 (
@@ -6517,6 +6560,7 @@ impl ApplicationHandler for Game<'_> {
                 WindowEvent::RedrawRequested => {
                     let now = Instant::now();
                     let elapsed = now.duration_since(self.previous);
+                    self.frame_ticks = elapsed.as_secs_f32() * 20.0;
                     self.previous = now;
                     // Arrow keys turn the camera (accessibility / scripted testing).
                     let turn = |k| f32::from(u8::from(self.keys.contains(&k)));
@@ -6535,6 +6579,7 @@ impl ApplicationHandler for Game<'_> {
                         if self.title.is_none() {
                             self.tick()?;
                             self.tick_ambience();
+                            self.tick_fov();
                         }
                         self.tick_music();
                     }
@@ -6592,7 +6637,8 @@ impl ApplicationHandler for Game<'_> {
         {
             // MouseHandler.turnPlayer at default sensitivity 0.5: 0.15 degrees per count.
             let s = f64::from(self.settings.sensitivity) * 0.6 + 0.2;
-            let f = s * s * s * 8.0;
+            // Scoping drops MouseHandler's 8x factor.
+            let f = s * s * s * if self.scoping() { 1.0 } else { 8.0 };
             self.yaw += (x * f * 0.15) as f32;
             self.pitch = (self.pitch + (y * f * 0.15) as f32).clamp(-90.0, 90.0);
         }
@@ -6819,6 +6865,9 @@ pub fn run() -> Result<()> {
         last_hurt_by_player: HashSet::new(),
         chest_open: HashMap::new(),
         using: None,
+        fov_modifier: [1.0, 1.0],
+        scope_scale: 0.5,
+        frame_ticks: 0.0,
         title: None,
         armor: [None, None, None, None],
         applied_modifiers: Vec::new(),
