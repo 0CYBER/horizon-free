@@ -17,6 +17,7 @@ pub mod creative;
 pub mod collisions;
 pub mod entities;
 pub mod environment;
+pub mod fog;
 pub mod gfx;
 pub mod health;
 pub mod hud;

@@ -280,6 +280,7 @@ pub struct Resources {
     providers: Providers,
     block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer,
     animate: horizon_client::animate_tick::AnimateTables,
+    fog: horizon_client::fog::FogRenderer,
     nether_environment: Environment,
     behaviours: Behaviours,
     names: Names,
@@ -2791,7 +2792,8 @@ impl Game<'_> {
                 let (x1, z1, y0, y1) = (x0 + 12.0, z0 + 12.0, bottom, bottom + 4.0);
                 let mut quad = |p: [[f32; 3]; 4], shade: f32| {
                     for v in p {
-                        out.push(Vertex { pos: v, uv, layer: 2, color: color(shade), light });
+                        // Overlay 4: clouds (unlit, faded by the cloud fog end).
+                        out.push(Vertex { pos: v, uv, layer: 4, color: color(shade), light });
                     }
                 };
                 quad([[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]], 1.0);
@@ -4161,6 +4163,8 @@ impl Game<'_> {
             // The camera inside an opaque block sees nothing through it: disable.
             cave_culling: !self.res.facts.get(self.world.block(block[0], block[1], block[2])).solid_render,
             water_fog,
+            fog: Some(self.frame_fog(camera, &sky, biome)),
+            dark_disc: self.dark_disc(camera),
             outline,
             hud: &hud,
             entities: &entities,
@@ -4643,6 +4647,7 @@ pub fn run() -> Result<()> {
     let world = World::new(facts.air, 0);
     let creative = options.creative;
     let animate = horizon_client::animate_tick::AnimateTables::load(&root, registry_owner.registry, &biomes)?;
+    let fog = horizon_client::fog::FogRenderer::load(&root, &biomes);
     let mut resources = Resources {
         assets,
         facts,
@@ -4656,6 +4661,7 @@ pub fn run() -> Result<()> {
         providers: Providers::load(&root),
         block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(&root, &registry_owner.registry)?,
         animate,
+        fog,
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         behaviours: Behaviours::load(registry_owner.registry, &root)?,
         names: Names::load(&root),

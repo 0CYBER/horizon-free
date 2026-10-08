@@ -24,6 +24,8 @@ struct Globals {
     inverse_view: [[f32; 4]; 4],
     sunrise: [f32; 4],
     sun: [f32; 4],
+    /// x: sky fog end, y: cloud fog end, z: dark disc (camera below the horizon), w: unused.
+    fog_ends: [f32; 4],
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
@@ -52,6 +54,10 @@ pub struct Frame<'a> {
     /// Environmental fog start/end (Nether 10..96), if any.
     pub environment_fog: Option<(f32, f32)>,
     pub water_fog: [f32; 3],
+    /// `FogRenderer.setupFog` result; replaces the underwater/environment fields when set.
+    pub fog: Option<crate::fog::FogData>,
+    /// Camera eye below the horizon height and not under water (`shouldRenderDarkDisc`).
+    pub dark_disc: bool,
     pub outline: Option<[f64; 6]>,
     pub hud: &'a HudBatch,
     /// Camera-relative entity geometry textured from the shared atlas.
@@ -73,6 +79,7 @@ pub struct Renderer {
     solid: wgpu::RenderPipeline,
     translucent: wgpu::RenderPipeline,
     sky: wgpu::RenderPipeline,
+    dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     entity_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
@@ -356,6 +363,7 @@ impl Renderer {
             Some(alpha_blend),
         );
         let sky = pipeline("Sky", "vs_sky", "fs_sky", &[], tri, None, false, false, None);
+        let dark_disc = pipeline("Dark disc", "vs_sky", "fs_dark_disc", &[], tri, None, false, false, Some(alpha_blend));
         let lines = pipeline(
             "Block outline",
             "vs_line",
@@ -668,6 +676,7 @@ impl Renderer {
             solid,
             translucent,
             sky,
+            dark_disc,
             lines,
             entity_pipeline,
             celestial_pipeline,
@@ -975,7 +984,9 @@ impl Renderer {
         let sun_angle = frame.sky.sun_angle.to_radians();
         // Celestial bodies rotate around the X axis; angle 0 = noon.
         let sun = Vec3::new(0.0, sun_angle.cos(), -sun_angle.sin());
-        let (fog_color, fog) = if frame.underwater {
+        let (fog_color, fog) = if let Some(f) = frame.fog {
+            (f.color, [f.environmental_start, f.environmental_end, f.render_distance_start, f.render_distance_end])
+        } else if frame.underwater {
             (
                 [frame.water_fog[0], frame.water_fog[1], frame.water_fog[2], 1.0],
                 [-8.0, 96.0, -8.0, 96.0],
@@ -1005,6 +1016,12 @@ impl Renderer {
             inverse_view: view.inverse().to_cols_array_2d(),
             sunrise: frame.sky.sunrise_color,
             sun: [sun.x, sun.y, sun.z, frame.sky.star_brightness],
+            fog_ends: [
+                frame.fog.map_or(frame.distance.min(512.0), |f| f.sky_end),
+                frame.fog.map_or(2048.0, |f| f.cloud_end),
+                if frame.dark_disc { 1.0 } else { 0.0 },
+                0.0,
+            ],
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -1175,7 +1192,12 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group, &[]);
-            if !frame.underwater && frame.skybox {
+            // LevelRenderer: no sky inside lava or powder snow (sky fog ends within 2 blocks).
+            let sky_visible = match frame.fog {
+                Some(f) => f.sky_end > 2.0,
+                None => !frame.underwater,
+            };
+            if sky_visible && frame.skybox {
                 if !frame.title {
                     pass.set_pipeline(&self.sky);
                     pass.draw(0..3, 0..1);
@@ -1187,6 +1209,10 @@ impl Renderer {
                     pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
                     pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
                     pass.set_bind_group(0, &self.group, &[]);
+                }
+                if !frame.title && frame.dark_disc {
+                    pass.set_pipeline(&self.dark_disc);
+                    pass.draw(0..3, 0..1);
                 }
             }
             if frame.title {

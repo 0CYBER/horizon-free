@@ -1,6 +1,7 @@
 //! Per-tick client visuals: the particle engine, `ClientLevel.animateTick`,
 //! campfire smoke and rain splashes (`ClientLevel.tickWeatherEffects`).
 use super::{Dim, Game};
+use horizon_client::fog::{FogData, FogInputs, FogType, fog_type, update_rain_fog};
 use horizon_client::{
     animate_tick::{AnimateContext, animate_tick, campfire_particles},
     biome::Biomes,
@@ -41,8 +42,94 @@ fn rains_at(world: &World, biomes: &Biomes, x: i32, y: i32, z: i32) -> bool {
 }
 
 impl Game<'_> {
+    fn forward(&self) -> [f64; 3] {
+        let (yaw, pitch) = (
+            f64::from(self.yaw).to_radians(),
+            f64::from(self.pitch).to_radians(),
+        );
+        [
+            -yaw.sin() * pitch.cos(),
+            -pitch.sin(),
+            yaw.cos() * pitch.cos(),
+        ]
+    }
+    /// `FogRenderer.setupFog` for the frame's camera.
+    pub(super) fn frame_fog(
+        &self,
+        camera: glam::DVec3,
+        sky: &horizon_client::environment::Sky,
+        biome: u16,
+    ) -> FogData {
+        let forward = self.forward();
+        let at = [camera.x, camera.y, camera.z];
+        let fog_type = fog_type(&self.world, &self.res.facts, at, forward);
+        let water = self.res.biomes.get(biome).water_fog;
+        let (rain, thunder) = if self.dim == Dim::Overworld {
+            self.world.weather.levels(self.clock.fraction() as f32)
+        } else {
+            (0.0, 0.0)
+        };
+        self.res.fog.setup(&FogInputs {
+            fog_type,
+            sky,
+            water_fog_color: [
+                (water >> 16 & 255) as f32 / 255.0,
+                (water >> 8 & 255) as f32 / 255.0,
+                (water & 255) as f32 / 255.0,
+            ],
+            biome,
+            render_distance_chunks: self.streaming.radius,
+            camera_y: camera.y,
+            min_y: MIN_Y,
+            flat: false,
+            forward: forward.map(|c| c as f32),
+            rain,
+            thunder,
+            skybox: self.dim == Dim::Overworld,
+            blindness: None,
+        })
+    }
+    /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon (y 63) and not under water.
+    pub(super) fn dark_disc(&self, camera: glam::DVec3) -> bool {
+        camera.y < 63.0
+            && fog_type(
+                &self.world,
+                &self.res.facts,
+                [camera.x, camera.y, camera.z],
+                self.forward(),
+            ) != FogType::Water
+    }
     pub(super) fn tick_particles(&mut self) {
         let eye = self.eye_position();
+        if let Some(e) = eye {
+            // LocalPlayer water vision and AtmosphericFogEnvironment rain fog.
+            let in_water =
+                fog_type(&self.world, &self.res.facts, e, self.forward()) == FogType::Water;
+            self.res.fog.state.tick(in_water);
+            let b = [
+                e[0].floor() as i32,
+                e[1].floor() as i32,
+                e[2].floor() as i32,
+            ];
+            let rain = if self.dim == Dim::Overworld {
+                self.world.weather.levels(1.0).0
+            } else {
+                0.0
+            };
+            let biome = self
+                .world
+                .chunks
+                .get(&(b[0] >> 4, b[2] >> 4))
+                .map_or(0, |c| c.biome(b[0], b[1], b[2]));
+            let rains = self.res.biomes.get(biome).precipitation;
+            update_rain_fog(
+                &mut self.res.fog.state,
+                rain,
+                self.world.light(b[0], b[1], b[2]) >> 4,
+                rains,
+                1.0,
+            );
+        }
         if let Some(e) = eye {
             self.particles.camera = e;
         }
