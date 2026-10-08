@@ -1,0 +1,275 @@
+//! Connection encryption (Crypt.getCipher: AES/CFB8/NoPadding with the shared
+//! secret as key and IV) and MD5 name-based UUIDs for offline-mode profiles
+//! (UUIDUtil.createOfflinePlayerUUID). Only the AES forward cipher is needed:
+//! CFB8 encrypts the shift register in both directions.
+
+const SBOX: [u8; 256] = {
+    // Generated from the AES field inverse and affine transform at compile time.
+    let mut sbox = [0u8; 256];
+    let mut p: u8 = 1;
+    let mut q: u8 = 1;
+    loop {
+        // p *= 3
+        p = p ^ (p << 1) ^ if p & 0x80 != 0 { 0x1B } else { 0 };
+        // q /= 3
+        q ^= q << 1;
+        q ^= q << 2;
+        q ^= q << 4;
+        if q & 0x80 != 0 {
+            q ^= 0x09;
+        }
+        let x = q ^ q.rotate_left(1) ^ q.rotate_left(2) ^ q.rotate_left(3) ^ q.rotate_left(4);
+        sbox[p as usize] = x ^ 0x63;
+        if p == 1 {
+            break;
+        }
+    }
+    sbox[0] = 0x63;
+    sbox
+};
+
+fn xtime(b: u8) -> u8 {
+    (b << 1) ^ if b & 0x80 != 0 { 0x1B } else { 0 }
+}
+
+/// AES-128 block encryption (FIPS-197).
+#[derive(Clone)]
+pub struct Aes128 {
+    round_keys: [[u8; 16]; 11],
+}
+impl Aes128 {
+    pub fn new(key: &[u8; 16]) -> Self {
+        let mut w = [[0u8; 4]; 44];
+        for i in 0..4 {
+            w[i].copy_from_slice(&key[i * 4..i * 4 + 4]);
+        }
+        let mut rcon = 1u8;
+        for i in 4..44 {
+            let mut t = w[i - 1];
+            if i % 4 == 0 {
+                t = [
+                    SBOX[t[1] as usize] ^ rcon,
+                    SBOX[t[2] as usize],
+                    SBOX[t[3] as usize],
+                    SBOX[t[0] as usize],
+                ];
+                rcon = xtime(rcon);
+            }
+            for j in 0..4 {
+                w[i][j] = w[i - 4][j] ^ t[j];
+            }
+        }
+        let mut round_keys = [[0u8; 16]; 11];
+        for (r, key) in round_keys.iter_mut().enumerate() {
+            for c in 0..4 {
+                key[c * 4..c * 4 + 4].copy_from_slice(&w[r * 4 + c]);
+            }
+        }
+        Self { round_keys }
+    }
+    pub fn encrypt_block(&self, block: &mut [u8; 16]) {
+        let add = |s: &mut [u8; 16], k: &[u8; 16]| s.iter_mut().zip(k).for_each(|(a, b)| *a ^= b);
+        add(block, &self.round_keys[0]);
+        for round in 1..=10 {
+            for b in block.iter_mut() {
+                *b = SBOX[*b as usize];
+            }
+            // ShiftRows (column-major state: byte r + 4c).
+            let s = *block;
+            for c in 0..4 {
+                for r in 0..4 {
+                    block[r + 4 * c] = s[r + 4 * ((c + r) % 4)];
+                }
+            }
+            if round != 10 {
+                for c in 0..4 {
+                    let col = [
+                        block[4 * c],
+                        block[4 * c + 1],
+                        block[4 * c + 2],
+                        block[4 * c + 3],
+                    ];
+                    let all = col[0] ^ col[1] ^ col[2] ^ col[3];
+                    for r in 0..4 {
+                        block[4 * c + r] = col[r] ^ all ^ xtime(col[r] ^ col[(r + 1) % 4]);
+                    }
+                }
+            }
+            add(block, &self.round_keys[round]);
+        }
+    }
+}
+
+/// AES/CFB8 stream state for one direction of a connection.
+#[derive(Clone)]
+pub struct Cfb8 {
+    aes: Aes128,
+    register: [u8; 16],
+}
+impl Cfb8 {
+    /// Minecraft uses the 16-byte shared secret as both key and IV.
+    pub fn new(key: &[u8; 16], iv: &[u8; 16]) -> Self {
+        Self {
+            aes: Aes128::new(key),
+            register: *iv,
+        }
+    }
+    fn keystream(&self) -> u8 {
+        let mut block = self.register;
+        self.aes.encrypt_block(&mut block);
+        block[0]
+    }
+    fn shift(&mut self, cipher_byte: u8) {
+        self.register.copy_within(1.., 0);
+        self.register[15] = cipher_byte;
+    }
+    pub fn encrypt(&mut self, data: &mut [u8]) {
+        for b in data {
+            *b ^= self.keystream();
+            self.shift(*b);
+        }
+    }
+    pub fn decrypt(&mut self, data: &mut [u8]) {
+        for b in data {
+            let c = *b;
+            *b ^= self.keystream();
+            self.shift(c);
+        }
+    }
+}
+
+/// MD5 (RFC 1321).
+pub fn md5(input: &[u8]) -> [u8; 16] {
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    let k: Vec<u32> = (0..64)
+        .map(|i| ((i as f64 + 1.0).sin().abs() * 4_294_967_296.0) as u32)
+        .collect();
+    let (mut a0, mut b0, mut c0, mut d0) = (
+        0x6745_2301u32,
+        0xefcd_ab89u32,
+        0x98ba_dcfeu32,
+        0x1032_5476u32,
+    );
+    let mut msg = input.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&((input.len() as u64).wrapping_mul(8)).to_le_bytes());
+    for chunk in msg.chunks(64) {
+        let m: Vec<u32> = chunk
+            .chunks(4)
+            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .collect();
+        let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
+        for i in 0..64 {
+            let (f, g) = match i / 16 {
+                0 => ((b & c) | (!b & d), i),
+                1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
+                2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                _ => (c ^ (b | !d), (7 * i) % 16),
+            };
+            let f = f.wrapping_add(a).wrapping_add(k[i]).wrapping_add(m[g]);
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(f.rotate_left(S[i]));
+        }
+        a0 = a0.wrapping_add(a);
+        b0 = b0.wrapping_add(b);
+        c0 = c0.wrapping_add(c);
+        d0 = d0.wrapping_add(d);
+    }
+    let mut out = [0u8; 16];
+    for (i, v) in [a0, b0, c0, d0].iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// UUID.nameUUIDFromBytes("OfflinePlayer:" + name): MD5, version 3, IETF variant.
+pub fn offline_uuid(name: &str) -> u128 {
+    let mut h = md5(format!("OfflinePlayer:{name}").as_bytes());
+    h[6] = (h[6] & 0x0f) | 0x30;
+    h[8] = (h[8] & 0x3f) | 0x80;
+    u128::from_be_bytes(h)
+}
+/// The canonical 8-4-4-4-12 form.
+pub fn uuid_string(u: u128) -> String {
+    let h = format!("{u:032x}");
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..]
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn sbox_spot_checks() {
+        assert_eq!(SBOX[0x00], 0x63);
+        assert_eq!(SBOX[0x01], 0x7c);
+        assert_eq!(SBOX[0x53], 0xed);
+        assert_eq!(SBOX[0xff], 0x16);
+    }
+
+    #[test]
+    fn aes128_fips197_vector() {
+        let key: [u8; 16] = hex("000102030405060708090a0b0c0d0e0f").try_into().unwrap();
+        let mut block: [u8; 16] = hex("00112233445566778899aabbccddeeff").try_into().unwrap();
+        Aes128::new(&key).encrypt_block(&mut block);
+        assert_eq!(block.to_vec(), hex("69c4e0d86a7b0430d8cdb78070b4c55a"));
+    }
+
+    #[test]
+    fn cfb8_nist_sp800_38a_vector() {
+        let key: [u8; 16] = hex("2b7e151628aed2a6abf7158809cf4f3c").try_into().unwrap();
+        let iv: [u8; 16] = hex("000102030405060708090a0b0c0d0e0f").try_into().unwrap();
+        let plain = hex("6bc1bee22e409f96e93d7e117393172aae2d");
+        let expected = hex("3b79424c9c0dd436bace9e0ed4586a4f32b9");
+        let mut data = plain.clone();
+        // Split across calls: the stream state carries over.
+        let mut enc = Cfb8::new(&key, &iv);
+        let (a, b) = data.split_at_mut(5);
+        enc.encrypt(a);
+        enc.encrypt(b);
+        assert_eq!(data, expected);
+        let mut dec = Cfb8::new(&key, &iv);
+        dec.decrypt(&mut data);
+        assert_eq!(data, plain);
+    }
+
+    #[test]
+    fn md5_and_offline_uuids() {
+        assert_eq!(md5(b"").to_vec(), hex("d41d8cd98f00b204e9800998ecf8427e"));
+        assert_eq!(
+            md5(b"abc").to_vec(),
+            hex("900150983cd24fb0d6963f7d28e17f72")
+        );
+        assert_eq!(
+            md5(&[b'a'; 100]).to_vec(),
+            hex("36a92cc94a9e0fa21f625f8bfb007adf")
+        );
+        assert_eq!(
+            uuid_string(offline_uuid("Notch")),
+            "b50ad385-829d-3141-a216-7e7d7539ba7f"
+        );
+    }
+}

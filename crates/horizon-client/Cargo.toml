@@ -11,6 +11,7 @@ description = "Horizon native development client"
 horizon-assets = { path = "../horizon-assets" }
 horizon-core = { path = "../horizon-core" }
 horizon-world = { path = "../horizon-world" }
+horizon-protocol = { path = "../horizon-protocol" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl"] }
 winit = "0.30.13"
 pollster = "0.4"

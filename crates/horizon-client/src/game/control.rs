@@ -27,6 +27,10 @@ const HELP: &[&str] = &[
     "bench SECONDS                  reset stats, wait, then reply with the summary",
     "open WORLD [SEED] [creative]   open or create a world from the title screen",
     "save                           save the world",
+    "connect HOST[:PORT] [NAME]     join a multiplayer server (offline mode) from the title screen",
+    "chat MESSAGE                   send chat or a /command to the server",
+    "disconnect                     leave the server for the server list",
+    "respawn                        respawn after death on a server",
     "quit                           save and exit",
 ];
 
@@ -245,6 +249,36 @@ impl Game<'_> {
                 self.open_world(folder, Some(folder), seed, creative)?;
                 ok()
             }
+            "connect" => {
+                if self.title.is_none() {
+                    return Err("leave the current world first".into());
+                }
+                let name = words.get(2).map_or_else(|| self.options.player_name.clone(), |n| (*n).to_owned());
+                self.connect_server(arg(1)?, &name)?;
+                ok()
+            }
+            "chat" => {
+                if self.remote.is_none() {
+                    return Err("not connected to a server".into());
+                }
+                let message = line.trim_start().strip_prefix("chat").unwrap_or("").trim();
+                self.send_chat(message);
+                ok()
+            }
+            "respawn" => {
+                if self.remote.is_none() || self.screen != Screen::Dead {
+                    return Err("respawn needs the death screen on a server".into());
+                }
+                self.remote_respawn();
+                ok()
+            }
+            "disconnect" => {
+                if self.remote.is_none() {
+                    return Err("not connected to a server".into());
+                }
+                self.leave_server(None)?;
+                ok()
+            }
             "save" => {
                 self.require_world()?;
                 self.save_game()?;
@@ -338,6 +372,7 @@ impl Game<'_> {
             "meshed_sections": self.streaming.meshed_total,
             "renderer": renderer,
             "uptime_seconds": self.started.elapsed().as_secs_f64(),
+            "server": self.remote_status(),
         })
     }
 }

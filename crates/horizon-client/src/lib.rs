@@ -33,6 +33,8 @@ pub mod mesher;
 pub mod mobs;
 pub mod models;
 pub mod motion;
+pub mod multiplayer;
+pub mod net;
 pub mod particles;
 pub mod pose;
 pub mod save;

@@ -14,6 +14,7 @@ mod explosion;
 mod growth;
 mod machines;
 mod tnt;
+mod remote;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -90,6 +91,9 @@ struct Options {
     no_pause: bool,
     /// Control socket path (`--control`), for `horizon-ctl`.
     control: Option<PathBuf>,
+    /// Multiplayer: `--server HOST[:PORT]` joins at start; `--name` is the offline player name.
+    server: Option<String>,
+    player_name: String,
 }
 impl Options {
     fn read() -> Result<Option<Self>> {
@@ -119,13 +123,15 @@ impl Options {
             dimension: None,
             no_pause: false,
             control: None,
+            server: None,
+            player_name: std::env::var("HORIZON_PLAYER_NAME").unwrap_or_else(|_| "Player".into()),
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (tools/prepare_native_client.py)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
+                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (tools/prepare_native_client.py)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default Player)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
                     );
                     return Ok(None);
                 }
@@ -158,6 +164,8 @@ impl Options {
                         "--smoke-report" => o.report = Some(value.into()),
                         "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
                         "--world" => o.world = Some(value),
+                        "--server" => o.server = Some(value),
+                        "--name" => o.player_name = value,
                         "--control-socket" => o.control = Some(value.into()),
                         "--time" => o.time = Some(value.parse()?),
                         "--weather" => o.weather = Some(value),
@@ -441,6 +449,8 @@ struct Game<'a> {
     pending_screenshot: Option<std::sync::mpsc::Sender<String>>,
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
     persist: persist::EntityMemory,
+    /// Connected to a server: the world comes from the network (game/remote.rs).
+    remote: Option<remote::Remote>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -1299,7 +1309,7 @@ impl Game<'_> {
         None
     }
     fn spawn_player(&mut self) -> Result<()> {
-        if self.player.is_some() {
+        if self.player.is_some() || self.remote.is_some() {
             return Ok(());
         }
         if let Some((_, target)) = &self.travelling {
@@ -1376,6 +1386,9 @@ impl Game<'_> {
         Ok(())
     }
     fn tick(&mut self) -> Result<()> {
+        if self.remote.is_some() {
+            return self.tick_remote();
+        }
         self.ticks += 1;
         self.world.game_time += 1;
         self.world.weather.tick(&mut self.world.random);
@@ -1674,6 +1687,9 @@ impl Game<'_> {
         }
         let atlas_ptr: *const HudAtlas = &self.res.atlas;
         let _ = atlas_ptr;
+        if self.remote_overlay(&mut batch) {
+            return batch;
+        }
         if self.player.is_none() {
             let text = if self.spawn_search > 0 { "Finding a place to spawn..." } else { "Loading terrain..." };
             let atlas = &self.res.atlas;
@@ -1824,6 +1840,7 @@ impl Game<'_> {
             }
             Screen::Playing | Screen::Options => {}
         }
+        self.remote_hud(&mut batch);
         batch
     }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
@@ -1999,6 +2016,9 @@ impl Game<'_> {
     }
     fn close_container(&mut self) {
         self.close_station();
+        if self.remote.is_some() {
+            return self.remote_close_container();
+        }
         let mut returned: Vec<ItemStack> = self.carried.take().into_iter().collect();
         returned.extend(self.craft_grid.iter_mut().filter_map(Option::take));
         for stack in returned {
@@ -2021,6 +2041,8 @@ impl Game<'_> {
     fn click_inventory(&mut self, right: bool) {
         if self.station_click(right) {
             return;
+        if self.remote.is_some() {
+            return self.remote_click(right);
         }
         let Some(size) = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]) else { return };
         let batch = HudBatch::new(size);
@@ -3267,6 +3289,9 @@ impl Game<'_> {
         Ok(())
     }
     fn close_world(&mut self) -> Result<()> {
+        if self.remote.is_some() {
+            return self.leave_server(None);
+        }
         self.save_game()?;
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
@@ -4165,6 +4190,9 @@ impl Game<'_> {
         }
     }
     fn save_game(&mut self) -> Result<()> {
+        if self.remote.is_some() {
+            return Ok(());
+        }
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys
             .iter()
@@ -4317,6 +4345,9 @@ impl Game<'_> {
     }
     /// A key press while a world is open (keyboard or control socket).
     fn key_pressed(&mut self, key: KeyCode) -> Result<()> {
+        if self.remote.is_some() && self.remote_key(key)? {
+            return Ok(());
+        }
         match key {
             KeyCode::Escape => match self.screen {
                 Screen::Options => {
@@ -4383,6 +4414,9 @@ impl Game<'_> {
     }
     /// A mouse button while playing (window or control socket).
     fn play_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
+        if self.remote.is_some() {
+            return self.remote_mouse(button, pressed);
+        }
         match button {
             MouseButton::Left => {
                 if pressed && self.attack() {
@@ -4414,6 +4448,9 @@ impl Game<'_> {
         Ok(())
     }
     fn update_world(&mut self) {
+        if let Err(e) = self.poll_remote() {
+            eprintln!("Horizon: {e}");
+        }
         if let Some(p) = &self.player {
             self.streaming.center = ((p.position.x.floor() as i32) >> 4, (p.position.z.floor() as i32) >> 4);
         }
@@ -4563,6 +4600,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                         Action::Play { folder } => self.open_world(&folder, None, None, false)?,
                         Action::Create { folder, name, seed, creative } => self.open_world(&folder, Some(&name), seed, creative)?,
+                        Action::Connect { address } => self.connect_server(&address, &self.options.player_name.clone())?,
                         Action::None => {}
                     }
                 }
@@ -4604,6 +4642,7 @@ impl ApplicationHandler for Game<'_> {
                                 }
                             }
                         }
+                        Screen::Dead if pressed && self.remote.is_some() => self.remote_respawn(),
                         Screen::Dead if pressed => {
                             self.respawn_out_of_end()?;
                             self.player = None;
@@ -4638,6 +4677,7 @@ impl ApplicationHandler for Game<'_> {
                     let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
                     self.station_text(event.text.as_deref(), backspace);
                 }
+                WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => self.remote_chat_key(&event),
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
                     if event.state == ElementState::Pressed
                         && let Some(title) = self.title.as_mut()
@@ -4936,6 +4976,7 @@ pub fn run() -> Result<()> {
         pending_screenshot: None,
         pending_bench: None,
         persist: Default::default(),
+        remote: None,
     };
     if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)
@@ -4944,6 +4985,10 @@ pub fn run() -> Result<()> {
         game.control = Some(server);
     }
     match game.options.world.clone() {
+        _ if game.options.server.is_some() => {
+            let (address, name) = (game.options.server.clone().unwrap_or_default(), game.options.player_name.clone());
+            game.connect_server(&address, &name)?;
+        }
         Some(folder) => {
             let (seed, creative) = (game.options.seed, game.options.creative);
             game.open_world(&folder, None, Some(seed), creative)?;

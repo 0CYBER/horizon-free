@@ -685,6 +685,7 @@ dependencies = [
  "glam",
  "horizon-assets",
  "horizon-core",
+ "horizon-protocol",
  "horizon-world",
  "png",
  "pollster",
@@ -697,6 +698,15 @@ dependencies = [
 [[package]]
 name = "horizon-core"
 version = "0.1.0"
+
+[[package]]
+name = "horizon-protocol"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "horizon-world",
+ "serde_json",
+]
 
 [[package]]
 name = "horizon-world"

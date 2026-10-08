@@ -18,6 +18,7 @@ pub enum Mode {
     Main,
     Select { worlds: Vec<WorldEntry>, selected: Option<usize> },
     Create { name: String, seed: String, creative: bool, focus: u8 },
+    Multiplayer(crate::multiplayer::Screen),
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -26,6 +27,7 @@ pub enum Action {
     Options,
     Play { folder: String },
     Create { folder: String, name: String, seed: Option<i64>, creative: bool },
+    Connect { address: String },
 }
 pub struct Title {
     pub mode: Mode,
@@ -79,7 +81,7 @@ impl Title {
                 let y = h / 4.0 + 48.0;
                 vec![
                     b(w / 2.0 - 100.0, y, 200.0, "Singleplayer", true, 1),
-                    b(w / 2.0 - 100.0, y + 24.0, 200.0, "Multiplayer", false, 0),
+                    b(w / 2.0 - 100.0, y + 24.0, 200.0, "Multiplayer", true, 4),
                     b(w / 2.0 - 100.0, y + 48.0, 200.0, "Minecraft Realms", false, 0),
                     b(w / 2.0 - 100.0, y + 84.0, 98.0, "Options...", true, 3),
                     b(w / 2.0 + 2.0, y + 84.0, 98.0, "Quit Game", true, 2),
@@ -95,6 +97,7 @@ impl Title {
                 b(w / 2.0 - 155.0, h - 28.0, 150.0, "Create New World", true, 21),
                 b(w / 2.0 + 5.0, h - 28.0, 150.0, "Cancel", true, 22),
             ],
+            Mode::Multiplayer(screen) => screen.buttons(w, h).into_iter().map(|(x, y, bw, label, enabled, id)| b(x, y, bw, &label, enabled, id)).collect(),
         }
     }
     pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, cursor: (f32, f32)) {
@@ -155,6 +158,7 @@ impl Title {
                     batch.text(atlas, &shown, w / 2.0 - 96.0, y + 17.0, rgba(224, 224, 224, 255), true);
                 }
             }
+            Mode::Multiplayer(screen) => screen.draw(atlas, batch, (self.started.elapsed().as_millis() / 300).is_multiple_of(2)),
         }
         for b in self.buttons(w, h) {
             let hover = b.enabled && cursor.0 >= b.x && cursor.0 < b.x + b.w && cursor.1 >= b.y && cursor.1 < b.y + 20.0;
@@ -193,6 +197,18 @@ impl Title {
                 Action::None
             }
             (Mode::Main, Some(2)) => Action::Quit,
+            (Mode::Main, Some(4)) => {
+                self.mode = Mode::Multiplayer(crate::multiplayer::Screen::list(&self.saves));
+                Action::None
+            }
+            (Mode::Multiplayer(screen), hit) => match screen.click(hit, x, y, (w, h), &self.saves) {
+                crate::multiplayer::Outcome::Back => {
+                    self.mode = Mode::Main;
+                    Action::None
+                }
+                crate::multiplayer::Outcome::Connect(address) => Action::Connect { address },
+                crate::multiplayer::Outcome::None => Action::None,
+            },
             (Mode::Main, Some(3)) => Action::Options,
             (Mode::Select { worlds, selected }, Some(10)) => match selected.and_then(|i| worlds.get(i)) {
                 Some(world) => Action::Play { folder: world.folder.clone() },
@@ -254,6 +270,9 @@ impl Title {
         }
     }
     pub fn type_text(&mut self, text: &str) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            screen.type_text(text);
+        }
         if let Mode::Create { name, seed, focus, .. } = &mut self.mode {
             let field = if *focus == 0 { name } else { seed };
             for c in text.chars().filter(|c| !c.is_control()) {
@@ -264,17 +283,28 @@ impl Title {
         }
     }
     pub fn backspace(&mut self) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            screen.backspace();
+        }
         if let Mode::Create { name, seed, focus, .. } = &mut self.mode {
             let field = if *focus == 0 { name } else { seed };
             field.pop();
         }
     }
     pub fn tab(&mut self) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            screen.tab();
+        }
         if let Mode::Create { focus, .. } = &mut self.mode {
             *focus = (*focus + 1) % 2;
         }
     }
     pub fn escape(&mut self) {
+        if let Mode::Multiplayer(screen) = &mut self.mode
+            && !screen.escape(&self.saves)
+        {
+            return;
+        }
         self.mode = match &self.mode {
             Mode::Create { .. } => Mode::Select { worlds: list_worlds(&self.saves), selected: None },
             _ => Mode::Main,
