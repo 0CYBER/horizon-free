@@ -30,6 +30,24 @@ struct Voice {
 #[derive(Default)]
 struct Mixer {
     voices: Vec<Voice>,
+    /// The streaming music track (`SoundSource.MUSIC`), kept apart from the
+    /// voice cap and scaled by `music_gain` (MusicManager's fade).
+    music: Option<Voice>,
+    music_gain: f32,
+    /// Tickable sound instances the game keeps a handle to (ambient loops).
+    tracked: Vec<Tracked>,
+}
+struct Tracked {
+    id: u64,
+    voice: Voice,
+    looping: bool,
+    volume: f32,
+}
+/// The current music track: decoding on a worker until the voice exists.
+struct MusicTrack {
+    event: String,
+    /// Set by the decoder thread once the voice is in the mixer (or failed).
+    ready: Arc<std::sync::atomic::AtomicBool>,
 }
 pub struct Audio {
     _stream: Option<cpal::Stream>,
@@ -42,6 +60,8 @@ pub struct Audio {
     pub listener: [f64; 3],
     pub listener_yaw: f32,
     pub master: f32,
+    music: Option<MusicTrack>,
+    next_tracked: u64,
 }
 fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
     use symphonia::core::{
@@ -111,7 +131,7 @@ impl Audio {
                 events.insert(format!("minecraft:{name}"), variants);
             }
         }
-        let mixer = Arc::new(Mutex::new(Mixer::default()));
+        let mixer = Arc::new(Mutex::new(Mixer { music_gain: 1.0, ..Mixer::default() }));
         let (stream, rate) = match Self::open(mixer.clone()) {
             Ok(v) => (Some(v.0), v.1),
             Err(e) => {
@@ -130,6 +150,8 @@ impl Audio {
             listener: [0.0; 3],
             listener_yaw: 0.0,
             master: 1.0,
+            music: None,
+            next_tracked: 0,
         }
     }
     fn open(mixer: Arc<Mutex<Mixer>>) -> Result<(cpal::Stream, u32)> {
@@ -156,6 +178,32 @@ impl Audio {
                         r += s * v.right;
                         v.position += v.step;
                     }
+                    for t in mixer.tracked.iter_mut() {
+                        let v = &mut t.voice;
+                        let mut i = v.position as usize;
+                        if t.looping && i + 1 >= v.samples.len() {
+                            v.position = 0.0;
+                            i = 0;
+                        }
+                        if i + 1 < v.samples.len() {
+                            let f = (v.position - i as f64) as f32;
+                            let s = (v.samples[i] * (1.0 - f) + v.samples[i + 1] * f) * t.volume;
+                            l += s * v.left;
+                            r += s * v.right;
+                            v.position += v.step;
+                        }
+                    }
+                    let gain = mixer.music_gain;
+                    if let Some(v) = mixer.music.as_mut() {
+                        let i = v.position as usize;
+                        if i + 1 < v.samples.len() {
+                            let t = (v.position - i as f64) as f32;
+                            let s = (v.samples[i] * (1.0 - t) + v.samples[i + 1] * t) * gain;
+                            l += s * v.left;
+                            r += s * v.right;
+                            v.position += v.step;
+                        }
+                    }
                     if channels >= 2 {
                         frame[0] = l.clamp(-1.0, 1.0);
                         frame[1] = r.clamp(-1.0, 1.0);
@@ -164,6 +212,10 @@ impl Audio {
                     }
                 }
                 mixer.voices.retain(|v| (v.position as usize) + 1 < v.samples.len());
+                mixer.tracked.retain(|t| t.looping || (t.voice.position as usize) + 1 < t.voice.samples.len());
+                if mixer.music.as_ref().is_some_and(|v| (v.position as usize) + 1 >= v.samples.len()) {
+                    mixer.music = None;
+                }
             },
             |e| eprintln!("Horizon: audio stream error: {e}"),
             None,
@@ -243,5 +295,111 @@ impl Audio {
                 right,
             });
         }
+    }
+    /// `SoundManager.play` of a music instance (`SimpleSoundInstance.forMusic`:
+    /// non-positional, streamed). Decoding runs on a worker thread; the track
+    /// counts as active from now on. Returns false when nothing can play.
+    pub fn play_music(&mut self, event: &str) -> bool {
+        self.stop_music();
+        if self._stream.is_none() {
+            return false;
+        }
+        let Some(variant) = self.resolve(event, 0) else { return false };
+        let path = self.root.join(format!("assets/minecraft/sounds/{}.ogg", variant.name.trim_start_matches("minecraft:")));
+        let volume = variant.volume.clamp(0.0, 1.0) * self.master * crate::settings::event_volume(event);
+        let step_scale = f64::from(variant.pitch.clamp(0.5, 2.0)) / f64::from(self.rate);
+        let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (mixer, done) = (self.mixer.clone(), ready.clone());
+        std::thread::spawn(move || {
+            if let Some((samples, rate)) = decode(&path)
+                && let Ok(mut m) = mixer.lock()
+                && !done.load(std::sync::atomic::Ordering::Acquire)
+            {
+                m.music = Some(Voice {
+                    samples: Arc::new(samples),
+                    position: 0.0,
+                    step: f64::from(rate) * step_scale,
+                    left: volume,
+                    right: volume,
+                });
+            }
+            done.store(true, std::sync::atomic::Ordering::Release);
+        });
+        self.music = Some(MusicTrack { event: event.to_owned(), ready });
+        true
+    }
+    /// `SoundManager.stop` of the music instance.
+    pub fn stop_music(&mut self) {
+        if let Some(track) = self.music.take() {
+            // A decoder still running sees the flag and drops its result.
+            track.ready.store(true, std::sync::atomic::Ordering::Release);
+        }
+        if let Ok(mut m) = self.mixer.lock() {
+            m.music = None;
+        }
+    }
+    /// `SoundManager.isActive`: decoding or still sounding.
+    pub fn music_active(&mut self) -> bool {
+        let Some(track) = &self.music else { return false };
+        if !track.ready.load(std::sync::atomic::Ordering::Acquire) {
+            return true;
+        }
+        let playing = self.mixer.lock().is_ok_and(|m| m.music.is_some());
+        if !playing {
+            self.music = None;
+        }
+        playing
+    }
+    /// The event of the current music track.
+    pub fn music_event(&self) -> Option<&str> {
+        self.music.as_ref().map(|t| t.event.as_str())
+    }
+    /// `SoundManager.updateCategoryVolume(MUSIC, gain)`.
+    pub fn set_music_gain(&mut self, gain: f32) {
+        if let Ok(mut m) = self.mixer.lock() {
+            m.music_gain = gain;
+        }
+    }
+    /// Play a relative (non-positional) tickable sound instance the caller
+    /// keeps a handle to: ambient loops (`looping`) and sub-sounds.
+    pub fn play_tracked(&mut self, event: &str, volume: f32, looping: bool) -> Option<u64> {
+        self._stream.as_ref()?;
+        let variant = self.resolve(event, 0)?;
+        let file = variant.name.trim_start_matches("minecraft:").to_owned();
+        let root = &self.root;
+        let (samples, rate) = self
+            .cache
+            .entry(file.clone())
+            .or_insert_with(|| decode(&root.join(format!("assets/minecraft/sounds/{file}.ogg"))).map(|(s, r)| (Arc::new(s), r)))
+            .clone()?;
+        let gain = variant.volume.clamp(0.0, 1.0) * self.master * crate::settings::event_volume(event);
+        let step = f64::from(rate) / f64::from(self.rate) * f64::from(variant.pitch.clamp(0.5, 2.0));
+        self.next_tracked += 1;
+        let id = self.next_tracked;
+        let mut m = self.mixer.lock().ok()?;
+        m.tracked.push(Tracked {
+            id,
+            voice: Voice { samples, position: 0.0, step, left: gain, right: gain },
+            looping,
+            volume: volume.clamp(0.0, 1.0),
+        });
+        Some(id)
+    }
+    /// A tracked instance's volume (`AbstractTickableSoundInstance.volume`).
+    pub fn set_tracked_volume(&mut self, id: u64, volume: f32) {
+        if let Ok(mut m) = self.mixer.lock()
+            && let Some(t) = m.tracked.iter_mut().find(|t| t.id == id)
+        {
+            t.volume = volume.clamp(0.0, 1.0);
+        }
+    }
+    pub fn stop_tracked(&mut self, id: u64) {
+        if let Ok(mut m) = self.mixer.lock() {
+            m.tracked.retain(|t| t.id != id);
+        }
+    }
+    /// Still sounding (a finished one-shot is gone).
+    pub fn tracked_active(&self, id: u64) -> bool {
+        self.mixer.lock().is_ok_and(|m| m.tracked.iter().any(|t| t.id == id))
     }
 }

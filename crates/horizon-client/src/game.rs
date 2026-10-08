@@ -24,6 +24,7 @@ mod creatures;
 mod render_control;
 mod render_tick;
 mod sign_edit;
+mod music;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -340,6 +341,8 @@ pub struct Resources {
     block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer,
     animate: horizon_client::animate_tick::AnimateTables,
     fog: horizon_client::fog::FogRenderer,
+    music: horizon_client::music::MusicTables,
+    ambient: horizon_client::ambience::AmbientTables,
     screen_fx: horizon_client::screen_effects::ScreenEffects,
     nether_environment: Environment,
     end_environment: Environment,
@@ -408,6 +411,8 @@ struct Game<'a> {
     save: Arc<SaveDir>,
     level: Level,
     audio: Audio,
+    music: horizon_client::music::MusicManager,
+    ambience: horizon_client::ambience::Ambience,
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: horizon_client::particles::ParticleEngine,
@@ -3019,6 +3024,7 @@ impl Game<'_> {
         Ok(())
     }
     fn close_world(&mut self) -> Result<()> {
+        self.ambience.clear(&mut self.audio);
         if self.remote.is_some() {
             return self.leave_server(None);
         }
@@ -4480,7 +4486,9 @@ impl ApplicationHandler for Game<'_> {
                     for _ in 0..steps {
                         if self.title.is_none() {
                             self.tick()?;
+                            self.tick_ambience();
                         }
+                        self.tick_music();
                     }
                     let rendered = self.render()?;
                     let finished = self.renderer.as_mut().and_then(|r| r.screenshot_result.take());
@@ -4633,6 +4641,8 @@ pub fn run() -> Result<()> {
         block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(&root, &registry_owner.registry)?,
         animate,
         fog,
+        music: horizon_client::music::MusicTables::load(&root),
+        ambient: horizon_client::ambience::AmbientTables::load(&root),
         screen_fx: Default::default(),
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         end_environment: Environment::load_dimension(&root, "the_end", false)?,
@@ -4708,6 +4718,8 @@ pub fn run() -> Result<()> {
         save,
         level,
         audio,
+        music: Default::default(),
+        ambience: Default::default(),
         dropped: Vec::new(),
         next_entity: 0,
         particles,

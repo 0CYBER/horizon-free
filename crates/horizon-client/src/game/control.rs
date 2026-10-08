@@ -458,6 +458,7 @@ impl Game<'_> {
             "frames": self.frames,
             "ticks": self.ticks,
             "day_time": self.world.day_time,
+            "music": self.music.current(),
             "render_distance": self.streaming.radius,
             "chunks": self.world.chunks.len(),
             "pending_chunks": self.streaming.pending(),

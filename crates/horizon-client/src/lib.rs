@@ -1,6 +1,7 @@
 //! Horizon native client: resources, world streaming, rendering and the
 //! bindings between the validated simulation pieces and the game loop.
 #![forbid(unsafe_code)]
+pub mod ambience;
 pub mod animate_tick;
 pub mod assets;
 pub mod attribute_updates;
@@ -39,6 +40,7 @@ pub mod landing;
 pub mod light;
 pub mod merchant;
 pub mod mesher;
+pub mod music;
 pub mod mobs;
 pub mod models;
 pub mod motion;
