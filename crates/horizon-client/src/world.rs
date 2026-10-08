@@ -18,6 +18,11 @@ pub struct World {
     pub dirty_sections: HashSet<(i32, i32, i32)>,
     /// Chunks whose light must be recomputed.
     pub dirty_light: HashSet<(i32, i32)>,
+    /// Edits on lit chunks (position, old state, new state), relit
+    /// incrementally by streaming.
+    pub light_edits: Vec<((i32, i32, i32), u16, u16)>,
+    /// Saved entities of chunks that just loaded, spawned by the game.
+    pub loaded_entities: Vec<((i32, i32), Vec<horizon_world::nbt::Tag>)>,
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
     pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
@@ -90,6 +95,8 @@ impl World {
             air,
             dirty_sections: HashSet::new(),
             dirty_light: HashSet::new(),
+            light_edits: Vec::new(),
+            loaded_entities: Vec::new(),
             modified: HashSet::new(),
             block_entities: HashMap::new(),
             game_time: 0,
@@ -125,9 +132,13 @@ impl World {
                 }
             }
             let _ = sy;
-            for dz in -1..=1 {
-                for dx in -1..=1 {
-                    self.dirty_light.insert(((x >> 4) + dx, (z >> 4) + dz));
+            if self.chunks.get(&(x >> 4, z >> 4)).is_some_and(|c| c.lit) {
+                self.light_edits.push(((x, y, z), previous, state.0 as u16));
+            } else {
+                for dz in -1..=1 {
+                    for dx in -1..=1 {
+                        self.dirty_light.insert(((x >> 4) + dx, (z >> 4) + dz));
+                    }
                 }
             }
         }

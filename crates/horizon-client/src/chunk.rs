@@ -101,6 +101,10 @@ pub struct Chunk {
     /// Generation postprocessing marks (ProtoChunk.postProcessing) as world
     /// positions, applied once by LevelChunk.postProcessGeneration.
     pub postprocess: Vec<[i32; 3]>,
+    /// Saved data Horizon keeps but does not simulate (save.rs).
+    pub saved: Option<Arc<crate::save::ChunkExtras>>,
+    /// Entities read from a save (vanilla entity NBT), spawned on arrival.
+    pub entities: Vec<horizon_world::nbt::Tag>,
 }
 impl Chunk {
     pub fn empty(x: i32, z: i32) -> Self {
@@ -114,6 +118,8 @@ impl Chunk {
             fresh: false,
             block_entities: Vec::new(),
             postprocess: Vec::new(),
+            saved: None,
+            entities: Vec::new(),
         }
     }
     #[inline]

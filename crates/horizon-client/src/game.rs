@@ -3,6 +3,7 @@
 mod control;
 mod end;
 mod postprocess;
+mod persist;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -395,6 +396,7 @@ struct Game<'a> {
     /// Control replies waiting for a rendered frame or a benchmark deadline.
     pending_screenshot: Option<std::sync::mpsc::Sender<String>>,
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
+    persist: persist::EntityMemory,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -719,7 +721,7 @@ impl Game<'_> {
     fn sync_tick_chunks(&mut self) {
         let loaded: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
         for k in loaded.difference(&self.tick_chunks.clone()) {
-            let _ = self.block_ticks.add_empty_chunk(horizon_core::position::ChunkPos::new(k.0, k.1));
+            self.register_chunk_ticks(*k);
         }
         for k in self.tick_chunks.difference(&loaded) {
             self.block_ticks.remove_chunk(horizon_core::position::ChunkPos::new(k.0, k.1));
@@ -1400,6 +1402,7 @@ impl Game<'_> {
         self.tick_using();
         self.tick_mining()?;
         self.tick_items();
+        self.spawn_loaded_entities();
         self.tick_mobs()?;
         self.tick_experience();
         self.tick_hand();
@@ -2618,6 +2621,7 @@ impl Game<'_> {
             .filter(|(p, _)| p.0 >> 4 == c.x && p.2 >> 4 == c.z)
             .map(|(p, e)| (*p, e.clone()))
             .collect();
+        self.attach_save_data(&mut c);
         Arc::new(c)
     }
     fn tick_mobs(&mut self) -> Result<()> {
@@ -2884,6 +2888,8 @@ impl Game<'_> {
     /// Load (or create) a world folder under saves/ and start streaming it.
     fn open_world(&mut self, folder: &str, name: Option<&str>, seed: Option<i64>, creative: bool) -> Result<()> {
         let save_root = std::env::current_dir()?.join("saves").join(folder);
+        horizon_client::save::migrate_legacy(&save_root)?;
+        self.persist = Default::default();
         let level = Level::read(&save_root).unwrap_or_else(|| Level {
             name: name.unwrap_or(folder).to_owned(),
             // WorldOptions.randomSeed when no seed was given.
@@ -2942,6 +2948,7 @@ impl Game<'_> {
         let (yaw, pitch) = self.options.look.unwrap_or((level.rotation[0], level.rotation[1]));
         self.yaw = yaw;
         self.pitch = pitch;
+        self.selected = level.selected_slot.clamp(0, 8) as usize;
         self.streaming = streaming;
         self.world = world;
         self.inventory = inventory;
@@ -2982,11 +2989,7 @@ impl Game<'_> {
     }
     /// Streaming and region storage for one dimension of a world.
     fn make_streaming(&self, world_root: &std::path::Path, dim: Dim, seed: i64) -> Result<(Streaming, Arc<SaveDir>)> {
-        let region_root = match dim.folder() {
-            Some(f) => world_root.join(f),
-            None => world_root.to_owned(),
-        };
-        let save = Arc::new(SaveDir::new(region_root));
+        let save = Arc::new(SaveDir::new(horizon_client::save::dimension_dir(world_root, dim.id())));
         let res = &*self.res;
         let mut streaming = if self.options.test_terrain && dim == Dim::Overworld {
             let inner = Arc::new(TestTerrain::new(res.assets.registry, &res.biomes)?);
@@ -3011,6 +3014,7 @@ impl Game<'_> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys.iter().filter_map(|k| self.world.chunks.get(k)).map(|c| self.with_entities(c)).collect();
         self.save.save(&chunks, &self.res.assets.registry, &self.res.biomes)?;
+        self.save_dimension_entities()?;
         // Coordinates scale by 8 between the Overworld and the Nether.
         let scale = match (self.dim, target) {
             (Dim::Overworld, Dim::Nether) => 1.0 / 8.0,
@@ -4118,6 +4122,8 @@ impl Game<'_> {
             .map(|c| self.with_entities(c))
             .collect();
         self.save.save(&chunks, &self.res.assets.registry, &self.res.biomes)?;
+        self.save_entities()?;
+        self.level.selected_slot = self.selected as i32;
         let level = &mut self.level;
         level.creative = self.creative;
         level.time = self.world.game_time;
@@ -4363,6 +4369,7 @@ impl Game<'_> {
             .cloned()
             .collect();
         let modified: Vec<_> = dirty.iter().map(|c| self.with_entities(c)).collect();
+        self.unload_entities(&unloaded);
         for c in &unloaded {
             self.world.block_entities.retain(|p, _| !(p.0 >> 4 == c.x && p.2 >> 4 == c.z));
         }
@@ -4686,7 +4693,7 @@ pub fn run() -> Result<()> {
     let visibility = models::load_visibility(&root, &assets.registry)?;
     eprintln!("load visibility: {:.2}s", started.elapsed().as_secs_f32());
     let tables = Arc::new(MeshTables::new(&assets, &facts, visibility)?);
-    let light = Arc::new(LightTables::new(&facts));
+    let light = Arc::new(LightTables::load(&root, &assets.registry, &facts)?);
     eprintln!("load tables: {:.2}s", started.elapsed().as_secs_f32());
     let atlas = HudAtlas::build(&root)?;
     eprintln!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
@@ -4853,6 +4860,7 @@ pub fn run() -> Result<()> {
         frame_stats: Default::default(),
         pending_screenshot: None,
         pending_bench: None,
+        persist: Default::default(),
     };
     if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)

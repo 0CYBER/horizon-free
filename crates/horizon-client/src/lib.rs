@@ -14,6 +14,7 @@ pub mod crafting;
 pub mod creative;
 pub mod collisions;
 pub mod entities;
+pub mod entity_nbt;
 pub mod environment;
 pub mod gfx;
 pub mod health;
