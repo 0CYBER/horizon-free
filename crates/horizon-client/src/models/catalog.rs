@@ -3,7 +3,7 @@
 //! resource-pack reloads remain separate work.
 use crate::{Result, sprites::Sprites};
 use horizon_assets::{
-    bake::{BlockModelTransform, ModelQuad, bake_model_transformed},
+    bake::{BlockModelTransform, ModelQuad, bake_block_model},
     blockstate::{
         BlockStateDefinition, Variant, VariantSet,
         bind::{Properties, PropertySchema, PropertyValues, SelectedModels},
@@ -176,7 +176,7 @@ impl StateModels {
         for (name, turns, lock) in variants {
             let model = library.resolve(&name)?;
             let faces: Vec<BakedFace> =
-                bake_model_transformed(&model, BlockModelTransform::new(turns, lock))?
+                bake_block_model(&model, BlockModelTransform::new(turns, lock))?
                     .into_iter()
                     .map(|quad| {
                         let layer = sprites.insert(root, &quad.material.sprite)?;

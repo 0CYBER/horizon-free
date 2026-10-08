@@ -169,13 +169,38 @@ pub fn bake_model_transformed(
     model: &ResolvedCuboidModel,
     transform: BlockModelTransform,
 ) -> Result<Vec<ModelQuad>> {
+    bake_elements(model, transform, false)
+}
+/// Block-model baking as `UnbakedCuboidGeometry.bake` does it: an element with
+/// zero extent along an axis draws no faces across that extent (a flat X
+/// element keeps only its X faces, and so on).
+pub fn bake_block_model(
+    model: &ResolvedCuboidModel,
+    transform: BlockModelTransform,
+) -> Result<Vec<ModelQuad>> {
+    bake_elements(model, transform, true)
+}
+fn bake_elements(
+    model: &ResolvedCuboidModel,
+    transform: BlockModelTransform,
+    skip_flat: bool,
+) -> Result<Vec<ModelQuad>> {
     let mut output = Vec::new();
     for element in model.elements() {
         let element = element
             .as_ref()
             .ok_or_else(|| error("null model element"))?;
         let matrix = element.rotation.as_ref().map(ElementMatrix::from_rotation);
+        let flat = |axis: usize| skip_flat && element.from[axis] == element.to[axis];
         for (direction, face) in &element.faces {
+            let drawn = match direction {
+                Direction::West | Direction::East => !flat(1) && !flat(2),
+                Direction::Down | Direction::Up => !flat(0) && !flat(2),
+                Direction::North | Direction::South => !flat(0) && !flat(1),
+            };
+            if !drawn {
+                continue;
+            }
             let face = face.as_ref().ok_or_else(|| error("null model face"))?;
             let material = model.material(&face.texture)?.cloned().unwrap_or(Material {
                 sprite: "minecraft:missingno".to_owned(),

@@ -63,6 +63,8 @@ pub struct Assets {
     pub animations: Vec<crate::sprites::SpriteAnimation>,
     pub sprite_layers: std::collections::BTreeMap<String, u32>,
     pub translucent_layers: Vec<bool>,
+    /// Block names in `#minecraft:blocks_fluid_flow` (fluid flow vectors).
+    pub blocks_fluid_flow: BTreeSet<String>,
 }
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -144,6 +146,13 @@ impl Assets {
             .iter()
             .map(String::as_str)
             .collect();
+        let blocks_fluid_flow = built
+            .tags
+            .get("minecraft:blocks_fluid_flow")
+            .ok_or_else(|| invalid("missing fluid flow tag"))?
+            .iter()
+            .cloned()
+            .collect();
         let properties = Properties(Arc::new(
             states
                 .iter()
@@ -202,6 +211,7 @@ impl Assets {
             animations: sprites.animations,
             sprite_layers: sprites.layers,
             translucent_layers: sprites.translucent,
+            blocks_fluid_flow,
         })
     }
 }
