@@ -64,8 +64,12 @@ impl Game<'_> {
                 .ok_or_else(|| format!("missing argument {i} for {}", words[0]))
         };
         let ok = || Ok(Some(json!({ "ok": true })));
+        if let Some(value) = self.block_command(&words)? {
+            return Ok(Some(value));
+        }
         match words[0] {
             "help" => Ok(Some(json!({ "commands": HELP.iter().chain(super::station_control::HELP).collect::<Vec<_>>() }))),
+            "help" => Ok(Some(json!({ "commands": HELP.iter().chain(super::blockctl::HELP).collect::<Vec<_>>() }))),
             "status" => Ok(Some(self.control_status())),
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;

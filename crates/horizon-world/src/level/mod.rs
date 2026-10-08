@@ -100,8 +100,11 @@ pub mod data;
 pub mod states;
 pub mod ticks;
 
+mod bonemeal;
 mod falling;
+mod feature_world;
 mod fluids;
+mod growth;
 mod hooks;
 mod interact;
 pub mod pistons;
@@ -110,11 +113,16 @@ mod query;
 mod rails;
 mod redstone;
 mod shapes;
+mod signals;
 mod speleothem;
 mod survive;
 mod tick;
+mod timeline;
 mod update;
+mod weather;
 
+#[cfg(test)]
+mod growth_tests;
 #[cfg(test)]
 mod tests;
 
@@ -337,6 +345,20 @@ pub trait LevelAccess {
         true
     }
     fn emit(&mut self, _event: LevelEvent) {}
+    /// Biome identifier at `pos` (`minecraft:plains`), for features placed by
+    /// block behaviour (bone meal flowers). None when unknown.
+    fn biome_name(&self, _pos: BlockPos) -> Option<&str> {
+        None
+    }
+    /// World seed (`WorldGenLevel.getSeed`) for seed-derived feature noise.
+    fn world_seed(&self) -> i64 {
+        0
+    }
+    /// `Level.getDayTime` (the overworld clock driving the day timeline's
+    /// environment attributes, e.g. eyeblossoms opening at night).
+    fn day_time(&self) -> i64 {
+        6000
+    }
 }
 
 /// Raw brightness as `Level.getRawBrightness(pos, skyDarken)`.
@@ -361,6 +383,7 @@ pub struct Behaviours {
     /// Uncached (position- or block-entity-dependent) collision shapes.
     dynamic: HashMap<BlockStateId, crate::dynamic_support::DynamicSupport>,
     occlusion_cache: Mutex<HashMap<(i32, i32, u8), bool>>,
+    growth: growth::Growth,
 }
 
 impl Behaviours {

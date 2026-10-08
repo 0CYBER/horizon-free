@@ -27,7 +27,7 @@ impl VanillaTerrain {
         Self::for_dimension(dir, registry, biomes, seed, "minecraft:overworld")
     }
     pub fn for_dimension(dir: &Path, registry: &'static BlockRegistry, biomes: &Biomes, seed: i64, dimension: &str) -> crate::Result<Self> {
-        let data: Arc<GeneratorData> = GeneratorData::load(dir, registry)?;
+        let data: Arc<GeneratorData> = shared_data(dir, registry)?;
         let biome_map = data.biome_names().iter().map(|name| biomes.id(name)).collect();
         let generator = OverworldGenerator::for_dimension(data, seed, "minecraft:normal", dimension)?;
         let unsupported = generator.unsupported_features();
@@ -49,6 +49,18 @@ impl VanillaTerrain {
     pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
         self.generator.ring_positions(set)
     }
+}
+/// The worldgen bundle at `dir`, loaded once and shared by every generator
+/// and by live feature placement (sapling growth, bone meal).
+pub fn shared_data(dir: &Path, registry: &'static BlockRegistry) -> crate::Result<Arc<GeneratorData>> {
+    static CACHE: std::sync::Mutex<Vec<(std::path::PathBuf, Arc<GeneratorData>)>> = std::sync::Mutex::new(Vec::new());
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, data)) = cache.iter().find(|(path, _)| path == dir) {
+        return Ok(data.clone());
+    }
+    let data = GeneratorData::load(dir, registry)?;
+    cache.push((dir.to_owned(), data.clone()));
+    Ok(data)
 }
 impl ChunkGenerator for VanillaTerrain {
     type Worker = GeneratorWorker;

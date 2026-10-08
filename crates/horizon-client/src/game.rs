@@ -1,5 +1,6 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
+mod blockctl;
 mod control;
 mod end;
 mod postprocess;
@@ -9,6 +10,10 @@ mod potions;
 mod station_control;
 mod stations;
 mod trading;
+mod explosion;
+mod growth;
+mod machines;
+mod tnt;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -204,8 +209,32 @@ struct GameLevel<'w> {
     raining: bool,
     thundering: bool,
     player_box: Option<([f64; 3], [f64; 3])>,
+    biomes: &'w Biomes,
+    seed: i64,
+    behaviours: &'w Behaviours,
+    items: &'w Items,
+    registry: &'static horizon_world::registry::BlockRegistry,
 }
 impl LevelAccess for GameLevel<'_> {
+    fn precipitation(&self, pos: BlockPos) -> Option<horizon_world::level::Precipitation> {
+        self.behaviours.precipitation_info(self, pos)
+    }
+    fn is_raining_at(&self, pos: BlockPos) -> bool {
+        self.behaviours.is_raining_at(self, pos)
+    }
+    fn block_entity_analog_signal(&self, pos: BlockPos, _state: BlockStateId, _direction: Direction) -> i32 {
+        machines::container_signal(self.world, self.behaviours, self.items, self.registry, pos)
+    }
+    fn biome_name(&self, pos: BlockPos) -> Option<&str> {
+        let chunk = self.world.chunks.get(&(pos.x >> 4, pos.z >> 4))?;
+        Some(&self.biomes.get(chunk.biome(pos.x, pos.y, pos.z)).name)
+    }
+    fn world_seed(&self) -> i64 {
+        self.seed
+    }
+    fn day_time(&self) -> i64 {
+        self.world.day_time
+    }
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.world.block(pos.x, pos.y, pos.z)
     }
@@ -225,6 +254,8 @@ impl LevelAccess for GameLevel<'_> {
     }
     fn max_y(&self) -> i32 {
         if self.dimension != LevelDimension::Overworld { 255 } else { MIN_Y + HEIGHT - 1 }
+        // Exclusive, as LevelAccess::max_y documents.
+        if self.dimension == LevelDimension::Nether { 256 } else { MIN_Y + HEIGHT }
     }
     fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
         &mut self.world.random
@@ -401,6 +432,8 @@ struct Game<'a> {
     tick_chunks: HashSet<(i32, i32)>,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
+    tnts: Vec<tnt::PrimedTnt>,
+    hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
     frame_stats: horizon_client::control::FrameStats,
@@ -717,6 +750,11 @@ impl Game<'_> {
             raining: rain > 0.2,
             thundering: thunder > 0.9,
             player_box,
+            biomes: &self.res.biomes,
+            seed: self.level.seed,
+            behaviours: &self.res.behaviours,
+            items: &self.res.items,
+            registry: self.res.assets.registry,
         };
         f(&self.res.behaviours, &mut level, &mut self.block_ticks)
     }
@@ -791,6 +829,7 @@ impl Game<'_> {
                         1502 => Some(("minecraft:block.redstone_torch.burnout", 0.5)),
                         1030 => Some(("minecraft:block.anvil.use", 1.0)),
                         1031 => Some(("minecraft:block.anvil.land", 0.3)),
+                        1505 => Some(("minecraft:item.bone_meal.use", 1.0)),
                         _ => None,
                     };
                     if let Some((name, volume)) = sound {
@@ -837,9 +876,11 @@ impl Game<'_> {
                     }
                     PlayerEffect::InteractLoot(_) | PlayerEffect::RespawnAnchor => {}
                 },
-                LevelEvent::PrimeTnt { pos } => {
-                    // Simplified: TNT explodes after its 80-tick fuse immediately.
-                    self.explode([f64::from(pos.x) + 0.5, f64::from(pos.y), f64::from(pos.z) + 0.5], 4.0)?;
+                LevelEvent::PrimeTnt { pos } => self.spawn_primed_tnt(pos, false),
+                LevelEvent::BlockEvent { pos, state, kind: "dispense" } => self.dispense_from(pos, state)?,
+                LevelEvent::BlockEvent { pos, state, kind: "pop_block_item" } => {
+                    let item = self.res.facts.get(state).item.clone();
+                    self.pop_resource([pos.x, pos.y, pos.z], ItemStack { item, count: 1, damage: 0 });
                 }
                 LevelEvent::GrowTree { .. } | LevelEvent::PlaceFeature { .. } | LevelEvent::BlockEvent { .. } | LevelEvent::GameEvent { .. } => {}
             }
@@ -1016,6 +1057,9 @@ impl Game<'_> {
             if self.using.is_none() {
                 self.using = Some((self.selected, 0));
             }
+            return Ok(());
+        }
+        if self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)? {
             return Ok(());
         }
         if self.use_tool(&stack)? {
@@ -1391,6 +1435,13 @@ impl Game<'_> {
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
                 }
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Write { position, flags, .. }) => {
+                    // Landing rules (farmland trampling, turtle eggs) wrote the block raw.
+                    self.with_level(|b, level, ticks| b.notify_written(level, ticks, position, flags as i32));
+                }
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Destroy { position, .. }) => {
+                    self.with_level(|b, level, ticks| b.notify_written(level, ticks, position, level_flags::UPDATE_ALL));
+                }
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Damage { .. }) => {
                     self.audio.play("minecraft:entity.player.hurt", Some(feet), 1.0, 1.0);
                 }
@@ -1434,6 +1485,7 @@ impl Game<'_> {
         self.postprocess_chunks()?;
         self.tick_blocks()?;
         self.tick_falling()?;
+        self.tick_tnt()?;
         if let Some(p) = &self.player {
             // Player.aiStep bob and Entity.walkDist (0.6 per block).
             let (dx, dz) = (p.position.x - self.previous_position.x, p.position.z - self.previous_position.z);
@@ -1775,7 +1827,7 @@ impl Game<'_> {
         batch
     }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
-        ((batch.width - 176.0) / 2.0, (batch.height - 166.0) / 2.0)
+        ((batch.width - 176.0) / 2.0, (batch.height - self.screen_height()) / 2.0)
     }
     /// Slot ids: 0..36 player inventory, 100..109 crafting grid, 200 result.
     fn container_kind(&self) -> Option<&BlockEntity> {
@@ -1804,6 +1856,7 @@ impl Game<'_> {
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
         if let Some(p) = self.station_slot_position(i) {
+        if let Some(p) = self.machine_slot_position(i) {
             return p;
         }
         let table = self.craft_size == 3;
@@ -1881,6 +1934,7 @@ impl Game<'_> {
             };
             let grey = rgba(64, 64, 64, 255);
             match self.container.and_then(|k| self.world.block_entities.get(&k)) {
+                Some(BlockEntity::Chest(_)) if self.draw_machine_screen(batch, ox, oy) => {}
                 Some(BlockEntity::Chest(_)) => {
                     // ContainerScreen with 3 rows: top 71px, then the player inventory from v=126.
                     part(batch, "gui/container/generic_54", 0.0, 0.0, 176.0, 71.0, ox, oy);
@@ -2287,6 +2341,7 @@ impl Game<'_> {
                 }
             }
         }
+        self.tnt_geometry(camera, alpha, &mut out);
         // Camera-facing particle quads.
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
         let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
@@ -2552,84 +2607,13 @@ impl Game<'_> {
         true
     }
     /// ServerExplosion: rays from a 16^3 grid lose (resistance + 0.3) * 0.3 per step.
+    /// A mob explosion (`Level.ExplosionInteraction.MOB`: drop decay with the
+    /// default mobGriefing rule).
     fn explode(&mut self, center: [f64; 3], radius: f32) -> Result<()> {
-        let mut destroyed = HashSet::new();
-        for j in 0..16 {
-            for k in 0..16 {
-                for l in 0..16 {
-                    if !(j == 0 || j == 15 || k == 0 || k == 15 || l == 0 || l == 15) {
-                        continue;
-                    }
-                    let mut d = [f64::from(j) / 15.0 * 2.0 - 1.0, f64::from(k) / 15.0 * 2.0 - 1.0, f64::from(l) / 15.0 * 2.0 - 1.0];
-                    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                    d = d.map(|v| v / len);
-                    let mut h = radius * (0.7 + self.world.random.next_float() * 0.6);
-                    let mut p = center;
-                    while h > 0.0 {
-                        let b = [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32];
-                        let state = self.world.block(b[0], b[1], b[2]);
-                        if !self.res.facts.is_air(state) {
-                            let f = self.res.facts.get(state);
-                            let resistance = if f.fluid != Fluid::None && !f.waterlogged { 100.0 } else { f.explosion_resistance };
-                            h -= (resistance + 0.3) * 0.3;
-                            if h > 0.0 && f.hardness >= 0.0 {
-                                destroyed.insert(b);
-                            }
-                        }
-                        p = [p[0] + d[0] * 0.3, p[1] + d[1] * 0.3, p[2] + d[2] * 0.3];
-                        h -= 0.225_000_01;
-                    }
-                }
-            }
-        }
-        for b in destroyed {
-            let state = self.world.block(b[0], b[1], b[2]);
-            if self.res.facts.is_air(state) {
-                continue;
-            }
-            // Explosion decay: each drop survives with probability 1 / radius.
-            if self.world.random.next_float() < 1.0 / radius {
-                let drops = self.res.items.block_drops(&self.res.assets.registry, state, None, &mut self.world.random);
-                for d in drops {
-                    self.pop_resource(b, d);
-                }
-            }
-            self.world.set(b[0], b[1], b[2], self.world.air)?;
-        }
-        self.audio.play("minecraft:entity.generic.explode", Some(center), 4.0, (1.0 + (self.world.random.next_float() - self.world.random.next_float()) * 0.2) * 0.7);
-        // Entity damage by distance (exposure approximated as unobstructed).
-        let diameter = f64::from(radius) * 2.0;
-        let mut armor_damage = None;
-        if let Some(player) = self.player.as_mut() {
-            let p = [player.position.x, player.position.y, player.position.z];
-            let dist = ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2) + (p[2] - center[2]).powi(2)).sqrt() / diameter;
-            if dist <= 1.0 {
-                let impact = 1.0 - dist;
-                let damage = ((impact * impact + impact) / 2.0 * 7.0 * diameter + 1.0) as f32;
-                if let Some(id) = self.motion.health.damage.id("minecraft:explosion") {
-                    let _ = player.hurt(&self.motion.health, self.world.health_rules, id, damage);
-                    armor_damage = Some(damage);
-                }
-                let (dx, dy, dz) = (p[0] - center[0], p[1] - center[1], p[2] - center[2]);
-                let l = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-4);
-                player.velocity = Vec3::new(player.velocity.x + dx / l * impact, player.velocity.y + dy / l * impact, player.velocity.z + dz / l * impact);
-            }
-        }
-        if let Some(d) = armor_damage
-            && !self.creative
-        {
-            self.hurt_armor(d);
-        }
-        for m in &mut self.mobs {
-            let dist = ((m.position.x - center[0]).powi(2) + (m.position.y - center[1]).powi(2) + (m.position.z - center[2]).powi(2)).sqrt() / diameter;
-            if dist <= 1.0 && m.alive() {
-                let impact = 1.0 - dist;
-                m.hurt(((impact * impact + impact) / 2.0 * 7.0 * diameter + 1.0) as f32, Some(center), &mut self.world.random);
-            }
-        }
-        Ok(())
+        self.server_explode(center, radius, explosion::BlockInteraction::DestroyWithDecay, false)
     }
     fn tick_block_entities(&mut self) -> Result<()> {
+        self.tick_hoppers()?;
         // ChestLidController: 0.1 per tick towards open/closed.
         if let Some(key) = self.container {
             self.chest_open.entry(key).or_insert((0.0, 0.0));
@@ -3008,8 +2992,10 @@ impl Game<'_> {
         self.dim = dim;
         self.world_root = save_root.clone();
         self.block_ticks = Ticks::new(self.level.seed as i32);
+        self.install_live_features();
         self.tick_chunks.clear();
         self.falling.clear();
+        self.tnts.clear();
         self.travelling = None;
         self.player = None;
         self.spawn = None;
@@ -3089,6 +3075,7 @@ impl Game<'_> {
         self.block_ticks = Ticks::new(self.level.seed as i32);
         self.tick_chunks.clear();
         self.falling.clear();
+        self.tnts.clear();
         self.mobs.clear();
         self.arrows.clear();
         self.dropped.clear();
@@ -4592,6 +4579,9 @@ impl ApplicationHandler for Game<'_> {
                         }
                         Screen::Inventory if pressed => {
                             self.click_inventory(button == MouseButton::Right);
+                            if let Some(key) = self.container {
+                                self.container_changed(key);
+                            }
                         }
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
@@ -4938,6 +4928,8 @@ pub fn run() -> Result<()> {
         tick_chunks: HashSet::new(),
         level_events: Vec::new(),
         falling: Vec::new(),
+        tnts: Vec::new(),
+        hoppers: HashMap::new(),
         creative_screen: Creative::load(&game_root)?,
         control: None,
         frame_stats: Default::default(),

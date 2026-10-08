@@ -208,6 +208,10 @@ impl StateTable {
     pub fn key(&mut self, name: &str) -> PropKey {
         self.key_or_insert(name)
     }
+    /// An existing property key, without interning a new one.
+    pub fn key_of(&self, name: &str) -> Option<PropKey> {
+        self.keys.get(name).copied()
+    }
     pub fn state_count(&self) -> usize {
         self.state_block.len()
     }

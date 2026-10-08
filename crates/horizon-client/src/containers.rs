@@ -77,6 +77,36 @@ impl BlockEntity {
         match self {
             Self::Chest(_) => "minecraft:chest",
             Self::Brewing(_) => "minecraft:brewing_stand",
+        let size = match name {
+            "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
+            "minecraft:hopper" => 5,
+            "minecraft:dispenser" | "minecraft:dropper" => 9,
+            _ => return None,
+        };
+        Some(Self::Chest(vec![None; size]))
+    }
+    /// The vanilla block entity type id of a container block.
+    pub fn id_for_block(name: &str) -> Option<&'static str> {
+        Some(match name {
+            "minecraft:chest" => "minecraft:chest",
+            "minecraft:trapped_chest" => "minecraft:trapped_chest",
+            "minecraft:barrel" => "minecraft:barrel",
+            "minecraft:hopper" => "minecraft:hopper",
+            "minecraft:dispenser" => "minecraft:dispenser",
+            "minecraft:dropper" => "minecraft:dropper",
+            "minecraft:furnace" => "minecraft:furnace",
+            "minecraft:blast_furnace" => "minecraft:blast_furnace",
+            "minecraft:smoker" => "minecraft:smoker",
+            _ => return None,
+        })
+    }
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::Chest(items) => match items.len() {
+                5 => "minecraft:hopper",
+                9 => "minecraft:dispenser",
+                _ => "minecraft:chest",
+            },
             Self::Furnace(f) => match f.kind {
                 FurnaceKind::Furnace => "minecraft:furnace",
                 FurnaceKind::BlastFurnace => "minecraft:blast_furnace",
@@ -89,6 +119,12 @@ impl BlockEntity {
             Self::Chest(items) => items.iter().flatten().cloned().collect(),
             Self::Furnace(f) => f.items.iter().flatten().cloned().collect(),
             Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
+        }
+    }
+    pub fn slots(&self) -> &[Option<ItemStack>] {
+        match self {
+            Self::Chest(items) => items,
+            Self::Furnace(f) => &f.items,
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {

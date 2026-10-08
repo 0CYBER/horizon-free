@@ -140,6 +140,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Observer => self.observer_tick(pos, state),
+                Class::Eyeblossom => self.eyeblossom_tick(state, pos, false),
+                Class::DriedGhast => self.dried_ghast_tick(state, pos),
                 Class::RedstoneLamp => self.lamp_tick(pos, state),
                 Class::RedstoneTorch => self.torch_tick(pos, state),
                 Class::Scaffolding => self.scaffolding_tick(pos, state),
@@ -329,6 +331,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Vine => self.vine_random_tick(state, pos),
+                Class::Eyeblossom => self.eyeblossom_tick(state, pos, true),
+                Class::FlowerPot => self.potted_eyeblossom_tick(state, pos),
+                Class::TurtleEgg => self.turtle_egg_tick(state, pos),
+                Class::DriedGhast => self.dried_ghast_random_tick(state, pos),
                 Class::WeatheringCopperFull => self.copper_change_over_time(state, pos),
                 _ => continue,
             }
@@ -708,11 +714,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return;
         }
         let age = b.table.int(state, b.props.age);
-        let max = b.table.int_range(state, b.props.age).map_or(7, |r| r.1);
+        let max = self.crop_max_age(state);
         if age < max {
             let speed = self.crop_growth_speed(b.block(state), pos);
             if self.rand_int((25.0 / speed) as i32 + 1) == 0 {
-                self.set_block(pos, b.table.set_int(state, b.props.age, age + 1), 2);
+                let next = self.crop_state_for_age(state, age + 1);
+                self.set_block(pos, next, 2);
             }
         }
     }
@@ -789,11 +796,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.set_block(upper_pos, upper, 3);
         }
     }
-    fn growing_plant_can_grow_into(&self, plant: BlockStateId, state: BlockStateId) -> bool {
+    pub(crate) fn growing_plant_can_grow_into(&self, plant: BlockStateId, state: BlockStateId) -> bool {
         let b = self.b;
         let data = b.data(plant);
         if data.is(Class::Kelp) {
-            b.is_block(state, b.named.water) && b.fluid(state).amount() == 8
+            // KelpBlock.canGrowInto: any water block state.
+            b.is_block(state, b.named.water)
         } else {
             // NetherVines.isValidGrowthState / CaveVines: air only.
             b.is_air(state)
@@ -868,12 +876,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `SaplingBlock.advanceTree`.
     pub(crate) fn sapling_advance_tree(&mut self, pos: BlockPos, state: BlockStateId) {
-        let b = self.b;
-        if b.table.int(state, b.props.stage) == 0 {
-            self.set_block(pos, b.table.cycle(state, b.props.stage), 260);
-        } else if let Some(grower) = b.data(state).feature.clone() {
-            self.emit(LevelEvent::GrowTree { pos, state, grower });
-        }
+        self.advance_tree(pos, state);
     }
     fn mushroom_random_tick(&mut self, state: BlockStateId, mut pos: BlockPos) {
         let b = self.b;
@@ -1013,13 +1016,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.set_block_and_update(grow, state);
         }
     }
-    fn bamboo_sapling_grow(&mut self, pos: BlockPos) {
+    pub(crate) fn bamboo_sapling_grow(&mut self, pos: BlockPos) {
         let b = self.b;
         let bamboo = b.default_of(b.named.bamboo);
         let state = b.table.set_text(bamboo, b.props.leaves, "small");
         self.set_block(above(pos), state, 3);
     }
-    fn bamboo_height_below(&self, pos: BlockPos) -> i32 {
+    pub(crate) fn bamboo_height_below(&self, pos: BlockPos) -> i32 {
         let mut height = 0;
         while height < 16
             && self.b.is_block(
@@ -1031,7 +1034,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         height
     }
-    fn bamboo_height_above(&self, pos: BlockPos) -> i32 {
+    pub(crate) fn bamboo_height_above(&self, pos: BlockPos) -> i32 {
         let mut height = 0;
         while height < 16
             && self.b.is_block(
@@ -1044,7 +1047,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         height
     }
     /// `BambooStalkBlock.growBamboo`.
-    fn bamboo_grow(&mut self, state: BlockStateId, pos: BlockPos, height: i32) {
+    pub(crate) fn bamboo_grow(&mut self, state: BlockStateId, pos: BlockPos, height: i32) {
         let b = self.b;
         let p = b.props;
         let below_state = self.below_state(pos);
