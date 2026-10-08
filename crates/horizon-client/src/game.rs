@@ -1,6 +1,8 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
+mod blockctl;
 mod control;
+mod growth;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -196,8 +198,17 @@ struct GameLevel<'w> {
     raining: bool,
     thundering: bool,
     player_box: Option<([f64; 3], [f64; 3])>,
+    biomes: &'w Biomes,
+    seed: i64,
 }
 impl LevelAccess for GameLevel<'_> {
+    fn biome_name(&self, pos: BlockPos) -> Option<&str> {
+        let chunk = self.world.chunks.get(&(pos.x >> 4, pos.z >> 4))?;
+        Some(&self.biomes.get(chunk.biome(pos.x, pos.y, pos.z)).name)
+    }
+    fn world_seed(&self) -> i64 {
+        self.seed
+    }
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.world.block(pos.x, pos.y, pos.z)
     }
@@ -216,7 +227,8 @@ impl LevelAccess for GameLevel<'_> {
         if self.dimension == LevelDimension::Nether { 0 } else { MIN_Y }
     }
     fn max_y(&self) -> i32 {
-        if self.dimension == LevelDimension::Nether { 255 } else { MIN_Y + HEIGHT - 1 }
+        // Exclusive, as LevelAccess::max_y documents.
+        if self.dimension == LevelDimension::Nether { 256 } else { MIN_Y + HEIGHT }
     }
     fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
         &mut self.world.random
@@ -686,6 +698,8 @@ impl Game<'_> {
             raining: rain > 0.2,
             thundering: thunder > 0.9,
             player_box,
+            biomes: &self.res.biomes,
+            seed: self.level.seed,
         };
         f(&self.res.behaviours, &mut level, &mut self.block_ticks)
     }
@@ -760,6 +774,7 @@ impl Game<'_> {
                         1502 => Some(("minecraft:block.redstone_torch.burnout", 0.5)),
                         1030 => Some(("minecraft:block.anvil.use", 1.0)),
                         1031 => Some(("minecraft:block.anvil.land", 0.3)),
+                        1505 => Some(("minecraft:item.bone_meal.use", 1.0)),
                         _ => None,
                     };
                     if let Some((name, volume)) = sound {
@@ -809,6 +824,10 @@ impl Game<'_> {
                 LevelEvent::PrimeTnt { pos } => {
                     // Simplified: TNT explodes after its 80-tick fuse immediately.
                     self.explode([f64::from(pos.x) + 0.5, f64::from(pos.y), f64::from(pos.z) + 0.5], 4.0)?;
+                }
+                LevelEvent::BlockEvent { pos, state, kind: "pop_block_item" } => {
+                    let item = self.res.facts.get(state).item.clone();
+                    self.pop_resource([pos.x, pos.y, pos.z], ItemStack { item, count: 1, damage: 0 });
                 }
                 LevelEvent::GrowTree { .. } | LevelEvent::PlaceFeature { .. } | LevelEvent::BlockEvent { .. } | LevelEvent::GameEvent { .. } => {}
             }
@@ -979,6 +998,9 @@ impl Game<'_> {
             if self.using.is_none() {
                 self.using = Some((self.selected, 0));
             }
+            return Ok(());
+        }
+        if self.use_bone_meal(&stack)? {
             return Ok(());
         }
         if self.use_tool(&stack)? {
@@ -2918,6 +2940,7 @@ impl Game<'_> {
         self.dim = dim;
         self.world_root = save_root.clone();
         self.block_ticks = Ticks::new(self.level.seed as i32);
+        self.install_live_features();
         self.tick_chunks.clear();
         self.falling.clear();
         self.travelling = None;
