@@ -383,3 +383,48 @@ impl Painting {
         )
     }
 }
+/// An item frame or glow item frame (`ItemFrame`).
+#[derive(Clone, Debug)]
+pub struct ItemFrame {
+    pub id: u32,
+    pub pos: [i32; 3],
+    /// Direction.get3DDataValue: down 0, up 1, north 2, south 3, west 4, east 5.
+    pub facing: u8,
+    pub glow: bool,
+    pub item: Option<crate::items::ItemStack>,
+    /// 0..8, in 45 degree steps.
+    pub rotation: u8,
+    pub drop_chance: f32,
+    pub fixed: bool,
+    pub invisible: bool,
+    pub check_interval: u32,
+}
+impl ItemFrame {
+    pub fn step(&self) -> [i32; 3] {
+        [
+            [0, -1, 0],
+            [0, 1, 0],
+            [0, 0, -1],
+            [0, 0, 1],
+            [-1, 0, 0],
+            [1, 0, 0],
+        ][usize::from(self.facing.min(5))]
+    }
+    pub fn kind(&self) -> &'static str {
+        if self.glow {
+            "minecraft:glow_item_frame"
+        } else {
+            "minecraft:item_frame"
+        }
+    }
+    /// ItemFrame.createBoundingBox (without a framed map): (min, max).
+    pub fn bounds(&self) -> ([f64; 3], [f64; 3]) {
+        let s = self.step().map(f64::from);
+        let c: [f64; 3] = std::array::from_fn(|i| f64::from(self.pos[i]) + 0.5 - s[i] * 0.46875);
+        let size: [f64; 3] = std::array::from_fn(|i| if s[i] != 0.0 { 0.0625 } else { 0.75 });
+        (
+            std::array::from_fn(|i| c[i] - size[i] / 2.0),
+            std::array::from_fn(|i| c[i] + size[i] / 2.0),
+        )
+    }
+}

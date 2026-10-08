@@ -9,6 +9,7 @@ mod enchant_effects;
 mod end;
 mod explosion;
 mod fov;
+mod frames;
 mod growth;
 mod machines;
 mod music;
@@ -519,6 +520,9 @@ struct Game<'a> {
     falling: Vec<FallingBlock>,
     paintings: Vec<horizon_client::entities::Painting>,
     painting_variants: paintings::PaintingVariants,
+    item_frames: Vec<horizon_client::entities::ItemFrame>,
+    frame_model: frames::FrameModel,
+    glow_frame_model: frames::FrameModel,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     creative_screen: Creative,
@@ -1387,7 +1391,7 @@ impl Game<'_> {
         Ok(())
     }
     fn use_item(&mut self) -> Result<()> {
-        if self.interact_mob()? {
+        if self.interact_frame() || self.interact_mob()? {
             return Ok(());
         }
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
@@ -1471,7 +1475,7 @@ impl Game<'_> {
             return Ok(());
         }
         if let Some(hit) = self.pick()
-            && self.place_painting(&hit, &stack)
+            && (self.place_painting(&hit, &stack) || self.place_item_frame(&hit, &stack))
         {
             return Ok(());
         }
@@ -2043,6 +2047,7 @@ impl Game<'_> {
         self.tick_using();
         self.titles.tick();
         self.tick_paintings();
+        self.tick_item_frames();
         self.tick_mining()?;
         self.tick_items();
         self.spawn_loaded_entities();
@@ -3501,6 +3506,7 @@ impl Game<'_> {
         }
         self.tnt_geometry(camera, alpha, &mut out);
         self.painting_geometry(camera, &mut out);
+        self.frame_geometry(camera, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
         let world = &self.world;
         self.particles.render(
@@ -3656,6 +3662,9 @@ impl Game<'_> {
             })
         {
             self.break_painting(i, true);
+            return true;
+        }
+        if self.attack_frame() {
             return true;
         }
         let Some((index, distance)) = self.mob_hit() else {
@@ -7010,6 +7019,9 @@ pub fn run() -> Result<()> {
         falling: Vec::new(),
         paintings: Vec::new(),
         painting_variants: paintings::PaintingVariants::load(&root),
+        item_frames: Vec::new(),
+        frame_model: frames::bake_frame(&root, "item_frame"),
+        glow_frame_model: frames::bake_frame(&root, "glow_item_frame"),
         tnts: Vec::new(),
         hoppers: HashMap::new(),
         creative_screen: Creative::load(&game_root)?,

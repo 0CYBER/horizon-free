@@ -130,6 +130,13 @@ impl Game<'_> {
                             });
                         }
                     }
+                    "minecraft:item_frame" | "minecraft:glow_item_frame" => {
+                        self.next_entity += 1;
+                        if let Some(f) = entity_nbt::item_frame_from_nbt(&tag, self.next_entity) {
+                            self.remember(f.id, uuid, tag);
+                            self.item_frames.push(f);
+                        }
+                    }
                     "minecraft:painting" => {
                         if let Some((pos, facing, variant)) = entity_nbt::painting_from_nbt(&tag)
                             && let Some(v) = self.painting_variants.get(&variant).cloned()
@@ -267,6 +274,24 @@ impl Game<'_> {
                 out.entry(chunk_of(f.position)).or_default().push(tag);
             }
         }
+        for f in &self.item_frames {
+            let (lo, hi) = f.bounds();
+            let at = Vec3::new(
+                (lo[0] + hi[0]) / 2.0,
+                (lo[1] + hi[1]) / 2.0,
+                (lo[2] + hi[2]) / 2.0,
+            );
+            if keys.contains(&chunk_of(at)) {
+                let uuid = self
+                    .persist
+                    .uuids
+                    .get(&f.id)
+                    .copied()
+                    .unwrap_or_else(random_uuid);
+                let tag = entity_nbt::item_frame_to_nbt(f, uuid, self.persist.raw.get(&f.id));
+                out.entry(chunk_of(at)).or_default().push(tag);
+            }
+        }
         for p in &self.paintings {
             let at = painting_center(p);
             if keys.contains(&chunk_of(at)) {
@@ -293,6 +318,18 @@ impl Game<'_> {
         if remove {
             let gone = |p: Vec3| keys.contains(&chunk_of(p));
             let mut removed: Vec<u32> = Vec::new();
+            self.item_frames.retain(|f| {
+                let (lo, hi) = f.bounds();
+                let keep = !gone(Vec3::new(
+                    (lo[0] + hi[0]) / 2.0,
+                    (lo[1] + hi[1]) / 2.0,
+                    (lo[2] + hi[2]) / 2.0,
+                ));
+                if !keep {
+                    removed.push(f.id);
+                }
+                keep
+            });
             self.paintings.retain(|p| {
                 let keep = !gone(painting_center(p));
                 if !keep {
