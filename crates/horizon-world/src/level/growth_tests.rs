@@ -70,9 +70,6 @@ impl LevelAccess for Level {
     fn game_time(&self) -> i64 {
         0
     }
-    fn block_light(&self, _pos: BlockPos) -> i32 {
-        15
-    }
     fn emit(&mut self, event: LevelEvent) {
         self.events.push(event);
     }
@@ -339,4 +336,31 @@ fn tall_flowers_and_seagrass() {
             ..
         }
     )));
+}
+
+#[test]
+fn snowy_biomes_freeze_and_snow() {
+    let Some(f) = fixture() else { return };
+    let mut w = World::new(f, 1);
+    w.level.biome = "minecraft:snowy_plains";
+    w.floor("grass_block", 2);
+    let water = w.id("water", &[]);
+    w.put(BlockPos::new(1, 63, 0), water);
+    let b = &f.behaviours;
+    let grass = b
+        .precipitation_info(&w.level, BlockPos::new(0, 70, 0))
+        .unwrap();
+    assert_eq!(grass.top, BlockPos::new(0, 64, 0));
+    assert!(grass.snows_at_top && !grass.freezes_below);
+    assert_eq!(grass.kind, PrecipitationKind::Snow);
+    let pond = b
+        .precipitation_info(&w.level, BlockPos::new(1, 70, 0))
+        .unwrap();
+    assert!(pond.freezes_below, "a water source at the edge freezes");
+    w.level.biome = "minecraft:plains";
+    let rain = b
+        .precipitation_info(&w.level, BlockPos::new(0, 70, 0))
+        .unwrap();
+    assert!(!rain.snows_at_top && !rain.freezes_below);
+    assert_eq!(rain.kind, PrecipitationKind::Rain);
 }

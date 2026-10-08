@@ -34,6 +34,8 @@ pub struct LiveFeatures {
     placed: Cache<PlacedFeatureDefinition>,
     /// `BiomeGenerationSettings.getBoneMealFeatures` per biome, in vanilla order.
     bone_meal: Vec<Vec<String>>,
+    /// Temperature settings per biome (`Biome.getTemperature`).
+    temperatures: Vec<super::biome_temperature::BiomeTemperatureSettings>,
 }
 
 fn resource(message: impl Into<String>) -> GeneratorError {
@@ -193,7 +195,15 @@ impl LiveFeatures {
             }
             bone_meal.push(list);
         }
+        let temperatures = (0..data.biome_names().len())
+            .map(|i| {
+                super::biome_temperature::BiomeTemperatureSettings::from_json(
+                    data.biome_json(BiomeId(i as u32)),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Some(Self {
+            temperatures,
             data: data.clone(),
             catalog,
             bindings,
@@ -295,6 +305,13 @@ impl LiveFeatures {
                 false
             }
         }
+    }
+    /// Temperature settings of a biome.
+    pub fn biome_temperature(
+        &self,
+        biome: BiomeId,
+    ) -> Option<super::biome_temperature::BiomeTemperatureSettings> {
+        self.temperatures.get(biome.0 as usize).copied()
     }
     /// Whether the named biome is in a biome tag (`minecraft:...`).
     pub fn biome_in_tag(&self, biome: &str, tag: &str) -> bool {

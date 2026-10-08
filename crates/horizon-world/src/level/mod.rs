@@ -118,6 +118,7 @@ mod speleothem;
 mod survive;
 mod tick;
 mod update;
+mod weather;
 
 #[cfg(test)]
 mod growth_tests;

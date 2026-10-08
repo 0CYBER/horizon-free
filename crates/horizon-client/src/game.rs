@@ -208,6 +208,12 @@ struct GameLevel<'w> {
     registry: &'static horizon_world::registry::BlockRegistry,
 }
 impl LevelAccess for GameLevel<'_> {
+    fn precipitation(&self, pos: BlockPos) -> Option<horizon_world::level::Precipitation> {
+        self.behaviours.precipitation_info(self, pos)
+    }
+    fn is_raining_at(&self, pos: BlockPos) -> bool {
+        self.behaviours.is_raining_at(self, pos)
+    }
     fn block_entity_analog_signal(&self, pos: BlockPos, _state: BlockStateId, _direction: Direction) -> i32 {
         machines::container_signal(self.world, self.behaviours, self.items, self.registry, pos)
     }
