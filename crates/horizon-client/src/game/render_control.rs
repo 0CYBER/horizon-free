@@ -2,12 +2,14 @@
 //! updates (`setblock`, `fill`) to build test scenes.
 use super::Game;
 use horizon_client::Result;
+use horizon_core::random::RandomSource;
 use horizon_world::registry::BlockStateId;
 use serde_json::{Value, json};
 
 pub const HELP: &[&str] = &[
     "setblock X Y Z STATE           set a block state (name[prop=value,...]) without updates",
     "fill X1 Y1 Z1 X2 Y2 Z2 STATE   fill a box with a block state without updates",
+    "particle NAME X Y Z [DX DY DZ] [COUNT]  spawn particles (vanilla /particle spread)",
 ];
 
 impl Game<'_> {
@@ -67,6 +69,38 @@ impl Game<'_> {
                     }
                 }
                 Ok(Some(json!({ "ok": true, "blocks": count })))
+            }
+            "particle" => {
+                use horizon_client::particles::{ParticleOptions, ParticleType};
+                let ty = ParticleType::from_name(words.get(1).ok_or("missing particle")?)
+                    .ok_or("unknown particle type")?;
+                let num = |i: usize, default: f64| -> Result<f64> {
+                    Ok(words.get(i).map_or(Ok(default), |w| w.parse::<f64>())?)
+                };
+                let at = [num(2, 0.0)?, num(3, 0.0)?, num(4, 0.0)?];
+                let delta = [num(5, 0.0)?, num(6, 0.0)?, num(7, 0.0)?];
+                let count = num(8, 1.0)? as u32;
+                let options = match ty {
+                    ParticleType::Dust => ParticleOptions::dust([1.0, 0.0, 0.0], 1.0),
+                    ParticleType::Block | ParticleType::FallingDust | ParticleType::DustPillar => {
+                        ParticleOptions::block(ty, "block/stone".into(), 0x808080)
+                    }
+                    _ => ParticleOptions::simple(ty),
+                };
+                // ServerLevel.sendParticles: count 0 uses the delta as velocity.
+                if count == 0 {
+                    self.particles.create(&options, at, delta);
+                }
+                for _ in 0..count {
+                    let r = self.particles.random();
+                    let p = [
+                        at[0] + r.next_gaussian() * delta[0],
+                        at[1] + r.next_gaussian() * delta[1],
+                        at[2] + r.next_gaussian() * delta[2],
+                    ];
+                    self.particles.create(&options, p, [0.0; 3]);
+                }
+                Ok(Some(json!({ "ok": true, "live": self.particles.len() })))
             }
             other => Err(format!("unknown render command {other}").into()),
         }

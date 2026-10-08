@@ -2,6 +2,7 @@
 //! block interaction, inventory and HUD.
 mod control;
 mod render_control;
+mod render_tick;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -278,6 +279,7 @@ pub struct Resources {
     mob_types: HashMap<String, Arc<MobType>>,
     providers: Providers,
     block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer,
+    animate: horizon_client::animate_tick::AnimateTables,
     nether_environment: Environment,
     behaviours: Behaviours,
     names: Names,
@@ -340,7 +342,7 @@ struct Game<'a> {
     audio: Audio,
     dropped: Vec<ItemEntity>,
     next_entity: u32,
-    particles: Vec<Particle>,
+    particles: horizon_client::particles::ParticleEngine,
     spawn_search: u32,
     mobs: Vec<Mob>,
     arrows: Vec<Arrow>,
@@ -1397,13 +1399,7 @@ impl Game<'_> {
             let eye = self.player.as_ref().map(|p| [p.position.x, p.position.y + f64::from(self.eye), p.position.z]);
             self.res.block_entity_render.tick(r.block_entities(), eye);
         }
-        let facts = &self.res.facts;
-        let world = &self.world;
-        self.particles.retain_mut(|p| p.tick(world, |id| facts.states[id as usize].full_collision));
-        if self.particles.len() > 4000 {
-            let excess = self.particles.len() - 4000;
-            self.particles.drain(..excess);
-        }
+        self.tick_particles();
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
             self.use_item()?;
             self.use_delay = 4;
@@ -2190,34 +2186,10 @@ impl Game<'_> {
                 }
             }
         }
-        // Camera-facing particle quads.
-        let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
-        let forward = glam::Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
-        let right = forward.cross(glam::Vec3::Y).normalize_or_zero();
-        let up = right.cross(forward).normalize_or_zero();
+        // Particles (ParticleEngine.extract): camera-facing quads.
+        let world = &self.world;
+        self.particles.render(camera, self.yaw, self.pitch, alpha as f32, &|b| world.light(b[0], b[1], b[2]), &mut out);
         let atlas = &self.res.atlas;
-        for p in &self.particles {
-            let Some(r) = atlas.sprites.get(&p.sprite).copied() else { continue };
-            let a = alpha;
-            let pos = glam::DVec3::new(
-                p.previous[0] + (p.position[0] - p.previous[0]) * a,
-                p.previous[1] + (p.position[1] - p.previous[1]) * a,
-                p.previous[2] + (p.position[2] - p.previous[2]) * a,
-            ) - camera;
-            let c = pos.as_vec3();
-            let light = self.world.light(p.position[0].floor() as i32, p.position[1].floor() as i32, p.position[2].floor() as i32);
-            let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
-            // TerrainParticle colour: 0.6 base brightness times the block tint.
-            let ch = |sft: u32| (((p.tint >> sft) & 255) as f32 * 0.6) as u32;
-            let color = 0xFF00_0000 | ch(0) << 16 | ch(8) << 8 | ch(16);
-            let (du, dv) = (r.u1 - r.u0, r.v1 - r.v0);
-            let (u0, v0, u1, v1) = (r.u0 + du * p.uv[0], r.v0 + dv * p.uv[1], r.u0 + du * p.uv[2], r.v0 + dv * p.uv[3]);
-            let s = p.size;
-            for (k, uv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter().zip([[u0, v1], [u1, v1], [u1, v0], [u0, v0]]) {
-                let v = c + right * (k.0 * s) + up * (k.1 * s);
-                out.push(Vertex { pos: v.to_array(), uv, layer: 0, color, light: packed });
-            }
-        }
         // Breaking progress overlay (destroy_stage_0..9).
         if let Some(m) = &self.mining
             && m.progress > 0.0
@@ -4658,6 +4630,7 @@ pub fn run() -> Result<()> {
     let audio = Audio::new(&root);
     let world = World::new(facts.air, 0);
     let creative = options.creative;
+    let animate = horizon_client::animate_tick::AnimateTables::load(&root, registry_owner.registry, &biomes)?;
     let mut resources = Resources {
         assets,
         facts,
@@ -4670,6 +4643,7 @@ pub fn run() -> Result<()> {
         layer_names,
         providers: Providers::load(&root),
         block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(&root, &registry_owner.registry)?,
+        animate,
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         behaviours: Behaviours::load(registry_owner.registry, &root)?,
         names: Names::load(&root),
@@ -4691,6 +4665,7 @@ pub fn run() -> Result<()> {
         settings.render_distance = d;
     }
     let look = options.look;
+    let particles = horizon_client::particles::ParticleEngine::new(&root, &resources.atlas.sprites);
     let mut game = Game {
         res: &mut resources,
         collision: &collision,
@@ -4741,7 +4716,7 @@ pub fn run() -> Result<()> {
         audio,
         dropped: Vec::new(),
         next_entity: 0,
-        particles: Vec::new(),
+        particles,
         spawn_search: 0,
         mobs: Vec::new(),
         arrows: Vec::new(),
