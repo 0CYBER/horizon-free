@@ -263,11 +263,11 @@ impl Ambience {
             }
         }
         for (sound, chance) in &sounds.additions {
-            if self.random.next_double() < *chance {
-                if let Some(id) = out.play_tracked(sound, 1.0, false) {
-                    // forAmbientAddition: a one-shot nobody ticks.
-                    let _ = id;
-                }
+            if self.random.next_double() < *chance
+                && let Some(id) = out.play_tracked(sound, 1.0, false)
+            {
+                // forAmbientAddition: a one-shot nobody ticks.
+                let _ = id;
             }
         }
         let Some(mood) = &sounds.mood else { return };

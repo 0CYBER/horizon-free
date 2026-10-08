@@ -91,7 +91,7 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
             })
         })
         .collect();
-    worlds.sort_by(|a, b| b.modified.cmp(&a.modified));
+    worlds.sort_by_key(|w| std::cmp::Reverse(w.modified));
     worlds
 }
 impl Title {
@@ -272,7 +272,7 @@ impl Title {
                 let title = "Create New World";
                 let tw = HudBatch::text_width(atlas, title);
                 batch.text(atlas, title, (w - tw) / 2.0, 8.0, u32::MAX, true);
-                let blink = (self.started.elapsed().as_millis() / 300) % 2 == 0;
+                let blink = (self.started.elapsed().as_millis() / 300).is_multiple_of(2);
                 for (i, (label, value)) in [
                     ("World Name", name),
                     (

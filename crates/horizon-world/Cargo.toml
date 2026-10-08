@@ -21,3 +21,6 @@ path = "src/main.rs"
 [[bin]]
 name = "horizon-worldgen-parity"
 path = "src/bin/worldgen_parity.rs"
+
+[lints]
+workspace = true

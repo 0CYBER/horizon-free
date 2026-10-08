@@ -301,8 +301,8 @@ impl Game<'_> {
                         let w = self.mob_world_base(&[]);
                         spawning::placement_ok(kind.species, &w, x, y, z) && {
                             let mut r = self.world.random.clone();
-                            let rules = spawning::spawn_rules_ok(kind.species, &w, &mut r, x, y, z);
-                            rules
+
+                            spawning::spawn_rules_ok(kind.species, &w, &mut r, x, y, z)
                         }
                     };
                     if ok {
@@ -571,7 +571,8 @@ impl Game<'_> {
                     self.spawn_item(d, pos, [0.0, 0.2, 0.0], 10);
                 }
             }
-            for item in [&m.extra.main_hand] {
+            {
+                let item = &m.extra.main_hand;
                 // Equipment drop chance 8.5% (+ player kill only).
                 if let Some(item) = item
                     && by_player
@@ -714,7 +715,7 @@ impl Game<'_> {
                     self.destroy_particles(pos, old);
                     if drop {
                         let drops = self.res.items.block_drops(
-                            &self.res.assets.registry,
+                            self.res.assets.registry,
                             old,
                             None,
                             &mut self.world.random,
@@ -1206,7 +1207,7 @@ impl Game<'_> {
         let mut sound: Option<&str> = None;
         let mut handled = true;
         let mut drops: Vec<(String, u32)> = Vec::new();
-        let is_food = m.kind.food.iter().any(|f| *f == item);
+        let is_food = m.kind.food.contains(&item);
         match species {
             Species::Cow | Species::Mooshroom if item == "minecraft:bucket" && !m.is_baby() => {
                 give = Some("minecraft:milk_bucket");
@@ -1304,12 +1305,13 @@ impl Game<'_> {
             self.audio
                 .play(&format!("minecraft:{s}"), Some(center), 1.0, pitch);
         }
-        if consume && !creative {
-            if let Some(stack) = self.inventory[selected].as_mut() {
-                stack.count -= 1;
-                if stack.count == 0 {
-                    self.inventory[selected] = None;
-                }
+        if consume
+            && !creative
+            && let Some(stack) = self.inventory[selected].as_mut()
+        {
+            stack.count -= 1;
+            if stack.count == 0 {
+                self.inventory[selected] = None;
             }
         }
         if let Some(g) = give {
@@ -1459,9 +1461,9 @@ impl Game<'_> {
                 (mob.position.y + mob.eye_height()).floor() as i32,
                 mob.position.z.floor() as i32,
             );
-            let mut packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+            let mut packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             if mob.fire_ticks > 0 || matches!(mob.species(), Species::Blaze | Species::MagmaCube) {
-                packed = 15 * 16 | (15 * 16) << 8;
+                packed = (15 * 16) | ((15 * 16) << 8);
             }
             horizon_client::mobs::render::render(
                 mob,
@@ -1494,9 +1496,9 @@ impl Game<'_> {
                 a.position.y.floor() as i32,
                 a.position.z.floor() as i32,
             );
-            let mut packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+            let mut packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             if a.is_fireball() {
-                packed = 15 * 16 | (15 * 16) << 8;
+                packed = (15 * 16) | ((15 * 16) << 8);
             }
             if a.is_arrow() {
                 let Some(r) = atlas.sprites.get("entity/projectiles/arrow").copied() else {

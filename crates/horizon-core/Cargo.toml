@@ -29,3 +29,6 @@ path = "src/bin/density_parity.rs"
 [[bin]]
 name = "horizon-float-log-parity"
 path = "src/bin/float_log_parity.rs"
+
+[lints]
+workspace = true

@@ -47,7 +47,10 @@ impl CommandError {
     pub fn context(&self) -> Option<String> {
         let input = self.input.as_ref()?;
         let cursor = self.cursor.min(input.len());
-        let start = input.floor_char_boundary(cursor.saturating_sub(10));
+        let start = (0..=cursor.saturating_sub(10))
+            .rev()
+            .find(|&i| input.is_char_boundary(i))
+            .unwrap_or(0);
         let mut out = String::new();
         if cursor > 10 {
             out.push_str("...");
@@ -490,7 +493,7 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
             out.push(expanded);
         }
     }
-    out.sort_by(|a, b| a.text.to_lowercase().cmp(&b.text.to_lowercase()));
+    out.sort_by_key(|a| a.text.to_lowercase());
     ((start, end), out)
 }
 

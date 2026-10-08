@@ -97,7 +97,7 @@ impl TestTerrain {
                     };
                     chunk.set(x, y, z, b);
                 }
-                if h > 63 && hash(wx, wz) % 13 == 0 {
+                if h > 63 && hash(wx, wz).is_multiple_of(13) {
                     chunk.set(x, h + 1, z, self.short_grass);
                 }
             }
@@ -107,7 +107,7 @@ impl TestTerrain {
             for x in 2..14 {
                 let (wx, wz) = (cx * 16 + x, cz * 16 + z);
                 let h = Self::height(wx, wz);
-                if h <= 64 || hash(wx, wz) % 97 != 0 {
+                if h <= 64 || !hash(wx, wz).is_multiple_of(97) {
                     continue;
                 }
                 for y in h + 1..h + 6 {

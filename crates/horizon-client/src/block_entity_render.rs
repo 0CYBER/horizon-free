@@ -85,7 +85,7 @@ pub fn diffuse(normal: Vec3, lights: (Vec3, Vec3)) -> f32 {
 }
 /// Packed vertex light from the level's packed `sky << 4 | block` byte.
 pub fn vertex_light(packed: u8) -> u32 {
-    u32::from(packed >> 4) * 16 | (u32::from(packed & 15) * 16) << 8
+    (u32::from(packed >> 4) * 16) | ((u32::from(packed & 15) * 16) << 8)
 }
 fn pack_color(rgb: u32, alpha: u32, brightness: f32) -> u32 {
     let c = |shift: u32| (((rgb >> shift) & 255) as f32 * brightness) as u32;

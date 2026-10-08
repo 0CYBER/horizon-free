@@ -96,7 +96,7 @@ impl MobWorld<'_> {
     /// WalkNodeEvaluator.getPathTypeStatic.
     pub fn path_type_static(&self, x: i32, y: i32, z: i32) -> PathType {
         let t = self.path_type_from_state(x, y, z);
-        if t == PathType::Open && y >= MIN_Y + 1 {
+        if t == PathType::Open && y > MIN_Y {
             match self.path_type_from_state(x, y - 1, z) {
                 PathType::Open | PathType::Water | PathType::Lava | PathType::Walkable => {
                     PathType::Open
@@ -345,7 +345,7 @@ impl<'a, 'w> Finder<'a, 'w> {
     fn state(&self, x: i32, y: i32, z: i32) -> data::StateData {
         self.w.data.state(self.w.world.block(x, y, z))
     }
-    fn from_state(&self, x: i32, y: i32, z: i32) -> PathType {
+    fn type_from_state(&self, x: i32, y: i32, z: i32) -> PathType {
         self.w.path_type_from_state(x, y, z)
     }
     fn fluid(&self, x: i32, y: i32, z: i32) -> Fluid {
@@ -389,7 +389,7 @@ impl<'a, 'w> Finder<'a, 'w> {
         match self.eval {
             Evaluator::Fly => self.fly_path_type(x, y, z),
             Evaluator::Amphibious { .. } => {
-                let t = self.from_state(x, y, z);
+                let t = self.type_from_state(x, y, z);
                 if t == PathType::Water {
                     for (dx, dy, dz) in [
                         (0, -1, 0),
@@ -399,7 +399,7 @@ impl<'a, 'w> Finder<'a, 'w> {
                         (-1, 0, 0),
                         (1, 0, 0),
                     ] {
-                        if self.from_state(x + dx, y + dy, z + dz) == PathType::Blocked {
+                        if self.type_from_state(x + dx, y + dy, z + dz) == PathType::Blocked {
                             return PathType::WaterBorder;
                         }
                     }
@@ -418,9 +418,9 @@ impl<'a, 'w> Finder<'a, 'w> {
         self.w.check_neighbours(x, y, z, t)
     }
     fn fly_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
-        let mut t = self.from_state(x, y, z);
-        if t == PathType::Open && y >= MIN_Y + 1 {
-            let below = self.from_state(x, y - 1, z);
+        let mut t = self.type_from_state(x, y, z);
+        if t == PathType::Open && y > MIN_Y {
+            let below = self.type_from_state(x, y - 1, z);
             t = match below {
                 PathType::Fire | PathType::Lava => PathType::Fire,
                 PathType::Damaging => PathType::Damaging,

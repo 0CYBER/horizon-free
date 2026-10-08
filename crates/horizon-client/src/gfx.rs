@@ -156,11 +156,7 @@ fn mip_chain(pixels: &[u8], size: u32, layers: u32) -> (Vec<u8>, u32) {
                     }
                     let o = &mut next[(y * n + x) * 4..][..4];
                     for c in 0..3 {
-                        o[c] = if weight > 0 {
-                            (acc[c] / weight) as u8
-                        } else {
-                            0
-                        };
+                        o[c] = acc[c].checked_div(weight).unwrap_or(0) as u8;
                     }
                     o[3] = (acc[3] / 4) as u8;
                 }
@@ -965,7 +961,7 @@ impl Renderer {
         // (section, entered face, directions travelled)
         queue.push_back((from, None::<usize>, 0u8));
         self.reachable.insert(from);
-        let sections = (crate::chunk::HEIGHT / 16) as i32;
+        let sections = crate::chunk::HEIGHT / 16;
         while let Some((key, entered, travelled)) = queue.pop_front() {
             let vis = self
                 .visibility

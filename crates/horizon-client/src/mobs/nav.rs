@@ -135,7 +135,7 @@ impl Mob {
             return 3;
         }
         let mut sacrifice = (self.health - self.attrs.max_health * 0.33) as i32;
-        sacrifice -= (3 - 2) * 4;
+        sacrifice -= 4;
         sacrifice.max(0) + 3
     }
     pub fn malus(&self, t: PathType) -> f32 {
@@ -449,13 +449,15 @@ impl Mob {
         let zd = (self.position.z - (f64::from(n.z) + 0.5)).abs();
         let max = f64::from(self.ai.nav.max_distance_to_waypoint);
         let close = xd < max && zd < max && yd < vertical;
-        if close || Navigation::can_cut_corner(n.kind) && self.should_target_next_node(w, mob_pos) {
-            if let Some(p) = &mut self.ai.nav.path {
-                p.advance();
-            }
+        if (close || Navigation::can_cut_corner(n.kind) && self.should_target_next_node(w, mob_pos))
+            && let Some(p) = &mut self.ai.nav.path
+        {
+            p.advance();
         }
         self.do_stuck_detection(w, mob_pos);
     }
+    // Vanilla's NaN-sensitive `!(a < b)` form.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     fn should_target_next_node(&self, w: &MobWorld, mob: Vec3) -> bool {
         let Some(path) = &self.ai.nav.path else {
             return false;

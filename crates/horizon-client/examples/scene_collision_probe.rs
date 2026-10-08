@@ -36,7 +36,7 @@ fn main() -> Result<()> {
     }
     let assets = assets::Assets::load(&resources)?;
     let world = world::World::test_scene(&assets, radius)?;
-    let binding = collisions::load(&resources, &assets.registry)?;
+    let binding = collisions::load(&resources, assets.registry)?;
     let mut scene = collisions::SceneCollisions {
         world: &world,
         binding: &binding,

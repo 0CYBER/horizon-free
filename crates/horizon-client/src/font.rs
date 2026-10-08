@@ -193,7 +193,7 @@ impl Font {
                     let name = file
                         .trim_start_matches("minecraft:")
                         .trim_end_matches(".png");
-                    let name = format!("{}", name);
+                    let name = name.to_string();
                     let Some(rect) = sprites.get(&name).copied() else {
                         continue;
                     };

@@ -49,10 +49,7 @@ pub fn register(m: &mut Mob) {
             let mut hurt = HurtByTarget::new().alert();
             hurt.alert_except = vec![S::ZombifiedPiglin];
             t.add(1, hurt);
-            t.add(
-                2,
-                NearestTarget::player(false).when(|m, w| drowned_can_attack(m, w)),
-            );
+            t.add(2, NearestTarget::player(false).when(drowned_can_attack));
             t.add(
                 3,
                 NearestTarget::species(&[S::Villager, S::WanderingTrader], false),

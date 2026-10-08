@@ -147,8 +147,8 @@ impl Mob {
             v.z * f64::from(speed),
         );
         let (s, c) = (
-            f64::from(self.yaw.to_radians().sin() as f32),
-            f64::from(self.yaw.to_radians().cos() as f32),
+            f64::from(self.yaw.to_radians().sin()),
+            f64::from(self.yaw.to_radians().cos()),
         );
         self.velocity = Vec3::new(
             self.velocity.x + (v.x * c - v.z * s),

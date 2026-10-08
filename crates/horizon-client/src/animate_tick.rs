@@ -192,7 +192,7 @@ impl AnimateTables {
                 .map(|id| {
                     registry
                         .state(BlockStateId(id))
-                        .is_some_and(|s| names.is_some_and(|n| n.iter().any(|t| *t == s.name)))
+                        .is_some_and(|s| names.is_some_and(|n| n.contains(&s.name)))
                 })
                 .collect()
         };

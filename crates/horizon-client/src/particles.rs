@@ -893,9 +893,7 @@ impl ParticleEngine {
                     * f64::from(scale)) as i32)
                     .max(1);
                 q.has_physics = physics;
-                if ty == T::WhiteSmoke {
-                    q.set_color(0.729_411_8, 0.694_117_67, 0.760_784_3);
-                } else if ty == T::WhiteAsh {
+                if matches!(ty, T::WhiteSmoke | T::WhiteAsh) {
                     q.set_color(186.0 / 255.0, 177.0 / 255.0, 194.0 / 255.0);
                 }
                 q.size_curve = Size::GrowIn;

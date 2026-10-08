@@ -366,10 +366,8 @@ fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
     }
     // Mob.aiStep: undead burn in daylight.
-    if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) {
-        if m.extra.head.is_none() {
-            m.fire_ticks = m.fire_ticks.max(160);
-        }
+    if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) && m.extra.head.is_none() {
+        m.fire_ticks = m.fire_ticks.max(160);
     }
     species_ai_step(m, w, events);
 }
@@ -434,10 +432,8 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     match m.species() {
         Species::Chicken => farm::chicken_ai_step(m, w, events),
-        Species::Sheep => {
-            if m.extra.anim_ticks > 0 {
-                m.extra.anim_ticks -= 1;
-            }
+        Species::Sheep if m.extra.anim_ticks > 0 => {
+            m.extra.anim_ticks -= 1;
         }
         _ => {}
     }

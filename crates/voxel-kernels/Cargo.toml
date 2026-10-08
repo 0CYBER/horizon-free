@@ -8,3 +8,6 @@ rust-version.workspace = true
 [[bin]]
 name = "voxel-bench"
 path = "src/main.rs"
+
+[lints]
+workspace = true

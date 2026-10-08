@@ -121,9 +121,7 @@ fn camera_fluid_height(world: &World, facts: &BlockFacts, b: [i32; 3]) -> Option
     }
     let above = facts.get(world.block(b[0], b[1] + 1, b[2]));
     let source = s.fluid_level >= 8 && !s.fluid_falling;
-    let height = if source && above.full_collision {
-        1.0
-    } else if above.fluid == s.fluid {
+    let height = if (source && above.full_collision) || above.fluid == s.fluid {
         1.0
     } else {
         f64::from(s.fluid_level) / 9.0

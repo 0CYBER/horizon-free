@@ -58,7 +58,7 @@ impl MotionResources {
         )?
         .0
         .tag;
-        let properties = MovementProperties::from_nbt(&data, &assets.registry)?;
+        let properties = MovementProperties::from_nbt(&data, assets.registry)?;
         let bundle: BTreeMap<String, String> =
             serde_json::from_slice(&fs::read(root.join("block-tags.json"))?)?;
         let mut definitions = TagDefinitions::default();

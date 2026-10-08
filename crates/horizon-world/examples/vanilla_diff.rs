@@ -275,7 +275,7 @@ fn main() -> Result<(), Error> {
         }
         println!("decoration order sensitivity (raster vs reverse): {total} blocks differ");
         let mut sorted: Vec<_> = pairs.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|p| std::cmp::Reverse(p.1));
         for ((v, r), n) in sorted.iter().take(limit) {
             println!("{n:>9}  {v} <-> {r}");
         }
@@ -406,7 +406,7 @@ fn main() -> Result<(), Error> {
         differ as f64 * 100.0 / compared.max(1) as f64
     );
     let mut sorted: Vec<_> = pairs.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted.sort_by_key(|p| std::cmp::Reverse(p.1));
     for ((v, r), n) in sorted.iter().take(limit) {
         println!("{n:>9}  vanilla {v} -> rust {r}");
     }
@@ -425,7 +425,7 @@ fn main() -> Result<(), Error> {
         })
         .filter(|(n, _)| *n > 0)
         .collect();
-    net.sort_by(|a, b| b.0.cmp(&a.0));
+    net.sort_by_key(|p| std::cmp::Reverse(p.0));
     println!("one-sided differences:");
     for (n, (v, r)) in net.iter().take(limit) {
         println!("{n:>9}  vanilla {v} -> rust {r}");
@@ -433,7 +433,7 @@ fn main() -> Result<(), Error> {
     let clean = per_chunk.iter().filter(|(_, n)| *n == 0).count();
     println!("chunks identical: {clean}/{}", per_chunk.len());
     let mut worst = per_chunk.clone();
-    worst.sort_by(|a, b| b.1.cmp(&a.1));
+    worst.sort_by_key(|p| std::cmp::Reverse(p.1));
     for ((x, z), n) in worst.iter().take(8).filter(|(_, n)| *n > 0) {
         println!("  chunk {x} {z}: {n}");
     }

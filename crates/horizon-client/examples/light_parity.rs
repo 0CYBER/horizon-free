@@ -276,7 +276,7 @@ fn incremental(
         let top = (0..384)
             .rev()
             .find(|y| world[&(cx, cz)].get(x & 15, MIN_Y + y, z & 15) != 0)
-            .unwrap_or(100) as i32
+            .unwrap_or(100)
             + MIN_Y;
         let y = top - 3 + next(6) as i32;
         let state = palette[next(palette.len() as u64) as usize];

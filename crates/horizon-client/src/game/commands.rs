@@ -81,7 +81,10 @@ impl Game<'_> {
         if cursor > 10 {
             context.push("...");
         }
-        let start = input.floor_char_boundary(cursor.saturating_sub(10));
+        let start = (0..=cursor.saturating_sub(10))
+            .rev()
+            .find(|&i| input.is_char_boundary(i))
+            .unwrap_or(0);
         context.push(&input[start..cursor]);
         if cursor < input.len() {
             context.push(
@@ -279,13 +282,12 @@ impl Game<'_> {
                         return None;
                     }
                 }
-                if let Some((lo, hi)) = s.level {
-                    if t != Target::Player
+                if let Some((lo, hi)) = s.level
+                    && (t != Target::Player
                         || lo.is_some_and(|l| level < l)
-                        || hi.is_some_and(|h| level > h)
-                    {
-                        return None;
-                    }
+                        || hi.is_some_and(|h| level > h))
+                {
+                    return None;
                 }
                 for (mode, neg) in &s.gamemodes {
                     let current = if creative { "creative" } else { "survival" };
@@ -504,7 +506,10 @@ impl Game<'_> {
                     &[mode_name],
                 ));
             } else {
-                self.system_message(Text::translate("gameMode.changed", &[mode_name.clone()]));
+                self.system_message(Text::translate(
+                    "gameMode.changed",
+                    std::slice::from_ref(&mode_name),
+                ));
                 self.feedback(Text::translate(
                     "commands.gamemode.success.other",
                     &[Text::literal(PLAYER_NAME), mode_name],

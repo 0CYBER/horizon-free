@@ -1070,7 +1070,7 @@ impl Game<'_> {
                 }
                 LevelEvent::DropResources { pos, state } => {
                     let drops = self.res.items.block_drops(
-                        &self.res.assets.registry,
+                        self.res.assets.registry,
                         state,
                         None,
                         &mut self.world.random,
@@ -1288,7 +1288,7 @@ impl Game<'_> {
                 || self.res.items.correct_for_drops(held.as_ref(), &facts.name);
             if harvest {
                 let drops = self.res.items.block_drops(
-                    &self.res.assets.registry,
+                    self.res.assets.registry,
                     state,
                     held.as_ref(),
                     &mut self.world.random,
@@ -1840,7 +1840,7 @@ impl Game<'_> {
             self.world.weather.tick(&mut self.world.random);
         }
         self.tick_weather_effects();
-        if self.ticks % 6000 == 0 {
+        if self.ticks.is_multiple_of(6000) {
             self.save_game()?;
         }
         self.advance_clock();
@@ -2855,10 +2855,10 @@ impl Game<'_> {
         let max = |items: &Items, s: &ItemStack| items.get(&s.item).map_or(64, |i| i.max_stack);
         let shift =
             self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
-        if slot >= 300 {
-            if let Some(key) = self.container {
-                self.world.modified.insert((key.0 >> 4, key.2 >> 4));
-            }
+        if slot >= 300
+            && let Some(key) = self.container
+        {
+            self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
         let is_furnace = matches!(self.container_kind(), Some(BlockEntity::Furnace(_)));
         if is_furnace && slot == 302 {
@@ -3031,7 +3031,7 @@ impl Game<'_> {
                 (q.y + 0.1).floor() as i32,
                 q.z.floor() as i32,
             );
-            let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             let center = pos.as_vec3() + glam::Vec3::new(0.0, bob + 0.125, 0.0);
             let rot = glam::Mat3::from_rotation_y(spin);
             let icon = self.icon(&item.stack.item);
@@ -3302,8 +3302,8 @@ impl Game<'_> {
                     o.position.y.floor() as i32,
                     o.position.z.floor() as i32,
                 );
-                let packed =
-                    u32::from(light >> 4).max(10) * 16 | (u32::from(light & 15).max(10) * 16) << 8;
+                let packed = (u32::from(light >> 4).max(10) * 16)
+                    | ((u32::from(light & 15).max(10) * 16) << 8);
                 let c = p.as_vec3();
                 let s = 0.15;
                 for (k, uv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
@@ -3340,7 +3340,7 @@ impl Game<'_> {
                 f.position.y.floor() as i32 + 1,
                 f.position.z.floor() as i32,
             );
-            let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             let v = |x: f32, y: f32, z: f32| o + glam::Vec3::new(x, y, z);
             let faces = [
                 (
@@ -3470,7 +3470,7 @@ impl Game<'_> {
                             uv,
                             layer: 0,
                             color: 0xB4FF_FFFF,
-                            light: 15 * 16 | (15 * 16) << 8,
+                            light: (15 * 16) | ((15 * 16) << 8),
                         });
                     }
                 }
@@ -3733,7 +3733,7 @@ impl Game<'_> {
                     pos: p.to_array(),
                     uv,
                     layer: 2,
-                    color: color,
+                    color,
                     light: 0,
                 });
             }
@@ -3832,7 +3832,7 @@ impl Game<'_> {
         let c = sky.cloud_color;
         let color = |shade: f32| {
             let ch = |v: f32| ((v * shade).clamp(0.0, 1.0) * 255.0) as u32;
-            ch(c[3].max(0.0).min(1.0)) << 24 | ch(c[2]) << 16 | ch(c[1]) << 8 | ch(c[0])
+            ch(c[3].clamp(0.0, 1.0)) << 24 | ch(c[2]) << 16 | ch(c[1]) << 8 | ch(c[0])
         };
         let light = 240 | 240 << 8;
         for dz in -radius..=radius {
@@ -4098,7 +4098,7 @@ impl Game<'_> {
             .map(|c| self.with_entities(c))
             .collect();
         self.save
-            .save(&chunks, &self.res.assets.registry, &self.res.biomes)?;
+            .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
         self.save_dimension_entities()?;
         // Coordinates scale by 8 between the Overworld and the Nether.
         let scale = match (self.dim, target) {
@@ -5147,7 +5147,7 @@ impl Game<'_> {
             eye[1].floor() as i32,
             eye[2].floor() as i32,
         );
-        let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+        let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let deg = |d: f32| d.to_radians();
         let sqrt_attack = attack.sqrt();
         match self.hand_item.clone() {
@@ -5476,7 +5476,7 @@ impl Game<'_> {
                 let a = (fade.clamp(0.0, 1.0) * 255.0) as u32;
                 let color = a << 24 | 0xFF_FFFF;
                 let light = self.world.light(x, top.max(cy), z);
-                let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+                let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
                 let (b, t) = (
                     (f64::from(y0) - camera.y) as f32,
                     (f64::from(y1) - camera.y) as f32,
@@ -5842,7 +5842,7 @@ impl Game<'_> {
             .map(|c| self.with_entities(c))
             .collect();
         self.save
-            .save(&chunks, &self.res.assets.registry, &self.res.biomes)?;
+            .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
         self.save_entities()?;
         self.level.selected_slot = self.selected as i32;
         let level = &mut self.level;
@@ -6207,7 +6207,7 @@ impl Game<'_> {
         if !modified.is_empty()
             && let Err(e) = self
                 .save
-                .save(&modified, &self.res.assets.registry, &self.res.biomes)
+                .save(&modified, self.res.assets.registry, &self.res.biomes)
         {
             eprintln!("Horizon: failed to save unloaded chunks: {e}");
         }
@@ -6627,19 +6627,19 @@ pub fn run() -> Result<()> {
         format!("{e}\nPrepare resources with: python3 tools/prepare_native_client.py --prepare")
     })?);
     eprintln!("load assets: {:.2}s", started.elapsed().as_secs_f32());
-    let facts = BlockFacts::load(&root, &assets.registry)?;
+    let facts = BlockFacts::load(&root, assets.registry)?;
     let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
     eprintln!("load facts: {:.2}s", started.elapsed().as_secs_f32());
-    let items = Items::load(&root, &assets.registry, &facts)?;
+    let items = Items::load(&root, assets.registry, &facts)?;
     eprintln!("load items: {:.2}s", started.elapsed().as_secs_f32());
     let recipes = Recipes::load(&root, &items)?;
     let biomes = Arc::new(Biomes::load(&root)?);
     let environment = Environment::load(&root)?;
     eprintln!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
-    let visibility = models::load_visibility(&root, &assets.registry)?;
+    let visibility = models::load_visibility(&root, assets.registry)?;
     eprintln!("load visibility: {:.2}s", started.elapsed().as_secs_f32());
     let tables = Arc::new(MeshTables::new(&assets, &facts, visibility)?);
-    let light = Arc::new(LightTables::load(&root, &assets.registry, &facts)?);
+    let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
     eprintln!("load tables: {:.2}s", started.elapsed().as_secs_f32());
     let atlas = HudAtlas::build(&root)?;
     horizon_client::ui::load_metadata(&root);
@@ -6654,7 +6654,7 @@ pub fn run() -> Result<()> {
         .map(|(name, layer)| (*layer, name.trim_start_matches("minecraft:").to_owned()))
         .collect();
     let registry_owner = assets.clone();
-    let collision = collisions::load(&root, &registry_owner.registry)?;
+    let collision = collisions::load(&root, registry_owner.registry)?;
     let motion = MotionResources::load(&root, &registry_owner)?;
     eprintln!(
         "load collision+motion: {:.2}s",
@@ -6712,7 +6712,7 @@ pub fn run() -> Result<()> {
         providers: Providers::load(&root),
         block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
             &root,
-            &registry_owner.registry,
+            registry_owner.registry,
         )?,
         animate,
         fog,
@@ -6726,7 +6726,13 @@ pub fn run() -> Result<()> {
         clouds: horizon_client::hud::decode(
             &root.join("assets/minecraft/textures/environment/clouds.png"),
         )
-        .map(|(w, h, px)| (w, h, px.chunks_exact(4).map(|p| p[3] > 0).collect()))
+        .map(|(w, h, px)| {
+            (
+                w,
+                h,
+                px.as_chunks::<4>().0.iter().map(|p| p[3] > 0).collect(),
+            )
+        })
         .unwrap_or((1, 1, vec![false])),
         mob_types: MobTypes::load(&root)?
             .types

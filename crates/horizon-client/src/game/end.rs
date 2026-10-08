@@ -940,7 +940,7 @@ impl Game<'_> {
     pub(super) fn end_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
         let atlas = &self.res.atlas;
         if let Some(r) = atlas.sprites.get("entity/end_portal/end_portal").copied() {
-            let full = 15 * 16 | (15 * 16) << 8;
+            let full = (15 * 16) | ((15 * 16) << 8);
             // Each block shows a quarter of the texture so neighbours join up.
             let quarter = |a: i32, b: i32| {
                 let (fa, fb) = (a.rem_euclid(4) as f32 / 4.0, b.rem_euclid(4) as f32 / 4.0);
@@ -1106,7 +1106,7 @@ impl Game<'_> {
                 feet.y.floor() as i32,
                 feet.z.floor() as i32,
             );
-            let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             // poseStack.scale(2) then translate(0, -0.5, 0); outer_glass at y 24 px + bob.
             let center = rel.as_vec3() + glam::Vec3::new(0.0, 2.0 * (24.0 / 16.0 - 0.5) + bob, 0.0);
             let outer = spin * tilt;
@@ -1301,7 +1301,7 @@ impl Game<'_> {
             pitch.cos(),
             yaw.cos() * pitch.sin(),
         ) * 0.25;
-        let full = 15 * 16 | (15 * 16) << 8;
+        let full = (15 * 16) | ((15 * 16) << 8);
         for eye in &self.end.eyes {
             let p = eye.previous + (eye.position - eye.previous) * alpha - camera;
             let c = p.as_vec3();

@@ -63,7 +63,7 @@ impl ItemEntity {
             self.velocity.y -= 0.04;
         }
         let horizontal = self.velocity.x * self.velocity.x + self.velocity.z * self.velocity.z;
-        if !self.on_ground || horizontal > 1.0e-5 || (self.age + self.id) % 4 == 0 {
+        if !self.on_ground || horizontal > 1.0e-5 || (self.age + self.id).is_multiple_of(4) {
             let mut scene = SceneCollisions {
                 world,
                 binding: collision,

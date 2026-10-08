@@ -233,7 +233,7 @@ impl Builder {
         Some(piece)
     }
     /// StrongholdPieces.generatePieceFromSmallDoor.
-    fn from_small_door(
+    fn piece_from_small_door(
         &mut self,
         r: &mut impl RandomSource,
         foot: [i32; 3],
@@ -312,7 +312,7 @@ impl Builder {
         if (foot[0] - start.min[0]).abs() > 112 || (foot[2] - start.min[2]).abs() > 112 {
             return;
         }
-        if let Some(piece) = self.from_small_door(r, foot, d, depth + 1) {
+        if let Some(piece) = self.piece_from_small_door(r, foot, d, depth + 1) {
             self.pieces.push(piece);
             self.pending.push(self.pieces.len() - 1);
         }

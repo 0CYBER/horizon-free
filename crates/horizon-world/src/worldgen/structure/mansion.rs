@@ -604,6 +604,8 @@ impl<R: RandomSource> Placer<'_, R> {
         let start_dir = direction;
         loop {
             let (dx, dz) = step(dir);
+            let (cx, cz) = step(counter_clockwise(dir));
+            let inner_corner = is_house(grid, gx + dx + cx, gy + dz + cz);
             if !is_house(grid, gx + dx, gy + dz) {
                 data.position = rel(data.position, data.rotation, Direction::South, -1);
                 self.add("wall_corner", data.position, data.rotation, Mirror::None);
@@ -614,10 +616,7 @@ impl<R: RandomSource> Placer<'_, R> {
                 if gx != end_x || gy != end_y || start_dir != dir {
                     self.wall_piece(data);
                 }
-            } else if {
-                let (cx, cz) = step(counter_clockwise(dir));
-                is_house(grid, gx + dx + cx, gy + dz + cz)
-            } {
+            } else if inner_corner {
                 data.position = rel(data.position, data.rotation, Direction::South, 6);
                 data.position = rel(data.position, data.rotation, Direction::East, 8);
                 data.rotation = data.rotation.get_rotated(Rotation::Counterclockwise90);

@@ -727,8 +727,9 @@ impl EditBox {
         let displayed: String = rest.chars().take(shown_len).collect();
         let rel_cursor = self.cursor as isize - self.display as isize;
         let on_screen = rel_cursor >= 0 && rel_cursor as usize <= shown_len;
-        let show_cursor =
-            self.focused && (self.focused_at.elapsed().as_millis() / 300) % 2 == 0 && on_screen;
+        let show_cursor = self.focused
+            && (self.focused_at.elapsed().as_millis() / 300).is_multiple_of(2)
+            && on_screen;
         let styled = |from: usize, to: usize| -> Text {
             match format {
                 Some(t) => t.slice(self.display + from, self.display + to),

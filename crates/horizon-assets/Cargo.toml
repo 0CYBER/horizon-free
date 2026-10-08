@@ -10,3 +10,6 @@ description = "Horizon version-specific model and resource decoding"
 horizon-core = { path = "../horizon-core" }
 serde = "1.0.229"
 serde_json = { version = "1.0.151", features = ["raw_value"] }
+
+[lints]
+workspace = true
