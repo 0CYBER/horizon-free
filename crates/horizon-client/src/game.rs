@@ -5,6 +5,7 @@ mod enchant_effects;
 mod potions;
 mod station_control;
 mod stations;
+mod trading;
 use horizon_client::{
     Result,
     assets::Assets,

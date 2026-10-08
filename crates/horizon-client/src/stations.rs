@@ -17,10 +17,16 @@ pub struct StationData {
     pub enchantments: Enchantments,
     pub recipes: StationRecipes,
     pub brewing: crate::brewing::Brewing,
+    pub trades: crate::merchant::Trades,
 }
 impl StationData {
     pub fn load(root: &Path, items: &Items) -> Self {
-        Self { enchantments: Enchantments::load(root), recipes: StationRecipes::load(root, items), brewing: crate::brewing::Brewing::load(root, items) }
+        Self {
+            enchantments: Enchantments::load(root),
+            recipes: StationRecipes::load(root, items),
+            brewing: crate::brewing::Brewing::load(root, items),
+            trades: crate::merchant::Trades::load(root),
+        }
     }
 }
 

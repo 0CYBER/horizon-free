@@ -16,6 +16,7 @@ pub(super) const HELP: &[&str] = &[
     "menu                           JSON dump of the open menu, carried stack and inventory",
     "effect ID SECONDS [AMPLIFIER]  give a status effect (effect clear removes all)",
     "effects                        list active status effects",
+    "trade PROFESSION [LEVEL] [TYPE] open a villager trading menu (offers from the world's trade sequences)",
     "close                          close the open menu",
 ];
 fn id(name: &str) -> String {
@@ -149,6 +150,16 @@ impl Game<'_> {
                 let seconds: i32 = arg(2)?.parse()?;
                 let amp: i32 = words.get(3).map_or(Ok(0), |a| a.parse())?;
                 self.potions.effects.add(horizon_client::effects::EffectInstance::new(def.id, seconds * 20, amp));
+                ok()
+            }
+            "trade" => {
+                let profession = arg(1)?.trim_start_matches("minecraft:").to_owned();
+                if !horizon_client::merchant::PROFESSIONS.contains(&profession.as_str()) {
+                    return Err(format!("unknown profession {profession}").into());
+                }
+                let level: i32 = words.get(2).map_or(Ok(1), |l| l.parse())?;
+                let variant = id(words.get(3).copied().unwrap_or("plains"));
+                self.open_merchant(&profession, &variant, level);
                 ok()
             }
             "effects" => Ok(Some(json!({ "effects": self.effects_json(), "health": self.player.as_ref().map(|p| p.health.health()) }))),

@@ -26,6 +26,8 @@ pub(super) enum Kind {
     Grindstone,
     Smithing,
     Stonecutter,
+    /// Villager trading (game/trading.rs).
+    Merchant,
 }
 impl Kind {
     fn from_block(name: &str) -> Option<Self> {
@@ -52,6 +54,7 @@ impl Kind {
             Self::Grindstone => "gui/container/grindstone",
             Self::Smithing => "gui/container/smithing",
             Self::Stonecutter => "gui/container/stonecutter",
+            Self::Merchant => "gui/container/villager",
         }
     }
     fn title_key(self) -> &'static str {
@@ -61,6 +64,7 @@ impl Kind {
             Self::Grindstone => "container.grindstone_title",
             Self::Smithing => "container.upgrade",
             Self::Stonecutter => "container.stonecutter",
+            Self::Merchant => "merchant.trades",
         }
     }
     /// (titleLabelX, titleLabelY).
@@ -79,6 +83,7 @@ impl Kind {
             Self::Grindstone => &[(49.0, 19.0), (49.0, 40.0)],
             Self::Smithing => &[(8.0, 48.0), (26.0, 48.0), (44.0, 48.0)],
             Self::Stonecutter => &[(20.0, 33.0)],
+            Self::Merchant => &[(86.0, 37.0), (112.0, 37.0)],
         };
         table[i.min(table.len() - 1)]
     }
@@ -89,6 +94,7 @@ impl Kind {
             Self::Grindstone => Some((129.0, 34.0)),
             Self::Smithing => Some((98.0, 48.0)),
             Self::Stonecutter => Some((143.0, 33.0)),
+            Self::Merchant => Some((170.0, 37.0)),
         }
     }
 }
@@ -97,7 +103,7 @@ pub(super) struct Station {
     pub(super) kind: Kind,
     pub(super) pos: [i32; 3],
     pub(super) inputs: Vec<Option<ItemStack>>,
-    result: Option<ItemStack>,
+    pub(super) result: Option<ItemStack>,
     offers: EnchantOffers,
     bookcases: i32,
     anvil: AnvilResult,
@@ -111,6 +117,8 @@ pub(super) struct Station {
     /// Anvil: the input the rename box was last filled from.
     anvil_last: Option<ItemStack>,
     last_sound: u64,
+    /// Villager trading state.
+    pub(super) merchant: Option<Box<super::trading::MerchantState>>,
 }
 impl Station {
     fn new(kind: Kind, pos: [i32; 3]) -> Self {
@@ -129,7 +137,11 @@ impl Station {
             input_item: None,
             anvil_last: None,
             last_sound: 0,
+            merchant: None,
         }
+    }
+    pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
+        Self::new(kind, pos)
     }
 }
 
@@ -195,6 +207,9 @@ impl Game<'_> {
             return Some([(56.0, 51.0), (79.0, 58.0), (102.0, 51.0), (79.0, 17.0), (17.0, 17.0)][i - 300]);
         }
         let s = self.station.as_ref()?;
+        if s.kind == Kind::Merchant && i < 36 {
+            return Some(super::trading::inventory_slot(i));
+        }
         match i {
             RESULT => s.kind.result_pos(),
             _ if i >= INPUT && i < INPUT + s.inputs.len() => Some(s.kind.input_pos(i - INPUT)),
@@ -253,6 +268,7 @@ impl Game<'_> {
             Kind::Smithing => {
                 s.result = data.recipes.smithing_result(&data.enchantments, s.inputs[0].as_ref(), s.inputs[1].as_ref(), s.inputs[2].as_ref());
             }
+            Kind::Merchant => super::trading::update(&mut s, items),
             Kind::Stonecutter => {
                 let item = s.inputs[0].as_ref().map(|i| i.item.clone());
                 if item != s.input_item {
@@ -430,6 +446,7 @@ impl Game<'_> {
                         moved = self.move_to(&mut stack, &[INPUT, INPUT + 1], false);
                     }
                 }
+                Some(Kind::Merchant) => {}
                 Some(Kind::Smithing) | Some(Kind::Anvil) | Some(Kind::Stonecutter) => {
                     let n = self.station.as_ref().map_or(0, |s| s.inputs.len());
                     let inputs: Vec<usize> = (0..n).map(|i| INPUT + i).collect();
@@ -565,6 +582,7 @@ impl Game<'_> {
                     self.play_at("minecraft:ui.stonecutter.take_result", pos, 1.0, 1.0);
                 }
             }
+            Kind::Merchant => self.merchant_take(&mut s),
             Kind::Enchanting => {}
         }
         self.station = Some(s);
@@ -647,6 +665,9 @@ impl Game<'_> {
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
         let shift = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
         if let Some(kind) = self.station.as_ref().map(|s| s.kind) {
+            if kind == Kind::Merchant && !right && self.merchant_click(local) {
+                return true;
+            }
             if kind == Kind::Enchanting && !right {
                 for i in 0..3 {
                     let (x, y, w, h) = enchant_button(i);
@@ -705,6 +726,7 @@ impl Game<'_> {
         self.station_changed();
     }
     pub(super) fn station_scroll(&mut self, d: f32) {
+        self.merchant_scroll(d);
         let Some(s) = self.station.as_mut() else { return };
         if s.kind != Kind::Stonecutter || s.recipes.len() <= 12 {
             return;
@@ -793,6 +815,9 @@ impl Game<'_> {
     }
     /// Draws the open station or brewing stand screen; false when none is open.
     pub(super) fn draw_station(&mut self, batch: &mut HudBatch) -> bool {
+        if self.station.as_ref().is_some_and(|s| s.kind == Kind::Merchant) {
+            return self.draw_merchant(batch);
+        }
         let brewing = self.brewing_open();
         if self.station.is_none() && !brewing {
             return false;
@@ -963,6 +988,7 @@ impl Game<'_> {
                         }
                     }
                 }
+                Kind::Merchant => {}
                 Kind::Stonecutter => {
                     let display = s.inputs[0].is_some() && !s.recipes.is_empty();
                     let active = display && s.recipes.len() > 12;

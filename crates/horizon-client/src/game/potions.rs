@@ -31,6 +31,8 @@ pub(super) struct PotionState {
     pub(super) burning: Vec<(u32, i32)>,
     /// Enchantment attribute modifiers on the player: (attribute, id, amount, operation).
     pub(super) enchant_modifiers: Vec<(String, String, f64, String)>,
+    /// The level's trade-set `RandomSequence`s, by sequence id.
+    pub(super) trade_randoms: std::collections::HashMap<String, horizon_core::random::XoroshiroRandom>,
 }
 
 impl Game<'_> {

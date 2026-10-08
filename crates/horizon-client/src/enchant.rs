@@ -279,7 +279,7 @@ impl Enchantments {
     // ---- Enchanting table (EnchantmentHelper) ----
 
     /// `EnchantmentHelper.getEnchantmentCost`.
-    pub fn enchantment_cost(&self, random: &mut LegacyRandom, slot: usize, bookcases: i32, item: &str) -> i32 {
+    pub fn enchantment_cost<R: RandomSource>(&self, random: &mut R, slot: usize, bookcases: i32, item: &str) -> i32 {
         if self.enchantable(item) == 0 {
             return 0;
         }
@@ -309,7 +309,7 @@ impl Enchantments {
         }
         out
     }
-    fn weighted(&self, random: &mut LegacyRandom, list: &[(Arc<str>, u32)]) -> Option<(Arc<str>, u32)> {
+    fn weighted<R: RandomSource>(&self, random: &mut R, list: &[(Arc<str>, u32)]) -> Option<(Arc<str>, u32)> {
         let total: i32 = list.iter().map(|(id, _)| self.get(id).map_or(0, |e| e.weight as i32)).sum();
         if total <= 0 {
             return None;
@@ -324,7 +324,7 @@ impl Enchantments {
         None
     }
     /// `EnchantmentHelper.selectEnchantment`.
-    pub fn select(&self, items: &Items, random: &mut LegacyRandom, item: &str, cost: i32, pool: &[Arc<str>]) -> Vec<(Arc<str>, u32)> {
+    pub fn select<R: RandomSource>(&self, items: &Items, random: &mut R, item: &str, cost: i32, pool: &[Arc<str>]) -> Vec<(Arc<str>, u32)> {
         let mut results = Vec::new();
         let value = self.enchantable(item) as i32;
         if value == 0 {
@@ -482,7 +482,7 @@ pub struct EffectContext<'a> {
     pub attacker: Option<&'a str>,
     pub direct_attacker: Option<&'a str>,
 }
-fn next_int(random: &mut LegacyRandom, bound: i32) -> i32 {
+fn next_int<R: RandomSource>(random: &mut R, bound: i32) -> i32 {
     random.next_int_bound(bound.max(1)).unwrap_or(0)
 }
 /// `LevelBasedValue.calculate`.

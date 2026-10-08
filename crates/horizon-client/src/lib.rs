@@ -27,6 +27,7 @@ pub mod item_data;
 pub mod items;
 pub mod landing;
 pub mod light;
+pub mod merchant;
 pub mod mesher;
 pub mod mobs;
 pub mod models;
