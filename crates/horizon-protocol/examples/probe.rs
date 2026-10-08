@@ -150,17 +150,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         })
                         .encode(),
                     )?;
-                    c.send(
-                        &play::Serverbound::MovePlayerPosRot(play::MovePlayerPosRot {
-                            x,
-                            y,
-                            z,
-                            yaw: p.yaw,
-                            pitch: p.pitch,
-                            flags: 0,
-                        })
-                        .encode(),
-                    )?;
+                    // One position per client tick: end the tick like the client.
+                    c.send(&play::Serverbound::ClientTickEnd(Empty).encode())?;
                 }
                 play::Clientbound::ChunkBatchFinished(_) => {
                     c.send(

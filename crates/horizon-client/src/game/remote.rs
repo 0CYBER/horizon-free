@@ -1462,21 +1462,22 @@ impl Game<'_> {
     }
     /// ChatScreen: typing, Enter to send, Escape to cancel.
     pub(super) fn remote_chat_key(&mut self, event: &winit::event::KeyEvent) {
-        use winit::keyboard::PhysicalKey;
+        use winit::keyboard::{Key, NamedKey};
         if event.state != winit::event::ElementState::Pressed {
             return;
         }
         let Some(r) = self.remote.as_mut() else { return };
         let Some(input) = r.chat_input.as_mut() else { return };
-        match event.physical_key {
-            PhysicalKey::Code(KeyCode::Escape) => {
+        // Logical keys: the text, not the scancode, decides (layouts, virtual keyboards).
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
                 r.chat_input = None;
                 self.capture(true);
             }
-            PhysicalKey::Code(KeyCode::Backspace) => {
+            Key::Named(NamedKey::Backspace) => {
                 input.pop();
             }
-            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+            Key::Named(NamedKey::Enter) => {
                 let message = r.chat_input.take().unwrap_or_default();
                 self.send_chat(&message);
                 self.capture(true);
@@ -1628,7 +1629,9 @@ impl Game<'_> {
         let open = r.chat_input.is_some();
         let now = Instant::now();
         let mut y = h - 48.0;
-        for (text, at) in r.chat.iter().rev().take(if open { 20 } else { 10 }) {
+        // Container screens cover the chat (vanilla draws them over the HUD).
+        let shown = if matches!(self.screen, Screen::Playing | Screen::Dead) { if open { 20 } else { 10 } } else { 0 };
+        for (text, at) in r.chat.iter().rev().take(shown) {
             let age = now.duration_since(*at);
             // Lines fade out after ten seconds unless the chat is open.
             let alpha = if open { 1.0 } else { (1.0 - (age.as_secs_f32() - 9.0).max(0.0)).clamp(0.0, 1.0) };
