@@ -58,6 +58,9 @@ public final class VanillaStructureStartOracle {
         var structures=world.lookupOrThrow(Registries.STRUCTURE);
         try(var w=new PrintWriter(Files.newBufferedWriter(out,StandardCharsets.UTF_8))) {
             structures.listElements().forEach(h->w.println("registry "+h.key().identifier()+" "+h.value().step().ordinal()));
+            if(System.getenv("HORIZON_RINGS")!=null)for(var set:state.possibleStructureSets())
+                if(set.value().placement() instanceof net.minecraft.world.level.levelgen.structure.placement.ConcentricRingsStructurePlacement rings)
+                    for(var p:state.getRingPositionsFor(rings))w.println("ring "+set.unwrapKey().get().identifier()+" "+p.x()+" "+p.z());
             if(System.getenv("HORIZON_HEIGHTS")!=null)for(String p:System.getenv("HORIZON_HEIGHTS").split(";")){
                 String[] xz=p.split(",");int x=Integer.parseInt(xz[0]),z=Integer.parseInt(xz[1]);
                 int floor=generator.getBaseHeight(x,z,Heightmap.Types.OCEAN_FLOOR_WG,height,randomState),surface=generator.getBaseHeight(x,z,Heightmap.Types.WORLD_SURFACE_WG,height,randomState);

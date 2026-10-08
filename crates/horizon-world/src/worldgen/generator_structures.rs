@@ -5,14 +5,14 @@ use super::{
     generator::{GeneratorData, GeneratorError},
     structure::{
         StructureResources,
-        start::{StructureRegistry, StructureStart, beardifier, create_starts},
+        start::{Rings, StructureRegistry, StructureStart, beardifier, create_starts},
     },
 };
 use horizon_core::{density::Beardifier, position::ChunkPos};
 use serde_json::Value;
 use std::{
     collections::{BTreeSet, HashMap},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 pub(super) type Starts = Arc<Vec<Arc<StructureStart>>>;
@@ -24,6 +24,8 @@ pub(super) struct StructureState {
     /// Structure indices of each decoration step, in registry order.
     pub(super) by_step: Vec<Vec<usize>>,
     starts: Mutex<HashMap<(i32, i32), Starts>>,
+    /// Concentric ring positions, computed on first use.
+    rings: OnceLock<Rings>,
 }
 const START_CACHE_LIMIT: usize = 65536;
 
@@ -85,6 +87,7 @@ impl StructureState {
             possible_sets,
             by_step,
             starts: Mutex::new(HashMap::new()),
+            rings: OnceLock::new(),
         }))
     }
     /// The (cached) structure starts owned by a chunk.
@@ -96,6 +99,11 @@ impl StructureState {
         if let Some(found) = self.starts.lock().unwrap().get(&(chunk.x, chunk.z)) {
             return found.clone();
         }
+        let rings = self.rings.get_or_init(|| {
+            let seed = context.seed();
+            self.registry
+                .ring_positions(&self.possible_sets, seed, &mut |q| context.noise_biome(q))
+        });
         let starts: Starts = Arc::new(
             create_starts(
                 &self.registry,
@@ -103,7 +111,7 @@ impl StructureState {
                 &self.bindings,
                 context,
                 &self.possible_sets,
-                &[],
+                rings,
                 chunk,
             )
             .into_iter()

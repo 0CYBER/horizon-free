@@ -237,6 +237,14 @@ pub trait PlacementContext {
     ) -> Result<bool, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
     }
+    /// Block.canSupportCenter: CENTER support on the requested face.
+    fn center_sturdy(
+        &mut self,
+        _position: [i32; 3],
+        _direction: horizon_core::geometry::Direction,
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
     /// Test entity obstruction of a unit-block shape with no excluded entity.
     fn unobstructed_block(&mut self, _position: [i32; 3]) -> Result<bool, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)

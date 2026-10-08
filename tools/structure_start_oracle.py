@@ -5,6 +5,7 @@ usage: structure_start_oracle.py OUT SEED X0 Z0 X1 Z1
 """
 import os
 import subprocess
+from pathlib import Path
 import sys
 try:
     from . import lab, test_rust_parity as base
@@ -17,7 +18,7 @@ def main():
     out, seed, x0, z0, x1, z1 = sys.argv[1:7]
     lock, jars, libraries = base.verify_artifacts()
     source = lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaStructureStartOracle.java'
-    build = lab.LOCAL/'structure-start-oracle'
+    build = Path(os.environ['HORIZON_ORACLE_BUILD']) if os.environ.get('HORIZON_ORACLE_BUILD') else lab.LOCAL/'structure-start-oracle'
     classes = build/'classes'
     classes.mkdir(parents=True, exist_ok=True)
     dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
