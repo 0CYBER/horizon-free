@@ -8,11 +8,10 @@ hardness/tool rules, collect drops from the block loot tables, place blocks,
 craft in the 2x2 inventory grid or on a crafting table, and save and reload worlds
 in vanilla's Anvil format.
 
-**Status:** playable, not yet at parity. Terrain currently comes from a simple
-test generator until the vanilla overworld generator (already byte-identical
-to vanilla up to the carver stage in `horizon-world`) is bound to streaming.
-There are no mobs, block behaviours (fluid spreading, redstone, crop growth),
-structures, furnaces/containers or multiplayer yet. See
+**Status:** playable, about 55% Java parity (see the README table). Worlds use the
+Rust port of the vanilla overworld and Nether generators. Chests, furnaces, nine
+mob types, fluids, redstone and crop growth run in the client. Multiplayer, the End,
+most structures and mobs, and several containers are still missing. See
 [Rust rewrite status](rust-parity.md).
 
 ## Run from a checkout

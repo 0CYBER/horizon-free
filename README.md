@@ -11,7 +11,32 @@ Horizon is a Rust rewrite of Minecraft Java **26.3** targeting one-to-one vanill
 - passive and hostile mobs with combat;
 - Anvil saves.
 
-Parity is **not** complete: block behaviours (fluids, redstone, crop growth), structures, many mobs, enchanting, the Nether and End, and multiplayer are still missing. See [Rust rewrite status](docs/rust-parity.md).
+Parity is **not** complete. Still missing: multiplayer, the End, most structures (jigsaw starts and five piece-based structures exist), about half the placed features (127 of 273 are skipped), most mob types, chat and commands, enchanting, anvils, brewing, smithing and trading, and sapling growth. Fluids, redstone, pistons, crop growth, random and scheduled ticks and the Nether run in the client. See [Rust rewrite status](docs/rust-parity.md).
+
+### Java parity: 55%
+
+Each subsystem scores 0 (absent), 0.25 (started, not playable), 0.5 (playable,
+major vanilla features missing), 0.75 (playable, mostly complete) or 1 (complete
+and verified against vanilla by differential tests). The percentage is the
+average; `tests/test_parity.py` keeps it in sync with this table. Last audited
+2026-10-08 against the code, not the docs.
+
+| Subsystem | Score | Main gaps |
+| --- | ---: | --- |
+| Window, input and game loop | 0.75 | No controls screen or fullscreen toggle |
+| Assets and resources | 0.75 | Heuristic item icons; no language files or resource packs |
+| Network protocol and multiplayer | 0 | No networking at all |
+| Chunk storage and palettes | 0.75 | Client uses plain arrays; palettes only on save |
+| Section meshing | 0.75 | Whole-mesh output not compared with vanilla |
+| Rendering | 0.5 | Few particles; chest is the only block-entity model; 9 mob models |
+| Lighting | 0.75 | Slabs/stairs light wrong; light not saved or tested against vanilla |
+| World generation | 0.5 | No End; 127 of 273 placed features skipped; few structures |
+| Region files and saves | 0.5 | Mobs, dropped items, scheduled ticks and light not saved |
+| Entities and physics | 0.5 | 9 mob types with simple AI |
+| Interaction and inventory | 0.5 | No enchanting, anvil, brewing, smithing or trading |
+| Menus, HUD and chat | 0.5 | No chat, commands, controls screen or recipe book |
+| Audio | 0.5 | No music or ambient sounds |
+| Block behaviours and ticking | 0.5 | Saplings never grow; TNT has no fuse; hoppers/dispensers don't move items |
 
 ```sh
 python3 tools/prepare_native_client.py --prepare   # needs JDK 25; extracts private vanilla resources
