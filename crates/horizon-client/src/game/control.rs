@@ -21,6 +21,9 @@ const HELP: &[&str] = &[
     "give ITEM [COUNT]              add items to the inventory",
     "render-distance N              chunks, 2..64",
     "time TICKS                     set the time of day",
+    "summon KIND [X Y Z] [baby]     spawn a mob (in front of the player without a position)",
+    "mobs [RADIUS]                  list mobs near the player with their AI state",
+    "fill X1 Y1 Z1 X2 Y2 Z2 BLOCK   set a box of loaded blocks",
     "resume                         leave the pause menu",
     "screenshot PATH                write the next frame as PNG",
     "chat TEXT                      send a chat line or /command as if typed",
@@ -229,6 +232,40 @@ impl Game<'_> {
             "time" => {
                 self.world.day_time = arg(1)?.parse()?;
                 ok()
+            }
+            "summon" => {
+                self.require_world()?;
+                let baby = words.contains(&"baby");
+                let nums: Vec<f64> = words[2..].iter().filter_map(|w| w.parse().ok()).collect();
+                let at = (nums.len() >= 3).then(|| [nums[0], nums[1], nums[2]]);
+                let id = self.summon(arg(1)?, at, baby)?;
+                Ok(Some(json!({ "ok": true, "id": id })))
+            }
+            "fill" => {
+                self.require_world()?;
+                let c: Vec<i32> = (1..=6).map(|i| arg(i).and_then(|v| v.parse::<i32>().map_err(|e| e.to_string()))).collect::<std::result::Result<_, _>>()?;
+                let name = arg(7)?;
+                let name = if name.contains(':') { name.to_owned() } else { format!("minecraft:{name}") };
+                let state = self.res.assets.registry.default_state(&name).ok_or_else(|| format!("unknown block {name}"))?;
+                let (lo, hi) = ([c[0].min(c[3]), c[1].min(c[4]), c[2].min(c[5])], [c[0].max(c[3]), c[1].max(c[4]), c[2].max(c[5])]);
+                if (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > 1 << 20 {
+                    return Err("fill volume too large".into());
+                }
+                for x in lo[0]..=hi[0] {
+                    for y in lo[1]..=hi[1] {
+                        for z in lo[2]..=hi[2] {
+                            if self.world.loaded(x, z) {
+                                self.world.set(x, y, z, state)?;
+                            }
+                        }
+                    }
+                }
+                ok()
+            }
+            "mobs" => {
+                self.require_world()?;
+                let radius: f64 = words.get(1).map_or(Ok(64.0), |r| r.parse())?;
+                Ok(Some(self.control_mobs(radius)))
             }
             "resume" => {
                 if self.screen == Screen::Paused {

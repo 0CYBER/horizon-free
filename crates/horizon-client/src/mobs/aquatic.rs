@@ -1,0 +1,427 @@
+//! Water mobs: squid and glow squid (tentacle propulsion), cod, salmon,
+//! tropical fish and pufferfish (`AbstractFish`, puffing), and dolphins
+//! (breathing, smooth swimming).
+use super::{
+    Mob, MobEvent, MobWorld, Species,
+    anim::{Poses, State},
+    control::MoveKind,
+    goals::{
+        Avoid, AvoidEntity, BreathAir, Cx, Goal, HurtByTarget, LookAtPlayer, MeleeAttack, Panic,
+        RandomLookAround, Stroll, TryFindWater, goal_clone,
+    },
+    nav::NavKind,
+};
+use crate::blocks::Fluid;
+use horizon_core::{geometry::Vec3, random::RandomSource};
+use std::f32::consts::PI;
+
+// Squid animation slots in AnimState.v.
+const TENTACLE_MOVEMENT: usize = 0;
+const TENTACLE_ANGLE: usize = 1;
+const X_BODY_ROT: usize = 2;
+const Z_BODY_ROT: usize = 3;
+const TENTACLE_SPEED: usize = 4;
+const ROTATE_SPEED: usize = 5;
+
+pub fn register(m: &mut Mob) {
+    use Species as S;
+    match m.species() {
+        S::Squid | S::GlowSquid => {
+            m.ai.goals.add(0, SquidRandomMovement);
+            m.ai.goals.add(1, SquidFlee { ticks: 0 });
+            m.ai.mov.kind = MoveKind::Custom;
+            m.ai.nav.kind = NavKind::Water { breach: false };
+            let speed = 1.0 / (m.random.next_float() + 1.0) * 0.2;
+            m.anim.v[TENTACLE_SPEED] = speed;
+        }
+        S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish => {
+            let puffer = m.species() == S::Pufferfish;
+            let g = &mut m.ai.goals;
+            g.add(0, Panic::new(1.25));
+            g.add(2, AvoidEntity::new(Avoid::Player, 8.0, 1.6, 1.4));
+            g.add(4, Stroll::swimming(1.0, 40));
+            if puffer {
+                g.add(1, PufferfishPuff);
+            }
+            m.ai.mov.kind = MoveKind::Custom;
+            m.ai.nav.kind = NavKind::Water { breach: false };
+        }
+        S::Dolphin => {
+            let g = &mut m.ai.goals;
+            g.add(0, BreathAir);
+            g.add(0, TryFindWater::default());
+            g.add(4, Stroll::swimming(1.0, 10));
+            g.add(4, RandomLookAround::default());
+            g.add(5, LookAtPlayer::new(6.0));
+            g.add(6, MeleeAttack::new(1.2, true));
+            m.ai.targets.add(1, HurtByTarget::new().alert());
+            m.ai.mov.kind = MoveKind::SmoothSwimming { max_turn_x: 85.0, max_turn_y: 10.0, in_water: 0.02, outside: 0.1, gravity: true };
+            m.ai.look.kind = super::control::LookKind::SmoothSwimming(10.0);
+            m.ai.nav.kind = NavKind::Water { breach: true };
+            m.air = 4800;
+        }
+        _ => {}
+    }
+}
+/// Pre-tick updates (Pufferfish.tick puff state).
+pub fn tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if m.species() != Species::Pufferfish || !m.alive() {
+        return;
+    }
+    let puff = m.extra.size;
+    if m.extra.counter > 0 {
+        if puff == 0 {
+            m.sound("entity.puffer_fish.blow_up", events);
+            m.extra.size = 1;
+        } else if m.extra.counter > 40 && puff == 1 {
+            m.sound("entity.puffer_fish.blow_up", events);
+            m.extra.size = 2;
+        }
+        m.extra.counter += 1;
+    } else if puff != 0 {
+        if m.extra.counter2 > 60 && puff == 2 {
+            m.sound("entity.puffer_fish.blow_out", events);
+            m.extra.size = 1;
+        } else if m.extra.counter2 > 100 && puff == 1 {
+            m.sound("entity.puffer_fish.blow_out", events);
+            m.extra.size = 0;
+        }
+        m.extra.counter2 += 1;
+    }
+}
+/// Pufferfish.getScale by puff state (the dimensions scale with it).
+pub fn puff_scale(state: i32) -> f64 {
+    match state {
+        0 => 0.5,
+        1 => 0.7,
+        _ => 1.0,
+    }
+}
+/// Species aiStep additions.
+pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    use Species as S;
+    match m.species() {
+        S::Squid | S::GlowSquid => squid_ai_step(m),
+        S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish => {
+            // AbstractFish.aiStep flops on land (applied before travel next tick).
+            if !m.fluids.in_water && m.on_ground && m.vertical_collision_below {
+                let (a, b) = (m.random.next_float(), m.random.next_float());
+                m.velocity = Vec3::new(m.velocity.x + f64::from((a * 2.0 - 1.0) * 0.05), m.velocity.y + 0.4, m.velocity.z + f64::from((b * 2.0 - 1.0) * 0.05));
+                m.on_ground = false;
+                let flop = match m.species() {
+                    S::Cod => "entity.cod.flop",
+                    S::Salmon => "entity.salmon.flop",
+                    S::TropicalFish => "entity.tropical_fish.flop",
+                    _ => "entity.puffer_fish.flop",
+                };
+                m.sound(flop, events);
+            }
+            if m.species() == S::Pufferfish && m.alive() && m.extra.size > 0 {
+                // Pufferfish.playerTouch / touch: sting with poison.
+                if let Some(p) = &w.player
+                    && p.alive
+                    && !p.creative
+                    && m.bounds().inflate(Vec3::new(0.3, 0.3, 0.3)).intersects(p.bounds)
+                    && m.ai.no_action_time % 10 == 0
+                {
+                    let amount = 1.0 + m.extra.size as f32;
+                    events.push(MobEvent::AttackPlayer(amount, [m.position.x, m.position.y, m.position.z]));
+                    events.push(MobEvent::EffectPlayer { effect: "minecraft:poison", ticks: 60 * m.extra.size, amplifier: 0 });
+                    m.sound("entity.puffer_fish.sting", events);
+                }
+            }
+        }
+        S::Dolphin => {
+            // Dolphin.tick: moisture out of water, hop on land.
+            if m.fluids.in_water || w.raining {
+                m.extra.counter = 2400;
+            } else {
+                m.extra.counter -= 1;
+                if m.extra.counter <= 0 {
+                    m.damage(1.0, super::Damage::of(super::DamageKind::Drown));
+                }
+                if m.on_ground {
+                    let (a, b) = (m.random.next_float(), m.random.next_float());
+                    m.velocity = Vec3::new(m.velocity.x + f64::from((a * 2.0 - 1.0) * 0.2), m.velocity.y + 0.5, m.velocity.z + f64::from((b * 2.0 - 1.0) * 0.2));
+                    m.yaw = m.random.next_float() * 360.0;
+                    m.on_ground = false;
+                }
+            }
+            // LivingEntity air: dolphins drown underwater and refill instantly in air.
+            if !m.fluids.eye_in_water {
+                m.air = 4800;
+            }
+        }
+        _ => {}
+    }
+}
+/// Squid.aiStep: tentacle cycle, propulsion and body rotation.
+fn squid_ai_step(m: &mut Mob) {
+    let v = &mut m.anim.v;
+    v[TENTACLE_MOVEMENT] += v[TENTACLE_SPEED];
+    if v[TENTACLE_MOVEMENT] > PI * 2.0 {
+        v[TENTACLE_MOVEMENT] -= PI * 2.0;
+        if m.random.next_int_bound(10).unwrap_or(1) == 0 {
+            m.anim.v[TENTACLE_SPEED] = 1.0 / (m.random.next_float() + 1.0) * 0.2;
+        }
+    }
+    let v = &mut m.anim.v;
+    if m.fluids.in_water {
+        if v[TENTACLE_MOVEMENT] < PI {
+            let scale = v[TENTACLE_MOVEMENT] / PI;
+            v[TENTACLE_ANGLE] = (scale * scale * PI).sin() * PI * 0.25;
+            if scale > 0.75 {
+                let mv = m.extra.vector;
+                m.velocity = Vec3::new(mv[0], mv[1], mv[2]);
+                m.anim.v[ROTATE_SPEED] = 1.0;
+            } else {
+                m.anim.v[ROTATE_SPEED] *= 0.8;
+            }
+        } else {
+            v[TENTACLE_ANGLE] = 0.0;
+            m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
+            m.anim.v[ROTATE_SPEED] *= 0.99;
+        }
+        let mv = m.velocity;
+        let horizontal = (mv.x * mv.x + mv.z * mv.z).sqrt();
+        m.body_yaw += (-(mv.x.atan2(mv.z) as f32).to_degrees() - m.body_yaw) * 0.1;
+        m.yaw = m.body_yaw;
+        let v = &mut m.anim.v;
+        v[Z_BODY_ROT] += PI * v[ROTATE_SPEED] * 1.5;
+        v[X_BODY_ROT] += (-(horizontal.atan2(mv.y) as f32).to_degrees() - v[X_BODY_ROT]) * 0.1;
+    } else {
+        v[TENTACLE_ANGLE] = v[TENTACLE_MOVEMENT].sin().abs() * PI * 0.25;
+        let yd = m.velocity.y - m.kind.gravity;
+        m.velocity = Vec3::new(0.0, yd * 0.98, 0.0);
+        let v = &mut m.anim.v;
+        v[X_BODY_ROT] += (-90.0 - v[X_BODY_ROT]) * 0.02;
+    }
+}
+/// Species travel overrides. Returns true when handled.
+pub fn travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
+    use Species as S;
+    match m.species() {
+        // Squid.travel: move by the current velocity only.
+        S::Squid | S::GlowSquid => {
+            m.do_move(w, events);
+            true
+        }
+        // AbstractFish.travelInWater / Dolphin.travelInWater.
+        S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish | S::Dolphin if m.fluids.in_water => {
+            let speed = if m.species() == S::Dolphin { m.ai.speed } else { 0.01 };
+            m.move_relative(speed, input);
+            m.do_move(w, events);
+            m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
+            if m.ai.target.is_none() {
+                m.velocity.y -= 0.005;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+/// FishMoveControl.tick (fish use it instead of the default move control).
+pub fn fish_move_control(m: &mut Mob) {
+    if !matches!(m.species(), Species::Cod | Species::Salmon | Species::TropicalFish | Species::Pufferfish) {
+        return;
+    }
+    if m.fluids.eye_in_water {
+        m.velocity.y += 0.005;
+    }
+    if m.ai.mov.operation == super::control::Operation::MoveTo && !m.ai.nav.is_done() {
+        let target = (m.ai.mov.speed_modifier * m.movement_speed()) as f32;
+        let speed = m.ai.speed + (target - m.ai.speed) * 0.125;
+        m.set_speed(speed);
+        let [wx, wy, wz] = m.ai.mov.wanted;
+        let (xd, yd, zd) = (wx - m.position.x, wy - m.position.y, wz - m.position.z);
+        if yd != 0.0 {
+            let dd = (xd * xd + yd * yd + zd * zd).sqrt();
+            m.velocity.y += f64::from(m.ai.speed) * (yd / dd) * 0.1;
+        }
+        if xd != 0.0 || zd != 0.0 {
+            let y_rot = (zd.atan2(xd).to_degrees() as f32) - 90.0;
+            m.yaw = super::control::rotlerp(m.yaw, y_rot, 90.0);
+            m.body_yaw = m.yaw;
+        }
+    } else {
+        m.set_speed(0.0);
+    }
+}
+/// Squid.SquidRandomMovementGoal
+#[derive(Clone, Debug)]
+pub struct SquidRandomMovement;
+impl Goal for SquidRandomMovement {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, _: &mut Mob, _: &mut Cx) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, _: &mut Cx) {
+        if m.ai.no_action_time > 100 {
+            m.extra.vector = [0.0; 3];
+        } else if m.random.next_int_bound(super::goals::reduced(50)).unwrap_or(1) == 0 || !m.fluids.in_water || m.extra.vector == [0.0; 3] {
+            let angle = m.random.next_float() * PI * 2.0;
+            let y = -0.1 + m.random.next_float() * 0.2;
+            m.extra.vector = [f64::from(angle.cos() * 0.2), f64::from(y), f64::from(angle.sin() * 0.2)];
+        }
+    }
+}
+/// Squid.SquidFleeGoal (keeps vanilla's discarded normalize()).
+#[derive(Clone, Debug)]
+pub struct SquidFlee {
+    ticks: i32,
+}
+impl Goal for SquidFlee {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(by) = m.ai.last_hurt_by.and_then(|w| cx.w.target_info(w)) else { return false };
+        m.fluids.in_water && m.distance_sqr(by.position) < 100.0
+    }
+    fn start(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.ticks = 0;
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.ticks += 1;
+        let Some(by) = m.ai.last_hurt_by.and_then(|w| cx.w.target_info(w)) else { return };
+        let mut f = [m.position.x - by.position.x, m.position.y - by.position.y, m.position.z - by.position.z];
+        let at = [(m.position.x + f[0]).floor() as i32, (m.position.y + f[1]).floor() as i32, (m.position.z + f[2]).floor() as i32];
+        let air = cx.w.facts.is_air(cx.w.world.block(at[0], at[1], at[2]));
+        if cx.w.fluid(at[0], at[1], at[2]) == Fluid::Water || air {
+            let length = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
+            if length > 0.0 {
+                let mut avoid = 3.0;
+                if length > 5.0 {
+                    avoid -= (length - 5.0) / 5.0;
+                }
+                if avoid > 0.0 {
+                    f = f.map(|c| c * avoid);
+                }
+            }
+            if air {
+                f[1] = 0.0;
+            }
+            m.extra.vector = [f[0] / 20.0, f[1] / 20.0, f[2] / 20.0];
+        }
+    }
+}
+/// Pufferfish.PufferfishPuffGoal: inflate when a mob or player is within 2.
+#[derive(Clone, Debug)]
+pub struct PufferfishPuff;
+impl Goal for PufferfishPuff {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let area = m.bounds().inflate(Vec3::new(2.0, 2.0, 2.0));
+        let player = cx.w.player.as_ref().is_some_and(|p| p.alive && !p.creative && area.intersects(p.bounds));
+        // TARGETING_CONDITIONS: not other fish (not_scary_for_pufferfish) and alive.
+        let mob = cx.w.others.iter().any(|s| {
+            s.id != m.id && s.alive && !matches!(s.species, Species::Cod | Species::Salmon | Species::TropicalFish | Species::Pufferfish | Species::Squid | Species::GlowSquid | Species::Dolphin | Species::Axolotl) && area.intersects(s.bounds)
+        });
+        player || mob
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.extra.counter = 1;
+        m.extra.counter2 = 0;
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.extra.counter = 0;
+    }
+}
+/// finalizeSpawn variants (tropical fish patterns and colours).
+pub fn finalize(m: &mut Mob) {
+    if m.species() == Species::TropicalFish {
+        // TropicalFish.COMMON_VARIANTS: (pattern index, base colour, pattern colour).
+        const COMMON: [(u8, u8, u8); 22] = [
+            (7, 1, 7), (6, 7, 7), (6, 7, 11), (11, 0, 7), (1, 11, 7), (0, 1, 0), (5, 6, 3), (9, 10, 4), (11, 0, 14), (5, 0, 4), (8, 0, 7),
+            (11, 0, 1), (3, 9, 6), (4, 5, 3), (10, 14, 0), (2, 7, 14), (9, 14, 0), (6, 0, 4), (0, 14, 0), (1, 7, 0), (3, 9, 4), (6, 4, 4),
+        ];
+        let (p, b, c) = if m.random.next_float() < 0.9 {
+            COMMON[m.random.next_int_bound(COMMON.len() as i32).unwrap_or(0) as usize]
+        } else {
+            (m.random.next_int_bound(12).unwrap_or(0) as u8, m.random.next_int_bound(16).unwrap_or(0) as u8, m.random.next_int_bound(16).unwrap_or(0) as u8)
+        };
+        m.extra.variant = p;
+        m.extra.variant2 = b;
+        m.extra.variant3 = c;
+    }
+}
+/// Model animation for the water mobs.
+pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
+    use Species as S;
+    let amp = if m.fluids.in_water { 1.0 } else { 1.5 };
+    match m.species() {
+        S::Squid | S::GlowSquid => {
+            let angle = m.anim.lerp(TENTACLE_ANGLE, s.partial);
+            for i in 0..8 {
+                p.xrot(&format!("tentacle{i}"), angle);
+            }
+        }
+        S::Cod => p.yrot("tail_fin", -amp * 0.45 * (0.6 * s.age).sin()),
+        S::TropicalFish => p.yrot("tail", -amp * 0.45 * (0.6 * s.age).sin()),
+        S::Salmon => {
+            let (a, k) = if m.fluids.in_water { (1.0, 1.0) } else { (1.3, 1.7) };
+            p.yrot("body_back", -a * 0.25 * (k * 0.6 * s.age).sin());
+        }
+        S::Pufferfish => {
+            let fin = 0.2 - 0.4 * (s.age * 0.2).sin();
+            if p.has("right_blue_fin") {
+                p.zrot("right_blue_fin", -fin);
+                p.zrot("left_blue_fin", fin);
+            } else {
+                p.zrot("right_fin", -fin);
+                p.zrot("left_fin", fin);
+            }
+        }
+        S::Dolphin => {
+            p.xrot("body", s.x_rot.to_radians());
+            p.yrot("body", s.y_rot.to_radians());
+            let moving = m.velocity.x * m.velocity.x + m.velocity.z * m.velocity.z > 1.0e-7;
+            if moving {
+                p.get("body")[3] += -0.05 - 0.05 * (s.age * 0.3).cos();
+                p.xrot("tail", -0.1 * (s.age * 0.3).cos());
+                p.xrot("tail_fin", -0.2 * (s.age * 0.3).cos());
+            }
+        }
+        _ => {}
+    }
+}
+/// Renderer setupRotations for the water mobs (replacing or extending the default).
+pub fn rotations(m: &Mob, alpha: f32, body: f32) -> Option<glam::Mat4> {
+    use Species as S;
+    let age = m.age as f32 + alpha;
+    match m.species() {
+        S::Squid | S::GlowSquid => {
+            let baby = m.is_baby();
+            let x = m.anim.lerp(X_BODY_ROT, alpha);
+            let z = m.anim.lerp(Z_BODY_ROT, alpha);
+            Some(
+                glam::Mat4::from_translation(glam::Vec3::new(0.0, if baby { 0.25 } else { 0.5 }, 0.0))
+                    * glam::Mat4::from_rotation_y((180.0 - body).to_radians())
+                    * glam::Mat4::from_rotation_x(x.to_radians())
+                    * glam::Mat4::from_rotation_y(z.to_radians())
+                    * glam::Mat4::from_translation(glam::Vec3::new(0.0, if baby { -0.6 } else { -1.2 }, 0.0)),
+            )
+        }
+        S::Cod | S::Salmon | S::TropicalFish => {
+            let (a, k) = if m.species() == S::Salmon && !m.fluids.in_water { (1.3, 1.7) } else { (1.0, 1.0) };
+            let mut t = glam::Mat4::from_rotation_y((180.0 - body).to_radians()) * glam::Mat4::from_rotation_y((a * 4.3 * (k * 0.6 * age).sin()).to_radians());
+            if !m.fluids.in_water {
+                let off = if m.species() == S::Cod { glam::Vec3::new(0.1, 0.1, -0.1) } else { glam::Vec3::new(0.2, 0.1, 0.0) };
+                t *= glam::Mat4::from_translation(off) * glam::Mat4::from_rotation_z(PI / 2.0);
+            }
+            Some(t)
+        }
+        S::Pufferfish => Some(glam::Mat4::from_translation(glam::Vec3::new(0.0, (age * 0.05).cos() * 0.08, 0.0)) * glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
+        _ => None,
+    }
+}

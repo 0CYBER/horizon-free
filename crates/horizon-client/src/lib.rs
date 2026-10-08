@@ -45,6 +45,7 @@ pub mod options_ui;
 pub mod packs;
 pub mod particles;
 pub mod pose;
+pub mod projectiles;
 pub mod save;
 pub mod settings;
 pub mod sprint;

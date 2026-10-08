@@ -378,6 +378,22 @@ def main():
             subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
                             'dev.horizonlab.parity.VanillaEntityModelExporter', str(entity_models)],
                            check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+    # Mob AI and animation facts: per-state path types, spawn placements and the
+    # client's keyframe animation definitions (needs the client jar).
+    mob_data = root / 'mob-data.json'
+    mob_oracle = oracle.with_name('VanillaMobDataExporter.java')
+    mob_sources = base.source_hashes([mob_oracle])
+    if not (previous.get('mob_data_exporters_sha256') == mob_sources and mob_data.exists()
+            and previous.get('client_sha256') == origin['client_sha256']):
+        classes = lab.LOCAL / 'mob-data' / 'classes'; classes.mkdir(parents=True, exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['client'], *baking.client_libraries()]))
+        with (root / 'mob-data-export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(mob_oracle)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
+                            'dev.horizonlab.parity.VanillaMobDataExporter', str(mob_data), str(jars['client'])],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
     creative = root / 'creative-tabs.json'
     creative_oracle = oracle.with_name('VanillaCreativeTabsExporter.java')
     creative_sources = base.source_hashes([creative_oracle])
@@ -406,6 +422,7 @@ def main():
                              'gameplay_exporters_sha256': gameplay_sources,
                              'entity_model_exporters_sha256': entity_sources,
                              'creative_exporters_sha256': creative_sources,
+                             'mob_data_exporters_sha256': mob_sources,
                              'entity_types_exporters_sha256': entity_types_sources,
                              'behaviour_exporters_sha256': behaviour_sources,
                              'model_states_sha256': lab.digest(model_states, 'sha256'), 'data_version': version['world_version'],
