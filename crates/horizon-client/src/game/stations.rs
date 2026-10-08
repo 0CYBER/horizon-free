@@ -976,7 +976,8 @@ impl Game<'_> {
                     batch.sprite(atlas, &format!("gui/sprites/container/stonecutter/{scroller}"), ox + 119.0, oy + 15.0 + (41.0 * offs).floor());
                     if display {
                         let (start, selected) = (s.start, s.selected);
-                        let shown: Vec<(usize, ItemStack)> = (start..(start + 12).min(s.recipes.len())).map(|i| (i, self.res.stations.recipes.stonecutting[s.recipes[i]].result.clone())).collect();
+                        // graphics.item: the icon only, without the count.
+                        let shown: Vec<(usize, ItemStack)> = (start..(start + 12).min(s.recipes.len())).map(|i| (i, ItemStack { count: 1, ..self.res.stations.recipes.stonecutting[s.recipes[i]].result.clone() })).collect();
                         for (index, result) in shown {
                             let p = index - start;
                             let (x, y) = (52.0 + (p % 4) as f32 * 16.0, 14.0 + (p / 4) as f32 * 18.0 + 2.0);
@@ -1152,26 +1153,56 @@ impl Game<'_> {
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
     }
+    /// Potion items: `layer0` tinted with the potion colour under the bottle
+    /// (`minecraft:potion` item tint source).
+    pub(super) fn draw_potion_layers(&self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
+        let (overlay, base) = match &*stack.item {
+            "minecraft:potion" => ("item/potion_overlay", "item/potion"),
+            "minecraft:splash_potion" => ("item/potion_overlay", "item/splash_potion"),
+            "minecraft:lingering_potion" => ("item/potion_overlay", "item/lingering_potion"),
+            "minecraft:tipped_arrow" => ("item/tipped_arrow_head", "item/tipped_arrow_base"),
+            _ => return,
+        };
+        let c = brewing::potion_color(stack.potion());
+        let atlas = &self.res.atlas;
+        batch.sprite_scaled(atlas, overlay, x, y, 16.0, 16.0, rgba((c >> 16 & 255) as u8, (c >> 8 & 255) as u8, (c & 255) as u8, 255));
+        batch.sprite_scaled(atlas, base, x, y, 16.0, 16.0, u32::MAX);
+    }
     /// The enchantment glint over an item icon: a shimmering purple tint.
     pub(super) fn draw_glint(&self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
         if !self.res.stations.enchantments.has_glint(stack) {
             return;
         }
-        let phase = (self.started.elapsed().as_secs_f32() * 0.8).fract();
-        let alpha = (105.0 + 45.0 * (phase * std::f32::consts::TAU).sin()) as u8;
-        let color = rgba(170, 80, 255, alpha);
+        // ItemRenderer glint: the enchanted_glint texture scrolls diagonally over the
+        // item's shape. Approximated with a grid of item-texture quads whose vertex
+        // colours carry a purple base tint plus a moving bright band.
+        let t = self.started.elapsed().as_secs_f32();
+        let glint = |gx: f32, gy: f32| -> u32 {
+            let d = ((gx + gy) / 32.0 - t * 0.35).rem_euclid(1.0);
+            let band = (1.0 - (d - 0.5).abs() * 6.0).max(0.0);
+            let a = 45.0 + 110.0 * band;
+            rgba((170.0 + 70.0 * band) as u8, (90.0 + 110.0 * band) as u8, 255, a as u8)
+        };
         match self.res.icons.get(&*stack.item).cloned().flatten() {
-            Some(super::Icon::Flat(name)) => batch.sprite_scaled(&self.res.atlas, &name, x, y, 16.0, 16.0, color),
-            Some(super::Icon::Cube { .. }) => batch.fill(&self.res.atlas, x + 1.0, y + 1.0, 14.0, 14.0, rgba(150, 70, 255, alpha / 2)),
-            None => {}
-        }
-        // A bright band sweeping diagonally, clipped to the 16x16 cell.
-        let band = phase * 32.0 - 8.0;
-        for i in 0..16 {
-            let bx = band + i as f32 * 0.5 - 4.0;
-            if (0.0..15.0).contains(&bx) {
-                batch.fill(&self.res.atlas, x + bx, y + i as f32, 1.0, 1.0, rgba(200, 150, 255, alpha / 2));
+            Some(super::Icon::Flat(name)) => {
+                let Some(r) = self.res.atlas.sprites.get(&name).copied() else { return };
+                const N: usize = 4;
+                let cell = 16.0 / N as f32;
+                let (du, dv) = ((r.u1 - r.u0) / N as f32, (r.v1 - r.v0) / N as f32);
+                for row in 0..N {
+                    for col in 0..N {
+                        let (x0, y0) = (col as f32 * cell, row as f32 * cell);
+                        let (u0, v0) = (r.u0 + du * col as f32, r.v0 + dv * row as f32);
+                        let corners = [(x0, y0, u0, v0), (x0 + cell, y0, u0 + du, v0), (x0 + cell, y0 + cell, u0 + du, v0 + dv), (x0, y0 + cell, u0, v0 + dv)];
+                        for i in [0usize, 1, 2, 0, 2, 3] {
+                            let (cx, cy, u, v) = corners[i];
+                            batch.vertices.push(horizon_client::hud::HudVertex { pos: [x + cx, y + cy], uv: [u + 2.0, v], color: glint(cx, cy) });
+                        }
+                    }
+                }
             }
+            Some(super::Icon::Cube { .. }) => batch.fill(&self.res.atlas, x + 1.0, y + 1.0, 14.0, 14.0, glint(8.0, 8.0) & 0x7FFF_FFFF),
+            None => {}
         }
     }
 

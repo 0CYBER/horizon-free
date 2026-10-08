@@ -1544,6 +1544,7 @@ impl Game<'_> {
             }
             None => batch.fill(atlas, x + 2.0, y + 2.0, 12.0, 12.0, rgba(200, 0, 200, 255)),
         }
+        self.draw_potion_layers(batch, stack, x, y);
         self.draw_glint(batch, stack, x, y);
         if stack.count > 1 {
             let text = stack.count.to_string();

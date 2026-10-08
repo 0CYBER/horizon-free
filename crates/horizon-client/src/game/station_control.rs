@@ -46,7 +46,7 @@ impl Game<'_> {
         if shift && !had_shift {
             self.keys.remove(&KeyCode::ShiftLeft);
         }
-        let _ = saved;
+        self.cursor = saved;
     }
     fn gui_origin(&self) -> Result<(f32, f32)> {
         let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).ok_or("no renderer yet")?;
