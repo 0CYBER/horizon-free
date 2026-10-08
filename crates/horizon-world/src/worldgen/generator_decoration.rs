@@ -4,6 +4,10 @@
 //! Roots whose algorithm or bindings are not implemented are left out of
 //! execution (but keep their place in vanilla's per-step feature ordering, so
 //! decoration seeds of the remaining features are unchanged).
+use super::structure::{
+    BoundingBox,
+    start::{STEPS, place_in_chunk},
+};
 use super::{
     anchor::WorldGenerationContext,
     biome::BiomeId,
@@ -41,12 +45,14 @@ use crate::{
     heightmap::{HeightmapState, HeightmapType},
     registry::BlockStateId,
 };
+use horizon_core::random::{WorldgenRandom, XoroshiroRandom};
 use horizon_core::{
     biome::obfuscate_seed,
     geometry::{Axis, Direction, VoxelShape},
     position::{BlockPos, ChunkPos},
 };
 use serde_json::Value;
+use std::collections::HashMap;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -62,6 +68,9 @@ pub(super) struct Decoration {
     bindings: FeatureBlockBindings<'static>,
     weather: Option<BiomeWeatherBindings>,
     blocks: FeatureBlocks,
+    catalog: FeatureCatalog,
+    /// Placed features referenced by name (feature pool elements), decoded lazily.
+    named: std::sync::Mutex<HashMap<String, Option<Arc<PlacedFeatureDefinition>>>>,
 }
 fn resource(message: impl Into<String>) -> GeneratorError {
     GeneratorError::Resource(message.into())
@@ -213,7 +222,21 @@ impl Decoration {
             weather,
             blocks: FeatureBlocks::from_registry(registry)?,
             bindings,
+            catalog,
+            named: std::sync::Mutex::new(HashMap::new()),
         }))
+    }
+    fn named_feature(&self, name: &str) -> Option<Arc<PlacedFeatureDefinition>> {
+        let mut named = self.named.lock().unwrap();
+        named
+            .entry(name.to_owned())
+            .or_insert_with(|| {
+                self.catalog
+                    .placed_feature_with_blocks(&Value::from(name).to_string(), &self.bindings)
+                    .ok()
+                    .map(Arc::new)
+            })
+            .clone()
     }
     /// Placed-feature roots that cannot run, with their decode errors.
     pub(super) fn unsupported(&self) -> Vec<(String, String)> {
@@ -231,6 +254,7 @@ impl Decoration {
         worker: &mut WorkerState,
         region: &mut [ProtoChunk; 9],
         next_boolean: impl FnMut() -> bool,
+        structures: Option<&super::generator_structures::StructureState>,
     ) -> Result<DecorateStats, GeneratorError> {
         let center = region[4].position();
         for (i, chunk) in region.iter().enumerate() {
@@ -291,10 +315,59 @@ impl Decoration {
         };
         let mut stats = DecorateStats::default();
         let blocks = self.blocks;
-        let result = self.plan.decorate_features(
+        let references = region[4].structure_starts.clone();
+        let chunk_box = BoundingBox::new(
+            [center.x * 16, generation.min_y + 1, center.z * 16],
+            [
+                center.x * 16 + 15,
+                generation.min_y + generation.height - 1,
+                center.z * 16 + 15,
+            ],
+        );
+        let mut structure_errors = 0;
+        let result = self.plan.decorate(
             &mut world,
             center,
             seed,
+            STEPS.len(),
+            |world, random, decoration_seed, step| {
+                let Some(structures) = structures else {
+                    return Ok(());
+                };
+                let Some(in_step) = structures.by_step.get(step) else {
+                    return Ok(());
+                };
+                for (index, &structure) in in_step.iter().enumerate() {
+                    random.set_feature_seed(decoration_seed, index as i32, step as i32);
+                    for start in references.iter().filter(|s| s.structure == structure) {
+                        let mut place_feature =
+                            |world: &mut World<'_>,
+                             random: &mut WorldgenRandom<XoroshiroRandom>,
+                             name: &str,
+                             pos: [i32; 3]| {
+                                match self.named_feature(name) {
+                                    Some(feature) => feature
+                                        .place(world, random, pos, blocks)
+                                        .map_err(|e| PlacementQueryError::Failed(e.to_string())),
+                                    None => Ok(false),
+                                }
+                            };
+                        if place_in_chunk(
+                            start,
+                            world,
+                            &structures.resources,
+                            random,
+                            chunk_box,
+                            &mut place_feature,
+                        )
+                        .is_err()
+                        {
+                            structure_errors += 1;
+                        }
+                    }
+                }
+                Ok(())
+            },
             |world, placer, random, id, origin| {
                 let Ok(feature) = &self.features[id.0 as usize] else {
                     stats.unsupported += 1;
@@ -331,6 +404,7 @@ impl Decoration {
             region[index as usize].terrain = terrain;
         }
         result.map_err(|e| GeneratorError::Stage("features", e.to_string()))?;
+        stats.failed += structure_errors;
         region[4]
             .terrain
             .set_generation_stage(PreLightChunkStage::Features);

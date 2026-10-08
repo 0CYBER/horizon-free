@@ -1,7 +1,9 @@
 //! Structure templates, processors and placement shared by template features
 //! and structure pieces.
 pub mod features;
+pub mod jigsaw;
 pub mod processor;
+pub mod start;
 pub mod template;
 
 use crate::{

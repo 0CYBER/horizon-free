@@ -96,7 +96,7 @@ fn verify(data: &std::sync::Arc<GeneratorData>, parity: &Path) -> Result<(), Err
     ];
     let mut expected = Vec::new();
     for (seed, x, z) in cases {
-        let generator = OverworldGenerator::new(data.clone(), seed)?;
+        let generator = OverworldGenerator::without_structures(data.clone(), seed)?;
         let lines = dump(&generator.worker().generate_proto(ChunkPos::new(x, z))?);
         if let Ok(path) = std::env::var("HORIZON_VERIFY_DUMP") {
             fs::write(format!("{path}{seed}.txt"), lines.join("\n") + "\n")?;
@@ -165,6 +165,11 @@ fn glyph(name: &str) -> char {
     match name {
         "water" => '~',
         "lava" => '!',
+        "dirt_path" => '_',
+        "cobblestone" | "mossy_cobblestone" => 'o',
+        "hay_block" => 'h',
+        _ if name.ends_with("planks") || name.ends_with("stairs") || name.ends_with("slab") => 'P',
+        _ if name.contains("glass") => 'g',
         "grass_block" => '"',
         "sand" | "suspicious_sand" => '.',
         "red_sand" => ',',
@@ -350,6 +355,21 @@ fn main() -> Result<(), Error> {
             );
         }
     }
+    let mut structures = BTreeMap::<(String, i32, i32), [[i32; 3]; 2]>::new();
+    for chunk in chunks.iter().flatten() {
+        for (name, start, min, max) in chunk.structures() {
+            structures.insert((name.to_owned(), start.x, start.z), [min, max]);
+        }
+    }
+    for ((name, x, z), [min, max]) in &structures {
+        println!("structure {name} start chunk ({x}, {z}) box {min:?}..{max:?}");
+    }
+    let block_entities: usize = chunks
+        .iter()
+        .flatten()
+        .map(|c| c.block_entities.len())
+        .sum();
+    println!("block entities: {block_entities}");
     let mut legend = BTreeMap::<char, BTreeMap<String, usize>>::new();
     let step = (size * 16 / 96).max(1);
     for bz in (0..size * 16).step_by(step as usize) {
