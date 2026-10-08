@@ -620,6 +620,15 @@ impl PlacementContext for World<'_> {
         state: BlockStateId,
         position: [i32; 3],
     ) -> Result<bool, PlacementQueryError> {
+        if let (None, Some(behaviours)) = (self.blocks, self.behaviours) {
+            let mut level = ShapeLevel {
+                world: self,
+                random: horizon_core::random::LegacyRandom::new(0),
+            };
+            let mut ticks = crate::level::Ticks::new(0);
+            let pos = BlockPos::new(position[0], position[1], position[2]);
+            return Ok(behaviours.can_survive(&mut level, &mut ticks, pos, state));
+        }
         let blocks = self.blocks()?;
         blocks
             .survival
@@ -640,6 +649,11 @@ impl PlacementContext for World<'_> {
         position: [i32; 3],
         direction: Direction,
     ) -> Result<bool, PlacementQueryError> {
+        // Without the exported support tables, fall back to the gameplay
+        // behaviour's empty-level sturdiness cache.
+        if let (None, Some(behaviours)) = (self.blocks, self.behaviours) {
+            return Ok(behaviours.is_face_sturdy(state, direction));
+        }
         let support = self.blocks()?.support.clone();
         support
             .is_face_sturdy(self, state, position, direction, SupportType::Full)
@@ -651,6 +665,9 @@ impl PlacementContext for World<'_> {
         direction: Direction,
     ) -> Result<bool, PlacementQueryError> {
         let state = self.region.block_state(position)?;
+        if let (None, Some(behaviours)) = (self.blocks, self.behaviours) {
+            return Ok(behaviours.is_face_sturdy_center(state, direction));
+        }
         let support = self.blocks()?.support.clone();
         support
             .is_face_sturdy(self, state, position, direction, SupportType::Center)

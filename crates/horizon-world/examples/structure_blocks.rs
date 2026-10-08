@@ -91,8 +91,9 @@ fn main() -> Result<(), Error> {
                 Some(Tag::String(s)) => s.to_string_lossy(),
                 _ => "-".into(),
             };
+            // The seed only matters (and is only reported) with a loot table.
             let seed = match nbt.get(&"LootTableSeed".into()) {
-                Some(Tag::Long(v)) => v.to_string(),
+                Some(Tag::Long(v)) if text("LootTable") != "-" => v.to_string(),
                 _ => "-".into(),
             };
             println!("be {x} {y} {z} {} {} {seed}", text("id"), text("LootTable"));
