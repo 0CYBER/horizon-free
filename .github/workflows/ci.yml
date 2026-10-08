@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -10,7 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-26]
+        # Linux only. macOS only when started by hand: gh workflow run checks --ref <branch>.
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest", "macos-26"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -375,7 +377,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-26]
+        # Linux only. macOS only when started by hand: gh workflow run checks --ref <branch>.
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest", "macos-26"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
