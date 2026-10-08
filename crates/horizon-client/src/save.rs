@@ -365,6 +365,7 @@ pub struct Level {
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
+    pub weather: crate::world::Weather,
 }
 impl Level {
     pub fn read(dir: &Path) -> Option<Self> {
@@ -375,6 +376,8 @@ impl Level {
         let long = |t: Option<&Tag>| match t {
             Some(Tag::Long(v)) => *v,
             Some(Tag::Int(v)) => i64::from(*v),
+            Some(Tag::Short(v)) => i64::from(*v),
+            Some(Tag::Byte(v)) => i64::from(*v),
             _ => 0,
         };
         let doubles = |t: Option<&Tag>| match t {
@@ -418,6 +421,15 @@ impl Level {
             health: player.map_or(20.0, |p| float(p.get("Health"))),
             food: player.map_or(20, |p| long(p.get("foodLevel")) as i32),
             saturation: player.map_or(5.0, |p| float(p.get("foodSaturationLevel"))),
+            weather: crate::world::Weather {
+                clear_time: long(data.get("clearWeatherTime")) as i32,
+                rain_time: long(data.get("rainTime")) as i32,
+                thunder_time: long(data.get("thunderTime")) as i32,
+                raining: long(data.get("raining")) != 0,
+                thundering: long(data.get("thundering")) != 0,
+                rain_level: if long(data.get("raining")) != 0 { (1.0, 1.0) } else { (0.0, 0.0) },
+                thunder_level: if long(data.get("thundering")) != 0 { (1.0, 1.0) } else { (0.0, 0.0) },
+            },
             xp_level: player.map_or(0, |p| long(p.get("XpLevel")) as i32),
             xp_progress: player.map_or(0.0, |p| float(p.get("XpP"))),
             xp_total: player.map_or(0, |p| long(p.get("XpTotal")) as i32),
@@ -478,6 +490,11 @@ impl Level {
                     ("SpawnY", Tag::Int(spawn[1].floor() as i32)),
                     ("SpawnZ", Tag::Int(spawn[2].floor() as i32)),
                     ("initialized", Tag::Byte(1)),
+                    ("clearWeatherTime", Tag::Int(self.weather.clear_time)),
+                    ("rainTime", Tag::Int(self.weather.rain_time)),
+                    ("thunderTime", Tag::Int(self.weather.thunder_time)),
+                    ("raining", Tag::Byte(i8::from(self.weather.raining))),
+                    ("thundering", Tag::Byte(i8::from(self.weather.thundering))),
                     ("allowCommands", Tag::Byte(0)),
                     ("hardcore", Tag::Byte(0)),
                     ("Difficulty", Tag::Byte(2)),

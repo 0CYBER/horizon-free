@@ -261,3 +261,39 @@ impl Environment {
         }
     }
 }
+/// WeatherAttributes: rain then thunder layers lerped by their levels
+/// (rain counts only the part not covered by thunder).
+pub fn apply_weather(sky: &mut Sky, rain: f32, thunder: f32) {
+    let grey = |c: [f32; 3]| c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
+    let lerp3 = |t: f32, a: [f32; 3], b: [f32; 3]| -> [f32; 3] { std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t) };
+    let lerp4 = |t: f32, a: [f32; 4], b: [f32; 4]| -> [f32; 4] { std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t) };
+    let lerp = |t: f32, a: f32, b: f32| a + (b - a) * t;
+    let night = [0.48, 0.48, 1.0];
+    // (level, sky gray (brightness, factor), fog multiplier, cloud gray, alpha, sunrise multiplier)
+    let layers = [
+        (rain - thunder, (0.6, 0.75), [0.5, 0.5, 0.6], (0.24, 0.5), 0.3125, [0.5, 0.5, 0.6]),
+        (thunder, (0.24, 0.94), [0.25, 0.25, 0.3], (0.095, 0.94), 0.527_343_75, [0.25, 0.25, 0.3]),
+    ];
+    for (level, (sb, sf), fog, (cb, cf), alpha, sunrise) in layers {
+        if level <= 0.0 {
+            continue;
+        }
+        let g = grey(sky.sky_color) * sb;
+        let target = lerp3(sf, sky.sky_color, [g; 3]);
+        sky.sky_color = lerp3(level, sky.sky_color, target);
+        let fogged = std::array::from_fn(|i| sky.fog_color[i] * fog[i]);
+        sky.fog_color = lerp3(level, sky.fog_color, fogged);
+        let cloud3 = [sky.cloud_color[0], sky.cloud_color[1], sky.cloud_color[2]];
+        let g = grey(cloud3) * cb;
+        let c = lerp3(cf, cloud3, [g; 3]);
+        sky.cloud_color = lerp4(level, sky.cloud_color, [c[0], c[1], c[2], sky.cloud_color[3]]);
+        // sky_light_level is a fraction of 15 here; the layer blends towards level 4.
+        let target_level = lerp(alpha, sky.sky_light_level * 15.0, 4.0) / 15.0;
+        sky.sky_light_level = lerp(level, sky.sky_light_level, target_level);
+        sky.sky_light_color = lerp3(level, sky.sky_light_color, lerp3(alpha, sky.sky_light_color, night));
+        sky.sky_light_factor = lerp(level, sky.sky_light_factor, lerp(alpha, sky.sky_light_factor, 0.24));
+        sky.star_brightness = lerp(level, sky.star_brightness, 0.0);
+        let s = sky.sunrise_color;
+        sky.sunrise_color = lerp4(level, s, [s[0] * sunrise[0], s[1] * sunrise[1], s[2] * sunrise[2], s[3]]);
+    }
+}

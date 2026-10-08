@@ -61,6 +61,7 @@ struct Options {
     world: Option<String>,
     look: Option<(f32, f32)>,
     time: Option<i64>,
+    weather: Option<String>,
 }
 impl Options {
     fn read() -> Result<Option<Self>> {
@@ -86,6 +87,7 @@ impl Options {
             world: None,
             look: None,
             time: None,
+            weather: None,
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -124,6 +126,7 @@ impl Options {
                         "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
                         "--world" => o.world = Some(value),
                         "--time" => o.time = Some(value.parse()?),
+                        "--weather" => o.weather = Some(value),
                         "--look" => {
                             let (y, p) = value.split_once(',').ok_or("--look takes YAW,PITCH")?;
                             o.look = Some((y.parse()?, p.parse()?));
@@ -260,6 +263,7 @@ struct Game<'a> {
     dragging: bool,
     walk: (f32, f32),
     bob: (f32, f32),
+    flash: u32,
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -1006,6 +1010,8 @@ impl Game<'_> {
     fn tick(&mut self) -> Result<()> {
         self.ticks += 1;
         self.world.game_time += 1;
+        self.world.weather.tick(&mut self.world.random);
+        self.tick_weather_effects();
         if self.ticks % 6000 == 0 {
             self.save_game()?;
         }
@@ -1940,7 +1946,9 @@ impl Game<'_> {
     }
 
     fn sky_darken(&self) -> i32 {
-        let sky = self.res.environment.sample(self.world.day_time, 0, 0);
+        let mut sky = self.res.environment.sample(self.world.day_time, 0, 0);
+        let (rain, thunder) = self.world.weather.levels(1.0);
+        horizon_client::environment::apply_weather(&mut sky, rain, thunder);
         // Level.updateSkyBrightness: darkening from the sky light level.
         (15.0 - 15.0 * sky.sky_light_level).round() as i32
     }
@@ -2269,7 +2277,7 @@ impl Game<'_> {
             self.spawn_monsters();
         }
         let player = self.player.as_ref().map(|p| ([p.position.x, p.position.y + 0.5, p.position.z], !p.health.dead_or_dying()));
-        let daylight = self.sky_darken() < 4;
+        let daylight = self.sky_darken() < 4 && self.world.weather.levels(1.0).0 < 0.2;
         let mut events = Vec::new();
         let mut mobs = std::mem::take(&mut self.mobs);
         {
@@ -2548,6 +2556,20 @@ impl Game<'_> {
         let mut world = World::new(self.res.facts.air, level.seed);
         world.game_time = level.time;
         world.day_time = self.options.time.unwrap_or(level.day_time);
+        world.weather = level.weather;
+        if let Some(w) = self.options.weather.as_deref() {
+            // /weather: clear, rain or thunder for a long duration.
+            let (rain, thunder) = (w != "clear", w == "thunder");
+            world.weather = horizon_client::world::Weather {
+                clear_time: if w == "clear" { 6000 } else { 0 },
+                rain_time: 6000,
+                thunder_time: 6000,
+                raining: rain,
+                thundering: thunder,
+                rain_level: if rain { (1.0, 1.0) } else { (0.0, 0.0) },
+                thunder_level: if thunder { (1.0, 1.0) } else { (0.0, 0.0) },
+            };
+        }
         self.creative = level.creative;
         let mut inventory = vec![None; 36];
         self.armor = [None, None, None, None];
@@ -3150,6 +3172,123 @@ impl Game<'_> {
         self.audio.master = self.settings.master_volume;
         horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, std::sync::atomic::Ordering::Relaxed);
     }
+    /// Whether precipitation at a column is snow (Biome.coldEnoughToSnow:
+    /// base temperature lowered above y 80) or none (no precipitation).
+    fn precipitation(&self, x: i32, y: i32, z: i32) -> Option<bool> {
+        let chunk = self.world.chunks.get(&(x >> 4, z >> 4))?;
+        let b = self.res.biomes.get(chunk.biome(x, y, z));
+        if !b.precipitation {
+            return None;
+        }
+        let t = if y > 80 { b.temperature - (y - 80) as f32 * 0.05 / 40.0 } else { b.temperature };
+        Some(t < 0.15)
+    }
+    /// The first motion-blocking block from the top (Heightmap MOTION_BLOCKING).
+    fn rain_height(&self, x: i32, z: i32, from: i32) -> i32 {
+        let mut y = from;
+        while y > MIN_Y {
+            let s = self.world.block(x, y, z);
+            let f = self.res.facts.get(s);
+            if f.full_collision || f.fluid != Fluid::None || f.name.contains("leaves") {
+                return y + 1;
+            }
+            y -= 1;
+        }
+        MIN_Y
+    }
+    fn tick_weather_effects(&mut self) {
+        if self.flash > 0 {
+            self.flash -= 1;
+        }
+        let (rain, thunder) = self.world.weather.levels(1.0);
+        let Some(eye) = self.eye_position() else { return };
+        // WeatherEffectRenderer.tickRainParticles: occasional rain sounds.
+        if rain > 0.0 && self.world.random.next_int_bound(3).unwrap_or(1) < (rain * 3.0) as i32 {
+            let r = &mut self.world.random;
+            let (dx, dz) = (r.next_int_bound(21).unwrap_or(10) - 10, r.next_int_bound(21).unwrap_or(10) - 10);
+            let (x, z) = (eye[0].floor() as i32 + dx, eye[2].floor() as i32 + dz);
+            let top = self.rain_height(x, z, eye[1] as i32 + 10);
+            if self.precipitation(x, top, z) == Some(false) && (top - eye[1] as i32).abs() < 10 && self.world.random.next_int_bound(5).unwrap_or(1) == 0 {
+                let above = f64::from(top) > eye[1] + 1.0;
+                let (name, volume, pitch) = if above { ("minecraft:weather.rain.above", 0.1, 0.5) } else { ("minecraft:weather.rain", 0.2, 1.0) };
+                self.audio.play(name, Some([f64::from(x) + 0.5, f64::from(top), f64::from(z) + 0.5]), volume, pitch);
+            }
+        }
+        // ServerLevel.tickChunk lightning: 1 in 100000 per chunk per tick while thundering.
+        if thunder > 0.0 && self.world.weather.thundering {
+            let chunks = self.world.chunks.len().max(1) as i32;
+            if self.world.random.next_int_bound((100_000 / chunks).max(1)).unwrap_or(1) == 0 {
+                self.flash = 2;
+                let r = &mut self.world.random;
+                let (dx, dz) = (f64::from(r.next_int_bound(160).unwrap_or(0) - 80), f64::from(r.next_int_bound(160).unwrap_or(0) - 80));
+                let at = [eye[0] + dx, eye[1], eye[2] + dz];
+                let pitch = 0.8 + self.world.random.next_float() * 0.2;
+                self.audio.play("minecraft:entity.lightning_bolt.thunder", Some(at), 10000.0, pitch);
+                self.audio.play("minecraft:entity.lightning_bolt.impact", Some(at), 2.0, 0.5 + self.world.random.next_float() * 0.2);
+            }
+        }
+    }
+    /// WeatherEffectRenderer: rain/snow columns within 10 blocks.
+    fn weather_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+        let (rain, _) = self.world.weather.levels(alpha as f32);
+        if rain <= 0.0 {
+            return;
+        }
+        let atlas = &self.res.atlas;
+        let (Some(rain_tex), Some(snow_tex)) = (atlas.sprites.get("environment/rain").copied(), atlas.sprites.get("environment/snow").copied()) else { return };
+        let (cx, cy, cz) = (camera.x.floor() as i32, camera.y.floor() as i32, camera.z.floor() as i32);
+        let radius = 10;
+        let time = self.ticks as f32 + alpha as f32;
+        for dz in -radius..=radius {
+            for dx in -radius..=radius {
+                let (x, z) = (cx + dx, cz + dz);
+                let d2 = (dx * dx + dz * dz) as f32;
+                if d2 > (radius * radius) as f32 {
+                    continue;
+                }
+                let top = self.rain_height(x, z, cy + radius + 10);
+                let y0 = (cy - radius).max(top);
+                let y1 = (cy + radius).max(top);
+                if y0 >= y1 {
+                    continue;
+                }
+                let Some(snow) = self.precipitation(x, top, z) else { continue };
+                let hash = (x.wrapping_mul(x).wrapping_mul(3121).wrapping_add(x.wrapping_mul(45_238_971)) ^ z.wrapping_mul(z).wrapping_mul(418_711).wrapping_add(z.wrapping_mul(13761))) & 31;
+                let r = if snow { snow_tex } else { rain_tex };
+                // Columns face the camera horizontally.
+                let (fx, fz) = (f64::from(x) + 0.5 - camera.x, f64::from(z) + 0.5 - camera.z);
+                let len = (fx * fx + fz * fz).sqrt().max(1e-3);
+                let (sx, sz) = ((-fz / len * 0.5) as f32, (fx / len * 0.5) as f32);
+                let center = glam::Vec3::new(fx as f32, 0.0, fz as f32);
+                let scroll = if snow {
+                    (time / 512.0 + hash as f32 / 32.0) % 1.0
+                } else {
+                    ((time + hash as f32) / 32.0 * (3.0 + (hash % 5) as f32 * 0.25)) % 1.0
+                };
+                let fade = ((1.0 - d2 / (radius * radius) as f32) * 0.5 + 0.5) * rain;
+                let a = (fade.clamp(0.0, 1.0) * 255.0) as u32;
+                let color = a << 24 | 0xFF_FFFF;
+                let light = self.world.light(x, top.max(cy), z);
+                let packed = u32::from(light >> 4) * 16 | (u32::from(light & 15) * 16) << 8;
+                let (b, t) = ((f64::from(y0) - camera.y) as f32, (f64::from(y1) - camera.y) as f32);
+                let vh = r.v1 - r.v0;
+                let corners = [
+                    center + glam::Vec3::new(-sx, b, -sz),
+                    center + glam::Vec3::new(sx, b, sz),
+                    center + glam::Vec3::new(sx, t, sz),
+                    center + glam::Vec3::new(-sx, t, -sz),
+                ];
+                // The rain texture is a vertical strip; sample a scrolling window of it.
+                let s0 = scroll * 0.75;
+                let uv0 = r.v0 + vh * s0;
+                let uv1 = r.v0 + vh * (s0 + 0.25);
+                let uvs = [[r.u0, uv1], [r.u1, uv1], [r.u1, uv0], [r.u0, uv0]];
+                for (p, uv) in corners.iter().zip(uvs) {
+                    out.push(Vertex { pos: p.to_array(), uv, layer: 0, color, light: packed });
+                }
+            }
+        }
+    }
     fn save_game(&mut self) -> Result<()> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys
@@ -3161,6 +3300,7 @@ impl Game<'_> {
         let level = &mut self.level;
         level.creative = self.creative;
         level.time = self.world.game_time;
+        level.weather = self.world.weather;
         level.day_time = self.world.day_time;
         level.spawn = self.spawn.map(|s| [s.x, s.y, s.z]);
         level.rotation = [self.yaw, self.pitch];
@@ -3218,7 +3358,14 @@ impl Game<'_> {
             .map(|c| c.biome(block[0], block[1], block[2]))
             .unwrap_or(0);
         let info = self.res.biomes.get(biome).clone();
-        let sky = self.res.environment.sample(self.world.day_time, info.sky, info.fog);
+        let mut sky = self.res.environment.sample(self.world.day_time, info.sky, info.fog);
+        let (rain, thunder) = self.world.weather.levels(alpha as f32);
+        horizon_client::environment::apply_weather(&mut sky, rain, thunder);
+        if self.flash > 0 {
+            // Lightning flash brightens the sky (LevelRenderer skyFlashTime).
+            sky.sky_color = [0.9, 0.9, 1.0];
+            sky.sky_light_factor = 1.0;
+        }
         let outline = if self.screen == Screen::Playing {
             self.pick().map(|h| {
                 let p = h.pos.map(f64::from);
@@ -3235,6 +3382,7 @@ impl Game<'_> {
         let mut entities = entities;
         if !title {
             self.cloud_geometry(&sky, camera, alpha, &mut entities);
+            self.weather_geometry(camera, alpha, &mut entities);
         }
         // PanoramaRenderer: the title cube spins at 0.1 degrees per tick, pitched 10 degrees.
         let (yaw, pitch) = if title { (-(self.started.elapsed().as_secs_f32() * 2.0) % 360.0, 10.0) } else { (self.yaw, self.pitch) };
@@ -3785,6 +3933,7 @@ pub fn run() -> Result<()> {
         dragging: false,
         walk: (0.0, 0.0),
         bob: (0.0, 0.0),
+        flash: 0,
     };
     match game.options.world.clone() {
         Some(folder) => {
