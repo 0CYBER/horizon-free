@@ -134,6 +134,7 @@ impl FoodWorld for TickWorld<'_> {
             dead: self.dead,
             sync_velocity: self.sync_velocity,
             game_time: self.game_time,
+            status: Default::default(),
         };
         ServerPlayerCombat::new(self.attributes, self.data, food, self.ids, &mut environment)?
             .hurt(self.hurt, amount)?;

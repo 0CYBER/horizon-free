@@ -15,6 +15,7 @@ pub mod crafting;
 pub mod enchant;
 pub mod creative;
 pub mod collisions;
+pub mod effects;
 pub mod entities;
 pub mod environment;
 pub mod gfx;

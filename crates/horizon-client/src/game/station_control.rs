@@ -14,6 +14,8 @@ pub(super) const HELP: &[&str] = &[
     "enchant ID LEVEL               enchant the held item (books store the enchantment)",
     "potion ITEM POTION             give a potion item (potion, splash_potion, lingering_potion, tipped_arrow)",
     "menu                           JSON dump of the open menu, carried stack and inventory",
+    "effect ID SECONDS [AMPLIFIER]  give a status effect (effect clear removes all)",
+    "effects                        list active status effects",
     "close                          close the open menu",
 ];
 fn id(name: &str) -> String {
@@ -138,6 +140,18 @@ impl Game<'_> {
                     "slots": slots,
                 })))
             }
+            "effect" => {
+                if arg(1)? == "clear" {
+                    self.potions.effects.clear();
+                    return ok();
+                }
+                let def = horizon_client::brewing::effect(arg(1)?).ok_or("unknown effect")?;
+                let seconds: i32 = arg(2)?.parse()?;
+                let amp: i32 = words.get(3).map_or(Ok(0), |a| a.parse())?;
+                self.potions.effects.add(horizon_client::effects::EffectInstance::new(def.id, seconds * 20, amp));
+                ok()
+            }
+            "effects" => Ok(Some(json!({ "effects": self.effects_json(), "health": self.player.as_ref().map(|p| p.health.health()) }))),
             "close" => {
                 self.close_container();
                 self.screen = Screen::Playing;

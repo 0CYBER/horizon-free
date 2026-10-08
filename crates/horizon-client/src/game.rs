@@ -1,6 +1,8 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
 mod control;
+mod enchant_effects;
+mod potions;
 mod station_control;
 mod stations;
 use horizon_client::{
@@ -316,6 +318,8 @@ struct Game<'a> {
     container: Option<(i32, i32, i32)>,
     /// Open workstation menu (enchanting table, anvil, ...).
     station: Option<stations::Station>,
+    /// Status effects and thrown potions (game/potions.rs).
+    potions: potions::PotionState,
     scratch_slot: Option<ItemStack>,
     mining: Option<Mining>,
     destroy_delay: u32,
@@ -891,7 +895,7 @@ impl Game<'_> {
                     held.as_ref(),
                     &mut self.world.random,
                 );
-                let silk = false;
+                let silk = held.as_ref().is_some_and(|h| h.enchantment_level("minecraft:silk_touch") > 0);
                 for d in drops {
                     if &*d.item != "minecraft:air" {
                         self.pop_resource(pos, d);
@@ -904,14 +908,15 @@ impl Game<'_> {
             }
             // Tools lose durability on blocks with nonzero hardness.
             if facts.hardness > 0.0
-                && let Some(stack) = self.inventory[self.selected].as_mut()
-                && let Some(info) = self.res.items.get(&stack.item)
-                && info.max_damage > 0
-                && !info.tool.is_empty()
+                && let Some(stack) = self.inventory[self.selected].clone()
+                && let Some(max) = self.res.items.get(&stack.item).filter(|i| i.max_damage > 0 && !i.tool.is_empty()).map(|i| i.max_damage)
             {
-                stack.damage += 1;
-                if stack.damage >= info.max_damage {
-                    self.inventory[self.selected] = None;
+                let loss = self.durability_loss(&stack, 1);
+                if let Some(stack) = self.inventory[self.selected].as_mut() {
+                    stack.damage += loss;
+                    if stack.damage >= max {
+                        self.inventory[self.selected] = None;
+                    }
                 }
             }
         }
@@ -972,6 +977,9 @@ impl Game<'_> {
         }
         let Some(stack) = self.held().cloned() else { return Ok(()) };
         let Some(info) = self.res.items.get(&stack.item).cloned() else { return Ok(()) };
+        if self.use_potion_item(&stack)? {
+            return Ok(());
+        }
         if &*stack.item == "minecraft:bow" {
             if self.using.is_none() {
                 self.using = Some((self.selected, 0));
@@ -1060,6 +1068,9 @@ impl Game<'_> {
             self.using = None;
             return;
         };
+        if self.tick_drinking(slot, ticks, &stack) {
+            return;
+        }
         if &*stack.item == "minecraft:bow" {
             self.using = Some((slot, ticks + 1));
             return;
@@ -1131,13 +1142,14 @@ impl Game<'_> {
         // Player.getDestroySpeed / BlockBehaviour.getDestroyProgress.
         let held = self.held();
         let mut speed = self.res.items.mining_speed(held, &facts.name);
+        speed = self.modify_destroy_speed(speed);
         let player = self.player.as_ref().ok_or("no player")?;
         if !player.ground.on_ground {
             speed /= 5.0;
         }
         let eye = self.eye_position().unwrap_or_default();
         if self.res.facts.get(self.world.block(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32)).fluid == Fluid::Water {
-            speed /= 5.0;
+            speed *= self.submerged_mining_speed();
         }
         let harvest = !facts.requires_tool || self.res.items.correct_for_drops(held, &facts.name);
         let progress = if facts.hardness == 0.0 {
@@ -1378,6 +1390,8 @@ impl Game<'_> {
             self.screen = Screen::Dead;
             self.capture(false);
         }
+        self.tick_effects();
+        self.tick_burning();
         self.tick_using();
         self.tick_mining()?;
         self.tick_items();
@@ -1597,6 +1611,7 @@ impl Game<'_> {
                 self.draw_item(&mut batch, &stack, w / 2.0 - 90.0 + i as f32 * 20.0 + 2.0, h - 19.0);
             }
         }
+        self.draw_effect_icons(&mut batch);
         let atlas = &self.res.atlas;
         if !self.creative
             && let Some(p) = &self.player
@@ -2451,7 +2466,7 @@ impl Game<'_> {
         }
         let held = self.held().cloned();
         let modifiers = held.as_ref().and_then(|h| self.res.items.get(&h.item)).map(|i| (i.attack_damage, i.attack_speed)).unwrap_or((0.0, 0.0));
-        let damage = 1.0 + modifiers.0;
+        let damage = 1.0 + modifiers.0 + self.effect_attack_bonus();
         let speed = (4.0 + modifiers.1).max(0.1);
         let delay = 20.0 / speed;
         let scale = ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0);
@@ -2462,6 +2477,9 @@ impl Game<'_> {
         if crit {
             amount *= 1.5;
         }
+        // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
+        let target_kind = self.mobs[index].kind.id.clone();
+        amount += self.enchant_damage_bonus(&format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"))) * scale;
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
@@ -2482,13 +2500,16 @@ impl Game<'_> {
             let event = format!("minecraft:{}", kind.sounds[if dead { 2 } else { 1 }]);
             let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
             self.audio.play(&event, Some(center), 1.0, pitch);
-            if let Some(stack) = self.inventory[self.selected].as_mut()
-                && let Some(info) = self.res.items.get(&stack.item)
-                && info.max_damage > 0
+            self.post_attack(index);
+            if let Some(stack) = self.inventory[self.selected].clone()
+                && let Some(max) = self.res.items.get(&stack.item).filter(|i| i.max_damage > 0).map(|i| i.max_damage)
             {
-                stack.damage += 1;
-                if stack.damage >= info.max_damage {
-                    self.inventory[self.selected] = None;
+                let loss = self.durability_loss(&stack, 1);
+                if let Some(stack) = self.inventory[self.selected].as_mut() {
+                    stack.damage += loss;
+                    if stack.damage >= max {
+                        self.inventory[self.selected] = None;
+                    }
                 }
             }
         }
@@ -2682,6 +2703,7 @@ impl Game<'_> {
                         let at = [player.position.x, player.position.y, player.position.z];
                         self.audio.play("minecraft:entity.player.hurt", Some(at), 1.0, 1.0);
                         self.hurt_armor(amount);
+                        self.thorns(from);
                     }
                 }
                 MobEvent::Shoot(from, target) => {
@@ -3277,12 +3299,14 @@ impl Game<'_> {
                 }
             }
         }
+        self.apply_enchantment_attributes();
     }
     /// Inventory.hurtArmor: each piece loses max(1, damage / 4) durability.
     fn hurt_armor(&mut self, damage: f32) {
         let amount = ((damage / 4.0) as u32).max(1);
         let mut broke = false;
-        for slot in &mut self.armor {
+        let losses: Vec<u32> = (0..4).map(|i| self.armor[i].clone().map_or(amount, |s| self.durability_loss(&s, amount))).collect();
+        for (slot, amount) in self.armor.iter_mut().zip(losses) {
             if let Some(stack) = slot.as_mut()
                 && let Some(info) = self.res.items.get(&stack.item)
                 && info.max_damage > 0
@@ -3346,6 +3370,10 @@ impl Game<'_> {
         if self.creative {
             return;
         }
+        let amount = match self.inventory[self.selected].clone() {
+            Some(held) => self.durability_loss(&held, amount),
+            None => amount,
+        };
         if let Some(stack) = self.inventory[self.selected].as_mut()
             && let Some(info) = self.res.items.get(&stack.item)
             && info.max_damage > 0
@@ -3545,6 +3573,9 @@ impl Game<'_> {
         }
         self.orbs = orbs;
         if gained > 0 {
+            gained = self.mending(gained);
+        }
+        if gained > 0 {
             let at = self.eye_position();
             let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.35 + 0.9;
             self.audio.play("minecraft:entity.experience_orb.pickup", at, 0.1, pitch);
@@ -3574,10 +3605,12 @@ impl Game<'_> {
         let speed = f64::from(power) * 3.0;
         let v = [(dir[0] + jitter()) * speed, (dir[1] + jitter()) * speed, (dir[2] + jitter()) * speed];
         let p = Vec3::new(eye[0], eye[1] - 0.1, eye[2]);
-        self.arrows.push(Arrow { from_player: true, critical: power >= 1.0, position: p, previous: p, velocity: Vec3::new(v[0], v[1], v[2]), stuck: false, age: 0, base_damage: 2.0 });
+        let (power_bonus, infinity) = self.bow_enchantments();
+        self.arrows.push(Arrow { from_player: true, critical: power >= 1.0, position: p, previous: p, velocity: Vec3::new(v[0], v[1], v[2]), stuck: false, age: 0, base_damage: 2.0 + power_bonus });
         let pitch = 1.0 / (self.world.random.next_float() * 0.4 + 1.2) + power * 0.5;
         self.audio.play("minecraft:entity.arrow.shoot", Some(eye), 1.0, pitch);
         if !self.creative
+            && !infinity
             && let Some(i) = arrow_slot
             && let Some(s) = self.inventory[i].as_mut()
         {
@@ -4780,6 +4813,7 @@ pub fn run() -> Result<()> {
         craft_size: 2,
         container: None,
         station: None,
+        potions: Default::default(),
         scratch_slot: None,
         mining: None,
         destroy_delay: 0,

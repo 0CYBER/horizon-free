@@ -174,11 +174,7 @@ impl Game<'_> {
     pub(super) fn close_station(&mut self) {
         let Some(station) = self.station.take() else { return };
         for stack in station.inputs.into_iter().flatten() {
-            if let Some(rest) = self.give(stack)
-                && let Some(eye) = self.eye_position()
-            {
-                self.spawn_item(rest, [eye[0], eye[1] - 0.3, eye[2]], [0.0, 0.1, 0.0], 40);
-            }
+            self.give_or_drop(stack);
         }
     }
     pub(super) fn station_slots(&self) -> Option<Vec<usize>> {

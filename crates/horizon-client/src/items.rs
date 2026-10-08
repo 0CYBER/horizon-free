@@ -327,6 +327,10 @@ struct LootContext<'a> {
     killed_by_player: bool,
 }
 impl LootContext<'_> {
+    /// Level of an enchantment on the tool / killer's weapon.
+    fn enchantment_level(&self, id: &str) -> u32 {
+        self.held.map_or(0, |h| h.enchantment_level(id))
+    }
     fn number(&self, v: &Value, random: &mut LegacyRandom) -> f32 {
         match v {
             Value::Number(n) => n.as_f64().unwrap_or(0.0) as f32,
@@ -374,14 +378,17 @@ impl LootContext<'_> {
         };
         match kind {
             "minecraft:survives_explosion" => true,
-            "minecraft:tool/can_silk_touch" => false,
+            "minecraft:tool/can_silk_touch" => self.enchantment_level("minecraft:silk_touch") > 0,
             "minecraft:tool/can_shear" => self.held.is_some_and(|h| &*h.item == "minecraft:shears"),
             "minecraft:inverted" => !self.condition(&c["term"], random),
             "minecraft:any_of" => c["terms"].as_array().into_iter().flatten().any(|t| self.condition(t, random)),
             "minecraft:all_of" => c["terms"].as_array().into_iter().flatten().all(|t| self.condition(t, random)),
             "minecraft:random_chance" => random.next_float() < self.number(&c["chance"], random),
             "minecraft:table_bonus" => {
-                let chance = c["chances"][0].as_f64().unwrap_or(0.0) as f32;
+                // BonusLevelTableCondition: chances[min(level, len - 1)].
+                let level = self.enchantment_level(c["enchantment"].as_str().unwrap_or("")) as usize;
+                let chances = c["chances"].as_array().map_or(&[][..], Vec::as_slice);
+                let chance = chances.get(level.min(chances.len().saturating_sub(1))).and_then(Value::as_f64).unwrap_or(0.0) as f32;
                 random.next_float() < chance
             }
             "minecraft:match_block" | "minecraft:block_state_property" => {
@@ -405,17 +412,32 @@ impl LootContext<'_> {
             }
             "minecraft:match_tool" => {
                 let items = &c["predicate"]["items"];
-                match (self.held, items) {
+                let items_ok = match (self.held, items) {
+                    (_, Value::Null) => self.held.is_some(),
                     (Some(h), Value::String(s)) => match s.strip_prefix('#') {
                         Some(tag) => self.items.item_tags.get(tag).is_some_and(|t| t.contains(&*h.item)),
                         None => **s == *h.item,
                     },
                     _ => false,
-                }
+                };
+                // ItemPredicate "minecraft:enchantments": each entry needs a level in range.
+                let enchants_ok = c["predicate"]["predicates"]["minecraft:enchantments"].as_array().into_iter().flatten().all(|e| {
+                    let level = self.enchantment_level(e["enchantments"].as_str().unwrap_or(""));
+                    let min = e["levels"]["min"].as_u64().unwrap_or(1) as u32;
+                    let max = e["levels"]["max"].as_u64().map_or(u32::MAX, |m| m as u32);
+                    level >= min.max(1) && level <= max
+                });
+                items_ok && enchants_ok
             }
             "minecraft:killed_by_player" => self.killed_by_player,
             "minecraft:random_chance_with_enchanted_bonus" => {
-                random.next_float() < c["unenchanted_chance"].as_f64().unwrap_or(0.0) as f32
+                let level = if self.killed_by_player && self.block.is_empty() { self.enchantment_level(c["enchantment"].as_str().unwrap_or("")) } else { 0 };
+                let chance = if level > 0 {
+                    crate::enchant::level_value(&c["enchanted_chance"], level)
+                } else {
+                    c["unenchanted_chance"].as_f64().unwrap_or(0.0) as f32
+                };
+                random.next_float() < chance
             }
             // Entity flags, equipment and damage-source predicates: none hold
             // for an unenchanted player kill without fire or lightning.
@@ -525,6 +547,44 @@ impl LootContext<'_> {
                     let n = self.int_number(&f["count"], random);
                     let base = if f["add"].as_bool() == Some(true) { stack.count as i32 } else { 0 };
                     stack.count = (base + n).max(0) as u32;
+                }
+                "minecraft:apply_bonus" => {
+                    let level = self.enchantment_level(f["enchantment"].as_str().unwrap_or("")) as i32;
+                    let count = stack.count as i32;
+                    let params = &f["parameters"];
+                    stack.count = match f["formula"].as_str().unwrap_or("") {
+                        "minecraft:ore_drops" if level > 0 => {
+                            let bonus = (random.next_int_bound(level + 2).unwrap_or(0) - 1).max(0);
+                            count * (bonus + 1)
+                        }
+                        "minecraft:uniform_bonus_count" => {
+                            let multiplier = params["bonusMultiplier"].as_i64().unwrap_or(1) as i32;
+                            count + random.next_int_bound(multiplier * level + 1).unwrap_or(0)
+                        }
+                        "minecraft:binomial_with_bonus_count" => {
+                            let (extra, p) = (params["extra"].as_i64().unwrap_or(0) as i32, params["probability"].as_f64().unwrap_or(0.0) as f32);
+                            let mut n = count;
+                            for _ in 0..level + extra {
+                                if random.next_float() < p {
+                                    n += 1;
+                                }
+                            }
+                            n
+                        }
+                        _ => count,
+                    }
+                    .max(0) as u32;
+                }
+                "minecraft:enchanted_count_increase" => {
+                    // Attacker's level x count, rounded (looting).
+                    let level = self.enchantment_level(f["enchantment"].as_str().unwrap_or(""));
+                    if level > 0 && self.killed_by_player && self.block.is_empty() {
+                        let add = level as f32 * self.number(&f["count"], random);
+                        stack.count = (stack.count as i32 + add.round() as i32).max(0) as u32;
+                        if let Some(limit) = f["limit"].as_i64().filter(|l| *l > 0) {
+                            stack.count = stack.count.min(limit as u32);
+                        }
+                    }
                 }
                 "minecraft:limit_count" => {
                     let limit = &f["limit"];
