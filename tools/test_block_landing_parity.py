@@ -61,7 +61,7 @@ def main():
     tested=base.source_hashes(sources);classes=build/'classes';classes.mkdir(exist_ok=True);dependencies=os.pathsep.join(map(str,libraries))
     def run(command,name):
         with (build/(name+'.log')).open('w') as log:subprocess.run(list(map(str,command)),cwd=lab.ROOT,check=True,timeout=3600,stdout=log,stderr=subprocess.STDOUT)
-    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',str(jars['server'])+os.pathsep+dependencies,'-d',classes,*oracles],'compile-java')
+    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependencies,'-d',classes,*oracles],'compile-java')
     def java(side,mode):run(['java','-Xmx768M','-cp',os.pathsep.join([str(classes),str(jars[side]),dependencies]),'dev.horizonlab.parity.VanillaBlockLandingOracle',mode,build],side+'-'+mode)
     java('server','export');states=json.loads((build/'landing-states.json').read_text());definitions=json.loads((build/'landing-definitions.json').read_text())
     if len(states)!=35723 or len(definitions)!=1286:raise AssertionError('Incomplete pinned registry')

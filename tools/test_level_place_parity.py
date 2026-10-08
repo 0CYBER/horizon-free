@@ -84,7 +84,7 @@ def main():
     dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
     parity = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity'
     sources = [parity / 'VanillaPlacementOracle.java', parity / 'VanillaHeightmapOracle.java', parity / 'VanillaLevelShapeOracle.java']
-    subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-cp', dependencies,
+    subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'), '-nowarn', '-cp', dependencies,
                     '-d', str(classes), *map(str, sources)], check=True)
     subprocess.run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies,
                     'dev.horizonlab.parity.VanillaPlacementOracle', str(resources), str(work / 'cases.jsonl'),

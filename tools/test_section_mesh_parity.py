@@ -429,7 +429,7 @@ def main():
     classes = BUILD / 'classes'
     classes.mkdir(exist_ok=True)
     dependencies = os.pathsep.join(map(str, [jars['client'], *baking.client_libraries()]))
-    run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp', dependencies, '-d', classes, oracle, *helpers], 'compile-java')
+    run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'), '-cp', dependencies, '-d', classes, oracle, *helpers], 'compile-java')
     env_jobs = os.environ.get('CARGO_BUILD_JOBS', '3')
     run(['cargo', 'build', '--locked', '--profile', 'fast', '-j', env_jobs, '-p', 'horizon-client', '--example', 'section_mesh_fixture'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))

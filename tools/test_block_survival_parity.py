@@ -223,7 +223,7 @@ def main():
         fluid_tags=fluid_tag_resources(jars['server'])
         if fluid_tags!=fluid_tag_resources(jars['client']):raise ValueError('client/server fluid tags differ')
         (build/'fluid-tags.json').write_text(json.dumps(fluid_tags,separators=(',',':')))
-        run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle,*helpers],'compile-java')
+        run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle,*helpers],'compile-java')
         java('server','export',build)
         facts=json.loads((build/'facts.json').read_text());definition_classes=json.loads((build/'survival-classes.json').read_text())
         definitions=bind_definitions(definition_classes,json.loads((build/'survival-placement-classes.json').read_text()),json.loads((build/'survival-support-tags.json').read_text()))

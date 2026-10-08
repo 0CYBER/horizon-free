@@ -66,7 +66,7 @@ def main():
     def run(command,name):
         with (build/(name+'.log')).open('w') as log:subprocess.run(list(map(str,command)),cwd=lab.ROOT,check=True,timeout=3600,stdout=log,stderr=subprocess.STDOUT)
     dependencies=os.pathsep.join(map(str,[jars['client'],*libraries]))
-    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',dependencies,'-d',classes,oracle,helper],'compile-java')
+    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',dependencies,'-d',classes,oracle,helper],'compile-java')
     run(['cargo','build','--locked','-p','horizon-assets','--example','blockstate_model_fixture'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--no-deps','--format-version','1'],cwd=lab.ROOT));binary=Path(metadata['target_directory'])/'debug/examples'/('blockstate_model_fixture.exe' if os.name=='nt' else 'blockstate_model_fixture')
     run([binary,inputs,build/'rust.jsonl'],'rust');run(['java','-Xmx512M','-cp',str(classes)+os.pathsep+dependencies,'dev.horizonlab.parity.VanillaBlockStateModelOracle',inputs,build/'client.jsonl'],'client')

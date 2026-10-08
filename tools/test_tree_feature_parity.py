@@ -109,7 +109,7 @@ def main():
     tags=worldgen.tag_resources(jars['server']);fluid_tags=survival.fluid_tag_resources(jars['server']);resources=feature_resources(jars['server'])
     if tags!=worldgen.tag_resources(jars['client']) or fluid_tags!=survival.fluid_tag_resources(jars['client']) or resources!=feature_resources(jars['client']):raise ValueError('reference resources differ')
     for name,value in [('tags.json',tags),('fluid-tags.json',fluid_tags),('vanilla-features.json',resources)]:(build/name).write_text(json.dumps(value,separators=(',',':')))
-    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle,exporter,*helpers],'compile-java')
+    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle,exporter,*helpers],'compile-java')
     for side in jars:
         export=build/(side+'-definitions');export.mkdir(exist_ok=True);java('VanillaSimpleBlockOracle',side,'export',export)
     for path in (build/'server-definitions').iterdir():

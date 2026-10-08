@@ -101,7 +101,7 @@ def main():
     def run(command, name, **kwargs):
         with (build / (name + '.log')).open('w') as log:
             subprocess.run(list(map(str, command)), cwd=lab.ROOT, check=True, timeout=3600, stderr=log, **({'stdout': log} | kwargs))
-    run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp', str(jars['server']) + os.pathsep + dependencies, '-d', classes, oracle], 'compile-java')
+    run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'), '-cp', str(jars['server']) + os.pathsep + dependencies, '-d', classes, oracle], 'compile-java')
     run(['cargo', 'build', '--release', '-p', 'horizon-core', '--example', 'generation_tick_fixture'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
     binary = Path(metadata['target_directory']) / 'release/examples' / ('generation_tick_fixture.exe' if os.name == 'nt' else 'generation_tick_fixture')

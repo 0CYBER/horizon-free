@@ -48,7 +48,7 @@ def main():
     inputs.write_text(''.join(json.dumps(f,separators=(',',':'))+'\n' for f in fixtures));input_hash=lab.digest(inputs,'sha256')
     classes=build/'classes';classes.mkdir(exist_ok=True)
     dependencies=os.pathsep.join(map(str,[jars['client'],*libraries]))
-    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',dependencies,'-d',classes,oracle],'compile-java')
+    run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',dependencies,'-d',classes,oracle],'compile-java')
     run(['cargo','build','--locked','-p','horizon-client','--example','sprint_probe'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--no-deps','--format-version','1'],cwd=lab.ROOT))
     binary=Path(metadata['target_directory'])/'debug/examples'/('sprint_probe.exe' if os.name=='nt' else 'sprint_probe')

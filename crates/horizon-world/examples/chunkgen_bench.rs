@@ -312,6 +312,11 @@ fn main() -> Result<(), Error> {
     let start = Instant::now();
     let generator =
         OverworldGenerator::for_dimension(data.clone(), seed, "minecraft:normal", &dimension)?;
+    if std::env::var_os("HORIZON_LIST_UNSUPPORTED").is_some() {
+        for (feature, error) in generator.unsupported_features() {
+            println!("unsupported {feature}: {error}");
+        }
+    }
     println!("seeded generator in {:.2?}", start.elapsed());
     if let Some((x0, z0, x1, z1, out)) = starts {
         dump_starts(&generator, seed, [x0, z0, x1, z1], &out)?;

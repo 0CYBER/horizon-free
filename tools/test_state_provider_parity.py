@@ -339,7 +339,7 @@ def main():
         biome_tags['horizon:ordered']='{"values":["minecraft:plains","minecraft:desert","minecraft:plains"]}'
         for name,data in [('biomes',biomes),('biome_tags',biome_tags)]:
             (build/(name+'.json')).write_text(json.dumps(data,separators=(',',':')),encoding='utf-8')
-        run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle,*helpers],'compile-java')
+        run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependency_path,'-d',classes,oracle,*helpers],'compile-java')
         run(['java','-Xmx512M','-cp',os.pathsep.join([str(classes),str(jars['server']),dependency_path]),'dev.horizonlab.parity.VanillaBlockPropertiesOracle','export',build],'properties-export')
         run(['java','-Xmx512M','-cp',os.pathsep.join([str(classes),str(jars['server']),dependency_path]),'dev.horizonlab.parity.VanillaBlockSupportOracle','export',build],'support-export')
         run(['java','-Xmx512M','-cp',os.pathsep.join([str(classes),str(jars['server']),dependency_path]),'dev.horizonlab.parity.VanillaBlockSurvivalOracle','definitions',build],'survival-export')
