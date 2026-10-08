@@ -148,6 +148,7 @@ python3 tools/compare_benchmarks.py baseline-frames.json optimized-frames.json -
 ```
 
 Open `Compare-Benchmarks.html` from the starter ZIP or [the source file](tools/Compare-Benchmarks.html) in your browser to compare without Python. Select each JSON and optionally its matching CSV. It exports summary JSON, flags settings and duration differences, and charts frames by recorded active time or ticks by sample number. It is self-contained and makes no network requests.
+
 Version 0.18 adds an isolated [terrain quad reuse experiment](docs/quad-reuse.md).
 It reuses a temporary quad discarded by successful premerge when the existing
 pool would otherwise allocate. Generated geometry and thread ownership checks
