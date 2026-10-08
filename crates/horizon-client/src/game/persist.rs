@@ -130,6 +130,23 @@ impl Game<'_> {
                             });
                         }
                     }
+                    k if super::boats::boat_wood(k).is_some()
+                        && self
+                            .boat_models
+                            .models
+                            .contains_key(super::boats::boat_wood(k).unwrap_or("")) =>
+                    {
+                        if let Some((position, velocity, yaw)) = entity_nbt::boat_from_nbt(&tag) {
+                            self.next_entity += 1;
+                            let id = self.next_entity;
+                            let wood =
+                                std::sync::Arc::from(super::boats::boat_wood(k).unwrap_or("oak"));
+                            let mut b = super::boats::Boat::new(id, wood, position, yaw);
+                            b.velocity = velocity;
+                            self.remember(id, uuid, tag);
+                            self.boats.push(b);
+                        }
+                    }
                     "minecraft:armor_stand" => {
                         self.next_entity += 1;
                         if let Some(a) = entity_nbt::armor_stand_from_nbt(&tag, self.next_entity) {
@@ -281,6 +298,25 @@ impl Game<'_> {
                 out.entry(chunk_of(f.position)).or_default().push(tag);
             }
         }
+        for b in &self.boats {
+            if keys.contains(&chunk_of(b.position)) {
+                let uuid = self
+                    .persist
+                    .uuids
+                    .get(&b.id)
+                    .copied()
+                    .unwrap_or_else(random_uuid);
+                let tag = entity_nbt::boat_to_nbt(
+                    &b.wood,
+                    b.position,
+                    b.velocity,
+                    b.yaw,
+                    uuid,
+                    self.persist.raw.get(&b.id),
+                );
+                out.entry(chunk_of(b.position)).or_default().push(tag);
+            }
+        }
         for a in &self.armor_stands {
             if keys.contains(&chunk_of(a.position)) {
                 let uuid = self
@@ -337,6 +373,14 @@ impl Game<'_> {
         if remove {
             let gone = |p: Vec3| keys.contains(&chunk_of(p));
             let mut removed: Vec<u32> = Vec::new();
+            let riding = self.riding;
+            self.boats.retain(|b| {
+                let keep = !gone(b.position) || Some(b.id) == riding;
+                if !keep {
+                    removed.push(b.id);
+                }
+                keep
+            });
             self.armor_stands.retain(|a| {
                 let keep = !gone(a.position);
                 if !keep {

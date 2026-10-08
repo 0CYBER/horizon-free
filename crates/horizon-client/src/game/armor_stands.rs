@@ -103,7 +103,10 @@ impl Game<'_> {
         // Touching the floor is not a collision.
         let (lo, hi) = (b.min_position(), b.max_position());
         let e = 1.0e-7;
-        let bounds = Aabb::new(Vec3::new(lo.x + e, lo.y + e, lo.z + e), Vec3::new(hi.x - e, hi.y - e, hi.z - e));
+        let bounds = Aabb::new(
+            Vec3::new(lo.x + e, lo.y + e, lo.z + e),
+            Vec3::new(hi.x - e, hi.y - e, hi.z - e),
+        );
         let mut scene = horizon_client::collisions::SceneCollisions {
             world: &self.world,
             binding: self.collision,

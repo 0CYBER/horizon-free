@@ -588,3 +588,31 @@ pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {
     a.on_ground = flag(tag, "OnGround");
     Some(a)
 }
+/// A boat entity (`minecraft:<wood>_boat`, `minecraft:bamboo_raft`).
+pub fn boat_to_nbt(
+    wood: &str,
+    position: Vec3,
+    motion: Vec3,
+    yaw: f32,
+    uuid: [i32; 4],
+    raw: Option<&Tag>,
+) -> Tag {
+    let id = if wood == "bamboo" {
+        "minecraft:bamboo_raft".to_owned()
+    } else {
+        format!("minecraft:{wood}_boat")
+    };
+    Base {
+        id: &id,
+        uuid,
+        position,
+        motion,
+        rotation: [yaw, 0.0],
+        on_ground: false,
+        fall_distance: 0.0,
+    }
+    .tag(raw)
+}
+pub fn boat_from_nbt(tag: &Tag) -> Option<(Vec3, Vec3, f32)> {
+    Some((position(tag)?, motion(tag), rotation(tag)[0]))
+}

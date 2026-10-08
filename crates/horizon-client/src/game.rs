@@ -2,6 +2,7 @@
 //! block interaction, inventory and HUD.
 mod armor_stands;
 mod blockctl;
+mod boats;
 mod chat;
 mod commands;
 mod control;
@@ -526,6 +527,10 @@ struct Game<'a> {
     glow_frame_model: frames::FrameModel,
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
     armor_stand_assets: armor_stands::ArmorStandAssets,
+    boats: Vec<boats::Boat>,
+    boat_models: boats::BoatModels,
+    /// The boat the player rides.
+    riding: Option<u32>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     creative_screen: Creative,
@@ -1394,7 +1399,11 @@ impl Game<'_> {
         Ok(())
     }
     fn use_item(&mut self) -> Result<()> {
-        if self.interact_frame() || self.interact_armor_stand() || self.interact_mob()? {
+        if self.interact_frame()
+            || self.interact_armor_stand()
+            || self.interact_boat()
+            || self.interact_mob()?
+        {
             return Ok(());
         }
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
@@ -1475,6 +1484,9 @@ impl Game<'_> {
             return Ok(());
         }
         if self.use_tool(&stack)? {
+            return Ok(());
+        }
+        if self.place_boat(&stack) {
             return Ok(());
         }
         if let Some(hit) = self.pick()
@@ -1911,6 +1923,21 @@ impl Game<'_> {
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
+        if self.riding.is_some() && self.player.is_some() {
+            let playing = self.screen == Screen::Playing;
+            let held = |k| playing && self.keys.contains(&k);
+            let keys = Keys {
+                forward: held(KeyCode::KeyW),
+                backward: held(KeyCode::KeyS),
+                left: held(KeyCode::KeyA),
+                right: held(KeyCode::KeyD),
+                jump: false,
+                shift: held(KeyCode::ShiftLeft),
+                sprint: false,
+            };
+            self.tick_riding(keys)?;
+        }
+        let riding = self.riding.is_some();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -1933,7 +1960,9 @@ impl Game<'_> {
             shift: held(KeyCode::ShiftLeft),
             sprint: held(KeyCode::ControlLeft),
         };
-        self.previous_position = player.position;
+        if !riding {
+            self.previous_position = player.position;
+        }
         player.yaw = self.yaw;
         // LocalPlayer.modifyInput: walking while using an item.
         player.item_use_speed = self
@@ -1947,14 +1976,16 @@ impl Game<'_> {
             })
             .and_then(|s| self.res.items.get(&s.item))
             .map(|i| i.use_speed);
-        MotionWorld {
-            player,
-            scene: &mut self.world,
-            assets: &self.res.assets,
-            collision_binding: self.collision,
-            resources: self.motion,
+        if !riding {
+            MotionWorld {
+                player,
+                scene: &mut self.world,
+                assets: &self.res.assets,
+                collision_binding: self.collision,
+                resources: self.motion,
+            }
+            .controlled_simulation_tick(keys)?;
         }
-        .controlled_simulation_tick(keys)?;
         let events = std::mem::take(&mut player.events);
         let feet = [player.position.x, player.position.y, player.position.z];
         self.previous_eye = self.eye;
@@ -2054,6 +2085,7 @@ impl Game<'_> {
         self.tick_paintings();
         self.tick_item_frames();
         self.tick_armor_stands();
+        self.tick_boats();
         self.tick_mining()?;
         self.tick_items();
         self.spawn_loaded_entities();
@@ -3514,6 +3546,7 @@ impl Game<'_> {
         self.painting_geometry(camera, &mut out);
         self.frame_geometry(camera, &mut out);
         self.armor_stand_geometry(camera, alpha, &mut out);
+        self.boat_geometry(camera, alpha, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
         let world = &self.world;
         self.particles.render(
@@ -3671,7 +3704,12 @@ impl Game<'_> {
             self.break_painting(i, true);
             return true;
         }
-        if self.attack_frame() || self.attack_armor_stand() {
+        let hand_damage = 1.0
+            + self
+                .held()
+                .and_then(|h| self.res.items.get(&h.item))
+                .map_or(0.0, |i| i.attack_damage);
+        if self.attack_frame() || self.attack_armor_stand() || self.attack_boat(hand_damage) {
             return true;
         }
         let Some((index, distance)) = self.mob_hit() else {
@@ -7031,6 +7069,9 @@ pub fn run() -> Result<()> {
         glow_frame_model: frames::bake_frame(&root, "glow_item_frame"),
         armor_stands: Vec::new(),
         armor_stand_assets: armor_stands::ArmorStandAssets::load(&root),
+        boats: Vec::new(),
+        boat_models: boats::BoatModels::load(&root),
+        riding: None,
         tnts: Vec::new(),
         hoppers: HashMap::new(),
         creative_screen: Creative::load(&game_root)?,
