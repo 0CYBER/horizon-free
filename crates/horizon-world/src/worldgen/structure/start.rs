@@ -84,6 +84,7 @@ pub enum StructureKind {
     Stronghold,
     Fortress,
     NetherFossil(HeightProvider),
+    EndCity,
     /// A structure type whose generator is not implemented yet.
     Unsupported(String),
 }
@@ -226,6 +227,7 @@ impl StructureRegistry {
                 },
                 "minecraft:stronghold" => StructureKind::Stronghold,
                 "minecraft:fortress" => StructureKind::Fortress,
+                "minecraft:end_city" => StructureKind::EndCity,
                 "minecraft:nether_fossil" => StructureKind::NetherFossil(
                     HeightProvider::from_json(&v["height"].to_string())?,
                 ),
@@ -760,6 +762,29 @@ fn try_generate(
             let pieces =
                 super::stronghold::generate(&mut random, seed, [chunk.x, chunk.z], sea, min);
             ([chunk.x * 16, 0, chunk.z * 16], legacy(pieces))
+        }
+        StructureKind::EndCity => {
+            let (x, z) = (chunk.x * 16 + 7, chunk.z * 16 + 7);
+            if !context.column_has_valid_biome(x, z, context.min_y() - 1, context.max_y()) {
+                return None;
+            }
+            let rotation = super::Rotation::random(&mut random);
+            let (sx, sz) = match rotation {
+                super::Rotation::None => (5, 5),
+                super::Rotation::Clockwise90 => (-5, 5),
+                super::Rotation::Clockwise180 => (-5, -5),
+                super::Rotation::Counterclockwise90 => (5, -5),
+            };
+            let y = corner_heights(context, x, sx, z, sz).into_iter().min().unwrap_or(0);
+            if y < 60 {
+                return None;
+            }
+            let start = [x, y, z];
+            if !def.biomes.contains(&context.noise_biome(start.map(|v| v >> 2))) {
+                return None;
+            }
+            let pieces = super::end_city::pieces(resources, start, rotation, &mut random)?;
+            (start, legacy(pieces))
         }
         StructureKind::Fortress => {
             let pieces = super::fortress::generate(&mut random, [chunk.x, chunk.z]);
