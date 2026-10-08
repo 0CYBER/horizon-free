@@ -279,6 +279,7 @@ impl Game<'_> {
             Screen::Paused => "paused",
             Screen::Options => "options",
             Screen::Inventory => "inventory",
+            Screen::Creative => "creative",
             Screen::Dead => "dead",
         }
     }

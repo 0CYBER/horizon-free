@@ -343,6 +343,21 @@ def main():
             subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
                             'dev.horizonlab.parity.VanillaEntityModelExporter', str(entity_models)],
                            check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+    creative = root / 'creative-tabs.json'
+    creative_oracle = oracle.with_name('VanillaCreativeTabsExporter.java')
+    creative_sources = base.source_hashes([creative_oracle])
+    if not (previous.get('creative_exporters_sha256') == creative_sources and creative.exists()
+            and previous.get('server_sha256') == origin['server_sha256']):
+        classes = lab.LOCAL / 'creative-tabs' / 'classes'; classes.mkdir(parents=True, exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+        with (root / 'creative-export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(creative_oracle)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
+                            'dev.horizonlab.parity.VanillaCreativeTabsExporter', str(creative)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+        recover_creative_tabs(creative, root)
     lab.write_json(manifest, {'schema': 7, **origin,
                              'health_exporters_sha256': health_sources,
                              'health_files_sha256': {name: lab.digest(root/name, 'sha256') for name in health_files},
@@ -355,12 +370,39 @@ def main():
                              'model_state_exporters_sha256': binding_sources,
                              'gameplay_exporters_sha256': gameplay_sources,
                              'entity_model_exporters_sha256': entity_sources,
+                             'creative_exporters_sha256': creative_sources,
                              'entity_types_exporters_sha256': entity_types_sources,
                              'behaviour_exporters_sha256': behaviour_sources,
                              'model_states_sha256': lab.digest(model_states, 'sha256'), 'data_version': version['world_version'],
                              'facts_sha256': lab.digest(facts, 'sha256'),
                              'block_tags_sha256': lab.digest(root / 'block-tags.json', 'sha256'), 'resource_files': count})
     print(f'Prepared Horizon native-client resources: {root}')
+
+
+def recover_creative_tabs(path, root):
+    """Tabs whose generators need dynamic registries (banner patterns) fail in
+    the bare bootstrap; recover their item order from the decompiled source."""
+    import re
+    tabs = json.loads(path.read_text())
+    source = lab.LOCAL / 'decompiled/net/minecraft/world/item/CreativeModeTabs.java'
+    if not source.exists():
+        return
+    items = json.loads((root / 'items.json').read_text())
+    text = source.read_text()
+    for tab in tabs:
+        if tab['items'] or tab['type'] != 'CATEGORY':
+            continue
+        name = tab['id'].split(':')[1].upper()
+        start = text.find(f'{name},')
+        end = text.find('Registry.register(', start + 1)
+        found = []
+        for m in re.finditer(r'\b(Items|Blocks)\.([A-Z0-9_]+)(?:\.(\w+)\(\))?', text[start:end]):
+            base, colour = m.group(2).lower(), m.group(3)
+            item = 'minecraft:' + (f'{colour}_{base}' if colour and colour not in ('asItem', 'defaultBlockState', 'get') else base)
+            if item in items and item not in found:
+                found.append(item)
+        tab['items'] = found
+    path.write_text(json.dumps(tabs))
 
 
 if __name__ == '__main__':

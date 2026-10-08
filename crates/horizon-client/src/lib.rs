@@ -11,6 +11,7 @@ pub mod clock;
 pub mod containers;
 pub mod control;
 pub mod crafting;
+pub mod creative;
 pub mod collisions;
 pub mod entities;
 pub mod environment;
