@@ -14,4 +14,5 @@
 /run/
 /logs/
 /dist/
-/mods/horizon-lab/build/
+/mods/horizon/build/
+/saves/

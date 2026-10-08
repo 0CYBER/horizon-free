@@ -39,7 +39,7 @@ def main():
     root = build_pack.ROOT
     fixture = build_mod.build_dispatch_fixture()
     version = build_pack.read_lock()["pack_version"]
-    mod = root / "dist" / f"horizon-lab-{version}.jar"
+    mod = root / "dist" / f"horizon-{version}.jar"
     results = []
     for enabled in [False, True]:
         instance = root / ".local/runtime" / ("dispatch-fixture-patched" if enabled else "dispatch-fixture-upstream")

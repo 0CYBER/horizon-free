@@ -10,18 +10,34 @@ from tools import build_pack, compare_benchmarks, runtime
 
 
 class PackTests(unittest.TestCase):
+    def test_rebrand_upgrade_retires_legacy_and_current_names(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            mods = root / "instance/mods"
+            mods.mkdir(parents=True)
+            previous = [mods / "horizon-lab-0.20.0.jar", mods / "horizon-0.21.0.jar"]
+            for old in previous:
+                with zipfile.ZipFile(old, "w") as archive:
+                    archive.writestr("fabric.mod.json", json.dumps({"id": "horizonlab"}))
+            new = root / "horizon-0.22.0.jar"
+            new.write_bytes(b"new original fixture")
+            runtime.install_original_mod(new, mods)
+            self.assertTrue(all(not old.exists() for old in previous))
+            self.assertEqual(list(mods.iterdir()), [mods / new.name])
+            self.assertEqual(len(list((mods.parent / ".horizon-mod-backups").glob("*.jar"))), 2)
+
     def test_original_mod_upgrade_preserves_backup_and_other_mods(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             mods = root / "instance/mods"
             mods.mkdir(parents=True)
-            old = mods / "horizon-lab-0.2.0.jar"
+            old = mods / "horizon-0.2.0.jar"
             with zipfile.ZipFile(old, "w") as archive:
                 archive.writestr("fabric.mod.json", json.dumps({"id": "horizonlab"}))
             old_bytes = old.read_bytes()
             other = mods / "other.jar"
             other.write_bytes(b"another mod")
-            new = root / "horizon-lab-0.3.0.jar"
+            new = root / "horizon-0.3.0.jar"
             new.write_bytes(b"new original fixture")
             runtime.install_original_mod(new, mods)
             self.assertFalse(old.exists())
@@ -34,9 +50,9 @@ class PackTests(unittest.TestCase):
     def test_original_mod_upgrade_refuses_unrelated_named_jar(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            with zipfile.ZipFile(root / "horizon-lab-0.1.0.jar", "w") as archive:
+            with zipfile.ZipFile(root / "horizon-0.1.0.jar", "w") as archive:
                 archive.writestr("fabric.mod.json", json.dumps({"id": "someoneelse"}))
-            new = root / "horizon-lab-0.3.0.jar"
+            new = root / "horizon-0.3.0.jar"
             new.write_bytes(b"new original fixture")
             with self.assertRaisesRegex(ValueError, "another mod"):
                 runtime.install_original_mod(new, root)
@@ -176,7 +192,7 @@ class PackTests(unittest.TestCase):
             with zipfile.ZipFile(pack) as archive:
                 names = archive.namelist()
                 self.assertEqual([n for n in names if n.endswith(".jar")],
-                                 [f"overrides/mods/horizon-lab-{build_pack.read_lock()['pack_version']}.jar"])
+                                 [f"overrides/mods/horizon-{build_pack.read_lock()['pack_version']}.jar"])
                 index = json.loads(archive.read("modrinth.index.json"))
                 self.assertEqual(index["dependencies"]["minecraft"], "26.3")
                 options = dict(line.split(":", 1) for line in archive.read("overrides/options.txt").decode().splitlines())

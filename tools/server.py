@@ -37,7 +37,7 @@ def prepare(instance, baseline=False):
         source = runtime.fetch(entry["url"], ROOT / ".local/pack-cache" / entry["filename"],
                                entry["hashes"]["sha512"], "sha512")
         shutil.copyfile(source, mod_dir / entry["filename"])
-    original = ROOT / "dist" / f"horizon-lab-{pack_lock['pack_version']}.jar"
+    original = ROOT / "dist" / f"horizon-{pack_lock['pack_version']}.jar"
     if not original.exists():
         raise FileNotFoundError("Build the original mod first with tools/build_mod.py, or use the server starter ZIP")
     runtime.install_original_mod(original, mod_dir)

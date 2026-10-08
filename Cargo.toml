@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/voxel-kernels"]
+members = ["crates/horizon-core", "crates/horizon-world", "crates/voxel-kernels", "crates/horizon-client", "crates/horizon-assets"]
 resolver = "2"
 
 [workspace.package]
@@ -10,3 +10,10 @@ rust-version = "1.85"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Optimized but quick-to-link builds for iteration: cargo build --profile fast
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

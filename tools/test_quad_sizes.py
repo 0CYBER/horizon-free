@@ -42,7 +42,7 @@ def main():
     root = build_pack.ROOT
     agent = build_agent()
     fixture = build_mod.build_integration_fixture("quad-size", "dev.horizonlab.dispatch.QuadSizeIntegration")
-    mod = root / "dist" / f"horizon-lab-{build_pack.read_lock()['pack_version']}.jar"
+    mod = root / "dist" / f"horizon-{build_pack.read_lock()['pack_version']}.jar"
     mod_hash = hashlib.sha256(mod.read_bytes()).hexdigest()
     results = []
     for headers in [False, True]:

@@ -17,7 +17,7 @@ except ImportError:
     import runtime
 
 ROOT = lab.ROOT
-SOURCE = ROOT / "mods/horizon-lab/src"
+SOURCE = ROOT / "mods/horizon/src"
 BUILD = ROOT / ".local/mod-build"
 
 
@@ -106,11 +106,11 @@ def build():
                     "dev.horizonlab.metrics.ResidentMemoryTest"], check=True)
     subprocess.run(["java", "-cp", os.pathsep.join([str(adapter_tests), test_classpath]),
                     "dev.horizonlab.geometry.RelativeTerrainPositionTest"], check=True)
-    output = ROOT / "dist" / f"horizon-lab-{lock['pack_version']}.jar"
+    output = ROOT / "dist" / f"horizon-{lock['pack_version']}.jar"
     output.parent.mkdir(exist_ok=True)
     entries = {path.relative_to(classes).as_posix(): path.read_bytes() for path in classes.rglob("*.class")}
     if any(not name.startswith("dev/horizonlab/") for name in entries):
-        raise ValueError("Only original Horizon Lab classes may be packaged")
+        raise ValueError("Only original Horizon classes may be packaged")
     resources = SOURCE / "main/resources"
     entries.update({path.relative_to(resources).as_posix(): path.read_bytes() for path in resources.rglob("*") if path.is_file()})
     entries["LICENSE"] = (ROOT / "LICENSE").read_bytes()

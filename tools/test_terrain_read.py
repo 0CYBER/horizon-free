@@ -23,7 +23,7 @@ def main():
     args = parser.parse_args()
     root = build_pack.ROOT
     fixture = build_mod.build_integration_fixture("terrain-read", "dev.horizonlab.dispatch.TerrainReadIntegration")
-    mod = root / "dist" / f"horizon-lab-{build_pack.read_lock()['pack_version']}.jar"
+    mod = root / "dist" / f"horizon-{build_pack.read_lock()['pack_version']}.jar"
     original_sha256 = hashlib.sha256(mod.read_bytes()).hexdigest()
     results = []
     for enabled in [False, True]:

@@ -40,7 +40,7 @@ def download(url, destination, checksum, algorithm="sha1"):
     try:
         with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
             temporary = Path(stream.name)
-            request = urllib.request.Request(url, headers={"User-Agent": "minecraft-optimization-lab/0.1"})
+            request = urllib.request.Request(url, headers={"User-Agent": "horizon/0.1"})
             with urllib.request.urlopen(request, timeout=120) as response:
                 shutil.copyfileobj(response, stream)
         actual = digest(temporary, algorithm)

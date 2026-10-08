@@ -1,0 +1,22 @@
+[package]
+name = "horizon-client"
+default-run = "horizon-client"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version = "1.90"
+description = "Horizon native development client"
+
+[dependencies]
+horizon-assets = { path = "../horizon-assets" }
+horizon-core = { path = "../horizon-core" }
+horizon-world = { path = "../horizon-world" }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl"] }
+winit = "0.30.13"
+pollster = "0.4"
+bytemuck = { version = "1.24", features = ["derive"] }
+glam = "0.30"
+png = "0.18"
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+cpal = "0.16"
+symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }

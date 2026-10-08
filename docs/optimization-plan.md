@@ -8,6 +8,13 @@ Inspect both pinned game JARs locally, retain bytecode as the reference, and mea
 
 Whole-game translation is a long-term research objective. Decompiled Java is an inspection artifact, not the original source tree: build configuration, comments, tooling history, and some source-level constructs cannot be recovered faithfully. A mechanically translated Rust game would also have to preserve behavior, data formats, networking and rendering. An isolated hot-path replacement is a useful first experiment.
 
+The Rust rewrite now has an original `horizon-core` foundation and a bytecode
+differential runner for selected position, random-stream and packed-storage
+operations. [Rust parity status](rust-parity.md) distinguishes that tested slice
+from the unimplemented gameplay and renderer. This establishes compatibility
+testing infrastructure; it does not select an FPS bottleneck or supply a playable
+Rust client.
+
 ## Local code map
 
 These entry points were verified present in the decompiled 26.3 client. Paths below are relative to `.local/minecraft/26.3/sources/client/net/minecraft/`; shared/server logic can also be inspected in the dedicated-server tree.

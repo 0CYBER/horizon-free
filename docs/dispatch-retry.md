@@ -56,7 +56,7 @@ earlier patched return produce different caller durations; these measurements
 describe the rejected-submission path, not normal task throughput. Linux CI runs
 the applied hooks; Windows and ARM Mac CI compile the fixture and production mod.
 
-In [Linux CI run 37158922187](https://github.com/ludovic111/minecraft-optimization-lab/actions/runs/37158922187),
+In [Linux CI run 37158922187](https://github.com/ludovic111/Horizon/actions/runs/37158922187),
 [the raw fixture result](../benchmarks/dispatch-retry-2026-10-04/linux-applied-hooks.json)
 reported 216,987,192 caller allocation bytes and 63,790 rejections upstream,
 versus 103,384 caller bytes and 6 rejections with the hook. Caller wall times were

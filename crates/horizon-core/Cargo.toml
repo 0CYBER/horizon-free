@@ -1,0 +1,31 @@
+[package]
+name = "horizon-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Horizon simulation foundations for the pinned vanilla Java Edition target"
+
+[[bin]]
+name = "horizon-parity"
+path = "src/bin/parity.rs"
+
+[[bin]]
+name = "horizon-tick-parity"
+path = "src/bin/tick_parity.rs"
+
+[[bin]]
+name = "horizon-geometry-parity"
+path = "src/bin/geometry_parity.rs"
+
+[[bin]]
+name = "horizon-noise-parity"
+path = "src/bin/noise_parity.rs"
+
+[[bin]]
+name = "horizon-density-parity"
+path = "src/bin/density_parity.rs"
+
+[[bin]]
+name = "horizon-float-log-parity"
+path = "src/bin/float_log_parity.rs"

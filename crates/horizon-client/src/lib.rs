@@ -1,0 +1,41 @@
+//! Horizon native client: resources, world streaming, rendering and the
+//! bindings between the validated simulation pieces and the game loop.
+#![forbid(unsafe_code)]
+pub mod assets;
+pub mod attribute_updates;
+pub mod audio;
+pub mod biome;
+pub mod blocks;
+pub mod chunk;
+pub mod clock;
+pub mod containers;
+pub mod control;
+pub mod crafting;
+pub mod creative;
+pub mod collisions;
+pub mod entities;
+pub mod environment;
+pub mod gfx;
+pub mod health;
+pub mod hud;
+pub mod hunger;
+pub mod input;
+pub mod items;
+pub mod landing;
+pub mod light;
+pub mod mesher;
+pub mod mobs;
+pub mod models;
+pub mod motion;
+pub mod particles;
+pub mod pose;
+pub mod save;
+pub mod settings;
+pub mod sprint;
+pub mod sprites;
+pub mod streaming;
+pub mod testgen;
+pub mod title;
+pub mod vanillagen;
+pub mod world;
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

@@ -1,0 +1,113 @@
+package dev.horizonlab.parity;
+import com.google.gson.*;import java.io.*;import java.lang.reflect.*;import java.lang.invoke.*;import java.nio.file.*;import java.util.*;
+import net.minecraft.network.syncher.*;import net.minecraft.world.entity.ai.attributes.*;import net.minecraft.world.food.FoodData;import net.minecraft.world.level.gamerules.*;import net.minecraft.world.flag.FeatureFlagSet;import net.minecraft.server.network.ServerGamePacketListenerImpl;import net.minecraft.core.*;import net.minecraft.core.component.*;import net.minecraft.core.registries.*;import net.minecraft.resources.*;import net.minecraft.tags.*;import net.minecraft.world.InteractionHand;import net.minecraft.world.entity.*;import net.minecraft.world.entity.player.*;import net.minecraft.world.damagesource.*;import net.minecraft.world.effect.*;import net.minecraft.world.item.*;import net.minecraft.world.item.component.*;import net.minecraft.server.level.*;import net.minecraft.server.PlayerAdvancements;import net.minecraft.sounds.*;import net.minecraft.stats.Stats;
+/** Native ServerPlayer hurt through actual reduction, attributes, health/absorption and hunger. */
+public final class VanillaServerPlayerCombatOracle {
+    static final class Stop extends RuntimeException {}
+    static EntityDataAccessor<Float> healthKey,absorptionKey;static Field amplifier;static Object unsafe;static Method allocate;static ItemStack plain,shield;static Field stamp,lastSource,noAction,cooldown,lastHurt,duration,time;
+    static <T>T make(Class<T> c)throws Exception{return c.cast(allocate.invoke(unsafe,c));}
+    static Field field(Class<?> c,String n)throws Exception{var f=c.getDeclaredField(n);f.setAccessible(true);return f;}
+    static float single(JsonElement v){return Float.intBitsToFloat(Integer.parseUnsignedInt(v.getAsString(),16));}
+    static double number(JsonElement v){return Double.longBitsToDouble(Long.parseUnsignedLong(v.getAsString(),16));}
+    static String values(List<SynchedEntityData.DataValue<?>> v){return VanillaPlayerHealthOracle.values(v);}
+    static String bits(float v){return String.format("%08x",Float.floatToIntBits(v));}
+    static String state(LivingEntity a){try{return noAction.getInt(a)+" "+cooldown.getInt(a)+" "+bits(lastHurt.getFloat(a))+" "+duration.getInt(a)+" "+time.getInt(a)+" "+(lastSource.get(a)!=null)+" "+stamp.getLong(a);}catch(Exception e){throw new AssertionError(e);}}
+    static final class Data {JsonObject op;PrintWriter out;AttributeMap attributes;SynchedEntityData data;Tracker tracker;Rules rules;int calls,difficultyCalls;boolean hit;Abilities abilities;PlainPlayer attacker;Arrow arrow;Actor other;float recorded;Server level;PlayerAdvancements advancements;List<MobEffectInstance> effects;
+        boolean flag(String n){return op.get(n).getAsBoolean();}void event(String s){out.println(s);if(calls++==op.get("fail").getAsInt())throw new Stop();}}
+    static final class Source extends DamageSource {Data d;Source(){super(null);}
+        @Override public boolean is(TagKey<DamageType> tag){String n=tag==DamageTypeTags.BYPASSES_ARMOR?"bypass_armor":tag==DamageTypeTags.BYPASSES_EFFECTS?"bypass_effects":tag==DamageTypeTags.BYPASSES_RESISTANCE?"bypass_resistance":tag==DamageTypeTags.BYPASSES_ENCHANTMENTS?"bypass_enchantments":tag==DamageTypeTags.IS_DROWNING?"drowning":tag==DamageTypeTags.IS_FALL?"fall":tag==DamageTypeTags.IS_FIRE?"fire":tag==DamageTypeTags.IS_FREEZING?"freezing":tag==DamageTypeTags.DAMAGES_HELMET?"damages_helmet":tag==DamageTypeTags.BYPASSES_COOLDOWN?"bypasses_cooldown":tag==DamageTypeTags.NO_IMPACT?"no_impact":tag==DamageTypeTags.NO_KNOCKBACK?"no_knockback":tag==DamageTypeTags.BYPASSES_INVULNERABILITY?"bypasses_invulnerability":null;if(n==null)throw new AssertionError();d.event("tag "+n);return d.flag(n);}
+        @Override public boolean is(ResourceKey<DamageType> k){if(k==DamageTypes.ENDER_PEARL){d.event("pearl");return d.flag("pearl");}if(k!=DamageTypes.THORNS)throw new AssertionError();d.event("thorns");return false;}
+        @Override public Entity getEntity(){d.event("attacker");return switch(d.op.get("attacker").getAsInt()){case 0->null;case 1->d.other;case 2->d.attacker;case 3->d.arrow;default->throw new AssertionError();};}
+        @Override public ItemStack getWeaponItem(){d.event("weapon");return d.flag("weapon")?ItemStack.EMPTY:null;}@Override public float getFoodExhaustion(){d.event("food-exhaustion");return single(d.op.get("food_exhaustion"));}
+        @Override public boolean isCreativePlayer(){d.event("creative");return d.flag("creative");}@Override public boolean scalesWithDifficulty(){d.event("scales");return d.flag("scales");}}
+    static final class PlainPlayer extends Player {PlainPlayer(){super(null,null);}@Override public net.minecraft.world.level.GameType gameMode(){return net.minecraft.world.level.GameType.SURVIVAL;}}
+    static final class Arrow extends net.minecraft.world.entity.projectile.arrow.Arrow {Data d;Arrow(){super(null,null);}@Override public Entity getOwner(){d.event("owner");return switch(d.op.get("owner").getAsInt()){case 0->null;case 1->d.attacker;case 2->d.other;default->throw new AssertionError();};}}
+    static final class Tracker extends CombatTracker {Data d;Tracker(){super(null);}@Override public void recordDamage(DamageSource s,float v){d.event("record "+bits(v));d.recorded=v;d.hit=true;}}
+    static final class Rules extends GameRules {Data d;Rules(){super(FeatureFlagSet.of());}@SuppressWarnings("unchecked") @Override public <T>T get(GameRule<T> rule){String n=rule==GameRules.DROWNING_DAMAGE?"drowning":rule==GameRules.FALL_DAMAGE?"fall":rule==GameRules.FIRE_DAMAGE?"fire":rule==GameRules.FREEZE_DAMAGE?"freeze":null;if(n==null)throw new AssertionError();d.event("rule "+n);return (T)Boolean.valueOf(d.flag("rule_"+n));}}
+    static final class Connection extends ServerGamePacketListenerImpl {Data d;Connection(){super(null,null,null,null);}@Override public boolean hasClientLoaded(){d.event("loaded");return d.flag("loaded");}}
+    static final class Server extends ServerLevel {Data d;Server(){super(null,null,null,null,null,null,false,0L,List.of(),false);}@Override public GameRules getGameRules(){d.event("rules");return d.rules;}@Override public void broadcastDamageEvent(Entity a,DamageSource s){d.event("broadcast");}@Override public boolean isClientSide(){d.event("client");return d.flag("client");}@Override public net.minecraft.world.Difficulty getDifficulty(){d.event("difficulty");return net.minecraft.world.Difficulty.values()[d.op.getAsJsonArray("difficulties").get(d.difficultyCalls++).getAsInt()];}@Override public long getGameTime(){d.event("game-time");return d.op.get("game_time").getAsLong();}}
+    static final class Effect extends MobEffectInstance {Data d;int id;Effect(){super(MobEffects.RESISTANCE);}@Override public void onMobHurt(ServerLevel l,LivingEntity a,DamageSource s,float v){d.event("effect "+id+" "+bits(v));}}
+    static final class Actor extends net.minecraft.world.entity.decoration.ArmorStand {Actor(){super(null,null);}
+
+        Data d;
+        @Override public boolean isPermanentlyInvulnerable(){d.event("permanent");return d.flag("permanent");}
+        @Override public boolean isTemporarilyInvulnerable(){d.event("temporary");return d.flag("temporary");}
+        @Override public boolean fireImmune(){d.event("fire-immune");return d.flag("fire_immune");}
+        @Override public boolean hasEffect(Holder<MobEffect> e){if(e==MobEffects.FIRE_RESISTANCE){d.event("fire-resistance");return d.flag("fire_resistance");}if(e!=MobEffects.RESISTANCE)throw new AssertionError();d.event("has-resistance");return d.flag("resistance");}
+        @Override public MobEffectInstance getEffect(Holder<MobEffect> e){if(e!=MobEffects.RESISTANCE)throw new AssertionError();d.event("effect");var v=new MobEffectInstance(e,100,0);try{amplifier.setInt(v,d.op.get("amplifier").getAsInt());}catch(Exception ex){throw new AssertionError(ex);}return v;}
+        @Override public double getAttributeValue(Holder<Attribute> a){return d.attributes.getValue(a);}
+        @Override protected void hurtArmor(DamageSource s,float v){d.event("hurt-armor "+bits(v));if(d.flag("break_armor"))d.attributes.getInstance(Attributes.ARMOR).setBaseValue(number(d.op.get("armor_after")));}
+        @Override public CombatTracker getCombatTracker(){d.event("tracker");return d.tracker;}
+        @Override public void gameEvent(Holder<net.minecraft.world.level.gameevent.GameEvent> e){if(e!=net.minecraft.world.level.gameevent.GameEvent.ENTITY_DAMAGE)throw new AssertionError();d.event("damage-event");}
+        @Override public void onSyncedDataUpdated(EntityDataAccessor<?> a){var k=a.id()==healthKey.id()?healthKey:absorptionKey;d.event("updated "+k.id()+" "+bits(d.data.get(k))+" "+d.data.isDirty());if(d.flag("pack_callback"))d.out.println("callback-pack "+values(d.data.packDirty()));}
+        @Override public boolean isSleeping(){d.event("sleeping");return d.flag("sleeping");}
+        @Override public void stopSleeping(){d.event("wake");}
+        @Override public ItemStack getUseItem(){d.event("use-item");return d.flag("component")?shield:ItemStack.EMPTY;}
+        @Override public float applyItemBlocking(ServerLevel l,DamageSource s,float v){d.event("blocking "+bits(v));return single(d.op.get("blocked"));}
+        @Override public boolean is(TagKey<EntityType<?>> tag){if(tag==EntityTypeTags.FALL_DAMAGE_IMMUNE){d.event("fall-immune");return d.flag("fall_immune");}if(tag!=EntityTypeTags.FREEZE_HURTS_EXTRA_TYPES)throw new AssertionError();d.event("freeze-extra");return d.flag("freeze_extra");}
+        @Override public ItemStack getItemBySlot(EquipmentSlot slot){d.event("slot "+slot.ordinal());return slot==EquipmentSlot.HEAD&&d.flag("helmet")?plain:ItemStack.EMPTY;}
+        @Override protected void hurtHelmet(DamageSource s,float v){d.event("hurt-helmet "+bits(v));}
+        @Override protected void resolveMobResponsibleForDamage(DamageSource s){d.event("resolve-mob");}
+        @Override protected Player resolvePlayerResponsibleForDamage(DamageSource s){d.event("resolve-player");return null;}
+        @Override protected void markHurt(){d.event("mark");}
+        @Override public void dealDefaultKnockback(DamageSource s,float v,boolean b){d.event("knockback "+bits(v)+" "+b);}
+        @Override public ItemStack getItemInHand(InteractionHand h){d.event("hand "+h.ordinal());return ItemStack.EMPTY;}
+        @Override protected SoundEvent getDeathSound(){d.event("death-sound");return null;}
+        @Override public void makeSound(SoundEvent e){d.event("make-sound");}
+        @Override public void die(DamageSource s){d.event("die");dead=true;}
+        @Override protected void playHurtSound(DamageSource s){d.event("hurt-sound");}
+        @Override public ServerLevel level(){d.event("level");return d.level;}
+        @Override public Collection<MobEffectInstance> getActiveEffects(){d.event("effects");return d.effects;}
+    }
+    static final class Human extends ServerPlayer {Human(){super(null,null,null,null);}
+
+        Data d;
+        @Override public boolean isPermanentlyInvulnerable(){d.event("permanent");return d.flag("permanent");}
+        @Override public boolean isTemporarilyInvulnerable(){d.event("temporary");return d.flag("temporary");}
+        @Override public boolean fireImmune(){d.event("fire-immune");return d.flag("fire_immune");}
+        @Override public boolean hasEffect(Holder<MobEffect> e){if(e==MobEffects.FIRE_RESISTANCE){d.event("fire-resistance");return d.flag("fire_resistance");}if(e!=MobEffects.RESISTANCE)throw new AssertionError();d.event("has-resistance");return d.flag("resistance");}
+        @Override public MobEffectInstance getEffect(Holder<MobEffect> e){if(e!=MobEffects.RESISTANCE)throw new AssertionError();d.event("effect");var v=new MobEffectInstance(e,100,0);try{amplifier.setInt(v,d.op.get("amplifier").getAsInt());}catch(Exception ex){throw new AssertionError(ex);}return v;}
+        @Override public double getAttributeValue(Holder<Attribute> a){return d.attributes.getValue(a);}
+        @Override protected void hurtArmor(DamageSource s,float v){d.event("hurt-armor "+bits(v));if(d.flag("break_armor"))d.attributes.getInstance(Attributes.ARMOR).setBaseValue(number(d.op.get("armor_after")));}
+        @Override public CombatTracker getCombatTracker(){d.event("tracker");return d.tracker;}
+        @Override public void gameEvent(Holder<net.minecraft.world.level.gameevent.GameEvent> e){if(e!=net.minecraft.world.level.gameevent.GameEvent.ENTITY_DAMAGE)throw new AssertionError();d.event("damage-event");}
+        @Override public void onSyncedDataUpdated(EntityDataAccessor<?> a){var k=a.id()==healthKey.id()?healthKey:absorptionKey;d.event("updated "+k.id()+" "+bits(d.data.get(k))+" "+d.data.isDirty());if(d.flag("pack_callback"))d.out.println("callback-pack "+values(d.data.packDirty()));}
+        @Override public boolean isSleeping(){d.event("sleeping");return d.flag("sleeping");}
+        @Override public void stopSleeping(){d.event("wake");}
+        @Override public ItemStack getUseItem(){d.event("use-item");return d.flag("component")?shield:ItemStack.EMPTY;}
+        @Override public float applyItemBlocking(ServerLevel l,DamageSource s,float v){d.event("blocking "+bits(v));return single(d.op.get("blocked"));}
+        @Override public boolean is(TagKey<EntityType<?>> tag){if(tag==EntityTypeTags.FALL_DAMAGE_IMMUNE){d.event("fall-immune");return d.flag("fall_immune");}if(tag!=EntityTypeTags.FREEZE_HURTS_EXTRA_TYPES)throw new AssertionError();d.event("freeze-extra");return d.flag("freeze_extra");}
+        @Override public ItemStack getItemBySlot(EquipmentSlot slot){d.event("slot "+slot.ordinal());return slot==EquipmentSlot.HEAD&&d.flag("helmet")?plain:ItemStack.EMPTY;}
+        @Override protected void hurtHelmet(DamageSource s,float v){d.event("hurt-helmet "+bits(v));}
+        @Override protected void resolveMobResponsibleForDamage(DamageSource s){d.event("resolve-mob");}
+        @Override protected Player resolvePlayerResponsibleForDamage(DamageSource s){d.event("resolve-player");return null;}
+        @Override protected void markHurt(){d.event("mark");}
+        @Override public void dealDefaultKnockback(DamageSource s,float v,boolean b){d.event("knockback "+bits(v)+" "+b);}
+        @Override public ItemStack getItemInHand(InteractionHand h){d.event("hand "+h.ordinal());return ItemStack.EMPTY;}
+        @Override protected SoundEvent getDeathSound(){d.event("death-sound");return null;}
+        @Override public void makeSound(SoundEvent e){d.event("make-sound");}
+        @Override public void die(DamageSource s){d.event("die");dead=true;}
+        @Override protected void playHurtSound(DamageSource s){d.event("hurt-sound");}
+        @Override public ServerLevel level(){d.event("level");return d.level;}
+        @Override public Collection<MobEffectInstance> getActiveEffects(){d.event("effects");return d.effects;}
+
+        @Override public boolean isChangingDimension(){d.event("changing");return d.flag("changing");}@Override protected void removeEntitiesOnShoulder(){d.event("shoulders");}@Override public boolean canHarmPlayer(Player p){d.event("can-harm");return d.flag("can_harm");}@Override public PlayerAdvancements getAdvancements(){d.event("criterion");return d.advancements;}
+        @Override public void awardStat(Identifier s,int v){if(s==Stats.DAMAGE_BLOCKED_BY_SHIELD){d.event("blocked-stat "+v);return;}String n=s==Stats.DAMAGE_RESISTED?"resisted":s==Stats.DAMAGE_ABSORBED?"absorbed":s==Stats.DAMAGE_TAKEN?"taken":null;if(n==null)throw new AssertionError();d.event("stat "+n+" "+v);}
+    }
+    @SuppressWarnings("unchecked") public static void main(String[] args)throws Throwable {
+        Path dir=Path.of(args[1]);if(args[0].equals("export"))VanillaPlayerHealthOracle.main(args);else{net.minecraft.SharedConstants.tryDetectVersion();net.minecraft.server.Bootstrap.bootStrap();}
+        healthKey=(EntityDataAccessor<Float>)field(LivingEntity.class,"DATA_HEALTH_ID").get(null);absorptionKey=(EntityDataAccessor<Float>)field(Player.class,"DATA_PLAYER_ABSORPTION_ID").get(null);if(args[0].equals("export")){var slots=new JsonArray();for(var s:EquipmentSlot.VALUES)slots.add(s.ordinal());Files.writeString(dir.resolve("slots.json"),slots.toString());Files.writeString(dir.resolve("head.json"),Integer.toString(EquipmentSlot.HEAD.ordinal()));return;}
+        var dataCtor=SynchedEntityData.class.getDeclaredConstructor(SyncedDataHolder.class,SynchedEntityData.DataItem[].class);dataCtor.setAccessible(true);amplifier=field(MobEffectInstance.class,"amplifier");var exhaustion=field(FoodData.class,"exhaustionLevel");var keys=List.of(Attributes.ARMOR,Attributes.ARMOR_TOUGHNESS,Attributes.MAX_HEALTH,Attributes.MAX_ABSORPTION);var u=Class.forName("sun.misc.Unsafe");unsafe=field(u,"theUnsafe").get(null);allocate=u.getMethod("allocateInstance",Class.class);
+        noAction=field(LivingEntity.class,"noActionTime");cooldown=field(LivingEntity.class,"damageCooldownTime");lastHurt=field(LivingEntity.class,"lastHurt");duration=field(LivingEntity.class,"hurtDuration");time=field(LivingEntity.class,"hurtTime");stamp=field(LivingEntity.class,"lastDamageStamp");lastSource=field(LivingEntity.class,"lastDamageSource");
+        var ctor=ItemStack.class.getDeclaredConstructor(Holder.class,int.class,PatchedDataComponentMap.class);ctor.setAccessible(true);plain=(ItemStack)ctor.newInstance(BuiltInRegistries.ITEM.wrapAsHolder(Items.STICK),1,new PatchedDataComponentMap(DataComponentMap.EMPTY));shield=(ItemStack)ctor.newInstance(BuiltInRegistries.ITEM.wrapAsHolder(Items.SHIELD),1,new PatchedDataComponentMap(DataComponentMap.EMPTY));shield.set(DataComponents.BLOCKS_ATTACKS,new BlocksAttacks(0,1,List.of(),new BlocksAttacks.ItemDamageFunction(0,0,0),Optional.empty(),Optional.empty(),Optional.empty()));
+        var lookup=MethodHandles.privateLookupIn(Player.class,MethodHandles.lookup());var playerHurt=lookup.findSpecial(Player.class,"hurtServer",MethodType.methodType(boolean.class,ServerLevel.class,DamageSource.class,float.class),Player.class).asType(MethodType.methodType(boolean.class,LivingEntity.class,ServerLevel.class,DamageSource.class,float.class));
+        var serverLookup=MethodHandles.privateLookupIn(ServerPlayer.class,MethodHandles.lookup());var serverHurt=serverLookup.findSpecial(ServerPlayer.class,"hurtServer",MethodType.methodType(boolean.class,ServerLevel.class,DamageSource.class,float.class),ServerPlayer.class).asType(MethodType.methodType(boolean.class,LivingEntity.class,ServerLevel.class,DamageSource.class,float.class));
+        try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var lines=Files.lines(dir.resolve("inputs.txt"))){for(var line:(Iterable<String>)lines::iterator){var f=JsonParser.parseString(line).getAsJsonObject();var d=new Data();d.out=out;d.level=make(Server.class);d.level.d=d;d.advancements=make(PlayerAdvancements.class);field(PlayerAdvancements.class,"activeTriggers").set(d.advancements,new HashMap<>());d.rules=make(Rules.class);d.rules.d=d;var human=make(Human.class);human.d=d;var connection=make(Connection.class);connection.d=d;human.connection=connection;LivingEntity actor=human;d.abilities=new Abilities();field(Player.class,"abilities").set(actor,d.abilities);d.attacker=make(PlainPlayer.class);d.other=make(Actor.class);d.other.d=d;d.arrow=make(Arrow.class);d.arrow.d=d;var hurt=serverHurt;var source=make(Source.class);source.d=d;
+            d.attributes=new AttributeMap(VanillaEntityAttributeOracle.supplier(BuiltInRegistries.ENTITY_TYPE.getValue(Identifier.parse("minecraft:player"))));for(int i=0;i<keys.size();i++){var a=f.getAsJsonArray("attributes").get(i).getAsJsonObject();var instance=d.attributes.getInstance(keys.get(i));instance.setBaseValue(number(a.get("base")));instance.addTransientModifier(new AttributeModifier(Identifier.parse("horizon:test"),number(a.get("amount")),AttributeModifier.Operation.values()[a.get("operation").getAsInt()]));}
+            var items=new SynchedEntityData.DataItem<?>[Math.max(healthKey.id(),absorptionKey.id())+1];for(int i=0;i<items.length;i++)items[i]=new SynchedEntityData.DataItem<Float>(new EntityDataAccessor<Float>(i,EntityDataSerializers.FLOAT),0f);var health=new SynchedEntityData.DataItem<Float>(healthKey,single(f.get("health")));var absorption=new SynchedEntityData.DataItem<Float>(absorptionKey,single(f.get("absorption")));items[healthKey.id()]=health;items[absorptionKey.id()]=absorption;d.data=dataCtor.newInstance(actor,items);field(Entity.class,"entityData").set(actor,d.data);field(LivingEntity.class,"dead").setBoolean(actor,f.get("dead").getAsBoolean());var food=new FoodData();exhaustion.setFloat(food,single(f.get("exhaustion")));field(Player.class,"foodData").set(actor,food);d.tracker=make(Tracker.class);d.tracker.d=d;
+            noAction.setInt(actor,f.get("no_action").getAsInt());cooldown.setInt(actor,f.get("cooldown").getAsInt());lastHurt.setFloat(actor,single(f.get("last_hurt")));duration.setInt(actor,f.get("duration").getAsInt());time.setInt(actor,f.get("time").getAsInt());stamp.setLong(actor,f.get("stamp").getAsLong());if(f.get("source").getAsBoolean())lastSource.set(actor,source);
+            for(var ov:f.getAsJsonArray("ops")){d.op=ov.getAsJsonObject();field(Entity.class,"removalReason").set(actor,d.flag("removed")?Entity.RemovalReason.DISCARDED:null);if(d.op.has("reset_cooldown")&&d.flag("reset_cooldown"))cooldown.setInt(actor,0);d.calls=0;d.difficultyCalls=0;d.hit=false;d.abilities.invulnerable=d.flag("ability_invulnerable");d.effects=new ArrayList<>();for(int i=0;i<d.op.get("effects").getAsInt();i++){var e=make(Effect.class);e.d=d;e.id=i;d.effects.add(e);}try{boolean result=(boolean)hurt.invokeExact(actor,(ServerLevel)d.level,(DamageSource)source,single(d.op.get("damage")));out.println("bool "+result);out.println("result ok");}catch(Stop e){out.println("result error");}out.println("state "+state(actor)+" "+bits(d.recorded)+" "+d.hit+" "+d.calls);
+                out.println("storage "+bits(health.getValue())+" "+bits(absorption.getValue())+" "+bits(exhaustion.getFloat(food))+" "+d.data.isDirty()+" "+health.isDirty()+" "+absorption.isDirty()+" "+field(LivingEntity.class,"dead").getBoolean(actor));if(d.flag("pack"))out.println("packed "+values(d.data.packDirty()));out.println("defaults "+values(d.data.getNonDefaultValues()));}
+        }}
+    }
+}
