@@ -570,6 +570,46 @@ mod tests {
         assert_eq!(increased_repair_cost(3), 7);
     }
 
+    /// Checks against the prepared vanilla resources when they are present.
+    #[test]
+    fn prepared_vanilla_data() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let items = Items::tags_only(&root).unwrap();
+        let data = StationData::load(&root, &items);
+        let e = &data.enchantments;
+        assert_eq!(e.list.len(), 43);
+        assert_eq!(&*e.tag("minecraft:in_enchanting_table")[0], "minecraft:protection");
+        assert!(!e.compatible("minecraft:fortune", "minecraft:silk_touch"));
+        assert!(e.is_curse("minecraft:binding_curse"));
+        assert_eq!(e.full_name("minecraft:sharpness", 5).0, "Sharpness V");
+        assert_eq!(e.enchantable("minecraft:golden_sword"), 22);
+        // Brewing: water + nether wart = awkward.
+        assert_eq!(data.brewing.recipes.len(), 279);
+        let water = ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water");
+        let r = data.brewing.find(&water, &ItemStack::new("minecraft:nether_wart", 1)).unwrap();
+        assert_eq!(r.output.potion(), Some("minecraft:awkward"));
+        assert!(data.brewing.is_reagent(&ItemStack::new("minecraft:blaze_powder", 1)));
+        // Smithing: netherite upgrade keeps enchantments.
+        let mut sword = ItemStack::new("minecraft:diamond_sword", 1);
+        sword.enchant("minecraft:sharpness", 2);
+        let out = data
+            .recipes
+            .smithing_result(e, Some(&ItemStack::new("minecraft:netherite_upgrade_smithing_template", 1)), Some(&sword), Some(&ItemStack::new("minecraft:netherite_ingot", 1)))
+            .unwrap();
+        assert_eq!((&*out.item, out.enchantment_level("minecraft:sharpness")), ("minecraft:netherite_sword", 2));
+        assert!(data.recipes.stonecutter(&ItemStack::new("minecraft:stone", 1)).len() >= 10);
+        // Trades: every profession level set yields offers.
+        let ctx = crate::merchant::TradeContext { items: &items, enchantments: e, variant: "minecraft:plains" };
+        for p in crate::merchant::PROFESSIONS {
+            let set = crate::merchant::Trades::set_for(p, 1);
+            let mut random = crate::merchant::sequence_random(12345, &format!("minecraft:trade_set/{}", set.trim_start_matches("minecraft:")));
+            assert!(!data.trades.offers_from_set(&ctx, &set, &mut random).is_empty(), "{p}");
+        }
+    }
+
     #[test]
     fn grindstone_strips_non_curses() {
         let e = sample();

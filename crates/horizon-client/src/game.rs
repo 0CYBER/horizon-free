@@ -2981,6 +2981,7 @@ impl Game<'_> {
         self.particles.clear();
         self.orbs.clear();
         self.experience = Experience { level: self.level.xp_level, progress: self.level.xp_progress, total: self.level.xp_total };
+        self.restore_effects();
         self.mining = None;
         self.container = None;
         self.carried = None;
@@ -4175,6 +4176,7 @@ impl Game<'_> {
             }
         }
         level.dimension = self.dim.id().to_owned();
+        level.active_effects = self.potions.effects.list.iter().map(|e| (format!("minecraft:{}", e.id), e.duration, e.amplifier, e.ambient, e.visible)).collect();
         level.write(&self.world_root)?;
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())

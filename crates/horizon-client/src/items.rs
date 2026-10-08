@@ -604,3 +604,50 @@ impl LootContext<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx<'a>(items: &'a Items, held: Option<&'a ItemStack>, props: &'a BTreeMap<String, String>, block: &'a str) -> LootContext<'a> {
+        LootContext { items, block, properties: props, held, killed_by_player: block.is_empty() }
+    }
+
+    #[test]
+    fn fortune_silk_touch_and_looting() {
+        let items = Items::for_tests(HashMap::new());
+        let props = BTreeMap::new();
+        let mut pick = ItemStack::new("minecraft:diamond_pickaxe", 1);
+        pick.enchant("minecraft:fortune", 3);
+        let ore = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:alternatives","children":[
+            {"type":"minecraft:item","condition":"minecraft:tool/can_silk_touch","name":"minecraft:diamond_ore"},
+            {"type":"minecraft:item","name":"minecraft:diamond","modifier":[{"type":"minecraft:apply_bonus","enchantment":"minecraft:fortune","formula":"minecraft:ore_drops"}]}]}]}]});
+        let mut random = LegacyRandom::new(7);
+        let n = 20000;
+        let total: u32 = (0..n).map(|_| ctx(&items, Some(&pick), &props, "minecraft:diamond_ore").evaluate(&ore, &mut random).iter().map(|s| s.count).sum::<u32>()).sum();
+        // Fortune III ore drops average (1 + 1 + 2 + 3 + 4) / 5 = 2.2 diamonds.
+        let mean = f64::from(total) / f64::from(n);
+        assert!((mean - 2.2).abs() < 0.05, "{mean}");
+        let mut silk = ItemStack::new("minecraft:diamond_pickaxe", 1);
+        silk.enchant("minecraft:silk_touch", 1);
+        let drops = ctx(&items, Some(&silk), &props, "minecraft:diamond_ore").evaluate(&ore, &mut random);
+        assert_eq!(&*drops[0].item, "minecraft:diamond_ore");
+        let plain = ItemStack::new("minecraft:diamond_pickaxe", 1);
+        let drops = ctx(&items, Some(&plain), &props, "minecraft:diamond_ore").evaluate(&ore, &mut random);
+        assert_eq!((&*drops[0].item, drops[0].count), ("minecraft:diamond", 1));
+        // Looting III adds level x uniform(0, 1) on player kills.
+        let flesh = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:rotten_flesh","modifier":[
+            {"type":"minecraft:set_count","count":{"type":"minecraft:uniform","min":0.0,"max":2.0}},
+            {"type":"minecraft:enchanted_count_increase","count":{"type":"minecraft:uniform","min":0.0,"max":1.0},"enchantment":"minecraft:looting"}]}]}]});
+        let mut sword = ItemStack::new("minecraft:iron_sword", 1);
+        sword.enchant("minecraft:looting", 3);
+        let looted: u32 = (0..n).map(|_| ctx(&items, Some(&sword), &props, "").evaluate(&flesh, &mut random).iter().map(|s| s.count).sum::<u32>()).sum();
+        let base: u32 = (0..n).map(|_| ctx(&items, None, &props, "").evaluate(&flesh, &mut random).iter().map(|s| s.count).sum::<u32>()).sum();
+        assert!(f64::from(looted) / f64::from(n) > f64::from(base) / f64::from(n) + 1.0);
+        // Table bonus uses the chance for the tool's level.
+        let leaves = json!({"pools":[{"rolls":1,"conditions":[{"type":"minecraft:table_bonus","enchantment":"minecraft:fortune","chances":[0.0,0.0,0.0,1.0]}],"entries":[{"type":"minecraft:item","name":"minecraft:apple"}]}]});
+        assert_eq!(ctx(&items, Some(&pick), &props, "minecraft:oak_leaves").evaluate(&leaves, &mut random).len(), 1);
+        assert!(ctx(&items, Some(&plain), &props, "minecraft:oak_leaves").evaluate(&leaves, &mut random).is_empty());
+    }
+}

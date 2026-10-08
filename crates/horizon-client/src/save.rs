@@ -386,6 +386,8 @@ pub struct Level {
     pub inventory_components: HashMap<u8, Box<crate::item_data::StackData>>,
     /// Player.XpSeed: the enchanting table seed.
     pub xp_seed: i32,
+    /// Player.active_effects: (id, duration, amplifier, ambient, show_icon).
+    pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
@@ -468,6 +470,16 @@ impl Level {
             xp_progress: player.map_or(0.0, |p| float(p.get("XpP"))),
             xp_total: player.map_or(0, |p| long(p.get("XpTotal")) as i32),
             xp_seed: player.map_or(0, |p| long(p.get("XpSeed")) as i32),
+            active_effects: match player.and_then(|p| p.get("active_effects")) {
+                Some(Tag::List(list)) => list
+                    .iter()
+                    .filter_map(|e| {
+                        let Some(Tag::String(id)) = e.get("id") else { return None };
+                        Some((id.to_string_lossy(), long(e.get("duration")) as i32, long(e.get("amplifier")) as i32, long(e.get("ambient")) != 0, e.get("show_icon").is_none_or(|v| long(Some(v)) != 0)))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
             inventory,
             inventory_components,
         })
@@ -483,6 +495,24 @@ impl Level {
             ("XpP", Tag::Float(self.xp_progress.to_bits())),
             ("XpTotal", Tag::Int(self.xp_total)),
             ("XpSeed", Tag::Int(self.xp_seed)),
+            (
+                "active_effects",
+                Tag::List(
+                    self.active_effects
+                        .iter()
+                        .map(|(id, duration, amplifier, ambient, icon)| {
+                            Tag::compound([
+                                ("id", string(id)),
+                                ("duration", Tag::Int(*duration)),
+                                ("amplifier", Tag::Byte(*amplifier as i8)),
+                                ("ambient", Tag::Byte(i8::from(*ambient))),
+                                ("show_particles", Tag::Byte(1)),
+                                ("show_icon", Tag::Byte(i8::from(*icon))),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
             ("playerGameType", Tag::Int(i32::from(self.creative))),
             (
                 "Rotation",

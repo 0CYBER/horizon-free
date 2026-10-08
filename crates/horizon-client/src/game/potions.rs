@@ -167,7 +167,9 @@ impl Game<'_> {
     }
     /// `LivingEntity.tickEffects`, attribute modifiers and the status flags.
     pub(super) fn tick_effects(&mut self) {
-        if self.player.as_ref().is_none_or(|p| p.health.dead_or_dying()) {
+        let Some(player) = self.player.as_ref() else { return };
+        if player.health.dead_or_dying() {
+            // LivingEntity.die → removeAllEffects.
             self.potions.effects.clear();
         }
         for action in self.potions.effects.tick() {
@@ -237,6 +239,18 @@ impl Game<'_> {
             t.velocity = Vec3::new(t.velocity.x * 0.99, t.velocity.y * 0.99 - 0.05, t.velocity.z * 0.99);
             t.age < 1200 && t.position.y > -128.0
         });
+        // ThrownItemRenderer stand-in: a short-lived sprite of the potion at its position.
+        for t in &thrown {
+            let sprite = if &*t.stack.item == "minecraft:lingering_potion" { "item/lingering_potion" } else { "item/splash_potion" };
+            let mut fixed = horizon_core::random::LegacyRandom::new(0);
+            let mut p = horizon_client::particles::Particle::terrain(&mut fixed, [t.position.x, t.position.y, t.position.z], [0.0; 3], sprite.into(), 0xFFFFFF);
+            p.velocity = [0.0; 3];
+            p.gravity = 0.0;
+            p.lifetime = 2;
+            p.size = 0.25;
+            p.uv = [0.0, 0.0, 1.0, 1.0];
+            self.particles.push(p);
+        }
         self.potions.thrown = thrown;
         for (stack, at) in landed {
             self.splash(&stack, at);
@@ -339,6 +353,17 @@ impl Game<'_> {
                 }
             }
             batch.sprite_scaled(atlas, &format!("mob_effect/{}", e.id), x + 3.0, y + 3.0, 18.0, 18.0, rgba(255, 255, 255, (alpha * 255.0) as u8));
+        }
+    }
+    /// Effects saved in level.dat (`Player.active_effects`).
+    pub(super) fn restore_effects(&mut self) {
+        self.potions = PotionState::default();
+        for (id, duration, amplifier, ambient, _) in self.level.active_effects.clone() {
+            if let Some(def) = brewing::effect(&id) {
+                let mut e = EffectInstance::new(def.id, duration, amplifier);
+                e.ambient = ambient;
+                self.potions.effects.add(e);
+            }
         }
     }
     pub(super) fn effects_json(&self) -> serde_json::Value {
