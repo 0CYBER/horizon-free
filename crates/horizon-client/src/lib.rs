@@ -10,6 +10,7 @@ pub mod chunk;
 pub mod clock;
 pub mod containers;
 pub mod crafting;
+pub mod creative;
 pub mod collisions;
 pub mod entities;
 pub mod environment;

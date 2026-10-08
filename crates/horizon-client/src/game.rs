@@ -12,6 +12,7 @@ use horizon_client::{
     mobs::{Mob, MobEvent, MobType, MobTypes, MobWorld},
     particles::Particle,
     containers::{BlockEntity, Providers},
+    creative::{Creative, Names},
     crafting::Recipes,
     collisions,
     environment::Environment,
@@ -71,6 +72,8 @@ struct Options {
     time: Option<i64>,
     weather: Option<String>,
     dimension: Option<String>,
+    /// Options.pauseOnLostFocus off (F3+P), for scripted testing.
+    no_pause: bool,
 }
 impl Options {
     fn read() -> Result<Option<Self>> {
@@ -98,6 +101,7 @@ impl Options {
             time: None,
             weather: None,
             dimension: None,
+            no_pause: false,
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -110,6 +114,7 @@ impl Options {
                 }
                 "--creative" => o.creative = true,
                 "--test-terrain" => o.test_terrain = true,
+                "--no-pause" => o.no_pause = true,
                 _ => {
                     let value = args.next().ok_or_else(|| format!("missing value after {arg}"))?;
                     match arg.as_str() {
@@ -155,6 +160,7 @@ enum Screen {
     Playing,
     Paused,
     Options,
+    Creative,
     Inventory,
     Dead,
 }
@@ -267,6 +273,7 @@ pub struct Resources {
     chest_model: Option<horizon_client::mobs::Part>,
     nether_environment: Environment,
     behaviours: Behaviours,
+    names: Names,
     /// clouds.png: (width, height, filled cells).
     clouds: (u32, u32, Vec<bool>),
     context: Arc<WorkerContext>,
@@ -368,6 +375,7 @@ struct Game<'a> {
     tick_chunks: HashSet<(i32, i32)>,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
+    creative_screen: Creative,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -492,6 +500,22 @@ impl Game<'_> {
         Some(stack)
     }
     /// The block's particle texture (approximated by its first model face) and tint.
+    /// The `particle` texture of a block's first blockstate model (for models without faces).
+    fn model_particle(&self, block: &str) -> Option<String> {
+        let root = &self.options.resources;
+        let read = |path: String| -> Option<serde_json::Value> { serde_json::from_slice(&std::fs::read(root.join(path)).ok()?).ok() };
+        let states = read(format!("assets/minecraft/blockstates/{block}.json"))?;
+        let mut model = states["variants"].as_object()?.values().next().and_then(|v| v["model"].as_str().or_else(|| v[0]["model"].as_str()))?.to_owned();
+        for _ in 0..8 {
+            let m = read(format!("assets/minecraft/models/{}.json", model.trim_start_matches("minecraft:")))?;
+            if let Some(p) = m["textures"]["particle"].as_str() {
+                let p = if let Some(alias) = p.strip_prefix('#') { m["textures"][alias].as_str()? } else { p };
+                return Some(p.trim_start_matches("minecraft:").to_owned());
+            }
+            model = m["parent"].as_str()?.to_owned();
+        }
+        None
+    }
     fn particle_sprite(&self, state: BlockStateId) -> Option<(String, u32)> {
         let models = self.res.assets.model_catalog.collect(state, horizon_core::position::BlockPos::new(0, 0, 0)).ok()?;
         let face = models.iter().flat_map(|(_, m)| m.faces.iter()).find(|f| f.quad.facing == horizon_assets::model::Direction::Up)
@@ -1418,7 +1442,12 @@ impl Game<'_> {
                 _ => None,
             }
         }
-        let model = first_model(&def["model"])?;
+        let Some(model) = first_model(&def["model"]) else {
+            // Special item models (chests, beds, banners...): show the block's particle texture.
+            let block = self.res.assets.registry.default_state(item).or_else(|| info.and_then(|i| i.block))?;
+            let (sprite, tint) = self.particle_sprite(block).or_else(|| self.model_particle(name).map(|s| (s, 0xFFFFFF)))?;
+            return Some(Icon::Cube { top: sprite.clone(), left: sprite.clone(), right: sprite, tint });
+        };
         let path = model.trim_start_matches("minecraft:").to_owned();
         let mut current = path.clone();
         let mut textures = serde_json::Map::new();
@@ -1669,6 +1698,9 @@ impl Game<'_> {
             }
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
+            }
+            Screen::Creative => {
+                self.draw_creative(&mut batch);
             }
             Screen::Playing | Screen::Options => {}
         }
@@ -3873,6 +3905,162 @@ impl Game<'_> {
             self.sleeping = Some((head, ticks));
         }
     }
+    fn creative_origin(batch: &HudBatch) -> (f32, f32) {
+        ((batch.width - Creative::WIDTH) / 2.0, (batch.height - Creative::HEIGHT) / 2.0)
+    }
+    /// Vanilla tooltip: dark box with a purple gradient border.
+    fn tooltip(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32) {
+        let atlas = &self.res.atlas;
+        let w = HudBatch::text_width(atlas, text);
+        let (x, y) = (x + 12.0, y - 12.0);
+        batch.fill(atlas, x - 3.0, y - 4.0, w + 6.0, 16.0, rgba(16, 0, 16, 240));
+        batch.fill(atlas, x - 3.0, y - 3.0, w + 6.0, 1.0, rgba(80, 0, 255, 80));
+        batch.fill(atlas, x - 3.0, y + 10.0, w + 6.0, 1.0, rgba(40, 0, 127, 80));
+        batch.text(atlas, text, x, y, u32::MAX, true);
+    }
+    fn draw_creative(&mut self, batch: &mut HudBatch) {
+        let (ox, oy) = Self::creative_origin(batch);
+        let selected = self.creative_screen.selected;
+        let tabs = self.creative_screen.tabs.clone();
+        let tab = self.creative_screen.tab().clone();
+        let tab_sprite = |t: &horizon_client::creative::Tab, on: bool| {
+            format!("gui/sprites/container/creative_inventory/tab_{}_{}_{}", if t.top { "top" } else { "bottom" }, if on { "selected" } else { "unselected" }, t.column + 1)
+        };
+        batch.fill(&self.res.atlas, 0.0, 0.0, batch.width, batch.height, rgba(16, 16, 16, 160));
+        // Unselected tabs behind the panel, then the panel, then the selected tab.
+        for (i, t) in tabs.iter().enumerate() {
+            if i != selected {
+                let (tx, ty) = Creative::tab_position(t);
+                batch.sprite(&self.res.atlas, &tab_sprite(t, false), ox + tx, oy + ty);
+            }
+        }
+        let background = if tab.search {
+            "gui/container/creative_inventory/tab_item_search"
+        } else if tab.inventory {
+            "gui/container/creative_inventory/tab_inventory"
+        } else {
+            "gui/container/creative_inventory/tab_items"
+        };
+        if let Some(mut r) = self.res.atlas.sprites.get(background).copied() {
+            r.u1 = r.u0 + (r.u1 - r.u0) * Creative::WIDTH / r.w as f32;
+            r.v1 = r.v0 + (r.v1 - r.v0) * Creative::HEIGHT / r.h as f32;
+            batch.rect_uv(ox, oy, Creative::WIDTH, Creative::HEIGHT, r, u32::MAX);
+        }
+        let (tx, ty) = Creative::tab_position(&tab);
+        batch.sprite(&self.res.atlas, &tab_sprite(&tab, true), ox + tx, oy + ty);
+        for t in &tabs {
+            let (tx, ty) = Creative::tab_position(t);
+            let stack = ItemStack { item: Arc::from(t.icon.as_str()), count: 1, damage: 0 };
+            self.draw_item(batch, &stack, ox + tx + 5.0, oy + ty + if t.top { 9.0 } else { 7.0 });
+        }
+        let atlas = &self.res.atlas;
+        batch.text(atlas, &tab.title, ox + 8.0, oy + 6.0, rgba(64, 64, 64, 255), false);
+        if tab.search {
+            let shown = format!("{}_", self.creative_screen.search);
+            batch.text(atlas, &shown, ox + 82.0, oy + 6.0, u32::MAX, true);
+        }
+        let items = self.creative_screen.items(&self.res.names);
+        let first = self.creative_screen.first_row(&self.res.names);
+        let mut hovered: Option<String> = None;
+        for r in 0..5 {
+            for c in 0..9 {
+                let Some(item) = items.get((first + r) * 9 + c) else { continue };
+                let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
+                let stack = ItemStack { item: Arc::from(item.as_str()), count: 1, damage: 0 };
+                self.draw_item(batch, &stack, x, y);
+                if self.cursor.0 >= x && self.cursor.0 < x + 16.0 && self.cursor.1 >= y && self.cursor.1 < y + 16.0 {
+                    batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
+                    hovered = Some(item.clone());
+                }
+            }
+        }
+        for c in 0..9 {
+            let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
+            if let Some(stack) = self.inventory[c].clone() {
+                self.draw_item(batch, &stack, x, y);
+                if self.cursor.0 >= x && self.cursor.0 < x + 16.0 && self.cursor.1 >= y && self.cursor.1 < y + 16.0 {
+                    hovered = Some(stack.item.to_string());
+                }
+            }
+        }
+        let scrollable = self.creative_screen.rows(&self.res.names) > 5;
+        let scroller = if scrollable {
+            "gui/sprites/container/creative_inventory/scroller"
+        } else {
+            "gui/sprites/container/creative_inventory/scroller_disabled"
+        };
+        batch.sprite(&self.res.atlas, scroller, ox + 175.0, oy + 18.0 + self.creative_screen.scroll * (112.0 - 15.0));
+        for t in &tabs {
+            let (tx, ty) = Creative::tab_position(t);
+            if self.cursor.0 >= ox + tx && self.cursor.0 < ox + tx + 26.0 && self.cursor.1 >= oy + ty && self.cursor.1 < oy + ty + 32.0 {
+                self.tooltip(batch, &t.title, self.cursor.0, self.cursor.1);
+            }
+        }
+        if let Some(stack) = self.carried.clone() {
+            self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+        } else if let Some(item) = hovered {
+            let name = self.res.names.item(&item);
+            self.tooltip(batch, &name, self.cursor.0, self.cursor.1);
+        }
+    }
+    fn click_creative(&mut self, right: bool) {
+        let Some(size) = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]) else { return };
+        let batch = HudBatch::new(size);
+        let (ox, oy) = Self::creative_origin(&batch);
+        let (cx, cy) = self.cursor;
+        let tabs = self.creative_screen.tabs.clone();
+        for (i, t) in tabs.iter().enumerate() {
+            let (tx, ty) = Creative::tab_position(t);
+            if cx >= ox + tx && cx < ox + tx + 26.0 && cy >= oy + ty && cy < oy + ty + 32.0 {
+                if t.inventory {
+                    self.screen = Screen::Inventory;
+                    return;
+                }
+                self.creative_screen.selected = i;
+                self.creative_screen.scroll = 0.0;
+                return;
+            }
+        }
+        if cx >= ox + 175.0 && cx < ox + 187.0 && cy >= oy + 18.0 && cy < oy + 130.0 {
+            self.creative_screen.scroll = ((cy - oy - 18.0 - 7.5) / (112.0 - 15.0)).clamp(0.0, 1.0);
+            return;
+        }
+        let shift = self.keys.contains(&KeyCode::ShiftLeft);
+        let items = self.creative_screen.items(&self.res.names);
+        let first = self.creative_screen.first_row(&self.res.names);
+        for r in 0..5 {
+            for c in 0..9 {
+                let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
+                if !(cx >= x && cx < x + 16.0 && cy >= y && cy < y + 16.0) {
+                    continue;
+                }
+                // Clicking the grid with an item deletes it; otherwise take a stack.
+                if self.carried.take().is_some() {
+                    return;
+                }
+                let Some(item) = items.get((first + r) * 9 + c) else { return };
+                let max = self.res.items.get(item).map_or(64, |i| i.max_stack);
+                let stack = ItemStack { item: Arc::from(item.as_str()), count: if right { 1 } else { max }, damage: 0 };
+                if shift {
+                    let _ = self.give(stack);
+                } else {
+                    self.carried = Some(stack);
+                }
+                return;
+            }
+        }
+        for c in 0..9 {
+            let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
+            if cx >= x && cx < x + 16.0 && cy >= y && cy < y + 16.0 {
+                std::mem::swap(&mut self.carried, &mut self.inventory[c]);
+                return;
+            }
+        }
+        // Clicking outside the panel throws the carried stack away.
+        if !(cx >= ox && cx < ox + Creative::WIDTH && cy >= oy && cy < oy + Creative::HEIGHT) {
+            self.carried = None;
+        }
+    }
     fn save_game(&mut self) -> Result<()> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks: Vec<_> = keys
@@ -4101,7 +4289,7 @@ impl ApplicationHandler for Game<'_> {
                         self.left = false;
                         self.right = false;
                         self.capture(false);
-                        if self.screen == Screen::Playing && self.player.is_some() {
+                        if self.screen == Screen::Playing && self.player.is_some() && !self.options.no_pause {
                             self.screen = Screen::Paused;
                         }
                     }
@@ -4121,6 +4309,10 @@ impl ApplicationHandler for Game<'_> {
                         MouseScrollDelta::LineDelta(_, y) => y,
                         MouseScrollDelta::PixelDelta(p) => p.y as f32,
                     };
+                    if self.screen == Screen::Creative && d != 0.0 {
+                        let rows = self.creative_screen.rows(&self.res.names).saturating_sub(5).max(1) as f32;
+                        self.creative_screen.scroll = (self.creative_screen.scroll - d.signum() / rows).clamp(0.0, 1.0);
+                    }
                     if self.screen == Screen::Playing && d != 0.0 {
                         self.selected = (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
                     }
@@ -4196,6 +4388,9 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Inventory if pressed => {
                             self.click_inventory(button == MouseButton::Right);
                         }
+                        Screen::Creative if pressed => {
+                            self.click_creative(button == MouseButton::Right);
+                        }
                         Screen::Paused if pressed => {
                             let size = self.renderer.as_ref().map(|r| [r.config.width, r.config.height]).unwrap_or([1, 1]);
                             let b = HudBatch::new(size);
@@ -4222,6 +4417,22 @@ impl ApplicationHandler for Game<'_> {
                         }
                         _ => {}
                     }
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.screen == Screen::Creative && self.creative_screen.tab().search && event.state == ElementState::Pressed
+                        && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
+                {
+                    match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Backspace) => {
+                            self.creative_screen.search.pop();
+                        }
+                        _ => {
+                            if let Some(text) = &event.text {
+                                self.creative_screen.search.extend(text.chars().filter(|c| !c.is_control()));
+                            }
+                        }
+                    }
+                    self.creative_screen.scroll = 0.0;
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
                     if event.state == ElementState::Pressed
@@ -4259,6 +4470,11 @@ impl ApplicationHandler for Game<'_> {
                                 self.screen = Screen::Paused;
                                 self.capture(false);
                             }
+                            Screen::Creative => {
+                                self.carried = None;
+                                self.screen = Screen::Playing;
+                                self.capture(true);
+                            }
                             Screen::Paused | Screen::Inventory => {
                                 self.close_container();
                                 self.screen = Screen::Playing;
@@ -4266,10 +4482,18 @@ impl ApplicationHandler for Game<'_> {
                             }
                             Screen::Dead => {}
                         },
+                        KeyCode::KeyE if self.screen == Screen::Creative && self.creative_screen.tab().search => {}
                         KeyCode::KeyE => match self.screen {
                             Screen::Playing => {
-                                self.screen = Screen::Inventory;
+                                self.screen = if self.creative { Screen::Creative } else { Screen::Inventory };
                                 self.capture(false);
+                            }
+                            Screen::Creative => {
+                                if let Some(c) = self.carried.take() {
+                                    let _ = self.give(c);
+                                }
+                                self.screen = Screen::Playing;
+                                self.capture(true);
                             }
                             Screen::Inventory => {
                                 self.close_container();
@@ -4438,6 +4662,7 @@ pub fn run() -> Result<()> {
         chest_model: horizon_client::mobs::load_model(&root, "minecraft:chest#main"),
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         behaviours: Behaviours::load(registry_owner.registry, &root)?,
+        names: Names::load(&root),
         clouds: horizon_client::hud::decode(&root.join("assets/minecraft/textures/environment/clouds.png"))
             .map(|(w, h, px)| (w, h, px.chunks_exact(4).map(|p| p[3] > 0).collect()))
             .unwrap_or((1, 1, vec![false])),
@@ -4450,6 +4675,7 @@ pub fn run() -> Result<()> {
     };
     let inventory = vec![None; 36];
     let now = Instant::now();
+    let game_root = options.resources.clone();
     let mut settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     if let Some(d) = options.distance_override {
         settings.render_distance = d;
@@ -4540,6 +4766,7 @@ pub fn run() -> Result<()> {
         tick_chunks: HashSet::new(),
         level_events: Vec::new(),
         falling: Vec::new(),
+        creative_screen: Creative::load(&game_root)?,
     };
     match game.options.world.clone() {
         Some(folder) => {
