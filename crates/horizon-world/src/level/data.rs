@@ -1084,6 +1084,7 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
         liquid_blocks,
         dynamic,
         occlusion_cache: Default::default(),
+        growth: Default::default(),
     })
 }
 
