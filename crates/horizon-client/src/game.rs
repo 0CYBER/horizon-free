@@ -29,6 +29,7 @@ mod shield;
 mod sign_edit;
 mod station_control;
 mod stations;
+mod storage;
 mod titles;
 mod tnt;
 mod totem;
@@ -532,6 +533,11 @@ struct Game<'a> {
     boat_models: boats::BoatModels,
     /// The boat the player rides.
     riding: Option<u32>,
+    /// The ender inventory (27 slots) and the ender chest showing it.
+    ender_items: Vec<Option<ItemStack>>,
+    ender_open: Option<(i32, i32, i32)>,
+    /// Contents of broken shulker boxes waiting for their dropped item.
+    pending_shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     creative_screen: Creative,
@@ -822,7 +828,8 @@ impl Game<'_> {
         });
     }
     /// Block.popResource
-    fn pop_resource(&mut self, pos: [i32; 3], stack: ItemStack) {
+    fn pop_resource(&mut self, pos: [i32; 3], mut stack: ItemStack) {
+        self.attach_shulker_contents(pos, &mut stack);
         let r = &mut self.world.random;
         let mut offset = || f64::from(r.next_float()) * 0.5 - 0.25;
         let p = [
@@ -1101,6 +1108,10 @@ impl Game<'_> {
                     self.audio.play(&name, Some(c), volume, pitch);
                 }
                 LevelEvent::DropResources { pos, state } => {
+                    if let Some(entity) = self.world.block_entities.remove(&(pos.x, pos.y, pos.z)) {
+                        let name = self.res.facts.get(state).name.clone();
+                        self.release_contents([pos.x, pos.y, pos.z], entity, &name);
+                    }
                     let drops = self.res.items.block_drops(
                         self.res.assets.registry,
                         state,
@@ -1110,11 +1121,6 @@ impl Game<'_> {
                     for d in drops {
                         if &*d.item != "minecraft:air" {
                             self.pop_resource([pos.x, pos.y, pos.z], d);
-                        }
-                    }
-                    if let Some(entity) = self.world.block_entities.remove(&(pos.x, pos.y, pos.z)) {
-                        for stack in entity.contents() {
-                            self.pop_resource([pos.x, pos.y, pos.z], stack);
                         }
                     }
                 }
@@ -1204,10 +1210,22 @@ impl Game<'_> {
         let key = (pos[0], pos[1], pos[2]);
         if &*name == "minecraft:crafting_table" {
             self.craft_size = 3;
+        } else if &*name == "minecraft:ender_chest" {
+            self.open_ender_chest(key);
+            let at = [
+                f64::from(key.0) + 0.5,
+                f64::from(key.1) + 0.5,
+                f64::from(key.2) + 0.5,
+            ];
+            let pitch = self.world.random.next_float() * 0.1 + 0.9;
+            self.audio
+                .play("minecraft:block.ender_chest.open", Some(at), 0.5, pitch);
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
-            let sound = if name.contains("chest") {
+            let sound = if storage::is_shulker_box(&name) {
+                Some("minecraft:block.shulker_box.open")
+            } else if name.contains("chest") {
                 Some("minecraft:block.chest.open")
             } else if &*name == "minecraft:barrel" {
                 Some("minecraft:block.barrel.open")
@@ -1375,10 +1393,9 @@ impl Game<'_> {
         }
         .unwrap_or(self.world.air);
         if let Some(entity) = self.world.block_entities.remove(&(pos[0], pos[1], pos[2])) {
-            // Containers.dropContents
-            for stack in entity.contents() {
-                self.pop_resource(pos, stack);
-            }
+            // Containers.dropContents (shulker boxes keep theirs).
+            let name = facts.name.clone();
+            self.release_contents(pos, entity, &name);
             if self.container == Some((pos[0], pos[1], pos[2])) {
                 self.container = None;
                 self.screen = Screen::Playing;
@@ -1538,6 +1555,7 @@ impl Game<'_> {
             self.world
                 .block_entities
                 .insert((target[0], target[1], target[2]), entity);
+            self.fill_placed_box(target, &stack);
             if sign {
                 self.open_sign_editor((target[0], target[1], target[2]), true);
             }
@@ -2972,7 +2990,11 @@ impl Game<'_> {
                 .get(self.world.block(key.0, key.1, key.2))
                 .name
                 .clone();
-            let sound = if name.contains("chest") {
+            let sound = if storage::is_shulker_box(&name) {
+                Some("minecraft:block.shulker_box.close")
+            } else if &*name == "minecraft:ender_chest" {
+                Some("minecraft:block.ender_chest.close")
+            } else if name.contains("chest") {
                 Some("minecraft:block.chest.close")
             } else if &*name == "minecraft:barrel" {
                 Some("minecraft:block.barrel.close")
@@ -2993,6 +3015,7 @@ impl Game<'_> {
             }
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
+        self.close_ender_chest();
     }
     fn click_inventory(&mut self, right: bool) {
         if self.station_click(right) {
@@ -3012,6 +3035,11 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return;
         };
+        if let Some(c) = &self.carried
+            && self.refuses(slot, c)
+        {
+            return;
+        }
         let max = |items: &Items, s: &ItemStack| items.get(&s.item).map_or(64, |i| i.max_stack);
         let shift =
             self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
@@ -4137,6 +4165,11 @@ impl Game<'_> {
         let mut inventory = vec![None; 36];
         self.armor = [None, None, None, None];
         self.offhand = None;
+        self.ender_items = if level.ender_items.len() == 27 {
+            level.ender_items.clone()
+        } else {
+            vec![None; 27]
+        };
         for (slot, id, count, damage) in &level.inventory {
             let stack = ItemStack {
                 item: Arc::from(id.as_str()),
@@ -6086,6 +6119,13 @@ impl Game<'_> {
             }
         }
         level.dimension = self.dim.id().to_owned();
+        // An open ender chest holds the live copy.
+        if let Some(key) = self.ender_open
+            && let Some(BlockEntity::Chest(items)) = self.world.block_entities.get(&key)
+        {
+            self.ender_items = items.clone();
+        }
+        level.ender_items = self.ender_items.clone();
         level.active_effects = self
             .potions
             .effects
@@ -7076,6 +7116,9 @@ pub fn run() -> Result<()> {
         boats: Vec::new(),
         boat_models: boats::BoatModels::load(&root),
         riding: None,
+        ender_items: vec![None; 27],
+        ender_open: None,
+        pending_shulker: HashMap::new(),
         tnts: Vec::new(),
         hoppers: HashMap::new(),
         creative_screen: Creative::load(&game_root)?,

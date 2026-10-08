@@ -407,11 +407,15 @@ impl Game<'_> {
             }
         }
         let contents = self.world.block_entities.remove(&(pos[0], pos[1], pos[2]));
+        let name = self
+            .res
+            .facts
+            .get(self.world.block(pos[0], pos[1], pos[2]))
+            .name
+            .clone();
         self.level_set(pos, self.world.air)?;
         if let Some(entity) = contents {
-            for stack in entity.contents() {
-                self.pop_resource(pos, stack);
-            }
+            self.release_contents(pos, entity, &name);
         }
         if is_tnt {
             self.spawn_primed_tnt(BlockPos::new(pos[0], pos[1], pos[2]), true);

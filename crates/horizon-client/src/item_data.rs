@@ -22,6 +22,8 @@ pub struct StackData {
     pub potion: Option<Arc<str>>,
     /// `minecraft:trim`: (material, pattern).
     pub trim: Option<(Arc<str>, Arc<str>)>,
+    /// `minecraft:container` (shulker boxes): the non-empty slots.
+    pub container: Vec<(u8, ItemStack)>,
 }
 impl StackData {
     pub fn is_empty(&self) -> bool {
@@ -236,6 +238,19 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
                 ]),
             ));
         }
+        if !d.container.is_empty() {
+            let slots = d
+                .container
+                .iter()
+                .map(|(slot, stack)| {
+                    Tag::compound([
+                        ("slot", Tag::Int(i32::from(*slot))),
+                        ("item", crate::save::item_to_nbt(stack)),
+                    ])
+                })
+                .collect();
+            entries.push(("minecraft:container", Tag::List(slots)));
+        }
     }
     (!entries.is_empty()).then(|| Tag::compound(entries))
 }
@@ -263,6 +278,18 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             .max(0) as u32,
         custom_name: c.get("minecraft:custom_name").and_then(read_text),
         potion,
+        container: match c.get("minecraft:container") {
+            Some(Tag::List(list)) => list
+                .iter()
+                .filter_map(|e| {
+                    Some((
+                        e.get("slot").and_then(int)?.clamp(0, 255) as u8,
+                        crate::save::item_from_nbt(e.get("item")?)?,
+                    ))
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
         trim: c.get("minecraft:trim").and_then(|t| {
             Some((
                 Arc::from(t.get("material").and_then(string)?.as_str()),

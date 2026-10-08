@@ -343,6 +343,9 @@ fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
             crate::containers::BlockEntity::Chest(_),
             "minecraft:trapped_chest" | "minecraft:barrel" | "minecraft:dropper",
         ) => block.to_owned(),
+        (crate::containers::BlockEntity::Chest(_), b) if b.ends_with("shulker_box") => {
+            "minecraft:shulker_box".to_owned()
+        }
         _ => e.id().to_owned(),
     }
 }
@@ -1222,6 +1225,8 @@ pub struct Level {
     pub xp_seed: i32,
     /// Player.active_effects: (id, duration, amplifier, ambient, show_icon).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
+    /// Player.EnderItems: the ender chest inventory (27 slots).
+    pub ender_items: Vec<Option<crate::items::ItemStack>>,
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
@@ -1423,6 +1428,7 @@ impl Level {
             }
         }
         self.inventory = inventory;
+        self.ender_items = decode_items(p.get("EnderItems"), 27);
         self.inventory_components = inventory_components;
         self.xp_seed = n("XpSeed").unwrap_or(0) as i32;
         self.active_effects = match p.get("active_effects") {
@@ -1448,7 +1454,7 @@ impl Level {
         let mut p = compound_or_empty(self.player_extra.clone());
         // Keys rewritten from scratch.
         if let Tag::Compound(map) = &mut p {
-            for key in ["Inventory", "equipment", "Pos", "respawn"] {
+            for key in ["Inventory", "EnderItems", "equipment", "Pos", "respawn"] {
                 map.remove(&JavaString::from(key));
             }
         }
@@ -1537,6 +1543,7 @@ impl Level {
             ),
             ("playerGameType", Tag::Int(i32::from(self.creative))),
             ("Inventory", Tag::List(inventory)),
+            ("EnderItems", encode_items(&self.ender_items)),
             ("abilities", abilities),
             (
                 "Dimension",

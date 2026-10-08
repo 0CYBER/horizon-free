@@ -79,6 +79,7 @@ impl BlockEntity {
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
             "minecraft:hopper" => 5,
             "minecraft:dispenser" | "minecraft:dropper" => 9,
+            n if n.ends_with("shulker_box") => 27,
             _ => return None,
         };
         Some(Self::Chest(vec![None; size]))
@@ -95,6 +96,7 @@ impl BlockEntity {
             "minecraft:furnace" => "minecraft:furnace",
             "minecraft:blast_furnace" => "minecraft:blast_furnace",
             "minecraft:smoker" => "minecraft:smoker",
+            n if n.ends_with("shulker_box") => "minecraft:shulker_box",
             _ => return None,
         })
     }
