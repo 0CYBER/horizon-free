@@ -1,14 +1,14 @@
 # First test on the M2 Pro Mac
 
-For the 16 GB M2 Pro, start with the published 0.21.0 packs. Core and balanced
+For the 16 GB M2 Pro, start with the 0.21.0 packs. No release downloads are published; build them with `python3 tools/build_release.py`. Core and balanced
 pass title/demo-world rendering and save/exit probes on the hosted macOS ARM64
 software renderer. Gameplay and FPS on this physical Mac remain unmeasured.
 The Linux software-rendering observations do not predict an M2 speedup.
 
 ## Import after installing Prism
 
-1. Download [horizon-mac-starter-0.21.0.zip](https://github.com/ludovic111/Horizon/releases/download/v0.21.0/horizon-mac-starter-0.21.0.zip)
-   and extract it in Finder.
+1. Build `horizon-mac-starter-0.21.0.zip` with `python3 tools/build_release.py`, copy it
+   from `dist/` to the Mac and extract it in Finder.
 2. In Prism, choose **Add Instance > Import**, then select
    `horizon-m2-balanced-0.21.0.mrpack` from the extracted folder. The individual
    `.mrpack` is the import file; the starter ZIP contains several different packs.

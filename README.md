@@ -46,11 +46,11 @@ cargo run --release -p horizon-client
 
 **Target machine:** the Rust rewrite targets one machine, **ludodesktop**: Ubuntu 26.04, Intel i7-13700KF, NVIDIA RTX 4080, GNOME on Wayland. The final deliverable is a playable native Linux build validated there. macOS (including the M2 Pro Mac) and Windows are out of scope. Track implementation and acceptance criteria in [Rust rewrite status](docs/rust-parity.md).
 
-**Java performance packs (no longer developed):** the earlier track of pinned Java performance packs, distant terrain, an original frame/tick recorder and client/server starter downloads. Its releases, including the Mac starter below, stay available, but they are no longer a development target.
+**Java performance packs (no longer developed):** the earlier track of pinned Java performance packs, distant terrain, an original frame/tick recorder and client/server starter downloads. No release downloads are published; build the packs and starters locally with `python3 tools/build_release.py` (see [Build and run](#build-and-run)). They are no longer a development target.
 
 ## Java packs: Mac starter (out of scope)
 
-Download **horizon-mac-starter-0.21.0.zip** from [Releases](https://github.com/ludovic111/horizon/releases), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
+Build **horizon-mac-starter-0.21.0.zip** with `python3 tools/build_release.py` (it lands in `dist/`), extract it and open `Mac-Start.command`. It verifies and installs official universal Prism Launcher in `~/Applications` if needed, then opens the balanced pack import. Sign into Microsoft **inside Prism yourself**. This project needs no credentials.
 
 Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on your 16 GB M2 Pro. Prism can download Java automatically. Start at 1280×800 or 1920×1200; full Retina resolution is a larger GPU workload. [START-HERE.txt](packs/START-HERE.txt) has details. The same `.mrpack` files import into Prism on Windows and Linux.
 
