@@ -394,7 +394,7 @@ fn blend(region: &[[Option<&Chunk>; 3]; 3], biomes: &Biomes, cx: i32, cz: i32, y
             }
         }
         let n = ((2 * R + 1) * (2 * R + 1)) as u32;
-        (r / n) << 16 | (g / n) << 8 | b / n
+        (r / n) << 16 | (g / n) << 8 | (b / n)
     };
     for z in 0..16 {
         for x in 0..16 {
@@ -531,7 +531,7 @@ impl Mesher<'_> {
             Tint::Redstone(p) => redstone_color(p),
             Tint::Stem(age) => {
                 let a = u32::from(age);
-                (a * 32) << 16 | (255 - a * 8) << 8 | a * 4
+                (a * 32) << 16 | (255 - a * 8) << 8 | (a * 4)
             }
         })
     }

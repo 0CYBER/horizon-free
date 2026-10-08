@@ -134,7 +134,7 @@ class Scene:
                 'blocks': [[*p, s] for p, s in sorted(self.blocks.items())], 'lights': self.lights()}
 
 
-def corpus(states):
+def corpus(states, full=True):
     scenes = []
     def scene(name, **kwargs):
         s = Scene(states, name, **kwargs)
@@ -271,6 +271,29 @@ def corpus(states):
         s = scene(f'catalog_{chunk // per_scene}')
         for i, name in enumerate(model_blocks[chunk:chunk + per_scene]):
             s.put(i % 8 * 2, i // 64 * 2, i // 8 % 8 * 2, states.defaults[name])
+    # Every model state (rotations, multipart, UV lock, waterlogging) on a sparse grid.
+    air = {'minecraft:air', 'minecraft:cave_air', 'minecraft:void_air'}
+    model_states = [i for i, name in enumerate(states.names) if states.render_shape[i] == 'MODEL' and name not in air]
+    if full:
+        for chunk in range(0, len(model_states), per_scene):
+            s = scene(f'states_{chunk // per_scene}')
+            for i, state in enumerate(model_states[chunk:chunk + per_scene]):
+                s.put(i % 8 * 2, i // 64 * 2, i // 8 % 8 * 2, state)
+    # Dense random states from the whole registry packed against each other and fluids.
+    fluids = [states('water'), states('lava'), states('water', level=3), states('water', level=9), states('lava', level=4)]
+    for seed in range(6 if full else 2):
+        rng = random.Random(0x44454E53 + seed)
+        s = scene(f'dense_{seed}', nether=seed == 5)
+        for x in range(-1, 17):
+            for y in range(-1, 17):
+                for z in range(-1, 17):
+                    roll = rng.random()
+                    if roll < 0.45:
+                        s.put(x, y, z, rng.choice(model_states))
+                    elif roll < 0.6:
+                        s.put(x, y, z, rng.choice(fluids))
+        if seed % 2:
+            s.noise = seed
     # Random dense scenes over a palette, with structured and noisy light.
     palette = ['stone', 'glass', 'oak_leaves', 'grass_block', 'water', 'lava', 'oak_slab', 'oak_stairs', 'torch', 'poppy',
                'short_grass', 'glowstone', 'oak_fence', 'snow', 'white_carpet', 'magma_block', 'soul_sand', 'ice', 'farmland', 'dirt_path']
@@ -335,16 +358,16 @@ def compare(scene, client, rust, states, report, limit):
         bucket = report['examples'].setdefault(category, [])
         if len(bucket) < limit:
             bucket.append({'scene': scene['name'], 'quads': list(examples)})
+    def attributes(entry):
+        quad, rotation = entry
+        v = quad['vertices']
+        return str([(round(x[3], 3), round(x[4], 3), channels(x[5]), light(x[6])) for x in v[rotation:] + v[:rotation]])
     for key, (left, right) in groups.items():
-        def attributes(entry):
-            quad, rotation = entry
-            v = quad['vertices']
-            return [(round(x[3], 3), round(x[4], 3), channels(x[5]), light(x[6])) for x in v[rotation:] + v[:rotation]]
-        left.sort(key=lambda e: str(attributes(e)))
-        right.sort(key=lambda e: str(attributes(e)))
+        # Coincident quads (back faces, overlapping elements) pair up by their attributes.
+        left.sort(key=attributes)
+        right.sort(key=attributes)
         for a, b in zip(left, right):
             report['matched_quads'] += 1
-            va = [x for x in attributes(a)]
             ca = a[0]['vertices'][a[1]:] + a[0]['vertices'][:a[1]]
             cb = b[0]['vertices'][b[1]:] + b[0]['vertices'][:b[1]]
             problems = set()
@@ -359,7 +382,6 @@ def compare(scene, client, rust, states, report, limit):
                 if light(p[6]) != light(q[6]):
                     lp, lq = light(p[6]), light(q[6])
                     problems.add('light_sky' if lp[0] != lq[0] else 'light_block')
-            del va
             if not problems:
                 report['identical_quads'] += 1
             for problem in sorted(problems):
@@ -378,6 +400,7 @@ def main():
     parser.add_argument('--strict', action='store_true', help='fail when any quad or fact differs')
     parser.add_argument('--examples', type=int, default=12, help='examples kept per mismatch category')
     parser.add_argument('--only', help='only scenes whose name contains this text')
+    parser.add_argument('--quick', action='store_true', help='skip the all-states catalogue and most dense scenes')
     args = parser.parse_args()
     lock, jars, _ = base.verify_artifacts()
     resources = lab.LOCAL / 'horizon-client' / lock['minecraft']['version']
@@ -392,7 +415,7 @@ def main():
         sources += [lab.ROOT / 'crates' / crate / 'Cargo.toml', *sorted((lab.ROOT / 'crates' / crate / 'src').rglob('*.rs'))]
     tested = base.source_hashes(sources)
     states = States(resources)
-    scenes = [s for s in corpus(states) if not args.only or args.only in s.name]
+    scenes = [s for s in corpus(states, not args.quick) if not args.only or args.only in s.name]
     rows = [s.row() for s in scenes]
     inputs = BUILD / 'inputs.jsonl'
     inputs.write_text(''.join(json.dumps(row) + '\n' for row in rows))
@@ -441,6 +464,8 @@ def main():
                 examples = report['facts'].setdefault(key, [])
                 if len(examples) < args.examples:
                     examples.append({'state': f"{states.names[a['id']]}{states.properties[a['id']]}", 'client': a[key], 'rust': b.get(key)})
+    timing = [line for line in (BUILD / 'rust.log').read_text().splitlines() if line.startswith('meshed ')]
+    report['rust_mesh_timing'] = timing[-1] if timing else None
     report['fact_mismatches'] = dict(fact_mismatches)
     report['fact_states'] = len(client_facts)
     base.ensure_sources_unchanged(sources, tested)
@@ -453,6 +478,7 @@ def main():
     for category, count in sorted(report['categories'].items(), key=lambda kv: -kv[1]):
         print(f'  {category:<28} {count:,}')
     print(f"Mesh facts: {len(client_facts):,} states, mismatches: {dict(fact_mismatches) or 'none'}")
+    print(f"Rust fixture (fast profile): {report['rust_mesh_timing']}")
     print(f'Report: {report_path}')
     if args.strict and (report['categories'] or fact_mismatches):
         raise SystemExit(1)

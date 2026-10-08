@@ -18,6 +18,7 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::PathBuf,
     sync::Arc,
+    time::{Duration, Instant},
 };
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -48,6 +49,7 @@ fn scene(
     tables: &MeshTables,
     biomes: &mut Biomes,
     names: &BTreeMap<u32, &str>,
+    elapsed: &mut Duration,
 ) -> Result<Value> {
     let colors = &row["colors"];
     let color = |k: &str| -> Result<u32> { Ok(int(&colors[k])? as u32 & 0xFF_FFFF) };
@@ -97,13 +99,16 @@ fn scene(
         visibility: tables.visibility.clone(),
     };
     let section_y = int(&row["section_y"])?;
+    let started = Instant::now();
     let mesh = mesher.mesh(&region, (section_y * 16 - MIN_Y) / 16);
+    *elapsed += started.elapsed();
     let mut quads = Vec::new();
     for (layer, vertices) in [("opaque", &mesh.solid), ("translucent", &mesh.translucent)] {
-        if vertices.len() % 4 != 0 {
+        let (vertices, rest) = vertices.as_chunks::<4>();
+        if !rest.is_empty() {
             return Err("partial quad".into());
         }
-        for quad in vertices.chunks_exact(4) {
+        for quad in vertices {
             let sprite = names.get(&quad[0].layer).ok_or("unknown sprite layer")?;
             if quad.iter().any(|v: &Vertex| v.layer != quad[0].layer) {
                 return Err("quad mixes sprite layers".into());
@@ -167,12 +172,19 @@ fn main() -> Result<()> {
         output.flush()?;
         return Ok(());
     }
+    let (mut elapsed, mut sections) = (Duration::ZERO, 0u32);
     for line in BufReader::new(fs::File::open(&args[1])?).lines() {
         let row: Value = serde_json::from_str(&line?)?;
-        let result = scene(&row, &assets, &tables, &mut biomes, &names)?;
+        let result = scene(&row, &assets, &tables, &mut biomes, &names, &mut elapsed)?;
         serde_json::to_writer(&mut output, &result)?;
         output.write_all(b"\n")?;
+        sections += 1;
     }
     output.flush()?;
+    eprintln!(
+        "meshed {sections} sections in {:.1} ms ({:.0} us per section)",
+        elapsed.as_secs_f64() * 1e3,
+        elapsed.as_secs_f64() * 1e6 / f64::from(sections.max(1))
+    );
     Ok(())
 }
