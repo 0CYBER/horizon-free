@@ -200,10 +200,12 @@ public final class VanillaSectionMeshOracle {
             recorder.kind = "model"; recorder.layer = layer(quad.materialInfo().layer());
             recorder.sprite = quad.materialInfo().sprite().contents().name().toString();
             int emission = quad.materialInfo().lightEmission();
+            int slot = Arrays.asList(FLUID_SPRITES).indexOf(recorder.sprite);
             for (int i = 0; i < 4; i++) {
                 var p = quad.position(i); long uv = quad.packedUV(i);
+                float u = Float.intBitsToFloat((int) (uv >>> 32));
                 recorder.vertex(p.x() + x, p.y() + y, p.z() + z, instance.getColor(i),
-                    Float.intBitsToFloat((int) (uv >>> 32)), Float.intBitsToFloat((int) uv), instance.getLightCoordsWithEmission(i, emission));
+                    slot < 0 ? u : u * STRIP - 2 * slot, Float.intBitsToFloat((int) uv), instance.getLightCoordsWithEmission(i, emission));
             }
         };
         int baseY = row.get("section_y").getAsInt() * 16;
@@ -241,6 +243,7 @@ public final class VanillaSectionMeshOracle {
         if (recorder.pending != null) throw new AssertionError("partial quad");
         return map("name", row.get("name").getAsString(), "quads", recorder.quads);
     }
+    private static BlockColors COLORS;
     /** Per-state facts the Rust mesher derives from prepared resources. */
     private static Object facts(BlockState state, int id) {
         var level = EmptyBlockGetter.INSTANCE;
@@ -255,14 +258,15 @@ public final class VanillaSectionMeshOracle {
         return map("id", id, "shade", state.getShadeBrightness(level, BlockPos.ZERO), "emissive", state.emissiveRendering(),
             "legacy_solid", state.isSolid(), "light_permeable", state.isLightPermeable(), "solid_render", state.isSolidRender(),
             "full_collision", state.isCollisionShapeFullBlock(level, BlockPos.ZERO), "emission", state.getLightEmission(),
-            "half_transparent", block instanceof HalfTransparentBlock, "leaves", block instanceof LeavesBlock,
-            "tint_sources", BlockColors.createDefault().getTintSources(state).size(), "offsets", offsets);
+            "overlay", block instanceof HalfTransparentBlock || block instanceof LeavesBlock,
+            "tint_sources", COLORS.getTintSources(state).size(), "offsets", offsets);
     }
     public static void main(String[] args) throws Exception {
         net.minecraft.SharedConstants.tryDetectVersion();
         net.minecraft.server.Bootstrap.bootStrap();
         VanillaHeightmapOracle.bindTags(JsonParser.parseString(Files.readString(Path.of(args[2]).resolve("block-tags.json"))).getAsJsonObject());
         LeavesBlock.setCutoutLeaves(true);
+        COLORS = BlockColors.createDefault();
         if (args[0].equals("facts")) {
             try (var output = Files.newBufferedWriter(Path.of(args[1]))) {
                 int id = 0;

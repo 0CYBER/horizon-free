@@ -10,6 +10,7 @@ use horizon_client::{
     mesher::{MeshTables, Mesher, Vertex},
     models,
 };
+use horizon_world::registry::BlockStateId;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -129,7 +130,9 @@ fn scene(
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() != 3 {
-        return Err("usage: section_mesh_fixture RESOURCES INPUT.jsonl OUTPUT.jsonl".into());
+        return Err(
+            "usage: section_mesh_fixture RESOURCES (INPUT.jsonl | facts) OUTPUT.jsonl".into(),
+        );
     }
     let root = PathBuf::from(&args[0]);
     let assets = Assets::load(&root)?;
@@ -143,6 +146,27 @@ fn main() -> Result<()> {
         .map(|(name, layer)| (*layer, name.as_str()))
         .collect();
     let mut output = BufWriter::new(fs::File::create(&args[2])?);
+    if args[1] == "facts" {
+        // The per-state facts the mesher derives, in the oracle's order and positions.
+        let positions = [(0, 0), (5, -3), (-17, 31), (123, -456), (9, 2)];
+        for id in 0..assets.registry.len() as u32 {
+            let state = BlockStateId(id);
+            let f = tables.facts(state).ok_or("missing mesh facts")?;
+            let offsets: Vec<_> = positions
+                .iter()
+                .filter_map(|&(x, z)| tables.offset(state, x, z))
+                .collect();
+            let row = json!({"id": id, "shade": f.shade, "emissive": f.emissive,
+                "legacy_solid": f.legacy_solid, "light_permeable": f.light_permeable,
+                "solid_render": f.solid_render, "full_collision": f.full_collision,
+                "emission": f.emission, "overlay": f.overlay, "tint_sources": f.tint_sources,
+                "offsets": offsets});
+            serde_json::to_writer(&mut output, &row)?;
+            output.write_all(b"\n")?;
+        }
+        output.flush()?;
+        return Ok(());
+    }
     for line in BufReader::new(fs::File::open(&args[1])?).lines() {
         let row: Value = serde_json::from_str(&line?)?;
         let result = scene(&row, &assets, &tables, &mut biomes, &names)?;

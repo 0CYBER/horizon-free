@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import platform
 import random
+import struct
 import subprocess
 try:
     from . import lab, test_rust_parity as base, test_model_baking_parity as baking
@@ -290,9 +291,14 @@ def corpus(states):
     return scenes
 
 
+def f32(value):
+    """Both sides emit binary32 values; Java prints them shortest-form, so parse back to the same float."""
+    return struct.unpack('<f', struct.pack('<f', value))[0]
+
+
 def quad_key(quad):
     vertices = quad['vertices']
-    rounded = [tuple(round(v[i] * 1000) for i in range(3)) for v in vertices]
+    rounded = [tuple(round(f32(v[i]) * 1000) for i in range(3)) for v in vertices]
     rotation = min(range(4), key=lambda r: rounded[r:] + rounded[:r])
     layer = 'translucent' if quad['layer'] == 'translucent' else 'opaque'
     return (quad['sprite'], layer, tuple(rounded[rotation:] + rounded[:rotation])), rotation
@@ -391,8 +397,12 @@ def main():
     inputs = BUILD / 'inputs.jsonl'
     inputs.write_text(''.join(json.dumps(row) + '\n' for row in rows))
     def run(command, name):
-        with (BUILD / (name + '.log')).open('w') as log:
-            subprocess.run(list(map(str, command)), cwd=lab.ROOT, check=True, timeout=3600, stdout=log, stderr=subprocess.STDOUT)
+        path = BUILD / (name + '.log')
+        with path.open('w') as log:
+            code = subprocess.run(list(map(str, command)), cwd=lab.ROOT, timeout=3600, stdout=log, stderr=subprocess.STDOUT).returncode
+        if code:
+            tail = [line for line in path.read_text(errors='replace').splitlines() if not line.startswith('WARNING')][-15:]
+            raise SystemExit(f'{name} failed ({code}); see {path}\n' + '\n'.join(tail))
     classes = BUILD / 'classes'
     classes.mkdir(exist_ok=True)
     dependencies = os.pathsep.join(map(str, [jars['client'], *baking.client_libraries()]))
@@ -422,6 +432,8 @@ def main():
         for key in a:
             if key == 'offsets':
                 same = len(a[key]) == len(b.get(key, [])) and all(abs(x - y) < 1e-6 for p, q in zip(a[key], b[key]) for x, y in zip(p, q))
+            elif isinstance(a[key], float):
+                same = isinstance(b.get(key), (int, float)) and abs(f32(a[key]) - f32(b[key])) == 0
             else:
                 same = a[key] == b.get(key)
             if not same:
