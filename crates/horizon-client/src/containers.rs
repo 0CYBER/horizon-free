@@ -54,6 +54,19 @@ pub enum BlockEntity {
     Sign(crate::signs::SignData),
     /// `JukeboxBlockEntity`: the record and its `JukeboxSongPlayer`.
     Jukebox(Jukebox),
+    /// `BeaconBlockEntity`.
+    Beacon(Box<Beacon>),
+}
+#[derive(Clone, Debug, Default)]
+pub struct Beacon {
+    pub levels: i32,
+    /// Effect ids (`minecraft:speed`).
+    pub primary: Option<String>,
+    pub secondary: Option<String>,
+    /// Beam sections (RGB colour, height) and the ones being rebuilt.
+    pub sections: Vec<(u32, i32)>,
+    pub checking: Vec<(u32, i32)>,
+    pub last_check_y: i32,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Jukebox {
@@ -80,6 +93,12 @@ impl BlockEntity {
                 cooking_total: 200,
                 speed: 1.0,
             }));
+        }
+        if name == "minecraft:beacon" {
+            return Some(Self::Beacon(Box::new(Beacon {
+                last_check_y: i32::MIN / 2,
+                ..Default::default()
+            })));
         }
         if name == "minecraft:brewing_stand" {
             return Some(Self::Brewing(Box::new(crate::brewing::BrewingStand::new())));
@@ -124,6 +143,7 @@ impl BlockEntity {
             Self::Brewing(_) => "minecraft:brewing_stand",
             Self::Sign(s) => s.id(),
             Self::Jukebox(_) => "minecraft:jukebox",
+            Self::Beacon(_) => "minecraft:beacon",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -133,6 +153,7 @@ impl BlockEntity {
             Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
             Self::Sign(_) => Vec::new(),
             Self::Jukebox(j) => j.record.iter().cloned().collect(),
+            Self::Beacon(_) => Vec::new(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -140,7 +161,7 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &f.items,
             Self::Brewing(b) => &b.items,
-            Self::Sign(_) | Self::Jukebox(_) => &[],
+            Self::Sign(_) | Self::Jukebox(_) | Self::Beacon(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -148,7 +169,7 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &mut f.items,
             Self::Brewing(b) => &mut b.items,
-            Self::Sign(_) | Self::Jukebox(_) => &mut [],
+            Self::Sign(_) | Self::Jukebox(_) | Self::Beacon(_) => &mut [],
         }
     }
 }

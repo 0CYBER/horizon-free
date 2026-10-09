@@ -1127,8 +1127,22 @@ impl Game<'_> {
     }
     /// Place a state like BlockInput.place: false when nothing changed.
     fn place_state(&mut self, pos: [i32; 3], state: BlockStateId, strict: bool) -> R<bool> {
-        if self.world.block(pos[0], pos[1], pos[2]) == state {
+        let previous = self.world.block(pos[0], pos[1], pos[2]);
+        if previous == state {
             return Ok(false);
+        }
+        // A different block replaces the block entity (Level.setBlock).
+        let (old, new) = (
+            self.res.facts.get(previous).name.clone(),
+            self.res.facts.get(state).name.clone(),
+        );
+        if old != new {
+            let key = (pos[0], pos[1], pos[2]);
+            self.jukebox_removed(pos);
+            self.world.block_entities.remove(&key);
+            if let Some(entity) = horizon_client::containers::BlockEntity::for_block(&new) {
+                self.world.block_entities.insert(key, entity);
+            }
         }
         if strict {
             self.with_level(|b, level, ticks| {

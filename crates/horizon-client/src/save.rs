@@ -385,6 +385,15 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
             }
             entries.push(("ticks_since_song_started", Tag::Long(j.ticks)));
         }
+        BlockEntity::Beacon(b) => {
+            if let Some(p) = &b.primary {
+                entries.push(("primary_effect", string(p)));
+            }
+            if let Some(s) = &b.secondary {
+                entries.push(("secondary_effect", string(s)));
+            }
+            entries.push(("Levels", Tag::Int(b.levels)));
+        }
     }
     Tag::compound(entries)
 }
@@ -405,6 +414,16 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
                 playing,
             }),
         ));
+    }
+    if id == "minecraft:beacon" {
+        let beacon = crate::containers::Beacon {
+            levels: int("Levels").unwrap_or(0),
+            primary: text(tag.get("primary_effect")),
+            secondary: text(tag.get("secondary_effect")),
+            last_check_y: i32::MIN / 2,
+            ..Default::default()
+        };
+        return Some((pos, BlockEntity::Beacon(Box::new(beacon))));
     }
     let mut entity = BlockEntity::for_block(&id)?;
     match &mut entity {
@@ -442,7 +461,7 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             };
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
-        BlockEntity::Jukebox(_) => {}
+        BlockEntity::Jukebox(_) | BlockEntity::Beacon(_) => {}
     }
     Some((pos, entity))
 }

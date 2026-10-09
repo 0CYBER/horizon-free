@@ -1,6 +1,7 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
 mod armor_stands;
+mod beacon;
 mod blockctl;
 mod boats;
 mod chat;
@@ -1308,6 +1309,10 @@ impl Game<'_> {
             let pitch = self.world.random.next_float() * 0.1 + 0.9;
             self.audio
                 .play("minecraft:block.ender_chest.open", Some(at), 0.5, pitch);
+        } else if &*name == "minecraft:beacon" && self.open_station(pos, &name) {
+            self.world.block_entities.entry(key).or_insert_with(|| {
+                BlockEntity::for_block(&name).unwrap_or(BlockEntity::Chest(Vec::new()))
+            });
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
@@ -2823,7 +2828,7 @@ impl Game<'_> {
             Some(BlockEntity::Chest(items)) => v.extend((0..items.len()).map(|i| 300 + i)),
             Some(BlockEntity::Furnace(_)) => v.extend(300..303),
             Some(BlockEntity::Brewing(_)) => v.extend(300..305),
-            Some(BlockEntity::Sign(_) | BlockEntity::Jukebox(_)) => {}
+            Some(BlockEntity::Sign(_) | BlockEntity::Jukebox(_) | BlockEntity::Beacon(_)) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
                 v.push(200);
@@ -3043,7 +3048,7 @@ impl Game<'_> {
                     }
                 }
                 Some(BlockEntity::Brewing(_)) => {}
-                Some(BlockEntity::Sign(_) | BlockEntity::Jukebox(_)) => {}
+                Some(BlockEntity::Sign(_) | BlockEntity::Jukebox(_) | BlockEntity::Beacon(_)) => {}
                 None => {
                     let texture = if self.craft_size == 3 {
                         "gui/container/crafting_table"
@@ -3728,6 +3733,7 @@ impl Game<'_> {
         self.armor_stand_geometry(camera, alpha, &mut out);
         self.boat_geometry(camera, alpha, &mut out);
         self.cart_geometry(camera, alpha, &mut out);
+        self.beacon_geometry(camera, alpha, &mut out);
         self.fishing_geometry(camera, alpha, &mut out);
         self.trident_geometry(camera, alpha, &mut out);
         self.rocket_geometry(camera, alpha, &mut out);
@@ -4030,6 +4036,7 @@ impl Game<'_> {
     fn tick_block_entities(&mut self) -> Result<()> {
         self.tick_hoppers()?;
         self.tick_jukeboxes();
+        self.tick_beacons();
         // ChestLidController: 0.1 per tick towards open/closed.
         if let Some(key) = self.container {
             self.chest_open.entry(key).or_insert((0.0, 0.0));

@@ -25,6 +25,8 @@ struct Out {
     @location(3) cylindrical: f32,
     @location(5) flash: f32,
     @location(4) @interpolate(flat) overlay: u32,
+    // Overlay 6: the sprite's v origin and height, for v repeated inside it.
+    @location(6) @interpolate(flat) wrap: vec2<f32>,
 }
 @vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>) -> Out {
@@ -35,7 +37,9 @@ struct Out {
     let lm = textureSampleLevel(lightmap, lightmap_sampler,
         clamp(l / 256.0 + 0.5 / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0)), 0.0);
     // overlay 2: celestial bodies, 4: clouds; both use their vertex colour unlit.
-    var c = select(color * lm, color, overlay == 2u || overlay == 4u);
+    var c = select(color * lm, color, overlay == 2u || overlay == 4u || overlay == 6u);
+    // Overlay 6 (beacon beams): the light bytes carry the sprite's v range.
+    out.wrap = vec2(f32(light.x | (light.y << 8u)), f32(light.z | (light.w << 8u))) / 65535.0;
     // Hurt overlay (OverlayTexture red tint).
     if overlay == 1u { c = vec4(mix(c.rgb, vec3(1.0, 0.0, 0.0), 0.3), c.a); }
     out.color = c;
@@ -54,7 +58,9 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     return (d - start) / (end - start);
 }
 @fragment fn fs_entity(in: Out) -> @location(0) vec4<f32> {
-    var color = textureSample(atlas, atlas_sampler, in.uv) * in.color;
+    var uv = in.uv;
+    if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
+    var color = textureSample(atlas, atlas_sampler, uv) * in.color;
     if in.overlay == 4u {
         // clouds.fsh: alpha fades out towards the cloud fog end.
         return vec4(color.rgb, color.a * (1.0 - linear_fog(in.spherical, 0.0, globals.fog_ends.y)));

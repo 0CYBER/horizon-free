@@ -1,0 +1,613 @@
+//! Beacons (`BeaconBlockEntity`, `BeaconMenu`, `BeaconScreen`,
+//! `BeaconRenderer`): the beam sections tinted by stained glass, the pyramid
+//! levels every 80 ticks, the primary/secondary effects for players in
+//! range, the activate/ambient/deactivate sounds, the 230x219 menu with its
+//! power buttons and payment slot, and the rotating, scrolling beam.
+use super::{
+    Game,
+    stations::{INPUT, Kind},
+};
+use horizon_client::{
+    containers::{Beacon, BlockEntity},
+    effects::EffectInstance,
+    hud::{HudBatch, rgba},
+    items::ItemStack,
+    mesher::Vertex,
+    mobs::render::{DYE, DYE_NAMES},
+};
+
+/// The beacon screen is 54 px wider than the 176-px menus it shares an origin with.
+pub(super) const SHIFT: f32 = -27.0;
+pub(super) const HEIGHT: f32 = 219.0;
+/// `BEACON_EFFECTS` in order, with the pyramid level each needs.
+pub(super) const EFFECTS: [(&str, i32); 6] = [
+    ("speed", 1),
+    ("haste", 1),
+    ("resistance", 2),
+    ("jump_boost", 2),
+    ("strength", 3),
+    ("regeneration", 4),
+];
+const PAYMENT: [&str; 5] = [
+    "minecraft:iron_ingot",
+    "minecraft:gold_ingot",
+    "minecraft:emerald",
+    "minecraft:diamond",
+    "minecraft:netherite_ingot",
+];
+pub(super) fn is_payment(item: &str) -> bool {
+    PAYMENT.contains(&item)
+}
+/// `BeaconMenu.PaymentSlot` and the player inventory, relative to the 176 origin.
+pub(super) fn slot_position(i: usize) -> Option<(f32, f32)> {
+    Some(match i {
+        0..9 => (36.0 + SHIFT + i as f32 * 18.0, 195.0),
+        9..36 => (
+            36.0 + SHIFT + ((i - 9) % 9) as f32 * 18.0,
+            137.0 + ((i - 9) / 9) as f32 * 18.0,
+        ),
+        INPUT => (136.0 + SHIFT, 110.0),
+        _ => return None,
+    })
+}
+/// A power button: (effect index, x, y, primary) relative to the beacon's left edge.
+fn buttons() -> Vec<(usize, f32, f32, bool)> {
+    let mut out = Vec::new();
+    let tiers: [&[usize]; 3] = [&[0, 1], &[2, 3], &[4]];
+    for (tier, effects) in tiers.iter().enumerate() {
+        let count = effects.len() as i32;
+        let total = count * 22 + (count - 1) * 2;
+        for (c, &e) in effects.iter().enumerate() {
+            let x = 76 + c as i32 * 24 - total / 2;
+            out.push((e, x as f32, 22.0 + tier as f32 * 25.0, true));
+        }
+    }
+    // Tier 4: regeneration, then the upgrade (primary II) button.
+    let total = 2 * 22 + 2;
+    out.push((5, (167 - total / 2) as f32, 47.0, false));
+    out
+}
+fn upgrade_button() -> (f32, f32) {
+    let total = 2 * 22 + 2;
+    ((167 + 24 - total / 2) as f32, 47.0)
+}
+fn inside(p: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {
+    p.0 >= x && p.1 >= y && p.0 < x + w && p.1 < y + h
+}
+fn effect_id(name: &str) -> Option<&'static str> {
+    let n = name.strip_prefix("minecraft:").unwrap_or(name);
+    EFFECTS.iter().map(|(e, _)| *e).find(|e| *e == n)
+}
+/// `ARGB.average`.
+fn average(a: u32, b: u32) -> u32 {
+    let ch = |c: u32, s: u32| (c >> s) & 255;
+    [16, 8, 0]
+        .iter()
+        .fold(0, |acc, &s| acc | ((ch(a, s) + ch(b, s)) / 2) << s)
+}
+impl Game<'_> {
+    /// The beam color of a `BeaconBeamBlock` (stained glass and panes, the beacon).
+    fn beam_color(&self, name: &str) -> Option<u32> {
+        if name == "minecraft:beacon" {
+            return Some(DYE[0]);
+        }
+        let n = name.strip_prefix("minecraft:")?;
+        let dye = n
+            .strip_suffix("_stained_glass")
+            .or_else(|| n.strip_suffix("_stained_glass_pane"))?;
+        DYE_NAMES.iter().position(|d| *d == dye).map(|i| DYE[i])
+    }
+    /// `getHeight(WORLD_SURFACE)`: above the highest non-air block.
+    fn world_surface(&self, x: i32, z: i32) -> i32 {
+        let (min, max) = (super::MIN_Y, super::MIN_Y + super::HEIGHT);
+        (min..max)
+            .rev()
+            .find(|&y| !self.res.facts.is_air(self.world.block(x, y, z)))
+            .map_or(min, |y| y + 1)
+    }
+    /// `BeaconBlockEntity.tick` for every beacon.
+    pub(super) fn tick_beacons(&mut self) {
+        let keys: Vec<(i32, i32, i32)> = self
+            .world
+            .block_entities
+            .iter()
+            .filter(|(_, e)| matches!(e, BlockEntity::Beacon(_)))
+            .map(|(k, _)| *k)
+            .collect();
+        for key in keys {
+            let Some(BlockEntity::Beacon(mut b)) = self.world.block_entities.remove(&key) else {
+                continue;
+            };
+            self.tick_beacon(key, &mut b);
+            self.world
+                .block_entities
+                .insert(key, BlockEntity::Beacon(b));
+        }
+    }
+    fn tick_beacon(&mut self, (x, y, z): (i32, i32, i32), b: &mut Beacon) {
+        let mut check = if b.last_check_y < y {
+            b.checking.clear();
+            b.last_check_y = y - 1;
+            y
+        } else {
+            b.last_check_y + 1
+        };
+        let surface = self.world_surface(x, z);
+        let mut i = 0;
+        while i < 10 && check <= surface {
+            let state = self.world.block(x, check, z);
+            let f = self.res.facts.get(state);
+            if let Some(color) = self.beam_color(&f.name) {
+                if b.checking.len() <= 1 {
+                    b.checking.push((color, 1));
+                } else if let Some(last) = b.checking.last_mut() {
+                    if color == last.0 {
+                        last.1 += 1;
+                    } else {
+                        let mixed = average(last.0, color);
+                        b.checking.push((mixed, 1));
+                    }
+                }
+            } else {
+                let Some(last) = b
+                    .checking
+                    .last_mut()
+                    .filter(|_| f.dampening < 15 || &*f.name == "minecraft:bedrock")
+                else {
+                    b.checking.clear();
+                    b.last_check_y = surface;
+                    break;
+                };
+                last.1 += 1;
+            }
+            check += 1;
+            b.last_check_y += 1;
+            i += 1;
+        }
+        let previous = b.levels;
+        if self.world.game_time % 80 == 0 {
+            if !b.sections.is_empty() {
+                b.levels = self.beacon_base(x, y, z);
+            }
+            if b.levels > 0 && !b.sections.is_empty() {
+                self.beacon_effects([x, y, z], b);
+                self.beacon_sound([x, y, z], "minecraft:block.beacon.ambient");
+            }
+        }
+        if b.last_check_y >= surface {
+            b.last_check_y = super::MIN_Y - 1;
+            b.sections = std::mem::take(&mut b.checking);
+            let (was, is) = (previous > 0, b.levels > 0);
+            if !was && is {
+                self.beacon_sound([x, y, z], "minecraft:block.beacon.activate");
+            } else if was && !is {
+                self.beacon_sound([x, y, z], "minecraft:block.beacon.deactivate");
+            }
+        }
+    }
+    fn beacon_sound(&mut self, p: [i32; 3], sound: &str) {
+        let at = [
+            f64::from(p[0]) + 0.5,
+            f64::from(p[1]) + 0.5,
+            f64::from(p[2]) + 0.5,
+        ];
+        self.audio.play(sound, Some(at), 1.0, 1.0);
+    }
+    /// `updateBase`: complete layers of `beacon_base_blocks` below.
+    fn beacon_base(&self, x: i32, y: i32, z: i32) -> i32 {
+        let base = self
+            .res
+            .items
+            .block_tags
+            .get("minecraft:beacon_base_blocks");
+        let mut levels = 0;
+        for step in 1..=4 {
+            let ly = y - step;
+            if ly < super::MIN_Y {
+                break;
+            }
+            let ok = (x - step..=x + step).all(|lx| {
+                (z - step..=z + step).all(|lz| {
+                    let name = &self.res.facts.get(self.world.block(lx, ly, lz)).name;
+                    base.is_some_and(|t| t.contains(&**name))
+                })
+            });
+            if !ok {
+                break;
+            }
+            levels = step;
+        }
+        levels
+    }
+    /// `applyEffects`: the powers for players within `levels * 10 + 10` (any height above).
+    fn beacon_effects(&mut self, p: [i32; 3], b: &Beacon) {
+        let Some(primary) = b.primary.as_deref().and_then(effect_id) else {
+            return;
+        };
+        let range = f64::from(b.levels * 10 + 10);
+        let Some(pp) = self.player.as_ref().map(|p| p.position) else {
+            return;
+        };
+        let inside = pp.x >= f64::from(p[0]) - range
+            && pp.x <= f64::from(p[0] + 1) + range
+            && pp.z >= f64::from(p[2]) - range
+            && pp.z <= f64::from(p[2] + 1) + range
+            && pp.y >= f64::from(p[1]) - range;
+        if !inside {
+            return;
+        }
+        let secondary = b.secondary.as_deref().and_then(effect_id);
+        let amplifier = i32::from(b.levels >= 4 && secondary == Some(primary));
+        let duration = (9 + b.levels * 2) * 20;
+        let ambient = |id, amp| EffectInstance {
+            ambient: true,
+            ..EffectInstance::new(id, duration, amp)
+        };
+        self.potions.effects.add(ambient(primary, amplifier));
+        if let Some(s) = secondary.filter(|&s| b.levels >= 4 && s != primary) {
+            self.potions.effects.add(ambient(s, 0));
+        }
+    }
+    /// Opening the menu shows the beacon's current powers.
+    pub(super) fn beacon_opened(&mut self) {
+        let Some(s) = self.station.as_ref().filter(|s| s.kind == Kind::Beacon) else {
+            return;
+        };
+        let pos = s.pos;
+        let (p, sec) = match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+            Some(BlockEntity::Beacon(b)) => (b.primary.clone(), b.secondary.clone()),
+            _ => (None, None),
+        };
+        let index =
+            |e: Option<String>| e.and_then(|e| EFFECTS.iter().position(|(n, _)| e.ends_with(n)));
+        if let Some(s) = self.station.as_mut() {
+            s.beacon = [index(p), index(sec)];
+        }
+    }
+    fn beacon_levels(&self) -> i32 {
+        let Some(pos) = self.station.as_ref().map(|s| s.pos) else {
+            return 0;
+        };
+        match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+            Some(BlockEntity::Beacon(b)) => b.levels,
+            _ => 0,
+        }
+    }
+    /// Clicks on the power, confirm and cancel buttons.
+    pub(super) fn beacon_click(&mut self, local: (f32, f32)) -> bool {
+        let l = (local.0 - SHIFT, local.1);
+        let levels = self.beacon_levels();
+        let Some(sel) = self.station.as_ref().map(|s| s.beacon) else {
+            return false;
+        };
+        for (e, x, y, primary) in buttons() {
+            if !inside(l, x, y, 22.0, 22.0) {
+                continue;
+            }
+            let tier = EFFECTS[e].1;
+            let selected = if primary {
+                sel[0] == Some(e)
+            } else {
+                sel[1] == Some(e)
+            };
+            if tier <= levels.min(if primary { 3 } else { 4 })
+                && !selected
+                && (primary || levels >= 4)
+            {
+                if let Some(s) = self.station.as_mut() {
+                    if primary {
+                        s.beacon[0] = Some(e);
+                        if s.beacon[1] != Some(e) {
+                            s.beacon[1] = None;
+                        }
+                    } else {
+                        s.beacon[1] = Some(e);
+                    }
+                }
+                self.audio
+                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            }
+            return true;
+        }
+        let (ux, uy) = upgrade_button();
+        if inside(l, ux, uy, 22.0, 22.0) {
+            if levels >= 4
+                && let Some(p) = sel[0]
+                && sel[1] != Some(p)
+                && let Some(s) = self.station.as_mut()
+            {
+                s.beacon[1] = Some(p);
+                self.audio
+                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            }
+            return true;
+        }
+        if inside(l, 164.0, 107.0, 22.0, 22.0) {
+            let paid = self.station.as_ref().is_some_and(|s| s.inputs[0].is_some());
+            if paid && sel[0].is_some() {
+                self.audio
+                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
+                self.confirm_beacon(sel);
+                self.close_beacon_screen();
+            }
+            return true;
+        }
+        if inside(l, 190.0, 107.0, 22.0, 22.0) {
+            self.audio
+                .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            self.close_beacon_screen();
+            return true;
+        }
+        false
+    }
+    fn close_beacon_screen(&mut self) {
+        self.close_container();
+        self.screen = super::Screen::Playing;
+        self.capture(true);
+    }
+    /// `BeaconMenu.updateEffects`: spend the payment and set the powers.
+    fn confirm_beacon(&mut self, sel: [Option<usize>; 2]) {
+        let Some(s) = self.station.as_mut() else {
+            return;
+        };
+        let pos = s.pos;
+        s.inputs[0] = None;
+        let name = |e: Option<usize>| e.map(|e| format!("minecraft:{}", EFFECTS[e].0));
+        let mut select_sound = false;
+        if let Some(BlockEntity::Beacon(b)) =
+            self.world.block_entities.get_mut(&(pos[0], pos[1], pos[2]))
+        {
+            b.primary = name(sel[0]);
+            b.secondary = name(sel[1]);
+            select_sound = !b.sections.is_empty();
+        }
+        if select_sound {
+            self.beacon_sound(pos, "minecraft:block.beacon.power_select");
+        }
+        self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
+    }
+    /// `BeaconScreen`: background, labels, payment icons, power buttons.
+    pub(super) fn draw_beacon(&mut self, batch: &mut HudBatch) {
+        let (ox, oy) = self.inventory_origin(batch);
+        let (bx, by) = (ox + SHIFT, oy);
+        let local = (self.cursor.0 - bx, self.cursor.1 - by);
+        let levels = self.beacon_levels();
+        let sel = self.station.as_ref().map_or([None; 2], |s| s.beacon);
+        let paid = self.station.as_ref().is_some_and(|s| s.inputs[0].is_some());
+        let atlas = &self.res.atlas;
+        batch.fill(
+            atlas,
+            0.0,
+            0.0,
+            batch.width,
+            batch.height,
+            rgba(16, 16, 16, 160),
+        );
+        if let Some(mut r) = atlas.sprites.get("gui/container/beacon").copied() {
+            let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
+            r.u1 = r.u0 + 230.0 * du;
+            r.v1 = r.v0 + HEIGHT * dv;
+            batch.rect_uv(bx, by, 230.0, HEIGHT, r, u32::MAX);
+        }
+        let label = 0xFFE0_E0E0;
+        for (key, fallback, cx) in [
+            ("block.minecraft.beacon.primary", "Primary Power", 62.0),
+            ("block.minecraft.beacon.secondary", "Secondary Power", 169.0),
+        ] {
+            let text = self.translate(key, fallback);
+            let atlas = &self.res.atlas;
+            let w = HudBatch::text_width(atlas, &text);
+            batch.text(
+                atlas,
+                &text,
+                bx + cx - (w / 2.0).floor(),
+                by + 10.0,
+                label,
+                false,
+            );
+        }
+        for (i, item) in PAYMENT.iter().rev().enumerate() {
+            let x = [20.0, 41.0, 63.0, 86.0, 108.0][i];
+            self.draw_item(batch, &ItemStack::new(item, 1), bx + x, by + 109.0);
+        }
+        let atlas = &self.res.atlas;
+        let mut tooltip = None;
+        let button =
+            |batch: &mut HudBatch, x: f32, y: f32, active: bool, selected: bool, icon: &str| {
+                let hover = inside(local, x, y, 22.0, 22.0);
+                let sprite = if !active {
+                    "button_disabled"
+                } else if selected {
+                    "button_selected"
+                } else if hover {
+                    "button_highlighted"
+                } else {
+                    "button"
+                };
+                batch.sprite(
+                    atlas,
+                    &format!("gui/sprites/container/beacon/{sprite}"),
+                    bx + x,
+                    by + y,
+                );
+                batch.sprite_scaled(
+                    atlas,
+                    icon,
+                    bx + x + 2.0,
+                    by + y + 2.0,
+                    18.0,
+                    18.0,
+                    u32::MAX,
+                );
+                hover
+            };
+        for (e, x, y, primary) in buttons() {
+            let tier = EFFECTS[e].1;
+            let active = if primary {
+                tier <= levels && tier < 4
+            } else {
+                levels >= 4
+            };
+            let selected = if primary {
+                sel[0] == Some(e)
+            } else {
+                sel[1] == Some(e)
+            };
+            let icon = format!("mob_effect/{}", EFFECTS[e].0);
+            if button(batch, x, y, active, selected, &icon) {
+                tooltip = Some(format!("effect.minecraft.{}", EFFECTS[e].0));
+            }
+        }
+        if let Some(p) = sel[0] {
+            let (x, y) = upgrade_button();
+            let icon = format!("mob_effect/{}", EFFECTS[p].0);
+            if button(batch, x, y, levels >= 4, sel[1] == Some(p), &icon) {
+                tooltip = Some(format!("effect.minecraft.{}", EFFECTS[p].0));
+            }
+        }
+        button(
+            batch,
+            164.0,
+            107.0,
+            paid && sel[0].is_some(),
+            false,
+            "gui/sprites/container/beacon/confirm",
+        );
+        button(
+            batch,
+            190.0,
+            107.0,
+            true,
+            false,
+            "gui/sprites/container/beacon/cancel",
+        );
+        let slots: Vec<usize> = (0..36).chain([INPUT]).collect();
+        for i in slots {
+            let (sx, sy) = self.slot_position(i);
+            if let Some(stack) = self.slot_mut(i).clone() {
+                self.draw_item(batch, &stack, ox + sx, oy + sy);
+            }
+        }
+        let mut stack_tip = None;
+        if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
+            let (sx, sy) = self.slot_position(slot);
+            batch.fill(
+                &self.res.atlas,
+                ox + sx,
+                oy + sy,
+                16.0,
+                16.0,
+                rgba(255, 255, 255, 128),
+            );
+            stack_tip = self.slot_mut(slot).clone();
+        }
+        if let Some(stack) = self.carried.clone() {
+            self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+        } else if let Some(stack) = stack_tip {
+            let lines = self.stack_tooltip(&stack);
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+        } else if let Some(key) = tooltip {
+            let text = self.translate(&key, &key);
+            self.draw_tooltip_lines(batch, &[(text, u32::MAX)], self.cursor.0, self.cursor.1);
+        }
+    }
+    /// `BeaconRenderer`: each section's rotating solid beam and its glow.
+    pub(super) fn beacon_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+        let Some(s) = self
+            .res
+            .atlas
+            .sprites
+            .get("entity/beacon/beacon_beam")
+            .copied()
+        else {
+            return;
+        };
+        // The sprite's v range rides in the light bytes (entity shader overlay 6).
+        let q = |v: f32| (v * 65535.0).round().clamp(0.0, 65535.0) as u32;
+        let wrap = q(s.v0) | q(s.v1 - s.v0) << 16;
+        let time = (self.world.game_time.rem_euclid(40)) as f32 + alpha as f32;
+        let scoping = self.scoping();
+        for (k, e) in &self.world.block_entities {
+            let BlockEntity::Beacon(b) = e else { continue };
+            if b.levels == 0 || b.sections.is_empty() {
+                continue;
+            }
+            let base = glam::DVec3::new(f64::from(k.0) + 0.5, f64::from(k.1), f64::from(k.2) + 0.5);
+            let distance = (base - camera).truncate().length() as f32;
+            let scale = if scoping {
+                1.0
+            } else {
+                (distance / 96.0).max(1.0)
+            };
+            let o = (base - camera).as_vec3();
+            let mut start = 0i32;
+            for (i, &(color, height)) in b.sections.iter().enumerate() {
+                let height = if i == b.sections.len() - 1 {
+                    2048
+                } else {
+                    height
+                };
+                let end = start + height;
+                let scroll = -time;
+                let v_off = (scroll * 0.2 - (scroll * 0.1).floor()).rem_euclid(1.0);
+                let rgb = |a: u32| {
+                    a << 24 | (color & 255) << 16 | (color >> 8 & 255) << 8 | (color >> 16 & 255)
+                };
+                // Solid beam: radius 0.2, rotated with time.
+                let r = 0.2 * scale;
+                let rot = glam::Mat3::from_rotation_y((time * 2.25 - 45.0).to_radians());
+                let corners = [
+                    rot * glam::Vec3::new(0.0, 0.0, r),
+                    rot * glam::Vec3::new(r, 0.0, 0.0),
+                    rot * glam::Vec3::new(-r, 0.0, 0.0),
+                    rot * glam::Vec3::new(0.0, 0.0, -r),
+                ];
+                let v2 = -1.0 + v_off;
+                let v1 = height as f32 * (0.5 / r) + v2;
+                beam_part(out, o, start, end, corners, [v1, v2], rgb(255), s, wrap);
+                // Glow: radius 0.25, translucent.
+                let g = 0.25 * scale;
+                let corners = [
+                    glam::Vec3::new(-g, 0.0, -g),
+                    glam::Vec3::new(g, 0.0, -g),
+                    glam::Vec3::new(-g, 0.0, g),
+                    glam::Vec3::new(g, 0.0, g),
+                ];
+                let v1 = height as f32 + v2;
+                beam_part(out, o, start, end, corners, [v1, v2], rgb(32), s, wrap);
+                start = end;
+            }
+        }
+    }
+}
+/// `renderPart`: four quads between the corners (wn, en, ws, es).
+#[allow(clippy::too_many_arguments)]
+fn beam_part(
+    out: &mut Vec<Vertex>,
+    o: glam::Vec3,
+    start: i32,
+    end: i32,
+    [wn, en, ws, es]: [glam::Vec3; 4],
+    [v1, v2]: [f32; 2],
+    color: u32,
+    s: horizon_client::hud::Rect,
+    wrap: u32,
+) {
+    for (a, b) in [(wn, en), (es, ws), (en, es), (ws, wn)] {
+        let at = |c: glam::Vec3, y: i32| o + c + glam::Vec3::new(0.0, y as f32, 0.0);
+        for (p, uv) in [
+            (at(a, end), [s.u1, v1]),
+            (at(a, start), [s.u1, v2]),
+            (at(b, start), [s.u0, v2]),
+            (at(b, end), [s.u0, v1]),
+        ] {
+            out.push(Vertex {
+                pos: p.to_array(),
+                uv,
+                layer: 6,
+                color,
+                light: wrap,
+            });
+        }
+    }
+}

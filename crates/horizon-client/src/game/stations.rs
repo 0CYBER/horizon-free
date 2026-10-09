@@ -28,6 +28,8 @@ pub(super) enum Kind {
     Stonecutter,
     /// Villager trading (game/trading.rs).
     Merchant,
+    /// The beacon menu (game/beacon.rs).
+    Beacon,
 }
 impl Kind {
     fn from_block(name: &str) -> Option<Self> {
@@ -39,13 +41,14 @@ impl Kind {
             "minecraft:grindstone" => Self::Grindstone,
             "minecraft:smithing_table" => Self::Smithing,
             "minecraft:stonecutter" => Self::Stonecutter,
+            "minecraft:beacon" => Self::Beacon,
             _ => return None,
         })
     }
     fn inputs(self) -> usize {
         match self {
             Self::Smithing => 3,
-            Self::Stonecutter => 1,
+            Self::Stonecutter | Self::Beacon => 1,
             _ => 2,
         }
     }
@@ -57,6 +60,7 @@ impl Kind {
             Self::Smithing => "gui/container/smithing",
             Self::Stonecutter => "gui/container/stonecutter",
             Self::Merchant => "gui/container/villager",
+            Self::Beacon => "gui/container/beacon",
         }
     }
     fn title_key(self) -> &'static str {
@@ -67,6 +71,7 @@ impl Kind {
             Self::Smithing => "container.upgrade",
             Self::Stonecutter => "container.stonecutter",
             Self::Merchant => "merchant.trades",
+            Self::Beacon => "container.beacon",
         }
     }
     /// (titleLabelX, titleLabelY).
@@ -86,6 +91,7 @@ impl Kind {
             Self::Smithing => &[(8.0, 48.0), (26.0, 48.0), (44.0, 48.0)],
             Self::Stonecutter => &[(20.0, 33.0)],
             Self::Merchant => &[(86.0, 37.0), (112.0, 37.0)],
+            Self::Beacon => &[(109.0, 110.0)],
         };
         table[i.min(table.len() - 1)]
     }
@@ -97,6 +103,7 @@ impl Kind {
             Self::Smithing => Some((98.0, 48.0)),
             Self::Stonecutter => Some((143.0, 33.0)),
             Self::Merchant => Some((170.0, 37.0)),
+            Self::Beacon => None,
         }
     }
 }
@@ -121,6 +128,8 @@ pub(super) struct Station {
     last_sound: u64,
     /// Villager trading state.
     pub(super) merchant: Option<Box<super::trading::MerchantState>>,
+    /// Beacon menu: the selected primary and secondary power (EFFECTS index).
+    pub(super) beacon: [Option<usize>; 2],
 }
 impl Station {
     fn new(kind: Kind, pos: [i32; 3]) -> Self {
@@ -140,6 +149,7 @@ impl Station {
             anvil_last: None,
             last_sound: 0,
             merchant: None,
+            beacon: [None; 2],
         }
     }
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
@@ -234,7 +244,7 @@ impl Game<'_> {
     fn data(&self) -> &stations::StationData {
         &self.res.stations
     }
-    fn translate(&self, key: &str, fallback: &str) -> String {
+    pub(super) fn translate(&self, key: &str, fallback: &str) -> String {
         self.data()
             .enchantments
             .translate(key)
@@ -254,6 +264,7 @@ impl Game<'_> {
         }
         self.station = Some(Station::new(kind, pos));
         self.station_changed();
+        self.beacon_opened();
         true
     }
     /// `AbstractContainerMenu.clearContainer`: inputs go back to the player.
@@ -293,6 +304,9 @@ impl Game<'_> {
         let s = self.station.as_ref()?;
         if s.kind == Kind::Merchant && i < 36 {
             return Some(super::trading::inventory_slot(i));
+        }
+        if s.kind == Kind::Beacon {
+            return super::beacon::slot_position(i);
         }
         match i {
             RESULT => s.kind.result_pos(),
@@ -391,6 +405,7 @@ impl Game<'_> {
                 );
             }
             Kind::Merchant => super::trading::update(&mut s, items),
+            Kind::Beacon => {}
             Kind::Stonecutter => {
                 let item = s.inputs[0].as_ref().map(|i| i.item.clone());
                 if item != s.input_item {
@@ -451,6 +466,7 @@ impl Game<'_> {
         let i = slot - INPUT;
         match s.kind {
             Kind::Enchanting if i == 0 => (true, 1),
+            Kind::Beacon => (super::beacon::is_payment(&stack.item), 1),
             Kind::Enchanting => (&*stack.item == "minecraft:lapis_lazuli", 64),
             Kind::Grindstone => (stations::grindstone_accepts(&self.res.items, stack), 64),
             Kind::Smithing => (data.recipes.smithing_accepts(i, stack), 64),
@@ -619,6 +635,12 @@ impl Game<'_> {
                     }
                 }
                 Some(Kind::Merchant) => {}
+                Some(Kind::Beacon) => {
+                    // BeaconMenu.quickMoveStack: one payment item into the empty slot.
+                    if super::beacon::is_payment(&stack.item) {
+                        moved = self.move_to(&mut stack, &[INPUT], false);
+                    }
+                }
                 Some(Kind::Smithing) | Some(Kind::Anvil) | Some(Kind::Stonecutter) => {
                     let n = self.station.as_ref().map_or(0, |s| s.inputs.len());
                     let inputs: Vec<usize> = (0..n).map(|i| INPUT + i).collect();
@@ -781,6 +803,7 @@ impl Game<'_> {
                 }
             }
             Kind::Merchant => self.merchant_take(&mut s),
+            Kind::Beacon => {}
             Kind::Enchanting => {}
         }
         self.station = Some(s);
@@ -900,6 +923,9 @@ impl Game<'_> {
             || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
         if let Some(kind) = self.station.as_ref().map(|s| s.kind) {
             if kind == Kind::Merchant && !right && self.merchant_click(local) {
+                return true;
+            }
+            if kind == Kind::Beacon && !right && self.beacon_click(local) {
                 return true;
             }
             if kind == Kind::Enchanting && !right {
@@ -1087,6 +1113,14 @@ impl Game<'_> {
             .is_some_and(|s| s.kind == Kind::Merchant)
         {
             return self.draw_merchant(batch);
+        }
+        if self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == Kind::Beacon)
+        {
+            self.draw_beacon(batch);
+            return true;
         }
         let brewing = self.brewing_open();
         if self.station.is_none() && !brewing {
@@ -1492,7 +1526,7 @@ impl Game<'_> {
                         }
                     }
                 }
-                Kind::Merchant => {}
+                Kind::Merchant | Kind::Beacon => {}
                 Kind::Stonecutter => {
                     let display = s.inputs[0].is_some() && !s.recipes.is_empty();
                     let active = display && s.recipes.len() > 12;
