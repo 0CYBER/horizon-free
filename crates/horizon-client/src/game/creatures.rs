@@ -93,7 +93,8 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
             .full_collision
     }
 }
-fn seen(m: &Mob) -> Seen {
+fn seen(m: &Mob, player: Option<[i32; 4]>) -> Seen {
+    let villager = m.species() == Species::Villager;
     Seen {
         id: m.id,
         species: m.species(),
@@ -102,7 +103,12 @@ fn seen(m: &Mob) -> Seen {
         eye_y: m.eye_y(),
         alive: m.alive(),
         baby: m.is_baby(),
-        in_love: m.extra.in_love > 0,
+        // A villager is "in love" when it is willing to breed (`canBreed`).
+        in_love: if villager {
+            horizon_client::mobs::villager::can_breed(m)
+        } else {
+            m.extra.in_love > 0
+        },
         tame: m.extra.tame,
         hostile: m.hostile(),
         target: m.ai.target,
@@ -116,6 +122,12 @@ fn seen(m: &Mob) -> Seen {
             .then_some(m.extra.bed)
             .flatten(),
         active_raid: horizon_client::mobs::raider::has_active_raid(m),
+        player_rep: match (villager, player) {
+            (true, Some(uuid)) => {
+                horizon_client::mobs::villager::ext(m).map_or(0, |e| e.gossips.reputation(uuid))
+            }
+            _ => 0,
+        },
     }
 }
 impl Game<'_> {
@@ -152,6 +164,7 @@ impl Game<'_> {
             hurt_by: self.player_hurt_by(),
             last_hurt: self.combat.last_hurt_mob.map(|(id, at)| (Who::Mob(id), at)),
             hero: self.potions.effects.get("hero_of_the_village").is_some(),
+            uuid: self.level.player_uuid.unwrap_or_default(),
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
@@ -280,6 +293,21 @@ impl Game<'_> {
                     "on_ground": m.on_ground,
                     "variant": m.extra.variant,
                     "color": m.extra.color,
+                    "villager": horizon_client::mobs::villager::ext(m).map(|e| serde_json::json!({
+                        "food_level": e.food_level,
+                        "inventory": e.inventory.iter().map(|s| format!("{}x{}", s.count, s.item)).collect::<Vec<_>>(),
+                        "gossips": e.gossips.len(),
+                        "last_slept": e.last_slept,
+                        "raid": e.raid,
+                    })),
+                    "raider": horizon_client::mobs::raider::state(m).map(|s| serde_json::json!({
+                        "raid": s.raid_id,
+                        "wave": s.wave,
+                        "leader": s.patrol_leader,
+                        "patrolling": s.patrolling,
+                        "patrol_target": s.patrol_target,
+                        "vehicle": s.vehicle,
+                    })),
                 })
             })
             .collect();
@@ -625,7 +653,8 @@ impl Game<'_> {
         self.spawn_natural();
         self.tick_patrol_spawner();
         self.tick_raids();
-        let snapshot: Vec<Seen> = self.mobs.iter().map(seen).collect();
+        let uuid = self.level.player_uuid;
+        let snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
         let mut events = Vec::new();
         let mut mobs = std::mem::take(&mut self.mobs);
         let mut dead = Vec::new();
@@ -649,6 +678,8 @@ impl Game<'_> {
         }
         self.mobs.append(&mut mobs);
         self.sync_riders();
+        self.villager_reputation_tick();
+        self.villager_pickups();
         for m in dead {
             self.mob_died(&m);
         }
@@ -670,6 +701,7 @@ impl Game<'_> {
             self.trigger_entity("minecraft:player_killed_entity", "entity", &view);
         }
         self.raider_died(m, by_player);
+        self.villager_murdered(m, by_player);
         let held = self.held().cloned();
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         if !m.is_baby() {
@@ -1005,6 +1037,9 @@ impl Game<'_> {
                 MobEvent::CreakingTearDown { center, spread } => {
                     self.creaking_tear_down(center, spread)
                 }
+                MobEvent::VillagerMeet { mob, other } => self.villager_meet(mob, other),
+                MobEvent::VillagerBirth { parent, partner } => self.villager_birth(parent, partner),
+                MobEvent::GolemCheck { mob, needed } => self.villager_golem_check(mob, needed),
                 MobEvent::Firework { at, color, flight } => {
                     self.villager_firework(at, color, flight)
                 }

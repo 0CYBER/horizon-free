@@ -63,6 +63,7 @@ mod tnt;
 mod totem;
 mod trading;
 mod trident;
+mod villagers;
 mod wither;
 use horizon_client::{
     Result,

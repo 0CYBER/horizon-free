@@ -665,6 +665,21 @@ pub enum MobEvent {
         kind: DamageKind,
         amount: f32,
     },
+    /// Two villagers are close: swap gossip and share food and wares.
+    VillagerMeet {
+        mob: u32,
+        other: u32,
+    },
+    /// Two villagers make a baby.
+    VillagerBirth {
+        parent: u32,
+        partner: u32,
+    },
+    /// A villager asks whether enough neighbours want an iron golem.
+    GolemCheck {
+        mob: u32,
+        needed: usize,
+    },
     /// A villager launches a firework rocket (celebrating a won raid).
     Firework {
         at: [f64; 3],
@@ -745,6 +760,8 @@ pub struct Seen {
     pub bed: Option<[i32; 3]>,
     /// A raider in an active raid.
     pub active_raid: bool,
+    /// A villager's reputation of the player (`getPlayerReputation`).
+    pub player_rep: i32,
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]
@@ -769,6 +786,8 @@ pub struct PlayerView {
     pub last_hurt: Option<(Who, i64)>,
     /// The Hero of the Village effect.
     pub hero: bool,
+    /// The player's UUID (villagers' gossip is keyed by it).
+    pub uuid: [i32; 4],
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,

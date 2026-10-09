@@ -23,6 +23,8 @@ pub struct LootStack {
     pub potion: Option<String>,
     /// Set by exploration_map (the map_id component of a found map).
     pub map: bool,
+    /// Set by set_ominous_bottle_amplifier.
+    pub ominous_amplifier: Option<i32>,
 }
 impl LootStack {
     fn new(item: &str) -> Self {
@@ -33,6 +35,7 @@ impl LootStack {
             enchantments: Vec::new(),
             potion: None,
             map: false,
+            ominous_amplifier: None,
         }
     }
     pub fn is_empty(&self) -> bool {
@@ -584,7 +587,7 @@ impl Context<'_> {
                 }
             }
             "minecraft:set_ominous_bottle_amplifier" => {
-                self.int(&f["amplifier"]);
+                stack.ominous_amplifier = Some(self.int(&f["amplifier"]));
             }
             "minecraft:set_instrument" => {
                 let options = data.holder_set("instrument", &f["options"]);

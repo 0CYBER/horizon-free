@@ -12,6 +12,7 @@ use super::{
         Stroll, goal_clone,
     },
 };
+use crate::items::ItemStack;
 use horizon_core::random::RandomSource;
 use std::{collections::HashMap, f32::consts::PI};
 
@@ -75,6 +76,8 @@ pub fn register(m: &mut Mob) {
     );
     g.add(1, Panic::new(0.75));
     g.add(2, RaidBehavior::default());
+    g.add(3, Social::default());
+    g.add(0, GolemCall);
     g.add(3, GiftToHero::default());
     g.add(3, JobSite::default());
     g.add(3, AcquireHome::default());
@@ -458,6 +461,7 @@ fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld) {
         _ => 4,
     };
     m.nav_stop();
+    ext_mut(m).last_slept = Some(w.game_time);
     m.velocity = horizon_core::geometry::Vec3::ZERO;
     m.position = horizon_core::geometry::Vec3::new(
         f64::from(p[0]) + 0.5,
@@ -517,6 +521,23 @@ pub fn sleep_pose(m: &Mob) -> Option<(f32, [f32; 2])> {
 pub fn ai_step(m: &mut Mob, w: &MobWorld) {
     if m.extra.ints[0] > 0 {
         m.extra.ints[0] -= 1;
+    }
+    if m.species() == Species::Villager {
+        let now = w.game_time;
+        let seen_golem = (i64::from(m.age) + i64::from(m.id)) % 200 == 0
+            && w.others.iter().any(|s| {
+                s.species == Species::IronGolem
+                    && s.alive
+                    && (s.position.x - m.position.x).abs() <= 16.0
+                    && (s.position.y - m.position.y).abs() <= 16.0
+                    && (s.position.z - m.position.z).abs() <= 16.0
+            });
+        let e = ext_mut(m);
+        // Villager.maybeDecayGossip and the GolemSensor (every 200 ticks).
+        e.maybe_decay(now);
+        if seen_golem {
+            e.golem_until = now + 599;
+        }
     }
     // WakeUp / LivingEntity.hurt: morning, a hit or a missing bed.
     if sleeping(m) {
@@ -612,6 +633,20 @@ pub const RAID_VICTORY: u8 = 3;
 pub struct Ext {
     /// Which raid package the villager follows.
     pub raid: u8,
+    /// What the villager remembers of players (`gossips`).
+    pub gossips: crate::gossip::Gossips,
+    pub last_gossip_time: i64,
+    pub last_gossip_decay: i64,
+    /// `foodLevel`: eaten but not yet digested, in food points.
+    pub food_level: i32,
+    /// The eight-slot inventory (`InventoryCarrier`).
+    pub inventory: Vec<ItemStack>,
+    /// `LAST_SLEPT` memory.
+    pub last_slept: Option<i64>,
+    /// `GOLEM_DETECTED_RECENTLY` expires at this game time.
+    pub golem_until: i64,
+    /// The `last_hurt_by_time` of the player's hit already counted.
+    pub hurt_seen: i32,
 }
 pub fn ext(m: &Mob) -> Option<&Ext> {
     m.extra.villager.as_deref()
@@ -807,5 +842,534 @@ impl Goal for GiftToHero {
         } else if m.ai.nav.is_done() {
             m.nav_move_to(cx.w, [p.position.x, p.position.y, p.position.z], 0.5);
         }
+    }
+}
+
+// ---- Gossip, food, breeding and golems.
+
+/// `VillagerFood` nutrition (`DataComponents.VILLAGER_FOOD`).
+pub fn food_points(item: &str) -> i32 {
+    match item {
+        "minecraft:bread" => 4,
+        "minecraft:potato" | "minecraft:carrot" | "minecraft:beetroot" => 1,
+        _ => 0,
+    }
+}
+/// The farmer's `requestedItems`.
+pub fn farmer_items() -> &'static [&'static str] {
+    &[
+        "minecraft:bread",
+        "minecraft:potato",
+        "minecraft:carrot",
+        "minecraft:wheat",
+        "minecraft:wheat_seeds",
+        "minecraft:beetroot",
+        "minecraft:beetroot_seeds",
+        "minecraft:torchflower_seeds",
+        "minecraft:pitcher_pod",
+    ]
+}
+/// A villager's `requestedItems` by profession.
+pub fn requested_items(m: &Mob) -> &'static [&'static str] {
+    if super::render::PROFESSIONS[m.extra.variant2 as usize % 15] == "farmer" {
+        farmer_items()
+    } else {
+        &[]
+    }
+}
+pub fn is_farmer(m: &Mob) -> bool {
+    super::render::PROFESSIONS[m.extra.variant2 as usize % 15] == "farmer"
+}
+/// `SimpleContainer(8)`: stacks the villager carries.
+const INVENTORY_SLOTS: usize = 8;
+
+impl Ext {
+    /// `countFoodPointsInInventory`.
+    pub fn food_in_inventory(&self) -> i32 {
+        self.inventory
+            .iter()
+            .map(|s| food_points(&s.item) * s.count as i32)
+            .sum()
+    }
+    /// `hasExcessFood` and `wantsMoreFood`.
+    pub fn has_excess_food(&self) -> bool {
+        self.food_in_inventory() >= 24
+    }
+    pub fn wants_more_food(&self) -> bool {
+        self.food_in_inventory() < 12
+    }
+    fn hungry(&self) -> bool {
+        self.food_level < 12
+    }
+    /// `Villager.eatAndDigestFood`: eat until full, then digest 12 points.
+    pub fn eat_and_digest(&mut self) {
+        if self.hungry() {
+            let mut slot = 0;
+            while slot < self.inventory.len() && self.hungry() {
+                let points = food_points(&self.inventory[slot].item);
+                if points > 0 {
+                    while self.inventory[slot].count > 0 && self.hungry() {
+                        self.food_level += points;
+                        self.inventory[slot].count -= 1;
+                    }
+                    if self.inventory[slot].count == 0 {
+                        self.inventory.remove(slot);
+                        continue;
+                    }
+                }
+                slot += 1;
+            }
+        }
+        self.food_level -= 12;
+    }
+    /// Whether the stack fits (`SimpleContainer.canAddItem`).
+    pub fn can_add(&self, stack: &ItemStack, max_stack: u32) -> bool {
+        self.inventory.len() < INVENTORY_SLOTS
+            || self
+                .inventory
+                .iter()
+                .any(|s| s.same_item_same_components(stack) && s.count < max_stack)
+    }
+    /// `SimpleContainer.addItem`: merge into stacks, then free slots; the
+    /// part that did not fit is returned.
+    pub fn add_item(&mut self, mut stack: ItemStack, max_stack: u32) -> Option<ItemStack> {
+        for s in &mut self.inventory {
+            if stack.count > 0 && s.same_item_same_components(&stack) && s.count < max_stack {
+                let n = (max_stack - s.count).min(stack.count);
+                s.count += n;
+                stack.count -= n;
+            }
+        }
+        while stack.count > 0 && self.inventory.len() < INVENTORY_SLOTS {
+            let n = stack.count.min(max_stack);
+            self.inventory.push(ItemStack {
+                count: n,
+                ..stack.clone()
+            });
+            stack.count -= n;
+        }
+        (stack.count > 0).then_some(stack)
+    }
+    pub fn count_item(&self, item: &str) -> u32 {
+        self.inventory
+            .iter()
+            .filter(|s| &*s.item == item)
+            .map(|s| s.count)
+            .sum()
+    }
+    /// `TradeWithVillager.throwHalfStack`: the half of a big matching stack
+    /// (or whatever is over 24) leaves the inventory.
+    pub fn take_half_stack(
+        &mut self,
+        wanted: impl Fn(&ItemStack) -> bool,
+        max_stack: impl Fn(&str) -> u32,
+    ) -> Option<ItemStack> {
+        for i in 0..self.inventory.len() {
+            let s = &self.inventory[i];
+            if s.count == 0 || !wanted(s) {
+                continue;
+            }
+            let count = if s.count > max_stack(&s.item) / 2 {
+                s.count / 2
+            } else if s.count > 24 {
+                s.count - 24
+            } else {
+                continue;
+            };
+            let taken = ItemStack { count, ..s.clone() };
+            self.inventory[i].count -= count;
+            if self.inventory[i].count == 0 {
+                self.inventory.remove(i);
+            }
+            return Some(taken);
+        }
+        None
+    }
+    /// `Villager.wantsToSpawnGolem`: slept within the last day and no golem
+    /// seen lately.
+    pub fn wants_golem(&self, now: i64) -> bool {
+        self.last_slept.is_some_and(|t| now - t < 24000) && now >= self.golem_until
+    }
+    /// `maybeDecayGossip`: once a day.
+    pub fn maybe_decay(&mut self, now: i64) {
+        if self.last_gossip_decay == 0 {
+            self.last_gossip_decay = now;
+        } else if now >= self.last_gossip_decay + 24000 {
+            self.gossips.decay();
+            self.last_gossip_decay = now;
+        }
+    }
+    /// `Villager.gossip` timing: hearing again waits 1200 ticks.
+    pub fn can_gossip(&self, now: i64) -> bool {
+        now < self.last_gossip_time || now >= self.last_gossip_time + 1200
+    }
+}
+/// `Villager.canBreed`: enough food, awake and an adult.
+pub fn can_breed(m: &Mob) -> bool {
+    m.species() == Species::Villager
+        && m.extra.age == 0
+        && !sleeping(m)
+        && ext(m).map_or(0, |e| e.food_level + e.food_in_inventory()) >= 12
+}
+
+/// The saved fields (`FoodLevel`, `Gossips`, `LastGossipDecay`, `Inventory`
+/// and the sleep and golem memories).
+pub fn write_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
+    use horizon_world::nbt::Tag;
+    let Some(e) = ext(m) else { return };
+    map.insert(
+        "FoodLevel".into(),
+        Tag::Byte(e.food_level.clamp(-128, 127) as i8),
+    );
+    map.insert("Gossips".into(), e.gossips.to_nbt());
+    map.insert("LastGossipDecay".into(), Tag::Long(e.last_gossip_decay));
+    map.insert(
+        "Inventory".into(),
+        Tag::List(e.inventory.iter().map(crate::save::item_to_nbt).collect()),
+    );
+}
+/// The memories of `Brain.memories` the villager keeps besides positions.
+pub fn write_memories(m: &Mob, memories: &mut Vec<(&'static str, horizon_world::nbt::Tag)>) {
+    use horizon_world::nbt::Tag;
+    let Some(e) = ext(m) else { return };
+    if let Some(t) = e.last_slept {
+        memories.push((
+            "minecraft:last_slept",
+            Tag::compound([("value", Tag::Long(t))]),
+        ));
+    }
+}
+pub fn read_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
+    use horizon_world::nbt::Tag;
+    let int = |t: Option<&Tag>| match t {
+        Some(Tag::Int(v)) => Some(i64::from(*v)),
+        Some(Tag::Byte(v)) => Some(i64::from(*v)),
+        Some(Tag::Short(v)) => Some(i64::from(*v)),
+        Some(Tag::Long(v)) => Some(*v),
+        _ => None,
+    };
+    let last_slept = int(tag
+        .get("Brain")
+        .and_then(|b| b.get("memories"))
+        .and_then(|b| b.get("minecraft:last_slept"))
+        .and_then(|j| j.get("value")));
+    let e = ext_mut(m);
+    e.food_level = int(tag.get("FoodLevel")).unwrap_or(0) as i32;
+    e.gossips = tag
+        .get("Gossips")
+        .map(crate::gossip::Gossips::from_nbt)
+        .unwrap_or_default();
+    e.last_gossip_decay = int(tag.get("LastGossipDecay")).unwrap_or(0);
+    e.last_slept = last_slept;
+    if let Some(Tag::List(items)) = tag.get("Inventory") {
+        e.inventory = items
+            .iter()
+            .filter_map(crate::save::item_from_nbt)
+            .take(INVENTORY_SLOTS)
+            .collect();
+    }
+}
+
+/// `InteractWith(VILLAGER)`, `TradeWithVillager` and `VillagerMakeLove` while
+/// idle, and `SocializeAtBell` at the meeting: walk up to a villager, swap
+/// gossip and food, and make a baby with a willing partner.
+#[derive(Clone, Debug, Default)]
+struct Social {
+    target: Option<u32>,
+    breed: bool,
+    ticks: i32,
+    cooldown: i32,
+    birth_at: i64,
+}
+impl Social {
+    fn pick(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let breedable = can_breed(m);
+        let id = m.id;
+        let nearest =
+            cx.w.nearby(m.position, 8.0, move |s| {
+                s.species == Species::Villager && s.id != id
+            })
+            .filter(|s| m.position.distance_squared(s.position) <= 64.0)
+            .map(|s| (s.id, s.in_love))
+            .collect::<Vec<_>>();
+        let visible: Vec<(u32, bool)> = nearest
+            .into_iter()
+            .filter(|(i, _)| m.sees(cx.w, Who::Mob(*i)))
+            .collect();
+        let Some(&(target, partner_willing)) = visible.first() else {
+            return false;
+        };
+        // RunOne weights: interact 2, breed 1 (when both are willing).
+        let breed = breedable && partner_willing && m.random.next_int_bound(3).unwrap_or(0) == 0;
+        self.target = Some(target);
+        self.breed = breed;
+        true
+    }
+}
+impl Goal for Social {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.is_baby() || sleeping(m) || raid_status(m) != RAID_NONE {
+            return false;
+        }
+        if self.cooldown > 0 {
+            self.cooldown -= 1;
+            return false;
+        }
+        match activity(m, cx.w.day_time) {
+            Activity::Idle => self.pick(m, cx),
+            Activity::Meet => {
+                // SocializeAtBell: one tick in a hundred, near the bell.
+                let near_bell = m.extra.meeting.is_some_and(|p| distance(m, p) < 4.0);
+                near_bell && m.random.next_int_bound(100).unwrap_or(1) == 0 && {
+                    let ok = self.pick(m, cx);
+                    self.breed = false;
+                    ok
+                }
+            }
+            _ => false,
+        }
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(t) = self.target else { return false };
+        let Some(s) = cx.w.seen(t) else { return false };
+        if !s.alive || sleeping(m) || raid_status(m) != RAID_NONE {
+            return false;
+        }
+        if self.breed {
+            self.ticks < 350 && can_breed(m) && s.in_love
+        } else {
+            self.ticks < 60
+        }
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.ticks = 0;
+        self.birth_at = 0;
+        if let Some(s) = self.target.and_then(|t| cx.w.seen(t)) {
+            let at = [s.position.x, s.position.y, s.position.z];
+            m.nav_move_to(cx.w, at, 0.5);
+        }
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.nav_stop();
+        self.target = None;
+        self.cooldown = 20 + m.random.next_int_bound(40).unwrap_or(0);
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.ticks += 1;
+        let Some(t) = self.target else { return };
+        let Some(s) = cx.w.seen(t) else { return };
+        let (at, eye) = ([s.position.x, s.position.y, s.position.z], s.eye_y);
+        m.look_at([at[0], eye, at[2]]);
+        if m.position.distance_squared(s.position) > 5.0 {
+            if m.ai.nav.is_done() && self.ticks % 10 == 1 {
+                m.nav_move_to(cx.w, at, 0.5);
+            }
+            return;
+        }
+        m.nav_stop();
+        if !self.breed {
+            cx.events.push(MobEvent::VillagerMeet {
+                mob: m.id,
+                other: t,
+            });
+            return;
+        }
+        let now = cx.w.game_time;
+        if self.birth_at == 0 {
+            self.birth_at = now + 275 + i64::from(m.random.next_int_bound(50).unwrap_or(0));
+        }
+        if now >= self.birth_at {
+            cx.events.push(MobEvent::VillagerBirth {
+                parent: m.id,
+                partner: t,
+            });
+            self.ticks = 1000;
+        } else if m.random.next_int_bound(35).unwrap_or(1) == 0 {
+            for p in [m.position, s.position] {
+                cx.events.push(MobEvent::Particles {
+                    kind: "heart",
+                    at: [p.x, p.y + 1.8, p.z],
+                    count: 1,
+                });
+            }
+        }
+    }
+}
+
+/// `VillagerPanicTrigger.tick`: a frightened villager calls for a golem
+/// every five seconds.
+#[derive(Clone, Debug, Default)]
+struct GolemCall;
+/// `VillagerHostilesSensor`: how close each hostile must be to scare.
+fn hostile_range(s: Species) -> f64 {
+    match s {
+        Species::Drowned
+        | Species::Husk
+        | Species::Vex
+        | Species::Zombie
+        | Species::ZombieVillager => 8.0,
+        Species::Evoker | Species::Ravager => 12.0,
+        Species::Pillager => 15.0,
+        Species::Vindicator | Species::Zoglin => 10.0,
+        _ => 0.0,
+    }
+}
+fn frightened(m: &Mob, cx: &Cx) -> bool {
+    // HURT_BY lasts 100 ticks.
+    let hurt = m.ai.last_hurt_by.is_some() && m.age as i32 - m.ai.last_hurt_by_time <= 100;
+    hurt || cx.w.others.iter().any(|s| {
+        s.alive && {
+            let r = hostile_range(s.species);
+            r > 0.0 && s.position.distance_squared(m.position) <= r * r
+        }
+    })
+}
+impl Goal for GolemCall {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        !m.is_baby() && frightened(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.can_use(m, cx)
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if cx.w.game_time % 100 == 0 {
+            cx.events.push(MobEvent::GolemCheck {
+                mob: m.id,
+                needed: 3,
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stack(item: &str, count: u32) -> ItemStack {
+        ItemStack::new(item, count)
+    }
+    #[test]
+    fn eating_fills_the_food_level_then_digests() {
+        let mut e = Ext {
+            inventory: vec![stack("minecraft:bread", 3), stack("minecraft:carrot", 5)],
+            ..Default::default()
+        };
+        assert_eq!(e.food_in_inventory(), 17);
+        // Hungry below 12: three breads fill it exactly, then 12 digest away.
+        e.eat_and_digest();
+        assert_eq!(e.food_level, 0);
+        assert_eq!(e.inventory.len(), 1);
+        assert_eq!(e.inventory[0].count, 5);
+        // Five carrots are not enough to be full again, and are all eaten.
+        e.eat_and_digest();
+        assert_eq!(e.food_level, 5 - 12);
+        assert!(e.inventory.is_empty());
+    }
+    #[test]
+    fn willingness_to_breed_needs_twelve_food_points() {
+        let mut e = Ext::default();
+        assert!(e.wants_more_food() && !e.has_excess_food());
+        e.inventory.push(stack("minecraft:bread", 6));
+        assert!(e.has_excess_food() && !e.wants_more_food());
+        e.food_level = -5;
+        assert_eq!(e.food_level + e.food_in_inventory(), 19);
+    }
+    #[test]
+    fn the_inventory_has_eight_stacking_slots() {
+        let mut e = Ext::default();
+        assert!(e.add_item(stack("minecraft:bread", 100), 64).is_none());
+        assert_eq!(e.inventory.len(), 2);
+        assert_eq!(e.inventory[0].count, 64);
+        for i in 0..6 {
+            assert!(
+                e.add_item(stack(&format!("minecraft:item_{i}"), 1), 64)
+                    .is_none()
+            );
+        }
+        assert_eq!(e.inventory.len(), 8);
+        // Full: another kind is refused, the same kind tops up the stack.
+        assert!(!e.can_add(&stack("minecraft:stick", 1), 64));
+        let left = e.add_item(stack("minecraft:bread", 40), 64).unwrap();
+        assert_eq!(left.count, 40 - 28);
+    }
+    #[test]
+    fn half_stacks_are_thrown() {
+        let mut e = Ext {
+            inventory: vec![
+                stack("minecraft:bread", 10),
+                stack("minecraft:wheat", 50),
+                stack("minecraft:wheat", 20),
+            ],
+            ..Default::default()
+        };
+        let max = |_: &str| 64;
+        // Bread is under half a stack and under 24: nothing.
+        assert!(
+            e.take_half_stack(|s| &*s.item == "minecraft:bread", max)
+                .is_none()
+        );
+        // 50 wheat is over half a stack: 25 go.
+        let t = e
+            .take_half_stack(|s| &*s.item == "minecraft:wheat", max)
+            .unwrap();
+        assert_eq!(t.count, 25);
+        assert_eq!(e.count_item("minecraft:wheat"), 25 + 20);
+    }
+    #[test]
+    fn golems_need_sleep_and_no_golem_nearby() {
+        let mut e = Ext::default();
+        assert!(!e.wants_golem(100));
+        e.last_slept = Some(0);
+        assert!(e.wants_golem(23_999));
+        assert!(!e.wants_golem(24_000));
+        e.last_slept = Some(1000);
+        e.golem_until = 2000 + 599;
+        assert!(!e.wants_golem(2500));
+        assert!(e.wants_golem(2700));
+    }
+    #[test]
+    fn gossip_decays_once_a_day_and_heard_gossip_waits() {
+        let player = [1, 2, 3, 4];
+        let mut e = Ext::default();
+        e.gossips
+            .add(player, crate::gossip::GossipType::MajorNegative, 25);
+        e.maybe_decay(100);
+        assert_eq!(e.last_gossip_decay, 100);
+        e.maybe_decay(24_099);
+        assert_eq!(
+            e.gossips
+                .get(player, crate::gossip::GossipType::MajorNegative),
+            25
+        );
+        e.maybe_decay(24_100);
+        assert_eq!(
+            e.gossips
+                .get(player, crate::gossip::GossipType::MajorNegative),
+            15
+        );
+        e.last_gossip_time = 5000;
+        assert!(!e.can_gossip(5100));
+        assert!(e.can_gossip(6200));
+        assert!(e.can_gossip(4000));
+    }
+    #[test]
+    fn villager_food_values() {
+        assert_eq!(food_points("minecraft:bread"), 4);
+        assert_eq!(food_points("minecraft:beetroot"), 1);
+        assert_eq!(food_points("minecraft:apple"), 0);
     }
 }

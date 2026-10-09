@@ -280,6 +280,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.insert("RestocksToday".into(), Tag::Int(t.restocks_today));
             put_offers(map, m);
             put_memories(map, m);
+            crate::mobs::villager::write_nbt(m, map);
         }
         "minecraft:wandering_trader" => put_offers(map, m),
         "minecraft:allay" => {
@@ -1046,7 +1047,7 @@ fn put_offers(map: &mut Compound, m: &Mob) {
 }
 /// The villager brain's `job_site`, `home` and `meeting_point` memories.
 fn put_memories(map: &mut Compound, m: &Mob) {
-    let memories: Vec<(&str, Tag)> = [
+    let mut memories: Vec<(&str, Tag)> = [
         ("minecraft:job_site", m.extra.home),
         ("minecraft:home", m.extra.bed),
         ("minecraft:meeting_point", m.extra.meeting),
@@ -1060,6 +1061,7 @@ fn put_memories(map: &mut Compound, m: &Mob) {
         Some((key, Tag::compound([("value", pos)])))
     })
     .collect();
+    crate::mobs::villager::write_memories(m, &mut memories);
     map.insert(
         "Brain".into(),
         Tag::compound([("memories", Tag::compound(memories))]),
@@ -1093,6 +1095,9 @@ fn read_villager(m: &mut Mob, tag: &Tag) {
     m.extra.home = memory("minecraft:job_site");
     m.extra.bed = memory("minecraft:home");
     m.extra.meeting = memory("minecraft:meeting_point");
+    if m.species() == crate::mobs::Species::Villager {
+        crate::mobs::villager::read_nbt(m, tag);
+    }
     let Some(Tag::List(recipes)) = tag.get("Offers").and_then(|o| o.get("Recipes")) else {
         return;
     };
