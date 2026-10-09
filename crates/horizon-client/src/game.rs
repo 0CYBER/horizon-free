@@ -2636,6 +2636,10 @@ impl Game<'_> {
             .map(|t| Icon::Flat(t.trim_start_matches("minecraft:").to_owned()))
     }
     fn draw_item(&mut self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
+        if &*stack.item == "minecraft:shield" {
+            shield::draw_shield_icon(batch, &self.res.atlas, x, y);
+            return;
+        }
         let icon = self.icon(&stack.item);
         let atlas = &self.res.atlas;
         match icon {

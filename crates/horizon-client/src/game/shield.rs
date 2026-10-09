@@ -218,3 +218,96 @@ impl Game<'_> {
         }
     }
 }
+
+/// The shield in a slot: `ShieldSpecialRenderer`'s plate and handle boxes
+/// under item/shield's `gui` display transform, flat-lit and depth-sorted.
+pub(super) fn draw_shield_icon(
+    batch: &mut horizon_client::hud::HudBatch,
+    atlas: &horizon_client::hud::HudAtlas,
+    x: f32,
+    y: f32,
+) {
+    let Some(r) = atlas
+        .sprites
+        .get("entity/shield/shield_base_nopattern")
+        .copied()
+    else {
+        return;
+    };
+    // display.gui: rotation [15, -25, -5], translation [2, 3, 0], scale 0.65.
+    let (sx, cx) = 15f32.to_radians().sin_cos();
+    let (sy, cy) = (-25f32).to_radians().sin_cos();
+    let (sz, cz) = (-5f32).to_radians().sin_cos();
+    // Quaternionf.rotationXYZ: Rx * Ry * Rz.
+    let rotate = |[x, y, z]: [f32; 3]| {
+        let (x, y) = (x * cz - y * sz, x * sz + y * cz);
+        let (x, z) = (x * cy + z * sy, -x * sy + z * cy);
+        let (y, z) = (y * cx - z * sx, y * sx + z * cx);
+        [x, y, z]
+    };
+    // Model pixels -> slot pixels: S(1,-1,-1), T(-0.5), S(0.65), R, T, and
+    // the GUI's (16, -16, 16) around the slot centre.
+    let place = |[px, py, pz]: [f32; 3]| {
+        let q = [px / 16.0 - 0.5, -py / 16.0 - 0.5, -pz / 16.0 - 0.5].map(|v| v * 0.65);
+        let [qx, qy, qz] = rotate(q);
+        [
+            x + 8.0 + (qx + 2.0 / 16.0) * 16.0,
+            y + 8.0 - (qy + 3.0 / 16.0) * 16.0,
+            qz,
+        ]
+    };
+    let tex = |u: f32, v: f32| {
+        [
+            r.u0 + (r.u1 - r.u0) * u / 64.0,
+            r.v0 + (r.v1 - r.v0) * v / 64.0,
+        ]
+    };
+    // ShieldModel: plate texOffs(0, 0) box(-6, -11, -2, 12, 22, 1) and
+    // handle texOffs(26, 0) box(-1, -3, -1, 2, 6, 6).
+    let mut faces: Vec<(f32, [[f32; 2]; 4], [[f32; 2]; 4], u32)> = Vec::new();
+    for (tu, tv, from, size) in [
+        (0.0, 0.0, [-6.0, -11.0, -2.0], [12.0, 22.0, 1.0]),
+        (26.0, 0.0, [-1.0, -3.0, -1.0], [2.0, 6.0, 6.0]),
+    ] {
+        let [w, h, d] = size;
+        let (x0, y0, z0) = (from[0], from[1], from[2]);
+        let (x1, y1, z1) = (x0 + w, y0 + h, z0 + d);
+        let t0 = [x0, y0, z0];
+        let t1 = [x1, y0, z0];
+        let t2 = [x1, y1, z0];
+        let t3 = [x0, y1, z0];
+        let l0 = [x0, y0, z1];
+        let l1 = [x1, y0, z1];
+        let l2 = [x1, y1, z1];
+        let l3 = [x0, y1, z1];
+        let (u0, u1, u2) = (tu, tu + d, tu + d + w);
+        let (u22, u3, u4) = (tu + d + w + w, tu + d + w + d, tu + d + w + d + w);
+        let (v0, v1, v2) = (tv, tv + d, tv + d + h);
+        // ModelPart.Cube's polygons: (vertices, u0, v0, u1, v1, normal).
+        for (verts, a, b, c, e, n) in [
+            ([l1, l0, t0, t1], u1, v0, u2, v1, [0.0, -1.0, 0.0]),
+            ([t2, t3, l3, l2], u2, v1, u22, v0, [0.0, 1.0, 0.0]),
+            ([t0, l0, l3, t3], u0, v1, u1, v2, [-1.0, 0.0, 0.0]),
+            ([t1, t0, t3, t2], u1, v1, u2, v2, [0.0, 0.0, -1.0]),
+            ([l1, t1, t2, l2], u2, v1, u3, v2, [1.0, 0.0, 0.0]),
+            ([l0, l1, l2, l3], u3, v1, u4, v2, [0.0, 0.0, 1.0]),
+        ] {
+            let normal = rotate([n[0], -n[1], -n[2]]);
+            if normal[2] <= 0.0 {
+                continue;
+            }
+            let p = verts.map(place);
+            let depth = p.iter().map(|q| q[2]).sum::<f32>() / 4.0;
+            let uv = [tex(c, b), tex(a, b), tex(a, e), tex(c, e)];
+            // Flat item lighting: faces toward the viewer are brightest.
+            let shade = (0.6 + 0.4 * normal[2]).min(1.0);
+            let s = (shade * 255.0) as u8;
+            let color = horizon_client::hud::rgba(s, s, s, 255);
+            faces.push((depth, p.map(|q| [q[0], q[1]]), uv, color));
+        }
+    }
+    faces.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (_, p, uv, color) in faces {
+        batch.quad(p, uv, color);
+    }
+}
