@@ -430,6 +430,7 @@ impl Game<'_> {
             "fill" => self.cmd_fill(ctx),
             "clone" => self.cmd_clone(ctx),
             "experience" => self.cmd_experience(ctx),
+            "advancement" => self.cmd_advancement(ctx),
             "gamerule" => self.cmd_gamerule(ctx),
             "difficulty" => self.cmd_difficulty(ctx),
             "seed" => {
@@ -1358,6 +1359,119 @@ impl Game<'_> {
             e.level += 1;
             e.progress /= horizon_client::entities::Experience::needed(e.level) as f32;
         }
+    }
+    /// AdvancementCommands.perform / performCriterion.
+    fn cmd_advancement(&mut self, ctx: &Context) -> R<i32> {
+        let targets = self.entities(ctx, "targets", true)?;
+        self.load_advancements();
+        let tree = self.adv.tree.clone();
+        let grant = ctx.has("grant");
+        let key = if grant { "grant" } else { "revoke" };
+        let index = match ctx.get("advancement") {
+            Some(Arg::Resource(id)) => Some(
+                *tree
+                    .by_id
+                    .get(id)
+                    .ok_or_else(|| err("advancement.advancementNotFound", &[id]))?,
+            ),
+            _ => None,
+        };
+        let player = Text::literal(PLAYER_NAME);
+        let players = targets.len();
+        if let (Some(i), Some(Arg::Str(criterion))) = (index, ctx.get("criterion")) {
+            let a = &tree.list[i];
+            let name = super::advancements::adv_name(a);
+            if !a.criteria.iter().any(|c| &c.name == criterion) {
+                return Err(CommandError::new(Text::translate(
+                    "commands.advancement.criterionNotFound",
+                    &[name, Text::literal(criterion.clone())],
+                )));
+            }
+            let changed = if grant {
+                self.grant_advancement(i, Some(criterion))
+            } else {
+                self.revoke_advancement(i, Some(criterion))
+            };
+            let to = if players == 1 { "one" } else { "many" };
+            let who = if players == 1 {
+                player
+            } else {
+                Text::literal(players.to_string())
+            };
+            let args = [Text::literal(criterion.clone()), name, who];
+            if !changed {
+                return Err(CommandError::new(Text::translate(
+                    &format!("commands.advancement.{key}.criterion.to.{to}.failure"),
+                    &args,
+                )));
+            }
+            self.feedback(Text::translate(
+                &format!("commands.advancement.{key}.criterion.to.{to}.success"),
+                &args,
+            ));
+            return Ok(1);
+        }
+        // getAdvancements: parents first (nearest up), the target, then
+        // the subtree depth first.
+        let list: Vec<usize> = match index {
+            None => (0..tree.list.len()).collect(),
+            Some(i) => {
+                let mut out = Vec::new();
+                if ctx.has("until") || ctx.has("through") {
+                    let mut p = tree.list[i].parent.as_ref();
+                    while let Some(&pi) = p.and_then(|id| tree.by_id.get(id)) {
+                        out.push(pi);
+                        p = tree.list[pi].parent.as_ref();
+                    }
+                }
+                out.push(i);
+                if ctx.has("from") || ctx.has("through") {
+                    let kids = tree.children();
+                    fn add(kids: &[Vec<usize>], i: usize, out: &mut Vec<usize>) {
+                        for &c in &kids[i] {
+                            out.push(c);
+                            add(kids, c, out);
+                        }
+                    }
+                    add(&kids, i, &mut out);
+                }
+                out
+            }
+        };
+        self.adv.quiet = index.is_none();
+        let mut count = 0;
+        for &i in &list {
+            let changed = if grant {
+                self.grant_advancement(i, None)
+            } else {
+                self.revoke_advancement(i, None)
+            };
+            count += i32::from(changed);
+        }
+        self.adv.quiet = false;
+        let to = if players == 1 { "one" } else { "many" };
+        let who = if players == 1 {
+            player
+        } else {
+            Text::literal(players.to_string())
+        };
+        let (what, first) = if list.len() == 1 {
+            ("one", super::advancements::adv_name(&tree.list[list[0]]))
+        } else {
+            ("many", Text::literal(list.len().to_string()))
+        };
+        let args = [first, who];
+        if count == 0 {
+            return Err(CommandError::new(Text::translate(
+                &format!("commands.advancement.{key}.{what}.to.{to}.failure"),
+                &args,
+            )));
+        }
+        self.feedback(Text::translate(
+            &format!("commands.advancement.{key}.{what}.to.{to}.success"),
+            &args,
+        ));
+        Ok(count)
     }
     fn cmd_experience(&mut self, ctx: &Context) -> R<i32> {
         let levels = ctx.has("levels");

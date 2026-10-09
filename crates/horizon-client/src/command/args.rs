@@ -25,6 +25,7 @@ pub struct Registries {
     pub clocks: Vec<String>,
     pub timelines: Vec<String>,
     pub time_markers: Vec<String>,
+    pub advancements: Vec<String>,
     /// Game rule name -> integer-valued.
     pub game_rules: Vec<(String, bool)>,
     pub players: Vec<String>,
@@ -1485,6 +1486,7 @@ impl ArgType {
             ArgType::Id(list) => {
                 let values = match *list {
                     "time_markers" => reg.time_markers.clone(),
+                    "advancements" => reg.advancements.clone(),
                     _ => Vec::new(),
                 };
                 suggest_resources(builder, &values, "");

@@ -34,6 +34,8 @@ pub fn build() -> Dispatcher {
     let mut d = Dispatcher::new();
     let root = 0;
 
+    advancement(&mut d, root);
+
     // help [<command>]
     let help = d.literal(root, "help");
     d.executes(help, "help");
@@ -400,6 +402,28 @@ fn execute(d: &mut Dispatcher, root: usize) {
             d.executes(node, "execute");
             d.redirect(node, ex);
         }
+    }
+}
+
+/// AdvancementCommands: grant|revoke <targets> only|from|until|through
+/// <advancement> | everything; `only` takes an optional criterion.
+fn advancement(d: &mut Dispatcher, root: usize) {
+    let adv = d.literal(root, "advancement");
+    d.requires(adv, GAMEMASTERS);
+    for action in ["grant", "revoke"] {
+        let a = d.literal(adv, action);
+        let t = d.argument(a, "targets", PLAYERS);
+        for mode in ["only", "from", "until", "through"] {
+            let m = d.literal(t, mode);
+            let id = d.argument(m, "advancement", ArgType::Id("advancements"));
+            d.executes(id, "advancement");
+            if mode == "only" {
+                let c = d.argument(id, "criterion", ArgType::Greedy);
+                d.executes(c, "advancement");
+            }
+        }
+        let e = d.literal(t, "everything");
+        d.executes(e, "advancement");
     }
 }
 

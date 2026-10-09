@@ -1,6 +1,7 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
 mod advancements;
+mod advancements_screen;
 mod armor_stands;
 mod beacon;
 mod blockctl;
@@ -243,6 +244,8 @@ enum Screen {
     Dead,
     /// The Statistics screen.
     Stats,
+    /// The Advancements screen.
+    Advancements,
 }
 #[derive(Clone)]
 enum Icon {
@@ -621,6 +624,7 @@ struct Game<'a> {
     stats: stats::Stats,
     adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
+    adv_ui: advancements_screen::AdvUi,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -2972,6 +2976,7 @@ impl Game<'_> {
             Screen::Paused => self.draw_pause_menu(&mut batch),
             Screen::Dead => self.draw_death_screen(&mut batch),
             Screen::Stats => self.draw_stats(&mut batch),
+            Screen::Advancements => self.draw_advancements(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
             }
@@ -6717,9 +6722,13 @@ impl Game<'_> {
                 }
                 Screen::Dead => {}
                 Screen::Stats => self.screen = Screen::Paused,
+                Screen::Advancements => self.close_advancements(),
                 Screen::Chat => self.close_chat(),
             },
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
+            // key.advancements.
+            KeyCode::KeyL if self.screen == Screen::Playing => self.open_advancements(false),
+            KeyCode::KeyL if self.screen == Screen::Advancements => self.close_advancements(),
             KeyCode::Slash if self.screen == Screen::Playing => self.open_chat("/"),
             KeyCode::F1 => self.toggle_hide_gui(),
             KeyCode::F11 => self.toggle_fullscreen(),
@@ -6950,6 +6959,9 @@ impl ApplicationHandler for Game<'_> {
                     if let Some(r) = &self.renderer {
                         let b = HudBatch::new([r.config.width, r.config.height]);
                         self.cursor = (position.x as f32 / b.scale, position.y as f32 / b.scale);
+                        if self.screen == Screen::Advancements {
+                            self.advancements_drag();
+                        }
                         if self.dragging && self.screen == Screen::Options {
                             let _ = b;
                             self.options_drag()?;
@@ -6981,6 +6993,13 @@ impl ApplicationHandler for Game<'_> {
                     }
                     if self.screen == Screen::Stats && d != 0.0 {
                         self.stats_scroll(d);
+                    }
+                    if self.screen == Screen::Advancements {
+                        let x = match delta {
+                            MouseScrollDelta::LineDelta(x, _) => x,
+                            MouseScrollDelta::PixelDelta(p) => p.x as f32,
+                        };
+                        self.advancements_scroll(x, d);
                     }
                     if self.screen == Screen::Playing && d != 0.0 {
                         self.selected =
@@ -7080,6 +7099,13 @@ impl ApplicationHandler for Game<'_> {
                         }
                         Screen::Paused if pressed => self.pause_click()?,
                         Screen::Dead if pressed => self.death_click()?,
+                        Screen::Advancements if button == MouseButton::Left => {
+                            let size = self
+                                .renderer
+                                .as_ref()
+                                .map_or([1, 1], |r| [r.config.width, r.config.height]);
+                            self.advancements_mouse(pressed, size);
+                        }
                         Screen::Stats if pressed && button == MouseButton::Left => {
                             let size = self
                                 .renderer
@@ -7586,6 +7612,7 @@ pub fn run() -> Result<()> {
         stats: Default::default(),
         adv: Default::default(),
         stats_ui: Default::default(),
+        adv_ui: Default::default(),
     };
     game.ui.vanilla_root = vanilla_root;
     game.res.atlas.font.uniform = game.settings.force_unicode;

@@ -28,6 +28,8 @@ pub(super) struct AdvState {
     loaded: bool,
     pub(super) recipes: BTreeSet<String>,
     toasts: VecDeque<Toast>,
+    /// Awards skip the toast (`/advancement grant ... everything`).
+    pub(super) quiet: bool,
     /// The inventory last seen by `inventory_changed`.
     last_inventory: u64,
 }
@@ -200,6 +202,7 @@ impl Game<'_> {
             }
         }
         self.adv.progress = progress;
+        self.ui.registries.advancements = tree.list.iter().map(|a| a.id.clone()).collect();
     }
     pub(super) fn save_advancements(&self) {
         if !self.adv.loaded || self.remote.is_some() {
@@ -330,7 +333,7 @@ impl Game<'_> {
             }
         }
         if let Some(d) = &a.display {
-            if d.show_toast {
+            if d.show_toast && !self.adv.quiet {
                 self.adv.toasts.push_back(Toast {
                     icon: d.icon.clone(),
                     frame: d.frame,
@@ -339,18 +342,12 @@ impl Game<'_> {
                 });
             }
             if d.announce && self.ui.rules.bool("show_advancement_messages") {
-                let (key, color) = match d.frame {
-                    Frame::Task => ("chat.type.advancement.task", text::GREEN),
-                    Frame::Goal => ("chat.type.advancement.goal", text::GREEN),
-                    Frame::Challenge => ("chat.type.advancement.challenge", text::DARK_PURPLE),
+                let key = match d.frame {
+                    Frame::Task => "chat.type.advancement.task",
+                    Frame::Goal => "chat.type.advancement.goal",
+                    Frame::Challenge => "chat.type.advancement.challenge",
                 };
-                let name = Text::literal("[")
-                    .append(text_of(&d.title))
-                    .append("]")
-                    .with_style(&Style {
-                        color: Some(color),
-                        ..Style::default()
-                    });
+                let name = adv_name(a);
                 self.system_message(Text::translate(
                     key,
                     &[Text::literal(super::chat::PLAYER_NAME), name],
@@ -602,6 +599,71 @@ impl Game<'_> {
         );
         batch.text_styled(atlas, &title, x + 30.0, 18.0, u32::MAX, false);
         self.draw_item(batch, &ItemStack::new(&icon, 1), x + 8.0, 8.0);
+    }
+}
+/// `Advancement.name`: the bracketed title in the frame's colour, with the
+/// description on hover; the id when there is no display.
+pub(super) fn adv_name(a: &adv::Advancement) -> Text {
+    let Some(d) = &a.display else {
+        return Text::literal(a.id.clone());
+    };
+    let color = match d.frame {
+        Frame::Challenge => text::DARK_PURPLE,
+        _ => text::GREEN,
+    };
+    let tooltip = text_of(&d.title)
+        .with_color(color)
+        .append("\n")
+        .append(text_of(&d.description));
+    let title = text_of(&d.title).with_style(&Style {
+        hover: Some(Box::new(tooltip)),
+        ..Style::default()
+    });
+    Text::literal("[")
+        .append(title)
+        .append("]")
+        .with_color(color)
+}
+impl Game<'_> {
+    /// `AdvancementCommands.Action.GRANT` on one advancement (or one of
+    /// its criteria): false when nothing changed.
+    pub(super) fn grant_advancement(&mut self, index: usize, criterion: Option<&str>) -> bool {
+        let tree = self.adv.tree.clone();
+        let a = &tree.list[index];
+        if criterion.is_none() && self.adv.progress.done(a) {
+            return false;
+        }
+        let names: Vec<&str> = match criterion {
+            Some(c) => vec![c],
+            None => a.criteria.iter().map(|c| c.name.as_str()).collect(),
+        };
+        let date = now_text();
+        let mut changed = false;
+        for c in names {
+            let was = self.adv.progress.done(a);
+            if self.adv.progress.grant(&a.id, c, &date) {
+                changed = true;
+                if !was && self.adv.progress.done(a) {
+                    self.award(index);
+                }
+            }
+        }
+        changed || criterion.is_none()
+    }
+    /// `AdvancementCommands.Action.REVOKE`.
+    pub(super) fn revoke_advancement(&mut self, index: usize, criterion: Option<&str>) -> bool {
+        let tree = self.adv.tree.clone();
+        let a = &tree.list[index];
+        match criterion {
+            Some(c) => self.adv.progress.revoke(&a.id, c),
+            None => {
+                let mut any = false;
+                for c in &a.criteria {
+                    any |= self.adv.progress.revoke(&a.id, &c.name);
+                }
+                any
+            }
+        }
     }
 }
 /// A text component from advancement JSON (`translate` or `text`).

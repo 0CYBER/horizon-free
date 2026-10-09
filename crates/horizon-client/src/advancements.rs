@@ -600,6 +600,301 @@ pub fn conditions(v: &Value, ctx: &Entities, w: &dyn World) -> bool {
     }
 }
 
+/// One node of `TreeNodePosition`, the Walker layout of a display tree.
+struct Place {
+    adv: usize,
+    parent: Option<usize>,
+    previous: Option<usize>,
+    child_index: i32,
+    children: Vec<usize>,
+    ancestor: usize,
+    thread: Option<usize>,
+    x: i32,
+    y: f32,
+    modifier: f32,
+    change: f32,
+    shift: f32,
+}
+struct Layout<'a> {
+    tree: &'a Tree,
+    kids: &'a [Vec<usize>],
+    nodes: Vec<Place>,
+}
+impl Layout<'_> {
+    fn build(
+        &mut self,
+        adv: usize,
+        parent: Option<usize>,
+        previous: Option<usize>,
+        child_index: i32,
+        depth: i32,
+    ) -> usize {
+        let me = self.nodes.len();
+        self.nodes.push(Place {
+            adv,
+            parent,
+            previous,
+            child_index,
+            children: Vec::new(),
+            ancestor: me,
+            thread: None,
+            x: depth,
+            y: -1.0,
+            modifier: 0.0,
+            change: 0.0,
+            shift: 0.0,
+        });
+        let mut prev = None;
+        for &c in &self.kids[adv] {
+            prev = self.add_child(me, c, prev);
+        }
+        me
+    }
+    fn add_child(&mut self, me: usize, adv: usize, mut prev: Option<usize>) -> Option<usize> {
+        if self.tree.list[adv].display.is_some() {
+            let index = self.nodes[me].children.len() as i32 + 1;
+            let depth = self.nodes[me].x + 1;
+            let c = self.build(adv, Some(me), prev, index, depth);
+            self.nodes[me].children.push(c);
+            Some(c)
+        } else {
+            for &g in &self.kids[adv] {
+                prev = self.add_child(me, g, prev);
+            }
+            prev
+        }
+    }
+    fn first_walk(&mut self, v: usize) {
+        let children = self.nodes[v].children.clone();
+        let previous = self.nodes[v].previous;
+        if children.is_empty() {
+            self.nodes[v].y = previous.map_or(0.0, |p| self.nodes[p].y + 1.0);
+            return;
+        }
+        let mut default_ancestor: Option<usize> = None;
+        for &c in &children {
+            self.first_walk(c);
+            default_ancestor = Some(self.apportion(c, default_ancestor.unwrap_or(c)));
+        }
+        self.execute_shifts(v);
+        let mid = (self.nodes[children[0]].y + self.nodes[children[children.len() - 1]].y) / 2.0;
+        if let Some(p) = previous {
+            self.nodes[v].y = self.nodes[p].y + 1.0;
+            self.nodes[v].modifier = self.nodes[v].y - mid;
+        } else {
+            self.nodes[v].y = mid;
+        }
+    }
+    fn second_walk(&mut self, v: usize, mod_sum: f32, depth: i32, mut min: f32) -> f32 {
+        self.nodes[v].y += mod_sum;
+        self.nodes[v].x = depth;
+        min = min.min(self.nodes[v].y);
+        let m = self.nodes[v].modifier;
+        for c in self.nodes[v].children.clone() {
+            min = self.second_walk(c, mod_sum + m, depth + 1, min);
+        }
+        min
+    }
+    fn third_walk(&mut self, v: usize, offset: f32) {
+        self.nodes[v].y += offset;
+        for c in self.nodes[v].children.clone() {
+            self.third_walk(c, offset);
+        }
+    }
+    fn execute_shifts(&mut self, v: usize) {
+        let (mut shift, mut change) = (0.0, 0.0);
+        for c in self.nodes[v].children.clone().into_iter().rev() {
+            let n = &mut self.nodes[c];
+            n.y += shift;
+            n.modifier += shift;
+            change += n.change;
+            shift += n.shift + change;
+        }
+    }
+    fn previous_or_thread(&self, v: usize) -> Option<usize> {
+        self.nodes[v]
+            .thread
+            .or_else(|| self.nodes[v].children.first().copied())
+    }
+    fn next_or_thread(&self, v: usize) -> Option<usize> {
+        self.nodes[v]
+            .thread
+            .or_else(|| self.nodes[v].children.last().copied())
+    }
+    fn apportion(&mut self, v: usize, mut default_ancestor: usize) -> usize {
+        let Some(previous) = self.nodes[v].previous else {
+            return default_ancestor;
+        };
+        let parent = self.nodes[v].parent.unwrap_or(v);
+        let (mut vir, mut vor, mut vil) = (v, v, previous);
+        let mut vol = self.nodes[parent].children[0];
+        let mut sir = self.nodes[v].modifier;
+        let mut sor = sir;
+        let mut sil = self.nodes[vil].modifier;
+        let mut sol = self.nodes[vol].modifier;
+        while let (Some(l), Some(r)) = (self.next_or_thread(vil), self.previous_or_thread(vir)) {
+            vil = l;
+            vir = r;
+            vol = self.previous_or_thread(vol).unwrap_or(vol);
+            vor = self.next_or_thread(vor).unwrap_or(vor);
+            self.nodes[vor].ancestor = v;
+            let shift = self.nodes[vil].y + sil - (self.nodes[vir].y + sir) + 1.0;
+            if shift > 0.0 {
+                let a = self.ancestor_of(vil, v, default_ancestor);
+                self.move_subtree(a, v, shift);
+                sir += shift;
+                sor += shift;
+            }
+            sil += self.nodes[vil].modifier;
+            sir += self.nodes[vir].modifier;
+            sol += self.nodes[vol].modifier;
+            sor += self.nodes[vor].modifier;
+        }
+        if let Some(l) = self.next_or_thread(vil)
+            && self.next_or_thread(vor).is_none()
+        {
+            self.nodes[vor].thread = Some(l);
+            self.nodes[vor].modifier += sil - sor;
+        } else {
+            if let Some(r) = self.previous_or_thread(vir)
+                && self.previous_or_thread(vol).is_none()
+            {
+                self.nodes[vol].thread = Some(r);
+                self.nodes[vol].modifier += sir - sol;
+            }
+            default_ancestor = v;
+        }
+        default_ancestor
+    }
+    fn move_subtree(&mut self, me: usize, right: usize, shift: f32) {
+        let subtrees = (self.nodes[right].child_index - self.nodes[me].child_index) as f32;
+        if subtrees != 0.0 {
+            self.nodes[right].change -= shift / subtrees;
+            self.nodes[me].change += shift / subtrees;
+        }
+        let r = &mut self.nodes[right];
+        r.shift += shift;
+        r.y += shift;
+        r.modifier += shift;
+    }
+    fn ancestor_of(&self, me: usize, other: usize, default_ancestor: usize) -> usize {
+        let a = self.nodes[me].ancestor;
+        let siblings = self.nodes[other]
+            .parent
+            .map(|p| &self.nodes[p].children[..])
+            .unwrap_or(&[]);
+        if siblings.contains(&a) {
+            a
+        } else {
+            default_ancestor
+        }
+    }
+}
+impl Tree {
+    /// Each advancement's children in `AdvancementTree.addAll` order: the
+    /// sorted list, a parent listed after its child inserting it a pass later.
+    pub fn children(&self) -> Vec<Vec<usize>> {
+        let mut kids = vec![Vec::new(); self.list.len()];
+        let mut inserted = vec![false; self.list.len()];
+        let mut pending: Vec<usize> = (0..self.list.len()).collect();
+        while !pending.is_empty() {
+            let before = pending.len();
+            pending.retain(|&i| {
+                let parent = match &self.list[i].parent {
+                    None => None,
+                    Some(p) => match self.by_id.get(p) {
+                        Some(&p) if inserted[p] => Some(p),
+                        _ => return true,
+                    },
+                };
+                if let Some(p) = parent {
+                    kids[p].push(i);
+                }
+                inserted[i] = true;
+                false
+            });
+            if pending.len() == before {
+                break;
+            }
+        }
+        kids
+    }
+    /// `AdvancementVisibilityEvaluator`: done advancements, their
+    /// ancestors, and unhidden ones within two levels of a done one.
+    pub fn visible(&self, kids: &[Vec<usize>], done: impl Fn(usize) -> bool) -> Vec<bool> {
+        #[derive(Clone, Copy, PartialEq)]
+        enum Rule {
+            Show,
+            Hide,
+            Same,
+        }
+        fn walk(
+            tree: &Tree,
+            kids: &[Vec<usize>],
+            done: &dyn Fn(usize) -> bool,
+            i: usize,
+            stack: &mut Vec<Rule>,
+            out: &mut [bool],
+        ) -> bool {
+            let me = done(i);
+            let rule = match &tree.list[i].display {
+                None => Rule::Hide,
+                Some(_) if me => Rule::Show,
+                Some(d) if d.hidden => Rule::Hide,
+                Some(_) => Rule::Same,
+            };
+            let mut any = me;
+            stack.push(rule);
+            for &c in &kids[i] {
+                any |= walk(tree, kids, done, c, stack, out);
+            }
+            let near = stack
+                .iter()
+                .rev()
+                .take(3)
+                .find(|r| **r != Rule::Same)
+                .is_some_and(|r| *r == Rule::Show);
+            stack.pop();
+            out[i] = any || near;
+            any
+        }
+        let mut out = vec![false; self.list.len()];
+        for (i, a) in self.list.iter().enumerate() {
+            if a.parent.is_none() {
+                let mut stack = vec![Rule::Same; 3];
+                walk(self, kids, &done, i, &mut stack, &mut out);
+            }
+        }
+        out
+    }
+    /// `AdvancementTree.repositionNodes`: (column, row) of every displayed
+    /// advancement under a displayed root.
+    pub fn layout(&self) -> Vec<Option<(i32, f32)>> {
+        let kids = self.children();
+        let mut out = vec![None; self.list.len()];
+        for (i, a) in self.list.iter().enumerate() {
+            if a.parent.is_some() || a.display.is_none() {
+                continue;
+            }
+            let mut l = Layout {
+                tree: self,
+                kids: &kids,
+                nodes: Vec::new(),
+            };
+            let root = l.build(i, None, None, 1, 0);
+            l.first_walk(root);
+            let y = l.nodes[root].y;
+            let min = l.second_walk(root, 0.0, 0, y);
+            if min < 0.0 {
+                l.third_walk(root, -min);
+            }
+            for n in &l.nodes {
+                out[n.adv] = Some((n.x, n.y));
+            }
+        }
+        out
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,5 +974,47 @@ mod tests {
         assert!(!p.done(&a));
         p.grant("minecraft:t", "b", "now");
         assert!(p.done(&a));
+    }
+    #[test]
+    fn layout_spreads_children_like_tree_node_position() {
+        let mut tree = Tree::default();
+        let shown = Display {
+            icon: String::new(),
+            title: Value::Null,
+            description: Value::Null,
+            frame: Frame::Task,
+            background: None,
+            show_toast: true,
+            announce: true,
+            hidden: false,
+        };
+        // Sorted ids; "b" names a parent that sorts after it.
+        for (id, parent) in [
+            ("a", Some("r")),
+            ("b", Some("e")),
+            ("c", Some("a")),
+            ("d", Some("a")),
+            ("e", Some("r")),
+            ("r", None),
+        ] {
+            tree.by_id.insert(id.into(), tree.list.len());
+            tree.list.push(Advancement {
+                id: id.into(),
+                parent: parent.map(Into::into),
+                display: Some(shown.clone()),
+                criteria: Vec::new(),
+                requirements: Vec::new(),
+                rewards: Rewards::default(),
+            });
+        }
+        let kids = tree.children();
+        assert_eq!(kids[5], vec![0, 4]);
+        let l = tree.layout();
+        assert_eq!(l[5], Some((0, 1.25)));
+        assert_eq!(l[0], Some((1, 0.5)));
+        assert_eq!(l[2], Some((2, 0.0)));
+        assert_eq!(l[3], Some((2, 1.0)));
+        assert_eq!(l[4], Some((1, 2.0)));
+        assert_eq!(l[1], Some((2, 2.0)));
     }
 }

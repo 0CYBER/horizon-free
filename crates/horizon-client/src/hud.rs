@@ -275,6 +275,68 @@ impl HudBatch {
             self.rect_uv(x, y, w, r.h as f32, r, u32::MAX);
         }
     }
+    /// Clip the quads drawn since `start` to `[x0, x1) x [y0, y1)` (the
+    /// GUI scissor): axis-aligned quads are cut with their UVs, others are
+    /// kept or dropped by their centre.
+    pub fn clip_since(&mut self, start: usize, x0: f32, y0: f32, x1: f32, y1: f32) {
+        let quads: Vec<[HudVertex; 6]> = self.vertices[start..].as_chunks::<6>().0.to_vec();
+        self.vertices.truncate(start);
+        for q in quads {
+            let (a, b, c, d) = (q[0], q[1], q[2], q[5]);
+            let aligned = a.pos[1] == b.pos[1]
+                && a.pos[0] == d.pos[0]
+                && c.pos[0] == b.pos[0]
+                && c.pos[1] == d.pos[1];
+            if !aligned {
+                let cx = (a.pos[0] + c.pos[0]) / 2.0;
+                let cy = (a.pos[1] + c.pos[1]) / 2.0;
+                if cx >= x0 && cx < x1 && cy >= y0 && cy < y1 {
+                    self.vertices.extend_from_slice(&q);
+                }
+                continue;
+            }
+            let (px0, py0, px1, py1) = (a.pos[0], a.pos[1], c.pos[0], c.pos[1]);
+            let (cx0, cy0) = (px0.max(x0), py0.max(y0));
+            let (cx1, cy1) = (px1.min(x1), py1.min(y1));
+            if cx0 >= cx1 || cy0 >= cy1 {
+                continue;
+            }
+            let lerp = |t0: f32, t1: f32, p: f32, lo: f32, hi: f32| {
+                if hi == lo {
+                    t0
+                } else {
+                    t0 + (t1 - t0) * (p - lo) / (hi - lo)
+                }
+            };
+            let u = |x: f32| lerp(a.uv[0], c.uv[0], x, px0, px1);
+            let v = |y: f32| lerp(a.uv[1], c.uv[1], y, py0, py1);
+            self.quad(
+                [[cx0, cy0], [cx1, cy0], [cx1, cy1], [cx0, cy1]],
+                [
+                    [u(cx0), v(cy0)],
+                    [u(cx1), v(cy0)],
+                    [u(cx1), v(cy1)],
+                    [u(cx0), v(cy1)],
+                ],
+                a.color,
+            );
+        }
+    }
+    /// `blit` of the top-left `w x h` texels of a `tw x th` texture.
+    pub fn sprite_region(
+        &mut self,
+        atlas: &HudAtlas,
+        name: &str,
+        [x, y, w, h]: [f32; 4],
+        tw: f32,
+        th: f32,
+    ) {
+        if let Some(mut r) = atlas.sprites.get(name).copied() {
+            r.u1 = r.u0 + (r.u1 - r.u0) * w / tw;
+            r.v1 = r.v0 + (r.v1 - r.v0) * h / th;
+            self.rect_uv(x, y, w, h, r, u32::MAX);
+        }
+    }
     pub fn fill(&mut self, atlas: &HudAtlas, x: f32, y: f32, w: f32, h: f32, color: u32) {
         let mut r = atlas.white;
         let (cu, cv) = ((r.u0 + r.u1) / 2.0, (r.v0 + r.v1) / 2.0);
