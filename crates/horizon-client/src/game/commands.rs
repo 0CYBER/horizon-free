@@ -6,6 +6,7 @@ pub(super) mod execute;
 mod items;
 mod misc;
 mod place;
+mod raid;
 mod terrain_cmds;
 mod text_commands;
 mod world_cmds;
@@ -496,6 +497,7 @@ impl Game<'_> {
             | "teleport.targets.location"
             | "teleport.targets.destination" => self.cmd_teleport(id, ctx),
             id if id.starts_with("time.") => self.cmd_time(id, ctx),
+            id if id.starts_with("raid.") => self.cmd_raid(id, ctx),
             "weather" => self.cmd_weather(ctx),
             "kill" => self.cmd_kill(ctx),
             "summon" => self.cmd_summon(ctx),

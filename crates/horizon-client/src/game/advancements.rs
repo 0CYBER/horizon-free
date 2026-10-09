@@ -20,6 +20,26 @@ pub(super) struct Toast {
     frame: Frame,
     title: Text,
     shown: Option<Instant>,
+    /// A `RecipeToast`: the icon is a recipe result.
+    recipe: bool,
+}
+impl Toast {
+    pub(super) fn is_recipe(&self) -> bool {
+        self.recipe
+    }
+    pub(super) fn was_shown(&self) -> bool {
+        self.shown.is_some()
+    }
+    /// `RecipeToast`: "New Recipe(s) Unlocked!" with the recipe's result.
+    pub(super) fn recipe(icon: &str) -> Self {
+        Self {
+            icon: icon.to_owned(),
+            frame: Frame::Task,
+            title: Text::literal(""),
+            shown: None,
+            recipe: true,
+        }
+    }
 }
 #[derive(Default)]
 pub(super) struct AdvState {
@@ -27,7 +47,7 @@ pub(super) struct AdvState {
     pub(super) progress: Progress,
     loaded: bool,
     pub(super) recipes: BTreeSet<String>,
-    toasts: VecDeque<Toast>,
+    pub(super) toasts: VecDeque<Toast>,
     /// Awards skip the toast (`/advancement grant ... everything`).
     pub(super) quiet: bool,
     /// The inventory last seen by `inventory_changed`.
@@ -297,12 +317,26 @@ impl Game<'_> {
         }
     }
     pub(super) fn mob_entity(&self, m: &horizon_client::mobs::Mob) -> EntityView {
+        // mainhand, offhand, head, chest, legs, feet.
+        let slot = |i: &Option<std::sync::Arc<str>>| {
+            i.as_ref().map(|id| item_view(&ItemStack::new(id, 1)))
+        };
+        let mut equipment: [Option<ItemView>; 7] = Default::default();
+        if !horizon_client::mobs::equine::is_equine(m.species()) {
+            equipment[0] = slot(&m.extra.main_hand);
+            equipment[1] = slot(&m.extra.off_hand);
+            equipment[2] = slot(&m.extra.head);
+            equipment[3] = slot(&m.extra.chest);
+            equipment[4] = slot(&m.extra.legs);
+            equipment[5] = slot(&m.extra.feet);
+        }
         EntityView {
             kind: m.kind.id.clone(),
             position: [m.position.x, m.position.y, m.position.z],
             on_fire: m.fire_ticks > 0,
             baby: m.is_baby(),
             on_ground: m.on_ground,
+            equipment,
             ..Default::default()
         }
     }
@@ -375,6 +409,7 @@ impl Game<'_> {
                     frame: d.frame,
                     title: text_of(&d.title),
                     shown: None,
+                    recipe: false,
                 });
             }
             if d.announce && self.ui.rules.bool("show_advancement_messages") {
@@ -390,6 +425,7 @@ impl Game<'_> {
                 ));
             }
         }
+        self.recipe_toast(&unlocked);
         for r in unlocked {
             self.trigger("minecraft:recipe_unlocked", |c, _| {
                 c["recipes"].as_str() == Some(r.as_str())
@@ -612,7 +648,20 @@ impl Game<'_> {
         } else {
             1.0
         };
-        let (title, frame, icon) = (t.title.clone(), t.frame, t.icon.clone());
+        let (title, frame, icon, recipe) = (t.title.clone(), t.frame, t.icon.clone(), t.recipe);
+        if recipe {
+            // RecipeToast: black description under a purple title.
+            let atlas = &self.res.atlas;
+            let x = batch.width - 160.0 * slide;
+            batch.sprite(atlas, "gui/sprites/toast/recipe", x, 0.0);
+            let title = self.translate("recipe.toast.title", "New Recipe(s) Unlocked!");
+            let description = self.translate("recipe.toast.description", "Check your recipe book");
+            let atlas = &self.res.atlas;
+            batch.text(atlas, &title, x + 30.0, 7.0, 0xFF50_0050, false);
+            batch.text(atlas, &description, x + 30.0, 18.0, 0xFF00_0000, false);
+            self.draw_item(batch, &ItemStack::new(&icon, 1), x + 8.0, 8.0);
+            return;
+        }
         if frame == Frame::Challenge && ms < 50.0 {
             self.audio
                 .play("minecraft:ui.toast.challenge_complete", None, 1.0, 1.0);

@@ -9,6 +9,7 @@ use std::f32::consts::PI;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anim {
     Allay,
+    Creaking,
     Camel,
     Wither,
     Vex,
@@ -346,6 +347,7 @@ pub fn setup(
     match m.kind.anim {
         Anim::Camel => super::camel::anim(m, s, p, w_anims),
         Anim::Allay => super::allay::anim(m, s, p),
+        Anim::Creaking => super::creaking::anim(m, s, p, w_anims),
         Anim::Squid | Anim::Fish | Anim::Pufferfish | Anim::Dolphin => {
             super::aquatic::anim(m, s, p)
         }

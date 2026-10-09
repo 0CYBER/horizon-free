@@ -786,7 +786,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 );
                 Some(table.set_text(default, p.orientation, &orientation))
             }
-            Class::CreakingHeart | Class::RotatedPillar | Class::InfestedRotatedPillar => {
+            Class::CreakingHeart => {
+                let state =
+                    table.set_text(default, p.axis, super::states::axis_name(axis_of(ctx.face)));
+                Some(self.heart_placement(state, ctx.pos))
+            }
+            Class::RotatedPillar | Class::InfestedRotatedPillar => {
                 Some(table.set_text(default, p.axis, super::states::axis_name(axis_of(ctx.face))))
             }
             Class::DecoratedPot => {

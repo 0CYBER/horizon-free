@@ -53,6 +53,10 @@ pub struct ItemInfo {
     pub glider: bool,
     /// `equippable.swappable` and `equip_sound`.
     pub swappable: bool,
+    /// `equippable.dispensable` (dispensers may put it on an entity).
+    pub equip_dispensable: bool,
+    /// `equippable.allowed_entities` resolved to entity type ids; None allows all.
+    pub equip_allowed: Option<HashSet<String>>,
     pub equip_sound: Option<String>,
     /// `jukebox_playable`: the jukebox song it plays.
     pub jukebox_song: Option<String>,
@@ -251,6 +255,13 @@ pub(crate) fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashS
         })
         .collect())
 }
+/// An entity type id or `#tag` as the set of entity type ids it names.
+fn entity_spec(tags: &HashMap<String, HashSet<String>>, spec: &str) -> HashSet<String> {
+    match spec.strip_prefix('#') {
+        Some(tag) => tags.get(tag).cloned().unwrap_or_default(),
+        None => HashSet::from([spec.to_owned()]),
+    }
+}
 impl Items {
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> Result<Self> {
         let raw: BTreeMap<String, Value> =
@@ -264,6 +275,7 @@ impl Items {
                     .or_insert(BlockStateId(i as u32));
             }
         }
+        let entity_tags = load_tags(root, "entity_type")?;
         let mut items = HashMap::new();
         let mut order = Vec::new();
         for (name, c) in &raw {
@@ -323,6 +335,19 @@ impl Items {
                     swappable: c["minecraft:equippable"]["swappable"]
                         .as_bool()
                         .unwrap_or(true),
+                    equip_dispensable: c["minecraft:equippable"]["dispensable"]
+                        .as_bool()
+                        .unwrap_or(true),
+                    equip_allowed: match &c["minecraft:equippable"]["allowed_entities"] {
+                        Value::String(spec) => Some(entity_spec(&entity_tags, spec)),
+                        Value::Array(list) => Some(
+                            list.iter()
+                                .filter_map(Value::as_str)
+                                .flat_map(|spec| entity_spec(&entity_tags, spec))
+                                .collect(),
+                        ),
+                        _ => None,
+                    },
                     equip_sound: c["minecraft:equippable"]["equip_sound"]
                         .as_str()
                         .map(str::to_owned),

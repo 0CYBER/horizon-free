@@ -83,6 +83,7 @@ pub enum Species {
     Wither,
     Camel,
     Allay,
+    Creaking,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -912,6 +913,20 @@ pub const ALL: &[Def] = &[
             "entity.allay.death"
         ],
         None,
+        Baby::None
+    ),
+    def!(
+        Creaking,
+        "creaking",
+        "creaking#main",
+        "entity/creaking/creaking",
+        A::Creaking,
+        [
+            "entity.creaking.ambient",
+            "entity.generic.hurt",
+            "entity.creaking.death"
+        ],
+        Some("entity.creaking.step"),
         Baby::None
     ),
     def!(

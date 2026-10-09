@@ -19,6 +19,18 @@ pub fn register(m: &mut Mob) {
     g.add(3, LookAtPlayer::new(8.0));
     g.add(3, RandomLookAround::default());
     m.ai.targets.add(1, HurtByTarget::new());
+    // NearestHealableRaiderTargetGoal: in a raid, go and heal the other raiders.
+    m.ai.targets.add(
+        2,
+        NearestTarget::new(
+            super::goals::Prey::Filter(|s| {
+                super::raider::is_raider(s.species) && s.species != Species::Witch
+            }),
+            true,
+        )
+        .interval(1)
+        .when(|m, _| super::raider::has_active_raid(m)),
+    );
     m.ai.targets
         .add(3, NearestTarget::player(true).interval(10));
 }
@@ -129,7 +141,23 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         })
         .map_or(20.0, |s| s.health)
     };
-    let (effect, ticks, amplifier) = if dist >= 8.0 {
+    // A raider target is healed instead: Healing when nearly dead, else
+    // Regeneration, and the witch drops the target afterwards.
+    let heals = match who {
+        Who::Mob(id) => {
+            cx.w.seen(id)
+                .is_some_and(|s| super::raider::is_raider(s.species))
+        }
+        Who::Player => false,
+    };
+    let (effect, ticks, amplifier) = if heals {
+        m.ai.target = None;
+        if health <= 4.0 {
+            ("minecraft:instant_health", 1, 0)
+        } else {
+            ("minecraft:regeneration", 900, 0)
+        }
+    } else if dist >= 8.0 {
         ("minecraft:slowness", 1800, 0)
     } else if health >= 8.0 {
         ("minecraft:poison", 900, 0)
