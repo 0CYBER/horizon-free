@@ -534,28 +534,13 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return;
         };
-        let key = cause.unwrap_or_else(|| {
-            let feet = [
-                p.position.x.floor() as i32,
-                p.position.y.floor() as i32,
-                p.position.z.floor() as i32,
-            ];
-            let fluid = self
-                .res
-                .facts
-                .get(self.world.block(feet[0], feet[1], feet[2]))
-                .fluid;
-            if p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64) {
-                "death.attack.outOfWorld".into()
-            } else if fluid == horizon_client::blocks::Fluid::Lava {
-                "death.attack.lava".into()
-            } else if p.fall_distance > 3.0 || p.ground.on_ground && p.velocity.y < -0.5 {
-                "death.attack.fall".into()
-            } else {
-                "death.attack.generic".into()
+        let message = match cause {
+            Some(key) => Text::translate(&key, &[Text::literal(PLAYER_NAME)]),
+            None if p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64) => {
+                Text::translate("death.attack.outOfWorld", &[Text::literal(PLAYER_NAME)])
             }
-        });
-        let message = Text::translate(&key, &[Text::literal(PLAYER_NAME)]);
+            None => self.combat_death_message(),
+        };
         self.ui.death_text = Some(message.clone());
         self.system_message(message);
     }

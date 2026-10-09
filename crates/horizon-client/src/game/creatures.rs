@@ -642,7 +642,21 @@ impl Game<'_> {
                     self.mob_hits_player(amount, from, "minecraft:mob_attack")
                 }
                 MobEvent::Shoot(..) => {}
-                MobEvent::Explode(at, radius) => self.explode(at, radius)?,
+                MobEvent::Explode(at, radius) => {
+                    // The exploding mob causes the damage (Creeper.explodeCreeper).
+                    if let Some(id) = self
+                        .mobs
+                        .iter()
+                        .filter(|m| {
+                            (m.position.x - at[0]).powi(2) + (m.position.z - at[2]).powi(2) < 1.0
+                        })
+                        .map(|m| m.id)
+                        .next()
+                    {
+                        self.note_attacker("minecraft:explosion", id);
+                    }
+                    self.explode(at, radius)?
+                }
                 MobEvent::AttackMob {
                     target,
                     amount,
@@ -847,6 +861,11 @@ impl Game<'_> {
                     .map(|m| m.id)
             })
             .flatten();
+        // The causing entity for the death message.
+        let owner = self.combat.projectile_owner.take();
+        if let Some(a) = attacker.or(owner) {
+            self.note_attacker(damage_type, a);
+        }
         let mut outcome = horizon_client::health::BlockOutcome::default();
         if let Some(player) = self.player.as_mut()
             && let Some(id) = self.motion.health.damage.id(damage_type)
@@ -980,6 +999,10 @@ impl Game<'_> {
         Ok(())
     }
     fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
+        self.combat.projectile_owner = match p.owner {
+            Some(Who::Mob(id)) => Some(id),
+            _ => None,
+        };
         let at = match hit {
             Hit::Entity { at, .. } | Hit::Block { at, .. } => at,
             Hit::None => return Ok(()),

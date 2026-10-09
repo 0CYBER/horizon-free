@@ -7,6 +7,7 @@ mod boats;
 mod books;
 mod cartography;
 mod chat;
+mod combat;
 mod commands;
 mod control;
 mod creatures;
@@ -607,6 +608,7 @@ struct Game<'a> {
     /// Connected to a server: the world comes from the network (game/remote.rs).
     remote: Option<remote::Remote>,
     ui: chat::UiState,
+    combat: combat::CombatTracker,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -2240,6 +2242,7 @@ impl Game<'_> {
         self.previous_eye = self.eye;
         self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
+        self.record_combat(&events);
         for event in events {
             match event {
                 MotionEvent::Emission {
@@ -7454,6 +7457,7 @@ pub fn run() -> Result<()> {
         persist: Default::default(),
         remote: None,
         ui: Default::default(),
+        combat: Default::default(),
     };
     game.ui.vanilla_root = vanilla_root;
     game.res.atlas.font.uniform = game.settings.force_unicode;

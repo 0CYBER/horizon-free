@@ -1,0 +1,219 @@
+//! The player's `CombatTracker`: the damage taken lately, who dealt it and
+//! where the player fell from, turned into the vanilla death message.
+use super::{Game, chat::PLAYER_NAME};
+use horizon_client::{health::HealthEvent, motion::MotionEvent, text::Text};
+
+struct Entry {
+    damage_type: String,
+    damage: f32,
+    fall_location: Option<&'static str>,
+    fall_distance: f32,
+    /// The causing entity: its id (for comparisons) and display name.
+    attacker: Option<(u32, Text)>,
+}
+#[derive(Default)]
+pub(super) struct CombatTracker {
+    entries: Vec<Entry>,
+    last_damage: i64,
+    in_combat: bool,
+    /// Attackers of damage dealt this tick, claimed by the matching
+    /// `RecordedDamage` event.
+    pending: Vec<(String, (u32, Text))>,
+    /// `LivingEntity.lastHurtByMob` and its timestamp (the kill credit).
+    last_hurt_by: Option<((u32, Text), i64)>,
+    /// The mob whose projectile is hitting the player now.
+    pub(super) projectile_owner: Option<u32>,
+    /// The player's fall distance before this tick's movement (as of the
+    /// end of the last one).
+    fall_before: f64,
+}
+impl Game<'_> {
+    /// The display name of a mob: its custom name or its type's name.
+    pub(super) fn mob_display_name(&self, id: u32) -> Option<Text> {
+        let m = self.mobs.iter().find(|m| m.id == id)?;
+        Some(match &m.custom_name {
+            Some(name) => Text::literal(name.clone()),
+            None => Text::translate(&format!("entity.{}", m.kind.id.replace(':', ".")), &[]),
+        })
+    }
+    /// Remember who deals the next `damage_type` damage to the player.
+    pub(super) fn note_attacker(&mut self, damage_type: &str, mob: u32) {
+        if let Some(name) = self.mob_display_name(mob) {
+            self.combat
+                .pending
+                .push((damage_type.to_owned(), (mob, name)));
+        }
+    }
+    /// `CombatTracker.recordDamage` for the motion events of this tick.
+    pub(super) fn record_combat(&mut self, events: &[MotionEvent]) {
+        self.recheck_combat();
+        for e in events {
+            let (name, amount) = match e {
+                MotionEvent::Health(HealthEvent::RecordedDamage { source, amount }) => {
+                    let Some(d) = self.motion.health.damage.definition(*source) else {
+                        continue;
+                    };
+                    (d.name.clone(), *amount)
+                }
+                MotionEvent::Health(HealthEvent::StarvationDamage(amount)) => {
+                    ("minecraft:starve".to_owned(), *amount)
+                }
+                _ => continue,
+            };
+            let attacker = self
+                .combat
+                .pending
+                .iter()
+                .position(|(t, _)| *t == name)
+                .map(|i| self.combat.pending.remove(i).1);
+            let (fall_location, fall_distance) = self.fall_location();
+            let now = self.world.game_time;
+            if let Some(a) = &attacker {
+                self.combat.last_hurt_by = Some((a.clone(), now));
+                if !self.combat.in_combat {
+                    self.combat.in_combat = true;
+                }
+            }
+            self.combat.entries.push(Entry {
+                damage_type: name,
+                damage: amount,
+                fall_location,
+                fall_distance,
+                attacker,
+            });
+            self.combat.last_damage = now;
+        }
+        self.combat.pending.clear();
+        self.combat.fall_before = self.player.as_ref().map_or(0.0, |p| p.fall_distance);
+    }
+    /// `FallLocation.getCurrentFallLocation` and the fall distance so far.
+    fn fall_location(&self) -> (Option<&'static str>, f32) {
+        let Some(p) = self.player.as_ref() else {
+            return (None, 0.0);
+        };
+        let distance = p.fall_distance.max(self.combat.fall_before) as f32;
+        let location = if let Some(c) = p.last_climbable {
+            let name = self
+                .res
+                .facts
+                .get(self.world.block(c.x, c.y, c.z))
+                .name
+                .clone();
+            Some(match &*name {
+                "minecraft:ladder" => "ladder",
+                "minecraft:vine" => "vines",
+                "minecraft:weeping_vines" | "minecraft:weeping_vines_plant" => "weeping_vines",
+                "minecraft:twisting_vines" | "minecraft:twisting_vines_plant" => "twisting_vines",
+                "minecraft:scaffolding" => "scaffolding",
+                _ => "other_climbable",
+            })
+        } else {
+            let f = self.res.facts.get(self.world.block(
+                p.position.x.floor() as i32,
+                (p.position.y + 0.1).floor() as i32,
+                p.position.z.floor() as i32,
+            ));
+            (f.fluid == horizon_client::blocks::Fluid::Water || f.waterlogged).then_some("water")
+        };
+        (location, distance)
+    }
+    /// `CombatTracker.recheckStatus`: forget old fights.
+    fn recheck_combat(&mut self) {
+        let reset = if self.combat.in_combat { 300 } else { 100 };
+        if !self.combat.entries.is_empty() && self.world.game_time - self.combat.last_damage > reset
+        {
+            self.combat.entries.clear();
+            self.combat.in_combat = false;
+        }
+    }
+    fn damage_in_tag(&self, name: &str, tag: &str) -> bool {
+        let damage = &self.motion.health.damage;
+        damage.id(name).is_some_and(|id| {
+            damage.in_tag(id, tag) || damage.in_tag(id, &format!("minecraft:{tag}"))
+        })
+    }
+    /// `CombatTracker.getMostSignificantFall`.
+    fn most_significant_fall(&self) -> Option<usize> {
+        let (mut result, mut alternative) = (None, None);
+        let (mut best_fall, mut alt_damage) = (0.0f32, 0.0f32);
+        for (i, e) in self.combat.entries.iter().enumerate() {
+            let fake = self.damage_in_tag(&e.damage_type, "always_most_significant_fall");
+            let distance = if fake { f32::MAX } else { e.fall_distance };
+            if (self.damage_in_tag(&e.damage_type, "is_fall") || fake)
+                && distance > 0.0
+                && (result.is_none() || distance > best_fall)
+            {
+                result = Some(i.saturating_sub(1));
+                best_fall = distance;
+            }
+            if e.fall_location.is_some() && (alternative.is_none() || e.damage > alt_damage) {
+                alternative = Some(i);
+                alt_damage = e.damage;
+            }
+        }
+        if best_fall > 5.0 && result.is_some() {
+            result
+        } else if alt_damage > 5.0 {
+            alternative
+        } else {
+            None
+        }
+    }
+    /// `CombatTracker.getDeathMessage`.
+    pub(super) fn combat_death_message(&mut self) -> Text {
+        self.recheck_combat();
+        let me = Text::literal(PLAYER_NAME);
+        let entries = std::mem::take(&mut self.combat.entries);
+        self.combat.in_combat = false;
+        let Some(killing) = entries.last() else {
+            return Text::translate("death.attack.generic", &[me]);
+        };
+        let def = self
+            .motion
+            .health
+            .damage
+            .id(&killing.damage_type)
+            .and_then(|id| self.motion.health.damage.definition(id))
+            .map(|d| (d.message_id.clone(), d.death_message_type.clone()))
+            .unwrap_or_else(|| ("generic".into(), "default".into()));
+        self.combat.entries = entries;
+        let knock = self.most_significant_fall();
+        let entries = std::mem::take(&mut self.combat.entries);
+        let killing = entries.last().expect("checked above");
+        let killer = killing.attacker.clone();
+        if def.1 == "fall_variants"
+            && let Some(knock) = knock.and_then(|i| entries.get(i))
+        {
+            let fall = self.damage_in_tag(&knock.damage_type, "is_fall")
+                || self.damage_in_tag(&knock.damage_type, "always_most_significant_fall");
+            if fall {
+                let at = knock.fall_location.unwrap_or("generic");
+                return Text::translate(&format!("death.fell.accident.{at}"), &[me]);
+            }
+            return match (&knock.attacker, &killer) {
+                (Some(a), k) if k.as_ref().is_none_or(|k| k.0 != a.0) => {
+                    Text::translate("death.fell.assist", &[me, a.1.clone()])
+                }
+                (_, Some(k)) => Text::translate("death.fell.finish", &[me, k.1.clone()]),
+                _ => Text::translate("death.fell.killer", &[me]),
+            };
+        }
+        let key = format!("death.attack.{}", def.0);
+        if def.1 == "intentional_game_design" {
+            let link = Text::literal("[")
+                .append(Text::translate(&format!("{key}.link"), &[]))
+                .append(Text::literal("]"));
+            return Text::translate(&format!("{key}.message"), &[me, link]);
+        }
+        if let Some((_, name)) = killer {
+            return Text::translate(&key, &[me, name]);
+        }
+        // getKillCredit: the last mob that hurt the player in the past 100 ticks.
+        if let Some(((_, name), at)) = &self.combat.last_hurt_by
+            && self.world.game_time - at <= 100
+        {
+            return Text::translate(&format!("{key}.player"), &[me, name.clone()]);
+        }
+        Text::translate(&key, &[me])
+    }
+}
