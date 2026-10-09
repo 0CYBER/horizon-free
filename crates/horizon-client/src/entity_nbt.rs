@@ -372,6 +372,10 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         for (slot, item) in [
             ("mainhand", &m.extra.main_hand),
             ("offhand", &m.extra.off_hand),
+            ("head", &m.extra.head),
+            ("chest", &m.extra.chest),
+            ("legs", &m.extra.legs),
+            ("feet", &m.extra.feet),
         ] {
             match item {
                 Some(id) => {
@@ -432,6 +436,13 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             .get("offhand")
             .and_then(|i| text(i.get("id")))
             .map(Into::into);
+        if !crate::mobs::equine::is_equine(m.species()) {
+            let slot = |key| eq.get(key).and_then(|i| text(i.get("id"))).map(Into::into);
+            m.extra.head = slot("head");
+            m.extra.chest = slot("chest");
+            m.extra.legs = slot("legs");
+            m.extra.feet = slot("feet");
+        }
     }
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
     m.persistent = flag(tag, "PersistenceRequired");

@@ -56,6 +56,11 @@ impl Game<'_> {
             extras.fluid_ticks.clear();
         }
         extras.last_update = time;
+        if let Some(t) = self.world.inhabited.get(&(chunk.x, chunk.z)) {
+            extras
+                .root
+                .insert("InhabitedTime".into(), horizon_world::nbt::Tag::Long(*t));
+        }
         chunk.saved = Some(Arc::new(extras));
     }
     /// Register a newly resident chunk with the tick scheduler, with the
@@ -63,6 +68,13 @@ impl Game<'_> {
     pub(super) fn register_chunk_ticks(&mut self, key: (i32, i32)) {
         let pos = ChunkPos::new(key.0, key.1);
         let saved = self.world.chunks.get(&key).and_then(|c| c.saved.clone());
+        // ChunkAccess.inhabitedTime as saved.
+        if let Some(Tag::Long(t)) = saved
+            .as_deref()
+            .and_then(|s| s.root.get(&"InhabitedTime".into()))
+        {
+            self.world.inhabited.insert(key, *t);
+        }
         let (blocks, fluids) = saved.as_deref().map_or((Vec::new(), Vec::new()), |s| {
             (s.block_ticks.clone(), s.fluid_ticks.clone())
         });
@@ -221,7 +233,13 @@ impl Game<'_> {
                                     m.position.y.floor() as i32,
                                     m.position.z.floor() as i32,
                                 );
-                                horizon_client::mobs::spawning::finalize(&mut m, &facts);
+                                let at = [m.position.x, m.position.y, m.position.z];
+                                let difficulty = self.local_difficulty(at);
+                                horizon_client::mobs::spawning::finalize(
+                                    &mut m,
+                                    &facts,
+                                    &difficulty,
+                                );
                                 // Cat.finalizeSpawn: black in #cats_spawn_as_black.
                                 if m.species() == horizon_client::mobs::Species::Cat {
                                     let p = [

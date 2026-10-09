@@ -26,6 +26,9 @@ pub struct World {
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
     pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
+    /// `ChunkAccess.inhabitedTime` of resident chunks: ticks a player spent
+    /// within spawning range (local difficulty).
+    pub inhabited: HashMap<(i32, i32), i64>,
     pub game_time: i64,
     pub day_time: i64,
     pub weather: Weather,
@@ -103,6 +106,7 @@ impl World {
             loaded_entities: Vec::new(),
             modified: HashSet::new(),
             block_entities: HashMap::new(),
+            inhabited: HashMap::new(),
             game_time: 0,
             day_time: 1000,
             weather: Weather::default(),

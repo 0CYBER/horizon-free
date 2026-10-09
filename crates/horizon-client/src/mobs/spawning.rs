@@ -180,7 +180,111 @@ pub fn spawn_rules_ok(
     }
 }
 /// Mob.finalizeSpawn for natural, chunk-generation and summoned mobs.
-pub fn finalize(m: &mut Mob, biome: &BiomeFacts) {
+/// `DifficultyInstance`: the local difficulty at a position.
+#[derive(Clone, Copy, Debug)]
+pub struct LocalDifficulty {
+    pub effective: f32,
+    /// The world difficulty is hard.
+    pub hard: bool,
+}
+/// `DimensionType.MOON_BRIGHTNESS_PER_PHASE`.
+pub const MOON_BRIGHTNESS: [f32; 8] = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75];
+impl LocalDifficulty {
+    /// `calculateDifficulty` from the difficulty id (0 peaceful to 3 hard),
+    /// the overworld clock, the chunk's inhabited time and the moon.
+    pub fn new(base: u8, total: i64, inhabited: i64, moon: f32) -> Self {
+        let hard = base == 3;
+        if base == 0 {
+            return Self {
+                effective: 0.0,
+                hard,
+            };
+        }
+        let global = ((total as f32 - 72000.0) / 1_440_000.0).clamp(0.0, 1.0) * 0.25;
+        let mut local =
+            (inhabited as f32 / 3_600_000.0).clamp(0.0, 1.0) * if hard { 1.0 } else { 0.75 };
+        local += (moon * 0.25).clamp(0.0, global);
+        if base == 1 {
+            local *= 0.5;
+        }
+        Self {
+            effective: f32::from(base) * (0.75 + global + local),
+            hard,
+        }
+    }
+    /// `getSpecialMultiplier`.
+    pub fn special(&self) -> f32 {
+        if self.effective < 2.0 {
+            0.0
+        } else if self.effective > 4.0 {
+            1.0
+        } else {
+            (self.effective - 2.0) / 2.0
+        }
+    }
+}
+/// The armour and toughness each vanilla armour piece adds.
+pub fn armor_stats(item: &str) -> (f32, f32) {
+    let Some(name) = item.strip_prefix("minecraft:") else {
+        return (0.0, 0.0);
+    };
+    let slot = ["helmet", "chestplate", "leggings", "boots"]
+        .iter()
+        .position(|p| name.ends_with(p));
+    let Some(slot) = slot else { return (0.0, 0.0) };
+    let (points, toughness): ([f32; 4], f32) = match name.split('_').next() {
+        Some("leather") => ([1.0, 3.0, 2.0, 1.0], 0.0),
+        Some("copper") => ([2.0, 4.0, 3.0, 1.0], 0.0),
+        Some("golden") => ([2.0, 5.0, 3.0, 1.0], 0.0),
+        Some("chainmail") => ([2.0, 5.0, 4.0, 1.0], 0.0),
+        Some("iron") => ([2.0, 6.0, 5.0, 2.0], 0.0),
+        Some("turtle") => ([2.0, 0.0, 0.0, 0.0], 0.0),
+        Some("diamond") => ([3.0, 8.0, 6.0, 3.0], 2.0),
+        Some("netherite") => ([3.0, 8.0, 6.0, 3.0], 3.0),
+        _ => return (0.0, 0.0),
+    };
+    (points[slot], toughness)
+}
+/// `Mob.populateDefaultEquipmentSlots`: sometimes a set of armour, from the
+/// head down, of one random material.
+fn populate_armor(m: &mut Mob, d: &LocalDifficulty) {
+    if m.random.next_float() >= 0.15 * d.special() {
+        return;
+    }
+    let mut kind = m.random.next_int_bound(3).unwrap_or(0);
+    for _ in 1..=3 {
+        if m.random.next_float() < 0.1087 {
+            kind += 1;
+        }
+    }
+    let partial = if d.hard { 0.1 } else { 0.25 };
+    let material = [
+        "leather",
+        "copper",
+        "golden",
+        "chainmail",
+        "iron",
+        "diamond",
+    ][kind as usize];
+    for (i, piece) in ["helmet", "chestplate", "leggings", "boots"]
+        .into_iter()
+        .enumerate()
+    {
+        if i > 0 && m.random.next_float() < partial {
+            break;
+        }
+        let slot = match i {
+            0 => &mut m.extra.head,
+            1 => &mut m.extra.chest,
+            2 => &mut m.extra.legs,
+            _ => &mut m.extra.feet,
+        };
+        if slot.is_none() {
+            *slot = Some(format!("minecraft:{material}_{piece}").into());
+        }
+    }
+}
+pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
     use Species as S;
     let climate_index = match biome.climate {
         Climate::Temperate => 0,
@@ -199,18 +303,22 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts) {
             if m.random.next_float() < 0.05 {
                 m.extra.age = i32::MIN / 2;
             }
-            if m.species() != S::Drowned && m.random.next_float() < 0.01 {
-                let r = m.random.next_int_bound(3).unwrap_or(0);
+            if m.species() != S::Drowned {
+                populate_armor(m, difficulty);
+            }
+            let weapon = if difficulty.hard { 0.05 } else { 0.01 };
+            if m.species() != S::Drowned && m.random.next_float() < weapon {
+                let r = m.random.next_int_bound(6).unwrap_or(0);
                 m.extra.main_hand = Some(
-                    if r == 0 {
-                        "minecraft:iron_sword"
-                    } else {
-                        "minecraft:iron_shovel"
+                    match r {
+                        0 => "minecraft:iron_sword",
+                        1 => "minecraft:iron_spear",
+                        _ => "minecraft:iron_shovel",
                     }
                     .into(),
                 );
             }
-            if m.species() == S::Drowned && m.random.next_float() < 0.0625 {
+            if m.species() == S::Drowned && m.random.next_float() > 0.9 {
                 m.extra.main_hand = Some(
                     if m.random.next_int_bound(16).unwrap_or(1) < 10 {
                         "minecraft:trident"
@@ -225,16 +333,42 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts) {
                 m.extra.variant2 = m.random.next_int_bound(15).unwrap_or(0) as u8;
             }
         }
-        // ZombifiedPiglin.populateDefaultEquipmentSlots: a golden sword.
-        S::ZombifiedPiglin => m.extra.main_hand = Some("minecraft:golden_sword".into()),
+        // ZombifiedPiglin.populateDefaultEquipmentSlots: a golden sword, or
+        // one time in 20 a golden spear.
+        S::ZombifiedPiglin => {
+            let spear = m.random.next_int_bound(20).unwrap_or(1) == 0;
+            m.extra.main_hand = Some(
+                if spear {
+                    "minecraft:golden_spear"
+                } else {
+                    "minecraft:golden_sword"
+                }
+                .into(),
+            );
+        }
+        // AbstractSkeleton.populateDefaultEquipmentSlots (the bow is given on
+        // registration).
+        S::Skeleton | S::Stray | S::Bogged | S::Parched => populate_armor(m, difficulty),
         S::Pillager => m.extra.main_hand = Some("minecraft:crossbow".into()),
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse => {
             super::equine::finalize(m)
         }
         // Camel.finalizeSpawn: standing, with fixed attributes.
         S::Camel => super::camel::stand_up_instantly(m),
-        // Piglin.createSpawnWeapon: half crossbows, half golden swords.
+        // Piglin.createSpawnWeapon: half crossbows, half golden swords, and
+        // each piece of golden armour one time in ten.
         S::Piglin if !m.is_baby() => {
+            for i in 0..4 {
+                if m.random.next_float() < 0.1 {
+                    let (slot, piece) = match i {
+                        0 => (&mut m.extra.head, "helmet"),
+                        1 => (&mut m.extra.chest, "chestplate"),
+                        2 => (&mut m.extra.legs, "leggings"),
+                        _ => (&mut m.extra.feet, "boots"),
+                    };
+                    *slot = Some(format!("minecraft:golden_{piece}").into());
+                }
+            }
             let crossbow = m.random.next_float() < 0.5;
             m.extra.main_hand = Some(
                 if crossbow {

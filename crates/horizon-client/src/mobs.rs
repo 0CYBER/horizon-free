@@ -452,6 +452,10 @@ pub struct Extra {
     pub main_hand: Option<Arc<str>>,
     pub off_hand: Option<Arc<str>>,
     pub head: Option<Arc<str>>,
+    /// Worn armour below the head (humanoid mobs).
+    pub chest: Option<Arc<str>>,
+    pub legs: Option<Arc<str>>,
+    pub feet: Option<Arc<str>>,
     pub using_item: i32,
     pub flag: bool,
     pub flag2: bool,
@@ -837,6 +841,22 @@ impl Mob {
     }
     /// LivingEntity.hurtServer: invulnerability frames, armor, knockback and
     /// the last-hurt-by bookkeeping goals read.
+    /// The `armor` and `armor_toughness` modifiers of worn humanoid armour.
+    pub fn worn_armor(&self) -> (f32, f32) {
+        if equine::is_equine(self.species()) {
+            return (0.0, 0.0);
+        }
+        [
+            &self.extra.head,
+            &self.extra.chest,
+            &self.extra.legs,
+            &self.extra.feet,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|i| spawning::armor_stats(i))
+        .fold((0.0, 0.0), |(a, t), (x, y)| (a + x, t + y))
+    }
     pub fn damage(&mut self, amount: f32, source: Damage) -> bool {
         if !self.alive() || self.removed {
             return false;
@@ -848,10 +868,11 @@ impl Mob {
             return false;
         }
         let mut amount = amount;
-        if !source.bypasses_armor() && self.kind.armor > 0.0 {
+        let (worn, worn_toughness) = self.worn_armor();
+        if !source.bypasses_armor() && self.kind.armor + worn > 0.0 {
             // CombatRules.getDamageAfterAbsorb
-            let armor = self.kind.armor;
-            let toughness = 2.0 + self.kind.armor_toughness / 4.0;
+            let armor = self.kind.armor + worn;
+            let toughness = 2.0 + (self.kind.armor_toughness + worn_toughness) / 4.0;
             let effective = (armor - amount / toughness).clamp(armor * 0.2, 20.0);
             amount *= 1.0 - effective / 25.0;
         }

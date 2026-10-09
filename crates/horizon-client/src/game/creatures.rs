@@ -206,7 +206,8 @@ impl Game<'_> {
             at[1].floor() as i32,
             at[2].floor() as i32,
         );
-        spawning::finalize(&mut mob, &facts);
+        let difficulty = self.local_difficulty(at);
+        spawning::finalize(&mut mob, &facts, &difficulty);
         let id = mob.id;
         self.mobs.push(mob);
         Some(id)
@@ -388,6 +389,46 @@ impl Game<'_> {
             mob_griefing: self.ui.rules.bool("mob_griefing"),
         }
     }
+    /// `ServerLevel.getCurrentDifficultyAt`.
+    pub(super) fn local_difficulty(&self, at: [f64; 3]) -> spawning::LocalDifficulty {
+        use horizon_world::food::Difficulty;
+        let base = match self.world.health_rules.difficulty {
+            Difficulty::Peaceful => 0,
+            Difficulty::Easy => 1,
+            Difficulty::Normal => 2,
+            Difficulty::Hard => 3,
+        };
+        let key = ((at[0].floor() as i32) >> 4, (at[2].floor() as i32) >> 4);
+        let (inhabited, moon) = if self.world.chunks.contains_key(&key) {
+            let phase = self.world.day_time.div_euclid(24000).rem_euclid(8) as usize;
+            (
+                self.world.inhabited.get(&key).copied().unwrap_or(0),
+                spawning::MOON_BRIGHTNESS[phase],
+            )
+        } else {
+            (0, 0.0)
+        };
+        spawning::LocalDifficulty::new(base, self.world.day_time, inhabited, moon)
+    }
+    /// `ServerChunkCache.tickSpawningChunk`: chunks whose centre is within
+    /// 128 blocks of the player gain inhabited time.
+    fn tick_inhabited(&mut self) {
+        let Some(p) = self.player.as_ref().map(|p| p.position) else {
+            return;
+        };
+        let (pcx, pcz) = (p.x.floor() as i32 >> 4, p.z.floor() as i32 >> 4);
+        for dx in -8..=8 {
+            for dz in -8..=8 {
+                let key = (pcx + dx, pcz + dz);
+                let (cx, cz) = (f64::from(key.0 * 16 + 8), f64::from(key.1 * 16 + 8));
+                if (cx - p.x).powi(2) + (cz - p.z).powi(2) < 128.0 * 128.0
+                    && self.world.chunks.contains_key(&key)
+                {
+                    *self.world.inhabited.entry(key).or_insert(0) += 1;
+                }
+            }
+        }
+    }
     /// NaturalSpawner.spawnForChunk over the chunks within 8 of the player.
     fn spawn_natural(&mut self) {
         let Some(p) = self.player.as_ref().map(|p| p.position) else {
@@ -559,6 +600,7 @@ impl Game<'_> {
             }
             self.spawn_generation_creatures(key.0, key.1);
         }
+        self.tick_inhabited();
         self.spawn_natural();
         let snapshot: Vec<Seen> = self.mobs.iter().map(seen).collect();
         let mut events = Vec::new();
@@ -646,11 +688,20 @@ impl Game<'_> {
             for item in gear {
                 self.spawn_item(ItemStack::new(item, 1), pos, [0.0, 0.2, 0.0], 10);
             }
-            {
-                let item = &m.extra.main_hand;
+            let worn = if horizon_client::mobs::equine::is_equine(m.species()) {
+                [None, None, None, None]
+            } else {
+                [
+                    m.extra.head.clone(),
+                    m.extra.chest.clone(),
+                    m.extra.legs.clone(),
+                    m.extra.feet.clone(),
+                ]
+            };
+            for item in std::iter::once(m.extra.main_hand.clone()).chain(worn) {
                 // Equipment drop chance 8.5% (+ player kill only).
                 // Vexes never drop their sword.
-                if let Some(item) = item
+                if let Some(item) = &item
                     && by_player
                     && m.species() != Species::Vex
                     && self.world.random.next_float() < 0.085

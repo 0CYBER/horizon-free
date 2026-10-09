@@ -533,7 +533,63 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         }
         _ => {}
     }
+    humanoid_armor(m, &mut v);
     v
+}
+/// `HumanoidArmorLayer`: the armour models of the mob's main model with the
+/// equipment textures (leather tinted, with its overlay).
+fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
+    if super::equine::is_equine(m.species()) {
+        return;
+    }
+    let (model, _) = body(m);
+    let Some(base) = model.strip_suffix("#main") else {
+        return;
+    };
+    let slots = [
+        (&m.extra.head, "helmet"),
+        (&m.extra.chest, "chestplate"),
+        (&m.extra.legs, "leggings"),
+        (&m.extra.feet, "boots"),
+    ];
+    for (item, layer) in slots {
+        let Some(name) = item.as_deref().and_then(|i| i.strip_prefix("minecraft:")) else {
+            continue;
+        };
+        let Some(material) = name.strip_suffix(&format!("_{layer}")) else {
+            continue;
+        };
+        let asset = match material {
+            "golden" => "gold",
+            "turtle" => "turtle_scute",
+            other => other,
+        };
+        let folder = if layer == "leggings" {
+            "humanoid_leggings"
+        } else {
+            "humanoid"
+        };
+        let model = format!("{base}#{layer}");
+        let tint = if asset == "leather" {
+            abgr(0xA06540)
+        } else {
+            0xFFFF_FFFF
+        };
+        v.push(Layer {
+            model: model.clone(),
+            texture: format!("entity/equipment/{folder}/{asset}"),
+            color: tint,
+            full_bright: false,
+        });
+        if asset == "leather" {
+            v.push(Layer {
+                model,
+                texture: format!("entity/equipment/{folder}/leather_overlay"),
+                color: 0xFFFF_FFFF,
+                full_bright: false,
+            });
+        }
+    }
 }
 impl super::MobType {
     /// The main model layer key without the namespace.
