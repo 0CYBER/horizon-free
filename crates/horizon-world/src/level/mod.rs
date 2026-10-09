@@ -112,6 +112,7 @@ mod place;
 mod query;
 mod rails;
 mod redstone;
+pub mod sculk;
 mod shapes;
 mod signals;
 mod speleothem;

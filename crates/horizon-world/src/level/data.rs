@@ -355,6 +355,11 @@ named_blocks! {
     campfire = "campfire",
     light = "light",
     sculk_sensor = "sculk_sensor",
+    calibrated_sculk_sensor = "calibrated_sculk_sensor",
+    sculk_shrieker = "sculk_shrieker",
+    sculk_catalyst = "sculk_catalyst",
+    sculk = "sculk",
+    sculk_vein = "sculk_vein",
     lectern = "lectern",
     target = "target",
     daylight_detector = "daylight_detector",
@@ -561,6 +566,8 @@ props! {
     side_chain = "side_chain",
     copper_golem_pose = "copper_golem_pose",
     sculk_sensor_phase = "sculk_sensor_phase",
+    shrieking = "shrieking",
+    can_summon = "can_summon",
     potent_sulfur_state = "potent_sulfur_state",
 }
 
