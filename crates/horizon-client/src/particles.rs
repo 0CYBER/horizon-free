@@ -119,13 +119,22 @@ particle_types! {
     Soul = "soul",
     SculkSoul = "sculk_soul",
     DragonBreath = "dragon_breath",
+    Gust = "gust",
+    SmallGust = "small_gust",
+    GustEmitterLarge = "gust_emitter_large",
+    GustEmitterSmall = "gust_emitter_small",
 }
 impl ParticleType {
     /// `ParticleType.getOverrideLimiter`: spawned regardless of distance.
     pub fn override_limiter(self) -> bool {
         matches!(
             self,
-            Self::DamageIndicator | Self::ExplosionEmitter | Self::Explosion | Self::Poof
+            Self::DamageIndicator
+                | Self::ExplosionEmitter
+                | Self::Explosion
+                | Self::Poof
+                | Self::GustEmitterLarge
+                | Self::GustEmitterSmall
         )
     }
 }
@@ -231,6 +240,11 @@ enum Behaviour {
     Crit,
     HugeExplosion,
     ExplosionSeed,
+    /// `GustSeedParticle`: three gusts around it every `delay + 1` ticks.
+    GustSeed {
+        scale: f64,
+        delay: i32,
+    },
     Campfire,
     SimpleAnimated {
         fade: Option<[f32; 3]>,
@@ -1429,6 +1443,34 @@ impl ParticleEngine {
                 q.behaviour = Behaviour::ExplosionSeed;
                 q
             }
+            // GustParticle: a still, bright, opaque quad that animates over
+            // its 12 to 15 ticks; the small one is scaled to 15%.
+            T::Gust | T::SmallGust => {
+                let mut q = Particle::moving(r, ty, p, [0.0; 3]);
+                q.velocity = [0.0; 3];
+                q.lifetime = 12 + r.next_int_bound(4).unwrap_or(0);
+                q.size = 1.0;
+                q.set_size(1.0, 1.0);
+                if ty == T::SmallGust {
+                    q.scale(0.15);
+                }
+                q.light = Light::FullBright;
+                q.behaviour = Behaviour::HugeExplosion;
+                q.set = set;
+                q
+            }
+            T::GustEmitterLarge | T::GustEmitterSmall => {
+                let mut q = Particle::moving(r, ty, p, [0.0; 3]);
+                let (scale, lifetime, delay) = if ty == T::GustEmitterLarge {
+                    (3.0, 7, 0)
+                } else {
+                    (1.0, 3, 2)
+                };
+                q.lifetime = lifetime;
+                q.no_render = true;
+                q.behaviour = Behaviour::GustSeed { scale, delay };
+                q
+            }
             T::CampfireCosySmoke | T::CampfireSignalSmoke => {
                 let mut q = Particle::at(r, ty, p);
                 q.scale(3.0);
@@ -2155,6 +2197,29 @@ impl ParticleEngine {
                     return;
                 }
                 self.sprite_from_age(p);
+            }
+            Behaviour::GustSeed { scale, delay } => {
+                if p.age % (delay + 1) == 0 {
+                    for _ in 0..3 {
+                        let r = &mut self.random;
+                        let at = [
+                            p.position[0] + (r.next_double() - r.next_double()) * scale,
+                            p.position[1] + (r.next_double() - r.next_double()) * scale,
+                            p.position[2] + (r.next_double() - r.next_double()) * scale,
+                        ];
+                        let f = f64::from(p.age as f32 / p.lifetime as f32);
+                        self.add(
+                            &ParticleOptions::simple(ParticleType::Gust),
+                            at,
+                            [f, 0.0, 0.0],
+                        );
+                    }
+                }
+                let age = p.age;
+                p.age += 1;
+                if age == p.lifetime {
+                    p.removed = true;
+                }
             }
             Behaviour::ExplosionSeed => {
                 for _ in 0..6 {

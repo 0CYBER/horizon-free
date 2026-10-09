@@ -8,6 +8,7 @@ mod beacon;
 mod blockctl;
 mod boats;
 mod books;
+mod breezes;
 mod cartography;
 mod chat;
 mod combat;
@@ -62,6 +63,7 @@ mod totem;
 mod trading;
 mod trident;
 mod wandering_trader;
+mod wind;
 mod wither;
 use horizon_client::{
     Result,

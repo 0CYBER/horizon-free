@@ -9,6 +9,7 @@ pub mod ai;
 pub mod allay;
 pub mod anim;
 pub mod aquatic;
+pub mod breeze;
 pub mod camel;
 pub mod caravan;
 pub mod control;
@@ -482,6 +483,8 @@ pub struct Extra {
     pub leash: Option<leash::Holder>,
     pub leash_pending: Option<leash::Pending>,
     pub leash_spin: f64,
+    /// More species scratch values.
+    pub scratch: [i32; 4],
 }
 #[derive(Clone, Debug)]
 pub struct Mob {

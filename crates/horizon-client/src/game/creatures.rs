@@ -30,6 +30,8 @@ pub(super) struct Creatures {
     /// Player status effects applied by mobs: (effect, ticks left, amplifier).
     pub player_fire: i32,
     pub pearl_cooldown: u32,
+    /// The wind charge's use cooldown (ticks).
+    pub wind_cooldown: u32,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
@@ -649,6 +651,7 @@ impl Game<'_> {
         self.tick_projectiles()?;
         self.tick_fangs();
         self.tick_allays();
+        self.tick_breeze_effects();
         self.tick_player_effects();
         self.piglin_pickups();
         Ok(())
@@ -1291,6 +1294,7 @@ impl Game<'_> {
                 self.creatures.player_fire -= 1;
             }
         }
+        self.creatures.wind_cooldown = self.creatures.wind_cooldown.saturating_sub(1);
         if self.creatures.pearl_cooldown > 0 {
             self.creatures.pearl_cooldown -= 1;
         }
@@ -1308,6 +1312,7 @@ impl Game<'_> {
     fn tick_projectiles(&mut self) -> Result<()> {
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
         let mut hits = Vec::new();
+        let mut deflections: Vec<[f64; 3]> = Vec::new();
         {
             let mut targets: Vec<(Who, Aabb)> = self
                 .mobs
@@ -1326,15 +1331,54 @@ impl Game<'_> {
                     .into_iter()
                     .map(|(id, b)| (Who::Mob(id), b)),
             );
+            let breezes: Vec<u32> = self
+                .mobs
+                .iter()
+                .filter(|m| m.alive() && m.species() == Species::Breeze)
+                .map(|m| m.id)
+                .collect();
+            let jitter = self.world.random.next_float();
             let w = self.mob_world_base(&[]);
             let pw = ProjWorld { w: &w, targets };
             projectiles.retain_mut(|p| {
                 let (keep, hit) = p.tick(&pw);
+                let wind = matches!(
+                    p.kind,
+                    ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+                );
+                // Entity.deflection: a breeze turns every projectile but wind charges away.
+                if let Hit::Entity {
+                    who: Who::Mob(id),
+                    at,
+                } = hit
+                    && !wind
+                    && breezes.contains(&id)
+                {
+                    super::wind::reverse(p, jitter);
+                    deflections.push([at.x, at.y, at.z]);
+                    return true;
+                }
+                // AbstractWindCharge.tick: out of the world's top it bursts.
+                if wind && keep && p.position.y > 350.0 {
+                    hits.push((
+                        p.clone(),
+                        Hit::Block {
+                            pos: [0; 3],
+                            at: p.position,
+                            face: [0; 3],
+                        },
+                    ));
+                    return false;
+                }
                 if hit != Hit::None {
                     hits.push((p.clone(), hit));
                 }
                 keep
             });
+        }
+        for at in deflections {
+            self.audio
+                .play("minecraft:entity.breeze.deflect", Some(at), 1.0, 1.0);
         }
         self.creatures.projectiles.append(&mut projectiles);
         for (p, hit) in hits {
@@ -1351,6 +1395,12 @@ impl Game<'_> {
             Hit::Entity { at, .. } | Hit::Block { at, .. } => at,
             Hit::None => return Ok(()),
         };
+        if matches!(
+            p.kind,
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+        ) {
+            return self.wind_charge_hit(p, hit);
+        }
         if let Hit::Entity {
             who: Who::Mob(id), ..
         } = hit
@@ -2052,6 +2102,7 @@ impl Game<'_> {
                 self.creatures.pearl_cooldown = 20;
                 ProjectileKind::EnderPearl
             }
+            "minecraft:wind_charge" => return self.throw_wind_charge(),
             _ if item.ends_with("_spawn_egg") => return self.use_spawn_egg(stack),
             _ => return Ok(false),
         };
@@ -2267,6 +2318,14 @@ impl Game<'_> {
                 }
                 continue;
             }
+            // WindChargeRenderer.
+            if matches!(
+                a.kind,
+                ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+            ) {
+                self.wind_charge_geometry(a, c, packed, out);
+                continue;
+            }
             // WitherSkullRenderer: the skull model facing its flight.
             if let Some(dangerous) = super::wither::skull_kind(a) {
                 static SKULL: std::sync::OnceLock<Option<horizon_client::mobs::Part>> =
@@ -2340,7 +2399,7 @@ fn eat_sound(s: Species) -> &'static str {
 fn experience_reward(m: &Mob, random: &mut impl RandomSource) -> u32 {
     use Species as S;
     match m.species() {
-        S::Blaze | S::Ghast | S::Hoglin | S::Zoglin | S::PiglinBrute => 10,
+        S::Blaze | S::Ghast | S::Hoglin | S::Zoglin | S::PiglinBrute | S::Breeze => 10,
         S::Slime | S::MagmaCube => m.extra.size.max(1) as u32,
         S::Endermite => 3,
         S::Bat

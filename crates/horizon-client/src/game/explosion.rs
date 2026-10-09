@@ -78,7 +78,7 @@ impl Game<'_> {
         true
     }
     /// `ServerExplosion.getSeenPercent` for an entity box.
-    fn seen_percent(&self, center: [f64; 3], min: [f64; 3], max: [f64; 3]) -> f32 {
+    pub(super) fn seen_percent(&self, center: [f64; 3], min: [f64; 3], max: [f64; 3]) -> f32 {
         let xs = 1.0 / ((max[0] - min[0]) * 2.0 + 1.0);
         let ys = 1.0 / ((max[1] - min[1]) * 2.0 + 1.0);
         let zs = 1.0 / ((max[2] - min[2]) * 2.0 + 1.0);

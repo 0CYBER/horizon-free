@@ -121,6 +121,10 @@ impl Mob {
         self.extra.age < 0
     }
     pub fn fluid_jump_threshold(&self) -> f64 {
+        // Breeze.getFluidJumpThreshold: its eye height.
+        if self.species() == super::Species::Breeze {
+            return self.eye_height();
+        }
         if self.eye_height() < 0.4 { 0.0 } else { 0.4 }
     }
     pub fn is_in_liquid(&self) -> bool {
@@ -305,6 +309,11 @@ impl Mob {
             y += (0.05 * 1.0 - movement.y) * 0.2;
         } else {
             y -= self.gravity();
+        }
+        // LivingEntity.shouldDiscardFriction (a breeze's long jump).
+        if super::breeze::discards_friction(self) {
+            self.velocity = Vec3::new(movement.x, y, movement.z);
+            return;
         }
         let drag = 0.91f32;
         let f = friction * drag;

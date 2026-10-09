@@ -25,6 +25,10 @@ pub enum ProjectileKind {
         power: i32,
     },
     LlamaSpit,
+    /// A player's `WindCharge` and a breeze's `BreezeWindCharge`: straight
+    /// flight that bursts on whatever it meets.
+    WindCharge,
+    BreezeWindCharge,
     /// `ShulkerBullet`: homing on `target` in axis-aligned steps.
     ShulkerBullet {
         target: Who,
@@ -484,6 +488,7 @@ impl Projectile {
                 );
             }
             ProjectileKind::Arrow { .. } => {}
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => {}
             // LlamaSpit.tick: gone in water; drag and gravity follow the move.
             ProjectileKind::LlamaSpit => {
                 if water {
@@ -628,6 +633,8 @@ impl Projectile {
             ProjectileKind::Potion { .. } => "item/splash_potion",
             ProjectileKind::LlamaSpit => "entity/llama/llama_spit",
             ProjectileKind::ShulkerBullet { .. } => "entity/shulker/spark",
+            // Drawn as `WindChargeModel` by the game.
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => return None,
             ProjectileKind::WitherSkull { dangerous: false } => "entity/wither/wither",
             ProjectileKind::WitherSkull { dangerous: true } => "entity/wither/wither_invulnerable",
             ProjectileKind::Arrow { .. } => return None,

@@ -83,6 +83,7 @@ pub enum Species {
     Wither,
     Camel,
     Allay,
+    Breeze,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -929,6 +930,20 @@ pub const ALL: &[Def] = &[
         Baby::Abs(0.95, 1.4, 1.38)
     ),
     def!(
+        Breeze,
+        "breeze",
+        "breeze#main",
+        "entity/breeze/breeze",
+        A::Breeze,
+        [
+            "entity.breeze.idle_ground",
+            "entity.breeze.hurt",
+            "entity.breeze.death"
+        ],
+        None,
+        Baby::None
+    ),
+    def!(
         Wither,
         "wither",
         "wither#main",
@@ -1416,6 +1431,7 @@ impl Def {
     pub fn head_rot_speed(&self) -> f32 {
         match self.species {
             Species::Frog => 35.0,
+            Species::Breeze => 25.0,
             _ => 10.0,
         }
     }
@@ -1430,6 +1446,7 @@ impl Def {
         match self.species {
             Species::Dolphin | Species::Axolotl => 1.0,
             Species::Frog => 5.0,
+            Species::Breeze => 30.0,
             Species::Goat => 15.0,
             Species::Armadillo => 32.0,
             _ => 75.0,

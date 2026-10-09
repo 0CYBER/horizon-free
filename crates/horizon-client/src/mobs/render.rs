@@ -313,6 +313,24 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 false,
             );
         }
+        // BreezeWindLayer (the scroll is not reproduced: atlas sprites do
+        // not wrap) and BreezeEyesLayer.
+        S::Breeze => {
+            push(
+                &mut v,
+                "breeze#wind",
+                "entity/breeze/breeze_wind",
+                white,
+                false,
+            );
+            push(
+                &mut v,
+                "breeze#eyes",
+                "entity/breeze/breeze_eyes",
+                white,
+                true,
+            );
+        }
         // LlamaDecorLayer: the carpet, or the trader's blanket.
         S::Llama | S::TraderLlama => {
             if let Some((model, texture)) = super::llama::decor(m) {
