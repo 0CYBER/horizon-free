@@ -231,6 +231,8 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts) {
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse => {
             super::equine::finalize(m)
         }
+        // Camel.finalizeSpawn: standing, with fixed attributes.
+        S::Camel => super::camel::stand_up_instantly(m),
         // Piglin.createSpawnWeapon: half crossbows, half golden swords.
         S::Piglin if !m.is_baby() => {
             let crossbow = m.random.next_float() < 0.5;

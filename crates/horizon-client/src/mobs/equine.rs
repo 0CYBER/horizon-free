@@ -39,6 +39,8 @@ pub struct Rider {
     pub jump: f32,
     /// Holding the mount's steering stick (pigs, striders).
     pub steer: bool,
+    /// Sprinting (camels run faster).
+    pub sprint: bool,
 }
 
 pub fn is_equine(s: Species) -> bool {
@@ -49,6 +51,7 @@ pub fn is_equine(s: Species) -> bool {
             | Species::Mule
             | Species::SkeletonHorse
             | Species::ZombieHorse
+            | Species::Camel
     )
 }
 /// `canPerformRearing`: not donkeys or mules.
@@ -59,6 +62,9 @@ fn can_rear(s: Species) -> bool {
     )
 }
 pub fn register(m: &mut Mob) {
+    if m.species() == Species::Camel {
+        return super::camel::register(m);
+    }
     let tempt = m.kind.tempt.clone();
     let rears = can_rear(m.species());
     let g = &mut m.ai.goals;
@@ -300,6 +306,40 @@ pub fn ridden_step(m: &mut Mob) {
         m.set_speed((m.attrs.speed * factor) as f32 * boost);
         return;
     }
+    if m.species() == Species::Camel {
+        // Camel.tickRidden / getRiddenInput: forward stands it up; no input
+        // while sitting; the jump is a dash.
+        if r.forward > 0.0 && super::camel::sitting(m) {
+            let mut ev = Vec::new();
+            super::camel::stand_up(m, &mut ev);
+        }
+        if super::camel::refuse_to_move(m) {
+            m.ai.xxa = 0.0;
+            m.ai.zza = 0.0;
+            return;
+        }
+        let forward = if r.forward <= 0.0 {
+            r.forward * 0.25
+        } else {
+            r.forward
+        };
+        m.ai.xxa = r.strafe * 0.5;
+        m.ai.zza = forward;
+        let bonus = if r.sprint && m.extra.anim_ticks == 0 {
+            0.1
+        } else {
+            0.0
+        };
+        m.set_speed(m.attrs.speed as f32 + bonus);
+        if r.jump > 0.0 {
+            let mut ev = Vec::new();
+            super::camel::dash(m, r.jump, &mut ev);
+            if let Some(rider) = m.rider.as_mut() {
+                rider.jump = 0.0;
+            }
+        }
+        return;
+    }
     let standing = m.extra.counter > 0;
     if m.on_ground && r.jump == 0.0 && standing {
         m.ai.xxa = 0.0;
@@ -331,7 +371,10 @@ pub fn ridden_step(m: &mut Mob) {
 }
 /// `AbstractHorse.aiStep` and `tick`: healing, grazing, the rear and the
 /// eating/standing/mouth animations.
-pub fn ai_step(m: &mut Mob, w: &MobWorld) {
+pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if m.species() == Species::Camel {
+        return super::camel::ai_step(m, events);
+    }
     if m.alive() && m.random.next_int_bound(900).unwrap_or(1) == 0 && m.death_time == 0 {
         m.health = (m.health + 1.0).min(m.attrs.max_health);
     }
@@ -388,6 +431,7 @@ pub fn texture(m: &Mob) -> String {
         Species::Donkey => format!("entity/horse/donkey{baby}"),
         Species::Mule => format!("entity/horse/mule{baby}"),
         Species::SkeletonHorse => format!("entity/horse/horse_skeleton{baby}"),
+        Species::Camel => format!("entity/camel/camel{baby}"),
         _ => format!("entity/horse/horse_zombie{baby}"),
     }
 }
@@ -409,6 +453,7 @@ pub fn model_name(s: Species) -> &'static str {
         Species::Donkey => "donkey",
         Species::Mule => "mule",
         Species::SkeletonHorse => "skeleton_horse",
+        Species::Camel => "camel",
         _ => "zombie_horse",
     }
 }
@@ -419,6 +464,7 @@ pub fn saddle_texture(s: Species) -> &'static str {
         Species::Mule => "entity/equipment/mule_saddle/saddle",
         Species::SkeletonHorse => "entity/equipment/skeleton_horse_saddle/saddle",
         Species::ZombieHorse => "entity/equipment/zombie_horse_saddle/saddle",
+        Species::Camel => "entity/equipment/camel_saddle/saddle",
         _ => "entity/equipment/horse_saddle/saddle",
     }
 }

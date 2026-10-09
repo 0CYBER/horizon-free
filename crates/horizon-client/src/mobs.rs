@@ -8,6 +8,7 @@
 pub mod ai;
 pub mod anim;
 pub mod aquatic;
+pub mod camel;
 pub mod control;
 pub mod cube;
 pub mod data;

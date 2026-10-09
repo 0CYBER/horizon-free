@@ -166,6 +166,9 @@ fn target_pos(w: &MobWorld, id: i32) -> Option<([f64; 3], f64, bool)> {
 }
 /// `WitherBoss.aiStep` (heads, particles) and `customServerAiStep`.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if !m.alive() {
+        return;
+    }
     m.extra.point = m
         .target_info(w)
         .map(|t| [t.position.x, t.position.y, t.position.z]);

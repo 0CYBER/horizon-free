@@ -119,7 +119,9 @@ pub fn family(s: Species) -> Family {
         S::Ravager => Family::Ravager,
         S::Wither => Family::Wither,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
-        S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse => Family::Equine,
+        S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse | S::Camel => {
+            Family::Equine
+        }
         S::Phantom => Family::Phantom,
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
@@ -547,7 +549,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             super::piglin::ai_step(m, w, events)
         }
         Species::Zoglin if m.extra.anim_ticks > 0 => m.extra.anim_ticks -= 1,
-        s if super::equine::is_equine(s) => super::equine::ai_step(m, w),
+        s if super::equine::is_equine(s) => super::equine::ai_step(m, w, events),
         Species::Phantom => super::phantom::flap_sound(m, events),
         Species::Guardian | Species::ElderGuardian => super::guardian::ai_step(m, w, events),
         Species::Vex => super::vex::ai_step(m, w),

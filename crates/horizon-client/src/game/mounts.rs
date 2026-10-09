@@ -151,7 +151,13 @@ impl Game<'_> {
     }
     /// `AbstractHorse.handleEating`.
     fn feed_mount(&mut self, index: usize, item: &str) -> bool {
+        let camel = self.mobs[index].species() == Species::Camel;
+        if camel != (item == "minecraft:cactus") {
+            return false;
+        }
         let (heal, age_up, temper, love) = match item {
+            // Camel.handleEating.
+            "minecraft:cactus" => (2.0, 10, 0, true),
             "minecraft:wheat" => (2.0, 20, 3, false),
             "minecraft:sugar" => (1.0, 30, 3, false),
             "minecraft:hay_block" => (20.0, 180, 0, false),
@@ -191,6 +197,7 @@ impl Game<'_> {
         m.anim.v[2] = 1.0;
         let at = m.center();
         let sound = match m.species() {
+            Species::Camel => "minecraft:entity.camel.eat",
             Species::Donkey => "minecraft:entity.donkey.eat",
             Species::Mule => "minecraft:entity.mule.eat",
             _ => "minecraft:entity.horse.eat",
@@ -272,6 +279,7 @@ impl Game<'_> {
             pitch: self.pitch,
             jump: if jump > 0.0 { jump } else { pending },
             steer,
+            sprint: self.keys.contains(&winit::keyboard::KeyCode::ControlLeft),
         });
         true
     }
@@ -281,7 +289,23 @@ impl Game<'_> {
             return;
         };
         let m = &self.mobs[i];
-        let at = Vec3::new(m.position.x, m.position.y + seat(m.species()), m.position.z);
+        let mut at = Vec3::new(m.position.x, m.position.y + seat(m.species()), m.position.z);
+        if m.species() == Species::Camel {
+            // Camel.getPassengerAttachmentPoint: the driver half a block
+            // forward, at the body anchor (lower while sitting).
+            let scale = if m.is_baby() { 0.6 } else { 1.0 };
+            let anchor = if horizon_client::mobs::camel::sitting(m) {
+                (2.375 - 1.43) * scale - if m.is_baby() { 0.09375 } else { 0.375 } + 0.2 * scale
+            } else {
+                2.375 * scale - if m.is_baby() { 0.09375 } else { 0.375 }
+            };
+            let yaw = m.yaw.to_radians();
+            at = Vec3::new(
+                m.position.x - f64::from(0.5 * scale * yaw.sin()),
+                m.position.y + f64::from(anchor) - 0.6,
+                m.position.z + f64::from(0.5 * scale * yaw.cos()),
+            );
+        }
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
             p.position = at;

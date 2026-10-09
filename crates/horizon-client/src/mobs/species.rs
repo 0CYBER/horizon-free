@@ -81,6 +81,7 @@ pub enum Species {
     Vex,
     Ravager,
     Wither,
+    Camel,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -897,6 +898,20 @@ pub const ALL: &[Def] = &[
         ],
         None,
         Baby::None
+    ),
+    def!(
+        Camel,
+        "camel",
+        "camel#main",
+        "entity/camel/camel",
+        A::Camel,
+        [
+            "entity.camel.ambient",
+            "entity.camel.hurt",
+            "entity.camel.death"
+        ],
+        Some("entity.camel.step"),
+        Baby::Abs(0.95, 1.4, 1.38)
     ),
     def!(
         Wither,

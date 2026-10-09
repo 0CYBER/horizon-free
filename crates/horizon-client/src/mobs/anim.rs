@@ -8,6 +8,7 @@ use std::f32::consts::PI;
 /// The setupAnim implementation a model uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anim {
+    Camel,
     Wither,
     Vex,
     Ravager,
@@ -74,7 +75,7 @@ pub struct AnimState {
     pub flap_speed_o: f32,
     pub flapping: f32,
     /// Generic per-species keyframe animation states.
-    pub states: [AnimationState; 4],
+    pub states: [AnimationState; 6],
     /// Per-species animation values (tail wag, squid tentacles, squish...)
     /// with their previous-tick copies for interpolation.
     pub v: [f32; 8],
@@ -341,8 +342,8 @@ pub fn setup(
     p: &mut Poses,
     w_anims: &HashMap<String, super::keyframes::Animation>,
 ) {
-    let _ = w_anims;
     match m.kind.anim {
+        Anim::Camel => super::camel::anim(m, s, p, w_anims),
         Anim::Squid | Anim::Fish | Anim::Pufferfish | Anim::Dolphin => {
             super::aquatic::anim(m, s, p)
         }

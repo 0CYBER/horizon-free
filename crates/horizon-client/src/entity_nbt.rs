@@ -246,6 +246,14 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("equipment".into(), Tag::Compound(equipment));
         }
+        "minecraft:camel" => {
+            // LastPoseTick: negative while sitting.
+            let sitting = crate::mobs::camel::sitting(m);
+            map.insert(
+                "LastPoseTick".into(),
+                Tag::Long(if sitting { -1 } else { 0 }),
+            );
+        }
         "minecraft:wither" => {
             map.insert("Invul".into(), Tag::Int(m.extra.counter));
         }
@@ -416,6 +424,13 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 .unwrap_or(0) as u8;
         }
     }
+    if m.species() == crate::mobs::Species::Camel {
+        let sitting = matches!(tag.get("LastPoseTick"), Some(Tag::Long(v)) if *v < 0);
+        crate::mobs::camel::stand_up_instantly(&mut m);
+        if sitting {
+            m.extra.egg_time = -1 - 400;
+        }
+    }
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;
     }
@@ -458,6 +473,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     // A mob saved mid-death finishes dying; one saved dead is dropped.
     if m.health <= 0.0 && m.death_time == 0 {
         return None;
+    }
+    // DeathTime only counts while dead.
+    if m.health > 0.0 {
+        m.death_time = 0;
     }
     Some(m)
 }
