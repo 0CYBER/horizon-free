@@ -82,6 +82,7 @@ pub enum Species {
     Ravager,
     Wither,
     Camel,
+    Allay,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -900,6 +901,20 @@ pub const ALL: &[Def] = &[
         Baby::None
     ),
     def!(
+        Allay,
+        "allay",
+        "allay#main",
+        "entity/allay/allay",
+        A::Allay,
+        [
+            "entity.allay.ambient_without_item",
+            "entity.allay.hurt",
+            "entity.allay.death"
+        ],
+        None,
+        Baby::None
+    ),
+    def!(
         Camel,
         "camel",
         "camel#main",
@@ -1246,6 +1261,7 @@ impl Def {
                     | S::Slime
                     | S::MagmaCube
                     | S::Wither
+                    | S::Allay
             ),
             flying: matches!(s, S::Ghast | S::Phantom),
             climber: matches!(s, S::Spider | S::CaveSpider),

@@ -246,6 +246,35 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("equipment".into(), Tag::Compound(equipment));
         }
+        "minecraft:allay" => {
+            // InventoryCarrier: the fetched stack; the liked player memory.
+            let mut inv = Vec::new();
+            if let (Some(item), n) = (&m.extra.main_hand, m.extra.ints[1])
+                && n > 0
+            {
+                inv.push(Tag::compound([
+                    ("id", Tag::String(item.as_ref().into())),
+                    ("count", Tag::Int(n)),
+                ]));
+            }
+            map.insert("Inventory".into(), Tag::List(inv));
+            map.insert(
+                "DuplicationCooldown".into(),
+                Tag::Long(i64::from(m.extra.egg_time)),
+            );
+            if m.extra.tame {
+                map.insert(
+                    "Brain".into(),
+                    Tag::compound([(
+                        "memories",
+                        Tag::compound([(
+                            "minecraft:liked_player",
+                            Tag::compound([("value", Tag::IntArray(vec![0, 0, 0, 1]))]),
+                        )]),
+                    )]),
+                );
+            }
+        }
         "minecraft:camel" => {
             // LastPoseTick: negative while sitting.
             let sitting = crate::mobs::camel::sitting(m);
@@ -306,6 +335,39 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         }
         _ => {}
     }
+    // LivingEntity equipment: what the mob holds now.
+    if !crate::mobs::equine::is_equine(m.species()) {
+        let mut equipment = match map.get(&"equipment".into()) {
+            Some(Tag::Compound(c)) => c.clone(),
+            _ => horizon_world::nbt::Compound::new(),
+        };
+        for (slot, item) in [
+            ("mainhand", &m.extra.main_hand),
+            ("offhand", &m.extra.off_hand),
+        ] {
+            match item {
+                Some(id) => {
+                    let keep = matches!(
+                        equipment.get(&slot.into()).and_then(|e| e.get("id")),
+                        Some(Tag::String(s)) if s.to_string_lossy() == **id
+                    );
+                    if !keep {
+                        equipment.insert(
+                            slot.into(),
+                            Tag::compound([
+                                ("id", Tag::String(id.as_ref().into())),
+                                ("count", Tag::Int(1)),
+                            ]),
+                        );
+                    }
+                }
+                None => {
+                    equipment.remove(&slot.into());
+                }
+            }
+        }
+        map.insert("equipment".into(), Tag::Compound(equipment));
+    }
     tag
 }
 /// `CustomName`: a text component saved as a string or a `{text: ..}` compound.
@@ -332,6 +394,17 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.health = h as f32;
     }
     m.hurt_time = number(tag.get("HurtTime")).unwrap_or(0) as i32;
+    // What it holds (equipment.mainhand / offhand), when saved.
+    if let Some(eq) = tag.get("equipment") {
+        m.extra.main_hand = eq
+            .get("mainhand")
+            .and_then(|i| text(i.get("id")))
+            .map(Into::into);
+        m.extra.off_hand = eq
+            .get("offhand")
+            .and_then(|i| text(i.get("id")))
+            .map(Into::into);
+    }
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
     m.persistent = flag(tag, "PersistenceRequired");
     m.custom_name = custom_name(tag);
@@ -423,6 +496,19 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 .position(|(n, _)| *n == v)
                 .unwrap_or(0) as u8;
         }
+    }
+    if m.species() == crate::mobs::Species::Allay {
+        if let Some(Tag::List(inv)) = tag.get("Inventory")
+            && let Some(first) = inv.first()
+        {
+            m.extra.ints[1] = number(first.get("count")).unwrap_or(1) as i32;
+        }
+        m.extra.egg_time = number(tag.get("DuplicationCooldown")).unwrap_or(0) as i32;
+        m.extra.tame = tag
+            .get("Brain")
+            .and_then(|b| b.get("memories"))
+            .and_then(|b| b.get("minecraft:liked_player"))
+            .is_some();
     }
     if m.species() == crate::mobs::Species::Camel {
         let sitting = matches!(tag.get("LastPoseTick"), Some(Tag::Long(v)) if *v < 0);

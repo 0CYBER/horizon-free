@@ -243,6 +243,8 @@ impl Game<'_> {
                     "baby": m.is_baby(),
                     "target": m.ai.target.map(|t| format!("{t:?}")),
                     "goals": m.ai.goals.running_names(),
+                    "held": m.extra.main_hand.as_deref(),
+                    "ints": m.extra.ints,
                     "targets": m.ai.targets.running_names(),
                     "path": m.ai.nav.path.as_ref().map(|p| p.nodes.len() - p.next.min(p.nodes.len())),
                     "on_ground": m.on_ground,
@@ -578,6 +580,7 @@ impl Game<'_> {
         self.handle_mob_events(events)?;
         self.tick_projectiles()?;
         self.tick_fangs();
+        self.tick_allays();
         self.tick_player_effects();
         self.piglin_pickups();
         Ok(())
@@ -1595,6 +1598,10 @@ impl Game<'_> {
             .unwrap_or_default();
         let creative = self.creative;
         let selected = self.selected;
+        if self.interact_allay(index, &item) {
+            self.swing_arm();
+            return Ok(true);
+        }
         // AbstractHorse.mobInteract: feed, equip or ride.
         if self.interact_mount(index, &item) {
             self.swing_arm();

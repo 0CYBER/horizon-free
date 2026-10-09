@@ -6,6 +6,7 @@
 //! controls (`control`), `LivingEntity` physics (`living`) and per-species
 //! behaviour, models, animations and sounds.
 pub mod ai;
+pub mod allay;
 pub mod anim;
 pub mod aquatic;
 pub mod camel;
@@ -103,6 +104,14 @@ impl Part {
             .map(|(k, c)| Part::parse(k, c))
             .collect();
         children.sort_by(|a, b| a.name.cmp(&b.name));
+        // A model whose root holds a part also named "root" (allay, vex,
+        // frog...): that inner part is what `root.getChild("root")` and the
+        // keyframe bones mean, so the outer one gives up the name.
+        let name = if name == "root" && children.iter().any(|c| c.name == "root") {
+            ""
+        } else {
+            name
+        };
         Self {
             name: name.to_owned(),
             pose: p,

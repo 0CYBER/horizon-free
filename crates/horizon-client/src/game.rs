@@ -2,6 +2,7 @@
 //! block interaction, inventory and HUD.
 mod advancements;
 mod advancements_screen;
+mod allays;
 mod armor_stands;
 mod beacon;
 mod blockctl;

@@ -85,6 +85,7 @@ pub enum Family {
     Vex,
     Ravager,
     Wither,
+    Allay,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -118,6 +119,7 @@ pub fn family(s: Species) -> Family {
         S::Vex => Family::Vex,
         S::Ravager => Family::Ravager,
         S::Wither => Family::Wither,
+        S::Allay => Family::Allay,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse | S::Camel => {
             Family::Equine
@@ -163,6 +165,7 @@ pub fn register(m: &mut Mob) {
         Family::Vex => super::vex::register(m),
         Family::Ravager => super::ravager::register(m),
         Family::Wither => super::wither::register(m),
+        Family::Allay => super::allay::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -384,6 +387,7 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::ElderGuardian if !m.fluids.in_water => "entity.elder_guardian.ambient_land",
         Species::Axolotl if !m.fluids.in_water => "entity.axolotl.idle_air",
         Species::Bat if m.extra.flag && m.random.next_int_bound(4).unwrap_or(1) != 0 => return,
+        Species::Allay if m.extra.main_hand.is_some() => "entity.allay.ambient_with_item",
         // Shulker.playAmbientSound: silent while closed.
         Species::Shulker if m.extra.counter == 0 => return,
         Species::ZombifiedPiglin if m.ai.target.is_some() => "entity.zombified_piglin.angry",
@@ -555,6 +559,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Vex => super::vex::ai_step(m, w),
         Species::Ravager => super::ravager::ai_step(m, w, events),
         Species::Wither => super::wither::ai_step(m, w, events),
+        Species::Allay => super::allay::ai_step(m),
         Species::Shulker => {
             super::shulker::tick(m, w, events);
             super::shulker::ai_step(m, w, events);
@@ -652,6 +657,8 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
 /// Species damage filters (LivingEntity.hurtServer overrides).
 pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
     match m.species() {
+        // Allay.hurtServer: its liked player cannot hurt it.
+        Species::Allay if m.extra.tame && source.attacker == Some(Who::Player) => false,
         Species::Wither => super::wither::accepts(m, source.kind, source.attacker, false),
         Species::Shulker => super::shulker::accepts(m, source),
         Species::Enderman => super::enderman::on_damage(m, source),
