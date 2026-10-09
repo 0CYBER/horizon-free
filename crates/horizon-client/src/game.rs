@@ -10,6 +10,7 @@ mod creatures;
 mod enchant_effects;
 mod end;
 mod explosion;
+mod fishing;
 mod fov;
 mod frames;
 mod growth;
@@ -538,6 +539,8 @@ struct Game<'a> {
     ender_open: Option<(i32, i32, i32)>,
     /// Contents of broken shulker boxes waiting for their dropped item.
     pending_shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
+    /// The player's fishing hook.
+    hook: Option<fishing::Hook>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     creative_screen: Creative,
@@ -1475,7 +1478,7 @@ impl Game<'_> {
         if self.use_potion_item(&stack)? || self.throw_item(&stack)? {
             return Ok(());
         }
-        if self.raise_shield(self.selected) {
+        if self.raise_shield(self.selected) || self.use_fishing_rod(&stack) {
             return Ok(());
         }
         if &*stack.item == "minecraft:spyglass" {
@@ -2108,6 +2111,7 @@ impl Game<'_> {
         self.tick_item_frames();
         self.tick_armor_stands();
         self.tick_boats();
+        self.tick_fishing();
         self.tick_mining()?;
         self.tick_items();
         self.spawn_loaded_entities();
@@ -3579,6 +3583,7 @@ impl Game<'_> {
         self.frame_geometry(camera, &mut out);
         self.armor_stand_geometry(camera, alpha, &mut out);
         self.boat_geometry(camera, alpha, &mut out);
+        self.fishing_geometry(camera, alpha, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
         let world = &self.world;
         self.particles.render(
@@ -7119,6 +7124,7 @@ pub fn run() -> Result<()> {
         ender_items: vec![None; 27],
         ender_open: None,
         pending_shulker: HashMap::new(),
+        hook: None,
         tnts: Vec::new(),
         hoppers: HashMap::new(),
         creative_screen: Creative::load(&game_root)?,

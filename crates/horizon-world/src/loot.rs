@@ -223,6 +223,32 @@ impl LootData {
         })
     }
 
+    /// LootTable.getRandomItems with the given random (its state is
+    /// advanced), luck and, for fishing, whether the hook is in open water.
+    pub fn roll(
+        &self,
+        table: &str,
+        random: &mut LegacyRandom,
+        luck: f32,
+        biome: Option<&str>,
+        open_water: Option<bool>,
+    ) -> Vec<LootStack> {
+        let Some(json) = self.tables.get(table) else {
+            return Vec::new();
+        };
+        let mut c = Context {
+            data: self,
+            random: random.clone(),
+            biome,
+            visited: Vec::new(),
+            luck,
+            open_water,
+        };
+        let mut items = Vec::new();
+        c.table_raw(table, json, &mut |_, stack| items.push(stack));
+        *random = c.random;
+        items
+    }
     /// LootTable.fill into an empty container of `slots` slots with
     /// `RandomSource.create(seed)`; `biome` is the container's biome for
     /// location checks (None: no origin, checks fail).
@@ -242,6 +268,8 @@ impl LootData {
             random: LegacyRandom::new(seed),
             biome,
             visited: Vec::new(),
+            luck: 0.0,
+            open_water: None,
         };
         let mut items = Vec::new();
         c.table_raw(table, json, &mut |c, stack| {
@@ -327,6 +355,10 @@ struct Context<'a> {
     random: LegacyRandom,
     biome: Option<&'a str>,
     visited: Vec<String>,
+    /// LootContext.getLuck.
+    luck: f32,
+    /// A fishing hook's `is_open_water` for `entity_properties` (None: no entity).
+    open_water: Option<bool>,
 }
 type Sink<'s> = dyn FnMut(&mut Context<'_>, LootStack) + 's;
 
@@ -391,6 +423,16 @@ impl Context<'_> {
                     .into_iter()
                     .flatten()
                     .any(|t| self.condition(t)),
+                // FishingHookPredicate: the only entity property a hook has.
+                "minecraft:entity_properties" => {
+                    let fishing = &c["predicate"]["type_specific"];
+                    match (self.open_water, fishing["type"].as_str()) {
+                        (Some(open), Some("minecraft:fishing_hook")) => fishing["in_open_water"]
+                            .as_bool()
+                            .is_none_or(|want| want == open),
+                        _ => false,
+                    }
+                }
                 "minecraft:random_chance" => {
                     let chance = self.float(&c["chance"]);
                     self.random.next_float() < chance
@@ -667,8 +709,12 @@ impl Context<'_> {
             if !pool["condition"].is_null() && !self.condition(&pool["condition"]) {
                 continue;
             }
-            let rolls = self.int(&pool["rolls"]);
-            // bonus_rolls * luck is 0 with no luck.
+            let bonus = if pool["bonus_rolls"].is_null() {
+                0.0
+            } else {
+                self.float(&pool["bonus_rolls"])
+            };
+            let rolls = self.int(&pool["rolls"]) + (bonus * self.luck).floor() as i32;
             for _ in 0..rolls {
                 self.add_random_item(pool, &mut |c, stack| {
                     let stack = c.modify(&pool["modifier"], stack);
@@ -685,7 +731,13 @@ impl Context<'_> {
         for entry in pool["entries"].as_array().into_iter().flatten() {
             self.expand(entry, &mut valid);
         }
-        let weight = |e: &Value| e["weight"].as_i64().unwrap_or(1).max(0) as i32;
+        // EntryBase.getWeight: max(floor(weight + quality * luck), 0).
+        let luck = self.luck;
+        let weight = |e: &Value| {
+            let w = e["weight"].as_i64().unwrap_or(1) as f32
+                + e["quality"].as_i64().unwrap_or(0) as f32 * luck;
+            w.floor().max(0.0) as i32
+        };
         let total: i32 = valid.iter().map(|e| weight(e)).sum();
         if total == 0 || valid.is_empty() {
             return;
