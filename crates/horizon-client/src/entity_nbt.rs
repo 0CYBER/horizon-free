@@ -246,6 +246,14 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("equipment".into(), Tag::Compound(equipment));
         }
+        "minecraft:creaking" => {
+            // home_pos: the heart it is bound to.
+            if let Some(home) = m.extra.home {
+                map.insert("home_pos".into(), Tag::IntArray(home.to_vec()));
+            } else {
+                map.remove(&"home_pos".into());
+            }
+        }
         "minecraft:villager" => {
             use crate::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
             let data = Tag::compound([
@@ -562,6 +570,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         if sitting {
             m.extra.egg_time = -1 - 400;
         }
+    }
+    if m.species() == crate::mobs::Species::Creaking
+        && let Some(Tag::IntArray(home)) = tag.get("home_pos")
+        && home.len() == 3
+    {
+        crate::mobs::creaking::set_transient(&mut m, [home[0], home[1], home[2]]);
     }
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;

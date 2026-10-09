@@ -11,6 +11,7 @@ pub mod anim;
 pub mod aquatic;
 pub mod camel;
 pub mod control;
+pub mod creaking;
 pub mod cube;
 pub mod data;
 pub mod enderman;
@@ -663,6 +664,17 @@ pub enum MobEvent {
     GiftLoot {
         table: &'static str,
         at: [f64; 3],
+    },
+    /// A creaking bound to the heart at `home` was hurt (`creakingHurt` when a player did it).
+    CreakingHurt {
+        home: [i32; 3],
+        by_player: bool,
+        id: u32,
+    },
+    /// `Creaking.tearDown`: crumbling particles around the creaking.
+    CreakingTearDown {
+        center: [f64; 3],
+        spread: [f64; 3],
     },
 }
 /// How a spawned-by-kind mob should be set up.

@@ -102,6 +102,7 @@ pub mod ticks;
 
 mod bonemeal;
 mod buckets;
+mod creaking;
 mod falling;
 mod feature_world;
 mod fluids;

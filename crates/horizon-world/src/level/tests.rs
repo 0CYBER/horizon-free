@@ -43,6 +43,7 @@ pub(crate) struct TestLevel {
     air: BlockStateId,
     random: LegacyRandom,
     pub time: i64,
+    pub day_time: i64,
     pub events: Vec<LevelEvent>,
     pub block_light: HashMap<BlockPos, i32>,
 }
@@ -53,6 +54,7 @@ impl TestLevel {
             air: b.air(),
             random: LegacyRandom::new(42),
             time: 0,
+            day_time: 0,
             events: Vec::new(),
             block_light: HashMap::new(),
         }
@@ -73,6 +75,9 @@ impl LevelAccess for TestLevel {
     }
     fn game_time(&self) -> i64 {
         self.time
+    }
+    fn day_time(&self) -> i64 {
+        self.day_time
     }
     fn block_light(&self, pos: BlockPos) -> i32 {
         self.block_light.get(&pos).copied().unwrap_or(0)
@@ -979,4 +984,49 @@ fn dispenser_buckets_pick_up_and_empty() {
         "minecraft:item.bucket.empty_powder_snow"
     ));
     assert_eq!(w.name(at), "powder_snow[]");
+}
+
+#[test]
+fn creaking_heart_follows_its_logs_and_the_night() {
+    let mut w = world!();
+    let heart_at = BlockPos::new(0, 10, 0);
+    let log = |w: &World, axis: &str| w.id("pale_oak_log", &[("axis", axis)]);
+    let heart = w.id(
+        "creaking_heart",
+        &[("axis", "y"), ("creaking_heart_state", "uprooted")],
+    );
+    let (below, above) = (BlockPos::new(0, 9, 0), BlockPos::new(0, 11, 0));
+    w.put(heart_at, heart);
+    w.put(below, log(&w, "y"));
+    // A log along another axis does not count.
+    w.put(above, log(&w, "x"));
+    assert!(
+        !w.b()
+            .creaking_heart_has_logs(&mut w.level, &mut w.ticks, heart_at, heart)
+    );
+    // Day: a log update wakes the uprooted heart to dormant.
+    let up = log(&w, "y");
+    w.set(above, up);
+    for _ in 0..3 {
+        w.tick();
+    }
+    assert_eq!(w.prop(heart_at, "creaking_heart_state"), "dormant");
+    // Night: the same trunk wakes a fresh heart up.
+    w.level.day_time = 14000;
+    w.put(heart_at, heart);
+    w.put(above, w.b().air());
+    w.set(above, up);
+    for _ in 0..3 {
+        w.tick();
+    }
+    assert_eq!(w.prop(heart_at, "creaking_heart_state"), "awake");
+    // Placed without logs it stays uprooted.
+    w.put(above, w.b().air());
+    w.put(heart_at, heart);
+    let air = w.b().air();
+    w.set(above, air);
+    for _ in 0..3 {
+        w.tick();
+    }
+    assert_eq!(w.prop(heart_at, "creaking_heart_state"), "uprooted");
 }

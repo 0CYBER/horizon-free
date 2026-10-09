@@ -970,6 +970,14 @@ impl Game<'_> {
                     }
                 },
                 MobEvent::Breed { parent, partner } => self.breed(parent, partner),
+                MobEvent::CreakingHurt {
+                    home,
+                    by_player,
+                    id,
+                } => self.creaking_hurt(home, id, by_player),
+                MobEvent::CreakingTearDown { center, spread } => {
+                    self.creaking_tear_down(center, spread)
+                }
                 MobEvent::GiftLoot { table, at } => {
                     let drops =
                         self.res

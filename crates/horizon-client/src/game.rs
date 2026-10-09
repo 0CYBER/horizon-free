@@ -13,6 +13,7 @@ mod chat;
 mod combat;
 mod commands;
 mod control;
+mod creaking;
 mod creatures;
 mod crossbow;
 mod dispenser;
@@ -306,6 +307,17 @@ impl LevelAccess for GameLevel<'_> {
     ) -> i32 {
         if let Some((_, comparator)) = jukebox::jukebox_signals(self.world, self.items, pos) {
             return comparator;
+        }
+        if let Some(signal) = creaking::heart_signal(self.world, pos) {
+            return if self.registry.state(_state).is_some_and(|s| {
+                s.properties
+                    .get("creaking_heart_state")
+                    .is_some_and(|v| v == "uprooted")
+            }) {
+                0
+            } else {
+                signal
+            };
         }
         if let Some(signal) = books::lectern_signal(self.world, pos) {
             return signal;
@@ -613,6 +625,7 @@ struct Game<'a> {
     hook: Option<fishing::Hook>,
     tridents: Vec<trident::ThrownTrident>,
     rockets: Vec<fireworks::Rocket>,
+    creaking: creaking::CreakingState,
     trident_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
@@ -1609,6 +1622,7 @@ impl Game<'_> {
             None
         }
         .unwrap_or(self.world.air);
+        self.creaking_heart_broken(pos);
         if let Some(entity) = self.world.block_entities.remove(&(pos[0], pos[1], pos[2])) {
             // Containers.dropContents (shulker boxes keep theirs).
             let name = facts.name.clone();
@@ -3043,7 +3057,8 @@ impl Game<'_> {
                 BlockEntity::Sign(_)
                 | BlockEntity::Jukebox(_)
                 | BlockEntity::Beacon(_)
-                | BlockEntity::Lectern(_),
+                | BlockEntity::Lectern(_)
+                | BlockEntity::CreakingHeart(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -3268,7 +3283,8 @@ impl Game<'_> {
                     BlockEntity::Sign(_)
                     | BlockEntity::Jukebox(_)
                     | BlockEntity::Beacon(_)
-                    | BlockEntity::Lectern(_),
+                    | BlockEntity::Lectern(_)
+                    | BlockEntity::CreakingHeart(_),
                 ) => {}
                 None => {
                     let texture = if self.craft_size == 3 {
@@ -4312,6 +4328,7 @@ impl Game<'_> {
         self.tick_hoppers()?;
         self.tick_jukeboxes();
         self.tick_beacons();
+        self.tick_creaking_hearts()?;
         // ChestLidController: 0.1 per tick towards open/closed.
         if let Some(key) = self.container {
             self.chest_open.entry(key).or_insert((0.0, 0.0));
@@ -7671,6 +7688,7 @@ pub fn run() -> Result<()> {
         hook: None,
         tridents: Vec::new(),
         rockets: Vec::new(),
+        creaking: Default::default(),
         trident_model: horizon_client::mobs::load_model(&root, "minecraft:trident#main"),
         tnts: Vec::new(),
         hoppers: HashMap::new(),

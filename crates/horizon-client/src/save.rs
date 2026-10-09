@@ -400,6 +400,11 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
                 entries.push(("Page", Tag::Int(l.page)));
             }
         }
+        BlockEntity::CreakingHeart(h) => {
+            if let Some((_, uuid)) = h.creaking {
+                entries.push(("creaking", uuid_tag(uuid)));
+            }
+        }
     }
     Tag::compound(entries)
 }
@@ -420,6 +425,13 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
                 playing,
             }),
         ));
+    }
+    if id == "minecraft:creaking_heart" {
+        let heart = crate::containers::CreakingHeart {
+            creaking: uuid_from_tag(tag.get("creaking")).map(|uuid| (None, uuid)),
+            ..Default::default()
+        };
+        return Some((pos, BlockEntity::CreakingHeart(Box::new(heart))));
     }
     if id == "minecraft:lectern" {
         let lectern = crate::containers::Lectern {
@@ -474,7 +486,10 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             };
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
-        BlockEntity::Jukebox(_) | BlockEntity::Beacon(_) | BlockEntity::Lectern(_) => {}
+        BlockEntity::Jukebox(_)
+        | BlockEntity::Beacon(_)
+        | BlockEntity::Lectern(_)
+        | BlockEntity::CreakingHeart(_) => {}
     }
     Some((pos, entity))
 }
@@ -2061,6 +2076,37 @@ mod tests {
         );
         let r = random_uuid();
         assert_eq!((r[1] >> 12) & 0xF, 4, "version 4");
+    }
+    #[test]
+    fn creaking_heart_keeps_its_protector_uuid() {
+        use crate::containers::{BlockEntity, CreakingHeart};
+        let heart = CreakingHeart {
+            creaking: Some((Some(7), [1, 2, 3, 4])),
+            ..Default::default()
+        };
+        let tag = encode_block_entity(
+            (3, 70, -5),
+            &BlockEntity::CreakingHeart(Box::new(heart)),
+            "minecraft:creaking_heart",
+        );
+        assert_eq!(
+            tag.get("creaking"),
+            Some(&Tag::IntArray(vec![1, 2, 3, 4])),
+            "vanilla stores the protector's UUID under `creaking`"
+        );
+        let (pos, entity) = decode_block_entity(&tag).expect("heart decodes");
+        assert_eq!(pos, (3, 70, -5));
+        let BlockEntity::CreakingHeart(h) = entity else {
+            panic!("a creaking heart");
+        };
+        // The entity id is resolved again once the creaking is loaded.
+        assert_eq!(h.creaking, Some((None, [1, 2, 3, 4])));
+        let lonely = encode_block_entity(
+            (0, 0, 0),
+            &BlockEntity::CreakingHeart(Box::default()),
+            "minecraft:creaking_heart",
+        );
+        assert!(lonely.get("creaking").is_none());
     }
     #[test]
     fn light_nibbles_use_vanilla_order() {
