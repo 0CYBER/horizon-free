@@ -66,6 +66,7 @@ fn undead(s: Species) -> bool {
             | Species::Skeleton
             | Species::Stray
             | Species::Bogged
+            | Species::Parched
             | Species::WitherSkeleton
             | Species::ZombieHorse
             | Species::SkeletonHorse

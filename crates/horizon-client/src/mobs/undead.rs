@@ -74,7 +74,7 @@ pub fn register(m: &mut Mob) {
             t.add(3, NearestTarget::species(&[S::Axolotl], true).interval(10));
             m.ai.nav.can_float = false;
         }
-        S::Skeleton | S::Stray | S::Bogged | S::WitherSkeleton => {
+        S::Skeleton | S::Stray | S::Bogged | S::Parched | S::WitherSkeleton => {
             let species = m.species();
             let g = &mut m.ai.goals;
             g.add(2, RestrictSun);
@@ -107,7 +107,11 @@ pub fn register(m: &mut Mob) {
                 m.ai.goals.add(4, MeleeAttack::new(1.2, false));
             } else {
                 m.extra.main_hand = Some("minecraft:bow".into());
-                let interval = if m.species() == S::Bogged { 70 } else { 40 };
+                let interval = if matches!(m.species(), S::Bogged | S::Parched) {
+                    70
+                } else {
+                    40
+                };
                 m.ai.goals.add(4, BowAttack::new(1.0, interval, 15.0));
             }
         }
@@ -398,6 +402,7 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
     let effect = match m.species() {
         Species::Stray => Some(("minecraft:slowness", 600)),
         Species::Bogged => Some(("minecraft:poison", 100)),
+        Species::Parched => Some(("minecraft:weakness", 600)),
         _ => None,
     };
     let mut p = Projectile::new(

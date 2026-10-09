@@ -97,6 +97,7 @@ pub fn family(s: Species) -> Family {
         | S::Skeleton
         | S::Stray
         | S::Bogged
+        | S::Parched
         | S::WitherSkeleton
         | S::ZombifiedPiglin => Family::Undead,
         S::Creeper | S::Spider | S::CaveSpider => Family::Hostile,
@@ -515,6 +516,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         | Species::Skeleton
         | Species::Stray
         | Species::Bogged
+        | Species::Parched
         | Species::WitherSkeleton
         | Species::ZombifiedPiglin => undead::custom_server_ai_step(m, cx),
         Species::Enderman => super::enderman::custom_server_ai_step(m, cx),

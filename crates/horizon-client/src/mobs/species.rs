@@ -52,6 +52,7 @@ pub enum Species {
     Skeleton,
     Stray,
     Bogged,
+    Parched,
     WitherSkeleton,
     Creeper,
     Spider,
@@ -714,6 +715,20 @@ pub const ALL: &[Def] = &[
         Baby::None
     ),
     def!(
+        Parched,
+        "parched",
+        "parched#main",
+        "entity/skeleton/parched",
+        A::Skeleton,
+        [
+            "entity.parched.ambient",
+            "entity.parched.hurt",
+            "entity.parched.death"
+        ],
+        Some("entity.parched.step"),
+        Baby::None
+    ),
+    def!(
         Bogged,
         "bogged",
         "bogged#main",
@@ -1178,6 +1193,7 @@ impl Def {
                 | S::Skeleton
                 | S::Stray
                 | S::Bogged
+                | S::Parched
                 | S::WitherSkeleton
                 | S::ZombieHorse
                 | S::SkeletonHorse
@@ -1241,6 +1257,7 @@ impl Def {
                     | S::Skeleton
                     | S::Stray
                     | S::Bogged
+                    | S::Parched
                     | S::Phantom
             ),
             undead,
@@ -1280,6 +1297,7 @@ impl Def {
                 | S::Skeleton
                 | S::Stray
                 | S::Bogged
+                | S::Parched
                 | S::WitherSkeleton
                 | S::Creeper
                 | S::Spider
@@ -1413,7 +1431,9 @@ impl Def {
             Species::Zombie | Species::Husk | Species::Drowned | Species::ZombieVillager => {
                 Brain::Zombie
             }
-            Species::Skeleton | Species::Stray | Species::Bogged => Brain::Skeleton,
+            Species::Skeleton | Species::Stray | Species::Bogged | Species::Parched => {
+                Brain::Skeleton
+            }
             Species::Spider | Species::CaveSpider => Brain::Spider,
             Species::Creeper => Brain::Creeper,
             _ => Brain::Passive,

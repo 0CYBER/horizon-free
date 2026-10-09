@@ -823,7 +823,11 @@ fn held_items(
 ) {
     let skeleton = matches!(
         m.species(),
-        Species::Skeleton | Species::Stray | Species::Bogged | Species::WitherSkeleton
+        Species::Skeleton
+            | Species::Stray
+            | Species::Bogged
+            | Species::Parched
+            | Species::WitherSkeleton
     );
     if !super::illager::shows_item(m) {
         return;
