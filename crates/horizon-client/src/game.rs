@@ -1678,7 +1678,8 @@ impl Game<'_> {
                 || self.place_minecart(&hit, &stack)
                 || self.place_painting(&hit, &stack)
                 || self.place_item_frame(&hit, &stack)
-                || self.place_armor_stand(&hit, &stack))
+                || self.place_armor_stand(&hit, &stack)
+                || self.place_end_crystal(&hit, &stack))
         {
             return Ok(());
         }

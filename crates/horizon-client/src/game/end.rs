@@ -590,7 +590,7 @@ impl Game<'_> {
     }
 
     /// EndPodiumFeature(active).place at `origin` (the portal level).
-    fn place_podium(&mut self, origin: [i32; 3], active: bool) -> Result<()> {
+    pub(super) fn place_podium(&mut self, origin: [i32; 3], active: bool) -> Result<()> {
         for y in origin[1] - 1..=origin[1] + 32 {
             for z in origin[2] - 4..=origin[2] + 4 {
                 for x in origin[0] - 4..=origin[0] + 4 {
