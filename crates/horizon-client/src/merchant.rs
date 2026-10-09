@@ -98,6 +98,23 @@ impl Trader {
     }
 }
 
+/// `Villager.updateSpecialPrices`: the reputation and Hero of the Village
+/// discounts of a player, from scratch.
+pub fn update_special_prices(offers: &mut [MerchantOffer], reputation: i32, hero: Option<i32>) {
+    // 0.3F + 0.0625F * amplifier, widened from float.
+    let hero_modifier = hero.map_or(0.0, |a| f64::from(0.3f32 + 0.0625f32 * a as f32));
+    for offer in offers {
+        offer.special_price_diff = 0;
+        if reputation != 0 {
+            offer.special_price_diff -= (reputation as f32 * offer.price_multiplier).floor() as i32;
+        }
+        if hero_modifier > 0.0 {
+            let reduction =
+                (hero_modifier * f64::from(offer.base_cost_a.stack.count)).floor() as i32;
+            offer.special_price_diff -= reduction.max(1);
+        }
+    }
+}
 /// An `ItemCost`: item and count (component predicates are not used by the
 /// 26.3 trade data except for one exact match, kept as the stack's data).
 #[derive(Clone, Debug, PartialEq)]
@@ -708,6 +725,32 @@ mod tests {
         assert!(!can_level_up(5));
     }
 
+    #[test]
+    fn reputation_and_heroes_lower_prices() {
+        let items = items();
+        let mut offers = vec![offer(10, None), offer(1, None)];
+        // Reputation 50 with a 0.2 multiplier: 10 off, floored per offer.
+        update_special_prices(&mut offers, 50, None);
+        assert_eq!(offers[0].special_price_diff, -10);
+        assert_eq!(offers[0].cost_a_count(&items), 1);
+        assert_eq!(offers[1].special_price_diff, -10);
+        // Bad reputation raises the price (-30 * 0.2 = -6 floors to -6).
+        update_special_prices(&mut offers, -30, None);
+        assert_eq!(offers[0].special_price_diff, 6);
+        assert_eq!(offers[0].cost_a_count(&items), 16);
+        // Hero of the Village I: 0.3 * 10 = 3 off, at least 1.
+        update_special_prices(&mut offers, 0, Some(0));
+        assert_eq!(offers[0].special_price_diff, -3);
+        assert_eq!(offers[1].special_price_diff, -1);
+        // Level III: 0.3 + 0.125 = 0.425 -> 4 off a ten emerald price.
+        update_special_prices(&mut offers, 0, Some(2));
+        assert_eq!(offers[0].special_price_diff, -4);
+        // Both stack, from scratch each time.
+        update_special_prices(&mut offers, 25, Some(0));
+        assert_eq!(offers[0].special_price_diff, -5 - 3);
+        update_special_prices(&mut offers, 0, None);
+        assert_eq!(offers[0].special_price_diff, 0);
+    }
     #[test]
     fn offers_follow_the_trade_data() {
         let items = items();

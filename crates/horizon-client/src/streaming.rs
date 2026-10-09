@@ -329,10 +329,23 @@ impl Streaming {
                     self.decorated.insert(key);
                     if self.in_range(key.0, key.1, 2) {
                         self.generated_total += 1;
+                        // A chunk saved with its light needs no light job; its
+                        // unlit neighbours still light themselves from it.
+                        let loaded = chunk.light_loaded;
                         world.chunks.insert(key, Arc::new(chunk));
+                        if loaded {
+                            self.lit.insert(key);
+                            for sy in 0..SECTIONS as i32 {
+                                world.dirty_sections.insert((key.0, sy, key.1));
+                            }
+                        }
                         for dz in -1..=1 {
                             for dx in -1..=1 {
-                                world.dirty_light.insert((key.0 + dx, key.1 + dz));
+                                let n = (key.0 + dx, key.1 + dz);
+                                if !loaded || world.chunks.get(&n).is_some_and(|c| !c.light_loaded)
+                                {
+                                    world.dirty_light.insert(n);
+                                }
                             }
                         }
                     }

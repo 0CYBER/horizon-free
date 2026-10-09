@@ -14,8 +14,10 @@ mod chat;
 mod combat;
 mod commands;
 mod control;
+mod creaking;
 mod creatures;
 mod crossbow;
+mod dispenser;
 mod dragon;
 mod enchant_effects;
 mod end;
@@ -26,6 +28,7 @@ mod fishing;
 mod fov;
 mod frames;
 mod game_mode;
+mod golems;
 mod growth;
 mod jukebox;
 mod lightning;
@@ -45,6 +48,7 @@ mod perspective;
 mod piglins;
 mod postprocess;
 mod potions;
+mod raids;
 mod recipe_book;
 mod remote;
 mod render_control;
@@ -63,6 +67,7 @@ mod tnt;
 mod totem;
 mod trading;
 mod trident;
+mod villagers;
 mod wither;
 use horizon_client::{
     Result,
@@ -309,6 +314,17 @@ impl LevelAccess for GameLevel<'_> {
         if let Some((_, comparator)) = jukebox::jukebox_signals(self.world, self.items, pos) {
             return comparator;
         }
+        if let Some(signal) = creaking::heart_signal(self.world, pos) {
+            return if self.registry.state(_state).is_some_and(|s| {
+                s.properties
+                    .get("creaking_heart_state")
+                    .is_some_and(|v| v == "uprooted")
+            }) {
+                0
+            } else {
+                signal
+            };
+        }
         if let Some(signal) = books::lectern_signal(self.world, pos) {
             return signal;
         }
@@ -521,6 +537,7 @@ struct Game<'a> {
     mobs: Vec<Mob>,
     arrows: Vec<Arrow>,
     creatures: creatures::Creatures,
+    raiding: raids::Raiding,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
     chest_open: HashMap<(i32, i32, i32), (f32, f32)>,
@@ -621,6 +638,7 @@ struct Game<'a> {
     hook: Option<fishing::Hook>,
     tridents: Vec<trident::ThrownTrident>,
     rockets: Vec<fireworks::Rocket>,
+    creaking: creaking::CreakingState,
     trident_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
@@ -1618,6 +1636,7 @@ impl Game<'_> {
             None
         }
         .unwrap_or(self.world.air);
+        self.creaking_heart_broken(pos);
         if let Some(entity) = self.world.block_entities.remove(&(pos[0], pos[1], pos[2])) {
             // Containers.dropContents (shulker boxes keep theirs).
             let name = facts.name.clone();
@@ -1842,6 +1861,7 @@ impl Game<'_> {
         self.stats.add("used", &stack.item, 1);
         self.trigger_block("minecraft:placed_block", target, &stack);
         self.check_wither_spawn(target)?;
+        self.check_golem_spawn(target)?;
         self.consume_held();
         Ok(())
     }
@@ -2435,6 +2455,7 @@ impl Game<'_> {
             self.screen = Screen::Dead;
             self.capture(false);
         }
+        self.tick_omens();
         self.tick_effects();
         self.tick_burning();
         self.tick_using();
@@ -3059,7 +3080,8 @@ impl Game<'_> {
                 | BlockEntity::Jukebox(_)
                 | BlockEntity::Beacon(_)
                 | BlockEntity::Lectern(_)
-                | BlockEntity::Banner(_),
+                | BlockEntity::Banner(_)
+                | BlockEntity::CreakingHeart(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -3258,7 +3280,8 @@ impl Game<'_> {
                     | BlockEntity::Jukebox(_)
                     | BlockEntity::Beacon(_)
                     | BlockEntity::Lectern(_)
-                    | BlockEntity::Banner(_),
+                    | BlockEntity::Banner(_)
+                    | BlockEntity::CreakingHeart(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -4336,6 +4359,7 @@ impl Game<'_> {
         self.tick_mount_menu();
         self.tick_jukeboxes();
         self.tick_beacons();
+        self.tick_creaking_hearts()?;
         // ChestLidController: 0.1 per tick towards open/closed.
         if let Some(key) = self.container {
             self.chest_open.entry(key).or_insert((0.0, 0.0));
@@ -6531,6 +6555,7 @@ impl Game<'_> {
             .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
         self.save_entities()?;
         self.save_maps();
+        self.save_raids();
         self.save_fight();
         self.save_stats();
         self.save_advancements();
@@ -7648,6 +7673,7 @@ pub fn run() -> Result<()> {
         mobs: Vec::new(),
         arrows: Vec::new(),
         creatures: Default::default(),
+        raiding: Default::default(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
         chest_open: HashMap::new(),
@@ -7722,6 +7748,7 @@ pub fn run() -> Result<()> {
         hook: None,
         tridents: Vec::new(),
         rockets: Vec::new(),
+        creaking: Default::default(),
         trident_model: horizon_client::mobs::load_model(&root, "minecraft:trident#main"),
         tnts: Vec::new(),
         hoppers: HashMap::new(),

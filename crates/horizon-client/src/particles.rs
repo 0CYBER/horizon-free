@@ -41,6 +41,7 @@ macro_rules! particle_types {
 particle_types! {
     Block = "block",
     BlockCrumble = "block_crumble",
+    Trail = "trail",
     DustPillar = "dust_pillar",
     FallingDust = "falling_dust",
     Smoke = "smoke",
@@ -140,6 +141,8 @@ pub struct ParticleOptions {
     pub color: [f32; 4],
     /// `DustParticleOptions.scale`, `PowerParticleOption.power`, `SpellParticleOption.power`.
     pub scale: f32,
+    /// `TrailParticleOption`: the point it flies to and how many ticks it takes.
+    pub trail: Option<([f64; 3], i32)>,
 }
 impl ParticleOptions {
     pub fn simple(ty: ParticleType) -> Self {
@@ -148,6 +151,20 @@ impl ParticleOptions {
             block: None,
             color: [1.0; 4],
             scale: 1.0,
+            trail: None,
+        }
+    }
+    /// `TrailParticleOption(target, color, duration)`.
+    pub fn trail(target: [f64; 3], rgb: u32, duration: i32) -> Self {
+        Self {
+            color: [
+                ((rgb >> 16) & 255) as f32 / 255.0,
+                ((rgb >> 8) & 255) as f32 / 255.0,
+                (rgb & 255) as f32 / 255.0,
+                1.0,
+            ],
+            trail: Some((target, duration)),
+            ..Self::simple(ParticleType::Trail)
         }
     }
     pub fn block(ty: ParticleType, sprite: String, tint: u32) -> Self {
@@ -260,6 +277,10 @@ enum Behaviour {
     },
     DragonBreath {
         hit_ground: bool,
+    },
+    /// `TrailParticle`: eases towards its target over its lifetime.
+    Trail {
+        target: [f64; 3],
     },
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1662,6 +1683,24 @@ impl ParticleEngine {
                 q.set_power(o.scale);
                 q
             }
+            T::Trail => {
+                let (target, duration) = o.trail?;
+                let mut q = Particle::at(r, ty, p);
+                let jitter = |r: &mut LegacyRandom| 0.875 + r.next_float() * 0.25;
+                let (jr, jg, jb) = (jitter(r), jitter(r), jitter(r));
+                q.set_color(
+                    (o.color[0] * jr).min(1.0),
+                    (o.color[1] * jg).min(1.0),
+                    (o.color[2] * jb).min(1.0),
+                );
+                q.size = 0.26;
+                q.lifetime = duration;
+                q.has_physics = false;
+                q.free_move = true;
+                q.light = Light::FullBright;
+                q.behaviour = Behaviour::Trail { target };
+                q
+            }
         };
         if particle.set.is_some() {
             particle.sprite = self.first(ty);
@@ -2145,6 +2184,19 @@ impl ParticleEngine {
                     start[1] + p.velocity[1] * f64::from(pos) - f64::from(pp * 1.2),
                     start[2] + p.velocity[2] * f64::from(pos),
                 ];
+            }
+            Behaviour::Trail { target } => {
+                p.previous = p.position;
+                let age = p.age;
+                p.age += 1;
+                if age >= p.lifetime {
+                    p.removed = true;
+                    return;
+                }
+                let alpha = 1.0 / f64::from((p.lifetime - p.age).max(1));
+                for i in 0..3 {
+                    p.position[i] += (target[i] - p.position[i]) * alpha;
+                }
             }
             Behaviour::HugeExplosion => {
                 p.previous = p.position;

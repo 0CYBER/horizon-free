@@ -87,6 +87,7 @@ pub enum Family {
     Wither,
     Allay,
     Villager,
+    Creaking,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -121,6 +122,7 @@ pub fn family(s: Species) -> Family {
         S::Ravager => Family::Ravager,
         S::Wither => Family::Wither,
         S::Allay => Family::Allay,
+        S::Creaking => Family::Creaking,
         S::Villager => Family::Villager,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse | S::Camel => {
@@ -169,7 +171,9 @@ pub fn register(m: &mut Mob) {
         Family::Wither => super::wither::register(m),
         Family::Allay => super::allay::register(m),
         Family::Villager => super::villager::register(m),
+        Family::Creaking => super::creaking::register(m),
     }
+    super::raider::register(m);
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
 fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
@@ -251,7 +255,11 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
         return false;
     }
     base_tick(m, w, events);
-    if m.death_time >= 20 {
+    if m.death_time >= super::creaking::death_limit(m) {
+        // Creaking.tickDeath: a heart's creaking crumbles away.
+        if super::creaking::is_creaking(m) && super::creaking::tearing_down(m) {
+            super::creaking::tear_down(m, events);
+        }
         return false;
     }
     ai_step(m, w, events);
@@ -391,6 +399,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Axolotl if !m.fluids.in_water => "entity.axolotl.idle_air",
         Species::Bat if m.extra.flag && m.random.next_int_bound(4).unwrap_or(1) != 0 => return,
         Species::Allay if m.extra.main_hand.is_some() => "entity.allay.ambient_with_item",
+        // Creaking.getAmbientSound: silent while awake.
+        Species::Creaking if m.extra.flag => return,
         // Shulker.playAmbientSound: silent while closed.
         Species::Shulker if m.extra.counter == 0 => return,
         Species::ZombifiedPiglin if m.ai.target.is_some() => "entity.zombified_piglin.angry",
@@ -405,6 +415,9 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 /// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
 fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if super::creaking::is_creaking(m) {
+        super::creaking::update(m, w, events);
+    }
     if m.ai.no_jump_delay > 0 {
         m.ai.no_jump_delay -= 1;
     }
@@ -486,6 +499,10 @@ fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
 /// Mob.serverAiStep
 fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.ai.no_action_time += 1;
+    // A creaking looked at stands still.
+    if super::creaking::is_creaking(m) && !super::creaking::can_move(m) {
+        return;
+    }
     // A saddled mount follows its rider instead of its goals.
     if super::equine::controlled(m) {
         super::equine::ridden_step(m);
@@ -587,6 +604,10 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
     }
     let Some(p) = &w.player else { return true };
     let d = m.distance_sqr(p.position);
+    // Patrols and raiders (`removeWhenFarAway`, `requiresCustomPersistence`).
+    if super::raider::keeps_alive(m, d) {
+        return true;
+    }
     let despawn = if m.kind.category == "water_ambient" {
         64.0
     } else {
@@ -664,6 +685,7 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
     match m.species() {
         // Allay.hurtServer: its liked player cannot hurt it.
         Species::Allay if m.extra.tame && source.attacker == Some(Who::Player) => false,
+        Species::Creaking => super::creaking::accepts_damage(m, source),
         Species::Wither => super::wither::accepts(m, source.kind, source.attacker, false),
         Species::Shulker => super::shulker::accepts(m, source),
         Species::Enderman => super::enderman::on_damage(m, source),
@@ -706,6 +728,9 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     }
     if m.species() == Species::Ravager {
         super::ravager::on_attack(m, cx.events);
+    }
+    if super::creaking::is_creaking(m) {
+        super::creaking::on_attack(m, cx.events);
     }
     let mut amount = m.attrs.attack_damage;
     let from = [m.position.x, m.position.y, m.position.z];

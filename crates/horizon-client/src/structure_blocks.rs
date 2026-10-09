@@ -59,11 +59,18 @@ pub fn block_entities(
                 .iter_mut()
                 .zip(loot.fill(&table, seed, 27, Some(biome)))
             {
-                *slot = stack.map(|s| ItemStack {
-                    item: Arc::from(s.item.as_str()),
-                    count: s.count.max(0) as u32,
-                    damage: s.damage.max(0) as u32,
-                    extra: None,
+                *slot = stack.map(|s| {
+                    let mut item = ItemStack {
+                        item: Arc::from(s.item.as_str()),
+                        count: s.count.max(0) as u32,
+                        damage: s.damage.max(0) as u32,
+                        extra: None,
+                    };
+                    // An ominous bottle's level (the default, 0, is no component).
+                    if let Some(level) = s.ominous_amplifier.filter(|l| *l > 0) {
+                        item.data_mut().ominous_amplifier = Some(level.clamp(0, 4) as u8);
+                    }
+                    item
                 });
             }
         }

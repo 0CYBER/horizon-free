@@ -58,6 +58,8 @@ pub enum BlockEntity {
     Beacon(Box<Beacon>),
     /// `LecternBlockEntity`: the book and the open page.
     Lectern(Lectern),
+    /// `CreakingHeartBlockEntity`: its protector and the hurt emitter.
+    CreakingHeart(Box<CreakingHeart>),
     /// `BannerBlockEntity`: the pattern layers.
     Banner(Banner),
     /// `CrafterBlockEntity`.
@@ -116,6 +118,18 @@ pub struct Banner {
     pub layers: Vec<crate::banner::BannerLayer>,
     pub name: Option<String>,
 }
+/// `CreakingHeartBlockEntity` (the logic is in `game/creaking.rs`).
+#[derive(Clone, Debug, Default)]
+pub struct CreakingHeart {
+    /// The protector: its entity id once resolved, and its UUID (the saved form).
+    pub creaking: Option<(Option<u32>, [i32; 4])>,
+    pub ticks_existed: i64,
+    pub ticker: i32,
+    /// Ticks left of the hurt effect (`emitter`) and where it heads.
+    pub emitter: i32,
+    pub emitter_target: Option<[f64; 3]>,
+    pub output_signal: i32,
+}
 #[derive(Clone, Debug, Default)]
 pub struct Lectern {
     pub book: Option<ItemStack>,
@@ -157,6 +171,9 @@ impl BlockEntity {
                 cooking_total: 200,
                 speed: 1.0,
             }));
+        }
+        if name == "minecraft:creaking_heart" {
+            return Some(Self::CreakingHeart(Box::default()));
         }
         if name == "minecraft:lectern" {
             return Some(Self::Lectern(Lectern::default()));
@@ -221,6 +238,7 @@ impl BlockEntity {
             Self::Lectern(_) => "minecraft:lectern",
             Self::Banner(_) => "minecraft:banner",
             Self::Crafter(_) => "minecraft:crafter",
+            Self::CreakingHeart(_) => "minecraft:creaking_heart",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -230,7 +248,7 @@ impl BlockEntity {
             Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
             Self::Sign(_) => Vec::new(),
             Self::Jukebox(j) => j.record.iter().cloned().collect(),
-            Self::Beacon(_) => Vec::new(),
+            Self::Beacon(_) | Self::CreakingHeart(_) => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
             Self::Banner(_) => Vec::new(),
             Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
@@ -247,6 +265,7 @@ impl BlockEntity {
             | Self::Lectern(_)
             | Self::Banner(_) => &[],
             Self::Crafter(c) => &c.items,
+            Self::CreakingHeart(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -260,6 +279,7 @@ impl BlockEntity {
             | Self::Lectern(_)
             | Self::Banner(_) => &mut [],
             Self::Crafter(c) => &mut c.items,
+            Self::CreakingHeart(_) => &mut [],
         }
     }
 }
