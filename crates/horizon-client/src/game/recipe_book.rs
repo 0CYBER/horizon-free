@@ -173,6 +173,31 @@ impl Game<'_> {
         search.reset_blink();
     }
 
+    /// The toast for newly unlocked recipes: one for a burst of unlocks.
+    pub(super) fn recipe_toast(&mut self, recipes: &[String]) {
+        if recipes.is_empty() || self.adv.quiet {
+            return;
+        }
+        self.ensure_book();
+        let icon = self
+            .recipe_ui
+            .book
+            .as_ref()
+            .and_then(|b| recipes.iter().find_map(|id| b.entry(id)))
+            .map(|e| e.result.item.to_string());
+        let Some(icon) = icon else { return };
+        let fresh = self
+            .adv
+            .toasts
+            .back()
+            .is_some_and(|t| t.is_recipe() && !t.was_shown());
+        if !fresh {
+            self.adv
+                .toasts
+                .push_back(super::advancements::Toast::recipe(&icon));
+        }
+    }
+
     // ---- recipes and what can be crafted ----
 
     /// The grid size of the open crafting menu.
