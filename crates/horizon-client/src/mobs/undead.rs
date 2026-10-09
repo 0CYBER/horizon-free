@@ -38,6 +38,22 @@ pub fn register(m: &mut Mob) {
                 .interval(10),
             );
         }
+        S::ZombifiedPiglin => {
+            // ZombifiedPiglin.addBehaviourGoals: neutral until provoked.
+            let g = &mut m.ai.goals;
+            g.add(8, LookAtPlayer::new(8.0));
+            g.add(8, RandomLookAround::default());
+            g.add(2, MeleeAttack::new(1.0, false).zombie());
+            g.add(7, Stroll::avoiding_water(1.0));
+            let t = &mut m.ai.targets;
+            t.add(1, HurtByTarget::new().alert());
+            t.add(
+                2,
+                NearestTarget::player(true)
+                    .interval(10)
+                    .when(|m, _| m.extra.anger > 0),
+            );
+        }
         S::Drowned => {
             let g = &mut m.ai.goals;
             g.add(1, DrownedGoToWater::default());
@@ -109,7 +125,79 @@ fn drowned_can_attack(m: &Mob, w: &super::MobWorld) -> bool {
     !w.daylight || w.fluid(x, y, z) == crate::blocks::Fluid::Water || m.fluids.in_water
 }
 /// Zombie drowning conversion (Zombie.DrowningTracker) and husk -> zombie.
+/// `ZombifiedPiglin.customServerAiStep`: faster and loud while angry,
+/// forgetting the player when the anger runs out, rallying the others.
+fn zombified_piglin_step(m: &mut Mob, cx: &mut Cx) {
+    let base = 0.23;
+    // NeutralMob.updatePersistentAnger: a new target starts 20-39 s of anger.
+    if m.ai.target.is_some() && !m.extra.flag2 {
+        m.extra.flag2 = true;
+        m.extra.anger = 400 + m.random.next_int_bound(380).unwrap_or(0);
+        m.extra.counter = m.random.next_int_bound(21).unwrap_or(0).max(1);
+        m.extra.counter2 = 80 + m.random.next_int_bound(41).unwrap_or(0);
+    } else if m.ai.target.is_none() {
+        m.extra.flag2 = false;
+    }
+    if m.extra.anger > 0 {
+        m.extra.anger -= 1;
+        if !m.is_baby() {
+            m.attrs.speed = base + 0.05;
+        }
+        // playFirstAngerSoundIn
+        if m.extra.counter > 0 {
+            m.extra.counter -= 1;
+            if m.extra.counter == 0 {
+                let base = if m.is_baby() { 1.5 } else { 1.0 };
+                let pitch = ((m.random.next_float() - m.random.next_float()) * 0.2 + base) * 1.8;
+                cx.events.push(MobEvent::Sound(
+                    "entity.zombified_piglin.angry",
+                    m.center(),
+                    2.0,
+                    pitch,
+                ));
+            }
+        }
+        if m.extra.anger == 0 {
+            m.ai.target = None;
+            m.extra.flag2 = false;
+        }
+    } else {
+        m.attrs.speed = base;
+    }
+    // maybeAlertOthers every 4 to 6 seconds while seeing the target.
+    if let Some(target) = m.ai.target {
+        if m.extra.counter2 > 0 {
+            m.extra.counter2 -= 1;
+        } else {
+            if m.sees(cx.w, target) {
+                let range = m.attrs.follow_range;
+                let (id, pos) = (m.id, m.position);
+                let others: Vec<u32> =
+                    cx.w.others
+                        .iter()
+                        .filter(|s| {
+                            s.id != id
+                                && s.alive
+                                && s.species == Species::ZombifiedPiglin
+                                && s.target.is_none()
+                                && (s.position.x - pos.x).abs() <= range + 1.0
+                                && (s.position.y - pos.y).abs() <= 11.0
+                                && (s.position.z - pos.z).abs() <= range + 1.0
+                        })
+                        .map(|s| s.id)
+                        .collect();
+                for other in others {
+                    cx.events.push(MobEvent::SetTarget { mob: other, target });
+                }
+            }
+            m.extra.counter2 = 80 + m.random.next_int_bound(41).unwrap_or(0);
+        }
+    }
+}
 pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
+    if m.species() == Species::ZombifiedPiglin {
+        return zombified_piglin_step(m, cx);
+    }
     if matches!(m.species(), Species::Zombie | Species::Husk) && m.alive() {
         if m.extra.counter2 > 0 {
             m.extra.counter2 -= 1;
