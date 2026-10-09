@@ -7,6 +7,7 @@ mod chat;
 mod commands;
 mod control;
 mod creatures;
+mod crossbow;
 mod enchant_effects;
 mod end;
 mod explosion;
@@ -1478,7 +1479,10 @@ impl Game<'_> {
         if self.use_potion_item(&stack)? || self.throw_item(&stack)? {
             return Ok(());
         }
-        if self.raise_shield(self.selected) || self.use_fishing_rod(&stack) {
+        if self.raise_shield(self.selected)
+            || self.use_fishing_rod(&stack)
+            || self.use_crossbow(&stack)
+        {
             return Ok(());
         }
         if &*stack.item == "minecraft:spyglass" {
@@ -1627,6 +1631,10 @@ impl Game<'_> {
         }
         if &*stack.item == "minecraft:bow" {
             self.using = Some((slot, ticks + 1));
+            return;
+        }
+        if &*stack.item == "minecraft:crossbow" {
+            self.tick_crossbow(slot, ticks, &stack);
             return;
         }
         if &*stack.item == "minecraft:spyglass" {
