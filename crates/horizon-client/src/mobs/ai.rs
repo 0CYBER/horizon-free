@@ -87,6 +87,8 @@ pub enum Family {
     Wither,
     Allay,
     Villager,
+    Warden,
+    Creaking,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -121,6 +123,7 @@ pub fn family(s: Species) -> Family {
         S::Ravager => Family::Ravager,
         S::Wither => Family::Wither,
         S::Allay => Family::Allay,
+        S::Creaking => Family::Creaking,
         S::Villager => Family::Villager,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse | S::Camel => {
@@ -130,6 +133,7 @@ pub fn family(s: Species) -> Family {
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
         S::Guardian | S::ElderGuardian => Family::Guardian,
+        S::Warden => Family::Warden,
         S::Shulker => Family::Shulker,
         _ => Family::Generic,
     }
@@ -169,7 +173,10 @@ pub fn register(m: &mut Mob) {
         Family::Wither => super::wither::register(m),
         Family::Allay => super::allay::register(m),
         Family::Villager => super::villager::register(m),
+        Family::Warden => super::warden::register(m),
+        Family::Creaking => super::creaking::register(m),
     }
+    super::raider::register(m);
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
 fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
@@ -251,10 +258,16 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
         return false;
     }
     base_tick(m, w, events);
-    if m.death_time >= 20 {
+    if m.death_time >= super::creaking::death_limit(m) {
+        // Creaking.tickDeath: a heart's creaking crumbles away.
+        if super::creaking::is_creaking(m) && super::creaking::tearing_down(m) {
+            super::creaking::tear_down(m, events);
+        }
         return false;
     }
-    ai_step(m, w, events);
+    if !m.no_ai {
+        ai_step(m, w, events);
+    }
     // Mob.tickHeadTurn -> BodyRotationControl.clientTick
     if m.alive() {
         m.body_rotation_tick();
@@ -371,6 +384,11 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let sound = match m.species() {
+        // Warden.getAmbientSound: by anger, silent while roaring or digging.
+        Species::Warden => match super::warden::ambient_sound(m) {
+            Some(sound) => sound,
+            None => return,
+        },
         Species::Zombie | Species::Husk if m.is_baby() => m.kind.sounds[0],
         Species::Drowned if m.fluids.in_water => "entity.drowned.ambient_water",
         Species::Enderman if m.ai.target.is_some() => "entity.enderman.scream",
@@ -391,6 +409,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Axolotl if !m.fluids.in_water => "entity.axolotl.idle_air",
         Species::Bat if m.extra.flag && m.random.next_int_bound(4).unwrap_or(1) != 0 => return,
         Species::Allay if m.extra.main_hand.is_some() => "entity.allay.ambient_with_item",
+        // Creaking.getAmbientSound: silent while awake.
+        Species::Creaking if m.extra.flag => return,
         // Shulker.playAmbientSound: silent while closed.
         Species::Shulker if m.extra.counter == 0 => return,
         Species::ZombifiedPiglin if m.ai.target.is_some() => "entity.zombified_piglin.angry",
@@ -405,6 +425,9 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 /// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
 fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if super::creaking::is_creaking(m) {
+        super::creaking::update(m, w, events);
+    }
     if m.ai.no_jump_delay > 0 {
         m.ai.no_jump_delay -= 1;
     }
@@ -486,6 +509,10 @@ fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
 /// Mob.serverAiStep
 fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.ai.no_action_time += 1;
+    // A creaking looked at stands still.
+    if super::creaking::is_creaking(m) && !super::creaking::can_move(m) {
+        return;
+    }
     // A saddled mount follows its rider instead of its goals.
     if super::equine::controlled(m) {
         super::equine::ridden_step(m);
@@ -532,6 +559,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Enderman => super::enderman::custom_server_ai_step(m, cx),
         Species::Blaze => super::nether::blaze_server_ai_step(m, cx),
         Species::ElderGuardian => super::guardian::elder_server_ai_step(m, cx),
+        Species::Warden => super::warden::server_ai_step(m, cx),
         // SpellcasterIllager.customServerAiStep.
         Species::Evoker if m.extra.counter > 0 => m.extra.counter -= 1,
         _ => {}
@@ -559,6 +587,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Zoglin if m.extra.anim_ticks > 0 => m.extra.anim_ticks -= 1,
         s if super::equine::is_equine(s) => super::equine::ai_step(m, w, events),
         Species::Phantom => super::phantom::flap_sound(m, events),
+        Species::Warden => super::warden::ai_step(m, events),
         Species::Guardian | Species::ElderGuardian => super::guardian::ai_step(m, w, events),
         Species::Vex => super::vex::ai_step(m, w),
         Species::Ravager => super::ravager::ai_step(m, w, events),
@@ -581,12 +610,17 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 /// Mob.checkDespawn (players are the only despawn reference).
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
     let creature = m.kind.category == "creature";
-    if m.persistent || creature && m.kind.flags.animal {
+    // Warden.removeWhenFarAway is false.
+    if m.persistent || m.species() == Species::Warden || creature && m.kind.flags.animal {
         m.ai.no_action_time = 0;
         return true;
     }
     let Some(p) = &w.player else { return true };
     let d = m.distance_sqr(p.position);
+    // Patrols and raiders (`removeWhenFarAway`, `requiresCustomPersistence`).
+    if super::raider::keeps_alive(m, d) {
+        return true;
+    }
     let despawn = if m.kind.category == "water_ambient" {
         64.0
     } else {
@@ -625,6 +659,7 @@ pub fn speed_bonus(m: &Mob) -> f64 {
 pub fn sound_volume(m: &Mob) -> f32 {
     match m.species() {
         Species::Ghast => 5.0,
+        Species::Warden => 4.0,
         Species::Slime | Species::MagmaCube => 0.4 * m.extra.size.max(1) as f32,
         Species::Cod
         | Species::Salmon
@@ -664,7 +699,9 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
     match m.species() {
         // Allay.hurtServer: its liked player cannot hurt it.
         Species::Allay if m.extra.tame && source.attacker == Some(Who::Player) => false,
+        Species::Creaking => super::creaking::accepts_damage(m, source),
         Species::Wither => super::wither::accepts(m, source.kind, source.attacker, false),
+        Species::Warden => super::warden::accepts_damage(m, source),
         Species::Shulker => super::shulker::accepts(m, source),
         Species::Enderman => super::enderman::on_damage(m, source),
         Species::WitherSkeleton | Species::Blaze | Species::MagmaCube | Species::Strider
@@ -681,6 +718,7 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
     match m.species() {
         Species::Enderman => super::enderman::after_hurt(m, source),
         Species::Shulker => super::shulker::after_hurt(m),
+        Species::Warden => super::warden::hurt(m, source),
         Species::Wolf => super::tame::after_hurt(m, source),
         // NeutralMob: an iron golem hit by the player stays angry a while.
         // PiglinAi.wasHurtBy: drop what is being admired, no admiring for
@@ -706,6 +744,9 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     }
     if m.species() == Species::Ravager {
         super::ravager::on_attack(m, cx.events);
+    }
+    if super::creaking::is_creaking(m) {
+        super::creaking::on_attack(m, cx.events);
     }
     let mut amount = m.attrs.attack_damage;
     let from = [m.position.x, m.position.y, m.position.z];

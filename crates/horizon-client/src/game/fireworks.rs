@@ -24,6 +24,9 @@ pub(super) struct Rocket {
     explosions: Vec<FireworkExplosion>,
     /// Boosting the player (attachedToEntity).
     attached: bool,
+    /// `DATA_SHOT_AT_ANGLE` (dispensers): constant velocity, exploding on
+    /// the first block it hits.
+    angled: bool,
     icon: Option<String>,
 }
 fn fireworks_of(stack: &ItemStack) -> (u8, Vec<FireworkExplosion>) {
@@ -34,7 +37,7 @@ fn fireworks_of(stack: &ItemStack) -> (u8, Vec<FireworkExplosion>) {
         .unwrap_or((1, Vec::new()))
 }
 impl Game<'_> {
-    fn new_rocket(&mut self, at: Vec3, stack: &ItemStack, attached: bool) -> Rocket {
+    pub(super) fn new_rocket(&mut self, at: Vec3, stack: &ItemStack, attached: bool) -> Rocket {
         let (flight, explosions) = fireworks_of(stack);
         let r = &mut self.world.random;
         let tri = |r: &mut horizon_core::random::LegacyRandom| {
@@ -52,6 +55,7 @@ impl Game<'_> {
             lifetime,
             explosions,
             attached,
+            angled: false,
             icon: Some("item/firework_rocket".into()),
         }
     }
@@ -72,6 +76,13 @@ impl Game<'_> {
         }
         self.swing_arm();
         true
+    }
+    /// `FireworkRocketItem.asProjectile` shot out of a dispenser.
+    pub(super) fn launch_dispensed_rocket(&mut self, at: Vec3, velocity: Vec3, stack: &ItemStack) {
+        let mut rocket = self.new_rocket(at, stack, false);
+        rocket.velocity = velocity;
+        rocket.angled = true;
+        self.rockets.push(rocket);
     }
     /// `FireworkRocketItem.use` while gliding: a rocket attached to the player.
     pub(super) fn boost_firework(&mut self, stack: &ItemStack) -> bool {
@@ -118,12 +129,23 @@ impl Game<'_> {
                     Vec3::new(r.position.x - h, r.position.y, r.position.z - h),
                     Vec3::new(r.position.x + h, r.position.y + 2.0 * h, r.position.z + h),
                 );
-                let wanted = Vec3::new(
-                    r.velocity.x * 1.15,
-                    r.velocity.y + 0.04,
-                    r.velocity.z * 1.15,
-                );
+                let wanted = if r.angled {
+                    r.velocity
+                } else {
+                    Vec3::new(
+                        r.velocity.x * 1.15,
+                        r.velocity.y + 0.04,
+                        r.velocity.z * 1.15,
+                    )
+                };
                 if let Ok(moved) = scene.resolve(bounds, wanted, 0.0, false) {
+                    let blocked = (moved.x - wanted.x).abs() > 1e-7
+                        || (moved.y - wanted.y).abs() > 1e-7
+                        || (moved.z - wanted.z).abs() > 1e-7;
+                    if r.angled && blocked {
+                        // hitTargetOrDeflectSelf: explode on the block.
+                        r.life = r.lifetime;
+                    }
                     let horizontal =
                         (moved.x - wanted.x).abs() > 1e-7 || (moved.z - wanted.z).abs() > 1e-7;
                     r.position = Vec3::new(

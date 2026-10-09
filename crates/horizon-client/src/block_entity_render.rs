@@ -700,6 +700,8 @@ pub struct Scene<'a> {
     pub lid: &'a dyn Fn([i32; 3]) -> f32,
     /// Sign block-entity data at a position.
     pub sign: &'a dyn Fn([i32; 3]) -> Option<&'a crate::signs::SignData>,
+    /// Banner layers at a position: pattern texture and RGB tint, bottom first.
+    pub banner: &'a dyn Fn([i32; 3]) -> Vec<(String, u32)>,
     /// Font glyph cell and advance.
     pub glyph: &'a dyn Fn(char) -> Option<(Rect, f32)>,
 }
@@ -772,6 +774,13 @@ impl BlockEntityRenderer {
             books: HashMap::new(),
             random: LegacyRandom::new(0x5EED_B00C),
         }
+    }
+    /// The standing banner's pole-and-bar and flag models (`BannerRenderer.submitSpecial`).
+    pub fn banner_models(&self) -> Option<(&ModelPart, &ModelPart)> {
+        Some((
+            self.models.get("standing_banner")?,
+            self.models.get("standing_banner_flag")?,
+        ))
     }
     fn kind(&self, state: u32) -> &Kind {
         self.kinds.get(state as usize).unwrap_or(&Kind::None)
@@ -993,9 +1002,15 @@ impl BlockEntityRenderer {
                     draw_part(main, "root", m, &none, paint, out);
                     draw_part(flag, "root", m, &wave, paint, out);
                 }
-                // BannerRenderer.submitPatterns: the base pattern layer in the dye colour.
+                // BannerRenderer.submitPatterns: the base pattern layer in the dye colour,
+                // then up to 16 pattern layers in order.
                 if let Some(paint) = paint("entity/banner/base", *color, packed) {
                     draw_part(flag, "root", m, &wave, paint, out);
+                }
+                for (texture, tint) in (scene.banner)(pos).iter().take(16) {
+                    if let Some(paint) = paint(texture, *tint, packed) {
+                        draw_part(flag, "root", m, &wave, paint, out);
+                    }
                 }
             }
             Kind::Skull {

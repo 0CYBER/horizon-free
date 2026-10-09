@@ -37,6 +37,9 @@ impl Game<'_> {
     /// `new PrimedTnt(level, x + 0.5, y, z + 0.5, owner)`; `short` applies
     /// `wasExploded`'s random short fuse. Plays `entity.tnt.primed` for primes.
     pub(super) fn spawn_primed_tnt(&mut self, pos: BlockPos, short: bool) {
+        // PrimedTnt: the fuse is lit.
+        let who = self.sculk_actor();
+        self.post_block_game_event("minecraft:prime_fuse", [pos.x, pos.y, pos.z], who, None);
         let r = &mut self.world.random;
         let rot = r.next_double() * f64::from(std::f32::consts::TAU);
         let position = Vec3::new(

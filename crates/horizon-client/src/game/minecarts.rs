@@ -90,7 +90,7 @@ const SEAT: f64 = 0.1875 - 0.6;
 pub(super) const CART_KEY_Y: i32 = -100_000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Shape {
+pub(super) enum Shape {
     NorthSouth,
     EastWest,
     AscendingEast,
@@ -117,7 +117,7 @@ impl Shape {
             _ => Self::NorthSouth,
         }
     }
-    fn is_slope(self) -> bool {
+    pub(super) fn is_slope(self) -> bool {
         matches!(
             self,
             Self::AscendingEast | Self::AscendingWest | Self::AscendingNorth | Self::AscendingSouth
@@ -141,9 +141,9 @@ impl Shape {
         }
     }
 }
-struct Rail {
+pub(super) struct Rail {
     name: Arc<str>,
-    shape: Shape,
+    pub(super) shape: Shape,
     powered: bool,
 }
 impl Minecart {
@@ -203,7 +203,7 @@ impl CartModels {
     }
 }
 impl Game<'_> {
-    fn rail(&self, x: i32, y: i32, z: i32) -> Option<Rail> {
+    pub(super) fn rail(&self, x: i32, y: i32, z: i32) -> Option<Rail> {
         let state = self.world.block(x, y, z);
         let name = self.res.facts.get(state).name.clone();
         if !matches!(
@@ -1238,6 +1238,7 @@ impl Game<'_> {
             nether: self.dim == super::Dim::Nether,
             lid: &lid,
             sign: &|_| None,
+            banner: &|_| Vec::new(),
             glyph: &|c| self.res.atlas.glyph(c),
         };
         self.res

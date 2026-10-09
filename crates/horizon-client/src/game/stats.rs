@@ -13,6 +13,9 @@ pub(super) struct Stats {
     loaded: bool,
     /// Ticks until the phantom spawner runs again.
     phantom_tick: i32,
+    /// Statistic changes (type, key, amount; `None` = reset) for the
+    /// scoreboard criteria to follow.
+    pub(super) events: Vec<(String, String, Option<i32>)>,
 }
 impl Stats {
     pub(super) fn add(&mut self, ty: &str, key: &str, n: i32) {
@@ -23,6 +26,8 @@ impl Stats {
             .entry(key.to_owned())
             .or_insert(0);
         *v = v.saturating_add(n);
+        self.events
+            .push((format!("minecraft:{ty}"), key.to_owned(), Some(n)));
     }
     pub(super) fn get(&self, ty: &str, key: &str) -> i32 {
         self.values
@@ -35,6 +40,8 @@ impl Stats {
         if let Some(m) = self.values.get_mut(&format!("minecraft:{ty}")) {
             m.insert(key.to_owned(), 0);
         }
+        self.events
+            .push((format!("minecraft:{ty}"), key.to_owned(), None));
     }
     pub(super) fn custom(&mut self, key: &str, n: i32) {
         self.add("custom", &format!("minecraft:{key}"), n);

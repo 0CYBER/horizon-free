@@ -195,7 +195,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         });
     }
     pub fn game_event(&mut self, pos: BlockPos, event: &'static str) {
-        self.level.emit(LevelEvent::GameEvent { pos, event });
+        self.level.emit(LevelEvent::GameEvent {
+            pos,
+            event,
+            state: None,
+        });
+    }
+    /// `Level.gameEvent(event, pos, Context.of(state))`.
+    pub fn game_event_state(&mut self, pos: BlockPos, event: &'static str, state: BlockStateId) {
+        self.level.emit(LevelEvent::GameEvent {
+            pos,
+            event,
+            state: Some(state),
+        });
     }
     pub fn block_of(&self, state: BlockStateId) -> BlockId {
         self.b.table.block(state)
@@ -334,7 +346,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let legacy = self.b.legacy_block(fluid);
         let destroyed = self.set_block_limit(pos, legacy, 3, limit);
         if destroyed {
-            self.game_event(pos, "minecraft:block_destroy");
+            self.game_event_state(pos, "minecraft:block_destroy", state);
         }
         destroyed
     }

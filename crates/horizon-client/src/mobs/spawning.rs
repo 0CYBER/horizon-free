@@ -292,6 +292,8 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         Climate::Cold => 2,
     };
     match m.species() {
+        // Warden.finalizeSpawn: a minute before it digs back down.
+        S::Warden => super::warden::finalize(m, false, &mut Vec::new()),
         S::Pig | S::Cow | S::Chicken => m.extra.variant = climate_index,
         S::Sheep => m.extra.color = super::farm::sheep_color(biome.climate, &mut m.random),
         S::Mooshroom => m.extra.variant = 0,
@@ -299,7 +301,9 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         S::Wolf => m.extra.variant = biome.wolf,
         S::Cat => m.extra.variant = super::tame::cat_variant(m, biome.full_moon),
         S::Zombie | S::Husk | S::Drowned | S::ZombieVillager => {
-            // Zombie.finalizeSpawn: 5% babies (normal difficulty).
+            // Zombie.finalizeSpawn: pick up loot 55% of the time (scaled by
+            // difficulty), 5% babies (normal difficulty).
+            m.extra.pick_up_loot = m.random.next_float() < 0.55 * difficulty.special();
             if m.random.next_float() < 0.05 {
                 m.extra.age = i32::MIN / 2;
             }
@@ -348,8 +352,14 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         }
         // AbstractSkeleton.populateDefaultEquipmentSlots (the bow is given on
         // registration).
-        S::Skeleton | S::Stray | S::Bogged | S::Parched => populate_armor(m, difficulty),
-        S::Pillager => m.extra.main_hand = Some("minecraft:crossbow".into()),
+        S::Skeleton | S::Stray | S::Bogged | S::Parched => {
+            populate_armor(m, difficulty);
+            m.extra.pick_up_loot = m.random.next_float() < 0.55 * difficulty.special();
+        }
+        S::Pillager => {
+            m.extra.main_hand = Some("minecraft:crossbow".into());
+            m.extra.pick_up_loot = true;
+        }
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse => {
             super::equine::finalize(m)
         }
@@ -358,6 +368,7 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         // Piglin.createSpawnWeapon: half crossbows, half golden swords, and
         // each piece of golden armour one time in ten.
         S::Piglin if !m.is_baby() => {
+            m.extra.pick_up_loot = true;
             for i in 0..4 {
                 if m.random.next_float() < 0.1 {
                     let (slot, piece) = match i {
@@ -379,11 +390,16 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
                 .into(),
             );
         }
-        S::PiglinBrute => m.extra.main_hand = Some("minecraft:golden_axe".into()),
+        S::PiglinBrute => {
+            m.extra.main_hand = Some("minecraft:golden_axe".into());
+            m.extra.pick_up_loot = true;
+        }
         S::Vindicator => m.extra.main_hand = Some("minecraft:iron_axe".into()),
         S::Villager => {
             m.extra.variant = villager_type(biome);
+            m.extra.pick_up_loot = true;
         }
+        S::Fox | S::Panda | S::Dolphin => m.extra.pick_up_loot = true,
         S::TropicalFish => super::aquatic::finalize(m),
         S::Slime | S::MagmaCube => super::cube::finalize(m),
         _ => {}

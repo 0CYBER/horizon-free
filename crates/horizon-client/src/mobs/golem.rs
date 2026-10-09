@@ -36,6 +36,7 @@ pub fn register_iron(m: &mut Mob) {
     );
     g.add(7, LookAtPlayer::new(6.0));
     g.add(8, RandomLookAround::default());
+    m.ai.targets.add(1, DefendVillage);
     m.ai.targets.add(2, HurtByTarget::new());
     m.ai.targets.add(
         3,
@@ -47,6 +48,48 @@ pub fn register_iron(m: &mut Mob) {
         3,
         NearestTarget::new(Prey::Filter(golem_prey), false).interval(5),
     );
+}
+/// `DefendVillageTargetGoal`: a player that a villager nearby has no
+/// good word for (reputation of -100 or worse) is attacked on sight.
+#[derive(Clone, Debug)]
+struct DefendVillage;
+impl Goal for DefendVillage {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        super::goals::TARGET
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(p) = &cx.w.player else { return false };
+        if !p.alive || p.creative || p.spectator {
+            return false;
+        }
+        // The box around the golem: 10 across, 8 up and down.
+        let b = m.bounds().inflate(Vec3::new(10.0, 8.0, 10.0));
+        if !b.intersects(p.bounds) || m.position.distance_squared(p.position) > 64.0 * 64.0 {
+            return false;
+        }
+        let bad = cx.w.others.iter().any(|s| {
+            s.species == Species::Villager
+                && s.alive
+                && s.player_rep <= -100
+                && b.contains(s.position)
+                && s.position.distance_squared(m.position) <= 64.0 * 64.0
+        });
+        bad && m.sees(cx.w, Who::Player)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.target_info(cx.w).is_some_and(|t| {
+            t.alive
+                && !(t.is_player && t.creative)
+                && m.position.distance_squared(t.position) <= 64.0 * 64.0
+        })
+    }
+    fn start(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.ai.target = Some(Who::Player);
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.ai.target = None;
+    }
 }
 /// `MoveTowardsTargetGoal`: close in on a target within range.
 #[derive(Clone, Debug)]

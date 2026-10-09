@@ -1,0 +1,668 @@
+//! Data packs in the game: functions (`/function`, `/return`, tick and load
+//! tags, `/schedule`), predicates, `/reload` and `/datapack`.
+use super::{
+    Game,
+    commands::{
+        R, err,
+        execute::{ExecState, Source},
+    },
+};
+use horizon_client::{
+    command::{Arg, Context},
+    datapack::{self, DataPack, DataStore, Function},
+    save,
+    scoreboard::bracketed,
+    text::{self, Text},
+};
+use horizon_world::nbt::Tag;
+use std::collections::BTreeSet;
+
+/// A `TimerQueue` event.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Scheduled {
+    /// `ns:function`, or `#ns:tag` for a function tag.
+    pub id: String,
+    pub time: i64,
+    pub seq: u64,
+}
+#[derive(Default)]
+pub(super) struct FnState {
+    pub store: DataStore,
+    packs: Vec<DataPack>,
+    /// Enabled pack ids, in load order (later overrides earlier).
+    enabled: Vec<String>,
+    loaded: bool,
+    /// Run the `minecraft:load` tag on the next tick.
+    load_pending: bool,
+    pub schedule: Vec<Scheduled>,
+    next_seq: u64,
+}
+/// What a function reported through `return`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Outcome {
+    NoReturn,
+    Value(i32),
+    Fail,
+}
+
+impl Game<'_> {
+    // ---- loading -----------------------------------------------------------
+
+    fn datapack_settings_path(&self) -> std::path::PathBuf {
+        self.world_root.join("datapacks.json")
+    }
+    /// Discover and load the data packs of the world (once, or on `/reload`).
+    pub(super) fn ensure_datapacks(&mut self) {
+        if self.fns.loaded || self.world_root.as_os_str().is_empty() {
+            return;
+        }
+        self.reload_datapacks(false);
+    }
+    pub(super) fn reload_datapacks(&mut self, run_load: bool) {
+        self.fns.packs = datapack::discover(&self.world_root);
+        let saved: Option<serde_json::Value> = std::fs::read(self.datapack_settings_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok());
+        let list = |key: &str| -> Vec<String> {
+            saved
+                .as_ref()
+                .and_then(|v| v[key].as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| s.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let disabled: BTreeSet<String> = list("disabled").into_iter().collect();
+        let mut enabled: Vec<String> = list("enabled")
+            .into_iter()
+            .filter(|id| self.fns.packs.iter().any(|p| &p.id == id))
+            .collect();
+        for p in &self.fns.packs {
+            if !enabled.contains(&p.id) && !disabled.contains(&p.id) {
+                enabled.push(p.id.clone());
+            }
+        }
+        self.fns.enabled = enabled;
+        self.rebuild_store();
+        self.fns.loaded = true;
+        self.fns.load_pending = true;
+        let _ = run_load;
+        if self.fns.schedule.is_empty() {
+            self.load_schedule();
+        }
+    }
+    fn rebuild_store(&mut self) {
+        let packs: Vec<&DataPack> = self
+            .fns
+            .enabled
+            .iter()
+            .filter_map(|id| self.fns.packs.iter().find(|p| &p.id == id))
+            .collect();
+        let store = DataStore::load(&packs);
+        for (id, e) in &store.errors {
+            eprintln!("Horizon: failed to load function {id}: {e}");
+        }
+        self.fns.store = store;
+        self.sync_function_registries();
+    }
+    fn save_datapack_settings(&self) {
+        let disabled: Vec<&String> = self
+            .fns
+            .packs
+            .iter()
+            .map(|p| &p.id)
+            .filter(|id| !self.fns.enabled.contains(id))
+            .collect();
+        let json = serde_json::json!({"enabled": self.fns.enabled, "disabled": disabled});
+        let _ = std::fs::write(self.datapack_settings_path(), json.to_string());
+    }
+    pub(super) fn sync_function_registries(&mut self) {
+        let reg = &mut self.ui.registries;
+        reg.functions = self.fns.store.functions.keys().cloned().collect();
+        reg.function_tags = self.fns.store.function_tags.keys().cloned().collect();
+        reg.predicates = self.fns.store.predicates.keys().cloned().collect();
+        reg.schedules = self.fns.schedule.iter().map(|s| s.id.clone()).collect();
+        reg.datapacks_enabled = std::iter::once("vanilla".to_owned())
+            .chain(self.fns.enabled.iter().cloned())
+            .collect();
+        reg.datapacks_disabled = self
+            .fns
+            .packs
+            .iter()
+            .map(|p| p.id.clone())
+            .filter(|id| !self.fns.enabled.contains(id))
+            .collect();
+    }
+
+    // ---- scheduled events ------------------------------------------------------
+
+    fn schedule_path(&self) -> std::path::PathBuf {
+        self.world_root.join("data/minecraft/scheduled_events.dat")
+    }
+    fn load_schedule(&mut self) {
+        let Some(root) = save::read_dat(&self.schedule_path()) else {
+            return;
+        };
+        let Some(Tag::List(events)) = root.get("data").and_then(|d| d.get("events")) else {
+            return;
+        };
+        for e in events {
+            let (Some(Tag::Long(time)), Some(Tag::String(id)), Some(cb)) =
+                (e.get("trigger_time"), e.get("id"), e.get("callback"))
+            else {
+                continue;
+            };
+            let _ = cb;
+            self.fns.next_seq += 1;
+            self.fns.schedule.push(Scheduled {
+                id: id.to_string_lossy(),
+                time: *time,
+                seq: self.fns.next_seq,
+            });
+        }
+    }
+    pub(super) fn save_schedule(&self) {
+        if !self.fns.loaded || self.remote.is_some() {
+            return;
+        }
+        let mut events = self.fns.schedule.clone();
+        events.sort_by_key(|e| (e.time, e.seq));
+        let list = events
+            .iter()
+            .map(|e| {
+                let (kind, name) = match e.id.strip_prefix('#') {
+                    Some(tag) => ("minecraft:function_tag", tag),
+                    None => ("minecraft:function", e.id.as_str()),
+                };
+                Tag::compound([
+                    ("trigger_time", Tag::Long(e.time)),
+                    ("id", Tag::String(e.id.as_str().into())),
+                    (
+                        "callback",
+                        Tag::compound([
+                            ("type", Tag::String(kind.into())),
+                            ("id", Tag::String(name.into())),
+                        ]),
+                    ),
+                ])
+            })
+            .collect();
+        if events.is_empty() && !self.schedule_path().exists() {
+            return;
+        }
+        let _ = save::write_dat(
+            &self.schedule_path(),
+            Tag::compound([
+                ("data", Tag::compound([("events", Tag::List(list))])),
+                ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
+            ]),
+        );
+    }
+
+    // ---- ticking -----------------------------------------------------------------
+
+    /// `ServerFunctionManager.tick` and the scheduled events.
+    pub(super) fn tick_functions(&mut self) {
+        self.ensure_datapacks();
+        if self.remote.is_some() {
+            return;
+        }
+        self.exec = ExecState::default();
+        let source = self.server_source();
+        if self.fns.load_pending {
+            self.fns.load_pending = false;
+            for f in self.fns.store.tag_functions("minecraft:load") {
+                self.run_function_by_id(&f, None, source);
+            }
+        }
+        let now = self.world.game_time;
+        loop {
+            let due = self
+                .fns
+                .schedule
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.time <= now)
+                .min_by_key(|(_, e)| (e.time, e.seq))
+                .map(|(i, _)| i);
+            let Some(i) = due else { break };
+            let event = self.fns.schedule.remove(i);
+            match event.id.strip_prefix('#') {
+                Some(tag) => {
+                    for f in self.fns.store.tag_functions(tag) {
+                        self.run_function_by_id(&f, None, source);
+                    }
+                }
+                None => self.run_function_by_id(&event.id, None, source),
+            }
+        }
+        for f in self.fns.store.tag_functions("minecraft:tick") {
+            self.run_function_by_id(&f, None, source);
+        }
+    }
+    fn run_function_by_id(&mut self, id: &str, args: Option<&Tag>, source: Source) {
+        self.exec.commands = 0;
+        if let Some(f) = self.fns.store.functions.get(id).cloned() {
+            let _ = self.run_function(&f, args, source);
+        }
+    }
+
+    // ---- running -----------------------------------------------------------------
+
+    /// Run one function with `source`: its commands in order, until a `return`.
+    pub(in crate::game) fn run_function(
+        &mut self,
+        f: &Function,
+        args: Option<&Tag>,
+        source: Source,
+    ) -> R<Outcome> {
+        let lines = f.instantiate(args).map_err(|(key, a)| {
+            let args: Vec<&dyn std::fmt::Display> =
+                a.iter().map(|s| s as &dyn std::fmt::Display).collect();
+            err(
+                "commands.function.instantiationFailure",
+                &[&f.id, &horizon_client::text::Text::tr(&key, &args).plain()],
+            )
+        })?;
+        if self.exec.function_depth >= 128 {
+            return Ok(Outcome::NoReturn);
+        }
+        self.exec.function_depth += 1;
+        let outer = self.exec.returned.take();
+        let inner = Source {
+            silent: true,
+            store: None,
+            ..source
+        };
+        for line in lines {
+            let _ = self.execute_line(&line, inner);
+            if self.exec.returned.is_some() {
+                break;
+            }
+            if self.exec.commands > self.ui.rules.int("max_command_sequence_length").max(1) as u32 {
+                break;
+            }
+        }
+        let returned = std::mem::replace(&mut self.exec.returned, outer);
+        self.exec.function_depth -= 1;
+        Ok(match returned {
+            None => Outcome::NoReturn,
+            Some(Some(v)) => Outcome::Value(v),
+            Some(None) => Outcome::Fail,
+        })
+    }
+    /// The functions a `FunctionArgument` names: a function or a tag.
+    pub(in crate::game) fn functions_named(&mut self, name: &str) -> R<Vec<Function>> {
+        self.ensure_datapacks();
+        match name.strip_prefix('#') {
+            Some(tag) => {
+                if !self.fns.store.function_tags.contains_key(tag) {
+                    return Err(err("arguments.function.tag.unknown", &[&tag]));
+                }
+                Ok(self
+                    .fns
+                    .store
+                    .tag_functions(tag)
+                    .iter()
+                    .filter_map(|id| self.fns.store.functions.get(id).cloned())
+                    .collect())
+            }
+            None => self
+                .fns
+                .store
+                .functions
+                .get(name)
+                .cloned()
+                .map(|f| vec![f])
+                .ok_or_else(|| err("arguments.function.unknown", &[&name])),
+        }
+    }
+    /// `if function`: what each function returns (None if it did not).
+    pub(in crate::game) fn call_function_ref(
+        &mut self,
+        name: &str,
+        args: Option<&Tag>,
+    ) -> R<Vec<Option<i32>>> {
+        let functions = self.functions_named(name)?;
+        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let mut out = Vec::new();
+        for f in functions {
+            out.push(match self.run_function(&f, args, source)? {
+                Outcome::NoReturn => None,
+                Outcome::Value(v) => Some(v),
+                Outcome::Fail => Some(0),
+            });
+        }
+        Ok(out)
+    }
+
+    // ---- commands ------------------------------------------------------------------
+
+    pub(super) fn cmd_function(&mut self, ctx: &Context) -> R<i32> {
+        let Some(Arg::Resource(name)) = ctx.get("name").cloned() else {
+            return Ok(0);
+        };
+        let functions = self.functions_named(&name)?;
+        if functions.is_empty() {
+            return Err(err("commands.function.scheduled.no_functions", &[&name]));
+        }
+        let args = if ctx.has("with") {
+            let r = self.data_ref_named(ctx, 0, "source")?;
+            let data = self.data_of(&r)?;
+            let tag = match ctx.get("path") {
+                Some(Arg::Str(p)) => {
+                    let path = horizon_client::nbt_path::NbtPath::parse(p)
+                        .map_err(horizon_client::data_cmd::path_error)?;
+                    horizon_client::data_cmd::single_tag(&path, &data)?
+                }
+                _ => data,
+            };
+            if !matches!(tag, Tag::Compound(_)) {
+                return Err(err(
+                    "commands.function.error.argument_not_compound",
+                    &[&"tag"],
+                ));
+            }
+            Some(tag)
+        } else if let Some(Arg::Str(text)) = ctx.get("arguments") {
+            Some(
+                horizon_world::nbt::parse_snbt(text)
+                    .map_err(|e| err("argument.nbt.invalid", &[&e]))?
+                    .0,
+            )
+        } else {
+            None
+        };
+        let message = if functions.len() == 1 {
+            Text::translate(
+                "commands.function.scheduled.single",
+                &[Text::literal(functions[0].id.clone())],
+            )
+        } else {
+            Text::translate(
+                "commands.function.scheduled.multiple",
+                &[horizon_client::scoreboard_cmd::format_list(
+                    functions
+                        .iter()
+                        .map(|f| Text::literal(f.id.clone()))
+                        .collect(),
+                )],
+            )
+        };
+        self.feedback(message);
+        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let mut sum: i32 = 0;
+        let mut any = false;
+        let mut failed = false;
+        for f in functions {
+            match self.run_function(&f, args.as_ref(), source)? {
+                Outcome::NoReturn => {}
+                Outcome::Value(v) => {
+                    any = true;
+                    sum = sum.wrapping_add(v);
+                    let message = Text::translate(
+                        "commands.function.result",
+                        &[Text::literal(f.id.clone()), Text::literal(v.to_string())],
+                    );
+                    self.feedback(message);
+                }
+                Outcome::Fail => {
+                    any = true;
+                    failed = true;
+                }
+            }
+        }
+        self.exec.callback = Some(if failed && sum == 0 {
+            Some((false, 0))
+        } else if any {
+            Some((true, sum))
+        } else {
+            None
+        });
+        Ok(sum)
+    }
+    /// `return <value>` and `return fail` (`return run` is a chain).
+    pub(super) fn cmd_return(&mut self, id: &str, ctx: &Context) -> R<i32> {
+        if id == "return.fail" {
+            self.finish_return(None);
+            self.exec.callback = Some(Some((false, 0)));
+            return Ok(0);
+        }
+        let value = match ctx.get("value") {
+            Some(Arg::Int(v)) => *v,
+            _ => 0,
+        };
+        self.finish_return(Some(value));
+        Ok(value)
+    }
+    pub(super) fn cmd_schedule(&mut self, id: &str, ctx: &Context) -> R<i32> {
+        self.ensure_datapacks();
+        if id == "schedule.clear" {
+            let Some(Arg::Resource(name)) = ctx.get("function").cloned() else {
+                return Ok(0);
+            };
+            let before = self.fns.schedule.len();
+            self.fns.schedule.retain(|e| e.id != name);
+            let count = before - self.fns.schedule.len();
+            if count == 0 {
+                return Err(err("commands.schedule.cleared.failure", &[&name]));
+            }
+            self.feedback(Text::translate(
+                "commands.schedule.cleared.success",
+                &[Text::literal(count.to_string()), Text::literal(name)],
+            ));
+            self.sync_function_registries();
+            return Ok(count as i32);
+        }
+        let Some(Arg::Resource(name)) = ctx.get("function").cloned() else {
+            return Ok(0);
+        };
+        let time = match ctx.get("time") {
+            Some(Arg::Int(t)) => *t,
+            _ => 0,
+        };
+        if time == 0 {
+            return Err(err("commands.schedule.same_tick", &[]));
+        }
+        let replace = !ctx.has("append");
+        let tick_time = self.world.game_time + i64::from(time);
+        let schedule_id = match name.strip_prefix('#') {
+            Some(tag) => {
+                if !self.fns.store.function_tags.contains_key(tag) {
+                    return Err(err("arguments.function.tag.unknown", &[&tag]));
+                }
+                name.clone()
+            }
+            None => {
+                let Some(f) = self.fns.store.functions.get(&name) else {
+                    return Err(err("arguments.function.unknown", &[&name]));
+                };
+                if f.is_macro() {
+                    return Err(err("commands.schedule.macro", &[]));
+                }
+                name.clone()
+            }
+        };
+        if replace {
+            self.fns.schedule.retain(|e| e.id != schedule_id);
+        }
+        if !self
+            .fns
+            .schedule
+            .iter()
+            .any(|e| e.id == schedule_id && e.time == tick_time)
+        {
+            self.fns.next_seq += 1;
+            let seq = self.fns.next_seq;
+            self.fns.schedule.push(Scheduled {
+                id: schedule_id,
+                time: tick_time,
+                seq,
+            });
+        }
+        let key = if name.starts_with('#') {
+            "commands.schedule.created.tag"
+        } else {
+            "commands.schedule.created.function"
+        };
+        self.feedback(Text::translate(
+            key,
+            &[
+                Text::literal(name.trim_start_matches('#').to_owned()),
+                Text::literal(time.to_string()),
+                Text::literal(tick_time.to_string()),
+            ],
+        ));
+        self.sync_function_registries();
+        Ok((tick_time.rem_euclid(i64::from(i32::MAX))) as i32)
+    }
+    pub(super) fn cmd_reload(&mut self) -> R<i32> {
+        self.reload_datapacks(true);
+        self.feedback(Text::translate("commands.reload.success", &[]));
+        Ok(1)
+    }
+    fn pack_link(&self, id: &str, enabled: bool) -> Text {
+        let hint = if enabled { "disable" } else { "enable" };
+        let style = text::Style {
+            color: Some(if enabled { text::GREEN } else { text::RED }),
+            suggest: Some(format!("/datapack {hint} \"{id}\"")),
+            ..text::Style::default()
+        };
+        let description = self
+            .fns
+            .packs
+            .iter()
+            .find(|p| p.id == id)
+            .map_or_else(|| "Default data pack".to_owned(), DataPack::description);
+        let style = text::Style {
+            hover: Some(Box::new(Text::literal(format!("{id}\n{description}")))),
+            ..style
+        };
+        bracketed(Text::literal(id).with_style(&style))
+    }
+    pub(super) fn cmd_datapack(&mut self, id: &str, ctx: &Context) -> R<i32> {
+        self.ensure_datapacks();
+        let name = match ctx.get("name") {
+            Some(Arg::Str(n)) => Some(n.clone()),
+            _ => None,
+        };
+        let enabled_ids: Vec<String> = std::iter::once("vanilla".to_owned())
+            .chain(self.fns.enabled.iter().cloned())
+            .collect();
+        let available: Vec<String> = self
+            .fns
+            .packs
+            .iter()
+            .map(|p| p.id.clone())
+            .filter(|p| !enabled_ids.contains(p))
+            .collect();
+        match id {
+            "datapack.list" => {
+                let want_enabled = ctx.has("enabled") || (!ctx.has("available"));
+                let want_available = ctx.has("available") || (!ctx.has("enabled"));
+                let mut total = 0;
+                if want_enabled {
+                    let links: Vec<Text> = enabled_ids
+                        .iter()
+                        .map(|p| self.pack_link(p, true))
+                        .collect();
+                    total += links.len();
+                    self.feedback(Text::translate(
+                        "commands.datapack.list.enabled.success",
+                        &[
+                            Text::literal(links.len().to_string()),
+                            horizon_client::scoreboard_cmd::format_list(links),
+                        ],
+                    ));
+                }
+                if want_available {
+                    if available.is_empty() {
+                        self.feedback(Text::translate(
+                            "commands.datapack.list.available.none",
+                            &[],
+                        ));
+                    } else {
+                        let links: Vec<Text> =
+                            available.iter().map(|p| self.pack_link(p, false)).collect();
+                        total += links.len();
+                        self.feedback(Text::translate(
+                            "commands.datapack.list.available.success",
+                            &[
+                                Text::literal(links.len().to_string()),
+                                horizon_client::scoreboard_cmd::format_list(links),
+                            ],
+                        ));
+                    }
+                }
+                Ok(total as i32)
+            }
+            "datapack.enable" => {
+                let name = name.unwrap_or_default();
+                if !self.fns.packs.iter().any(|p| p.id == name) && name != "vanilla" {
+                    return Err(err("commands.datapack.unknown", &[&name]));
+                }
+                if enabled_ids.contains(&name) {
+                    return Err(err("commands.datapack.enable.failed", &[&name]));
+                }
+                let existing = match ctx.get("existing") {
+                    Some(Arg::Str(e)) => Some(e.clone()),
+                    _ => None,
+                };
+                let position = if ctx.has("first") {
+                    0
+                } else if let Some(e) = &existing {
+                    let Some(i) = self.fns.enabled.iter().position(|p| p == e) else {
+                        return Err(err("commands.datapack.unknown", &[e]));
+                    };
+                    if ctx.has("before") { i } else { i + 1 }
+                } else {
+                    self.fns.enabled.len()
+                };
+                self.fns.enabled.insert(position, name.clone());
+                self.feedback(Text::translate(
+                    "commands.datapack.modify.enable",
+                    &[self.pack_link(&name, true)],
+                ));
+                self.apply_pack_change();
+                Ok(self.fns.enabled.len() as i32)
+            }
+            _ => {
+                let name = name.unwrap_or_default();
+                if !self.fns.packs.iter().any(|p| p.id == name) && name != "vanilla" {
+                    return Err(err("commands.datapack.unknown", &[&name]));
+                }
+                let Some(i) = self.fns.enabled.iter().position(|p| p == &name) else {
+                    return Err(err("commands.datapack.disable.failed", &[&name]));
+                };
+                self.fns.enabled.remove(i);
+                self.feedback(Text::translate(
+                    "commands.datapack.modify.disable",
+                    &[self.pack_link(&name, false)],
+                ));
+                self.apply_pack_change();
+                Ok(self.fns.enabled.len() as i32)
+            }
+        }
+    }
+    fn apply_pack_change(&mut self) {
+        self.save_datapack_settings();
+        self.rebuild_store();
+        self.fns.load_pending = true;
+        self.feedback(Text::translate("commands.reload.success", &[]));
+    }
+
+    // ---- predicates -------------------------------------------------------------------
+
+    /// `if predicate`: a datapack predicate tested for the source entity.
+    pub(in crate::game) fn check_predicate(&mut self, id: &str) -> R<bool> {
+        self.ensure_datapacks();
+        let Some(json) = self.fns.store.predicates.get(id).cloned() else {
+            return Err(err("argument.predicate.unknown", &[&id]));
+        };
+        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let view = source.entity.map(|t| self.entity_view_of(t));
+        Ok(self.conditions_hold(&json, view.as_ref(), source.pos))
+    }
+}

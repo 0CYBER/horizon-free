@@ -88,8 +88,10 @@ impl Game<'_> {
                 .chain(super::blockctl::HELP)
                 .chain(super::lan::HELP)
                 .chain(super::render_control::HELP)
+                .chain(super::sculk::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
+            "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
@@ -297,6 +299,9 @@ impl Game<'_> {
                 match self.screen {
                     Screen::Chat => self.chat_type(text),
                     Screen::Options => self.ui.options.type_text(text),
+                    Screen::Inventory if self.recipe_search_focused() => {
+                        self.recipe_text(Some(text), false)
+                    }
                     _ => {
                         return Err(
                             "type needs the chat screen (key t tap) or the language search".into(),
