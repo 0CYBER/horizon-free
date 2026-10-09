@@ -52,6 +52,33 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     let targets = d.argument(respect, "targets", ENTITIES);
     d.executes(targets, "spreadplayers");
 
+    // place template <template> [<pos> [<rotation> [<mirror> [<integrity> [<seed> [strict]]]]]]
+    let place = d.literal(root, "place");
+    d.requires(place, GAMEMASTERS);
+    let template = d.literal(place, "template");
+    let id = d.argument(template, "template", ArgType::Id("templates"));
+    d.executes(id, "place");
+    let pos = d.argument(id, "pos", ArgType::BlockPos);
+    d.executes(pos, "place");
+    let rotation = d.argument(
+        pos,
+        "rotation",
+        ArgType::Enum(&["none", "clockwise_90", "180", "counterclockwise_90"]),
+    );
+    d.executes(rotation, "place");
+    let mirror = d.argument(
+        rotation,
+        "mirror",
+        ArgType::Enum(&["none", "left_right", "front_back"]),
+    );
+    d.executes(mirror, "place");
+    let integrity = d.argument(mirror, "integrity", ArgType::Float { min: 0.0, max: 1.0 });
+    d.executes(integrity, "place");
+    let seed = d.argument(integrity, "seed", integer(i32::MIN));
+    d.executes(seed, "place");
+    let strict = d.literal(seed, "strict");
+    d.executes(strict, "place");
+
     forceload(d, root);
     fillbiome(d, root);
     worldborder(d, root);

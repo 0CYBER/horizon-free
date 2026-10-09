@@ -120,6 +120,31 @@ impl Game<'_> {
             self.ui.registries.recipes = dir("recipe");
             self.ui.registries.damage_types = dir("damage_type");
             self.ui.registries.loot_tables = dir("loot_table");
+            self.ui.registries.templates = {
+                let root = self.options.resources.join("worldgen/structure/minecraft");
+                let mut out = Vec::new();
+                let mut stack = vec![root.clone()];
+                while let Some(d) = stack.pop() {
+                    let Ok(entries) = std::fs::read_dir(&d) else {
+                        continue;
+                    };
+                    for e in entries.flatten() {
+                        let p = e.path();
+                        if p.is_dir() {
+                            stack.push(p);
+                        } else if p.extension().and_then(|x| x.to_str()) == Some("nbt")
+                            && let Ok(rel) = p.strip_prefix(&root)
+                        {
+                            out.push(format!(
+                                "minecraft:{}",
+                                rel.with_extension("").to_string_lossy().replace('\\', "/")
+                            ));
+                        }
+                    }
+                }
+                out.sort();
+                out
+            };
         }
         self.ui.registries.sounds = self.audio.event_names();
         self.ui.registries.attributes = [

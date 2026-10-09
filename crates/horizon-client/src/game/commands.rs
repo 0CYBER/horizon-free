@@ -5,6 +5,7 @@ mod effects;
 pub(super) mod execute;
 mod items;
 mod misc;
+mod place;
 mod terrain_cmds;
 mod text_commands;
 mod world_cmds;
@@ -527,6 +528,7 @@ impl Game<'_> {
             "setworldspawn" => self.cmd_setworldspawn(ctx),
             "clear" => self.cmd_clear(ctx),
             "item" => self.cmd_item(ctx),
+            "place" => self.cmd_place(ctx),
             "recipe.give" | "recipe.take" => self.cmd_recipe(id, ctx),
             "damage" => self.cmd_damage(ctx),
             "rotate" => self.cmd_rotate(ctx),
@@ -1287,7 +1289,12 @@ impl Game<'_> {
                 .all(|(k, v)| s.properties.get(k) == Some(v))
     }
     /// Place a state like BlockInput.place: false when nothing changed.
-    fn place_state(&mut self, pos: [i32; 3], state: BlockStateId, strict: bool) -> R<bool> {
+    pub(super) fn place_state(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        strict: bool,
+    ) -> R<bool> {
         let previous = self.world.block(pos[0], pos[1], pos[2]);
         if previous == state {
             return Ok(false);

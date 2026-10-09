@@ -458,3 +458,19 @@ fn world_command_trees() {
     assert!(run("spreadplayers 0 0 5 0 false @a").is_err());
     assert!(run("worldborder warning distance -1").is_err());
 }
+
+#[test]
+fn place_template_tree() {
+    for line in [
+        "place template minecraft:igloo/top",
+        "place template minecraft:igloo/top ~ ~ ~",
+        "place template minecraft:igloo/top 1 2 3 clockwise_90 left_right 0.5 12 strict",
+    ] {
+        assert_eq!(
+            run(line).unwrap_or_else(|e| panic!("{line}: {e:?}")).0,
+            "place"
+        );
+    }
+    assert!(run("place template minecraft:x ~ ~ ~ sideways").is_err());
+    assert!(run("place template minecraft:x ~ ~ ~ none none 2").is_err());
+}
