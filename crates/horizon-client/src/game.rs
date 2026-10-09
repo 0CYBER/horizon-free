@@ -36,6 +36,7 @@ mod options;
 mod packs;
 mod paintings;
 mod persist;
+mod perspective;
 mod piglins;
 mod postprocess;
 mod potions;
@@ -437,6 +438,7 @@ pub struct Resources {
     context: Arc<WorkerContext>,
     threads: usize,
     player_arm: Option<horizon_client::mobs::Part>,
+    player_type: Option<Arc<horizon_client::mobs::MobType>>,
     /// firstperson_righthand display transforms per item: (rotation, translation, scale).
     displays: HashMap<String, Option<([f32; 3], [f32; 3], [f32; 3])>>,
     /// Enchantments, workstation recipes and brewing (game/stations.rs).
@@ -625,6 +627,9 @@ struct Game<'a> {
     adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
+    camera_type: perspective::CameraType,
+    /// The local player as a model (third person, the inventory).
+    player_model: Option<Mob>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -701,8 +706,10 @@ impl Game<'_> {
     /// each block's outline shape (`BlockGetter.clip` with `ClipContext.Block.OUTLINE`).
     fn pick(&self) -> Option<Hit> {
         let origin = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
-        let reach = self.reach();
+        self.clip_ray(origin, view_vector(self.yaw, self.pitch), self.reach())
+    }
+    /// The first block outline hit within `reach` along the unit `dir`.
+    fn clip_ray(&self, origin: [f64; 3], dir: [f64; 3], reach: f64) -> Option<Hit> {
         let mut pos = origin.map(|v| v.floor() as i32);
         let step = dir.map(|d| if d > 0.0 { 1 } else { -1 });
         let delta = dir.map(|d| {
@@ -2755,13 +2762,15 @@ impl Game<'_> {
         self.draw_spyglass(&mut batch);
         {
             let atlas = &self.res.atlas;
-            // Crosshair.
-            batch.sprite(
-                atlas,
-                "gui/sprites/hud/crosshair",
-                (w - 15.0) / 2.0,
-                (h - 15.0) / 2.0,
-            );
+            // Crosshair (first person only).
+            if self.camera_type.first_person() {
+                batch.sprite(
+                    atlas,
+                    "gui/sprites/hud/crosshair",
+                    (w - 15.0) / 2.0,
+                    (h - 15.0) / 2.0,
+                );
+            }
         }
         // Gui: spectators get the (closed) spectator menu instead of the
         // hotbar and no player health.
@@ -3274,6 +3283,9 @@ impl Game<'_> {
                 }
             }
         }
+        if self.container.is_none() && self.craft_size != 3 {
+            self.draw_inventory_player(batch, ox, oy);
+        }
         for i in self.slots() {
             let (sx, sy) = self.slot_position(i);
             if i == 504 && self.offhand.is_none() {
@@ -3695,6 +3707,7 @@ impl Game<'_> {
         }
         // Mobs and their projectiles.
         self.mob_geometry(camera, alpha, &mut out);
+        self.player_model_geometry(camera, alpha, &mut out);
         self.name_tag_geometry(camera, alpha, &mut out);
         // Arrows: two crossed quads along the flight direction.
         if let Some(r) = self
@@ -4309,6 +4322,7 @@ impl Game<'_> {
         self.tick_stats();
         self.spawn_phantoms();
         self.tick_advancements();
+        self.tick_player_model();
         Ok(())
     }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
@@ -5734,6 +5748,7 @@ impl Game<'_> {
     fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
         let mut out = Vec::new();
         if self.spectator()
+            || !self.camera_type.first_person()
             || self
                 .player
                 .as_ref()
@@ -6530,7 +6545,7 @@ impl Game<'_> {
             return Ok(false);
         };
         let alpha = self.clock.fraction();
-        let (camera, underwater) = match &self.player {
+        let (camera, underwater, view_yaw, view_pitch) = match &self.player {
             Some(p) => {
                 let (a, b) = (self.previous_position, p.position);
                 let eye = self.previous_eye + alpha as f32 * (self.eye - self.previous_eye);
@@ -6539,15 +6554,21 @@ impl Game<'_> {
                     a.y + (b.y - a.y) * alpha + f64::from(eye),
                     a.z + (b.z - a.z) * alpha,
                 );
+                let (c, yaw, pitch) = self.camera_view(c);
                 let s =
                     self.world
                         .block(c.x.floor() as i32, c.y.floor() as i32, c.z.floor() as i32);
-                (c, self.res.facts.get(s).fluid == Fluid::Water)
+                (c, self.res.facts.get(s).fluid == Fluid::Water, yaw, pitch)
             }
-            None => (glam::DVec3::new(0.5, 100.0, 0.5), false),
+            None => (
+                glam::DVec3::new(0.5, 100.0, 0.5),
+                false,
+                self.yaw,
+                self.pitch,
+            ),
         };
         self.audio.listener = [camera.x, camera.y, camera.z];
-        self.audio.listener_yaw = self.yaw;
+        self.audio.listener_yaw = view_yaw;
         let block = [
             camera.x.floor() as i32,
             camera.y.floor() as i32,
@@ -6648,7 +6669,7 @@ impl Game<'_> {
         let (yaw, pitch) = if title {
             (-(self.started.elapsed().as_secs_f32() * 2.0) % 360.0, 10.0)
         } else {
-            (self.yaw, self.pitch)
+            (view_yaw, view_pitch)
         };
         let water_fog = {
             let c = info.water_fog;
@@ -6737,6 +6758,7 @@ impl Game<'_> {
             KeyCode::F1 => self.toggle_hide_gui(),
             KeyCode::F11 => self.toggle_fullscreen(),
             KeyCode::F2 => self.take_screenshot(),
+            KeyCode::F5 if self.screen == Screen::Playing => self.cycle_camera(),
             KeyCode::KeyE
                 if self.screen == Screen::Creative && self.creative_screen.tab().search => {}
             KeyCode::KeyE => match self.screen {
@@ -7449,6 +7471,7 @@ pub fn run() -> Result<()> {
         mob_data,
         context,
         threads,
+        player_type: perspective::player_type(&root),
         player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
             .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
         displays: HashMap::new(),
@@ -7617,6 +7640,8 @@ pub fn run() -> Result<()> {
         adv: Default::default(),
         stats_ui: Default::default(),
         adv_ui: Default::default(),
+        camera_type: Default::default(),
+        player_model: None,
     };
     game.ui.vanilla_root = vanilla_root;
     game.res.atlas.font.uniform = game.settings.force_unicode;

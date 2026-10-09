@@ -411,6 +411,27 @@ pub fn setup(
                 None,
                 m.extra.main_hand.is_some(),
             );
+            if m.extra.passenger {
+                // HumanoidModel.setupAnim: riding.
+                p.get("right_arm")[3] -= PI / 5.0;
+                p.get("left_arm")[3] -= PI / 5.0;
+                for (leg, side) in [("right_leg", 1.0), ("left_leg", -1.0)] {
+                    p.xrot(leg, -1.413_716_7);
+                    p.yrot(leg, side * PI / 10.0);
+                    p.zrot(leg, side * 0.078_539_82);
+                }
+            }
+            if m.extra.crouching {
+                p.xrot("body", 0.5);
+                p.get("right_arm")[3] += 0.4;
+                p.get("left_arm")[3] += 0.4;
+                p.get("right_leg")[2] += 4.0;
+                p.get("left_leg")[2] += 4.0;
+                p.get("head")[1] += 4.2;
+                p.get("body")[1] += 3.2;
+                p.get("left_arm")[1] += 3.2;
+                p.get("right_arm")[1] += 3.2;
+            }
             if m.ai.aggressive && !bow {
                 // SkeletonModel melee pose.
                 let sw = s.swing;

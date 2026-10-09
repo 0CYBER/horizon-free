@@ -102,6 +102,9 @@ pub fn body(m: &Mob) -> (String, String) {
             s.to_owned()
         }
     };
+    if &*m.kind.id == "minecraft:player" {
+        return ("main".into(), m.kind.texture.to_string());
+    }
     match m.species() {
         s if super::equine::is_equine(s) => {
             let name = super::equine::model_name(s);
@@ -268,6 +271,9 @@ pub fn body_color(m: &Mob, alpha: f32) -> u32 {
 pub fn layers(m: &Mob) -> Vec<Layer> {
     use Species as S;
     let mut v = Vec::new();
+    if &*m.kind.id == "minecraft:player" {
+        return v;
+    }
     let white = 0xFFFF_FFFF;
     let push = |v: &mut Vec<Layer>, model: &str, texture: &str, color: u32, full_bright: bool| {
         v.push(Layer {

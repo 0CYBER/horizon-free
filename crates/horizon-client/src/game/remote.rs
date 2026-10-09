@@ -14,7 +14,7 @@ use horizon_client::{
     entities::{Experience, ItemEntity},
     hud::{HudBatch, rgba},
     items::ItemStack,
-    mobs::{Anim, Brain, Mob, MobType},
+    mobs::{Mob, MobType},
     motion::{MotionWorld, PlayerMotion},
     net::{Event, Session},
     save::SaveDir,
@@ -136,54 +136,7 @@ impl Game<'_> {
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
         let session = Session::connect(address, name, view, lang.clone());
-        let player_type =
-            horizon_client::mobs::load_model(&root, "minecraft:player#main").map(|model| {
-                Arc::new(MobType {
-                    id: "minecraft:player".into(),
-                    // Players render as a humanoid; the species only drives local AI.
-                    species: horizon_client::mobs::Species::Zombie,
-                    width: 0.6,
-                    height: 1.8,
-                    eye_height: 1.62,
-                    category: "misc".into(),
-                    max_health: 20.0,
-                    speed: 0.1,
-                    flying_speed: 0.02,
-                    attack_damage: 1.0,
-                    attack_knockback: 0.0,
-                    follow_range: 0.0,
-                    step_height: 0.6,
-                    armor: 0.0,
-                    armor_toughness: 0.0,
-                    knockback_resistance: 0.0,
-                    jump_strength: 0.42,
-                    gravity: 0.08,
-                    safe_fall_distance: 3.0,
-                    fall_damage_multiplier: 1.0,
-                    water_efficiency: 0.0,
-                    water_slowdown: 0.8,
-                    air_speed: 0.02,
-                    baby_scale: 0.5,
-                    head_rot_speed: 10.0,
-                    max_head_x_rot: 40.0,
-                    max_head_y_rot: 75.0,
-                    ambient_interval: 80,
-                    flags: Default::default(),
-                    model: Arc::new(model),
-                    layers: Default::default(),
-                    texture: "entity/player/wide/steve".into(),
-                    brain: Brain::Passive,
-                    anim: Anim::Humanoid { zombie_arms: false },
-                    sounds: [
-                        "entity.player.hurt",
-                        "entity.player.hurt",
-                        "entity.player.death",
-                    ],
-                    step_sound: None,
-                    food: Arc::from([]),
-                    tempt: Arc::from([]),
-                })
-            });
+        let player_type = super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),
             self.res.context.clone(),
