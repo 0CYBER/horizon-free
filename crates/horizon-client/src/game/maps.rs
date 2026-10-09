@@ -1,8 +1,8 @@
 //! Maps (`EmptyMapItem`, `MapItem`, `MapItemSavedData`, `MapRenderer`):
 //! creating a map centred on the player's grid cell, revealing it while held
 //! (`MapItem.update`: dominant map colour per pixel, height and water-depth
-//! shading, the dithered edge), the player marker, `data/map_<id>.dat` and
-//! `idcounts.dat`, the 128x128 texture in an atlas slot, the two-handed
+//! shading, the dithered edge), the player marker, `data/minecraft/maps/<id>.dat` and
+//! `maps/last_id.dat`, the 128x128 texture in an atlas slot, the two-handed
 //! first-person view and maps in item frames.
 use super::Game;
 use horizon_client::{
@@ -121,7 +121,7 @@ impl MapData {
 #[derive(Default)]
 pub(super) struct Maps {
     pub data: HashMap<i32, MapData>,
-    /// The highest map id handed out (`idcounts.dat`), loaded on first use.
+    /// The highest map id handed out (`maps/last_id.dat`), loaded on first use.
     last_id: Option<i32>,
     /// (map id, atlas slot), most recently shown last.
     slots: Vec<(i32, usize)>,
@@ -153,12 +153,12 @@ impl Game<'_> {
         }
     }
     fn map_path(&self, name: &str) -> std::path::PathBuf {
-        self.world_root.join("data").join(name)
+        self.world_root.join("data/minecraft/maps").join(name)
     }
-    /// The map's data, loaded from `data/map_<id>.dat` on first use.
+    /// The map's data, loaded from `data/minecraft/maps/<id>.dat` on first use.
     pub(super) fn map(&mut self, id: i32) -> Option<&mut MapData> {
         if !self.maps.data.contains_key(&id) && !self.maps.missing.contains(&id) {
-            let loaded = horizon_client::save::read_dat(&self.map_path(&format!("map_{id}.dat")))
+            let loaded = horizon_client::save::read_dat(&self.map_path(&format!("{id}.dat")))
                 .and_then(|t| MapData::from_nbt(&t));
             match loaded {
                 Some(m) => {
@@ -173,7 +173,7 @@ impl Game<'_> {
     }
     fn next_map_id(&mut self) -> i32 {
         let last = *self.maps.last_id.get_or_insert_with(|| {
-            horizon_client::save::read_dat(&self.world_root.join("data/idcounts.dat"))
+            horizon_client::save::read_dat(&self.world_root.join("data/minecraft/maps/last_id.dat"))
                 .and_then(|t| match t.get("data")?.get("map")? {
                     Tag::Int(v) => Some(*v),
                     _ => None,
@@ -438,7 +438,10 @@ impl Game<'_> {
     pub(super) fn save_maps(&mut self) {
         for (id, m) in &mut self.maps.data {
             if m.dirty {
-                let path = self.world_root.join("data").join(format!("map_{id}.dat"));
+                let path = self
+                    .world_root
+                    .join("data/minecraft/maps")
+                    .join(format!("{id}.dat"));
                 if horizon_client::save::write_dat(&path, m.to_nbt()).is_ok() {
                     m.dirty = false;
                 }
@@ -449,8 +452,10 @@ impl Game<'_> {
                 ("data", Tag::compound([("map", Tag::Int(last))])),
                 ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
             ]);
-            let _ =
-                horizon_client::save::write_dat(&self.world_root.join("data/idcounts.dat"), tag);
+            let _ = horizon_client::save::write_dat(
+                &self.world_root.join("data/minecraft/maps/last_id.dat"),
+                tag,
+            );
         }
     }
     /// The atlas slot showing map `id`, its texture uploaded when it changed.
