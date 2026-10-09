@@ -2609,11 +2609,11 @@ impl ParticleEngine {
                     }
                     alpha = 1.0 - ((p.age as f32 + partial) / p.lifetime as f32).clamp(0.0, 1.0);
                     rotations = [
-                        Some(Quat::from_rotation_x(-1.0472)),
+                        Some(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_3)),
                         Some(Quat::from_euler(
                             glam::EulerRot::YXZ,
                             -std::f32::consts::PI,
-                            1.0472,
+                            std::f32::consts::FRAC_PI_3,
                             0.0,
                         )),
                     ];

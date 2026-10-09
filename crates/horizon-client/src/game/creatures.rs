@@ -259,6 +259,7 @@ impl Game<'_> {
                     "on_ground": m.on_ground,
                     "variant": m.extra.variant,
                     "color": m.extra.color,
+                    "warden": horizon_client::mobs::warden::describe(m),
                 })
             })
             .collect();
@@ -874,7 +875,11 @@ impl Game<'_> {
                         m.ai.target = Some(target);
                     }
                 }
-                MobEvent::Projectile(p) => self.creatures.projectiles.push(p),
+                MobEvent::Projectile(p) => {
+                    let (owner, at) = (p.owner, [p.position.x, p.position.y, p.position.z]);
+                    self.creatures.projectiles.push(p);
+                    self.projectile_event("minecraft:projectile_shoot", owner, at);
+                }
                 MobEvent::Spawn(mut m) => {
                     self.next_entity += 1;
                     m.id = self.next_entity;
@@ -1360,6 +1365,8 @@ impl Game<'_> {
             return Ok(());
         }
         let atp = [at.x, at.y, at.z];
+        // Projectile.onHit: the landing is heard.
+        self.projectile_event("minecraft:projectile_land", p.owner, atp);
         let source_kind = match p.kind {
             ProjectileKind::Arrow { .. } => DamageKind::Arrow,
             ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => {
@@ -2063,6 +2070,7 @@ impl Game<'_> {
             on_ground,
         );
         self.creatures.projectiles.push(proj);
+        self.player_projectile_shot();
         let sound = match kind {
             ProjectileKind::Snowball => "minecraft:entity.snowball.throw",
             ProjectileKind::Egg => "minecraft:entity.egg.throw",

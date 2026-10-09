@@ -1433,6 +1433,12 @@ impl Game<'_> {
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
+            self.post_block_game_event(
+                "minecraft:container_open",
+                [key.0, key.1, key.2],
+                Some(horizon_client::mobs::Who::Player),
+                None,
+            );
             let stat = match &*name {
                 "minecraft:chest" => "open_chest",
                 "minecraft:trapped_chest" => "trigger_trapped_chest",
@@ -1965,6 +1971,8 @@ impl Game<'_> {
         }
         if ticks >= duration {
             self.using = None;
+            // Consumable.onConsume.
+            self.post_entity_event("minecraft:eat", horizon_client::mobs::Who::Player);
             if let Some((nutrition, saturation)) = info.food
                 && let Some(p) = self.player.as_mut()
             {
@@ -3383,6 +3391,12 @@ impl Game<'_> {
         }
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
+            self.post_block_game_event(
+                "minecraft:container_close",
+                [key.0, key.1, key.2],
+                Some(horizon_client::mobs::Who::Player),
+                None,
+            );
             let name = self
                 .res
                 .facts
@@ -5711,6 +5725,7 @@ impl Game<'_> {
             on_ground,
         );
         self.creatures.projectiles.push(arrow);
+        self.player_projectile_shot();
         let pitch = 1.0 / (self.world.random.next_float() * 0.4 + 1.2) + power * 0.5;
         self.audio
             .play("minecraft:entity.arrow.shoot", Some(eye), 1.0, pitch);
@@ -6527,6 +6542,7 @@ impl Game<'_> {
         self.save_fight();
         self.save_stats();
         self.save_advancements();
+        self.save_warden_tracker();
         self.level.selected_slot = self.selected as i32;
         let mode = self.mode_id();
         let level = &mut self.level;
@@ -6713,7 +6729,11 @@ impl Game<'_> {
         }
         let celestial = if title {
             self.panorama_geometry()
-        } else if self.dim == Dim::Overworld {
+        } else if self.dim == Dim::Overworld
+            && self.potions.effects.get("darkness").is_none()
+            && self.potions.effects.get("blindness").is_none()
+        {
+            // Camera.doesMobEffectBlockSky: no sun, moon or stars.
             self.celestial_geometry(&sky)
         } else if self.dim == Dim::End {
             self.end_sky_geometry()
@@ -6792,6 +6812,7 @@ impl Game<'_> {
             screen: &screen,
             game_time: self.world.game_time as f32,
             ticks: self.ticks,
+            darkness: self.darkness_lighting(alpha as f32),
         };
         self.renderer.as_mut().ok_or("renderer")?.render(&frame)
     }

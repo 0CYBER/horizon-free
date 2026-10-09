@@ -1052,3 +1052,30 @@ fn catalyst_bloom_lasts_eight_ticks() {
     w.tick();
     assert_eq!(w.prop(pos, "bloom"), "false");
 }
+
+#[test]
+fn placing_and_breaking_report_the_affected_state() {
+    let mut w = world!();
+    w.floor(0, 4, "stone");
+    let wool = w.id("white_wool", &[]);
+    let placed = w.place(
+        "white_wool",
+        BlockPos::new(0, 0, 0),
+        Direction::Up,
+        0.0,
+        0.0,
+        0.0,
+    );
+    assert!(matches!(placed, PlaceOutcome::Placed { .. }));
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::GameEvent { event: "minecraft:block_place", state: Some(s), .. } if *s == wool
+    )));
+    w.level.events.clear();
+    w.f.behaviours
+        .destroy_block(&mut w.level, &mut w.ticks, BlockPos::new(0, 1, 0), false);
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::GameEvent { event: "minecraft:block_destroy", state: Some(s), .. } if *s == wool
+    )));
+}

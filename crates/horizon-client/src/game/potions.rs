@@ -154,6 +154,7 @@ impl Game<'_> {
             return true;
         }
         self.using = None;
+        self.post_entity_event("minecraft:drink", horizon_client::mobs::Who::Player);
         let (lasting, now) = PlayerEffects::potion_effects(stack.potion(), 1.0);
         for e in lasting {
             self.potions.effects.add(e);

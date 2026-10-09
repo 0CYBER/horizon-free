@@ -15,6 +15,13 @@ use horizon_world::registry::BlockStateId;
 use std::collections::{HashMap, HashSet};
 use winit::keyboard::KeyCode;
 
+pub const HELP: &[&str] = &[
+    "sculk                          sculk listeners, the warning level and the darkness blend",
+    "sculk charge X Y Z AMOUNT      a mob dying there with that much experience (the nearest catalyst takes it)",
+    "sculk warn LEVEL               set the player's warden warning level",
+    "sculk dig                      end the minute of calm of every warden",
+];
+
 /// The sculk block kinds by state id, built once.
 #[derive(Default)]
 struct Tables {
@@ -65,9 +72,12 @@ pub(super) struct SculkState {
     steps: HashMap<Who, Steps>,
     damaged: HashMap<u32, i64>,
     last_health: Option<f32>,
+    /// The darkness effect's blend factor, previous and current tick.
+    darkness: (f32, f32),
     /// Who causes the block changes being processed (the player's actions).
     pub actor: Option<Who>,
     ticks: u32,
+    tracker_loaded: bool,
 }
 const KIND_SENSOR: u8 = 1;
 const KIND_CALIBRATED: u8 = 2;
@@ -100,6 +110,99 @@ impl Game<'_> {
         let out = f(self);
         self.sculk.actor = prior;
         out
+    }
+
+    /// The `sculk` control command: listeners and their vibrations, or a
+    /// test charge for the nearest catalyst.
+    pub(super) fn sculk_command(&mut self, words: &[&str]) -> Result<serde_json::Value> {
+        match words.get(1).copied() {
+            Some("charge") => {
+                let num = |i: usize| -> Result<f64> {
+                    Ok(words.get(i).ok_or("missing argument")?.parse::<f64>()?)
+                };
+                let at = [num(2)?, num(3)?, num(4)?];
+                let amount = num(5)? as u32;
+                let taken = self.catalyst_takes_experience(at, |_| amount);
+                Ok(serde_json::json!({ "ok": true, "taken": taken }))
+            }
+            Some("dig") => {
+                // Let every warden's minute of calm run out.
+                for m in self
+                    .mobs
+                    .iter_mut()
+                    .filter(|m| m.species() == Species::Warden)
+                {
+                    warden::expire_dig_cooldown(m);
+                }
+                Ok(serde_json::json!({ "ok": true }))
+            }
+            Some("warn") => {
+                let level = words.get(2).ok_or("missing level")?.parse::<i32>()?;
+                self.sculk.tracker.set_warning_level(level);
+                Ok(serde_json::json!({ "ok": true }))
+            }
+            _ => Ok(self.sculk_status()),
+        }
+    }
+    /// The `sculk` control command's listing.
+    pub(super) fn sculk_status(&self) -> serde_json::Value {
+        let listeners: Vec<serde_json::Value> = self
+            .sculk
+            .index
+            .iter()
+            .filter_map(|key| match self.world.block_entities.get(key) {
+                Some(BlockEntity::Sculk(e)) => Some(serde_json::json!({
+                    "pos": [key.0, key.1, key.2],
+                    "kind": e.id(),
+                    "current": e.vibration.current.map(|i| i.event),
+                    "travel": e.vibration.travel,
+                    "last_frequency": e.last_frequency,
+                    "warning_level": e.warning_level,
+                    "cursors": e.spreader.cursors.len(),
+                })),
+                _ => None,
+            })
+            .collect();
+        serde_json::json!({
+            "listeners": listeners,
+            "warning_level": self.sculk.tracker.warning_level,
+            "cooldown": self.sculk.tracker.cooldown_ticks,
+            "darkness": self.sculk.darkness.1,
+            "chunks_known": self.sculk.known.len(),
+        })
+    }
+    /// `ServerPlayer`'s `warden_spawn_tracker` from the player data.
+    fn load_warden_tracker(&mut self) {
+        if self.sculk.tracker_loaded {
+            return;
+        }
+        self.sculk.tracker_loaded = true;
+        if let Some(tag) = self
+            .level
+            .player_extra
+            .as_ref()
+            .and_then(|p| p.get("warden_spawn_tracker"))
+        {
+            self.sculk.tracker = WardenSpawnTracker::from_nbt(tag);
+        }
+    }
+    /// Write the tracker into the player data being saved.
+    pub(super) fn save_warden_tracker(&mut self) {
+        if !self.sculk.tracker_loaded {
+            return;
+        }
+        let tag = self.sculk.tracker.to_nbt();
+        let extra = self
+            .level
+            .player_extra
+            .get_or_insert_with(|| horizon_world::nbt::Tag::Compound(Default::default()));
+        if let horizon_world::nbt::Tag::Compound(map) = extra {
+            map.insert("warden_spawn_tracker".into(), tag);
+        }
+    }
+    /// Who is causing the block changes being processed.
+    pub(super) fn sculk_actor(&self) -> Option<Who> {
+        self.sculk.actor
     }
 
     // ---- setup and the block entity index ----
@@ -413,20 +516,17 @@ impl Game<'_> {
         let state = self.world.block(key.0, key.1, key.2);
         let can_receive = match kind {
             SculkKind::Sensor | SculkKind::Calibrated => {
-                if source_block == [key.0, key.1, key.2]
-                    && matches!(event, "minecraft:block_destroy" | "minecraft:block_place")
-                {
-                    false
-                } else if sculk::frequency(event) == 0
-                    || !self.res.behaviours.sculk_sensor_can_activate(state)
-                {
-                    false
-                } else if kind == SculkKind::Calibrated {
+                // The sensor does not hear its own placement or removal.
+                let own = source_block == [key.0, key.1, key.2]
+                    && matches!(event, "minecraft:block_destroy" | "minecraft:block_place");
+                let frequency = sculk::frequency(event);
+                let calibrated_out = kind == SculkKind::Calibrated && {
                     let back = self.calibrated_signal(key);
-                    !(back != 0 && sculk::frequency(event) != back)
-                } else {
-                    true
-                }
+                    back != 0 && frequency != back
+                };
+                !own && !calibrated_out
+                    && frequency != 0
+                    && self.res.behaviours.sculk_sensor_can_activate(state)
             }
             SculkKind::Shrieker => !self.shrieker_shrieking(state) && ctx.player,
             SculkKind::Catalyst => false,
@@ -536,7 +636,9 @@ impl Game<'_> {
     pub(super) fn tick_sculk(&mut self) -> Result<()> {
         self.sculk.ticks = self.sculk.ticks.wrapping_add(1);
         self.sculk_prepare();
+        self.load_warden_tracker();
         self.sculk.tracker.tick();
+        self.tick_darkness_blend();
         self.sculk_sync_index();
         let keys: Vec<(i32, i32, i32)> = self.sculk.index.iter().copied().collect();
         for key in keys {
@@ -783,16 +885,7 @@ impl Game<'_> {
                 && (m.position.y + f64::from(m.height()) / 2.0 - c[1]).abs() < 24.0
                 && (m.position.z - c[2]).abs() < 24.0
         });
-        let near = self.player.as_ref().is_some_and(|p| {
-            !self.spectator()
-                && !p.health.dead_or_dying()
-                && (p.position.x - c[0]).powi(2)
-                    + (p.position.y - c[1]).powi(2)
-                    + (p.position.z - c[2]).powi(2)
-                    < WardenSpawnTracker::PLAYER_SEARCH_RADIUS.powi(2)
-        });
-        // The triggering player is always among them.
-        let _ = near;
+        // The only player is the one who set it off.
         let mut trackers = [self.sculk.tracker];
         let level = WardenSpawnTracker::try_warn(&mut trackers, warden_nearby);
         self.sculk.tracker = trackers[0];
@@ -940,6 +1033,46 @@ impl Game<'_> {
 
     // ---- darkness ----
 
+    /// `MobEffectInstance.BlendState.tick` for the darkness effect: it fades
+    /// in and out over 22 ticks.
+    fn tick_darkness_blend(&mut self) {
+        const BLEND: f32 = 22.0;
+        let (_, current) = self.sculk.darkness;
+        let next = match self.potions.effects.get("darkness") {
+            Some(e) => {
+                let target = if e.duration == -1 || e.duration > BLEND as i32 {
+                    1.0
+                } else {
+                    0.0
+                };
+                current + (target - current).clamp(-1.0 / BLEND, 1.0 / BLEND)
+            }
+            None => 0.0,
+        };
+        self.sculk.darkness = (current, next);
+    }
+    /// The darkness effect's blend factor at the partial tick.
+    fn darkness_blend(&self, partial: f32) -> f32 {
+        let (previous, current) = self.sculk.darkness;
+        previous + (current - previous) * partial
+    }
+    /// The fog's view of the darkness effect, while it is on.
+    pub(super) fn darkness_fog(&self) -> Option<f32> {
+        self.potions
+            .effects
+            .get("darkness")
+            .map(|_| self.darkness_blend(self.clock.fraction() as f32))
+    }
+    /// `LightmapRenderStateExtractor`: (brightness taken off the gamma
+    /// option, the pulsing light scale).
+    pub(super) fn darkness_lighting(&self, partial: f32) -> (f32, f32) {
+        // options.darknessEffectScale is at its default of 100%.
+        let modifier = self.darkness_blend(partial);
+        let pulse =
+            ((self.ticks as f32 - partial) * std::f32::consts::PI * 0.025).cos() * 0.45 * modifier;
+        (modifier, pulse.max(0.0))
+    }
+
     /// `Warden.applyDarknessAround` / `MobEffectUtil.addEffectToPlayersAround`.
     pub(super) fn apply_darkness(&mut self, at: [f64; 3], radius: f64) {
         if self.creative || self.spectator() {
@@ -956,7 +1089,7 @@ impl Game<'_> {
         if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= radius * radius {
             return;
         }
-        if let Some(active) = self.potions.effects.get("minecraft:darkness")
+        if let Some(active) = self.potions.effects.get("darkness")
             && active.duration > warden::DARKNESS_REAPPLY - 1
         {
             return;
@@ -1185,6 +1318,35 @@ impl Game<'_> {
     }
 
     // ---- entity events ----
+
+    /// `Projectile.shoot` / `onHit`: a projectile of `owner` at a position.
+    pub(super) fn projectile_event(
+        &mut self,
+        event: &'static str,
+        owner: Option<Who>,
+        at: [f64; 3],
+    ) {
+        let mut ctx = Context::default();
+        if event == "minecraft:projectile_shoot" {
+            // The shooter is the source of the shot.
+            ctx = self.who_context(owner, None);
+        } else {
+            ctx.owner = owner;
+            ctx.player = owner == Some(Who::Player) || self.rides_player(owner);
+        }
+        self.post_game_event(event, at, ctx);
+    }
+    /// The player shot or threw something.
+    pub(super) fn player_projectile_shot(&mut self) {
+        if let Some(p) = self.player.as_ref() {
+            let at = [
+                p.position.x,
+                p.position.y + f64::from(self.eye),
+                p.position.z,
+            ];
+            self.projectile_event("minecraft:projectile_shoot", Some(Who::Player), at);
+        }
+    }
 
     /// Events from entities moving, getting hurt and dying, derived from what
     /// changed this tick.

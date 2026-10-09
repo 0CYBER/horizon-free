@@ -591,7 +591,8 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 /// Mob.checkDespawn (players are the only despawn reference).
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
     let creature = m.kind.category == "creature";
-    if m.persistent || creature && m.kind.flags.animal {
+    // Warden.removeWhenFarAway is false.
+    if m.persistent || m.species() == Species::Warden || creature && m.kind.flags.animal {
         m.ai.no_action_time = 0;
         return true;
     }

@@ -890,18 +890,17 @@ fn start_behaviours(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
         && st.walk.is_none()
         && let Some((location, until)) = st.disturbance
         && now < until
+        && dist_sqr(location, block_pos(m)) >= 4.0
     {
-        if dist_sqr(location, block_pos(m)) >= 4.0 {
-            let ox = m.random.next_int_bound(3).unwrap_or(1) - 1;
-            let oz = m.random.next_int_bound(3).unwrap_or(1) - 1;
-            let target = [location[0] + ox, location[1], location[2] + oz];
-            st.look = Some((Track::Block(target), NEVER));
-            st.walk = Some(Walk {
-                target: Track::Block(target),
-                speed: SPEED_INVESTIGATING as f32,
-                close_enough: 2,
-            });
-        }
+        let ox = m.random.next_int_bound(3).unwrap_or(1) - 1;
+        let oz = m.random.next_int_bound(3).unwrap_or(1) - 1;
+        let target = [location[0] + ox, location[1], location[2] + oz];
+        st.look = Some((Track::Block(target), NEVER));
+        st.walk = Some(Walk {
+            target: Track::Block(target),
+            speed: SPEED_INVESTIGATING as f32,
+            close_enough: 2,
+        });
     }
     // Sniff: Sniffing.
     if active(st, Activity::Sniff)
@@ -1412,6 +1411,37 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
         m.anim.states[SONIC_BOOM].stop();
     }
 }
+/// Test aid: the minute of calm ran out.
+pub fn expire_dig_cooldown(m: &mut Mob) {
+    if let Some(st) = m.extra.warden.as_mut() {
+        st.dig_cooldown = None;
+        st.attack_target = None;
+        st.roar_target = None;
+    }
+}
+/// The warden's state for the control socket.
+pub fn describe(m: &Mob) -> Option<serde_json::Value> {
+    let st = m.extra.warden.as_ref()?;
+    let anger: Vec<String> = st
+        .anger
+        .suspects()
+        .iter()
+        .map(|w| format!("{w:?}={}", st.anger.anger_of(*w)))
+        .collect();
+    Some(serde_json::json!({
+        "pose": format!("{:?}", pose(m)),
+        "activity": format!("{:?}", st.activity),
+        "anger_level": format!("{:?}", anger_level(m)),
+        "anger": anger,
+        "attack_target": st.attack_target.map(|t| format!("{t:?}")),
+        "roar_target": st.roar_target.map(|t| format!("{t:?}")),
+        "disturbance": st.disturbance.map(|(p, _)| p),
+        "walk": st.walk.is_some(),
+        "dig_cooldown": st.dig_cooldown.map(|t| t - i64::from(m.age)),
+        "sniff_cooldown": st.sniff_cooldown.map(|t| t - i64::from(m.age)),
+        "vibration": st.vibration.current.map(|i| i.event),
+    }))
+}
 /// `Warden.getHeartBeatDelay`.
 pub fn heart_beat_delay(client_anger: i32) -> i32 {
     let anger = client_anger as f32 / AngerLevel::Angry.minimum() as f32;
@@ -1606,9 +1636,11 @@ mod tests {
 
     #[test]
     fn memories_expire_with_their_ttl() {
-        let mut st = Warden::default();
+        let mut st = Warden {
+            in_brain: true,
+            ..Warden::default()
+        };
         // Set during the brain: present for exactly the ttl.
-        st.in_brain = true;
         let until = st.expiry(100, 5);
         assert!(present(until, 104));
         assert!(!present(until, 105));

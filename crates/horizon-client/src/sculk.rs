@@ -303,8 +303,10 @@ impl Data {
         Tag::compound(entries)
     }
     pub fn from_nbt(tag: &Tag) -> Self {
-        let mut data = Self::default();
-        data.current = tag.get("event").and_then(info_from_nbt);
+        let mut data = Self {
+            current: tag.get("event").and_then(info_from_nbt),
+            ..Self::default()
+        };
         if let Some(Tag::Int(t)) = tag.get("event_delay") {
             data.travel = (*t).max(0);
         }
