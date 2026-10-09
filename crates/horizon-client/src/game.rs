@@ -45,6 +45,7 @@ mod potions;
 mod remote;
 mod render_control;
 mod render_tick;
+mod scoreboard;
 mod screens;
 mod shield;
 mod sign_edit;
@@ -627,6 +628,7 @@ struct Game<'a> {
     combat: combat::CombatTracker,
     mount: mounts::MountState,
     stats: stats::Stats,
+    score: scoreboard::ScoreState,
     adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
@@ -2393,6 +2395,7 @@ impl Game<'_> {
             self.death_message();
             // ServerPlayer.die: deaths, and the time-since counters restart.
             self.stats.custom("deaths", 1);
+            self.score_player_died();
             if let Some(kind) = killer {
                 self.stats.add("killed_by", &kind, 1);
                 let view = horizon_client::advancements::EntityView {
@@ -2819,6 +2822,7 @@ impl Game<'_> {
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
         self.draw_boss_bar(&mut batch);
         self.draw_titles(&mut batch);
+        self.draw_scoreboard(&mut batch);
         // Gui.renderVehicleHealth / the jump bar while riding a mount.
         let mounted = !self.creative && !spectator && self.draw_mount_hud(&mut batch, w, h);
         let atlas = &self.res.atlas;
@@ -4364,6 +4368,7 @@ impl Game<'_> {
         self.tick_creatures()?;
         self.position_rider();
         self.tick_stats();
+        self.tick_scoreboard();
         self.spawn_phantoms();
         self.tick_advancements();
         self.tick_player_model();
@@ -4562,6 +4567,7 @@ impl Game<'_> {
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         horizon_client::save::migrate_legacy(&save_root)?;
         self.persist = Default::default();
+        self.score = Default::default();
         let level = Level::read(&save_root).unwrap_or_else(|| Level {
             name: name.unwrap_or(folder).to_owned(),
             // WorldOptions.randomSeed when no seed was given.
@@ -6500,6 +6506,7 @@ impl Game<'_> {
         self.save_fight();
         self.save_stats();
         self.save_advancements();
+        self.save_scoreboard();
         self.level.selected_slot = self.selected as i32;
         let mode = self.mode_id();
         let level = &mut self.level;
@@ -7682,6 +7689,7 @@ pub fn run() -> Result<()> {
         combat: Default::default(),
         mount: Default::default(),
         stats: Default::default(),
+        score: Default::default(),
         adv: Default::default(),
         stats_ui: Default::default(),
         adv_ui: Default::default(),

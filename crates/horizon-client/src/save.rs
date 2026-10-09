@@ -1137,7 +1137,7 @@ fn write_saved_data(world: &Path, name: &str, data: Tag) -> Result<()> {
         Tag::compound([("data", data), ("DataVersion", Tag::Int(DATA_VERSION))]),
     )
 }
-fn uuid_text(u: [i32; 4]) -> String {
+pub fn uuid_text(u: [i32; 4]) -> String {
     let hex: String = u.iter().map(|v| format!("{:08x}", *v as u32)).collect();
     format!(
         "{}-{}-{}-{}-{}",
@@ -1148,7 +1148,7 @@ fn uuid_text(u: [i32; 4]) -> String {
         &hex[20..32]
     )
 }
-fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
+pub fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
     let hex: String = s.chars().filter(|c| *c != '-').collect();
     if hex.len() != 32 {
         return None;

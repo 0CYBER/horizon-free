@@ -29,6 +29,13 @@ pub struct Registries {
     /// Game rule name -> integer-valued.
     pub game_rules: Vec<(String, bool)>,
     pub players: Vec<String>,
+    /// Scoreboard objective names, team names and tracked score holders.
+    pub objectives: Vec<String>,
+    pub teams: Vec<String>,
+    pub tracked: Vec<String>,
+    /// Loaded datapack functions (`ns:path`) and function tags (`ns:path`).
+    pub functions: Vec<String>,
+    pub function_tags: Vec<String>,
     /// The block the source is looking at (relevant coordinates).
     pub target_block: Option<[i32; 3]>,
 }
@@ -116,6 +123,24 @@ pub enum ArgType {
     Component,
     /// CompoundTagArgument (kept as SNBT text).
     Nbt,
+    /// ScoreHolderArgument.
+    ScoreHolder {
+        multiple: bool,
+    },
+    /// ObjectiveArgument (checked when the command runs).
+    Objective,
+    /// TeamArgument (checked when the command runs).
+    Team,
+    /// ObjectiveCriteriaArgument.
+    Criteria,
+    /// ScoreboardSlotArgument.
+    ScoreboardSlot,
+    /// OperationArgument.
+    Operation,
+    /// TeamColorArgument.
+    TeamColor,
+    /// RangeArgument.Ints (`1`, `1..`, `..5`, `1..5`).
+    IntRange,
 }
 pub fn integer(min: i32) -> ArgType {
     ArgType::Integer { min, max: i32::MAX }
@@ -227,6 +252,29 @@ pub struct Selector {
     pub y_rotation: Option<DoubleRange>,
     pub pos: [Option<f64>; 3],
     pub delta: [Option<f64>; 3],
+    /// `scores={objective=range,...}`.
+    pub scores: Vec<(String, IntRange)>,
+    /// `team=` (an empty name matches entities without a team).
+    pub teams: Vec<(String, bool)>,
+    /// `nbt=` compounds (SNBT text).
+    pub nbt: Vec<(String, bool)>,
+    /// `advancements={id=true|{criterion=true}}`.
+    pub advancements: Vec<(String, AdvCondition)>,
+    /// `predicate=` ids.
+    pub predicates: Vec<(String, bool)>,
+}
+/// An `advancements=` entry: all done or not, or per-criterion states.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AdvCondition {
+    Done(bool),
+    Criteria(Vec<(String, bool)>),
+}
+/// A `ScoreHolderArgument` value.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ScoreHolderArg {
+    Wildcard,
+    Name(String),
+    Selector(Selector),
 }
 impl Selector {
     pub fn is_self(&self) -> bool {
@@ -293,6 +341,8 @@ pub enum Arg {
     GameMode(GameMode),
     /// `eyes` (true) or `feet`.
     Anchor(bool),
+    ScoreHolder(ScoreHolderArg),
+    IntRange(IntRange),
 }
 
 fn is_id_char(c: char) -> bool {
@@ -563,6 +613,7 @@ fn suggest_coordinates(builder: &mut SuggestionsBuilder, reg: &Registries) {
     }
 }
 
+pub const OPERATIONS: [&str; 9] = ["=", "+=", "-=", "*=", "/=", "%=", "<", ">", "><"];
 const SELECTORS: [(&str, &str); 6] = [
     ("@a", "argument.entity.selector.allPlayers"),
     ("@e", "argument.entity.selector.allEntities"),
@@ -571,7 +622,7 @@ const SELECTORS: [(&str, &str); 6] = [
     ("@r", "argument.entity.selector.randomPlayer"),
     ("@s", "argument.entity.selector.self"),
 ];
-const OPTIONS: [&str; 16] = [
+const OPTIONS: [&str; 21] = [
     "name",
     "distance",
     "level",
@@ -588,7 +639,22 @@ const OPTIONS: [&str; 16] = [
     "gamemode",
     "tag",
     "type",
+    "scores",
+    "team",
+    "nbt",
+    "advancements",
+    "predicate",
 ];
+/// StringReader.expect.
+fn expect_symbol(reader: &mut Reader, c: char) -> CmdResult<()> {
+    reader.skip_whitespace();
+    if reader.can_read() && reader.peek() == c {
+        reader.skip();
+        Ok(())
+    } else {
+        Err(CommandError::tr_at("parsing.expected", &[&c], reader))
+    }
+}
 fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> {
     let start = reader.cursor;
     if !(reader.can_read() && reader.peek() == '@') {
@@ -790,6 +856,81 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
                     let neg = negated(reader);
                     let v = reader.read_unquoted_string().to_owned();
                     s.tags.push((v, neg));
+                }
+                "team" => {
+                    let neg = negated(reader);
+                    let v = reader.read_unquoted_string().to_owned();
+                    s.teams.push((v, neg));
+                }
+                "nbt" => {
+                    let neg = negated(reader);
+                    if !reader.can_read() || reader.peek() != '{' {
+                        return Err(CommandError::tr_at(
+                            "argument.nbt.expected.compound",
+                            &[],
+                            reader,
+                        ));
+                    }
+                    s.nbt.push((read_braced(reader, '{', '}')?, neg));
+                }
+                "predicate" => {
+                    let neg = negated(reader);
+                    s.predicates.push((read_id(reader)?, neg));
+                }
+                "scores" => {
+                    expect_symbol(reader, '{')?;
+                    reader.skip_whitespace();
+                    while reader.can_read() && reader.peek() != '}' {
+                        reader.skip_whitespace();
+                        let name = reader.read_unquoted_string().to_owned();
+                        expect_symbol(reader, '=')?;
+                        let range = range_int(reader)?;
+                        s.scores.push((name, range));
+                        reader.skip_whitespace();
+                        if reader.can_read() && reader.peek() == ',' {
+                            reader.skip();
+                        }
+                        reader.skip_whitespace();
+                    }
+                    expect_symbol(reader, '}')?;
+                }
+                "advancements" => {
+                    expect_symbol(reader, '{')?;
+                    reader.skip_whitespace();
+                    while reader.can_read() && reader.peek() != '}' {
+                        reader.skip_whitespace();
+                        let id = read_id(reader)?;
+                        expect_symbol(reader, '=')?;
+                        reader.skip_whitespace();
+                        if reader.can_read() && reader.peek() == '{' {
+                            reader.skip();
+                            reader.skip_whitespace();
+                            let mut criteria = Vec::new();
+                            while reader.can_read() && reader.peek() != '}' {
+                                reader.skip_whitespace();
+                                let c = reader.read_unquoted_string().to_owned();
+                                expect_symbol(reader, '=')?;
+                                criteria.push((c, reader.read_boolean()?));
+                                reader.skip_whitespace();
+                                if reader.can_read() && reader.peek() == ',' {
+                                    reader.skip();
+                                }
+                                reader.skip_whitespace();
+                            }
+                            expect_symbol(reader, '}')?;
+                            s.advancements.push((id, AdvCondition::Criteria(criteria)));
+                        } else {
+                            s.advancements
+                                .push((id, AdvCondition::Done(reader.read_boolean()?)));
+                        }
+                        reader.skip_whitespace();
+                        if reader.can_read() && reader.peek() == ',' {
+                            reader.skip();
+                        }
+                        reader.skip_whitespace();
+                    }
+                    expect_symbol(reader, '}')?;
+                    s.include_entities = false;
                 }
                 "type" => {
                     let neg = negated(reader);
@@ -1436,6 +1577,91 @@ impl ArgType {
                 }
                 Arg::Str(axes)
             }
+            ArgType::ScoreHolder { multiple } => {
+                if reader.can_read() && reader.peek() == '@' {
+                    let sel = parse_selector(reader, reg)?;
+                    if !*multiple && sel.limit > 1 {
+                        reader.cursor = start;
+                        return Err(CommandError::tr_at("argument.entity.toomany", &[], reader));
+                    }
+                    Arg::ScoreHolder(ScoreHolderArg::Selector(sel))
+                } else {
+                    while reader.can_read() && reader.peek() != ' ' {
+                        reader.skip();
+                    }
+                    let text = &reader.string[start..reader.cursor];
+                    if text == "*" {
+                        Arg::ScoreHolder(ScoreHolderArg::Wildcard)
+                    } else {
+                        Arg::ScoreHolder(ScoreHolderArg::Name(text.to_owned()))
+                    }
+                }
+            }
+            ArgType::Objective | ArgType::Team => {
+                Arg::Str(reader.read_unquoted_string().to_owned())
+            }
+            ArgType::Criteria => {
+                while reader.can_read() && reader.peek() != ' ' {
+                    reader.skip();
+                }
+                let id = &reader.string[start..reader.cursor];
+                if !crate::scoreboard::criteria_exists(id, reg) {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at(
+                        "argument.criteria.invalid",
+                        &[&id],
+                        reader,
+                    ));
+                }
+                Arg::Str(id.to_owned())
+            }
+            ArgType::ScoreboardSlot => {
+                let name = reader.read_unquoted_string();
+                if !crate::scoreboard::display_slot_valid(name) {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at(
+                        "argument.scoreboardDisplaySlot.invalid",
+                        &[&name],
+                        reader,
+                    ));
+                }
+                Arg::Str(name.to_owned())
+            }
+            ArgType::Operation => {
+                if !reader.can_read() {
+                    return Err(CommandError::tr_at(
+                        "arguments.operation.invalid",
+                        &[],
+                        reader,
+                    ));
+                }
+                while reader.can_read() && reader.peek() != ' ' {
+                    reader.skip();
+                }
+                let op = &reader.string[start..reader.cursor];
+                if !OPERATIONS.contains(&op) {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at(
+                        "arguments.operation.invalid",
+                        &[],
+                        reader,
+                    ));
+                }
+                Arg::Str(op.to_owned())
+            }
+            ArgType::TeamColor => {
+                let name = reader.read_unquoted_string();
+                if crate::scoreboard::team_color_rgb(name).is_none() {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at(
+                        "argument.color.invalid",
+                        &[&name],
+                        reader,
+                    ));
+                }
+                Arg::Str(name.to_owned())
+            }
+            ArgType::IntRange => Arg::IntRange(range_int(reader)?),
             ArgType::Anchor => {
                 let name = reader.read_unquoted_string();
                 match name {
@@ -1511,6 +1737,50 @@ impl ArgType {
                 }
             }
             ArgType::GameMode => builder.suggest_matching(GameMode::ALL.map(GameMode::name)),
+            ArgType::ScoreHolder { .. } => {
+                suggest_selector(builder, reg);
+                let names: Vec<String> = reg
+                    .players
+                    .iter()
+                    .chain(reg.tracked.iter())
+                    .cloned()
+                    .collect();
+                builder.suggest_matching(names.iter().map(String::as_str));
+            }
+            ArgType::Objective => {
+                builder.suggest_matching(reg.objectives.iter().map(String::as_str))
+            }
+            ArgType::Team => builder.suggest_matching(reg.teams.iter().map(String::as_str)),
+            ArgType::Criteria => {
+                let mut ids: Vec<String> = crate::scoreboard::CUSTOM_CRITERIA
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect();
+                for c in crate::scoreboard::team_colors() {
+                    ids.push(format!("teamkill.{c}"));
+                    ids.push(format!("killedByTeam.{c}"));
+                }
+                let stat = |ty: &str, key: &str| crate::scoreboard::stat_criteria(ty, key);
+                ids.extend(reg.blocks.keys().map(|b| stat("mined", b)));
+                for ty in ["crafted", "used", "broken", "picked_up", "dropped"] {
+                    ids.extend(reg.items.iter().map(|i| stat(ty, i)));
+                }
+                for ty in ["killed", "killed_by"] {
+                    ids.extend(reg.entity_types.iter().map(|e| stat(ty, e)));
+                }
+                ids.extend(
+                    crate::scoreboard::CUSTOM_STATS
+                        .iter()
+                        .map(|c| stat("custom", &format!("minecraft:{c}"))),
+                );
+                builder.suggest_matching(ids.iter().map(String::as_str));
+            }
+            ArgType::ScoreboardSlot => {
+                let slots = crate::scoreboard::display_slots();
+                builder.suggest_matching(slots.iter().map(String::as_str));
+            }
+            ArgType::Operation => builder.suggest_matching(OPERATIONS),
+            ArgType::TeamColor => builder.suggest_matching(crate::scoreboard::team_colors()),
             ArgType::Anchor => builder.suggest_matching(["eyes", "feet"]),
             ArgType::Swizzle | ArgType::Component => {}
             ArgType::Message => {

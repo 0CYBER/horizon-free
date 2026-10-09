@@ -18,10 +18,10 @@ use horizon_client::{
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_world::registry::BlockStateId;
 
-type R<T> = Result<T, CommandError>;
+pub(super) type R<T> = Result<T, CommandError>;
 
 /// An entity a selector found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Target {
     Player,
     Mob(u32),
@@ -117,7 +117,7 @@ impl Game<'_> {
         self.system_message(message.with_color(text::RED));
     }
     /// sendSuccess honouring `send_command_feedback`.
-    fn feedback(&mut self, message: Text) {
+    pub(super) fn feedback(&mut self, message: Text) {
         if self.ui.rules.bool("send_command_feedback") {
             self.system_message(message);
         }
@@ -238,7 +238,7 @@ impl Game<'_> {
         }
     }
     /// EntitySelector.findEntities.
-    fn select(&mut self, s: &Selector) -> Vec<Target> {
+    pub(super) fn select(&mut self, s: &Selector) -> Vec<Target> {
         if let Some(name) = &s.player_name {
             return if name.eq_ignore_ascii_case(PLAYER_NAME) && self.player.is_some() {
                 vec![Target::Player]
@@ -274,6 +274,7 @@ impl Game<'_> {
         }
         let level = self.experience.level;
         let creative = self.creative;
+        let passing = self.selector_extra_filter(&candidates, s);
         let mut out: Vec<(Target, f64)> = candidates
             .into_iter()
             .filter_map(|t| {
@@ -304,10 +305,8 @@ impl Game<'_> {
                         return None;
                     }
                 }
-                for (_, neg) in &s.tags {
-                    if !*neg {
-                        return None;
-                    }
+                if !passing.contains(&t) {
+                    return None;
                 }
                 if let Some((lo, hi)) = s.level
                     && (t != Target::Player
@@ -449,6 +448,12 @@ impl Game<'_> {
             "spawnpoint" => self.cmd_spawnpoint(ctx),
             "setworldspawn" => self.cmd_setworldspawn(ctx),
             "clear" => self.cmd_clear(ctx),
+            id if id.starts_with("scoreboard.")
+                || id.starts_with("team.")
+                || id.starts_with("trigger") =>
+            {
+                self.cmd_scoreboard(id, ctx)
+            }
             "locate.structure" | "locate.biome" => self.cmd_locate(id, ctx),
             "say" | "me" | "msg" => self.cmd_say(id, ctx),
             "list" => {

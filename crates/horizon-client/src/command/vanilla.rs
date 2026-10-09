@@ -342,6 +342,7 @@ pub fn build() -> Dispatcher {
     let fade_out = d.argument(stay, "fadeOut", ArgType::Time { min: 0 });
     d.executes(fade_out, "title");
 
+    super::tree_scoreboard::register(&mut d, root);
     execute(&mut d, root);
     d
 }

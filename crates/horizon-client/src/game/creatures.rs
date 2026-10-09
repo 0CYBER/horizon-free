@@ -642,9 +642,11 @@ impl Game<'_> {
         if by_player {
             self.stats.add("killed", &m.kind.id, 1);
             self.stats.custom("mob_kills", 1);
+            self.score_player_killed(super::commands::Target::Mob(m.id));
             let view = self.mob_entity(m);
             self.trigger_entity("minecraft:player_killed_entity", "entity", &view);
         }
+        self.score_entity_removed(m.id);
         let held = self.held().cloned();
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         if !m.is_baby() {

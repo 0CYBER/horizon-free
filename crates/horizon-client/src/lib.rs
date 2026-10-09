@@ -54,6 +54,8 @@ pub mod particles;
 pub mod pose;
 pub mod projectiles;
 pub mod save;
+pub mod scoreboard;
+pub mod scoreboard_cmd;
 pub mod screen_effects;
 pub mod settings;
 pub mod shadows;
