@@ -483,6 +483,12 @@ impl Game<'_> {
     /// `Slot.mayPlace` and `getMaxStackSize` for station and brewing slots.
     fn slot_rules(&self, slot: usize, stack: &ItemStack) -> (bool, u32) {
         let data = self.data();
+        if let Some(BlockEntity::Crafter(c)) = self.container_kind()
+            && (300..309).contains(&slot)
+        {
+            // CrafterSlot.mayPlace: not a disabled slot.
+            return (!c.disabled[slot - 300], 64);
+        }
         if (300..305).contains(&slot) {
             return match slot - 300 {
                 0..=2 => (data.brewing.is_bottle(stack), 1),
@@ -1952,14 +1958,12 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) else {
             return;
         };
-        let stack = if slot == 200 {
-            self.craft_result()
-        } else {
-            self.slot_mut(slot).clone()
-        };
+        let stack = self.slot_view(slot);
         if let Some(stack) = stack {
             let lines = self.stack_tooltip(&stack);
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+        } else if let Some(text) = self.crafter_tooltip(slot) {
+            self.draw_tooltip_lines(batch, &[(text, u32::MAX)], self.cursor.0, self.cursor.1);
         }
     }
     /// Potion items: `layer0` tinted with the potion colour under the bottle

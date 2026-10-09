@@ -3,6 +3,8 @@
 //! the vanilla dispense behaviours Horizon has entities for, and container
 //! comparator signals (`AbstractContainerMenu.getRedstoneSignalFromContainer`).
 use super::Game;
+
+mod crafter;
 use horizon_client::{
     Result,
     containers::BlockEntity,
@@ -40,6 +42,8 @@ enum Kind {
     /// `AbstractFurnaceBlockEntity` (a `WorldlyContainer`).
     Furnace,
     Hopper,
+    /// `CrafterBlockEntity`: disabled slots and the smallest-stack-first rule.
+    Crafter,
 }
 
 /// A container: one block entity, or a double chest (`CompoundContainer`).
@@ -145,6 +149,7 @@ impl Containers<'_> {
         let name = self.name(state);
         let kind = match (entity, name) {
             (BlockEntity::Furnace(_), _) => Kind::Furnace,
+            (BlockEntity::Crafter(_), _) => Kind::Crafter,
             (_, "minecraft:hopper") => Kind::Hopper,
             _ => Kind::Generic,
         };
@@ -212,6 +217,12 @@ impl Containers<'_> {
     }
     /// `Container.canPlaceItem` (+ `canPlaceItemThroughFace` for furnaces).
     fn can_place(&self, view: &View, slot: usize, stack: &ItemStack) -> bool {
+        if view.kind == Kind::Crafter {
+            return match self.world.block_entities.get(&view.parts[0].0) {
+                Some(BlockEntity::Crafter(c)) => c.can_place(slot, stack, self.max_stack(stack)),
+                _ => false,
+            };
+        }
         if view.kind != Kind::Furnace {
             return true;
         }
@@ -246,6 +257,13 @@ impl Containers<'_> {
     }
     /// `AbstractContainerMenu.getRedstoneSignalFromContainer`.
     fn signal(&self, view: &View) -> i32 {
+        if view.kind == Kind::Crafter {
+            // CrafterBlockEntity.getRedstoneSignal: filled or disabled slots.
+            return match self.world.block_entities.get(&view.parts[0].0) {
+                Some(BlockEntity::Crafter(c)) => c.redstone_signal(),
+                _ => 0,
+            };
+        }
         let mut total = 0.0f32;
         for i in 0..view.len() {
             if let Some(s) = self.get(view, i) {
@@ -567,6 +585,9 @@ impl Game<'_> {
     pub(super) fn dispense_from(&mut self, pos: BlockPos, state: BlockStateId) -> Result<()> {
         let key = (pos.x, pos.y, pos.z);
         let name = self.res.facts.get(state).name.clone();
+        if &*name == "minecraft:crafter" {
+            return self.crafter_dispense(pos, state);
+        }
         let dropper = &*name == "minecraft:dropper";
         if !dropper && &*name != "minecraft:dispenser" {
             return Ok(());

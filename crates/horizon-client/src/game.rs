@@ -3047,6 +3047,7 @@ impl Game<'_> {
             Some(BlockEntity::Chest(items)) => v.extend((0..items.len()).map(|i| 300 + i)),
             Some(BlockEntity::Furnace(_)) => v.extend(300..303),
             Some(BlockEntity::Brewing(_)) => v.extend(300..305),
+            Some(BlockEntity::Crafter(_)) => v.extend(300..310),
             Some(
                 BlockEntity::Sign(_)
                 | BlockEntity::Jukebox(_)
@@ -3069,6 +3070,7 @@ impl Game<'_> {
         if let Some(p) = self
             .station_slot_position(i)
             .or_else(|| self.machine_slot_position(i))
+            .or_else(|| self.crafter_slot_position(i))
         {
             return p;
         }
@@ -3146,6 +3148,14 @@ impl Game<'_> {
             &mut self.craft_grid[i - 100]
         } else {
             &mut self.inventory[i]
+        }
+    }
+    /// What a slot shows: the crafting result slots are computed.
+    fn slot_view(&mut self, i: usize) -> Option<ItemStack> {
+        match i {
+            200 => self.craft_result(),
+            309 => self.crafter_result(),
+            _ => self.slot_mut(i).clone(),
         }
     }
     fn craft_result(&self) -> Option<ItemStack> {
@@ -3273,6 +3283,7 @@ impl Game<'_> {
                     }
                 }
                 Some(BlockEntity::Brewing(_)) => {}
+                Some(BlockEntity::Crafter(_)) => self.draw_crafter_screen(batch, ox, oy),
                 Some(
                     BlockEntity::Sign(_)
                     | BlockEntity::Jukebox(_)
@@ -3328,11 +3339,7 @@ impl Game<'_> {
                     oy + sy,
                 );
             }
-            let stack = if i == 200 {
-                self.craft_result()
-            } else {
-                self.slot_mut(i).clone()
-            };
+            let stack = self.slot_view(i);
             if let Some(stack) = stack {
                 self.draw_item(batch, &stack, ox + sx, oy + sy);
             }
@@ -3421,6 +3428,11 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return;
         };
+        let held_shift =
+            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        if self.crafter_click(slot, held_shift) {
+            return;
+        }
         if let Some(c) = &self.carried
             && self.refuses(slot, c)
         {
@@ -4335,6 +4347,7 @@ impl Game<'_> {
     }
     fn tick_block_entities(&mut self) -> Result<()> {
         self.tick_hoppers()?;
+        self.tick_crafters();
         self.tick_jukeboxes();
         self.tick_beacons();
         // ChestLidController: 0.1 per tick towards open/closed.

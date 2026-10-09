@@ -289,6 +289,10 @@ impl Recipes {
     }
     /// Match a `size`x`size` grid (row-major) against the crafting recipes.
     pub fn craft(&self, grid: &[Option<ItemStack>], size: usize) -> Option<ItemStack> {
+        self.find(grid, size).map(|(_, result)| result)
+    }
+    /// `craft` with the matched recipe's id (the file name without namespace).
+    pub fn find(&self, grid: &[Option<ItemStack>], size: usize) -> Option<(&str, ItemStack)> {
         // Trim to the occupied bounding box.
         let occupied: Vec<(usize, usize)> = (0..size * size)
             .filter(|&i| grid[i].is_some())
@@ -307,12 +311,12 @@ impl Recipes {
         );
         let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
         let cell = |x: usize, y: usize| grid[(y0 + y) * size + x0 + x].as_ref();
-        for (_, recipe) in &self.crafting {
+        for (name, recipe) in &self.crafting {
             match recipe {
                 Recipe::Special(special) => {
                     let stacks: Vec<&ItemStack> = grid.iter().flatten().collect();
                     if let Some(result) = special.assemble(&stacks) {
-                        return Some(result);
+                        return Some((name, result));
                     }
                 }
                 Recipe::Shaped {
@@ -337,7 +341,7 @@ impl Recipes {
                         })
                     };
                     if matches(false) || matches(true) {
-                        return Some(result.clone());
+                        return Some((name, result.clone()));
                     }
                 }
                 Recipe::Shapeless {
@@ -361,7 +365,7 @@ impl Recipes {
                         }
                     });
                     if ok {
-                        return Some(result.clone());
+                        return Some((name, result.clone()));
                     }
                 }
             }

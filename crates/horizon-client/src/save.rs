@@ -400,6 +400,20 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
                 entries.push(("Page", Tag::Int(l.page)));
             }
         }
+        BlockEntity::Crafter(c) => {
+            entries.push(("Items", encode_items(&c.items)));
+            entries.push((
+                "disabled_slots",
+                Tag::IntArray(
+                    (0..9)
+                        .filter(|&i| c.disabled[i])
+                        .map(|i| i as i32)
+                        .collect(),
+                ),
+            ));
+            entries.push(("triggered", Tag::Int(i32::from(c.triggered))));
+            entries.push(("crafting_ticks_remaining", Tag::Int(c.crafting_ticks)));
+        }
         BlockEntity::Banner(b) => {
             if !b.layers.is_empty() {
                 entries.push(("patterns", crate::banner::layers_to_nbt(&b.layers)));
@@ -491,6 +505,20 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             };
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
+        BlockEntity::Crafter(c) => {
+            for (slot, item) in decode_items(tag.get("Items"), 9).into_iter().enumerate() {
+                c.items[slot] = item;
+            }
+            if let Some(Tag::IntArray(slots)) = tag.get("disabled_slots") {
+                for &slot in slots {
+                    if (0..9).contains(&slot) && c.items[slot as usize].is_none() {
+                        c.disabled[slot as usize] = true;
+                    }
+                }
+            }
+            c.triggered = int("triggered").unwrap_or(0) != 0;
+            c.crafting_ticks = int("crafting_ticks_remaining").unwrap_or(0);
+        }
         BlockEntity::Jukebox(_)
         | BlockEntity::Beacon(_)
         | BlockEntity::Lectern(_)
@@ -2013,6 +2041,29 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn crafter_block_entity_round_trips() {
+        let mut crafter = crate::containers::Crafter::default();
+        crafter.items[2] = Some(crate::items::ItemStack::new("minecraft:stick", 5));
+        crafter.disabled[4] = true;
+        crafter.triggered = true;
+        crafter.crafting_ticks = 3;
+        let tag = encode_block_entity(
+            (7, 8, 9),
+            &crate::containers::BlockEntity::Crafter(crafter),
+            "minecraft:crafter",
+        );
+        let (pos, back) = decode_block_entity(&tag).expect("crafter");
+        assert_eq!(pos, (7, 8, 9));
+        let crate::containers::BlockEntity::Crafter(back) = back else {
+            panic!("not a crafter");
+        };
+        assert_eq!(back.items[2].as_ref().map(|s| s.count), Some(5));
+        assert!(back.disabled[4] && !back.disabled[3]);
+        assert!(back.triggered);
+        assert_eq!(back.crafting_ticks, 3);
+        assert_eq!(back.redstone_signal(), 2);
+    }
     #[test]
     fn banner_block_entity_round_trips() {
         let banner = crate::containers::Banner {

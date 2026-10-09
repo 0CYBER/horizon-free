@@ -60,6 +60,56 @@ pub enum BlockEntity {
     Lectern(Lectern),
     /// `BannerBlockEntity`: the pattern layers.
     Banner(Banner),
+    /// `CrafterBlockEntity`.
+    Crafter(Crafter),
+}
+/// `CrafterBlockEntity`: nine slots that can be disabled, the powered flag
+/// and the ticks left in the crafting animation.
+#[derive(Clone, Debug, Default)]
+pub struct Crafter {
+    pub items: [Option<ItemStack>; 9],
+    pub disabled: [bool; 9],
+    pub triggered: bool,
+    pub crafting_ticks: i32,
+}
+impl Crafter {
+    /// `slotCanBeDisabled`: only empty slots.
+    pub fn slot_can_be_disabled(&self, slot: usize) -> bool {
+        slot < 9 && self.items[slot].is_none()
+    }
+    /// `setSlotState`.
+    pub fn set_slot_state(&mut self, slot: usize, enabled: bool) {
+        if self.slot_can_be_disabled(slot) {
+            self.disabled[slot] = !enabled;
+        }
+    }
+    /// `getRedstoneSignal`: filled or disabled slots.
+    pub fn redstone_signal(&self) -> i32 {
+        (0..9)
+            .filter(|&i| self.items[i].is_some() || self.disabled[i])
+            .count() as i32
+    }
+    /// `canPlaceItem`: a hopper fills the smallest stacks first.
+    pub fn can_place(&self, slot: usize, stack: &ItemStack, max_stack: u32) -> bool {
+        if slot >= 9 || self.disabled[slot] {
+            return false;
+        }
+        let Some(current) = &self.items[slot] else {
+            return true;
+        };
+        if current.count >= max_stack {
+            return false;
+        }
+        !(slot + 1..9).any(|i| {
+            !self.disabled[i]
+                && match &self.items[i] {
+                    None => true,
+                    Some(other) => {
+                        other.count < current.count && other.same_item_same_components(stack)
+                    }
+                }
+        })
+    }
 }
 #[derive(Clone, Debug, Default)]
 pub struct Banner {
@@ -111,6 +161,9 @@ impl BlockEntity {
         if name == "minecraft:lectern" {
             return Some(Self::Lectern(Lectern::default()));
         }
+        if name == "minecraft:crafter" {
+            return Some(Self::Crafter(Crafter::default()));
+        }
         if name.ends_with("_banner") {
             return Some(Self::Banner(Banner::default()));
         }
@@ -145,6 +198,7 @@ impl BlockEntity {
             "minecraft:blast_furnace" => "minecraft:blast_furnace",
             "minecraft:smoker" => "minecraft:smoker",
             n if n.ends_with("shulker_box") => "minecraft:shulker_box",
+            "minecraft:crafter" => "minecraft:crafter",
             _ => return None,
         })
     }
@@ -166,6 +220,7 @@ impl BlockEntity {
             Self::Beacon(_) => "minecraft:beacon",
             Self::Lectern(_) => "minecraft:lectern",
             Self::Banner(_) => "minecraft:banner",
+            Self::Crafter(_) => "minecraft:crafter",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -178,6 +233,7 @@ impl BlockEntity {
             Self::Beacon(_) => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
             Self::Banner(_) => Vec::new(),
+            Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -190,6 +246,7 @@ impl BlockEntity {
             | Self::Beacon(_)
             | Self::Lectern(_)
             | Self::Banner(_) => &[],
+            Self::Crafter(c) => &c.items,
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -202,6 +259,7 @@ impl BlockEntity {
             | Self::Beacon(_)
             | Self::Lectern(_)
             | Self::Banner(_) => &mut [],
+            Self::Crafter(c) => &mut c.items,
         }
     }
 }
