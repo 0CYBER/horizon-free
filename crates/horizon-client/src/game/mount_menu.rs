@@ -67,10 +67,7 @@ impl Game<'_> {
             mob: m.id,
             species,
             columns,
-            saddle: m
-                .extra
-                .saddled
-                .then(|| ItemStack::new("minecraft:saddle", 1)),
+            saddle: m.saddle_item(),
             armor: m
                 .extra
                 .head
@@ -137,18 +134,18 @@ impl Game<'_> {
         let Some(index) = self.mount_mob_index(open.mob) else {
             return;
         };
-        let (saddle, armor) = (open.saddle.is_some(), open.armor.clone());
+        let (saddle, armor) = (open.saddle.clone(), open.armor.clone());
         let items = open.items.clone();
         let m = &mut self.mobs[index];
         let at = m.center();
-        let sound = if saddle && !m.extra.saddled {
+        let sound = if saddle.is_some() && !m.extra.saddled {
             Some("minecraft:entity.horse.saddle")
         } else if armor.is_some() && m.extra.head.is_none() {
             Some("minecraft:entity.horse.armor")
         } else {
             None
         };
-        m.extra.saddled = saddle;
+        m.set_saddle(saddle);
         if open.show_armor {
             m.extra.head = armor.map(|a| a.item);
         }

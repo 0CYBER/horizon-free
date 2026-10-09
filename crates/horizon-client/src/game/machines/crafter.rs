@@ -270,7 +270,7 @@ impl Game<'_> {
             256.0,
         );
         let grey = rgba(64, 64, 64, 255);
-        let title = self.translate("container.crafter", "Crafter");
+        let title = self.container_title(self.translate("container.crafter", "Crafter"));
         let tw = HudBatch::text_width(atlas, &title);
         batch.text(
             atlas,

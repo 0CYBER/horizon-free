@@ -730,7 +730,15 @@ pub fn encode_with(
     let mut block_entities: Vec<Tag> = chunk
         .block_entities
         .iter()
-        .map(|(p, e)| encode_block_entity(*p, e, &block_name(p)))
+        .map(|(p, e)| {
+            let mut tag = encode_block_entity(*p, e, &block_name(p));
+            if let Some((_, name)) = chunk.block_names.iter().find(|(q, _)| q == p)
+                && let Tag::Compound(map) = &mut tag
+            {
+                map.insert("CustomName".into(), string(name));
+            }
+            tag
+        })
         .collect();
     if let Some(extras) = extras {
         for raw in &extras.block_entities {
@@ -940,7 +948,12 @@ pub fn decode_with(
     if let Some(Tag::List(entities)) = tag.get("block_entities") {
         for e in entities {
             match decode_block_entity(e) {
-                Some(be) => chunk.block_entities.push(be),
+                Some(be) => {
+                    if let Some(name) = text(e.get("CustomName")) {
+                        chunk.block_names.push((be.0, name));
+                    }
+                    chunk.block_entities.push(be);
+                }
                 None => extras.block_entities.push(e.clone()),
             }
         }

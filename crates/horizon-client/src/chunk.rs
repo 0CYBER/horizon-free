@@ -100,6 +100,8 @@ pub struct Chunk {
     pub fresh: bool,
     /// Block entities read from a save, moved into the world on arrival.
     pub block_entities: Vec<((i32, i32, i32), crate::containers::BlockEntity)>,
+    /// `CustomName` of the container block entities (shown as the screen title).
+    pub block_names: Vec<((i32, i32, i32), String)>,
     /// Generation postprocessing marks (ProtoChunk.postProcessing) as world
     /// positions, applied once by LevelChunk.postProcessGeneration.
     pub postprocess: Vec<[i32; 3]>,
@@ -125,6 +127,7 @@ impl Chunk {
             light_loaded: false,
             fresh: false,
             block_entities: Vec::new(),
+            block_names: Vec::new(),
             structure_refs: Vec::new(),
             postprocess: Vec::new(),
             saved: None,

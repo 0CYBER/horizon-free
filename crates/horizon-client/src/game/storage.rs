@@ -11,6 +11,14 @@ impl Game<'_> {
     /// Block-entity contents on removal: shulker boxes keep theirs for the
     /// dropped box (`copy_components`), other containers spill them.
     pub(super) fn release_contents(&mut self, pos: [i32; 3], entity: BlockEntity, block: &str) {
+        if let Some(name) = self
+            .world
+            .block_names
+            .remove(&(pos[0], pos[1], pos[2]))
+            .filter(|_| !matches!(entity, BlockEntity::Banner(_)))
+        {
+            self.pending_names.insert(pos, (block.to_owned(), name));
+        }
         if let BlockEntity::Banner(banner) = entity {
             self.pending_banner.insert(pos, banner);
             return;
@@ -40,6 +48,38 @@ impl Game<'_> {
         {
             stack.data_mut().container = contents;
         }
+    }
+    /// The custom name a broken container drops with (`copy_components`).
+    pub(super) fn attach_container_name(&mut self, pos: [i32; 3], stack: &mut ItemStack) {
+        if self
+            .pending_names
+            .get(&pos)
+            .is_some_and(|(item, _)| **item == *stack.item)
+            && let Some((_, name)) = self.pending_names.remove(&pos)
+        {
+            stack.data_mut().custom_name = Some(name);
+        }
+    }
+    /// A placed container takes the item's custom name.
+    pub(super) fn name_placed_container(&mut self, pos: [i32; 3], stack: &ItemStack) {
+        let key = (pos[0], pos[1], pos[2]);
+        if let Some(name) = stack.custom_name()
+            && !matches!(
+                self.world.block_entities.get(&key),
+                Some(BlockEntity::Banner(_) | BlockEntity::Sign(_))
+            )
+        {
+            self.world.block_names.insert(key, name.to_owned());
+        }
+    }
+    /// The custom name of the open container, or its default title
+    /// (a double chest is named by whichever half has a name).
+    pub(super) fn container_title(&self, default: String) -> String {
+        self.container_parts()
+            .iter()
+            .find_map(|(key, _)| self.world.block_names.get(key))
+            .cloned()
+            .unwrap_or(default)
     }
     /// A placed shulker box takes the item's contents.
     pub(super) fn fill_placed_box(&mut self, pos: [i32; 3], stack: &ItemStack) {
@@ -234,7 +274,7 @@ impl Game<'_> {
             _ if rows > 3 => ("container.chestDouble", "Large Chest"),
             _ => ("container.chest", "Chest"),
         };
-        self.translate(key, fallback)
+        self.container_title(self.translate(key, fallback))
     }
     /// `ContainerScreen` / `ShulkerBoxScreen`: the background with its
     /// container rows, the title and the inventory label.

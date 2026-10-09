@@ -630,6 +630,8 @@ struct Game<'a> {
     pending_shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
     /// Layers of broken banners waiting for their dropped item.
     pending_banner: HashMap<[i32; 3], horizon_client::containers::Banner>,
+    /// Custom names of broken containers, for the dropped item (`copy_components`).
+    pending_names: HashMap<[i32; 3], (String, String)>,
     /// The recipe book of the open screen (game/recipe_book.rs).
     recipe_ui: recipe_book::RecipeUi,
     /// The horse inventory (game/mount_menu.rs).
@@ -1005,6 +1007,7 @@ impl Game<'_> {
     /// Block.popResource
     fn pop_resource(&mut self, pos: [i32; 3], mut stack: ItemStack) {
         self.attach_shulker_contents(pos, &mut stack);
+        self.attach_container_name(pos, &mut stack);
         self.attach_banner_layers(pos, &mut stack);
         let r = &mut self.world.random;
         let mut offset = || f64::from(r.next_float()) * 0.5 - 0.25;
@@ -1838,6 +1841,7 @@ impl Game<'_> {
                 .block_entities
                 .insert((target[0], target[1], target[2]), entity);
             self.fill_placed_box(target, &stack);
+            self.name_placed_container(target, &stack);
             self.fill_placed_banner(target, &stack);
             if sign {
                 self.open_sign_editor((target[0], target[1], target[2]), true);
@@ -3249,6 +3253,7 @@ impl Game<'_> {
                         }
                     };
                     part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
+                    let title = &self.container_title(title.to_owned());
                     let tw = HudBatch::text_width(atlas, title);
                     batch.text(atlas, title, ox + (176.0 - tw) / 2.0, oy + 6.0, grey, false);
                     batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
@@ -4415,6 +4420,13 @@ impl Game<'_> {
             .iter()
             .filter(|(p, _)| p.0 >> 4 == c.x && p.2 >> 4 == c.z)
             .map(|(p, e)| (*p, e.clone()))
+            .collect();
+        c.block_names = self
+            .world
+            .block_names
+            .iter()
+            .filter(|(p, _)| p.0 >> 4 == c.x && p.2 >> 4 == c.z)
+            .map(|(p, n)| (*p, n.clone()))
             .collect();
         self.attach_save_data(&mut c);
         Arc::new(c)
@@ -6999,6 +7011,9 @@ impl Game<'_> {
             self.world
                 .block_entities
                 .retain(|p, _| !(p.0 >> 4 == c.x && p.2 >> 4 == c.z));
+            self.world
+                .block_names
+                .retain(|p, _| !(p.0 >> 4 == c.x && p.2 >> 4 == c.z));
         }
         if !modified.is_empty()
             && let Err(e) = self
@@ -7751,6 +7766,7 @@ pub fn run() -> Result<()> {
         ender_open: None,
         pending_shulker: HashMap::new(),
         pending_banner: HashMap::new(),
+        pending_names: HashMap::new(),
         recipe_ui: Default::default(),
         mount_menu: Default::default(),
         hook: None,

@@ -26,6 +26,8 @@ pub struct World {
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
     pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
+    /// `BaseContainerBlockEntity.name`: custom names of container block entities.
+    pub block_names: HashMap<(i32, i32, i32), String>,
     /// `ChunkAccess.inhabitedTime` of resident chunks: ticks a player spent
     /// within spawning range (local difficulty).
     pub inhabited: HashMap<(i32, i32), i64>,
@@ -106,6 +108,7 @@ impl World {
             loaded_entities: Vec::new(),
             modified: HashSet::new(),
             block_entities: HashMap::new(),
+            block_names: HashMap::new(),
             inhabited: HashMap::new(),
             game_time: 0,
             day_time: 1000,

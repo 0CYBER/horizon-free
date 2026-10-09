@@ -38,13 +38,14 @@ impl Game<'_> {
     }
     /// `Pig` / `Strider.mobInteract`: saddle an adult, or ride a saddled one.
     fn interact_steerable(&mut self, index: usize, item: &str) -> bool {
+        let held = self.inventory[self.selected].clone();
         let m = &mut self.mobs[index];
         if m.is_baby() || !m.alive() || Some(m.id) == self.riding {
             return false;
         }
         let at = m.center();
         if item == "minecraft:saddle" && !m.extra.saddled {
-            m.extra.saddled = true;
+            m.set_saddle(held);
             let sound = if m.species() == Species::Strider {
                 "minecraft:entity.strider.saddle"
             } else {
@@ -91,6 +92,7 @@ impl Game<'_> {
     }
     /// `AbstractHorse.mobInteract`. Returns whether the click was used.
     pub(super) fn interact_mount(&mut self, index: usize, item: &str) -> bool {
+        let held = self.inventory[self.selected].clone();
         let m = &self.mobs[index];
         let species = m.species();
         if matches!(species, Species::Pig | Species::Strider) {
@@ -118,7 +120,7 @@ impl Game<'_> {
         let at = m.center();
         let tamed = m.extra.tame;
         let sound = if item == "minecraft:saddle" && tamed && !m.extra.saddled {
-            m.extra.saddled = true;
+            m.set_saddle(held);
             Some("minecraft:entity.horse.saddle")
         } else if item.ends_with("_horse_armor")
             && species == Species::Horse

@@ -253,6 +253,65 @@ pub enum Special {
     /// `RepairItemRecipe`: two damaged items of one kind.
     RepairItem,
 }
+impl Special {
+    /// The recipe-book displays of a learnable (non-custom) crafting recipe:
+    /// its layout and result.
+    pub fn book_displays(&self) -> Vec<(crate::recipe_book::Display, ItemStack)> {
+        use crate::recipe_book::Display;
+        match self {
+            Self::Transmute {
+                input,
+                material,
+                min,
+                max,
+                add_count,
+                result,
+            } => (*min..=*max)
+                .map(|n| {
+                    let mut ingredients = vec![input.clone()];
+                    ingredients.extend(std::iter::repeat_n(material.clone(), n));
+                    let mut made = result.create();
+                    if result.item.is_none() {
+                        // The result keeps the input's item: show the first one.
+                        if let Some(first) = input.0.iter().min() {
+                            made.item = Arc::from(first.as_str());
+                        }
+                    }
+                    if *add_count {
+                        made.count += n as u32;
+                    }
+                    (Display::Shapeless(ingredients), made)
+                })
+                .collect(),
+            Self::Dye {
+                target,
+                dye,
+                result,
+            } => vec![(
+                Display::Shapeless(vec![target.clone(), dye.clone()]),
+                result.create(),
+            )],
+            Self::Imbue {
+                source,
+                material,
+                result,
+            } => {
+                let cells = (0..9)
+                    .map(|i| Some(if i == 4 { source } else { material }.clone()))
+                    .collect();
+                vec![(
+                    Display::Shaped {
+                        width: 3,
+                        height: 3,
+                        cells,
+                    },
+                    result.create(),
+                )]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
 /// `CraftingInput`: the occupied bounding box of the grid.
 pub struct Input<'a> {
     pub width: usize,
