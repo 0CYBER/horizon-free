@@ -53,6 +53,7 @@ pub mod packs;
 pub mod particles;
 pub mod pose;
 pub mod projectiles;
+pub mod raid;
 pub mod save;
 pub mod screen_effects;
 pub mod settings;

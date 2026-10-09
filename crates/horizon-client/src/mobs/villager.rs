@@ -5,11 +5,11 @@
 //! (work and restock at the job site, meet at the bell, sleep in the bed),
 //! fleeing hostiles (`VillagerPanicTrigger`) and the unhappy head shake.
 use super::{
-    Mob, MobEvent, MobWorld, Species,
+    Mob, MobEvent, MobWorld, Species, Who,
     anim::{Poses, State},
     goals::{
-        Avoid, AvoidEntity, Cx, Float, Goal, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll,
-        goal_clone,
+        Avoid, AvoidEntity, Cx, Float, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround,
+        Stroll, goal_clone,
     },
 };
 use horizon_core::random::RandomSource;
@@ -74,6 +74,8 @@ pub fn register(m: &mut Mob) {
         AvoidEntity::new(Avoid::Species(raiders), 12.0, 0.75, 0.75),
     );
     g.add(1, Panic::new(0.75));
+    g.add(2, RaidBehavior::default());
+    g.add(3, GiftToHero::default());
     g.add(3, JobSite::default());
     g.add(3, AcquireHome::default());
     g.add(4, Schedule::default());
@@ -593,4 +595,217 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     );
     p.yrot("right_leg", 0.0);
     p.yrot("left_leg", 0.0);
+}
+
+// ---- Raids: the raid activities and the gift for a hero.
+
+pub const RAID_NONE: u8 = 0;
+/// A raid is near but no wave is on (`Activity.PRE_RAID`).
+pub const PRE_RAID: u8 = 1;
+/// A wave is on (`Activity.RAID`).
+pub const RAID: u8 = 2;
+/// The raid was won: the villagers celebrate.
+pub const RAID_VICTORY: u8 = 3;
+
+/// Villager state beyond `Extra`'s scratch fields.
+#[derive(Clone, Debug, Default)]
+pub struct Ext {
+    /// Which raid package the villager follows.
+    pub raid: u8,
+}
+pub fn ext(m: &Mob) -> Option<&Ext> {
+    m.extra.villager.as_deref()
+}
+pub fn ext_mut(m: &mut Mob) -> &mut Ext {
+    m.extra.villager.get_or_insert_with(Box::default)
+}
+fn raid_status(m: &Mob) -> u8 {
+    ext(m).map_or(RAID_NONE, |e| e.raid)
+}
+
+/// The raid packages of `VillagerGoalPackages`: in a raid villagers hide at
+/// home (`LocateHidingPlace`), before one they gather at the bell and ring it
+/// (`RingBell`), and after a victory they look for the sky to celebrate
+/// (`MoveToSkySeeingSpot`, `CelebrateVillagersSurvivedRaid`).
+#[derive(Clone, Debug, Default)]
+struct RaidBehavior {
+    next_move: i32,
+}
+impl Goal for RaidBehavior {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        raid_status(m) != RAID_NONE && !sleeping(m)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.can_use(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        self.next_move = 0;
+        m.nav_stop();
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.nav_stop();
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.next_move -= 1;
+        let p = m.position;
+        match raid_status(m) {
+            RAID => {
+                // LocateHidingPlace(24, 0.7, 1): back to the bed.
+                let Some(home) = m.extra.bed else { return };
+                if distance(m, home) > 1.0 && (self.next_move <= 0 || m.ai.nav.is_done()) {
+                    if distance(m, home) <= 24.0 {
+                        m.nav_move_to(cx.w, center(home), 0.7);
+                    }
+                    self.next_move = 40;
+                }
+            }
+            PRE_RAID => {
+                // RingBell and SetWalkTargetFromBlockMemory(meeting, 0.75).
+                let Some(bell) = m.extra.meeting else { return };
+                if distance(m, bell) > 2.0 && (self.next_move <= 0 || m.ai.nav.is_done()) {
+                    m.nav_move_to(cx.w, center(bell), 0.75);
+                    self.next_move = 40;
+                }
+                if distance(m, bell) < 3.0
+                    && m.random.next_float() > 0.95
+                    && cx.w.block_name(bell[0], bell[1], bell[2]) == "minecraft:bell"
+                {
+                    cx.events.push(MobEvent::SoundId(
+                        "minecraft:block.bell.use".into(),
+                        center(bell),
+                        2.0,
+                        1.0,
+                    ));
+                }
+            }
+            RAID_VICTORY => {
+                let (x, y, z) = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
+                if cx.w.can_see_sky(x, y, z) {
+                    // CelebrateVillagersSurvivedRaid.tick.
+                    if m.random.next_int_bound(100).unwrap_or(1) == 0 {
+                        m.voice("entity.villager.celebrate", cx.events);
+                    }
+                    if m.random.next_int_bound(200).unwrap_or(1) == 0 {
+                        let color = m.random.next_int_bound(16).unwrap_or(0) as usize;
+                        let flight = m.random.next_int_bound(3).unwrap_or(0) as u8;
+                        cx.events.push(MobEvent::Firework {
+                            at: [p.x, m.eye_y(), p.z],
+                            color,
+                            flight,
+                        });
+                    }
+                    m.nav_stop();
+                } else if self.next_move <= 0 || m.ai.nav.is_done() {
+                    // MoveToSkySeeingSpot: a random spot with a view of the sky.
+                    for _ in 0..5 {
+                        if let Some(at) = m.land_random_pos(cx.w, 15, 7)
+                            && cx.w.can_see_sky(
+                                at[0].floor() as i32,
+                                at[1].floor() as i32,
+                                at[2].floor() as i32,
+                            )
+                        {
+                            m.nav_move_to(cx.w, at, 0.5);
+                            break;
+                        }
+                    }
+                    self.next_move = 40;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `GiveGiftToHero`: a villager that sees a hero of the village walks up and
+/// throws a gift of its profession, every so often.
+#[derive(Clone, Debug)]
+struct GiftToHero {
+    until_next: i32,
+    started: i64,
+    given: bool,
+}
+impl Default for GiftToHero {
+    fn default() -> Self {
+        Self {
+            until_next: 600,
+            started: 0,
+            given: false,
+        }
+    }
+}
+/// The gift loot table of a villager (`GiveGiftToHero.getLootTableToThrow`).
+fn gift_table(m: &Mob) -> String {
+    if m.is_baby() {
+        return "minecraft:gameplay/hero_of_the_village/baby_gift".into();
+    }
+    let profession = super::render::PROFESSIONS[m.extra.variant2 as usize % 15];
+    let name = match profession {
+        "none" | "nitwit" => "unemployed",
+        other => other,
+    };
+    format!("minecraft:gameplay/hero_of_the_village/{name}_gift")
+}
+fn hero_in_view(m: &mut Mob, cx: &Cx) -> bool {
+    let Some(p) = &cx.w.player else { return false };
+    p.hero
+        && p.alive
+        && !p.spectator
+        && m.position.distance_squared(p.position) <= 16.0 * 16.0
+        && m.sees(cx.w, Who::Player)
+}
+impl Goal for GiftToHero {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !hero_in_view(m, cx) || sleeping(m) {
+            return false;
+        }
+        if self.until_next > 0 {
+            self.until_next -= 1;
+            return false;
+        }
+        true
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        hero_in_view(m, cx) && !self.given
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.given = false;
+        self.started = cx.w.game_time;
+        if let Some(p) = &cx.w.player {
+            m.look_at(p.eye);
+        }
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        self.until_next = 600 + m.random.next_int_bound(6001).unwrap_or(0);
+        m.nav_stop();
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(p) = cx.w.player.clone() else { return };
+        m.look_at(p.eye);
+        let near = m.position.distance_squared(p.position) < 25.0;
+        if near {
+            if cx.w.game_time - self.started > 20 {
+                cx.events.push(MobEvent::ThrowGift {
+                    table: gift_table(m),
+                    from: [m.position.x, m.eye_y() - 0.3, m.position.z],
+                    to: [p.position.x, p.position.y, p.position.z],
+                });
+                self.given = true;
+            }
+            m.nav_stop();
+        } else if m.ai.nav.is_done() {
+            m.nav_move_to(cx.w, [p.position.x, p.position.y, p.position.z], 0.5);
+        }
+    }
 }

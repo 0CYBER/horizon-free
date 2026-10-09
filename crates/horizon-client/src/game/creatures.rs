@@ -151,6 +151,7 @@ impl Game<'_> {
             gold_armor: self.wearing_gold(),
             hurt_by: self.player_hurt_by(),
             last_hurt: self.combat.last_hurt_mob.map(|(id, at)| (Who::Mob(id), at)),
+            hero: self.potions.effects.get("hero_of_the_village").is_some(),
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
@@ -623,6 +624,7 @@ impl Game<'_> {
         self.tick_inhabited();
         self.spawn_natural();
         self.tick_patrol_spawner();
+        self.tick_raids();
         let snapshot: Vec<Seen> = self.mobs.iter().map(seen).collect();
         let mut events = Vec::new();
         let mut mobs = std::mem::take(&mut self.mobs);
@@ -646,6 +648,7 @@ impl Game<'_> {
             push_apart(&mut mobs);
         }
         self.mobs.append(&mut mobs);
+        self.sync_riders();
         for m in dead {
             self.mob_died(&m);
         }
@@ -666,6 +669,7 @@ impl Game<'_> {
             let view = self.mob_entity(m);
             self.trigger_entity("minecraft:player_killed_entity", "entity", &view);
         }
+        self.raider_died(m, by_player);
         let held = self.held().cloned();
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         if !m.is_baby() {
@@ -1001,6 +1005,10 @@ impl Game<'_> {
                 MobEvent::CreakingTearDown { center, spread } => {
                     self.creaking_tear_down(center, spread)
                 }
+                MobEvent::Firework { at, color, flight } => {
+                    self.villager_firework(at, color, flight)
+                }
+                MobEvent::ThrowGift { table, from, to } => self.throw_gift(&table, from, to),
                 MobEvent::PatrolTarget { mob, target } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         horizon_client::mobs::raider::set_patrol_target(m, target);

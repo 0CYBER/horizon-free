@@ -111,6 +111,28 @@ pub fn build() -> Dispatcher {
         d.executes(dur, "weather");
     }
 
+    // raid start <omenlvl> | stop | check | sound <type> | spawnleader | setomen <level> | glow
+    let raid = d.literal(root, "raid");
+    d.requires(raid, 3);
+    let start = d.literal(raid, "start");
+    let level = d.argument(start, "omenlvl", integer(0));
+    d.executes(level, "raid.start");
+    for (name, id) in [
+        ("stop", "raid.stop"),
+        ("check", "raid.check"),
+        ("spawnleader", "raid.spawnleader"),
+        ("glow", "raid.glow"),
+    ] {
+        let n = d.literal(raid, name);
+        d.executes(n, id);
+    }
+    let sound = d.literal(raid, "sound");
+    let kind = d.argument(sound, "type", ArgType::Greedy);
+    d.executes(kind, "raid.sound");
+    let setomen = d.literal(raid, "setomen");
+    let level = d.argument(setomen, "level", integer(0));
+    d.executes(level, "raid.setomen");
+
     // kill [<targets>]
     let kill = d.literal(root, "kill");
     d.requires(kill, GAMEMASTERS);

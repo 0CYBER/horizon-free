@@ -2442,6 +2442,7 @@ impl Game<'_> {
             self.screen = Screen::Dead;
             self.capture(false);
         }
+        self.tick_omens();
         self.tick_effects();
         self.tick_burning();
         self.tick_using();
@@ -6519,6 +6520,7 @@ impl Game<'_> {
             .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
         self.save_entities()?;
         self.save_maps();
+        self.save_raids();
         self.save_fight();
         self.save_stats();
         self.save_advancements();

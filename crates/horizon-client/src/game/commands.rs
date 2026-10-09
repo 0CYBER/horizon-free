@@ -2,6 +2,7 @@
 //! entity selectors resolved against the game, vanilla feedback and errors.
 mod effects;
 pub(super) mod execute;
+mod raid;
 mod text_commands;
 
 use super::{Dim, Game, Screen, chat::PLAYER_NAME};
@@ -418,6 +419,7 @@ impl Game<'_> {
             | "teleport.targets.location"
             | "teleport.targets.destination" => self.cmd_teleport(id, ctx),
             id if id.starts_with("time.") => self.cmd_time(id, ctx),
+            id if id.starts_with("raid.") => self.cmd_raid(id, ctx),
             "weather" => self.cmd_weather(ctx),
             "kill" => self.cmd_kill(ctx),
             "summon" => self.cmd_summon(ctx),

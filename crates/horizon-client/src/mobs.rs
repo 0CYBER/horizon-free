@@ -479,6 +479,8 @@ pub struct Extra {
     pub trade: Option<Box<crate::merchant::Trader>>,
     /// A raider's patrol and raid state.
     pub raider: Option<Box<raider::State>>,
+    /// A villager's raid activity and gossip.
+    pub villager: Option<Box<villager::Ext>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -663,6 +665,18 @@ pub enum MobEvent {
         kind: DamageKind,
         amount: f32,
     },
+    /// A villager launches a firework rocket (celebrating a won raid).
+    Firework {
+        at: [f64; 3],
+        color: usize,
+        flight: u8,
+    },
+    /// A villager throws a hero's gift (a loot table) toward the player.
+    ThrowGift {
+        table: String,
+        from: [f64; 3],
+        to: [f64; 3],
+    },
     /// A patrol leader hands its patrol target to a companion.
     PatrolTarget {
         mob: u32,
@@ -753,6 +767,8 @@ pub struct PlayerView {
     pub hurt_by: Option<(Who, i64)>,
     /// `getLastHurtMob` and when.
     pub last_hurt: Option<(Who, i64)>,
+    /// The Hero of the Village effect.
+    pub hero: bool,
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,

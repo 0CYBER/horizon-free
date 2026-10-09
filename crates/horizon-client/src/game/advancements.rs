@@ -261,12 +261,26 @@ impl Game<'_> {
         }
     }
     pub(super) fn mob_entity(&self, m: &horizon_client::mobs::Mob) -> EntityView {
+        // mainhand, offhand, head, chest, legs, feet.
+        let slot = |i: &Option<std::sync::Arc<str>>| {
+            i.as_ref().map(|id| item_view(&ItemStack::new(id, 1)))
+        };
+        let mut equipment: [Option<ItemView>; 7] = Default::default();
+        if !horizon_client::mobs::equine::is_equine(m.species()) {
+            equipment[0] = slot(&m.extra.main_hand);
+            equipment[1] = slot(&m.extra.off_hand);
+            equipment[2] = slot(&m.extra.head);
+            equipment[3] = slot(&m.extra.chest);
+            equipment[4] = slot(&m.extra.legs);
+            equipment[5] = slot(&m.extra.feet);
+        }
         EntityView {
             kind: m.kind.id.clone(),
             position: [m.position.x, m.position.y, m.position.z],
             on_fire: m.fire_ticks > 0,
             baby: m.is_baby(),
             on_ground: m.on_ground,
+            equipment,
             ..Default::default()
         }
     }

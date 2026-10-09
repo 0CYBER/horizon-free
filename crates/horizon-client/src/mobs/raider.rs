@@ -30,6 +30,28 @@ pub struct State {
     pub celebrating: bool,
     /// The raid is active (`hasActiveRaid`); set by the game every tick.
     pub active_raid: bool,
+    /// The raid is won or lost (`Raid.isOver`), lost (`isLoss`).
+    pub raid_over: bool,
+    pub raid_loss: bool,
+    pub raid_center: [i32; 3],
+    /// Standing in or beside a village (`ServerLevel.isVillage`).
+    pub in_village: bool,
+    /// A dropped ominous banner this raider may fetch.
+    pub banner_at: Option<[f64; 3]>,
+    /// Beds around the raid's centre.
+    pub homes: Option<std::sync::Arc<Vec<[i32; 3]>>>,
+    /// The ravager this raider rides, and (for a ravager) that it carries one.
+    pub vehicle: Option<u32>,
+    pub rider: bool,
+    /// Quick Charge (pillager crossbows) or Sharpness (vindicator axes) from
+    /// the raid's enchanting.
+    pub enchant: u8,
+}
+impl State {
+    /// A ravager carrying a raider (`hasControllingPassenger`).
+    pub fn has_rider(&self) -> bool {
+        self.rider
+    }
 }
 
 /// The raider species (`EntityTypeTags.RAIDERS`).
@@ -67,6 +89,10 @@ pub fn register(m: &mut Mob) {
     }
     m.extra.raider = Some(Box::default());
     let species = m.species();
+    m.ai.goals.add(1, ObtainBanner);
+    m.ai.goals.add(3, PathfindToRaid);
+    m.ai.goals.add(4, MoveThroughVillage::new(1.05, 1.0));
+    m.ai.goals.add(5, Celebration);
     m.ai.goals.add(4, LongDistancePatrol::new(0.7, 0.595));
     // The illagers hold their ground in a patrol (Witch and Ravager do not).
     if matches!(species, Species::Pillager | Species::Vindicator) {
@@ -292,10 +318,203 @@ fn close_to_center(p: [i32; 3], at: Vec3, distance: f64) -> bool {
         < distance * distance
 }
 
-impl State {
-    /// A ravager carrying a raider (`hasControllingPassenger`).
-    pub fn has_rider(&self) -> bool {
-        false
+/// `Raider.ObtainRaidLeaderBannerGoal`: walk to a fallen ominous banner when
+/// the wave has no living leader (the game finds the banner and picks it up).
+#[derive(Clone, Debug)]
+pub struct ObtainBanner;
+impl Goal for ObtainBanner {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        state(m).is_some_and(|s| s.banner_at.is_some())
+    }
+    fn can_continue(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        !m.ai.nav.is_done() && state(m).is_some_and(|s| s.banner_at.is_some())
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some(at) = state(m).and_then(|s| s.banner_at) {
+            m.nav_move_to(cx.w, at, 1.15);
+        }
+    }
+}
+
+/// `PathfindToRaidGoal`: outside the village, head for the raid's centre in
+/// hops of up to 15 blocks.
+#[derive(Clone, Debug)]
+pub struct PathfindToRaid;
+impl PathfindToRaid {
+    fn valid(s: &State) -> bool {
+        s.active_raid && !s.raid_over && !s.in_village
+    }
+}
+impl Goal for PathfindToRaid {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        m.ai.target.is_none() && state(m).is_some_and(|s| !s.has_rider() && Self::valid(s))
+    }
+    fn can_continue(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        state(m).is_some_and(Self::valid)
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(c) = state(m).map(|s| s.raid_center) else {
+            return;
+        };
+        if m.ai.nav.is_done() {
+            let to = [
+                f64::from(c[0]) + 0.5,
+                f64::from(c[1]),
+                f64::from(c[2]) + 0.5,
+            ];
+            if let Some(at) =
+                m.default_random_pos_towards(cx.w, 15, 4, to, std::f64::consts::FRAC_PI_2)
+            {
+                m.nav_move_to(cx.w, at, 1.0);
+            }
+        }
+    }
+}
+
+/// `Raider.RaiderMoveThroughVillageGoal`: walk to a bed of the village not
+/// visited lately, then onwards to the next one.
+#[derive(Clone, Debug)]
+pub struct MoveThroughVillage {
+    speed: f64,
+    distance: f64,
+    poi: Option<[i32; 3]>,
+    visited: Vec<[i32; 3]>,
+    stuck: bool,
+}
+impl MoveThroughVillage {
+    pub fn new(speed: f64, distance: f64) -> Self {
+        Self {
+            speed,
+            distance,
+            poi: None,
+            visited: Vec::new(),
+            stuck: false,
+        }
+    }
+}
+impl Goal for MoveThroughVillage {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        if self.visited.len() > 2 {
+            self.visited.remove(0);
+        }
+        let Some(s) = state(m) else { return false };
+        if !(s.active_raid && !s.raid_over) || m.ai.target.is_some() {
+            return false;
+        }
+        let Some(homes) = s.homes.clone() else {
+            return false;
+        };
+        let near: Vec<[i32; 3]> = homes
+            .iter()
+            .copied()
+            .filter(|p| !self.visited.contains(p) && close_to_center(*p, m.position, 48.0))
+            .collect();
+        if near.is_empty() {
+            return false;
+        }
+        self.poi = Some(near[m.random.next_int_bound(near.len() as i32).unwrap_or(0) as usize]);
+        true
+    }
+    fn can_continue(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        let Some(p) = self.poi else { return false };
+        !m.ai.nav.is_done()
+            && m.ai.target.is_none()
+            && !close_to_center(p, m.position, f64::from(m.width()) + self.distance)
+            && !self.stuck
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.ai.no_action_time = 0;
+        if let Some(p) = self.poi {
+            m.nav_move_to(
+                cx.w,
+                [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])],
+                self.speed,
+            );
+        }
+        self.stuck = false;
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        if let Some(p) = self.poi
+            && close_to_center(p, m.position, self.distance)
+        {
+            self.visited.push(p);
+        }
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(p) = self.poi else { return };
+        if !m.ai.nav.is_done() {
+            return;
+        }
+        let to = [
+            f64::from(p[0]) + 0.5,
+            f64::from(p[1]),
+            f64::from(p[2]) + 0.5,
+        ];
+        let next = m
+            .default_random_pos_towards(cx.w, 16, 7, to, std::f64::consts::PI / 10.0)
+            .or_else(|| m.default_random_pos_towards(cx.w, 8, 7, to, std::f64::consts::FRAC_PI_2));
+        match next {
+            Some(at) => {
+                m.nav_move_to(cx.w, at, self.speed);
+            }
+            None => self.stuck = true,
+        }
+    }
+}
+
+/// `Raider.RaiderCelebration`: after a lost village, cheer and jump.
+#[derive(Clone, Debug)]
+pub struct Celebration;
+impl Goal for Celebration {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        m.alive()
+            && m.ai.target.is_none()
+            && state(m).is_some_and(|s| s.raid_loss && s.raid_id.is_some())
+    }
+    fn start(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        state_mut(m).celebrating = true;
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        state_mut(m).celebrating = false;
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if m.random
+            .next_int_bound(super::goals::reduced(100))
+            .unwrap_or(1)
+            == 0
+        {
+            let sound = match m.species() {
+                Species::Pillager => "entity.pillager.celebrate",
+                Species::Vindicator => "entity.vindicator.celebrate",
+                Species::Evoker => "entity.evoker.celebrate",
+                Species::Ravager => "entity.ravager.celebrate",
+                _ => "entity.witch.celebrate",
+            };
+            m.voice(sound, cx.events);
+        }
+        if m.random
+            .next_int_bound(super::goals::reduced(50))
+            .unwrap_or(1)
+            == 0
+        {
+            m.ai.jumping = true;
+        }
     }
 }
 
