@@ -316,6 +316,7 @@ impl Decoration {
         }
         let mut world = World {
             block_entities,
+            entities: Vec::new(),
             level_random,
             blocks: data
                 .feature_resources
@@ -418,6 +419,22 @@ impl Decoration {
                 chunk.block_entities.push((pos, nbt));
             }
         }
+        // WorldGenRegion.addFreshEntity: into the chunk holding the position.
+        for nbt in std::mem::take(&mut world.entities) {
+            let Some(crate::nbt::Tag::List(p)) = nbt.get(&"Pos".into()) else {
+                continue;
+            };
+            let coord = |i: usize| match p.get(i) {
+                Some(crate::nbt::Tag::Double(b)) => f64::from_bits(*b).floor() as i32,
+                _ => 0,
+            };
+            let index = ((coord(2) >> 4).wrapping_sub(center.z) + 1) * 3
+                + (coord(0) >> 4).wrapping_sub(center.x)
+                + 1;
+            if let Some(chunk) = usize::try_from(index).ok().and_then(|i| region.get_mut(i)) {
+                chunk.entities.push(nbt);
+            }
+        }
         for terrain in world.region.into_chunks() {
             let p = terrain.position();
             let index = (p.z.wrapping_sub(center.z) + 1) * 3 + p.x.wrapping_sub(center.x) + 1;
@@ -437,6 +454,7 @@ impl Decoration {
 /// the FEATURES step's write radius, biome lookups through the biome zoom.
 struct World<'a> {
     block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
+    entities: Vec<crate::nbt::Compound>,
     level_random: &'a mut dyn super::structure::legacy::PieceRandom,
     blocks: Option<&'a BlockBehavior>,
     region: TerrainRegion<'static, GenBlockStates>,
@@ -720,6 +738,10 @@ impl PlacementContext for World<'_> {
             && (0..nx).all(|x| {
                 (0..ny).all(|y| (0..nz).all(|z| shape.is_full(x as i32, y as i32, z as i32)))
             }))
+    }
+    fn add_entity(&mut self, nbt: crate::nbt::Compound) -> Result<(), PlacementQueryError> {
+        self.entities.push(nbt);
+        Ok(())
     }
     fn set_block_entity(
         &mut self,

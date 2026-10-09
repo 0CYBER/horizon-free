@@ -500,6 +500,9 @@ pub struct ProtoChunk {
     pub block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
     /// Structure starts referencing this chunk (STRUCTURE_REFERENCES).
     pub(super) structure_starts: Vec<Arc<super::structure::start::StructureStart>>,
+    /// Entities placed by structures (`ProtoChunk.addEntity`), as NBT with
+    /// absolute `Pos`.
+    pub entities: Vec<crate::nbt::Compound>,
 }
 impl ProtoChunk {
     pub fn position(&self) -> ChunkPos {
@@ -1021,6 +1024,7 @@ where
             decorated: false,
             block_entities: Vec::new(),
             structure_starts: references,
+            entities: Vec::new(),
         })
     }
 }
@@ -1326,6 +1330,13 @@ trait SeededPipeline: Send + Sync {
     ) -> Vec<Arc<super::structure::start::StructureStart>>;
     fn unsupported_features(&self) -> Vec<(String, String)>;
     fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>>;
+    fn locate(
+        &self,
+        worker: &mut WorkerState,
+        names: &[String],
+        from: [i32; 3],
+        radius: i32,
+    ) -> Option<(String, [i32; 3])>;
 }
 impl<R: RandomSource + 'static> SeededPipeline for Pipeline<R>
 where
@@ -1402,6 +1413,24 @@ where
     }
     fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
         self.structures.as_ref()?.cached_rings(set)
+    }
+    fn locate(
+        &self,
+        worker: &mut WorkerState,
+        names: &[String],
+        from: [i32; 3],
+        radius: i32,
+    ) -> Option<(String, [i32; 3])> {
+        self.structures.as_ref()?.locate(
+            &mut StructureQueries {
+                pipeline: self,
+                worker,
+                valid: BTreeSet::new(),
+            },
+            names,
+            from,
+            radius,
+        )
     }
 }
 
@@ -1540,6 +1569,15 @@ impl GeneratorWorker {
         let result = self.pipeline.generate(&mut self.state, pos);
         self.state.timings.chunks += 1;
         result
+    }
+    /// `/locate structure`: the nearest start of one of `names`.
+    pub fn locate(
+        &mut self,
+        names: &[String],
+        from: [i32; 3],
+        radius: i32,
+    ) -> Option<(String, [i32; 3])> {
+        self.pipeline.locate(&mut self.state, names, from, radius)
     }
     /// STRUCTURE_STARTS: the structure starts owned by a chunk (cached).
     pub fn structure_starts(

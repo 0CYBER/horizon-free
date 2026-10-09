@@ -33,10 +33,18 @@ impl Palette {
         &self.blocks
     }
 }
+/// StructureTemplate.StructureEntityInfo: an entity saved with the template.
+#[derive(Clone, Debug)]
+pub struct EntityInfo {
+    pub pos: [f64; 3],
+    pub block_pos: [i32; 3],
+    pub nbt: Compound,
+}
 #[derive(Debug)]
 pub struct StructureTemplate {
     pub size: [i32; 3],
     palettes: Vec<Palette>,
+    pub entities: Vec<EntityInfo>,
 }
 
 fn int_list(tag: Option<&Tag>) -> [i32; 3] {
@@ -123,6 +131,7 @@ impl StructureTemplate {
         Self {
             size: [0; 3],
             palettes: Vec::new(),
+            entities: Vec::new(),
         }
     }
     /// StructureTemplate.load. Blocks are ordered as vanilla orders them:
@@ -199,7 +208,54 @@ impl StructureTemplate {
                 _ => load(&[]),
             },
         }
-        Self { size, palettes }
+        let mut entities = Vec::new();
+        if let Some(Tag::List(list)) = get(root, "entities") {
+            for e in list {
+                let Tag::Compound(e) = e else { continue };
+                let Some(Tag::Compound(nbt)) = get(e, "nbt") else {
+                    continue;
+                };
+                let mut pos = [0.0; 3];
+                if let Some(Tag::List(p)) = get(e, "pos") {
+                    for (slot, v) in pos.iter_mut().zip(p) {
+                        if let Tag::Double(bits) = v {
+                            *slot = f64::from_bits(*bits);
+                        }
+                    }
+                }
+                entities.push(EntityInfo {
+                    pos,
+                    block_pos: int_list(get(e, "blockPos")),
+                    nbt: nbt.clone(),
+                });
+            }
+        }
+        Self {
+            size,
+            palettes,
+            entities,
+        }
+    }
+    /// StructureTemplate.transform(Vec3, ...): entity positions.
+    pub fn transform_vec(
+        pos: [f64; 3],
+        mirror: Mirror,
+        rotation: Rotation,
+        pivot: [i32; 3],
+    ) -> [f64; 3] {
+        let [mut x, y, mut z] = pos;
+        match mirror {
+            Mirror::LeftRight => z = 1.0 - z,
+            Mirror::FrontBack => x = 1.0 - x,
+            Mirror::None => {}
+        }
+        let (px, pz) = (f64::from(pivot[0]), f64::from(pivot[2]));
+        match rotation {
+            Rotation::Counterclockwise90 => [px - pz + z, y, px + pz + 1.0 - x],
+            Rotation::Clockwise90 => [px + pz + 1.0 - z, y, pz - px + x],
+            Rotation::Clockwise180 => [px + px + 1.0 - x, y, pz + pz + 1.0 - z],
+            Rotation::None => [x, y, z],
+        }
     }
     pub fn palettes(&self) -> &[Palette] {
         &self.palettes

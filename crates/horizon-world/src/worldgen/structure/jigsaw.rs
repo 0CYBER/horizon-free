@@ -484,6 +484,8 @@ fn place_element<W: FeatureWorld + PlacementContext, R: RandomSource>(
             };
             let mut settings = PlaceSettings::new(rotation);
             settings.known_shape = true;
+            // SinglePoolElement.getSettings.
+            settings.finalize_entities = true;
             settings.bounding_box = Some(chunk_box);
             settings.waterlogging = override_liquid.unwrap_or(waterlogging);
             if !*legacy {

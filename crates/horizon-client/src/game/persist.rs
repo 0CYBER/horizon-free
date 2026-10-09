@@ -206,9 +206,23 @@ impl Game<'_> {
                     }
                     _ if self.res.mob_types.contains_key(&kind) => {
                         self.next_entity += 1;
-                        if let Some(m) =
+                        // Structure entities placed with finalizeEntities.
+                        let mut tag = tag;
+                        let finalize = match &mut tag {
+                            Tag::Compound(c) => c.remove(&"horizon:finalize".into()).is_some(),
+                            _ => false,
+                        };
+                        if let Some(mut m) =
                             entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, self.next_entity)
                         {
+                            if finalize {
+                                let facts = self.biome_facts(
+                                    m.position.x.floor() as i32,
+                                    m.position.y.floor() as i32,
+                                    m.position.z.floor() as i32,
+                                );
+                                horizon_client::mobs::spawning::finalize(&mut m, &facts);
+                            }
                             self.remember(m.id, uuid, tag);
                             self.mobs.push(m);
                         }

@@ -130,6 +130,105 @@ impl StructureState {
         cache.insert((chunk.x, chunk.z), starts.clone());
         starts
     }
+    /// ChunkGenerator.findNearestMapStructure: the nearest start of one of
+    /// `names` from block `from` (rings: every ring chunk; random spreads:
+    /// sectors in growing squares up to `radius`). Returns the structure and
+    /// its locate position (the start chunk's corner at y 0).
+    pub(super) fn locate(
+        &self,
+        context: &mut impl super::structure::start::StartContext,
+        names: &[String],
+        from: [i32; 3],
+        radius: i32,
+    ) -> Option<(String, [i32; 3])> {
+        let seed = context.seed();
+        let rings = self
+            .rings
+            .get_or_init(|| {
+                self.registry
+                    .ring_positions(&self.possible_sets, seed, &mut |q| context.noise_biome(q))
+            })
+            .clone();
+        let wanted = |s: usize| names.iter().any(|n| *n == self.registry.structures[s].name);
+        let dist = |p: [i32; 3]| {
+            let (dx, dz) = (f64::from(p[0] - from[0]), f64::from(p[2] - from[2]));
+            dx * dx + dz * dz
+        };
+        let mut best: Option<(f64, String, [i32; 3])> = None;
+        let found_at = |this: &Self, context: &mut _, chunk: ChunkPos| -> Option<String> {
+            this.starts_at(context, chunk)
+                .iter()
+                .find(|s| wanted(s.structure))
+                .map(|s| s.name.clone())
+        };
+        for &si in &self.possible_sets {
+            let set = &self.registry.sets[si];
+            if !set.structures.iter().any(|(s, _)| wanted(*s)) {
+                continue;
+            }
+            match set.spacing() {
+                None => {
+                    // Rings: nearest by the chunk's (8, 32, 8) block.
+                    let Some(chunks) = rings.get(&set.name) else {
+                        continue;
+                    };
+                    let mut nearest: Option<(f64, ChunkPos)> = None;
+                    for &c in chunks {
+                        let d = dist([c.x * 16 + 8, 32, c.z * 16 + 8]);
+                        if nearest.is_none_or(|(n, _)| d < n)
+                            && self
+                                .registry
+                                .is_structure_chunk(set, seed, c.x, c.z, &rings)
+                        {
+                            nearest = Some((d, c));
+                        }
+                    }
+                    if let Some((_, c)) = nearest
+                        && let Some(name) = found_at(self, context, c)
+                    {
+                        let p = [c.x * 16, 0, c.z * 16];
+                        let d = dist(p);
+                        if best.as_ref().is_none_or(|(b, ..)| d < *b) {
+                            best = Some((d, name, p));
+                        }
+                    }
+                }
+                Some(spacing) => {
+                    let (cx, cz) = (from[0] >> 4, from[2] >> 4);
+                    'search: for r in 0..=radius {
+                        for dx in -r..=r {
+                            let x_edge = dx == -r || dx == r;
+                            for dz in -r..=r {
+                                if !(x_edge || dz == -r || dz == r) {
+                                    continue;
+                                }
+                                let (sx, sz) = (cx + spacing * dx, cz + spacing * dz);
+                                let Some(c) = StructureRegistry::potential_chunk(set, seed, sx, sz)
+                                else {
+                                    continue;
+                                };
+                                if !self
+                                    .registry
+                                    .is_structure_chunk(set, seed, c.x, c.z, &rings)
+                                {
+                                    continue;
+                                }
+                                if let Some(name) = found_at(self, context, c) {
+                                    let p = [c.x * 16, 0, c.z * 16];
+                                    let d = dist(p);
+                                    if best.as_ref().is_none_or(|(b, ..)| d < *b) {
+                                        best = Some((d, name, p));
+                                    }
+                                    break 'search;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(_, n, p)| (n, p))
+    }
     /// ChunkGenerator.createReferences: starts within 8 chunks whose box
     /// intersects this chunk's column.
     pub(super) fn references(

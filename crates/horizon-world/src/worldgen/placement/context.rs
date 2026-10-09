@@ -309,6 +309,11 @@ pub trait PlacementContext {
     fn layer_block(&mut self, _position: [i32; 3]) -> Result<LayerBlock, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
     }
+    /// Add an entity from its NBT (structure templates and pieces; `Pos` is
+    /// absolute). Worlds without entity storage drop it.
+    fn add_entity(&mut self, _nbt: crate::nbt::Compound) -> Result<(), PlacementQueryError> {
+        Ok(())
+    }
     /// Store block-entity data loaded at a just-placed block (structure
     /// templates). Worlds without block-entity storage drop it.
     fn set_block_entity(

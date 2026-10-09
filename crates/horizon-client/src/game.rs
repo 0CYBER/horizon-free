@@ -4720,8 +4720,7 @@ impl Game<'_> {
             let inner = Arc::new(VanillaTerrain::for_dimension(&self.options.resources.join("worldgen"), res.assets.registry, &res.biomes, seed, dim.id()).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with: python3 tools/prepare_native_client.py")
             })?);
-            self.end
-                .set_locator((dim == Dim::Overworld).then(|| inner.clone()));
+            self.end.set_locator(Some(inner.clone()));
             Streaming::new(
                 Arc::new(Persistent {
                     inner,

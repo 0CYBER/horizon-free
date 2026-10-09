@@ -1835,10 +1835,82 @@ impl Game<'_> {
         let Some(Arg::Resource(s)) = ctx.get("structure").cloned() else {
             return Ok(0);
         };
-        Err(CommandError::new(Text::tr(
-            "commands.locate.structure.not_found",
-            &[&s],
-        )))
+        // LocateCommand.locateStructure: an id or a #tag of structures.
+        let names = match s.strip_prefix('#') {
+            Some(tag) => self.structure_tag(tag),
+            None => vec![s.clone()],
+        };
+        let from = origin.map(|v| v.floor() as i32);
+        let found = self.end.locator().and_then(|t| t.locate(&names, from, 100));
+        let Some((name, p)) = found else {
+            return Err(CommandError::new(Text::tr(
+                "commands.locate.structure.not_found",
+                &[&s],
+            )));
+        };
+        let coords = Text::translate(
+            "chat.coordinates",
+            &[
+                Text::literal(p[0].to_string()),
+                Text::literal("~"),
+                Text::literal(p[2].to_string()),
+            ],
+        );
+        let link = Text::literal("[")
+            .append(coords)
+            .append("]")
+            .with_style(&Style {
+                color: Some(text::GREEN),
+                suggest: Some(format!("/tp @s {} ~ {}", p[0], p[2])),
+                ..Style::default()
+            });
+        let (dx, dz) = (f64::from(p[0] - from[0]), f64::from(p[2] - from[2]));
+        let distance = (dx * dx + dz * dz).sqrt().floor() as i32;
+        let shown = if s.starts_with('#') {
+            format!("{s} ({name})")
+        } else {
+            name
+        };
+        self.feedback(Text::translate(
+            "commands.locate.structure.success",
+            &[
+                Text::literal(shown),
+                link,
+                Text::literal(distance.to_string()),
+            ],
+        ));
+        Ok(distance)
+    }
+    /// The structures of a `worldgen/structure` tag, nested tags expanded.
+    fn structure_tag(&self, tag: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut pending = vec![tag.to_owned()];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(t) = pending.pop() {
+            if !seen.insert(t.clone()) {
+                continue;
+            }
+            let (ns, path) = t.split_once(':').unwrap_or(("minecraft", &t));
+            let file = self
+                .options
+                .resources
+                .join(format!("data/{ns}/tags/worldgen/structure/{path}.json"));
+            let Ok(v) = std::fs::read(file)
+                .map_err(|_| ())
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).map_err(|_| ()))
+            else {
+                continue;
+            };
+            for e in v["values"].as_array().into_iter().flatten() {
+                let id = e.as_str().or_else(|| e["id"].as_str()).unwrap_or_default();
+                match id.strip_prefix('#') {
+                    Some(nested) => pending.push(nested.to_owned()),
+                    None if !id.is_empty() => out.push(id.to_owned()),
+                    None => {}
+                }
+            }
+        }
+        out
     }
     fn cmd_say(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let raw = match ctx.get(if id == "me" { "action" } else { "message" }) {

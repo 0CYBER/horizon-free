@@ -326,6 +326,32 @@ impl StructureRegistry {
         rings
     }
     /// RandomSpreadStructurePlacement.getPotentialStructureChunk et al.
+    /// RandomSpreadStructurePlacement.getPotentialStructureChunk for the
+    /// sector holding chunk (`x`, `z`); `None` for other placements.
+    pub fn potential_chunk(set: &StructureSet, seed: i64, x: i32, z: i32) -> Option<ChunkPos> {
+        let Placement::RandomSpread {
+            spacing,
+            separation,
+            triangular,
+        } = set.placement
+        else {
+            return None;
+        };
+        let (gx, gz) = (x.div_euclid(spacing), z.div_euclid(spacing));
+        let mut random = WorldgenRandom::new(LegacyRandom::new(0));
+        random.set_large_feature_with_salt(seed, gx, gz, set.salt);
+        let limit = spacing - separation;
+        let spread = |r: &mut WorldgenRandom<LegacyRandom>| {
+            if triangular {
+                (r.next_int_bound(limit).unwrap_or(0) + r.next_int_bound(limit).unwrap_or(0)) / 2
+            } else {
+                r.next_int_bound(limit).unwrap_or(0)
+            }
+        };
+        let sx = spread(&mut random);
+        let sz = spread(&mut random);
+        Some(ChunkPos::new(gx * spacing + sx, gz * spacing + sz))
+    }
     pub fn is_structure_chunk(
         &self,
         set: &StructureSet,
@@ -383,6 +409,15 @@ impl StructureRegistry {
                 true
             }
             None => true,
+        }
+    }
+}
+impl StructureSet {
+    /// The random spread's spacing in chunks (`None` for rings).
+    pub fn spacing(&self) -> Option<i32> {
+        match self.placement {
+            Placement::RandomSpread { spacing, .. } => Some(spacing),
+            _ => None,
         }
     }
 }

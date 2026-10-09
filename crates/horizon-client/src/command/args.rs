@@ -1346,6 +1346,13 @@ impl ArgType {
             ArgType::ItemPredicate => Arg::Item(parse_item(reader, reg, true)?),
             ArgType::BlockState => Arg::Block(parse_block(reader, reg, false)?),
             ArgType::BlockPredicate => Arg::Block(parse_block(reader, reg, true)?),
+            // ResourceOrTagKeyArgument: structures and biomes also take a #tag.
+            ArgType::Resource(kind @ (Resource::Structure | Resource::Biome))
+                if reader.can_read() && reader.peek() == '#' =>
+            {
+                reader.cursor += 1;
+                Arg::Resource(format!("#{}", read_id(reader)?))
+            }
             ArgType::Resource(kind) => {
                 let id = read_id(reader)?;
                 let values = kind.values(reg);

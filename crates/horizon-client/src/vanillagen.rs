@@ -68,6 +68,16 @@ impl VanillaTerrain {
             loot,
         })
     }
+    /// `/locate structure`: the nearest start of one of `names` within
+    /// `radius` placement sectors of block `from`.
+    pub fn locate(
+        &self,
+        names: &[String],
+        from: [i32; 3],
+        radius: i32,
+    ) -> Option<(String, [i32; 3])> {
+        self.generator.worker().locate(names, from, radius)
+    }
     /// Concentric ring positions of a structure set (strongholds), once known.
     pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
         self.generator.ring_positions(set)
@@ -142,7 +152,7 @@ impl ChunkGenerator for VanillaTerrain {
     }
     fn finish(&self, proto: Proto) -> Chunk {
         let proto = proto.downcast::<VanillaProto>().expect("vanilla proto");
-        let chunk = match *proto {
+        let mut chunk = match *proto {
             VanillaProto::Ready(c) => c,
             VanillaProto::Failed(x, z) => return Chunk::empty(x, z),
         };
@@ -190,6 +200,10 @@ impl ChunkGenerator for VanillaTerrain {
         }
         out.biomes = Arc::new(biomes);
         out.block_entities = crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
+        out.entities = std::mem::take(&mut chunk.entities)
+            .into_iter()
+            .map(horizon_world::nbt::Tag::Compound)
+            .collect();
         for s in &mut out.sections {
             Arc::make_mut(s).compact();
         }

@@ -317,6 +317,9 @@ pub struct PlaceSettings<'a> {
     /// StructurePlaceSettings.knownShape: skip the neighbor shape updates
     /// after placement (jigsaw pieces).
     pub known_shape: bool,
+    /// StructurePlaceSettings.ignoreEntities / finalizeEntities.
+    pub ignore_entities: bool,
+    pub finalize_entities: bool,
 }
 impl<'a> PlaceSettings<'a> {
     pub fn new(rotation: Rotation) -> Self {
@@ -329,6 +332,8 @@ impl<'a> PlaceSettings<'a> {
             waterlogging: true,
             random: None,
             known_shape: false,
+            ignore_entities: false,
+            finalize_entities: false,
         }
     }
     pub fn with_processors(mut self, list: &'a ProcessorList) -> Self {
@@ -832,7 +837,113 @@ pub fn place_in_world<W: FeatureWorld + PlacementContext>(
             world.update_from_neighbour_shapes(pos, flags & !1 | 16)?;
         }
     }
+    if !settings.ignore_entities {
+        place_entities(world, template, position, settings)?;
+    }
     Ok(true)
+}
+
+/// StructureTemplate.placeEntities: each saved entity moved, turned and
+/// mirrored with the template, its NBT handed to the world.
+fn place_entities<W: PlacementContext>(
+    world: &mut W,
+    template: &StructureTemplate,
+    position: [i32; 3],
+    settings: &PlaceSettings<'_>,
+) -> Result<(), PlacementQueryError> {
+    let (mirror, rotation, pivot) = (settings.mirror, settings.rotation, settings.pivot);
+    for e in &template.entities {
+        let b = StructureTemplate::transform(e.block_pos, mirror, rotation, pivot);
+        let block_pos = [b[0] + position[0], b[1] + position[1], b[2] + position[2]];
+        if settings
+            .bounding_box
+            .is_some_and(|bb| !bb.is_inside(block_pos))
+        {
+            continue;
+        }
+        let r = StructureTemplate::transform_vec(e.pos, mirror, rotation, pivot);
+        let pos = [
+            r[0] + f64::from(position[0]),
+            r[1] + f64::from(position[1]),
+            r[2] + f64::from(position[2]),
+        ];
+        let mut nbt = e.nbt.clone();
+        nbt.insert(
+            "Pos".into(),
+            Tag::List(pos.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+        );
+        nbt.remove(&"UUID".into());
+        if nbt.contains_key(&"block_pos".into()) {
+            nbt.insert("block_pos".into(), Tag::IntArray(block_pos.to_vec()));
+        }
+        for (key, i) in [("TileX", 0), ("TileY", 1), ("TileZ", 2)] {
+            if nbt.contains_key(&key.into()) {
+                nbt.insert(key.into(), Tag::Int(block_pos[i]));
+            }
+        }
+        // Entity.rotate + Entity.mirror on the yaw.
+        let wrap = |a: f32| {
+            let a = a % 360.0;
+            if a >= 180.0 {
+                a - 360.0
+            } else if a < -180.0 {
+                a + 360.0
+            } else {
+                a
+            }
+        };
+        if let Some(Tag::List(rot)) = nbt.get(&"Rotation".into()).cloned()
+            && let Some(Tag::Float(bits)) = rot.first()
+        {
+            let yaw = wrap(f32::from_bits(*bits));
+            let rotated = match rotation {
+                Rotation::Clockwise180 => yaw + 180.0,
+                Rotation::Counterclockwise90 => yaw + 270.0,
+                Rotation::Clockwise90 => yaw + 90.0,
+                Rotation::None => yaw,
+            };
+            let mirrored = match mirror {
+                Mirror::FrontBack => -yaw,
+                Mirror::LeftRight => 180.0 - yaw,
+                Mirror::None => yaw,
+            };
+            let mut rot = rot.clone();
+            rot[0] = Tag::Float((rotated + mirrored - yaw).to_bits());
+            nbt.insert("Rotation".into(), Tag::List(rot));
+        }
+        // HangingEntity.rotate/mirror: the facing turns with the template.
+        if let Some(&Tag::Byte(f)) = nbt.get(&"Facing".into()) {
+            nbt.insert("Facing".into(), Tag::Byte(turn_facing(f, mirror, rotation)));
+        }
+        if settings.finalize_entities {
+            nbt.insert("horizon:finalize".into(), Tag::Byte(1));
+        }
+        world.add_entity(nbt)?;
+    }
+    Ok(())
+}
+/// A 3D data value (2 north, 3 south, 4 west, 5 east) mirrored then rotated.
+fn turn_facing(f: i8, mirror: Mirror, rotation: Rotation) -> i8 {
+    if !(2..=5).contains(&f) {
+        return f;
+    }
+    let mirrored = match (mirror, f) {
+        (Mirror::LeftRight, 2) => 3,
+        (Mirror::LeftRight, 3) => 2,
+        (Mirror::FrontBack, 4) => 5,
+        (Mirror::FrontBack, 5) => 4,
+        (_, f) => f,
+    };
+    // Clockwise order: north, east, south, west.
+    let order = [2, 5, 3, 4];
+    let i = order.iter().position(|&d| d == mirrored).unwrap_or(0);
+    let steps = match rotation {
+        Rotation::None => 0,
+        Rotation::Clockwise90 => 1,
+        Rotation::Clockwise180 => 2,
+        Rotation::Counterclockwise90 => 3,
+    };
+    order[(i + steps) % 4]
 }
 
 /// StructureTemplate.updateShapeAtEdge over the placed positions' voxel

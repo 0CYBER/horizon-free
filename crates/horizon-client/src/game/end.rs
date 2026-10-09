@@ -93,6 +93,9 @@ impl EndFlash {
     }
 }
 impl EndState {
+    pub(super) fn locator(&self) -> Option<Arc<VanillaTerrain>> {
+        self.locator.lock().unwrap().clone()
+    }
     pub(super) fn set_locator(&self, terrain: Option<Arc<VanillaTerrain>>) {
         *self.locator.lock().unwrap() = terrain;
     }

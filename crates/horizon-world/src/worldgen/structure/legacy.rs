@@ -785,6 +785,9 @@ impl TemplatePiece {
         s.mirror = self.mirror;
         s.pivot = self.pivot;
         s.waterlogging = self.waterlogging;
+        // Mansions and end cities spawn their mobs from data markers.
+        s.ignore_entities = self.template_name.contains("woodland_mansion/")
+            || self.template_name.contains("end_city/");
         s
     }
     /// TemplateStructurePiece.postProcess at a (possibly shifted) position;
