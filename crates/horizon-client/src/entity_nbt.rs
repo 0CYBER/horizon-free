@@ -246,6 +246,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("equipment".into(), Tag::Compound(equipment));
         }
+        "minecraft:shulker" => {
+            map.insert("AttachFace".into(), Tag::Byte(m.extra.variant3 as i8));
+            map.insert("Peek".into(), Tag::Byte(m.extra.counter as i8));
+            map.insert("Color".into(), Tag::Byte(m.extra.color as i8));
+        }
         "minecraft:slime" | "minecraft:magma_cube" => {
             map.insert("Size".into(), Tag::Int(m.extra.size.max(1) - 1));
             map.insert("wasOnGround".into(), Tag::Byte(i8::from(m.extra.flag2)));
@@ -394,6 +399,20 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 .position(|(n, _)| *n == v)
                 .unwrap_or(0) as u8;
         }
+    }
+    if m.species() == crate::mobs::Species::Shulker {
+        m.extra.variant3 = number(tag.get("AttachFace")).unwrap_or(0).clamp(0, 5) as u8;
+        m.extra.counter = number(tag.get("Peek")).unwrap_or(0).clamp(0, 100) as i32;
+        m.extra.color = number(tag.get("Color")).map_or(16, |c| c.clamp(0, 16) as u8);
+        m.anim.v[0] = m.extra.counter as f32 * 0.01;
+        m.anim.vo[0] = m.anim.v[0];
+        // Shulker.setPos: square on its block.
+        m.position = horizon_core::geometry::Vec3::new(
+            m.position.x.floor() + 0.5,
+            (m.position.y + 0.5).floor(),
+            m.position.z.floor() + 0.5,
+        );
+        m.previous = m.position;
     }
     if matches!(
         m.species(),

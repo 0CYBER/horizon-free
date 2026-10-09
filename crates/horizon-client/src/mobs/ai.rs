@@ -81,6 +81,7 @@ pub enum Family {
     /// Slimes and magma cubes.
     Cube,
     Guardian,
+    Shulker,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -116,6 +117,7 @@ pub fn family(s: Species) -> Family {
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
         S::Guardian | S::ElderGuardian => Family::Guardian,
+        S::Shulker => Family::Shulker,
         _ => Family::Generic,
     }
 }
@@ -147,6 +149,7 @@ pub fn register(m: &mut Mob) {
         Family::Enderman => super::enderman::register(m),
         Family::Cube => super::cube::register(m),
         Family::Guardian => super::guardian::register(m),
+        Family::Shulker => super::shulker::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -362,6 +365,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::ElderGuardian if !m.fluids.in_water => "entity.elder_guardian.ambient_land",
         Species::Axolotl if !m.fluids.in_water => "entity.axolotl.idle_air",
         Species::Bat if m.extra.flag && m.random.next_int_bound(4).unwrap_or(1) != 0 => return,
+        // Shulker.playAmbientSound: silent while closed.
+        Species::Shulker if m.extra.counter == 0 => return,
         Species::ZombifiedPiglin if m.ai.target.is_some() => "entity.zombified_piglin.angry",
         Species::Piglin if m.ai.target.is_some() => "entity.piglin.angry",
         Species::Hoglin if m.ai.target.is_some() => "entity.hoglin.angry",
@@ -522,6 +527,10 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         s if super::equine::is_equine(s) => super::equine::ai_step(m, w),
         Species::Phantom => super::phantom::flap_sound(m, events),
         Species::Guardian | Species::ElderGuardian => super::guardian::ai_step(m, w, events),
+        Species::Shulker => {
+            super::shulker::tick(m, w, events);
+            super::shulker::ai_step(m, w, events);
+        }
         Species::SnowGolem => super::golem::snow_ai_step(m, w, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
@@ -615,6 +624,7 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
 /// Species damage filters (LivingEntity.hurtServer overrides).
 pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
     match m.species() {
+        Species::Shulker => super::shulker::accepts(m, source),
         Species::Enderman => super::enderman::on_damage(m, source),
         Species::WitherSkeleton | Species::Blaze | Species::MagmaCube | Species::Strider
             if source.is_fire() =>
@@ -629,6 +639,7 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
     m.ai.no_action_time = 0;
     match m.species() {
         Species::Enderman => super::enderman::after_hurt(m, source),
+        Species::Shulker => super::shulker::after_hurt(m),
         Species::Wolf => super::tame::after_hurt(m, source),
         // NeutralMob: an iron golem hit by the player stays angry a while.
         // PiglinAi.wasHurtBy: drop what is being admired, no admiring for
@@ -709,6 +720,8 @@ pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<Mo
     match family(m.species()) {
         Family::Aquatic => aquatic::travel(m, w, input, events),
         Family::Guardian => super::guardian::travel(m, w, input, events),
+        // Shulkers never move on their own.
+        Family::Shulker => true,
         _ => false,
     }
 }

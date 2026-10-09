@@ -83,6 +83,15 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
     fn targets(&self) -> &[(Who, Aabb)] {
         &self.targets
     }
+    fn empty(&self, p: [i32; 3]) -> bool {
+        self.w.facts.is_air(self.w.world.block(p[0], p[1], p[2]))
+    }
+    fn solid(&self, p: [i32; 3]) -> bool {
+        self.w
+            .facts
+            .get(self.w.world.block(p[0], p[1], p[2]))
+            .full_collision
+    }
 }
 fn seen(m: &Mob) -> Seen {
     Seen {
@@ -1446,6 +1455,42 @@ impl Game<'_> {
                     }
                 }
             },
+            // ShulkerBullet.onHitEntity: 4 damage, then levitation for 10 s.
+            (ProjectileKind::ShulkerBullet { .. }, Hit::Entity { who, .. }) => match who {
+                Who::Player => {
+                    if !self.creative {
+                        self.mob_hits_player(
+                            4.0,
+                            [p.previous.x, p.previous.y, p.previous.z],
+                            "minecraft:mob_projectile",
+                        );
+                        self.give_player_effect("minecraft:levitation", 200, 0);
+                    }
+                }
+                Who::Mob(id) => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
+                        && m.damage(4.0, source)
+                    {
+                        m.extra.levitation = 200;
+                    }
+                }
+            },
+            (ProjectileKind::ShulkerBullet { .. }, Hit::Block { .. }) => {
+                self.audio
+                    .play("minecraft:entity.shulker_bullet.hit", Some(atp), 1.0, 1.0);
+                if let Some(ty) = horizon_client::particles::ParticleType::from_name("explosion") {
+                    let options = horizon_client::particles::ParticleOptions::simple(ty);
+                    for _ in 0..2 {
+                        let r = &mut self.world.random;
+                        let at = [
+                            atp[0] + r.next_gaussian() * 0.2,
+                            atp[1] + r.next_gaussian() * 0.2,
+                            atp[2] + r.next_gaussian() * 0.2,
+                        ];
+                        self.particles.add(&options, at, [0.0; 3]);
+                    }
+                }
+            }
             _ => {}
         }
         Ok(())

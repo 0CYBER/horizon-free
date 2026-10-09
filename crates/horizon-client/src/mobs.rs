@@ -27,6 +27,7 @@ pub mod path;
 pub mod phantom;
 pub mod piglin;
 pub mod render;
+pub mod shulker;
 pub mod spawning;
 pub mod species;
 pub mod tame;

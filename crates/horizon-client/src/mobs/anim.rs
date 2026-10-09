@@ -9,6 +9,7 @@ use std::f32::consts::PI;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anim {
     Guardian,
+    Shulker,
     Quadruped,
     Sheep,
     Chicken,
@@ -455,6 +456,7 @@ pub fn setup(
         Anim::Piglin => super::piglin::piglin_anim(m, s, p),
         Anim::Phantom => super::phantom::anim(m, s, p),
         Anim::Guardian => super::guardian::anim(m, s, p),
+        Anim::Shulker => super::shulker::anim(m, s, p),
         Anim::Horse => {
             super::equine::anim(m, s, p);
             // DonkeyModel: the chests show once fitted.

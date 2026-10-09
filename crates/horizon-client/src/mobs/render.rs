@@ -117,6 +117,7 @@ pub fn body(m: &Mob) -> (String, String) {
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
         ),
+        S::Shulker => ("shulker#main".into(), super::shulker::texture(m)),
         S::Ghast => (
             "ghast#main".into(),
             if m.extra.flag {
@@ -574,6 +575,7 @@ fn flip_degrees(m: &Mob) -> f32 {
 fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
     match m.species() {
         Species::Cat => super::tame::cat_rotations(m, alpha),
+        Species::Shulker => super::shulker::rotations(m),
         _ => glam::Mat4::IDENTITY,
     }
 }
