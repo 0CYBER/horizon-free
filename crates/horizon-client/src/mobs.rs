@@ -23,6 +23,7 @@ pub mod living;
 pub mod nav;
 pub mod nether;
 pub mod path;
+pub mod phantom;
 pub mod piglin;
 pub mod render;
 pub mod spawning;
@@ -571,6 +572,10 @@ pub enum MobEvent {
         pos: [i32; 3],
         name: &'static str,
         effect: bool,
+    },
+    /// A cat hisses (phantoms flee).
+    Hiss {
+        mob: u32,
     },
     /// A horse's rider tamed it.
     Tamed {

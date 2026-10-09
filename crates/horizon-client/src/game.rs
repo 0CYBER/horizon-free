@@ -45,6 +45,7 @@ mod shield;
 mod sign_edit;
 mod station_control;
 mod stations;
+mod stats;
 mod storage;
 mod titles;
 mod tnt;
@@ -612,6 +613,7 @@ struct Game<'a> {
     ui: chat::UiState,
     combat: combat::CombatTracker,
     mount: mounts::MountState,
+    stats: stats::Stats,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -1496,6 +1498,8 @@ impl Game<'_> {
             self.anger_piglins(false);
         }
         if !self.creative {
+            // Block.playerDestroy: the mined statistic and the exhaustion.
+            self.stats.add("mined", &facts.name, 1);
             if let Some(p) = self.player.as_mut() {
                 p.health.food.exhaustion = (p.health.food.exhaustion + 0.005).min(40.0);
             }
@@ -2329,6 +2333,10 @@ impl Game<'_> {
                 player.position.z,
             ];
             self.death_message();
+            // ServerPlayer.die: deaths, and the time-since counters restart.
+            self.stats.custom("deaths", 1);
+            self.stats.reset("custom", "minecraft:time_since_death");
+            self.stats.reset("custom", "minecraft:time_since_rest");
             if !self.creative && !self.ui.rules.bool("keep_inventory") {
                 // Inventory.dropAll: slots 0..36, armor feet to head (36..39), off hand (40).
                 let mut stacks: Vec<ItemStack> =
@@ -4238,6 +4246,8 @@ impl Game<'_> {
     fn tick_mobs(&mut self) -> Result<()> {
         self.tick_creatures()?;
         self.position_rider();
+        self.tick_stats();
+        self.spawn_phantoms();
         Ok(())
     }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
@@ -6082,6 +6092,8 @@ impl Game<'_> {
         }
         self.message = Some(("Respawn point set".into(), Instant::now()));
         self.sleeping = Some((head, 0));
+        self.stats.custom("sleep_in_bed", 1);
+        self.stats.reset("custom", "minecraft:time_since_rest");
     }
     fn tick_sleep(&mut self) {
         let Some((head, ticks)) = self.sleeping else {
@@ -6358,6 +6370,7 @@ impl Game<'_> {
         self.save_entities()?;
         self.save_maps();
         self.save_fight();
+        self.save_stats();
         self.level.selected_slot = self.selected as i32;
         let mode = self.mode_id();
         let level = &mut self.level;
@@ -7496,6 +7509,7 @@ pub fn run() -> Result<()> {
         ui: Default::default(),
         combat: Default::default(),
         mount: Default::default(),
+        stats: Default::default(),
     };
     game.ui.vanilla_root = vanilla_root;
     game.res.atlas.font.uniform = game.settings.force_unicode;

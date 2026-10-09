@@ -564,6 +564,10 @@ impl Game<'_> {
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
         let by_player = self.last_hurt_by_player.remove(&m.id) || m.ai.last_hurt_by_player > 0;
+        if by_player {
+            self.stats.add("killed", &m.kind.id, 1);
+            self.stats.custom("mob_kills", 1);
+        }
         let held = self.held().cloned();
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         if !m.is_baby() {
@@ -706,6 +710,13 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::FinishAdmiring { mob } => self.finish_admiring(mob),
+                MobEvent::Hiss { mob } => {
+                    if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
+                        let at = m.center();
+                        self.audio
+                            .play("minecraft:entity.cat.hiss", Some(at), 1.0, 1.0);
+                    }
+                }
                 MobEvent::Tamed { .. } | MobEvent::Buck { .. } => self.mount_event(&e),
                 MobEvent::Launch { target, up } => match target {
                     Who::Player => {
