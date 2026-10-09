@@ -296,15 +296,8 @@ impl Game<'_> {
                     }
                 }
                 if !t.in_ground {
-                    let (x, y, z) = (
-                        t.position.x.floor() as i32,
-                        t.position.y.floor() as i32,
-                        t.position.z.floor() as i32,
-                    );
-                    let water = self.res.facts.get(self.world.block(x, y, z)).fluid
-                        == horizon_client::blocks::Fluid::Water;
-                    // getWaterInertia 0.99, air 0.99, gravity 0.05.
-                    let drag = if water { 0.99 } else { 0.99 };
+                    // A trident's water inertia (0.99) equals the air drag; gravity 0.05.
+                    let drag = 0.99;
                     t.velocity = Vec3::new(
                         t.velocity.x * drag,
                         t.velocity.y * drag - 0.05,
