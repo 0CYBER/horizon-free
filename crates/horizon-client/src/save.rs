@@ -901,6 +901,60 @@ pub fn decode_with(
     Some(chunk)
 }
 
+/// Read the stored `SkyLight`/`BlockLight` layers of a chunk saved with
+/// `isLightOn` (`SerializableChunkData.read` + `ThreadedLevelLightEngine`),
+/// so it needs no relighting. A missing sky layer repeats the bottom layer of
+/// the section above it (15 above the highest stored one); a missing block
+/// layer is dark.
+pub fn load_light(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
+    if tag.get("isLightOn") != Some(&Tag::Byte(1)) {
+        return;
+    }
+    let Some(Tag::List(sections)) = tag.get("sections") else {
+        return;
+    };
+    let mut layers: Vec<(Option<&[u8]>, Option<&[u8]>)> = vec![(None, None); SECTIONS];
+    for section in sections {
+        let Some(y) = number(section.get("Y")) else {
+            continue;
+        };
+        let si = y as i32 - (MIN_Y >> 4);
+        if !(0..SECTIONS as i32).contains(&si) {
+            continue;
+        }
+        let layer = |name: &str| match section.get(name) {
+            Some(Tag::ByteArray(a)) if a.len() == 2048 => Some(&a[..]),
+            _ => None,
+        };
+        layers[si as usize] = (layer("SkyLight"), layer("BlockLight"));
+    }
+    let sky_default = if sky_light { 15u8 } else { 0 };
+    // Sky nibbles of the section above's bottom layer, going down.
+    let mut above: [u8; 256] = [sky_default; 256];
+    for si in (0..SECTIONS).rev() {
+        let (sky, block) = layers[si];
+        let mut data = Box::new([0u8; 4096]);
+        let nibble = |a: &[u8], i: usize| (a[i >> 1] >> ((i & 1) * 4)) & 15;
+        for (i, packed) in data.iter_mut().enumerate() {
+            let s = match sky {
+                Some(a) if sky_light => nibble(a, i),
+                _ => above[i & 255],
+            };
+            let b = block.map_or(0, |a| nibble(a, i));
+            *packed = s << 4 | b;
+        }
+        for (i, a) in above.iter_mut().enumerate() {
+            *a = data[i] >> 4;
+        }
+        let mut section = (*chunk.sections[si]).clone();
+        section.light = Light::Full(data);
+        section.compact();
+        chunk.sections[si] = Arc::new(section);
+    }
+    chunk.lit = true;
+    chunk.light_loaded = true;
+}
+
 type RegionCache = Mutex<HashMap<(i32, i32), Option<Arc<Mutex<RegionFile>>>>>;
 /// One dimension folder (`dimensions/minecraft/<name>`). Region files are
 /// read lazily by worker threads.
@@ -951,7 +1005,9 @@ impl SaveDir {
     pub fn load(&self, x: i32, z: i32, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
         let root = self.read_record("region", x, z)?;
         let tables = self.tables.get().map(|t| &**t);
-        decode_with(&root, registry, biomes, tables)
+        let mut chunk = decode_with(&root, registry, biomes, tables)?;
+        load_light(&root.tag, &mut chunk, self.sky_light);
+        Some(chunk)
     }
     /// Entities saved for a chunk (`entities/`; older chunks may still keep
     /// them in the chunk's own `entities` list).
@@ -2014,6 +2070,52 @@ mod tests {
         let light = Light::Full(a);
         assert_eq!(nibbles(&light, false)[0], 0x23);
         assert_eq!(nibbles(&light, true)[0], 0x5F);
+    }
+    #[test]
+    fn stored_light_loads_with_vanilla_defaults() {
+        let mut sky = vec![0u8; 2048];
+        sky[0] = 0x5A; // x=0 -> 10, x=1 -> 5
+        let section = |y: i8, entries: Vec<(&str, Tag)>| {
+            let mut all = vec![("Y", Tag::Byte(y))];
+            all.extend(entries);
+            Tag::compound(all)
+        };
+        let tag = Tag::compound([
+            ("isLightOn", Tag::Byte(1)),
+            (
+                "sections",
+                Tag::List(vec![
+                    section(
+                        -4,
+                        vec![
+                            ("SkyLight", Tag::ByteArray(sky)),
+                            ("BlockLight", Tag::ByteArray(vec![0x21; 2048])),
+                        ],
+                    ),
+                    // No sky layer: repeats the bottom layer of the section above.
+                    section(-3, vec![]),
+                ]),
+            ),
+        ]);
+        let mut chunk = Chunk::empty(0, 0);
+        load_light(&tag, &mut chunk, true);
+        assert!(chunk.lit && chunk.light_loaded);
+        let at = |c: &Chunk, si: usize, i: usize| c.sections[si].light(i);
+        assert_eq!(at(&chunk, 0, 0), 0xA1, "stored sky 10, block 1");
+        assert_eq!(at(&chunk, 0, 1), 0x52, "stored sky 5, block 2");
+        // Section -3 has no layers; above it (-2..) sky defaults to 15.
+        assert_eq!(at(&chunk, 1, 0), 0xF0);
+        assert_eq!(at(&chunk, SECTIONS - 1, 5), 0xF0);
+        let mut dark = Chunk::empty(0, 0);
+        load_light(&tag, &mut dark, false);
+        assert_eq!(at(&dark, 1, 0), 0x00, "no skylight dimension");
+        let mut unlit = Chunk::empty(0, 0);
+        load_light(
+            &Tag::compound([("isLightOn", Tag::Byte(0))]),
+            &mut unlit,
+            true,
+        );
+        assert!(!unlit.lit && !unlit.light_loaded);
     }
     #[test]
     fn level_round_trips_through_the_vanilla_files() {
