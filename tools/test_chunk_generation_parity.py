@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""Compare whole generated chunks block-for-block with vanilla.
+
+Vanilla side: VanillaChunkGenerationOracle drives the actual ChunkGenerator
+stages (structure starts and references, biomes, terrain with surface and
+carvers, then biome decoration with every placed feature and structure piece)
+through real WorldGenRegion instances. Horizon side: the chunk_dump example
+runs the same stages in the same order. Every block state, quart biome and
+block entity (canonical NBT) of each target chunk is compared.
+
+Cases: terrain sites for several seeds across the overworld, the Nether and the
+End, plus rectangles around vanilla structure starts found by scanning each
+seed (villages, mineshafts, strongholds, ancient cities, trial chambers,
+monuments, mansions, ...).
+
+usage: test_chunk_generation_parity.py [--seeds N] [--per-structure K]
+       [--filter REGEX] [--dimension overworld|the_nether|the_end] [--keep]
+"""
+import argparse
+import json
+import os
+import random
+import re
+import subprocess
+import sys
+import time
+from collections import Counter, defaultdict
+from pathlib import Path
+
+try:
+    from . import lab, test_rust_parity as base
+except ImportError:
+    import lab
+    import test_rust_parity as base
+
+SEEDS = [12345, -7046029254386353131, 987654321987, 4242, -1, 0x5DEECE66D, 20260607, 777]
+RESOURCES = lab.LOCAL / 'horizon-client/26.3'
+ORACLE = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaChunkGenerationOracle.java'
+
+
+def build_dir():
+    path = lab.LOCAL / 'chunk-generation-parity'
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+class Oracle:
+    def __init__(self):
+        self.lock, self.jars, self.libraries = base.verify_artifacts()
+        self.dependencies = os.pathsep.join(map(str, [self.jars['server'], *self.libraries]))
+        self.classes = build_dir() / 'classes'
+        self.classes.mkdir(exist_ok=True)
+        result = subprocess.run(['javac', '--release', str(self.lock['minecraft']['java_major']), '-proc:none', '-cp', self.dependencies,
+                                 '-d', str(self.classes), str(ORACLE)], capture_output=True, text=True)
+        if result.returncode:
+            raise SystemExit('javac failed:\n' + result.stderr[-4000:])
+
+    def run(self, out, args):
+        result = subprocess.run(['java', '-Xmx8G', '-cp', str(self.classes) + os.pathsep + self.dependencies,
+                                 'dev.horizonlab.parity.VanillaChunkGenerationOracle', *map(str, [args[0], out, *args[1:]])],
+                                capture_output=True, text=True, env=dict(os.environ))
+        if result.returncode:
+            lines = [l for l in (result.stdout + result.stderr).splitlines() if 'Exception' in l or 'Caused' in l or '\tat ' in l]
+            raise SystemExit('oracle failed: ' + ' | '.join(lines[:10]))
+
+
+def rust_binary():
+    subprocess.run(['cargo', 'build', '--release', '-q', '-p', 'horizon-world', '--example', 'chunk_dump'], check=True, cwd=lab.ROOT)
+    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
+    return Path(metadata['target_directory']) / 'release/examples/chunk_dump'
+
+
+def run_rust(binary, out, seed, dimension, rects, scan=False):
+    env = dict(os.environ)
+    if scan:
+        env['HORIZON_SCAN'] = '1'
+    with open(out, 'w') as handle:
+        result = subprocess.run([str(binary), str(RESOURCES), str(seed), dimension, *rects], stdout=handle, stderr=subprocess.PIPE, text=True, env=env, cwd=lab.ROOT)
+    if result.returncode:
+        raise SystemExit('chunk_dump failed: ' + result.stderr[-2000:])
+    return result.stderr
+
+
+def parse(path):
+    chunks, current = {}, None
+    for line in Path(path).read_text().splitlines():
+        if line.startswith('chunk '):
+            _, x, z = line.split()
+            current = (int(x), int(z))
+            chunks[current] = {'q': {}, 'y': {}, 'be': {}}
+        elif line.startswith('q '):
+            _, q, row = line.split(' ', 2)
+            chunks[current]['q'][int(q)] = row
+        elif line.startswith('y '):
+            _, y, row = line.split(' ', 2)
+            chunks[current]['y'][int(y)] = row
+        elif line.startswith('be '):
+            head, *forms = line.split('\t')
+            parts = head.split(' ')
+            chunks[current]['be'][(int(parts[1]), int(parts[2]), int(parts[3]))] = forms
+    return chunks
+
+
+def parse_nbt(text, i=0):
+    """Canonical NBT text -> Python values (typed scalars as (type, text) tuples)."""
+    c = text[i]
+    if c == '{':
+        i += 1
+        value = {}
+        while text[i] != '}':
+            j = text.index('=', i)
+            key = text[i:j]
+            value[key], i = parse_nbt(text, j + 1)
+            i += 1  # comma
+        return value, i + 1
+    if c == '[':
+        i += 1
+        items = []
+        while text[i] != ']':
+            item, i = parse_nbt(text, i)
+            items.append(item)
+            i += 1
+        return items, i + 1
+    if c == '"':
+        i += 1
+        out = []
+        while text[i] != '"':
+            if text[i] == '\\':
+                i += 1
+            out.append(text[i])
+            i += 1
+        return ('str', ''.join(out)), i + 1
+    if c in 'BIL' and text[i + 1] == '[':
+        j = text.index(']', i)
+        return (c, text[i + 2:j]), j + 1
+    j = i + 1
+    while j < len(text) and text[j] not in ',}]':
+        j += 1
+    return (c, text[i + 1:j]), j
+
+
+def nbt_matches(vanilla, rust, default):
+    """Horizon stores the placed data only; vanilla saves defaults too. Every key
+    Horizon sets must match, and every other vanilla key must be the fresh default."""
+    if isinstance(vanilla, dict) and isinstance(rust, dict):
+        default = default if isinstance(default, dict) else {}
+        for key, value in vanilla.items():
+            if key in ('x', 'y', 'z') or (key == 'components' and value == {}):
+                continue
+            if key in rust:
+                if not nbt_matches(value, rust[key], default.get(key)):
+                    return False
+            elif value != default.get(key):
+                return False
+        return all(key in vanilla or key in ('x', 'y', 'z') for key in rust)
+    return vanilla == rust
+
+
+def entity_matches(vanilla, rust):
+    if rust is None or vanilla is None:
+        return False
+    return nbt_matches(parse_nbt(vanilla[0])[0], parse_nbt(rust[0])[0], parse_nbt(vanilla[1])[0])
+
+
+def state_names():
+    facts = json.loads((RESOURCES / 'facts.json').read_text())
+    return [s[3].removeprefix('Block{').replace('}', '', 1) for s in facts['states']]
+
+
+def compare(vanilla, rust, names, label, limit=6, quiet=False):
+    """Returns (differing chunks, differing blocks, differing biome cells, differing block entities)."""
+    chunks = blocks = biomes = entities = 0
+    for pos in sorted(vanilla):
+        a, b = vanilla[pos], rust.get(pos)
+        if b is None:
+            print(f'  {label} chunk {pos}: missing from Horizon output')
+            chunks += 1
+            continue
+        block_diffs, biome_diffs, entity_diffs = [], [], []
+        for y in sorted(a['y']):
+            ra, rb = a['y'][y], b['y'].get(y)
+            if ra == rb:
+                continue
+            for i, (u, v) in enumerate(zip(ra.split(' '), (rb or '').split(' '))):
+                if u != v:
+                    block_diffs.append((pos[0] * 16 + i % 16, y, pos[1] * 16 + i // 16, names[int(u)], names[int(v)]))
+        for q in sorted(a['q']):
+            if a['q'][q] != b['q'].get(q):
+                for i, (u, v) in enumerate(zip(a['q'][q].split(' '), b['q'].get(q, '').split(' '))):
+                    if u != v:
+                        biome_diffs.append((pos[0] * 4 + i % 4, q, pos[1] * 4 + i // 4, u, v))
+        for key in sorted(set(a['be']) | set(b['be'])):
+            if not entity_matches(a['be'].get(key), b['be'].get(key)):
+                entity_diffs.append((key, a['be'].get(key, [None])[0], (b['be'].get(key) or [None])[0]))
+        if block_diffs or biome_diffs or entity_diffs:
+            chunks += 1
+            blocks += len(block_diffs)
+            biomes += len(biome_diffs)
+            entities += len(entity_diffs)
+            if quiet:
+                continue
+            print(f'  {label} chunk {pos}: {len(block_diffs)} blocks, {len(biome_diffs)} biome cells, {len(entity_diffs)} block entities')
+            for d in block_diffs[:limit]:
+                print(f'    block {d[0]} {d[1]} {d[2]}: vanilla {d[3]} / horizon {d[4]}')
+            for d in biome_diffs[:2]:
+                print(f'    biome quart {d[0]} {d[1]} {d[2]}: vanilla {d[3]} / horizon {d[4]}')
+            for d in entity_diffs[:3]:
+                print(f'    block entity {d[0]}: vanilla {d[1]} / horizon {d[2]}')
+    return chunks, blocks, biomes, entities
+
+
+def scan(oracle, binary, seed, dimension, radius):
+    out = build_dir() / f'scan-{dimension}-{seed}.txt'
+    oracle.run(out, ['scan', seed, dimension, -radius, -radius, radius, radius])
+    starts = []
+    for line in out.read_text().splitlines():
+        t = line.split()
+        if t and t[0] == 'start':
+            starts.append((t[1], int(t[2]), int(t[3]), tuple(map(int, t[4:10]))))
+    return starts
+
+
+def pick_structures(starts, per_kind, rng):
+    by_kind = defaultdict(list)
+    for s in starts:
+        by_kind[s[0]].append(s)
+    picked = []
+    for kind, items in sorted(by_kind.items()):
+        items.sort(key=lambda s: abs(s[1]) + abs(s[2]))
+        # Nearest first, then random ones, so that variants (village types) differ.
+        chosen = items[:1] + rng.sample(items[1:], min(per_kind - 1, len(items) - 1))
+        picked.extend(chosen[:per_kind])
+    return picked
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--seeds', type=int, default=3)
+    parser.add_argument('--per-structure', type=int, default=2)
+    parser.add_argument('--sites', type=int, default=6, help='terrain sites per overworld seed')
+    parser.add_argument('--radius', type=int, default=1, help='chunk radius around each site')
+    parser.add_argument('--scan-radius', type=int, default=180)
+    parser.add_argument('--limit', type=int, default=6, help='block differences shown per chunk')
+    parser.add_argument('--summary', action='store_true', help='one line per differing site')
+    parser.add_argument('--rect', action='append', help='compare only this x0,z0,x1,z1 chunk rectangle (repeatable)')
+    parser.add_argument('--filter', help='regex over structure names')
+    parser.add_argument('--dimension', action='append')
+    parser.add_argument('--phase', choices=['terrain', 'structures', 'full'], default='full', help='stop before features, or run structure pieces only')
+    parser.add_argument('--terrain-only', action='store_true', help='skip the structure sites')
+    parser.add_argument('--structures-only', action='store_true')
+    args = parser.parse_args()
+    os.environ['HORIZON_PHASE'] = args.phase
+    dimensions = args.dimension or ['overworld', 'the_nether', 'the_end']
+    oracle = Oracle()
+    binary = rust_binary()
+    names = state_names()
+    build = build_dir()
+    totals = Counter()
+    biome_seen = set()
+    structure_seen = Counter()
+    started = time.time()
+    for seed in SEEDS[:args.seeds]:
+        rng = random.Random(seed)
+        for dimension in dimensions:
+            rects, labels = [], []
+            if args.rect:
+                rects, labels = list(args.rect), [f'rect {r}' for r in args.rect]
+            r = args.radius
+            if not args.structures_only and not args.rect:
+                spread = {'overworld': 5000, 'the_nether': 1500, 'the_end': 1800}[dimension]
+                sites = [(0, 0)] + [(rng.randint(-spread, spread) // 16, rng.randint(-spread, spread) // 16) for _ in range(args.sites if dimension == 'overworld' else 2)]
+                for cx, cz in sites:
+                    rects.append(f'{cx - r},{cz - r},{cx + r},{cz + r}')
+                    labels.append(f'terrain {cx},{cz}')
+            if not args.terrain_only and not args.rect:
+                starts = scan(oracle, binary, seed, dimension, args.scan_radius if dimension == 'overworld' else 80)
+                for kind, cx, cz, box in pick_structures(starts, args.per_structure, rng):
+                    if args.filter and not re.search(args.filter, kind):
+                        continue
+                    rects.append(f'{cx - r},{cz - r},{cx + r},{cz + r}')
+                    labels.append(f'{kind} {cx},{cz}')
+                    structure_seen[kind] += 1
+            if not rects:
+                continue
+            tag = f'{dimension}-{seed}-{args.phase}' + ('-iso' if os.environ.get('HORIZON_ISOLATED') else '') + ('-rect' if args.rect else '')
+            vanilla_path, rust_path = build / f'vanilla-{tag}.txt', build / f'rust-{tag}.txt'
+            t0 = time.time()
+            if not (os.environ.get('REUSE_VANILLA') and vanilla_path.exists()):
+                oracle.run(vanilla_path, ['dump', seed, dimension, *rects])
+            t1 = time.time()
+            stderr = run_rust(binary, rust_path, seed, dimension, rects)
+            t2 = time.time()
+            vanilla, rust = parse(vanilla_path), parse(rust_path)
+            for line in stderr.splitlines()[:5]:
+                print('  horizon:', line)
+            counts = [0, 0, 0, 0]
+            for rect, label in zip(rects, labels):
+                x0, z0, x1, z1 = map(int, rect.split(','))
+                part = {k: v for k, v in vanilla.items() if x0 <= k[0] <= x1 and z0 <= k[1] <= z1}
+                one = compare(part, rust, names, f'{tag} {label}', limit=args.limit, quiet=args.summary)
+                if one[0]:
+                    print(f'{tag} {label}: {one[0]} chunks differ ({one[1]} blocks, {one[2]} biome cells, {one[3]} block entities)')
+                counts = [a + b for a, b in zip(counts, one)]
+            totals.update(dict(zip(['chunks', 'blocks', 'biomes', 'entities'], counts)))
+            totals['compared'] += len(vanilla)
+            for chunk in vanilla.values():
+                for row in chunk['q'].values():
+                    biome_seen.update(row)
+            print(f'{tag}: {len(rects)} sites, {len(vanilla)} chunks, differing chunks {counts[0]} (blocks {counts[1]}, biome cells {counts[2]}, block entities {counts[3]}); vanilla {t1 - t0:.0f}s, horizon {t2 - t1:.0f}s', flush=True)
+    print(f'Compared {totals["compared"]} chunks across {len(biome_seen)} biomes and {sum(structure_seen.values())} structure sites in {time.time() - started:.0f}s')
+    print('structure sites:', dict(sorted(structure_seen.items())))
+    print(f'Differences: {totals["chunks"]} chunks, {totals["blocks"]} blocks, {totals["biomes"]} biome cells, {totals["entities"]} block entities')
+    if totals['chunks']:
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

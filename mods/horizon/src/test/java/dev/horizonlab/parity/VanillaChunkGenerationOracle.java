@@ -1,0 +1,404 @@
+package dev.horizonlab.parity;
+
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import net.minecraft.SharedConstants;
+import net.minecraft.core.*;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.RegistryDataLoader;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.Bootstrap;
+import net.minecraft.server.RegistryLayer;
+import net.minecraft.server.level.GenerationChunkHolder;
+import net.minecraft.server.level.ServerChunkCache;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.WorldGenRegion;
+import net.minecraft.server.packs.PackType;
+import net.minecraft.server.packs.repository.ServerPacksSource;
+import net.minecraft.server.packs.resources.MultiPackResourceManager;
+import net.minecraft.tags.TagLoader;
+import net.minecraft.util.StaticCache2D;
+import net.minecraft.util.datafix.DataFixers;
+import net.minecraft.world.level.*;
+import net.minecraft.world.level.biome.*;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.chunk.*;
+import net.minecraft.world.level.chunk.status.ChunkPyramid;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.levelgen.*;
+import net.minecraft.world.level.levelgen.blending.Blender;
+import net.minecraft.world.level.levelgen.structure.*;
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
+import net.minecraft.world.level.storage.LevelStorageSource;
+
+/**
+ * Original oracle: whole-chunk generation through vanilla's own pipeline.
+ *
+ * Chunks run through STRUCTURE_STARTS, STRUCTURE_REFERENCES, BIOMES, TERRAIN
+ * (noise, surface, carvers) and FEATURES exactly as the ChunkStatusTasks do,
+ * with actual WorldGenRegion instances over an allocation-only ServerLevel.
+ * FEATURES run in row-major order over the target rectangle grown by one chunk,
+ * so every target chunk has all eight neighbours decorated. Spill from
+ * neighbouring features therefore matches a canonical vanilla order.
+ *
+ * usage: dump OUT SEED DIMENSION X0,Z0,X1,Z1...  (target chunks, inclusive)
+ *        scan OUT SEED DIMENSION X0 Z0 X1 Z1  (structure starts per chunk)
+ * dump takes any number of X0,Z0,X1,Z1 rectangles, each generated from scratch.
+ */
+public final class VanillaChunkGenerationOracle {
+    private static final class OracleCache extends ServerChunkCache {
+        private OracleCache() {
+            super(null, null, null, null, null, null, 0, 0, false, null);
+        }
+        static ChunkGeneratorStructureState state;
+        static RandomState random;
+        static ChunkGenerator generator;
+        @Override
+        public ChunkGeneratorStructureState getGeneratorState() {
+            return state;
+        }
+        @Override
+        public RandomState randomState() {
+            return random;
+        }
+        @Override
+        public ChunkGenerator getGenerator() {
+            return generator;
+        }
+    }
+
+    private static final class OracleLevel extends ServerLevel {
+        private OracleLevel() {
+            super(null, null, null, null, null, null, false, 0L, null, false);
+        }
+        static long seed;
+        static RegistryAccess access;
+        static net.minecraft.world.level.dimension.DimensionType type;
+        static StructureManager structures;
+        static BiomeResolver resolver;
+        static ServerChunkCache cache;
+        static ResourceKey<Level> key;
+        static int minY, height;
+        static Map<Long, ProtoChunk> chunks;
+        static net.minecraft.world.level.lighting.LevelLightEngine light;
+        @Override
+        public net.minecraft.world.level.lighting.LevelLightEngine getLightEngine() {
+            return light;
+        }
+        @Override
+        public long getSeed() {
+            return seed;
+        }
+        @Override
+        public net.minecraft.world.flag.FeatureFlagSet enabledFeatures() {
+            return net.minecraft.world.flag.FeatureFlagSet.of();
+        }
+        @Override
+        public RegistryAccess registryAccess() {
+            return access;
+        }
+        @Override
+        public net.minecraft.world.level.dimension.DimensionType dimensionType() {
+            return type;
+        }
+        @Override
+        public StructureManager structureManager() {
+            return structures;
+        }
+        @Override
+        public BiomeResolver uncachedBiomeResolver() {
+            return resolver;
+        }
+        @Override
+        public ServerChunkCache getChunkSource() {
+            return cache;
+        }
+        @Override
+        public ResourceKey<Level> dimension() {
+            return key;
+        }
+        @Override
+        public net.minecraft.world.level.storage.ServerLevelData getLevelData() {
+            return DATA;
+        }
+        static final net.minecraft.world.level.storage.ServerLevelData DATA = (net.minecraft.world.level.storage.ServerLevelData) java.lang.reflect.Proxy.newProxyInstance(
+            OracleLevel.class.getClassLoader(), new Class<?>[] {net.minecraft.world.level.storage.ServerLevelData.class}, (proxy, method, values) -> {
+                Class<?> type = method.getReturnType();
+                if (type == long.class) return 0L;
+                if (type == int.class) return 0;
+                if (type == boolean.class) return false;
+                if (type == float.class) return 0f;
+                if (type == double.class) return 0d;
+                return null;
+            });
+        @Override
+        public int getMinY() {
+            return minY;
+        }
+        @Override
+        public int getHeight() {
+            return height;
+        }
+        @Override
+        public int getSeaLevel() {
+            return OracleCache.generator.getSeaLevel();
+        }
+        @Override
+        public void updatePOIOnBlockStateChange(net.minecraft.core.BlockPos pos, net.minecraft.world.level.block.state.BlockState a, net.minecraft.world.level.block.state.BlockState b) {}
+        @Override
+        public ChunkAccess getChunk(int x, int z, ChunkStatus status, boolean load) {
+            return chunks.get(ChunkPos.pack(x, z));
+        }
+    }
+
+    private static final class ChunkHolder extends GenerationChunkHolder {
+        final ProtoChunk chunk;
+        ChunkHolder(ProtoChunk chunk) {
+            super(chunk.getPos());
+            this.chunk = chunk;
+        }
+        @Override
+        public ChunkAccess getChunkIfPresentUnchecked(ChunkStatus status) {
+            return status.isOrBefore(chunk.getPersistedStatus()) ? chunk : null;
+        }
+        @Override
+        protected void addSaveDependency(CompletableFuture<?> sync) {}
+        @Override
+        public int getTicketLevel() {
+            return 0;
+        }
+        @Override
+        public int getQueueLevel() {
+            return 0;
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        SharedConstants.tryDetectVersion();
+        Bootstrap.bootStrap();
+        String mode = args[0];
+        Path out = Path.of(args[1]);
+        long seed = Long.parseLong(args[2]);
+        String dimension = args[3];
+        var repo = ServerPacksSource.createVanillaTrustedRepository();
+        repo.reload();
+        repo.setSelected(List.of("vanilla"));
+        var resources = new MultiPackResourceManager(PackType.SERVER_DATA, repo.openAllSelected());
+        var layers = RegistryLayer.createRegistryAccess();
+        var staticTags = TagLoader.loadTagsForExistingRegistries(resources, layers.getLayer(RegistryLayer.STATIC));
+        var context = TagLoader.buildUpdatedLookups(layers.getAccessForLoading(RegistryLayer.WORLD), staticTags);
+        RegistryAccess.Frozen world = RegistryDataLoader.load(resources, context, RegistryDataLoader.WORLD_REGISTRIES, Runnable::run).join();
+        var loaded = net.minecraft.server.ReloadableServerRegistries.reload(layers.replaceFrom(RegistryLayer.WORLD, world), staticTags, resources, Runnable::run).join();
+        var components = BuiltInRegistries.DATA_COMPONENT_INITIALIZERS.build(loaded.lookupWithUpdatedTags());
+        staticTags.forEach(Registry.PendingTags::apply);
+        components.forEach(net.minecraft.core.component.DataComponentInitializers.PendingComponents::apply);
+        RegistryAccess access = loaded.layers().compositeAccess();
+        var settings = world.lookupOrThrow(Registries.NOISE_SETTINGS).getOrThrow(switch (dimension) {
+            case "the_nether" -> NoiseGeneratorSettings.NETHER;
+            case "the_end" -> NoiseGeneratorSettings.END;
+            default -> NoiseGeneratorSettings.OVERWORLD;
+        });
+        var presets = world.lookupOrThrow(Registries.MULTI_NOISE_BIOME_SOURCE_PARAMETER_LIST);
+        BiomeSource biomeSource = switch (dimension) {
+            case "the_nether" -> MultiNoiseBiomeSource.createFromPreset(presets.getOrThrow(MultiNoiseBiomeSourceParameterLists.NETHER));
+            case "the_end" -> TheEndBiomeSource.create(world.lookupOrThrow(Registries.BIOME));
+            default -> MultiNoiseBiomeSource.createFromPreset(presets.getOrThrow(MultiNoiseBiomeSourceParameterLists.OVERWORLD));
+        };
+        ResourceKey<Level> levelKey = switch (dimension) {
+            case "the_nether" -> Level.NETHER;
+            case "the_end" -> Level.END;
+            default -> Level.OVERWORLD;
+        };
+        var randomState = RandomState.create(world.lookupOrThrow(Registries.NOISE), seed, settings.value());
+        var generator = new NoiseBasedChunkGenerator(biomeSource, settings);
+        String phase = System.getenv().getOrDefault("HORIZON_PHASE", "full");
+        if (phase.equals("structures")) {
+            // Structure pieces only: every biome keeps its carvers but loses its placed features.
+            java.util.function.Function<Holder<Biome>, BiomeGenerationSettings> noFeatures = biome -> {
+                var builder = new BiomeGenerationSettings.PlainBuilder();
+                for (var carver : biome.value().getGenerationSettings().getCarvers()) builder.addCarver(carver);
+                return builder.build();
+            };
+            var field = ChunkGenerator.class.getDeclaredField("generationSettingsGetter");
+            field.setAccessible(true);
+            field.set(generator, noFeatures);
+        }
+        var state = ChunkGeneratorStructureState.createForNormal(randomState, seed, new ChunkPos(0, 0), biomeSource, world.lookupOrThrow(Registries.STRUCTURE_SET));
+        Path tmp = Files.createTempDirectory("horizon-chunks");
+        var storage = LevelStorageSource.createDefault(tmp).createAccess("oracle");
+        var templates = new StructureTemplateManager(resources, storage, DataFixers.getDataFixer(), BuiltInRegistries.BLOCK);
+        var dimensionType = world.lookupOrThrow(Registries.DIMENSION_TYPE).getOrThrow(switch (dimension) {
+            case "the_nether" -> net.minecraft.world.level.dimension.BuiltinDimensionTypes.NETHER;
+            case "the_end" -> net.minecraft.world.level.dimension.BuiltinDimensionTypes.END;
+            default -> net.minecraft.world.level.dimension.BuiltinDimensionTypes.OVERWORLD;
+        }).value();
+        LevelHeightAccessor height = dimension.equals("overworld") ? LevelHeightAccessor.create(-64, 384) : LevelHeightAccessor.create(0, 256);
+        var factory = PalettedContainerFactory.create(access);
+        var unsafeField = Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe");
+        unsafeField.setAccessible(true);
+        Object unsafe = unsafeField.get(null);
+        var allocate = unsafe.getClass().getMethod("allocateInstance", Class.class);
+        Map<Long, ProtoChunk> chunks = new HashMap<>();
+        OracleCache.state = state;
+        OracleCache.random = randomState;
+        OracleCache.generator = generator;
+        OracleLevel.seed = seed;
+        OracleLevel.access = access;
+        OracleLevel.type = dimensionType;
+        OracleLevel.resolver = biomeSource.createUncachedResolver(randomState);
+        OracleLevel.cache = (ServerChunkCache) allocate.invoke(unsafe, OracleCache.class);
+        OracleLevel.key = levelKey;
+        OracleLevel.minY = height.getMinY();
+        OracleLevel.height = height.getHeight();
+        OracleLevel.chunks = chunks;
+        var blockGetter = (BlockGetter) java.lang.reflect.Proxy.newProxyInstance(BlockGetter.class.getClassLoader(), new Class<?>[] {BlockGetter.class}, (proxy, method, values) -> {
+            switch (method.getName()) {
+                case "getMinY": return height.getMinY();
+                case "getHeight": return height.getHeight();
+            }
+            if (method.isDefault()) return java.lang.reflect.InvocationHandler.invokeDefault(proxy, method, values);
+            return null;
+        });
+        var lightGetter = new LightChunkGetter() {
+            public LightChunk getChunkForLighting(int x, int z) { return null; }
+            public BlockGetter getLevel() { return blockGetter; }
+        };
+        OracleLevel.light = new net.minecraft.world.level.lighting.LevelLightEngine(lightGetter, true, dimensionType.hasSkyLight());
+        var check = new StructureCheck((pos, visitor) -> CompletableFuture.completedFuture(null), access, templates, levelKey, generator, randomState, height, biomeSource, seed, DataFixers.getDataFixer());
+        var level = (ServerLevel) allocate.invoke(unsafe, OracleLevel.class);
+        OracleLevel.structures = new StructureManager(level, new WorldOptions(seed, true, false), check);
+        var pyramid = ChunkPyramid.GENERATION_PYRAMID;
+        java.util.function.BiFunction<Integer, Integer, ProtoChunk> chunkAt = (x, z) -> chunks.computeIfAbsent(ChunkPos.pack(x, z), k -> new ProtoChunk(new ChunkPos(x, z), UpgradeData.EMPTY, height, factory, null));
+        java.util.function.BiFunction<ChunkStatus, ProtoChunk, WorldGenRegion> regionFor = (status, chunk) -> {
+            var step = pyramid.getStepTo(status);
+            int radius = step.directDependencies().size() - 1;
+            var cache = StaticCache2D.<GenerationChunkHolder>create(chunk.getPos().x(), chunk.getPos().z(), radius, (x, z) -> new ChunkHolder(chunkAt.apply(x, z)));
+            return new WorldGenRegion(level, cache, step, chunk);
+        };
+        Runnable noop = () -> {};
+        try (var w = new PrintWriter(Files.newBufferedWriter(out, StandardCharsets.UTF_8))) {
+            if (mode.equals("scan")) {
+                int x0 = Integer.parseInt(args[4]), z0 = Integer.parseInt(args[5]), x1 = Integer.parseInt(args[6]), z1 = Integer.parseInt(args[7]);
+                for (int x = x0; x <= x1; x++) for (int z = z0; z <= z1; z++) {
+                    var chunk = chunkAt.apply(x, z);
+                    generator.createStructures(access, state, OracleLevel.structures, chunk, templates, levelKey);
+                    for (var start : chunk.getAllStarts().values()) {
+                        if (!start.isValid()) continue;
+                        var box = start.getBoundingBox();
+                        var id = access.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure());
+                        w.println("start " + id + " " + x + " " + z + " " + box.minX() + " " + box.minY() + " " + box.minZ() + " " + box.maxX() + " " + box.maxY() + " " + box.maxZ());
+                    }
+                }
+                return;
+            }
+            for (int rect = 4; rect < args.length; rect++) {
+            chunks.clear();
+            String[] corners = args[rect].split(",");
+            int x0 = Integer.parseInt(corners[0]), z0 = Integer.parseInt(corners[1]), x1 = Integer.parseInt(corners[2]), z1 = Integer.parseInt(corners[3]);
+            // Margins: FEATURES need TERRAIN at 1, which needs BIOMES at 1 more; STRUCTURE_STARTS reach 8 further.
+            int m = System.getenv("HORIZON_ISOLATED") != null ? 0 : 1; // diagnostics: decorate the targets only
+            int fx0 = x0 - m, fz0 = z0 - m, fx1 = x1 + m, fz1 = z1 + m;
+            int tx0 = fx0 - 1, tz0 = fz0 - 1, tx1 = fx1 + 1, tz1 = fz1 + 1;
+            int bx0 = tx0 - 1, bz0 = tz0 - 1, bx1 = tx1 + 1, bz1 = tz1 + 1;
+            int sx0 = tx0 - 8, sz0 = tz0 - 8, sx1 = tx1 + 8, sz1 = tz1 + 8;
+            for (int z = sz0; z <= sz1; z++) for (int x = sx0; x <= sx1; x++) {
+                var chunk = chunkAt.apply(x, z);
+                generator.createStructures(access, state, OracleLevel.structures, chunk, templates, levelKey);
+                chunk.setPersistedStatus(ChunkStatus.STRUCTURE_STARTS);
+            }
+            for (int z = tz0; z <= tz1; z++) for (int x = tx0; x <= tx1; x++) {
+                var chunk = chunkAt.apply(x, z);
+                var region = regionFor.apply(ChunkStatus.STRUCTURE_REFERENCES, chunk);
+                generator.createReferences(region, OracleLevel.structures.forWorldGenRegion(region), chunk);
+                chunk.setPersistedStatus(ChunkStatus.STRUCTURE_REFERENCES);
+            }
+            for (int z = bz0; z <= bz1; z++) for (int x = bx0; x <= bx1; x++) {
+                var chunk = chunkAt.apply(x, z);
+                if (chunk.getPersistedStatus() != ChunkStatus.STRUCTURE_STARTS && chunk.getPersistedStatus() != ChunkStatus.EMPTY && chunk.getPersistedStatus() != ChunkStatus.STRUCTURE_REFERENCES) continue;
+                var region = regionFor.apply(ChunkStatus.BIOMES, chunk);
+                generator.createBiomes(randomState, Blender.empty(), OracleLevel.structures.forWorldGenRegion(region), chunk).join();
+                chunk.setPersistedStatus(ChunkStatus.BIOMES);
+            }
+            for (int z = tz0; z <= tz1; z++) for (int x = tx0; x <= tx1; x++) {
+                var chunk = chunkAt.apply(x, z);
+                var region = regionFor.apply(ChunkStatus.TERRAIN, chunk);
+                Set<Holder<Biome>> possible = new HashSet<>();
+                for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) region.getChunk(x + dx, z + dz).collectBiomesInPalette(possible);
+                generator.buildTerrain(chunk, Blender.empty(), randomState, OracleLevel.structures.forWorldGenRegion(region), region.getBiomeManager(), region, possible).join();
+                Heightmap.primeHeightmaps(chunk, EnumSet.of(Heightmap.Types.MOTION_BLOCKING, Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, Heightmap.Types.OCEAN_FLOOR, Heightmap.Types.WORLD_SURFACE));
+                chunk.setPersistedStatus(ChunkStatus.TERRAIN);
+            }
+            for (int z = fz0; z <= fz1 && !phase.equals("terrain"); z++) for (int x = fx0; x <= fx1; x++) {
+                var chunk = chunkAt.apply(x, z);
+                var region = regionFor.apply(ChunkStatus.FEATURES, chunk);
+                generator.applyBiomeDecoration(region, chunk, OracleLevel.structures.forWorldGenRegion(region));
+                chunk.setPersistedStatus(ChunkStatus.FEATURES);
+            }
+            var registry = access;
+            for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) {
+                var target = chunkAt.apply(x, z);
+                w.println("chunk " + x + " " + z);
+                // Biomes: one line per quart layer, 16 columns in z-major order.
+                for (int qy = height.getMinY() >> 2; qy <= height.getMaxY() >> 2; qy++) {
+                    StringBuilder line = new StringBuilder("q " + qy);
+                    for (int qz = 0; qz < 4; qz++) for (int qx = 0; qx < 4; qx++)
+                        line.append(' ').append(target.getNoiseBiome((x << 2) + qx, qy, (z << 2) + qz).unwrapKey().orElseThrow().identifier());
+                    w.println(line);
+                }
+                for (int y = height.getMinY(); y <= height.getMaxY(); y++) {
+                    StringBuilder line = new StringBuilder("y " + y);
+                    for (int zz = 0; zz < 16; zz++) for (int xx = 0; xx < 16; xx++)
+                        line.append(' ').append(Block.getId(target.getBlockState(new BlockPos((x << 4) + xx, y, (z << 4) + zz))));
+                    w.println(line);
+                }
+                var positions = new TreeSet<BlockPos>(Comparator.<BlockPos>comparingInt(BlockPos::getX).thenComparingInt(BlockPos::getY).thenComparingInt(BlockPos::getZ));
+                positions.addAll(target.getBlockEntitiesPos());
+                for (var pos : positions) {
+                    var tag = target.getBlockEntityNbtForSaving(pos, registry);
+                    if (tag == null) continue;
+                    var st = target.getBlockState(pos);
+                    var fresh = ((net.minecraft.world.level.block.EntityBlock) st.getBlock()).newBlockEntity(pos, st).saveWithFullMetadata(registry);
+                    if ("DUMMY".equals(tag.getStringOr("id", ""))) tag = fresh;
+                    w.println("be " + pos.getX() + " " + pos.getY() + " " + pos.getZ() + "\t" + canonicalOf(tag) + "\t" + canonicalOf(fresh));
+                }
+            }
+            }
+        }
+        storage.close();
+        System.exit(0);
+    }
+
+    private static String canonicalOf(net.minecraft.nbt.Tag tag) {
+        var out = new StringBuilder();
+        canonical(tag, out);
+        return out.toString();
+    }
+
+    /** Canonical single-line form of a tag: type-prefixed scalars, sorted compound keys. */
+    private static void canonical(net.minecraft.nbt.Tag tag, StringBuilder out) {
+        switch (tag) {
+            case net.minecraft.nbt.ByteTag t -> out.append("b").append(t.byteValue());
+            case net.minecraft.nbt.ShortTag t -> out.append("s").append(t.shortValue());
+            case net.minecraft.nbt.IntTag t -> out.append("i").append(t.intValue());
+            case net.minecraft.nbt.LongTag t -> out.append("l").append(t.longValue());
+            case net.minecraft.nbt.FloatTag t -> out.append("f").append(Float.floatToRawIntBits(t.floatValue()));
+            case net.minecraft.nbt.DoubleTag t -> out.append("d").append(Double.doubleToRawLongBits(t.doubleValue()));
+            case net.minecraft.nbt.StringTag t -> out.append('"').append(t.value().replace("\\", "\\\\").replace("\"", "\\\"")).append('"');
+            case net.minecraft.nbt.ByteArrayTag t -> { out.append("B["); for (byte v : t.getAsByteArray()) out.append(v).append(','); out.append(']'); }
+            case net.minecraft.nbt.IntArrayTag t -> { out.append("I["); for (int v : t.getAsIntArray()) out.append(v).append(','); out.append(']'); }
+            case net.minecraft.nbt.LongArrayTag t -> { out.append("L["); for (long v : t.getAsLongArray()) out.append(v).append(','); out.append(']'); }
+            case net.minecraft.nbt.ListTag t -> { out.append('['); for (var item : t) { canonical(item, out); out.append(','); } out.append(']'); }
+            case net.minecraft.nbt.CompoundTag t -> {
+                out.append('{');
+                for (String key : new TreeSet<>(t.keySet())) { out.append(key).append('='); canonical(t.get(key), out); out.append(','); }
+                out.append('}');
+            }
+            default -> throw new IllegalStateException(tag.getClass().getName());
+        }
+    }
+}
