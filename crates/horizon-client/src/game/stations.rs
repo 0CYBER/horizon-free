@@ -32,6 +32,8 @@ pub(super) enum Kind {
     Beacon,
     /// The cartography table (game/cartography.rs).
     Cartography,
+    /// The loom (game/loom.rs).
+    Loom,
 }
 impl Kind {
     fn from_block(name: &str) -> Option<Self> {
@@ -45,12 +47,13 @@ impl Kind {
             "minecraft:stonecutter" => Self::Stonecutter,
             "minecraft:beacon" => Self::Beacon,
             "minecraft:cartography_table" => Self::Cartography,
+            "minecraft:loom" => Self::Loom,
             _ => return None,
         })
     }
     fn inputs(self) -> usize {
         match self {
-            Self::Smithing => 3,
+            Self::Smithing | Self::Loom => 3,
             Self::Stonecutter | Self::Beacon => 1,
             _ => 2,
         }
@@ -65,6 +68,7 @@ impl Kind {
             Self::Merchant => "gui/container/villager",
             Self::Beacon => "gui/container/beacon",
             Self::Cartography => "gui/container/cartography_table",
+            Self::Loom => "gui/container/loom",
         }
     }
     fn title_key(self) -> &'static str {
@@ -77,6 +81,7 @@ impl Kind {
             Self::Merchant => "merchant.trades",
             Self::Beacon => "container.beacon",
             Self::Cartography => "container.cartography_table",
+            Self::Loom => "container.loom",
         }
     }
     /// (titleLabelX, titleLabelY).
@@ -85,7 +90,7 @@ impl Kind {
             Self::Anvil => (60.0, 6.0),
             Self::Smithing => (44.0, 15.0),
             Self::Stonecutter => (8.0, 5.0),
-            Self::Cartography => (8.0, 4.0),
+            Self::Cartography | Self::Loom => (8.0, 4.0),
             _ => (8.0, 6.0),
         }
     }
@@ -99,6 +104,7 @@ impl Kind {
             Self::Merchant => &[(86.0, 37.0), (112.0, 37.0)],
             Self::Beacon => &[(109.0, 110.0)],
             Self::Cartography => &[(15.0, 15.0), (15.0, 52.0)],
+            Self::Loom => &[(13.0, 26.0), (33.0, 26.0), (23.0, 45.0)],
         };
         table[i.min(table.len() - 1)]
     }
@@ -112,6 +118,7 @@ impl Kind {
             Self::Merchant => Some((170.0, 37.0)),
             Self::Beacon => None,
             Self::Cartography => Some((145.0, 39.0)),
+            Self::Loom => Some((143.0, 57.0)),
         }
     }
 }
@@ -133,11 +140,13 @@ pub(super) struct Station {
     input_item: Option<Arc<str>>,
     /// Anvil: the input the rename box was last filled from.
     anvil_last: Option<ItemStack>,
-    last_sound: u64,
+    pub(super) last_sound: u64,
     /// Villager trading state.
     pub(super) merchant: Option<Box<super::trading::MerchantState>>,
     /// Beacon menu: the selected primary and secondary power (EFFECTS index).
     pub(super) beacon: [Option<usize>; 2],
+    /// The loom's patterns, selection and scroller (game/loom.rs).
+    pub(super) loom: super::loom::LoomState,
 }
 impl Station {
     fn new(kind: Kind, pos: [i32; 3]) -> Self {
@@ -158,6 +167,7 @@ impl Station {
             last_sound: 0,
             merchant: None,
             beacon: [None; 2],
+            loom: Default::default(),
         }
     }
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
@@ -437,6 +447,7 @@ impl Game<'_> {
             Kind::Merchant => super::trading::update(&mut s, items),
             Kind::Beacon => {}
             Kind::Cartography => s.result = self.cartography_result(&s),
+            Kind::Loom => self.loom_changed(&mut s),
             Kind::Stonecutter => {
                 let item = s.inputs[0].as_ref().map(|i| i.item.clone());
                 if item != s.input_item {
@@ -498,6 +509,7 @@ impl Game<'_> {
         match s.kind {
             Kind::Enchanting if i == 0 => (true, 1),
             Kind::Beacon => (super::beacon::is_payment(&stack.item), 1),
+            Kind::Loom => self.loom_slot_rules(i, stack),
             Kind::Cartography if i == 0 => (super::maps::map_id(stack).is_some(), 64),
             Kind::Cartography => (
                 matches!(
@@ -565,7 +577,12 @@ impl Game<'_> {
         self.carried = new_carried;
     }
     /// `moveItemStackTo` over `targets` (menu order), merging first, then empty slots.
-    fn move_to(&mut self, stack: &mut ItemStack, targets: &[usize], reverse: bool) -> bool {
+    pub(super) fn move_to(
+        &mut self,
+        stack: &mut ItemStack,
+        targets: &[usize],
+        reverse: bool,
+    ) -> bool {
         let order: Vec<usize> = if reverse {
             targets.iter().rev().copied().collect()
         } else {
@@ -614,8 +631,12 @@ impl Game<'_> {
             return false;
         };
         let player = Self::player_slots();
+        let loom = self.station.as_ref().is_some_and(|s| s.kind == Kind::Loom);
         let moved = if (300..305).contains(&slot) || slot >= INPUT {
-            self.move_to(&mut stack, &player, true)
+            // LoomMenu moves into the inventory front to back, the others back to front.
+            self.move_to(&mut stack, &player, !loom)
+        } else if loom {
+            self.loom_quick_move(slot, &mut stack)
         } else if self.brewing_open() {
             // BrewingStandMenu.quickMoveStack: fuel, ingredient, bottles, then the other half.
             let data = self.data();
@@ -673,7 +694,7 @@ impl Game<'_> {
                         moved = self.move_to(&mut stack, &[INPUT, INPUT + 1], false);
                     }
                 }
-                Some(Kind::Merchant) => {}
+                Some(Kind::Merchant | Kind::Loom) => {}
                 Some(Kind::Beacon) => {
                     // BeaconMenu.quickMoveStack: one payment item into the empty slot.
                     if super::beacon::is_payment(&stack.item) {
@@ -713,7 +734,7 @@ impl Game<'_> {
         ];
         self.audio.play(sound, Some(at), volume, pitch);
     }
-    fn give_or_drop(&mut self, stack: ItemStack) {
+    pub(super) fn give_or_drop(&mut self, stack: ItemStack) {
         if let Some(rest) = self.give(stack)
             && let Some(eye) = self.eye_position()
         {
@@ -860,6 +881,7 @@ impl Game<'_> {
                     self.cartography_taken(pos);
                 }
             }
+            Kind::Loom => self.loom_taken(&mut s),
             Kind::Enchanting => {}
         }
         self.station = Some(s);
@@ -991,6 +1013,9 @@ impl Game<'_> {
             if kind == Kind::Merchant && !right && self.merchant_click(local) {
                 return true;
             }
+            if kind == Kind::Loom && !right && self.loom_click(local) {
+                return true;
+            }
             if kind == Kind::Beacon && !right && self.beacon_click(local) {
                 return true;
             }
@@ -1065,6 +1090,7 @@ impl Game<'_> {
     }
     pub(super) fn station_scroll(&mut self, d: f32) {
         self.merchant_scroll(d);
+        self.loom_scroll(d);
         let Some(s) = self.station.as_mut() else {
             return;
         };
@@ -1307,6 +1333,9 @@ impl Game<'_> {
             }
             if kind == Kind::Cartography {
                 self.draw_cartography(batch, ox, oy);
+            }
+            if kind == Kind::Loom {
+                tooltip = self.draw_loom(batch, ox, oy, local);
             }
             let atlas = &self.res.atlas;
             let s = self.station.as_ref().expect("open station");
@@ -1598,7 +1627,7 @@ impl Game<'_> {
                         }
                     }
                 }
-                Kind::Merchant | Kind::Beacon | Kind::Cartography => {}
+                Kind::Merchant | Kind::Beacon | Kind::Cartography | Kind::Loom => {}
                 Kind::Stonecutter => {
                     let display = s.inputs[0].is_some() && !s.recipes.is_empty();
                     let active = display && s.recipes.len() > 12;
@@ -1798,6 +1827,11 @@ impl Game<'_> {
                     rgba(170, 170, 170, 255)
                 },
             ));
+        }
+        // BannerPatternLayers.addToTooltip: up to six layer names.
+        for layer in horizon_client::banner::layers(stack).iter().take(6) {
+            let key = self.res.stations.banners.layer_key(layer);
+            lines.push((self.translate(&key, &key), rgba(170, 170, 170, 255)));
         }
         if let Some(info) = self.res.items.get(&stack.item)
             && info.max_damage > 0

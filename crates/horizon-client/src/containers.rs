@@ -58,6 +58,13 @@ pub enum BlockEntity {
     Beacon(Box<Beacon>),
     /// `LecternBlockEntity`: the book and the open page.
     Lectern(Lectern),
+    /// `BannerBlockEntity`: the pattern layers.
+    Banner(Banner),
+}
+#[derive(Clone, Debug, Default)]
+pub struct Banner {
+    pub layers: Vec<crate::banner::BannerLayer>,
+    pub name: Option<String>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Lectern {
@@ -103,6 +110,9 @@ impl BlockEntity {
         }
         if name == "minecraft:lectern" {
             return Some(Self::Lectern(Lectern::default()));
+        }
+        if name.ends_with("_banner") {
+            return Some(Self::Banner(Banner::default()));
         }
         if name == "minecraft:beacon" {
             return Some(Self::Beacon(Box::new(Beacon {
@@ -155,6 +165,7 @@ impl BlockEntity {
             Self::Jukebox(_) => "minecraft:jukebox",
             Self::Beacon(_) => "minecraft:beacon",
             Self::Lectern(_) => "minecraft:lectern",
+            Self::Banner(_) => "minecraft:banner",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -166,6 +177,7 @@ impl BlockEntity {
             Self::Jukebox(j) => j.record.iter().cloned().collect(),
             Self::Beacon(_) => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
+            Self::Banner(_) => Vec::new(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -173,7 +185,11 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &f.items,
             Self::Brewing(b) => &b.items,
-            Self::Sign(_) | Self::Jukebox(_) | Self::Beacon(_) | Self::Lectern(_) => &[],
+            Self::Sign(_)
+            | Self::Jukebox(_)
+            | Self::Beacon(_)
+            | Self::Lectern(_)
+            | Self::Banner(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -181,7 +197,11 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &mut f.items,
             Self::Brewing(b) => &mut b.items,
-            Self::Sign(_) | Self::Jukebox(_) | Self::Beacon(_) | Self::Lectern(_) => &mut [],
+            Self::Sign(_)
+            | Self::Jukebox(_)
+            | Self::Beacon(_)
+            | Self::Lectern(_)
+            | Self::Banner(_) => &mut [],
         }
     }
 }

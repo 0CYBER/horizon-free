@@ -400,6 +400,14 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
                 entries.push(("Page", Tag::Int(l.page)));
             }
         }
+        BlockEntity::Banner(b) => {
+            if !b.layers.is_empty() {
+                entries.push(("patterns", crate::banner::layers_to_nbt(&b.layers)));
+            }
+            if let Some(name) = &b.name {
+                entries.push(("CustomName", string(name)));
+            }
+        }
     }
     Tag::compound(entries)
 }
@@ -427,6 +435,15 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             page: int("Page").unwrap_or(0),
         };
         return Some((pos, BlockEntity::Lectern(lectern)));
+    }
+    if id == "minecraft:banner" {
+        return Some((
+            pos,
+            BlockEntity::Banner(crate::containers::Banner {
+                layers: crate::banner::layers_from_nbt(tag.get("patterns")),
+                name: text(tag.get("CustomName")),
+            }),
+        ));
     }
     if id == "minecraft:beacon" {
         let beacon = crate::containers::Beacon {
@@ -474,7 +491,10 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             };
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
-        BlockEntity::Jukebox(_) | BlockEntity::Beacon(_) | BlockEntity::Lectern(_) => {}
+        BlockEntity::Jukebox(_)
+        | BlockEntity::Beacon(_)
+        | BlockEntity::Lectern(_)
+        | BlockEntity::Banner(_) => {}
     }
     Some((pos, entity))
 }
@@ -1993,6 +2013,25 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn banner_block_entity_round_trips() {
+        let banner = crate::containers::Banner {
+            layers: vec![crate::banner::BannerLayer::new("minecraft:creeper", "lime")],
+            name: Some("Flag".into()),
+        };
+        let tag = encode_block_entity(
+            (1, 2, 3),
+            &crate::containers::BlockEntity::Banner(banner.clone()),
+            "minecraft:red_banner",
+        );
+        let (pos, back) = decode_block_entity(&tag).expect("banner");
+        assert_eq!(pos, (1, 2, 3));
+        let crate::containers::BlockEntity::Banner(back) = back else {
+            panic!("not a banner");
+        };
+        assert_eq!(back.layers, banner.layers);
+        assert_eq!(back.name, banner.name);
+    }
     use super::*;
 
     #[test]

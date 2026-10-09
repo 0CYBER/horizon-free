@@ -1238,6 +1238,7 @@ impl Game<'_> {
             nether: self.dim == super::Dim::Nether,
             lid: &lid,
             sign: &|_| None,
+            banner: &|_| Vec::new(),
             glyph: &|c| self.res.atlas.glyph(c),
         };
         self.res

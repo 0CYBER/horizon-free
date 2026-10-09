@@ -4,6 +4,7 @@ mod advancements;
 mod advancements_screen;
 mod allays;
 mod armor_stands;
+mod banners;
 mod beacon;
 mod blockctl;
 mod boats;
@@ -28,6 +29,7 @@ mod game_mode;
 mod growth;
 mod jukebox;
 mod lightning;
+mod loom;
 mod machines;
 mod maps;
 mod minecarts;
@@ -607,6 +609,8 @@ struct Game<'a> {
     ender_open: Option<(i32, i32, i32)>,
     /// Contents of broken shulker boxes waiting for their dropped item.
     pending_shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
+    /// Layers of broken banners waiting for their dropped item.
+    pending_banner: HashMap<[i32; 3], horizon_client::containers::Banner>,
     /// The player's fishing hook.
     hook: Option<fishing::Hook>,
     tridents: Vec<trident::ThrownTrident>,
@@ -977,6 +981,7 @@ impl Game<'_> {
     /// Block.popResource
     fn pop_resource(&mut self, pos: [i32; 3], mut stack: ItemStack) {
         self.attach_shulker_contents(pos, &mut stack);
+        self.attach_banner_layers(pos, &mut stack);
         let r = &mut self.world.random;
         let mut offset = || f64::from(r.next_float()) * 0.5 - 0.25;
         let p = [
@@ -1808,6 +1813,7 @@ impl Game<'_> {
                 .block_entities
                 .insert((target[0], target[1], target[2]), entity);
             self.fill_placed_box(target, &stack);
+            self.fill_placed_banner(target, &stack);
             if sign {
                 self.open_sign_editor((target[0], target[1], target[2]), true);
             }
@@ -2653,13 +2659,18 @@ impl Game<'_> {
             .map(|t| Icon::Flat(t.trim_start_matches("minecraft:").to_owned()))
     }
     fn draw_item(&mut self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
-        if &*stack.item == "minecraft:shield" {
-            shield::draw_shield_icon(batch, &self.res.atlas, x, y);
-            return;
-        }
-        let icon = self.icon(&stack.item);
+        // Special-model items: the shield and banners draw their own 3D icon.
+        let banner = if &*stack.item == "minecraft:shield" {
+            let passes = shield::shield_passes(&self.res.stations.banners, stack);
+            shield::draw_shield_icon(batch, &self.res.atlas, x, y, &passes);
+            true
+        } else {
+            self.draw_banner_icon(batch, stack, x, y)
+        };
+        let icon = if banner { None } else { self.icon(&stack.item) };
         let atlas = &self.res.atlas;
         match icon {
+            None if banner => {}
             Some(Icon::Flat(name)) => batch.sprite_scaled(atlas, &name, x, y, 16.0, 16.0, u32::MAX),
             Some(Icon::Cube {
                 top,
@@ -3040,7 +3051,8 @@ impl Game<'_> {
                 BlockEntity::Sign(_)
                 | BlockEntity::Jukebox(_)
                 | BlockEntity::Beacon(_)
-                | BlockEntity::Lectern(_),
+                | BlockEntity::Lectern(_)
+                | BlockEntity::Banner(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -3265,7 +3277,8 @@ impl Game<'_> {
                     BlockEntity::Sign(_)
                     | BlockEntity::Jukebox(_)
                     | BlockEntity::Beacon(_)
-                    | BlockEntity::Lectern(_),
+                    | BlockEntity::Lectern(_)
+                    | BlockEntity::Banner(_),
                 ) => {}
                 None => {
                     let texture = if self.craft_size == 3 {
@@ -3453,6 +3466,12 @@ impl Game<'_> {
             let mut crafted = 0;
             while let Some(result) = self.craft_result() {
                 let made = (result.item.clone(), result.count);
+                let cells = self.craft_size * self.craft_size;
+                let remainders = self.res.recipes.remainders(
+                    &self.res.items,
+                    &self.craft_grid[..cells],
+                    &result,
+                );
                 if shift {
                     if self.give(result).is_some() {
                         break;
@@ -3475,6 +3494,14 @@ impl Game<'_> {
                         if s.count == 0 {
                             *cell = None;
                         }
+                    }
+                }
+                for (i, rest) in remainders.into_iter().enumerate() {
+                    let Some(rest) = rest else { continue };
+                    match &mut self.craft_grid[i] {
+                        cell @ None => *cell = Some(rest),
+                        Some(c) if c.same_item_same_components(&rest) => c.count += rest.count,
+                        _ => self.give_or_drop(rest),
                     }
                 }
                 crafted += 1;
@@ -3867,6 +3894,7 @@ impl Game<'_> {
                     Some(BlockEntity::Sign(sign)) => Some(sign),
                     _ => None,
                 },
+                banner: &|p| self.banner_layers_at(p),
                 glyph: &|c| self.res.atlas.glyph(c),
             };
             self.res
@@ -5760,6 +5788,10 @@ impl Game<'_> {
             }
             first(&d["model"])
         });
+        if item.ends_with("_banner") {
+            // The banner item model is a special renderer over this base model.
+            current = Some("minecraft:item/template_banner".to_owned());
+        }
         for _ in 0..16 {
             let Some(m) = current.take() else { break };
             let path = m.trim_start_matches("minecraft:").to_owned();
@@ -5906,6 +5938,9 @@ impl Game<'_> {
                     * glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::XYZ, deg(rot[0]), deg(rot[1]), deg(rot[2])))
                     * glam::Mat4::from_scale(glam::Vec3::from(scale))
                     * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
+                if self.held_banner_geometry(m, &stack, packed, &mut out) {
+                    return out;
+                }
                 let atlas = &self.res.atlas;
                 let quad = |corners: [glam::Vec3; 4],
                             name: &str,
@@ -7033,6 +7068,9 @@ impl ApplicationHandler for Game<'_> {
                         if self.screen == Screen::Advancements {
                             self.advancements_drag();
                         }
+                        if self.screen == Screen::Inventory {
+                            self.loom_drag();
+                        }
                         if self.dragging && self.screen == Screen::Options {
                             let _ = b;
                             self.options_drag()?;
@@ -7164,6 +7202,7 @@ impl ApplicationHandler for Game<'_> {
                                 self.container_changed(key);
                             }
                         }
+                        Screen::Inventory => self.loom_release(),
                         Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
@@ -7665,6 +7704,7 @@ pub fn run() -> Result<()> {
         ender_items: vec![None; 27],
         ender_open: None,
         pending_shulker: HashMap::new(),
+        pending_banner: HashMap::new(),
         hook: None,
         tridents: Vec::new(),
         rockets: Vec::new(),

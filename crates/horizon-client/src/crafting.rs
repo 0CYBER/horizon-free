@@ -53,6 +53,96 @@ pub enum Recipe {
         ingredients: Vec<Ingredient>,
         result: ItemStack,
     },
+    /// `BannerDuplicateRecipe` and `ShieldDecorationRecipe`.
+    Special(Special),
+}
+/// The banner-copying custom recipes.
+#[derive(Clone, Debug)]
+pub enum Special {
+    /// A patterned banner and a blank one of the same colour copy the patterns.
+    BannerDuplicate { banner: Ingredient, result: String },
+    /// A banner decorates an undecorated shield.
+    ShieldDecoration {
+        banner: Ingredient,
+        target: Ingredient,
+        result: String,
+    },
+}
+impl Special {
+    /// `matches` + `assemble` over the non-empty stacks of the grid.
+    fn assemble(&self, stacks: &[&ItemStack]) -> Option<ItemStack> {
+        use crate::banner;
+        if stacks.len() != 2 {
+            return None;
+        }
+        match self {
+            Self::BannerDuplicate {
+                banner: ing,
+                result,
+            } => {
+                let color = banner::banner_color(&stacks[0].item)?;
+                let mut source = None;
+                let mut target = false;
+                for s in stacks {
+                    if !ing.test(s) || banner::banner_color(&s.item)? != color {
+                        return None;
+                    }
+                    let layers = banner::layers(s).len();
+                    if layers > banner::MAX_LAYERS {
+                        return None;
+                    }
+                    if layers > 0 {
+                        if source.is_some() {
+                            return None;
+                        }
+                        source = Some(*s);
+                    } else {
+                        if target {
+                            return None;
+                        }
+                        target = true;
+                    }
+                }
+                let source = source.filter(|_| target)?;
+                // TransmuteRecipe.createWithOriginalComponents: the source's components.
+                Some(ItemStack {
+                    item: Arc::from(result.as_str()),
+                    count: 1,
+                    ..(*source).clone()
+                })
+            }
+            Self::ShieldDecoration {
+                banner: ing,
+                target: tgt,
+                result,
+            } => {
+                let (mut patterned, mut clear) = (None, None);
+                for s in stacks {
+                    if ing.test(s) && banner::banner_color(&s.item).is_some() {
+                        if patterned.is_some() {
+                            return None;
+                        }
+                        patterned = Some(*s);
+                    } else {
+                        if !tgt.test(s) || clear.is_some() || !banner::layers(s).is_empty() {
+                            return None;
+                        }
+                        clear = Some(*s);
+                    }
+                }
+                let (banner_stack, shield) = (patterned?, clear?);
+                let mut out = ItemStack {
+                    item: Arc::from(result.as_str()),
+                    count: 1,
+                    ..shield.clone()
+                };
+                let data = out.data_mut();
+                data.banner_patterns = banner::layers(banner_stack).to_vec();
+                data.base_color = banner::banner_color(&banner_stack.item).map(Arc::from);
+                Some(out)
+            }
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Cooking {
@@ -145,6 +235,36 @@ impl Recipes {
                         ));
                     }
                 }
+                "minecraft:crafting_special_bannerduplicate" => {
+                    if let (Some(banner), Some(id)) = (
+                        Ingredient::parse(&v["banner"], items),
+                        v["result"]["id"].as_str(),
+                    ) {
+                        crafting.push((
+                            name,
+                            Recipe::Special(Special::BannerDuplicate {
+                                banner,
+                                result: id.to_owned(),
+                            }),
+                        ));
+                    }
+                }
+                "minecraft:crafting_special_shielddecoration" => {
+                    if let (Some(banner), Some(target), Some(id)) = (
+                        Ingredient::parse(&v["banner"], items),
+                        Ingredient::parse(&v["target"], items),
+                        v["result"]["id"].as_str(),
+                    ) {
+                        crafting.push((
+                            name,
+                            Recipe::Special(Special::ShieldDecoration {
+                                banner,
+                                target,
+                                result: id.to_owned(),
+                            }),
+                        ));
+                    }
+                }
                 kind @ ("minecraft:smelting"
                 | "minecraft:blasting"
                 | "minecraft:smoking"
@@ -189,6 +309,12 @@ impl Recipes {
         let cell = |x: usize, y: usize| grid[(y0 + y) * size + x0 + x].as_ref();
         for (_, recipe) in &self.crafting {
             match recipe {
+                Recipe::Special(special) => {
+                    let stacks: Vec<&ItemStack> = grid.iter().flatten().collect();
+                    if let Some(result) = special.assemble(&stacks) {
+                        return Some(result);
+                    }
+                }
                 Recipe::Shaped {
                     width,
                     height,
@@ -242,9 +368,80 @@ impl Recipes {
         }
         None
     }
+    /// `Recipe.getRemainingItems` per grid cell: an item's crafting remainder
+    /// (buckets, bottles), and the patterned banner a duplicate keeps.
+    pub fn remainders(
+        &self,
+        items: &Items,
+        grid: &[Option<ItemStack>],
+        result: &ItemStack,
+    ) -> Vec<Option<ItemStack>> {
+        grid.iter()
+            .map(|cell| {
+                let s = cell.as_ref()?;
+                if let Some(rem) = items.get(&s.item).and_then(|i| i.remainder.as_deref()) {
+                    return Some(ItemStack::new(rem, 1));
+                }
+                (result.item.ends_with("_banner") && !crate::banner::layers(s).is_empty()).then(
+                    || ItemStack {
+                        count: 1,
+                        ..s.clone()
+                    },
+                )
+            })
+            .collect()
+    }
     pub fn cook(&self, kind: &str, input: &ItemStack) -> Option<&Cooking> {
         self.cooking
             .iter()
             .find(|c| c.kind == kind && c.ingredient.test(input))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::banner::BannerLayer;
+
+    fn ingredient(items: &[&str]) -> Ingredient {
+        Ingredient(items.iter().map(|s| (*s).to_owned()).collect())
+    }
+    fn patterned(item: &str) -> ItemStack {
+        let mut s = ItemStack::new(item, 1);
+        s.data_mut().banner_patterns = vec![BannerLayer::new("minecraft:cross", "red")];
+        s
+    }
+    #[test]
+    fn banner_duplicate_copies_the_patterns_of_the_same_colour() {
+        let recipe = Special::BannerDuplicate {
+            banner: ingredient(&["minecraft:white_banner"]),
+            result: "minecraft:white_banner".into(),
+        };
+        let source = patterned("minecraft:white_banner");
+        let blank = ItemStack::new("minecraft:white_banner", 1);
+        let out = recipe.assemble(&[&source, &blank]).expect("copy");
+        assert_eq!(out.data().unwrap().banner_patterns.len(), 1);
+        // Two blanks, or two patterned banners, do not match.
+        assert!(recipe.assemble(&[&blank, &blank]).is_none());
+        assert!(recipe.assemble(&[&source, &source]).is_none());
+        // Another colour is not in the recipe's ingredient.
+        let other = ItemStack::new("minecraft:red_banner", 1);
+        assert!(recipe.assemble(&[&source, &other]).is_none());
+    }
+    #[test]
+    fn shield_decoration_needs_a_bare_shield() {
+        let recipe = Special::ShieldDecoration {
+            banner: ingredient(&["minecraft:red_banner"]),
+            target: ingredient(&["minecraft:shield"]),
+            result: "minecraft:shield".into(),
+        };
+        let banner = patterned("minecraft:red_banner");
+        let shield = ItemStack::new("minecraft:shield", 1);
+        let out = recipe.assemble(&[&banner, &shield]).expect("decorated");
+        let data = out.data().unwrap();
+        assert_eq!(data.base_color.as_deref(), Some("red"));
+        assert_eq!(data.banner_patterns.len(), 1);
+        // A shield that already has patterns cannot be decorated again.
+        assert!(recipe.assemble(&[&banner, &out]).is_none());
     }
 }

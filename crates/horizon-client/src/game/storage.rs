@@ -11,6 +11,10 @@ impl Game<'_> {
     /// Block-entity contents on removal: shulker boxes keep theirs for the
     /// dropped box (`copy_components`), other containers spill them.
     pub(super) fn release_contents(&mut self, pos: [i32; 3], entity: BlockEntity, block: &str) {
+        if let BlockEntity::Banner(banner) = entity {
+            self.pending_banner.insert(pos, banner);
+            return;
+        }
         if is_shulker_box(block) {
             if let BlockEntity::Chest(items) = entity {
                 let kept = items
