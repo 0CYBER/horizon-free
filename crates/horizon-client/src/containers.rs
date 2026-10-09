@@ -56,6 +56,13 @@ pub enum BlockEntity {
     Jukebox(Jukebox),
     /// `BeaconBlockEntity`.
     Beacon(Box<Beacon>),
+    /// `LecternBlockEntity`: the book and the open page.
+    Lectern(Lectern),
+}
+#[derive(Clone, Debug, Default)]
+pub struct Lectern {
+    pub book: Option<ItemStack>,
+    pub page: i32,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Beacon {
@@ -93,6 +100,9 @@ impl BlockEntity {
                 cooking_total: 200,
                 speed: 1.0,
             }));
+        }
+        if name == "minecraft:lectern" {
+            return Some(Self::Lectern(Lectern::default()));
         }
         if name == "minecraft:beacon" {
             return Some(Self::Beacon(Box::new(Beacon {
@@ -144,6 +154,7 @@ impl BlockEntity {
             Self::Sign(s) => s.id(),
             Self::Jukebox(_) => "minecraft:jukebox",
             Self::Beacon(_) => "minecraft:beacon",
+            Self::Lectern(_) => "minecraft:lectern",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -154,6 +165,7 @@ impl BlockEntity {
             Self::Sign(_) => Vec::new(),
             Self::Jukebox(j) => j.record.iter().cloned().collect(),
             Self::Beacon(_) => Vec::new(),
+            Self::Lectern(l) => l.book.iter().cloned().collect(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -161,7 +173,7 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &f.items,
             Self::Brewing(b) => &b.items,
-            Self::Sign(_) | Self::Jukebox(_) | Self::Beacon(_) => &[],
+            Self::Sign(_) | Self::Jukebox(_) | Self::Beacon(_) | Self::Lectern(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -169,7 +181,7 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &mut f.items,
             Self::Brewing(b) => &mut b.items,
-            Self::Sign(_) | Self::Jukebox(_) | Self::Beacon(_) => &mut [],
+            Self::Sign(_) | Self::Jukebox(_) | Self::Beacon(_) | Self::Lectern(_) => &mut [],
         }
     }
 }

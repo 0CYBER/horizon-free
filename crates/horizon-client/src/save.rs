@@ -394,6 +394,12 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
             }
             entries.push(("Levels", Tag::Int(b.levels)));
         }
+        BlockEntity::Lectern(l) => {
+            if let Some(book) = &l.book {
+                entries.push(("Book", item_to_nbt(book)));
+                entries.push(("Page", Tag::Int(l.page)));
+            }
+        }
     }
     Tag::compound(entries)
 }
@@ -414,6 +420,13 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
                 playing,
             }),
         ));
+    }
+    if id == "minecraft:lectern" {
+        let lectern = crate::containers::Lectern {
+            book: tag.get("Book").and_then(item_from_nbt),
+            page: int("Page").unwrap_or(0),
+        };
+        return Some((pos, BlockEntity::Lectern(lectern)));
     }
     if id == "minecraft:beacon" {
         let beacon = crate::containers::Beacon {
@@ -461,7 +474,7 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             };
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
-        BlockEntity::Jukebox(_) | BlockEntity::Beacon(_) => {}
+        BlockEntity::Jukebox(_) | BlockEntity::Beacon(_) | BlockEntity::Lectern(_) => {}
     }
     Some((pos, entity))
 }

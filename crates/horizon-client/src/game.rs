@@ -4,6 +4,7 @@ mod armor_stands;
 mod beacon;
 mod blockctl;
 mod boats;
+mod books;
 mod cartography;
 mod chat;
 mod commands;
@@ -286,6 +287,9 @@ impl LevelAccess for GameLevel<'_> {
         if let Some((_, comparator)) = jukebox::jukebox_signals(self.world, self.items, pos) {
             return comparator;
         }
+        if let Some(signal) = books::lectern_signal(self.world, pos) {
+            return signal;
+        }
         machines::container_signal(self.world, self.behaviours, self.items, self.registry, pos)
     }
     fn block_entity_signal(
@@ -484,6 +488,10 @@ struct Game<'a> {
     particles: horizon_client::particles::ParticleEngine,
     /// Sign text being edited (`SignEditScreen`).
     sign_edit: Option<sign_edit::SignEditor>,
+    /// An open book, book and quill or lectern screen.
+    book: Option<books::BookScreen>,
+    /// Lecterns whose page-turn pulse is running (ticks left).
+    lectern_pulses: Vec<((i32, i32, i32), i32)>,
     spawn_search: u32,
     mobs: Vec<Mob>,
     arrows: Vec<Arrow>,
@@ -1305,6 +1313,10 @@ impl Game<'_> {
             .name
             .clone();
         let key = (pos[0], pos[1], pos[2]);
+        if &*name == "minecraft:lectern" {
+            self.open_lectern(pos);
+            return;
+        }
         if &*name == "minecraft:crafting_table" {
             self.craft_size = 3;
         } else if &*name == "minecraft:ender_chest" {
@@ -1532,6 +1544,10 @@ impl Game<'_> {
             && let Some(hit) = self.pick()
         {
             let held = self.held().cloned();
+            if self.use_lectern(hit.pos, held.as_ref()) {
+                self.swing_arm();
+                return Ok(());
+            }
             if self.use_jukebox(hit.pos, held.as_ref()) {
                 self.swing_arm();
                 return Ok(());
@@ -1588,6 +1604,7 @@ impl Game<'_> {
             || self.use_trident(&stack)
             || self.boost_firework(&stack)
             || self.use_empty_map(&stack)
+            || self.use_book(&stack)
             || self.equip_from_hand(&stack)
         {
             return Ok(());
@@ -2262,6 +2279,7 @@ impl Game<'_> {
         self.tick_boats();
         self.tick_carts();
         self.tick_thunder();
+        self.tick_lecterns();
         self.tick_maps();
         self.tick_bolts();
         self.tick_fishing();
@@ -2815,6 +2833,7 @@ impl Game<'_> {
         }
         self.remote_hud(&mut batch);
         self.draw_sign_editor(&mut batch);
+        self.draw_book(&mut batch);
         batch
     }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
@@ -2838,7 +2857,12 @@ impl Game<'_> {
             Some(BlockEntity::Chest(items)) => v.extend((0..items.len()).map(|i| 300 + i)),
             Some(BlockEntity::Furnace(_)) => v.extend(300..303),
             Some(BlockEntity::Brewing(_)) => v.extend(300..305),
-            Some(BlockEntity::Sign(_) | BlockEntity::Jukebox(_) | BlockEntity::Beacon(_)) => {}
+            Some(
+                BlockEntity::Sign(_)
+                | BlockEntity::Jukebox(_)
+                | BlockEntity::Beacon(_)
+                | BlockEntity::Lectern(_),
+            ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
                 v.push(200);
@@ -3058,7 +3082,12 @@ impl Game<'_> {
                     }
                 }
                 Some(BlockEntity::Brewing(_)) => {}
-                Some(BlockEntity::Sign(_) | BlockEntity::Jukebox(_) | BlockEntity::Beacon(_)) => {}
+                Some(
+                    BlockEntity::Sign(_)
+                    | BlockEntity::Jukebox(_)
+                    | BlockEntity::Beacon(_)
+                    | BlockEntity::Lectern(_),
+                ) => {}
                 None => {
                     let texture = if self.craft_size == 3 {
                         "gui/container/crafting_table"
@@ -6705,9 +6734,12 @@ impl ApplicationHandler for Game<'_> {
                         self.left = false;
                         self.right = false;
                         self.capture(false);
+                        // Screens (books, signs) stay open instead of pausing.
                         if self.screen == Screen::Playing
                             && self.player.is_some()
                             && !self.options.no_pause
+                            && self.book.is_none()
+                            && self.sign_edit.is_none()
                         {
                             self.screen = Screen::Paused;
                         }
@@ -6792,6 +6824,16 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::MouseInput { .. } if self.title.is_some() => {}
+                WindowEvent::MouseInput { state, button, .. } if self.book.is_some() => {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        let size = self
+                            .renderer
+                            .as_ref()
+                            .map(|r| [r.config.width, r.config.height])
+                            .unwrap_or([1, 1]);
+                        self.book_click(size);
+                    }
+                }
                 WindowEvent::MouseInput { state, button, .. } if self.sign_edit.is_some() => {
                     if state == ElementState::Pressed && button == MouseButton::Left {
                         let size = self
@@ -6851,6 +6893,9 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.sign_edit.is_some() => {
                     self.sign_edit_key(&event)
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.book.is_some() => {
+                    self.book_key(&event)
                 }
                 WindowEvent::KeyboardInput { event, .. }
                     if self.screen == Screen::Creative
@@ -7232,6 +7277,8 @@ pub fn run() -> Result<()> {
         next_entity: 0,
         particles,
         sign_edit: None,
+        book: None,
+        lectern_pulses: Vec::new(),
         spawn_search: 0,
         mobs: Vec::new(),
         arrows: Vec::new(),

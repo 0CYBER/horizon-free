@@ -31,6 +31,18 @@ pub struct StackData {
     pub fireworks: Option<(u8, Vec<crate::particles::FireworkExplosion>)>,
     /// `minecraft:map_id` (filled maps).
     pub map_id: Option<i32>,
+    /// `minecraft:writable_book_content` pages.
+    pub writable_pages: Vec<String>,
+    /// `minecraft:written_book_content`.
+    pub written: Option<WrittenBook>,
+}
+/// `WrittenBookContent` with the pages as plain text.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WrittenBook {
+    pub title: String,
+    pub author: String,
+    pub generation: u8,
+    pub pages: Vec<String>,
 }
 impl StackData {
     pub fn is_empty(&self) -> bool {
@@ -196,6 +208,13 @@ fn read_levels(t: Option<&Tag>) -> Levels {
         .collect()
 }
 /// A text component as stored by vanilla: a plain string or `{"text": ...}`.
+/// A `Filterable<String/Component>`: the value itself or `{raw: value}`.
+fn filterable_text(t: &Tag) -> Option<String> {
+    match t.get("raw") {
+        Some(raw) => read_text(raw),
+        None => read_text(t),
+    }
+}
 fn read_text(t: &Tag) -> Option<String> {
     match t {
         Tag::String(s) => Some(s.to_string_lossy()),
@@ -247,6 +266,36 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
         }
         if let Some(id) = d.map_id {
             entries.push(("minecraft:map_id", Tag::Int(id)));
+        }
+        // Filterable values are saved as {raw: ..}.
+        let raw = |t: Tag| Tag::compound([("raw", t)]);
+        if !d.writable_pages.is_empty() {
+            let pages = d
+                .writable_pages
+                .iter()
+                .map(|p| raw(Tag::String(p.as_str().into())))
+                .collect();
+            entries.push((
+                "minecraft:writable_book_content",
+                Tag::compound([("pages", Tag::List(pages))]),
+            ));
+        }
+        if let Some(w) = &d.written {
+            let pages = w
+                .pages
+                .iter()
+                .map(|p| raw(Tag::String(p.as_str().into())))
+                .collect();
+            entries.push((
+                "minecraft:written_book_content",
+                Tag::compound([
+                    ("title", raw(Tag::String(w.title.as_str().into()))),
+                    ("author", Tag::String(w.author.as_str().into())),
+                    ("generation", Tag::Int(i32::from(w.generation))),
+                    ("pages", Tag::List(pages)),
+                    ("resolved", Tag::Byte(1)),
+                ]),
+            ));
         }
         if let Some((flight, explosions)) = &d.fireworks {
             let list = explosions
@@ -322,6 +371,24 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         custom_name: c.get("minecraft:custom_name").and_then(read_text),
         potion,
         map_id: c.get("minecraft:map_id").and_then(int).map(|v| v as i32),
+        writable_pages: match c
+            .get("minecraft:writable_book_content")
+            .and_then(|b| b.get("pages"))
+        {
+            Some(Tag::List(pages)) => pages.iter().filter_map(filterable_text).collect(),
+            _ => Vec::new(),
+        },
+        written: c
+            .get("minecraft:written_book_content")
+            .map(|b| WrittenBook {
+                title: b.get("title").and_then(filterable_text).unwrap_or_default(),
+                author: b.get("author").and_then(string).unwrap_or_default(),
+                generation: b.get("generation").and_then(int).unwrap_or(0).clamp(0, 3) as u8,
+                pages: match b.get("pages") {
+                    Some(Tag::List(pages)) => pages.iter().filter_map(filterable_text).collect(),
+                    _ => Vec::new(),
+                },
+            }),
         fireworks: c.get("minecraft:fireworks").map(|f| {
             let flight = f
                 .get("flight_duration")

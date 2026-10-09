@@ -127,6 +127,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     let next = self.leaves_update_distance(state, pos);
                     self.set_block_and_update(pos, next);
                 }
+                // LecternBlock.tick: the page-turn pulse ends.
+                Class::Lectern => {
+                    self.set_block_and_update(pos, b.table.set_bool(state, p.powered, false));
+                    self.update_neighbors_at(below(pos), block);
+                }
                 Class::LightningRod => {
                     self.set_block_and_update(pos, b.table.set_bool(state, p.powered, false));
                     let facing = b.facing(state);

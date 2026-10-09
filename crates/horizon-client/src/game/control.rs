@@ -286,6 +286,10 @@ impl Game<'_> {
                     .unwrap_or("")
                     .strip_prefix(' ')
                     .unwrap_or("");
+                if self.book.is_some() {
+                    self.book_type(text);
+                    return ok();
+                }
                 match self.screen {
                     Screen::Chat => self.chat_type(text),
                     Screen::Options => self.ui.options.type_text(text),
