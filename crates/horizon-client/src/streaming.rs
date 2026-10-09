@@ -121,6 +121,9 @@ pub struct Streaming {
     /// Chunks come from a server (`insert_remote`/`forget`): nothing is
     /// generated and columns are only unloaded when the server says so.
     pub remote: bool,
+    /// More areas to keep loaded (centre chunk, radius), e.g. around guests
+    /// of a world open to the network. They are generated and kept but not meshed.
+    pub extra: Vec<((i32, i32), i32)>,
 }
 pub struct WorkerContext {
     pub assets: Arc<crate::assets::Assets>,
@@ -228,6 +231,7 @@ impl Streaming {
             generated_total: 0,
             meshed_total: 0,
             remote: false,
+            extra: Vec::new(),
         }
     }
     /// A column received from a server: store it and relight it and its neighbours.
@@ -262,8 +266,14 @@ impl Streaming {
         self.shared.ready.notify_one();
     }
     fn distance(&self, x: i32, z: i32) -> i64 {
-        let (dx, dz) = (i64::from(x - self.center.0), i64::from(z - self.center.1));
-        dx * dx + dz * dz
+        let d = |c: (i32, i32)| {
+            let (dx, dz) = (i64::from(x - c.0), i64::from(z - c.1));
+            dx * dx + dz * dz
+        };
+        self.extra
+            .iter()
+            .map(|(c, _)| d(*c))
+            .fold(d(self.center), i64::min)
     }
     fn region(world: &World, x: i32, z: i32) -> Option<Box<Region>> {
         let mut region: Region = Default::default();
@@ -392,10 +402,15 @@ impl Streaming {
             self.meshed.remove(key);
         }
         // Drop far proto chunks that are not checked out.
-        let (cx, cz, r4) = (self.center.0, self.center.1, i64::from(self.radius + 4));
+        let areas: Vec<((i32, i32), i64)> =
+            std::iter::once((self.center, i64::from(self.radius + 4)))
+                .chain(self.extra.iter().map(|&(c, r)| (c, i64::from(r + 4))))
+                .collect();
         self.protos.retain(|&(x, z), p| {
-            let d = i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2);
-            p.is_none() || d <= r4 * r4
+            p.is_none()
+                || areas.iter().any(|&((cx, cz), r4)| {
+                    i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2) <= r4 * r4
+                })
         });
         let (protos, finishing) = (&self.protos, &self.finishing);
         self.decorated.retain(|k| {
@@ -475,23 +490,29 @@ impl Streaming {
         // Generation (load or proto), closest first, bounded in flight.
         let margin = if self.decorates { 3 } else { 1 };
         if !self.remote && self.generating.len() < workers * 3 {
-            let r = self.radius + margin;
             let mut wanted = Vec::new();
-            for dz in -r..=r {
-                for dx in -r..=r {
-                    let (x, z) = (self.center.0 + dx, self.center.1 + dz);
-                    if !self.in_range(x, z, margin)
-                        || world.chunks.contains_key(&(x, z))
-                        || self.generating.contains(&(x, z))
-                        || self.protos.contains_key(&(x, z))
-                        || self.finishing.contains(&(x, z))
-                    {
-                        continue;
+            let areas: Vec<((i32, i32), i32)> = std::iter::once((self.center, self.radius))
+                .chain(self.extra.iter().copied())
+                .collect();
+            for (center, radius) in areas {
+                let r = radius + margin;
+                for dz in -r..=r {
+                    for dx in -r..=r {
+                        let (x, z) = (center.0 + dx, center.1 + dz);
+                        if !self.in_range(x, z, margin)
+                            || world.chunks.contains_key(&(x, z))
+                            || self.generating.contains(&(x, z))
+                            || self.protos.contains_key(&(x, z))
+                            || self.finishing.contains(&(x, z))
+                        {
+                            continue;
+                        }
+                        wanted.push((self.distance(x, z), x, z));
                     }
-                    wanted.push((self.distance(x, z), x, z));
                 }
             }
             wanted.sort_unstable();
+            wanted.dedup();
             for (d, x, z) in wanted.into_iter().take(workers * 3 - self.generating.len()) {
                 self.generating.insert((x, z));
                 self.submit(d * 4, Job::Generate(x, z));
@@ -521,7 +542,7 @@ impl Streaming {
         let dirty: Vec<_> = world.dirty_sections.iter().copied().collect();
         let mut columns: HashMap<(i32, i32), Option<Box<Region>>> = HashMap::new();
         for (x, sy, z) in dirty {
-            if !world.chunks.contains_key(&(x, z)) || !self.in_range(x, z, 0) {
+            if !world.chunks.contains_key(&(x, z)) || !self.in_main_range(x, z, 0) {
                 world.dirty_sections.remove(&(x, sy, z));
                 continue;
             }
@@ -627,8 +648,17 @@ impl Streaming {
         }
     }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
+        self.in_main_range(x, z, margin)
+            || self.extra.iter().any(|&(c, radius)| {
+                let r = i64::from(radius + margin);
+                let (dx, dz) = (i64::from(x - c.0), i64::from(z - c.1));
+                dx * dx + dz * dz <= r * r
+            })
+    }
+    fn in_main_range(&self, x: i32, z: i32, margin: i32) -> bool {
         let r = i64::from(self.radius + margin);
-        self.distance(x, z) <= r * r
+        let (dx, dz) = (i64::from(x - self.center.0), i64::from(z - self.center.1));
+        dx * dx + dz * dz <= r * r
     }
 }
 impl Drop for Streaming {

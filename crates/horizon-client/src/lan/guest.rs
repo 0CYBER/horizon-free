@@ -1,0 +1,244 @@
+//! A remote player: connection, position, chunk and entity views, and the
+//! player state (inventory, health, game mode) that the host's gameplay code
+//! operates on when it acts for them.
+use super::{Joined, PlayerSender, entity::Tracker};
+use crate::{items::ItemStack, motion::PlayerMotion};
+use horizon_protocol::{
+    item::Stack,
+    packets::{configuration::ClientInformation, play},
+};
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::{Arc, atomic::AtomicI32},
+};
+
+/// GameType ids.
+pub const SURVIVAL: i32 = 0;
+pub const CREATIVE: i32 = 1;
+pub const ADVENTURE: i32 = 2;
+pub const SPECTATOR: i32 = 3;
+
+pub struct Guest {
+    pub conn: u32,
+    pub uuid: u128,
+    pub name: String,
+    pub entity_id: i32,
+    pub sender: PlayerSender,
+    pub latency: Arc<AtomicI32>,
+    pub info: ClientInformation,
+    pub brand: String,
+    /// The chunk radius this client is sent.
+    pub view_distance: i32,
+    pub position: [f64; 3],
+    pub previous_position: [f64; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub head_yaw: f32,
+    pub on_ground: bool,
+    pub game_mode: i32,
+    pub sneaking: bool,
+    pub sprinting: bool,
+    pub fall_flying: bool,
+    pub flying: bool,
+    pub sleeping: bool,
+    /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
+    /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
+    pub awaiting_teleport: Option<(i32, [f64; 3])>,
+    pub teleport_counter: i32,
+    /// The client finished loading terrain (ServerboundPlayerLoadedPacket).
+    pub loaded: bool,
+    // Chunks.
+    pub center: Option<(i32, i32)>,
+    pub sent_chunks: HashSet<(i32, i32)>,
+    pub chunk_queue: Vec<(i32, i32)>,
+    pub unacknowledged: u32,
+    pub chunks_per_tick: f32,
+    pub chunk_credit: f32,
+    // Entities.
+    pub tracker: Tracker,
+    // Player state the gameplay code reads and writes.
+    pub motion: Option<Box<PlayerMotion>>,
+    /// The 36 inventory slots (hotbar first), armor (head..feet) and off hand.
+    pub inventory: Vec<Option<ItemStack>>,
+    pub armor: [Option<ItemStack>; 4],
+    pub offhand: Option<ItemStack>,
+    pub selected: usize,
+    pub carried: Option<ItemStack>,
+    pub health: f32,
+    pub food: i32,
+    pub saturation: f32,
+    pub xp_level: i32,
+    pub xp_progress: f32,
+    pub xp_total: i32,
+    /// What the client believes the inventory menu holds (for change detection).
+    pub menu_sent: Vec<Option<ItemStack>>,
+    pub menu_state: i32,
+    pub sent_health: Option<(f32, i32, f32)>,
+    pub sent_xp: Option<(f32, i32, i32)>,
+    pub sent_selected: usize,
+    pub inbox: VecDeque<play::Serverbound>,
+    pub joined_tick: u64,
+    pub ticks: u64,
+    pub dead: bool,
+    /// The join packets were sent (PlayerList.placeNewPlayer ran).
+    pub placed: bool,
+    /// The compound this player was loaded from, for fields Horizon does not model.
+    pub saved: Option<horizon_world::nbt::Tag>,
+}
+
+impl Guest {
+    pub fn new(j: Joined, entity_id: i32, position: [f64; 3], view_distance: i32) -> Self {
+        Self {
+            conn: j.conn,
+            uuid: j.uuid,
+            name: j.name,
+            entity_id,
+            sender: j.sender,
+            latency: j.latency,
+            view_distance: (i32::from(j.info.view_distance)).clamp(2, view_distance),
+            info: j.info,
+            brand: j.brand,
+            position,
+            previous_position: position,
+            yaw: 0.0,
+            pitch: 0.0,
+            head_yaw: 0.0,
+            on_ground: false,
+            game_mode: SURVIVAL,
+            sneaking: false,
+            sprinting: false,
+            fall_flying: false,
+            flying: false,
+            sleeping: false,
+            awaiting_teleport: None,
+            teleport_counter: 0,
+            loaded: false,
+            center: None,
+            sent_chunks: HashSet::new(),
+            chunk_queue: Vec::new(),
+            unacknowledged: 0,
+            chunks_per_tick: 9.0,
+            chunk_credit: 0.0,
+            tracker: Tracker::default(),
+            motion: None,
+            inventory: vec![None; 36],
+            armor: [None, None, None, None],
+            offhand: None,
+            selected: 0,
+            carried: None,
+            health: 20.0,
+            food: 20,
+            saturation: 5.0,
+            xp_level: 0,
+            xp_progress: 0.0,
+            xp_total: 0,
+            menu_sent: vec![None; 46],
+            menu_state: 0,
+            sent_health: None,
+            sent_xp: None,
+            sent_selected: 0,
+            inbox: VecDeque::new(),
+            joined_tick: 0,
+            ticks: 0,
+            dead: false,
+            placed: false,
+            saved: None,
+        }
+    }
+    pub fn send(&self, packet: &play::Clientbound) {
+        self.sender.send(packet.encode());
+    }
+    pub fn send_all(&self, packets: &[play::Clientbound]) {
+        for p in packets {
+            self.send(p);
+        }
+    }
+    pub fn chunk(&self) -> (i32, i32) {
+        (
+            (self.position[0].floor() as i32) >> 4,
+            (self.position[2].floor() as i32) >> 4,
+        )
+    }
+    pub fn creative(&self) -> bool {
+        self.game_mode == CREATIVE
+    }
+    pub fn spectator(&self) -> bool {
+        self.game_mode == SPECTATOR
+    }
+    /// PlayerAbilities flags (invulnerable, flying, may fly, instabuild).
+    pub fn ability_flags(&self) -> i8 {
+        let mut f = 0;
+        if self.creative() || self.spectator() {
+            f |= 1;
+        }
+        if self.flying || self.spectator() {
+            f |= 2;
+        }
+        if self.creative() || self.spectator() {
+            f |= 4;
+        }
+        if self.creative() {
+            f |= 8;
+        }
+        f
+    }
+    pub fn eye_height(&self) -> f64 {
+        if self.sneaking { 1.27 } else { 1.62 }
+    }
+    /// The inventory menu's 46 slots (ServerPlayer.inventoryMenu): 0 crafting
+    /// result, 1..=4 crafting grid, 5..=8 armor, 9..=35 main, 36..=44 hotbar,
+    /// 45 off hand.
+    pub fn menu_slot(&self, slot: usize) -> Option<ItemStack> {
+        match slot {
+            0..=4 => None,
+            5..=8 => self.armor[slot - 5].clone(),
+            9..=35 => self.inventory.get(slot).cloned().flatten(),
+            36..=44 => self.inventory.get(slot - 36).cloned().flatten(),
+            45 => self.offhand.clone(),
+            _ => None,
+        }
+    }
+    pub fn set_menu_slot(&mut self, slot: usize, item: Option<ItemStack>) {
+        match slot {
+            5..=8 => self.armor[slot - 5] = item,
+            9..=35 => self.inventory[slot] = item,
+            36..=44 => self.inventory[slot - 36] = item,
+            45 => self.offhand = item,
+            _ => {}
+        }
+    }
+}
+
+/// The off hand slot is conventionally 40 in saves and 45 in the menu.
+pub fn stack_to_network(
+    item_id: impl Fn(&str) -> i32,
+    enchantment_id: impl Fn(&str) -> Option<i32>,
+    s: &Option<ItemStack>,
+) -> Option<Stack> {
+    let s = s.as_ref()?;
+    let mut stack = Stack::new(item_id(&s.item), s.count as i32);
+    if s.damage > 0 {
+        stack.added.push((
+            horizon_protocol::item::component::DAMAGE,
+            horizon_protocol::item::Component::Int(s.damage as i32),
+        ));
+    }
+    let enchantments: Vec<(i32, i32)> = s
+        .enchantments()
+        .iter()
+        .filter_map(|(e, level)| Some((enchantment_id(e)?, *level as i32)))
+        .collect();
+    if !enchantments.is_empty() {
+        stack.added.push((
+            horizon_protocol::item::component::ENCHANTMENTS,
+            horizon_protocol::item::Component::Enchantments(enchantments),
+        ));
+    }
+    if let Some(name) = s.custom_name() {
+        stack.added.push((
+            horizon_protocol::item::component::CUSTOM_NAME,
+            horizon_protocol::item::Component::Text(horizon_protocol::text::literal(name)),
+        ));
+    }
+    Some(stack)
+}

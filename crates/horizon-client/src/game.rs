@@ -27,6 +27,8 @@ mod frames;
 mod game_mode;
 mod growth;
 mod jukebox;
+mod lan;
+mod lan_screen;
 mod lightning;
 mod machines;
 mod maps;
@@ -250,6 +252,8 @@ enum Screen {
     Stats,
     /// The Advancements screen.
     Advancements,
+    /// WorldOptionsScreen (game/lan_screen.rs).
+    WorldOptions,
 }
 #[derive(Clone)]
 enum Icon {
@@ -623,6 +627,11 @@ struct Game<'a> {
     persist: persist::EntityMemory,
     /// Connected to a server: the world comes from the network (game/remote.rs).
     remote: Option<remote::Remote>,
+    /// This world is open to the network (game/lan.rs).
+    lan: Option<lan::LanHost>,
+    world_options: Option<lan_screen::WorldOptions>,
+    /// Allow Cheats: whether guests may be given commands.
+    cheats: bool,
     ui: chat::UiState,
     combat: combat::CombatTracker,
     mount: mounts::MountState,
@@ -2443,6 +2452,7 @@ impl Game<'_> {
         self.tick_items();
         self.spawn_loaded_entities();
         self.tick_mobs()?;
+        self.tick_lan();
         self.tick_experience();
         self.tick_hand();
         self.tick_sleep();
@@ -3000,6 +3010,7 @@ impl Game<'_> {
             Screen::Dead => self.draw_death_screen(&mut batch),
             Screen::Stats => self.draw_stats(&mut batch),
             Screen::Advancements => self.draw_advancements(&mut batch),
+            Screen::WorldOptions => self.draw_world_options(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
             }
@@ -3751,6 +3762,7 @@ impl Game<'_> {
         // Mobs and their projectiles.
         self.mob_geometry(camera, alpha, &mut out);
         self.player_model_geometry(camera, alpha, &mut out);
+        self.guest_model_geometry(camera, alpha, &mut out);
         self.fangs_geometry(camera, alpha, &mut out);
         self.name_tag_geometry(camera, alpha, &mut out);
         // Arrows: two crossed quads along the flight direction.
@@ -6793,6 +6805,7 @@ impl Game<'_> {
                 Screen::Dead => {}
                 Screen::Stats => self.screen = Screen::Paused,
                 Screen::Advancements => self.close_advancements(),
+                Screen::WorldOptions => self.close_world_options(),
                 Screen::Chat => self.close_chat(),
             },
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
@@ -7169,6 +7182,9 @@ impl ApplicationHandler for Game<'_> {
                             self.click_creative(button == MouseButton::Right);
                         }
                         Screen::Paused if pressed => self.pause_click()?,
+                        Screen::WorldOptions if pressed && button == MouseButton::Left => {
+                            self.world_options_click()
+                        }
                         Screen::Dead if pressed => self.death_click()?,
                         Screen::Advancements if button == MouseButton::Left => {
                             let size = self
@@ -7236,6 +7252,9 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => {
                     self.remote_chat_key(&event)
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::WorldOptions => {
+                    self.world_options_key(&event)
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Options => {
                     if event.state == ElementState::Pressed
@@ -7678,6 +7697,9 @@ pub fn run() -> Result<()> {
         pending_bench: None,
         persist: Default::default(),
         remote: None,
+        lan: None,
+        world_options: None,
+        cheats: true,
         ui: Default::default(),
         combat: Default::default(),
         mount: Default::default(),

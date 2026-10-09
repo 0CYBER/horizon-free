@@ -367,6 +367,7 @@ impl Game<'_> {
             self.ui
                 .chat
                 .add(&self.res.atlas, line, None, self.ticks, focused);
+            self.lan_host_chat(message);
         }
     }
     pub(super) fn chat_scroll(&mut self, amount: f32) {
