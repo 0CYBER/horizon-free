@@ -22,6 +22,8 @@ pub struct BiomeFacts {
     pub frog: u8,
     /// Wolf variant index (`tame::WOLF_VARIANTS`).
     pub wolf: u8,
+    /// `MoonBrightnessCheck(>= 0.9)`: the full moon.
+    pub full_moon: bool,
 }
 /// SpawnPlacementTypes for the species.
 pub fn placement_ok(species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> bool {
@@ -172,6 +174,7 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts) {
         S::Mooshroom => m.extra.variant = 0,
         S::Frog => m.extra.variant = biome.frog,
         S::Wolf => m.extra.variant = biome.wolf,
+        S::Cat => m.extra.variant = super::tame::cat_variant(m, biome.full_moon),
         S::Zombie | S::Husk | S::Drowned | S::ZombieVillager => {
             // Zombie.finalizeSpawn: 5% babies (normal difficulty).
             if m.random.next_float() < 0.05 {

@@ -96,7 +96,7 @@ pub fn family(s: Species) -> Family {
         | S::Dolphin => Family::Aquatic,
         S::Giant => Family::Inert,
         S::Witch => Family::Witch,
-        S::Wolf => Family::Tame,
+        S::Wolf | S::Cat => Family::Tame,
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
         _ => Family::Generic,
@@ -111,6 +111,7 @@ pub fn register(m: &mut Mob) {
         Family::Generic => generic(m),
         Family::Inert => {}
         Family::Witch => super::witch::register(m),
+        Family::Tame if m.species() == Species::Cat => super::tame::register_cat(m),
         Family::Tame => super::tame::register(m),
         Family::Enderman => super::enderman::register(m),
         Family::Cube => super::cube::register(m),
@@ -460,6 +461,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         Species::Enderman => super::enderman::ai_step(m, w, events),
         Species::Wolf => super::tame::ai_step(m, w, events),
+        Species::Cat => super::tame::cat_ai_step(m, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {

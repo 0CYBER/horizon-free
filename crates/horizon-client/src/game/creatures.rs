@@ -160,6 +160,7 @@ impl Game<'_> {
             desert: b.name == "minecraft:desert",
             jungle: has("minecraft:is_jungle"),
             wolf: horizon_client::mobs::tame::wolf_variant_for(&b.name, &has),
+            full_moon: (self.world.day_time / 24000).rem_euclid(8) == 0,
             frog: if has("minecraft:spawns_warm_variant_frogs") {
                 1
             } else if has("minecraft:spawns_cold_variant_frogs") {
@@ -843,6 +844,27 @@ impl Game<'_> {
             && let Some(child) = self.mobs.iter_mut().find(|m| m.id == id)
         {
             child.extra.age = -24000;
+            if p.species() == Species::Cat {
+                // Cat.getBreedOffspring.
+                let other = q.as_ref().unwrap_or(&p);
+                child.extra.variant = if coin {
+                    p.extra.variant
+                } else {
+                    other.extra.variant
+                };
+                if p.extra.tame {
+                    child.extra.tame = true;
+                    child.extra.owner = p.extra.owner;
+                    child.extra.color = if coin2 {
+                        p.extra.color
+                    } else {
+                        other.extra.color
+                    };
+                }
+                let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
+                self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+                return;
+            }
             if p.species() == Species::Wolf {
                 // Wolf.getBreedOffspring: a parent's variant; tame parents
                 // give a tame baby with one of their collar colours.
@@ -1456,6 +1478,74 @@ impl Game<'_> {
                     m.extra.sitting = true;
                 }
                 // TamableAnimal.spawnTamingParticles.
+                let kind = if tamed { "heart" } else { "smoke" };
+                self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }])?;
+                let m = &self.mobs[index];
+                self.world.modified.insert((
+                    m.position.x.floor() as i32 >> 4,
+                    m.position.z.floor() as i32 >> 4,
+                ));
+            }
+            // Cat.mobInteract: dye, heal or sit when tame; fish may tame a wild one.
+            Species::Cat
+                if m.extra.tame
+                    && item.ends_with("_dye")
+                    && horizon_client::mobs::render::DYE_NAMES
+                        .iter()
+                        .position(|d| {
+                            item.trim_start_matches("minecraft:")
+                                .trim_end_matches("_dye")
+                                == *d
+                        })
+                        .is_some_and(|c| c as u8 != m.extra.color) =>
+            {
+                let name = item
+                    .trim_start_matches("minecraft:")
+                    .trim_end_matches("_dye");
+                if let Some(c) = horizon_client::mobs::render::DYE_NAMES
+                    .iter()
+                    .position(|d| *d == name)
+                {
+                    m.extra.color = c as u8;
+                }
+                m.persistent = true;
+                consume = true;
+            }
+            Species::Cat if m.extra.tame && is_food && m.health < m.attrs.max_health => {
+                let heal = self
+                    .res
+                    .items
+                    .get(&item)
+                    .and_then(|i| i.food.as_ref())
+                    .map_or(1.0, |f| f.0 as f32);
+                m.health = (m.health + heal).min(m.attrs.max_health);
+                consume = true;
+                sound = Some("entity.cat.eat");
+            }
+            Species::Cat
+                if m.extra.tame && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
+            {
+                m.extra.sitting = !m.extra.sitting;
+                self.world.modified.insert((
+                    m.position.x.floor() as i32 >> 4,
+                    m.position.z.floor() as i32 >> 4,
+                ));
+            }
+            Species::Cat if !m.extra.tame && is_food => {
+                consume = true;
+                sound = Some("entity.cat.eat");
+                m.persistent = true;
+                let at = [
+                    m.position.x,
+                    m.position.y + f64::from(m.height()) * 0.5 + 0.5,
+                    m.position.z,
+                ];
+                let tamed = m.random.next_int_bound(3).unwrap_or(1) == 0;
+                if tamed {
+                    m.extra.tame = true;
+                    m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+                    m.extra.sitting = true;
+                }
                 let kind = if tamed { "heart" } else { "smoke" };
                 self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }])?;
                 let m = &self.mobs[index];

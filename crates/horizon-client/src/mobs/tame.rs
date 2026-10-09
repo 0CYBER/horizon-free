@@ -672,3 +672,389 @@ fn max_head_x_rot(m: &Mob) -> f32 {
         m.kind.max_head_x_rot
     }
 }
+
+/// Cat variants (`CatVariants`): registry name, texture file.
+pub const CAT_VARIANTS: [&str; 11] = [
+    "tabby",
+    "black",
+    "red",
+    "siamese",
+    "british_shorthair",
+    "calico",
+    "persian",
+    "ragdoll",
+    "white",
+    "jellie",
+    "all_black",
+];
+// Cat AnimState slots.
+const LIE: usize = 0;
+const LIE_TAIL: usize = 1;
+const RELAX: usize = 2;
+
+/// `Cat.registerGoals` (with `reassessTameGoals`' player avoidance).
+pub fn register_cat(m: &mut Mob) {
+    m.extra.color = RED;
+    let food = m.kind.food.clone();
+    let g = &mut m.ai.goals;
+    g.add(1, Float);
+    g.add(1, TamePanic(Panic::new(1.5)));
+    g.add(2, SitWhenOrdered);
+    g.add(4, CatTempt(super::goals::Tempt::new(0.6, food, true)));
+    g.add(
+        4,
+        super::goals::AvoidEntity::new(super::goals::Avoid::Player, 16.0, 0.8, 1.33)
+            .when(|m| !m.extra.tame),
+    );
+    g.add(
+        5,
+        CatLieOnBlock(super::goals::MoveToBlock {
+            vertical_start: -2,
+            ..super::goals::MoveToBlock::new(1.1, 8, 6)
+        }),
+    );
+    g.add(6, FollowOwner::new(1.0, 10.0, 5.0));
+    g.add(7, CatSitOnBlock(super::goals::MoveToBlock::new(0.8, 8, 1)));
+    g.add(8, LeapAtTarget::new(0.3));
+    g.add(9, OcelotAttack { attack_time: 0 });
+    g.add(10, Breed::new(0.8));
+    g.add(11, Stroll::avoiding_water(0.8));
+    g.add(12, LookAtPlayer::new(10.0));
+    m.ai.targets.add(
+        1,
+        NearestTarget::species(&[Species::Rabbit], false).when(|m, _| !m.extra.tame),
+    );
+    m.ai.targets.add(
+        1,
+        NearestTarget::new(Prey::Filter(baby_turtle_on_land), false).when(|m, _| !m.extra.tame),
+    );
+}
+/// `Cat.isInSittingPose`: ordered to sit or sitting on a block.
+pub fn cat_sitting(m: &Mob) -> bool {
+    m.extra.sitting || m.extra.flag2
+}
+/// `Cat.CatTemptGoal`: only wild cats come for fish.
+#[derive(Clone, Debug)]
+struct CatTempt(super::goals::Tempt);
+impl Goal for CatTempt {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        !m.extra.tame && self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx)
+    }
+    fn every_tick(&self) -> bool {
+        self.0.every_tick()
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        // Cat.tick: a wild cat being tempted begs every 100 ticks.
+        if m.age.is_multiple_of(100) {
+            cx.events.push(MobEvent::Sound(
+                "entity.cat.beg_for_food",
+                m.center(),
+                1.0,
+                1.0,
+            ));
+        }
+        self.0.tick(m, cx)
+    }
+}
+fn has_tag(w: &MobWorld, p: [i32; 3], tag: &str) -> bool {
+    let name = w.facts.get(w.world.block(p[0], p[1], p[2])).name.clone();
+    w.block_tags.get(tag).is_some_and(|t| t.contains(&*name))
+}
+fn empty_above(w: &MobWorld, p: [i32; 3]) -> bool {
+    w.facts
+        .get(w.world.block(p[0], p[1] + 1, p[2]))
+        .name
+        .as_ref()
+        == "minecraft:air"
+}
+/// `CatLieOnBlockGoal`: tame cats lie on beds and other warm blocks.
+#[derive(Clone, Debug)]
+struct CatLieOnBlock(super::goals::MoveToBlock);
+fn can_lie_on(w: &MobWorld, p: [i32; 3]) -> bool {
+    empty_above(w, p) && has_tag(w, p, "minecraft:cats_can_lie_on")
+}
+impl Goal for CatLieOnBlock {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        JUMP | MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.extra.tame
+            && !m.extra.sitting
+            && !m.extra.flag
+            && self.0.can_use(m, cx.w, reduced(40), can_lie_on)
+    }
+    fn can_continue(&mut self, _: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_continue(cx.w, can_lie_on)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx.w);
+        m.extra.flag2 = false;
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.extra.flag = false;
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx.w);
+        m.extra.flag2 = false;
+        m.extra.flag = self.0.reached;
+    }
+}
+/// `CatSitOnBlockGoal`: chests, lit furnaces and beds.
+#[derive(Clone, Debug)]
+struct CatSitOnBlock(super::goals::MoveToBlock);
+fn can_sit_on(w: &MobWorld, p: [i32; 3]) -> bool {
+    if !empty_above(w, p) || !has_tag(w, p, "minecraft:cats_can_sit_on") {
+        return false;
+    }
+    let f = w.facts.get(w.world.block(p[0], p[1], p[2]));
+    match f.name.as_ref() {
+        // The lit state is the only light source a furnace has.
+        "minecraft:furnace" => f.emission > 0,
+        _ => true,
+    }
+}
+impl Goal for CatSitOnBlock {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        JUMP | MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let next = reduced(200 + m.random.next_int_bound(200).unwrap_or(0));
+        m.extra.tame && !m.extra.sitting && self.0.can_use(m, cx.w, next, can_sit_on)
+    }
+    fn can_continue(&mut self, _: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_continue(cx.w, can_sit_on)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx.w);
+        m.extra.flag2 = false;
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.extra.flag2 = false;
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx.w);
+        m.extra.flag2 = self.0.reached;
+    }
+}
+/// `OcelotAttackGoal`: stalk slowly, dash in, swipe every second.
+#[derive(Clone, Debug)]
+struct OcelotAttack {
+    attack_time: i32,
+}
+impl Goal for OcelotAttack {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        m.ai.target.is_some()
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(t) = m.ai.target.and_then(|t| cx.w.target_info(t)) else {
+            return false;
+        };
+        t.alive
+            && m.distance_sqr(t.position) <= 225.0
+            && (!m.ai.nav.is_done() || m.ai.target.is_some())
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.nav_stop();
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(who) = m.ai.target else {
+            return;
+        };
+        let Some(t) = cx.w.target_info(who) else {
+            return;
+        };
+        m.look_at_speed([t.position.x, t.eye_y, t.position.z], 30.0, 30.0);
+        let reach = f64::from(m.width() * 2.0);
+        let melee = reach * reach;
+        let d2 = m.distance_sqr(t.position);
+        let speed = if d2 > melee && d2 < 16.0 {
+            1.33
+        } else if d2 < 225.0 {
+            0.6
+        } else {
+            0.8
+        };
+        m.nav_move_to_entity(cx.w, [t.position.x, t.position.y, t.position.z], 0, speed);
+        self.attack_time = (self.attack_time - 1).max(0);
+        if d2 <= melee && self.attack_time <= 0 {
+            self.attack_time = 20;
+            super::ai::do_hurt_target(m, who, cx);
+        }
+    }
+}
+/// `Cat.tick`: lying and relaxing amounts and the purr.
+pub fn cat_ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    let lying = m.extra.flag;
+    let v = &mut m.anim.v;
+    if lying {
+        v[LIE] = (v[LIE] + 0.15).min(1.0);
+        v[LIE_TAIL] = (v[LIE_TAIL] + 0.08).min(1.0);
+    } else {
+        v[LIE] = (v[LIE] - 0.22).max(0.0);
+        v[LIE_TAIL] = (v[LIE_TAIL] - 0.13).max(0.0);
+    }
+    v[RELAX] = (v[RELAX] - 0.13).max(0.0);
+    if lying && m.age.is_multiple_of(5) {
+        let volume = 0.6 + 0.4 * (m.random.next_float() - m.random.next_float());
+        events.push(MobEvent::Sound("entity.cat.purr", m.center(), volume, 1.0));
+    }
+}
+/// `Cat.finalizeSpawn` variant: any but all-black, which a full moon allows.
+pub fn cat_variant(m: &mut Mob, w_moon_full: bool) -> u8 {
+    let n = if w_moon_full { 11 } else { 10 };
+    m.random.next_int_bound(n).unwrap_or(0) as u8
+}
+pub fn cat_texture(m: &Mob) -> String {
+    let v = CAT_VARIANTS[(m.extra.variant as usize).min(10)];
+    let baby = if m.is_baby() { "_baby" } else { "" };
+    format!("entity/cat/cat_{v}{baby}")
+}
+/// `CatRenderer.setupRotations`: lying cats roll onto their side.
+pub fn cat_rotations(m: &Mob, partial: f32) -> glam::Mat4 {
+    let lie = m.anim.lerp(LIE, partial);
+    if lie <= 0.0 {
+        return glam::Mat4::IDENTITY;
+    }
+    glam::Mat4::from_translation(glam::Vec3::new(0.4 * lie, 0.15 * lie, 0.1 * lie))
+        * glam::Mat4::from_rotation_z((90.0 * lie).to_radians())
+}
+fn rot_lerp(t: f32, from: f32, to: f32) -> f32 {
+    let mut d = (to - from) % (PI * 2.0);
+    if d < -PI {
+        d += PI * 2.0;
+    }
+    if d >= PI {
+        d -= PI * 2.0;
+    }
+    from + t * d
+}
+/// `AdultFelineModel` / `BabyFelineModel.setupAnim` for cats.
+pub fn cat_anim(m: &Mob, s: &State, p: &mut Poses) {
+    let baby = m.is_baby();
+    let age = if baby { 0.5 } else { 1.0 };
+    let wanted = m.ai.mov.has_wanted();
+    let speed_mod = m.ai.mov.speed_modifier;
+    // Cat.customServerAiStep: crouch while stalking, sprint while dashing.
+    let crouching = wanted && (speed_mod - 0.6).abs() < 1e-6;
+    let sprinting = wanted && (speed_mod - 1.33).abs() < 1e-6;
+    let sitting = cat_sitting(m);
+    let add = |p: &mut Poses, part: &str, x: f32, y: f32, z: f32| {
+        let v = p.get(part);
+        v[0] += x;
+        v[1] += y;
+        v[2] += z;
+    };
+    if crouching {
+        add(p, "body", 0.0, age, 0.0);
+        add(p, "head", 0.0, 2.0 * age, 0.0);
+        add(p, "tail1", 0.0, age, 0.0);
+        add(p, "tail2", 0.0, -4.0 * age, 2.0 * age);
+        p.xrot("tail1", PI / 2.0);
+        p.xrot("tail2", PI / 2.0);
+    } else if sprinting {
+        let y1 = p.get("tail1")[1];
+        p.get("tail2")[1] = y1;
+        add(p, "tail2", 0.0, 0.0, 2.0 * age);
+        p.xrot("tail1", PI / 2.0);
+        p.xrot("tail2", PI / 2.0);
+    }
+    p.xrot("head", s.x_rot.to_radians());
+    p.yrot("head", s.y_rot.to_radians());
+    let (pos, sp) = (s.pos, s.speed);
+    if !sitting {
+        if !baby {
+            p.xrot("body", PI / 2.0);
+        }
+        if sprinting {
+            p.xrot("left_hind_leg", (pos * 0.6662).cos() * sp);
+            p.xrot("right_hind_leg", (pos * 0.6662 + 0.3).cos() * sp);
+            p.xrot("left_front_leg", (pos * 0.6662 + PI + 0.3).cos() * sp);
+            p.xrot("right_front_leg", (pos * 0.6662 + PI).cos() * sp);
+            p.xrot("tail2", 1.727_876_1 + PI / 10.0 * pos.cos() * sp);
+        } else {
+            p.xrot("left_hind_leg", (pos * 0.6662).cos() * sp);
+            p.xrot("right_hind_leg", (pos * 0.6662 + PI).cos() * sp);
+            p.xrot("left_front_leg", (pos * 0.6662 + PI).cos() * sp);
+            p.xrot("right_front_leg", (pos * 0.6662).cos() * sp);
+            let swing = if crouching { 0.471_238_94 } else { PI / 4.0 };
+            p.xrot("tail2", 1.727_876_1 + swing * pos.cos() * sp);
+        }
+    } else if baby {
+        let x = p.get("body")[3] - 0.436_332_32;
+        p.xrot("body", x);
+        add(p, "body", 0.0, 1.25, 0.0);
+        add(p, "head", 0.0, 0.0, 0.75);
+        let t = p.get("tail1")[3] + 0.545_415_4;
+        p.xrot("tail1", t);
+        add(p, "tail1", 0.0, 4.0, -0.9);
+        add(p, "left_hind_leg", 0.0, 0.0, -0.9);
+        add(p, "right_hind_leg", 0.0, 0.0, -0.9);
+    } else {
+        p.xrot("body", PI / 4.0);
+        add(p, "body", 0.0, -4.0 * age, 5.0 * age);
+        add(p, "head", 0.0, -3.3 * age, age);
+        add(p, "tail1", 0.0, 8.0 * age, -2.0 * age);
+        add(p, "tail2", 0.0, 2.0 * age, -0.8 * age);
+        p.xrot("tail1", 1.727_876_1);
+        p.xrot("tail2", 2.670_354);
+        p.xrot("left_front_leg", -PI / 20.0);
+        add(p, "left_front_leg", 0.0, 2.0 * age, -2.0 * age);
+        p.xrot("right_front_leg", -PI / 20.0);
+        add(p, "right_front_leg", 0.0, 2.0 * age, -2.0 * age);
+        p.xrot("left_hind_leg", -PI / 2.0);
+        add(p, "left_hind_leg", 0.0, 3.0 * age, -4.0 * age);
+        p.xrot("right_hind_leg", -PI / 2.0);
+        add(p, "right_hind_leg", 0.0, 3.0 * age, -4.0 * age);
+    }
+    let lie = m.anim.lerp(LIE, s.partial);
+    let lie_tail = m.anim.lerp(LIE_TAIL, s.partial);
+    if lie > 0.0 && !baby {
+        let (hz, hy) = (p.get("head")[5], p.get("head")[4]);
+        p.zrot("head", rot_lerp(lie, hz, -1.270_796_3));
+        p.yrot("head", rot_lerp(lie, hy, 1.270_796_3));
+        p.xrot("left_front_leg", -1.270_796_3);
+        p.xrot("right_front_leg", -0.470_796_35);
+        p.zrot("right_front_leg", -0.2);
+        add(p, "right_front_leg", age, 0.0, 0.0);
+        p.xrot("left_hind_leg", -0.4);
+        p.xrot("right_hind_leg", 0.5);
+        p.zrot("right_hind_leg", -0.5);
+        add(p, "right_hind_leg", 0.8 * age, 2.0 * age, 0.0);
+        let (t1, t2) = (p.get("tail1")[3], p.get("tail2")[3]);
+        p.xrot("tail1", rot_lerp(lie_tail, t1, 0.8));
+        p.xrot("tail2", rot_lerp(lie_tail, t2, -0.4));
+    }
+    let relax = m.anim.lerp(RELAX, s.partial);
+    if relax > 0.0 {
+        let hx = p.get("head")[3];
+        p.xrot("head", rot_lerp(relax, hx, -0.581_776_44));
+    }
+}

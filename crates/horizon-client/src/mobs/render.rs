@@ -107,6 +107,10 @@ pub fn body(m: &Mob) -> (String, String) {
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
         ),
+        S::Cat => (
+            baby_or(m, "cat#main", "cat_baby#main"),
+            super::tame::cat_texture(m),
+        ),
         S::Frog => (
             "frog#main".into(),
             format!("entity/frog/frog_{}", climate(m)),
@@ -265,6 +269,21 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 ("wolf_baby#main", "entity/wolf/wolf_collar_baby")
             } else {
                 ("wolf#main", "entity/wolf/wolf_collar")
+            };
+            push(
+                &mut v,
+                model,
+                texture,
+                abgr(DYE[m.extra.color as usize & 15]),
+                false,
+            );
+        }
+        // CatCollarLayer.
+        S::Cat if m.extra.tame => {
+            let (model, texture) = if m.is_baby() {
+                ("cat_baby#collar", "entity/cat/cat_collar_baby")
+            } else {
+                ("cat#collar", "entity/cat/cat_collar")
             };
             push(
                 &mut v,
@@ -476,9 +495,11 @@ fn flip_degrees(m: &Mob) -> f32 {
         _ => 90.0,
     }
 }
-fn species_rotations(_m: &Mob, _alpha: f32) -> glam::Mat4 {
-    let _ = PI;
-    glam::Mat4::IDENTITY
+fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
+    match m.species() {
+        Species::Cat => super::tame::cat_rotations(m, alpha),
+        _ => glam::Mat4::IDENTITY,
+    }
 }
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
     match m.species() {

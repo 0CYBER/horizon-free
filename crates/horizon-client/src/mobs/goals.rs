@@ -1412,7 +1412,7 @@ impl Goal for Breed {
         }
         let species = m.species();
         // Wolf.canMate: both tame and standing.
-        let tamable = species == Species::Wolf;
+        let tamable = matches!(species, Species::Wolf | Species::Cat);
         if tamable && (!m.extra.tame || m.extra.sitting) {
             return false;
         }
@@ -1763,5 +1763,116 @@ impl Goal for TryFindWater {
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.nav_move_to(cx.w, self.wanted, 1.0);
+    }
+}
+/// `MoveToBlockGoal`'s shared state: search, walk to and stay at a block.
+#[derive(Clone, Debug, Default)]
+pub struct MoveToBlock {
+    pub speed: f64,
+    pub range: i32,
+    pub vertical_range: i32,
+    pub vertical_start: i32,
+    pub next_start: i32,
+    pub try_ticks: i32,
+    pub max_stay: i32,
+    pub reached: bool,
+    pub block: [i32; 3],
+}
+impl MoveToBlock {
+    pub fn new(speed: f64, range: i32, vertical_range: i32) -> Self {
+        Self {
+            speed,
+            range,
+            vertical_range,
+            ..Default::default()
+        }
+    }
+    /// `canUse` with a custom `nextStartTick` delay.
+    pub fn can_use(
+        &mut self,
+        m: &mut Mob,
+        w: &MobWorld,
+        next: i32,
+        valid: impl Fn(&MobWorld, [i32; 3]) -> bool,
+    ) -> bool {
+        if self.next_start > 0 {
+            self.next_start -= 1;
+            return false;
+        }
+        self.next_start = next;
+        self.find_nearest(m, w, valid)
+    }
+    /// `MoveToBlockGoal.findNearestBlock`: rings outward, alternating heights.
+    fn find_nearest(
+        &mut self,
+        m: &Mob,
+        w: &MobWorld,
+        valid: impl Fn(&MobWorld, [i32; 3]) -> bool,
+    ) -> bool {
+        let base = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        ];
+        let next = |v: i32| if v > 0 { -v } else { 1 - v };
+        let mut y = self.vertical_start;
+        while y <= self.vertical_range {
+            for r in 0..self.range {
+                let mut x = 0;
+                while x <= r {
+                    let mut z = if x < r && x > -r { r } else { 0 };
+                    while z <= r {
+                        let p = [base[0] + x, base[1] + y - 1, base[2] + z];
+                        if valid(w, p) {
+                            self.block = p;
+                            return true;
+                        }
+                        z = next(z);
+                    }
+                    x = next(x);
+                }
+            }
+            y = next(y);
+        }
+        false
+    }
+    pub fn can_continue(&self, w: &MobWorld, valid: impl Fn(&MobWorld, [i32; 3]) -> bool) -> bool {
+        self.try_ticks >= -self.max_stay && self.try_ticks <= 1200 && valid(w, self.block)
+    }
+    pub fn start(&mut self, m: &mut Mob, w: &MobWorld) {
+        let b = self.block;
+        m.nav_move_to(
+            w,
+            [
+                f64::from(b[0]) + 0.5,
+                f64::from(b[1] + 1),
+                f64::from(b[2]) + 0.5,
+            ],
+            self.speed,
+        );
+        self.try_ticks = 0;
+        let r = m.random.next_int_bound(1200).unwrap_or(0) + 1200;
+        self.max_stay = m.random.next_int_bound(r).unwrap_or(0) + 1200;
+    }
+    /// `MoveToBlockGoal.tick` (accepted distance 1 from the block above).
+    pub fn tick(&mut self, m: &mut Mob, w: &MobWorld) {
+        let t = [
+            f64::from(self.block[0]) + 0.5,
+            f64::from(self.block[1] + 1) + 0.5,
+            f64::from(self.block[2]) + 0.5,
+        ];
+        let d2 = (m.position.x - t[0]).powi(2)
+            + (m.position.y - t[1]).powi(2)
+            + (m.position.z - t[2]).powi(2);
+        if d2 >= 1.0 {
+            self.reached = false;
+            self.try_ticks += 1;
+            if self.try_ticks % 40 == 0 {
+                m.nav_move_to(w, [t[0], t[1] - 0.5, t[2]], self.speed);
+            }
+        } else {
+            self.reached = true;
+            self.try_ticks -= 1;
+        }
     }
 }
