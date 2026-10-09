@@ -125,7 +125,7 @@ impl Game<'_> {
             true,
             horizon_world::level::flags::UPDATE_CLIENTS,
         );
-        let remainders = self.res.recipes.remainders(&self.res.items, &grid, &result);
+        let remainders = self.res.recipes.remainders(&recipe, &grid, 3);
         self.crafter_eject(key, facing, result, &recipe);
         for rest in remainders.into_iter().flatten() {
             self.crafter_eject(key, facing, rest, &recipe);

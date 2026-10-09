@@ -3185,9 +3185,17 @@ impl Game<'_> {
         }
     }
     fn craft_result(&self) -> Option<ItemStack> {
+        self.craft_recipe().map(|(_, result)| result)
+    }
+    /// The recipe id and result of the crafting grid.
+    fn craft_recipe(&self) -> Option<(String, ItemStack)> {
         let n = self.craft_size;
         let grid: Vec<Option<ItemStack>> = (0..n * n).map(|i| self.craft_grid[i].clone()).collect();
-        self.res.recipes.craft(&grid, n)
+        let scale = |id: i32| self.maps.data.get(&id).map(|m| m.scale);
+        self.res
+            .recipes
+            .find_with(&grid, n, &scale)
+            .map(|(name, result)| (name.to_owned(), result))
     }
     fn draw_inventory(&mut self, batch: &mut HudBatch) {
         if self.draw_station(batch) {
@@ -3484,13 +3492,13 @@ impl Game<'_> {
         if slot == 200 {
             // ResultSlot: take the crafted stack and consume one of each ingredient.
             let mut crafted = 0;
-            while let Some(result) = self.craft_result() {
+            while let Some((recipe, result)) = self.craft_recipe() {
                 let made = (result.item.clone(), result.count);
                 let cells = self.craft_size * self.craft_size;
                 let remainders = self.res.recipes.remainders(
-                    &self.res.items,
+                    &recipe,
                     &self.craft_grid[..cells],
-                    &result,
+                    self.craft_size,
                 );
                 if shift {
                     if self.give(result).is_some() {

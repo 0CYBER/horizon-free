@@ -287,7 +287,7 @@ impl Book {
                 category: crafting_category(&category),
                 group: group(&grp),
                 display,
-                result: result.clone(),
+                result: result.create(),
             });
         }
         for c in &recipes.cooking {
