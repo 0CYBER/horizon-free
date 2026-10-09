@@ -1116,6 +1116,11 @@ impl Game<'_> {
                 .is_some_and(|s| s.kind == Kind::Anvil && s.inputs[0].is_some())
     }
     pub(super) fn station_text(&mut self, text: Option<&str>, backspace: bool) {
+        // The recipe book's search box takes scripted typing too.
+        if self.recipe_search_focused() {
+            self.recipe_text(text, backspace);
+            return;
+        }
         let Some(s) = self.station.as_mut() else {
             return;
         };

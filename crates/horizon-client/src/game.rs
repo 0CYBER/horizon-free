@@ -44,6 +44,7 @@ mod perspective;
 mod piglins;
 mod postprocess;
 mod potions;
+mod recipe_book;
 mod remote;
 mod render_control;
 mod render_tick;
@@ -611,6 +612,8 @@ struct Game<'a> {
     pending_shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
     /// Layers of broken banners waiting for their dropped item.
     pending_banner: HashMap<[i32; 3], horizon_client::containers::Banner>,
+    /// The recipe book of the open screen (game/recipe_book.rs).
+    recipe_ui: recipe_book::RecipeUi,
     /// The player's fishing hook.
     hook: Option<fishing::Hook>,
     tridents: Vec<trident::ThrownTrident>,
@@ -3028,7 +3031,7 @@ impl Game<'_> {
     }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
         (
-            (batch.width - 176.0) / 2.0,
+            (batch.width - 176.0) / 2.0 + self.recipe_book_shift(batch.width),
             (batch.height - self.screen_height()) / 2.0,
         )
     }
@@ -3344,6 +3347,7 @@ impl Game<'_> {
                 self.draw_item(batch, &stack, ox + sx, oy + sy);
             }
         }
+        self.draw_recipe_book(batch);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
             batch.fill(
@@ -3362,6 +3366,7 @@ impl Game<'_> {
     }
     pub(super) fn close_container(&mut self) {
         self.close_station();
+        self.recipe_ui.reset_screen();
         if self.remote.is_some() {
             return self.remote_close_container();
         }
@@ -3411,6 +3416,9 @@ impl Game<'_> {
         self.close_cart_container();
     }
     fn click_inventory(&mut self, right: bool) {
+        if self.recipe_book_click(right) {
+            return;
+        }
         if self.station_click(right) {
             return;
         }
@@ -6609,6 +6617,7 @@ impl Game<'_> {
             self.ender_items = items.clone();
         }
         level.ender_items = self.ender_items.clone();
+        level.recipe_book.recipes = self.adv.recipes.iter().cloned().collect();
         level.active_effects = self
             .potions
             .effects
@@ -6843,6 +6852,7 @@ impl Game<'_> {
                 Screen::Advancements => self.close_advancements(),
                 Screen::Chat => self.close_chat(),
             },
+            KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
             // key.advancements.
             KeyCode::KeyL if self.screen == Screen::Playing => self.open_advancements(false),
@@ -7276,6 +7286,14 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     self.creative_screen.scroll = 0.0;
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.recipe_search_focused()
+                        && event.state == ElementState::Pressed
+                        && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
+                {
+                    // The recipe book's search box takes every key but Escape.
+                    self.recipe_key(&event);
                 }
                 WindowEvent::KeyboardInput { event, .. }
                     if self.station_typing()
@@ -7718,6 +7736,7 @@ pub fn run() -> Result<()> {
         ender_open: None,
         pending_shulker: HashMap::new(),
         pending_banner: HashMap::new(),
+        recipe_ui: Default::default(),
         hook: None,
         tridents: Vec::new(),
         rockets: Vec::new(),

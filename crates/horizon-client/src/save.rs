@@ -1358,6 +1358,8 @@ pub struct Level {
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
     pub ender_items: Vec<Option<crate::items::ItemStack>>,
+    /// The `recipeBook` compound: open/filter settings and unlocked recipes.
+    pub recipe_book: crate::recipe_book::Settings,
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
@@ -1570,6 +1572,7 @@ impl Level {
         }
         self.inventory = inventory;
         self.ender_items = decode_items(p.get("EnderItems"), 27);
+        self.recipe_book = crate::recipe_book::Settings::read(p.get("recipeBook"));
         self.inventory_components = inventory_components;
         self.xp_seed = n("XpSeed").unwrap_or(0) as i32;
         self.active_effects = match p.get("active_effects") {
@@ -1595,7 +1598,14 @@ impl Level {
         let mut p = compound_or_empty(self.player_extra.clone());
         // Keys rewritten from scratch.
         if let Tag::Compound(map) = &mut p {
-            for key in ["Inventory", "EnderItems", "equipment", "Pos", "respawn"] {
+            for key in [
+                "Inventory",
+                "EnderItems",
+                "equipment",
+                "Pos",
+                "respawn",
+                "recipeBook",
+            ] {
                 map.remove(&JavaString::from(key));
             }
         }
@@ -1690,6 +1700,7 @@ impl Level {
             ("playerGameType", Tag::Int(self.mode())),
             ("Inventory", Tag::List(inventory)),
             ("EnderItems", encode_items(&self.ender_items)),
+            ("recipeBook", self.recipe_book.write()),
             ("abilities", abilities),
             (
                 "Dimension",

@@ -146,6 +146,11 @@ impl Special {
 }
 #[derive(Clone, Debug)]
 pub struct Cooking {
+    /// The recipe's file name (its id without namespace).
+    pub id: String,
+    /// `category` (`food`, `blocks`, `misc`) and `group` of the recipe book.
+    pub category: String,
+    pub group: String,
     pub kind: String,
     pub ingredient: Ingredient,
     pub result: ItemStack,
@@ -155,6 +160,8 @@ pub struct Cooking {
 pub struct Recipes {
     pub crafting: Vec<(String, Recipe)>,
     pub cooking: Vec<Cooking>,
+    /// `category` and `group` of each crafting recipe, by file name.
+    pub meta: std::collections::HashMap<String, (String, String)>,
 }
 fn result(v: &Value) -> Option<ItemStack> {
     Some(ItemStack {
@@ -168,6 +175,7 @@ impl Recipes {
     pub fn load(root: &Path, items: &Items) -> Result<Self> {
         let mut crafting = Vec::new();
         let mut cooking = Vec::new();
+        let mut meta = std::collections::HashMap::new();
         let mut files: Vec<_> = fs::read_dir(root.join("data/minecraft/recipe"))?
             .flatten()
             .map(|e| e.path())
@@ -181,6 +189,8 @@ impl Recipes {
                 .unwrap_or("")
                 .to_owned();
             let v: Value = serde_json::from_slice(&fs::read(&path)?)?;
+            let text = |k: &str| v[k].as_str().unwrap_or("").to_owned();
+            meta.insert(name.clone(), (text("category"), text("group")));
             match v["type"].as_str().unwrap_or("") {
                 "minecraft:crafting_shaped" => {
                     let pattern: Vec<Vec<char>> = v["pattern"]
@@ -274,6 +284,9 @@ impl Recipes {
                         result(&v["result"]),
                     ) {
                         cooking.push(Cooking {
+                            id: name,
+                            category: text("category"),
+                            group: text("group"),
                             kind: kind.to_owned(),
                             ingredient,
                             result,
@@ -285,7 +298,11 @@ impl Recipes {
                 _ => {}
             }
         }
-        Ok(Self { crafting, cooking })
+        Ok(Self {
+            crafting,
+            cooking,
+            meta,
+        })
     }
     /// Match a `size`x`size` grid (row-major) against the crafting recipes.
     pub fn craft(&self, grid: &[Option<ItemStack>], size: usize) -> Option<ItemStack> {
