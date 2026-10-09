@@ -8,46 +8,48 @@ Horizon is a Rust rewrite of Minecraft Java **26.3** targeting one-to-one vanill
 - placing, crafting, chests and furnaces;
 - dropped items and particles;
 - sounds;
-- passive and hostile mobs with combat;
+- passive and hostile mobs with combat, including guardians, shulkers, illagers, ravagers, the wither and the ender dragon fight;
+- villagers that take jobs, trade, restock, meet at the bell and sleep in beds;
+- boats, minecarts, item frames, paintings and armor stands;
+- shields, maps, books, fireworks, beacons, advancements and statistics;
 - Anvil saves.
 
-Parity is **not** complete. Still missing: the ender dragon fight, boats, minecarts, item frames, paintings and armor stands, the warden, shields, maps, books, fireworks, beacons, the loom and cartography table, `/execute` and most other commands beyond the basic set, field-of-view effects (sprint, bow, spyglass) and the sculk family. Multiplayer joins vanilla servers but Horizon cannot host one. See [Rust rewrite status](docs/rust-parity.md).
+Parity is **not** complete. Still missing: the warden and the sculk family, the breeze, sniffer, creaking, happy ghast, llamas and a few other mobs, raids and pillager patrols, villager breeding and gossip, the loom, crafter and recipe book, scoreboards, subtitles, and spawned mob gear enchantments. Multiplayer joins vanilla servers but Horizon cannot host one. See [Rust rewrite status](docs/rust-parity.md).
 
-### Java parity: 71%
+### Java parity: 73%
 
 Each subsystem scores 0 (absent), 0.25 (started, not playable), 0.5 (playable,
 major vanilla features missing), 0.75 (playable, mostly complete) or 1 (complete
 and verified against vanilla by differential tests). The percentage is the
 average; `tests/test_parity.py` keeps it in sync with this table. Last audited
-2026-10-09 against the code, not the docs: 214 of 215 `tools/test_*_parity.py`
-differential harnesses pass (the tree feature harness diverges), and the client
-joins a vanilla 26.3 server.
+2026-10-09 against the code, not the docs: all 217 `tools/test_*_parity.py`
+differential harnesses pass, and the client joins a vanilla 26.3 server.
 
 | Subsystem | Score | Main gaps |
 | --- | ---: | --- |
-| Window, input and game loop | 0.75 | No field-of-view effects (sprint, speed, bow, underwater, death) |
+| Window, input and game loop | 0.75 | Frame timing and input not compared with vanilla |
 | Assets and resources | 0.75 | Heuristic item icons for some items |
 | Network protocol and multiplayer | 0.5 | Joins vanilla servers (chunks, entities, chat); cannot host or open to LAN |
 | Chunk storage and palettes | 0.75 | Client uses plain arrays; palettes only on save |
 | Section meshing | 0.75 | Whole-mesh output not compared with vanilla |
-| Rendering | 0.75 | No item frames, paintings, armor stands, vehicles or beacon beams |
+| Rendering | 0.75 | Held blocks not drawn in mob hands; no elder guardian curse overlay |
 | Lighting | 0.75 | Slabs/stairs light wrong; light not saved or tested against vanilla |
 | World generation | 0.75 | Tree feature output diverges from vanilla; whole chunks not compared end to end |
 | Region files and saves | 0.75 | Light not saved; some block entities kept as raw NBT |
-| Entities and physics | 0.5 | No ender dragon, warden, boats, minecarts or decorative entities |
-| Interaction and inventory | 0.75 | No shields, loom, cartography table, beacon, crafter, maps or books |
-| Menus, HUD and chat | 0.75 | About 30 commands; no `/execute`, `/tellraw`, `/title`, scoreboards or recipe book |
+| Entities and physics | 0.75 | No warden, breeze, sniffer, creaking, happy ghast, llamas or copper golem; no raids, patrols or villager breeding |
+| Interaction and inventory | 0.75 | No loom, crafter, recipe book or horse inventory screen |
+| Menus, HUD and chat | 0.75 | About 30 commands; no scoreboards, subtitles or recipe book |
 | Audio | 0.75 | Music and ambience not verified by ear; no subtitles |
-| Block behaviours and ticking | 0.75 | No sculk, lightning or creaking hearts; dispensers lack most item behaviours |
+| Block behaviours and ticking | 0.75 | No sculk or creaking hearts; dispensers lack most item behaviours |
 
 ### Next steps
 
-1. Fix the tree feature divergence (`python3 tools/test_tree_feature_parity.py`) so all differential harnesses pass.
-2. Field-of-view modifiers and the spyglass (`AbstractClientPlayer.getFieldOfViewModifier`, `Camera.tickFov`).
-3. Shields and blocking: wire the existing `horizon-world` blocking kernels into player and mob damage.
-4. `/execute` with a real command source (position, rotation, executor, dimension), then `/tellraw` and `/title`.
-5. Decorative entities (item frames, paintings, armor stands), then boats and minecarts.
-6. The ender dragon fight and the warden.
+1. `/summon` with NBT, and enchantments on spawned mob gear (`mob_spawn_equipment`).
+2. Pillager patrols and raids (bad omen, raid waves, the raid bar), then villager breeding, gossip and iron golem summoning.
+3. The warden and the sculk family (sensors, shriekers, catalysts), then the creaking and its heart.
+4. Remaining mobs: breeze, sniffer, llamas and trader llamas, happy ghast, copper golem, illusioner.
+5. The loom, crafter, recipe book and horse inventory screen.
+6. Scoreboards and subtitles.
 7. Hosting: an integrated server so Horizon worlds can be opened to LAN.
 
 ```sh
