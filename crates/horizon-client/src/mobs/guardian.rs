@@ -331,7 +331,8 @@ pub fn elder_server_ai_step(m: &mut Mob, cx: &mut Cx) {
 /// The beam's clock for rendering: (attack time with the partial tick,
 /// attack scale), while a target is locked.
 pub fn beam(m: &Mob, partial: f32) -> Option<(f32, f32)> {
-    if !m.extra.flag || m.ai.target.is_none() {
+    let guardian = matches!(m.species(), Species::Guardian | Species::ElderGuardian);
+    if !guardian || !m.extra.flag || m.ai.target.is_none() {
         return None;
     }
     let time = m.extra.counter2 as f32 + partial;

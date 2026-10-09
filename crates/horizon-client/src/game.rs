@@ -18,6 +18,7 @@ mod dragon;
 mod enchant_effects;
 mod end;
 mod explosion;
+mod fangs;
 mod fireworks;
 mod fishing;
 mod fov;
@@ -628,6 +629,7 @@ struct Game<'a> {
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
     camera_type: perspective::CameraType,
+    fangs: fangs::FangState,
     /// Structure `spawn_overrides`: structure -> category -> (piece only, spawns).
     spawn_overrides:
         HashMap<String, HashMap<String, (bool, Vec<horizon_client::biome::SpawnEntry>)>>,
@@ -3744,6 +3746,7 @@ impl Game<'_> {
         // Mobs and their projectiles.
         self.mob_geometry(camera, alpha, &mut out);
         self.player_model_geometry(camera, alpha, &mut out);
+        self.fangs_geometry(camera, alpha, &mut out);
         self.name_tag_geometry(camera, alpha, &mut out);
         // Arrows: two crossed quads along the flight direction.
         if let Some(r) = self
@@ -7676,6 +7679,7 @@ pub fn run() -> Result<()> {
         stats_ui: Default::default(),
         adv_ui: Default::default(),
         camera_type: Default::default(),
+        fangs: Default::default(),
         spawn_overrides: HashMap::new(),
         player_model: None,
     };

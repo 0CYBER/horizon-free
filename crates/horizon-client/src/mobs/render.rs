@@ -118,6 +118,7 @@ pub fn body(m: &Mob) -> (String, String) {
             super::tame::texture(m),
         ),
         S::Shulker => ("shulker#main".into(), super::shulker::texture(m)),
+        S::Vex => ("vex#main".into(), super::vex::texture(m).into()),
         S::Ghast => (
             "ghast#main".into(),
             if m.extra.flag {

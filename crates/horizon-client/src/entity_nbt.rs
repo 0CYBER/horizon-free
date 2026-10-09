@@ -246,6 +246,14 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("equipment".into(), Tag::Compound(equipment));
         }
+        "minecraft:vex" => {
+            if let Some(h) = m.extra.home {
+                map.insert("bound_pos".into(), Tag::IntArray(h.to_vec()));
+            }
+            if m.extra.egg_time > 0 {
+                map.insert("life_ticks".into(), Tag::Int(m.extra.egg_time));
+            }
+        }
         "minecraft:shulker" => {
             map.insert("AttachFace".into(), Tag::Byte(m.extra.variant3 as i8));
             map.insert("Peek".into(), Tag::Byte(m.extra.counter as i8));
@@ -399,6 +407,14 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 .position(|(n, _)| *n == v)
                 .unwrap_or(0) as u8;
         }
+    }
+    if m.species() == crate::mobs::Species::Vex {
+        if let Some(Tag::IntArray(v)) = tag.get("bound_pos")
+            && v.len() == 3
+        {
+            m.extra.home = Some([v[0], v[1], v[2]]);
+        }
+        m.extra.egg_time = number(tag.get("life_ticks")).map_or(-1, |v| v as i32);
     }
     if m.species() == crate::mobs::Species::Shulker {
         m.extra.variant3 = number(tag.get("AttachFace")).unwrap_or(0).clamp(0, 5) as u8;

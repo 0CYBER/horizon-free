@@ -108,10 +108,11 @@ fn seen(m: &Mob) -> Seen {
         target: m.ai.target,
         health: m.health,
         variant: m.extra.variant,
+        color: m.extra.color,
     }
 }
 impl Game<'_> {
-    fn player_view(&self) -> Option<PlayerView> {
+    pub(super) fn player_view(&self) -> Option<PlayerView> {
         let p = self.player.as_ref()?;
         let w = f64::from(p.dimensions.width) / 2.0;
         let bounds = Aabb::new(
@@ -576,6 +577,7 @@ impl Game<'_> {
         }
         self.handle_mob_events(events)?;
         self.tick_projectiles()?;
+        self.tick_fangs();
         self.tick_player_effects();
         self.piglin_pickups();
         Ok(())
@@ -693,6 +695,18 @@ impl Game<'_> {
                     self.mob_hits_player(amount, from, kind)
                 }
                 MobEvent::ElderCurse { at } => self.elder_curse(at),
+                MobEvent::Wololo { mob } => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        // DyeColor.RED.
+                        m.extra.color = 14;
+                    }
+                }
+                MobEvent::Fangs {
+                    at,
+                    yaw,
+                    delay,
+                    owner,
+                } => self.add_fangs(at, yaw, delay, owner),
                 MobEvent::Shoot(..) => {}
                 MobEvent::Explode(at, radius) => {
                     // The exploding mob causes the damage (Creeper.explodeCreeper).
@@ -908,6 +922,15 @@ impl Game<'_> {
         if let Some(v) = setup.variant {
             m.extra.variant = v;
         }
+        if let Some(owner) = setup.owner_mob {
+            m.extra.counter2 = owner as i32;
+        }
+        if let Some(home) = setup.home {
+            m.extra.home = Some(home);
+        }
+        if let Some(life) = setup.life {
+            m.extra.egg_time = life;
+        }
     }
     /// Animal.spawnChildFromBreeding
     fn breed(&mut self, parent: u32, partner: u32) {
@@ -1061,6 +1084,10 @@ impl Game<'_> {
         self.audio
             .play("minecraft:entity.elder_guardian.curse", Some(at), 1.0, 1.0);
         self.creatures.elder_apparition = 30;
+    }
+    /// Damage of a given type to the player from a point.
+    pub(super) fn mob_hits_player_kind(&mut self, amount: f32, from: [f64; 3], kind: &str) {
+        self.mob_hits_player(amount, from, kind);
     }
     fn mob_hits_player(&mut self, amount: f32, from: [f64; 3], damage_type: &str) {
         if self.creative {

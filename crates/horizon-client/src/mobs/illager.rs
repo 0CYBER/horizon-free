@@ -5,7 +5,7 @@ use super::{
     anim::{Poses, State},
     goals::{
         Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack, NearestTarget, Prey,
-        Stroll, goal_clone,
+        Stroll, goal_clone, reduced,
     },
 };
 use crate::projectiles::{Projectile, ProjectileKind};
@@ -14,11 +14,20 @@ use std::f32::consts::PI;
 
 /// The species raiders do not fight (`Raider`'s allies).
 fn raider(s: Species) -> bool {
-    matches!(s, Species::Pillager | Species::Vindicator | Species::Witch)
+    matches!(
+        s,
+        Species::Pillager | Species::Vindicator | Species::Witch | Species::Evoker
+    )
 }
 fn targets(m: &mut Mob, villagers_seen: bool) {
     let mut hurt = HurtByTarget::new().alert();
-    hurt.ignore = vec![Species::Pillager, Species::Vindicator, Species::Witch];
+    hurt.ignore = vec![
+        Species::Pillager,
+        Species::Vindicator,
+        Species::Witch,
+        Species::Evoker,
+        Species::Vex,
+    ];
     m.ai.targets.add(1, hurt);
     m.ai.targets.add(2, NearestTarget::player(true));
     m.ai.targets.add(
@@ -53,6 +62,289 @@ pub fn register_vindicator(m: &mut Mob) {
             .interval(0)
             .when(|m, _| m.custom_name.as_deref() == Some("Johnny")),
     );
+}
+// Evoker state: `counter` spellCastingTickCount, `variant2` the spell
+// being cast (0 none, 1 vexes, 2 fangs, 3 wololo), `counter2` the wololo
+// sheep's id.
+pub fn register_evoker(m: &mut Mob) {
+    let g = &mut m.ai.goals;
+    g.add(0, Float);
+    g.add(1, CastingSpell);
+    g.add(
+        2,
+        super::goals::AvoidEntity::new(super::goals::Avoid::Player, 8.0, 0.6, 1.0),
+    );
+    g.add(4, UseSpell::new(Spell::Vexes));
+    g.add(5, UseSpell::new(Spell::Fangs));
+    g.add(6, UseSpell::new(Spell::Wololo));
+    g.add(8, Stroll::new(0.6));
+    g.add(9, LookAtPlayer::new(3.0).probability(1.0));
+    targets(m, false);
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Spell {
+    Vexes = 1,
+    Fangs = 2,
+    Wololo = 3,
+}
+/// `SpellcasterCastingSpellGoal`: stand still facing the target while a
+/// spell is cast.
+#[derive(Clone, Debug)]
+struct CastingSpell;
+impl Goal for CastingSpell {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        m.extra.counter > 0
+    }
+    fn start(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.ai.nav.stop();
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.extra.variant2 = 0;
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let look = match m.target_info(cx.w) {
+            Some(t) => Some([t.position.x, t.eye_y, t.position.z]),
+            None => {
+                let id = m.extra.counter2 as u32;
+                cx.w.others
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| [s.position.x, s.eye_y, s.position.z])
+            }
+        };
+        if let Some(at) = look {
+            let (y, x) = (m.kind.head_rot_speed, m.kind.max_head_x_rot);
+            m.look_at_speed(at, y, x);
+        }
+    }
+}
+/// `SpellcasterUseSpellGoal` with the evoker's three spells.
+#[derive(Clone, Debug)]
+struct UseSpell {
+    spell: Spell,
+    warmup: i32,
+    next: i64,
+}
+impl UseSpell {
+    fn new(spell: Spell) -> Self {
+        Self {
+            spell,
+            warmup: 0,
+            next: 0,
+        }
+    }
+    /// (warm-up, casting time, interval, prepare sound).
+    fn timing(&self) -> (i32, i32, i64, &'static str) {
+        match self.spell {
+            Spell::Vexes => (20, 100, 340, "entity.evoker.prepare_summon"),
+            Spell::Fangs => (20, 40, 100, "entity.evoker.prepare_attack"),
+            Spell::Wololo => (40, 60, 140, "entity.evoker.prepare_wololo"),
+        }
+    }
+}
+impl Goal for UseSpell {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let age = i64::from(m.age);
+        if self.spell == Spell::Wololo {
+            // EvokerWololoSpellGoal.canUse: a blue sheep within 16 (4 up or
+            // down), no target, griefing on.
+            if m.ai.target.is_some() || m.extra.counter > 0 || age < self.next || !cx.w.mob_griefing
+            {
+                return false;
+            }
+            let p = m.position;
+            let sheep: Vec<u32> =
+                cx.w.others
+                    .iter()
+                    .filter(|s| {
+                        s.species == Species::Sheep
+                            && s.alive
+                            && s.color == 11
+                            && (s.position.x - p.x).abs() <= 16.0
+                            && (s.position.y - p.y).abs() <= 4.0
+                            && (s.position.z - p.z).abs() <= 16.0
+                    })
+                    .map(|s| s.id)
+                    .collect();
+            if sheep.is_empty() {
+                return false;
+            }
+            let pick = m.random.next_int_bound(sheep.len() as i32).unwrap_or(0) as usize;
+            m.extra.counter2 = sheep[pick] as i32;
+            return true;
+        }
+        if !m.target_info(cx.w).is_some_and(|t| t.alive) || m.extra.counter > 0 || age < self.next {
+            return false;
+        }
+        if self.spell == Spell::Vexes {
+            // EvokerSummonSpellGoal: fewer vexes nearby than a roll of 1..8.
+            let p = m.position;
+            let vexes =
+                cx.w.others
+                    .iter()
+                    .filter(|s| {
+                        s.species == Species::Vex
+                            && s.alive
+                            && s.position.distance_squared(p) <= 16.0 * 16.0 * 3.0
+                    })
+                    .count() as i32;
+            return m.random.next_int_bound(8).unwrap_or(0) + 1 > vexes;
+        }
+        true
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if self.spell == Spell::Wololo {
+            return m.extra.counter2 != 0 && self.warmup > 0;
+        }
+        m.target_info(cx.w).is_some_and(|t| t.alive) && self.warmup > 0
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let (warmup, casting, interval, sound) = self.timing();
+        self.warmup = reduced(warmup);
+        m.extra.counter = casting;
+        self.next = i64::from(m.age) + interval;
+        cx.events.push(MobEvent::Sound(
+            sound,
+            [m.position.x, m.position.y, m.position.z],
+            1.0,
+            1.0,
+        ));
+        m.extra.variant2 = self.spell as u8;
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        if self.spell == Spell::Wololo {
+            m.extra.counter2 = 0;
+        }
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.warmup -= 1;
+        if self.warmup != 0 {
+            return;
+        }
+        match self.spell {
+            Spell::Vexes => summon_vexes(m, cx),
+            Spell::Fangs => cast_fangs(m, cx),
+            Spell::Wololo => {
+                let id = m.extra.counter2 as u32;
+                if id != 0 {
+                    cx.events.push(MobEvent::Wololo { mob: id });
+                }
+            }
+        }
+        cx.events.push(MobEvent::Sound(
+            "entity.evoker.cast_spell",
+            [m.position.x, m.position.y, m.position.z],
+            1.0,
+            1.0,
+        ));
+    }
+}
+/// `EvokerSummonSpellGoal.performSpellCasting`: three vexes nearby for 30
+/// to 120 seconds.
+fn summon_vexes(m: &mut Mob, cx: &mut Cx) {
+    let base = [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ];
+    for _ in 0..3 {
+        let r = &mut m.random;
+        let p = [
+            base[0] - 2 + r.next_int_bound(5).unwrap_or(2),
+            base[1] + 1,
+            base[2] - 2 + r.next_int_bound(5).unwrap_or(2),
+        ];
+        let life = 20 * (30 + r.next_int_bound(90).unwrap_or(0));
+        cx.events.push(MobEvent::SpawnKind {
+            kind: "minecraft:vex".into(),
+            at: [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])],
+            setup: super::SpawnSetup {
+                owner_mob: Some(m.id),
+                home: Some(p),
+                life: Some(life),
+                ..Default::default()
+            },
+        });
+    }
+}
+/// `EvokerAttackSpellGoal.performSpellCasting`: a ring of fangs when the
+/// target is close, else a line of sixteen toward it.
+fn cast_fangs(m: &mut Mob, cx: &mut Cx) {
+    let Some(t) = m.target_info(cx.w) else {
+        return;
+    };
+    let min_y = t.position.y.min(m.position.y);
+    let max_y = t.position.y.max(m.position.y) + 1.0;
+    let angle = (t.position.z - m.position.z).atan2(t.position.x - m.position.x) as f32;
+    let mut place = |x: f64, z: f64, a: f32, delay: i32| {
+        if let Some(y) = fang_floor(cx.w, x, z, min_y, max_y) {
+            cx.events.push(MobEvent::Fangs {
+                at: [x, y, z],
+                yaw: a.to_degrees(),
+                delay,
+                owner: m.id,
+            });
+        }
+    };
+    let (x, z) = (m.position.x, m.position.z);
+    if m.distance_sqr(t.position) < 9.0 {
+        for i in 0..5 {
+            let a = angle + i as f32 * PI * 0.4;
+            place(
+                x + f64::from(a.cos()) * 1.5,
+                z + f64::from(a.sin()) * 1.5,
+                a,
+                0,
+            );
+        }
+        for i in 0..8 {
+            let a = angle + i as f32 * PI * 2.0 / 8.0 + PI * 2.0 / 5.0;
+            place(
+                x + f64::from(a.cos()) * 2.5,
+                z + f64::from(a.sin()) * 2.5,
+                a,
+                3,
+            );
+        }
+    } else {
+        for i in 0..16 {
+            let reach = 1.25 * f64::from(i + 1);
+            place(
+                x + f64::from(angle.cos()) * reach,
+                z + f64::from(angle.sin()) * reach,
+                angle,
+                i,
+            );
+        }
+    }
+}
+/// `createSpellEntity`: the first sturdy floor going down from `max_y`,
+/// standing on the top of any block in the way.
+fn fang_floor(w: &super::MobWorld, x: f64, z: f64, min_y: f64, max_y: f64) -> Option<f64> {
+    let (bx, bz) = (x.floor() as i32, z.floor() as i32);
+    let mut y = max_y.floor() as i32;
+    while y >= min_y.floor() as i32 - 1 {
+        let below = w.facts.get(w.world.block(bx, y - 1, bz));
+        if below.full_collision {
+            let here = w.world.block(bx, y, bz);
+            let top = if w.facts.is_air(here) {
+                0.0
+            } else {
+                f64::from(w.data.state(here).top)
+            };
+            return Some(f64::from(y) + top);
+        }
+        y -= 1;
+    }
+    None
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Crossbow {
@@ -235,6 +527,7 @@ fn shoot_crossbow(m: &mut Mob, who: Who, cx: &mut Cx) {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ArmPose {
+    Spellcasting,
     Crossed,
     Neutral,
     Attacking,
@@ -255,6 +548,8 @@ fn arm_pose(m: &Mob) -> ArmPose {
                 ArmPose::Neutral
             }
         }
+        Species::Evoker if m.extra.variant2 != 0 => ArmPose::Spellcasting,
+        Species::Evoker => ArmPose::Crossed,
         _ => {
             if m.ai.aggressive {
                 ArmPose::Attacking
@@ -341,6 +636,19 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
                 (m.extra.using_item as f32 + s.partial).clamp(0.0, CHARGE as f32) / CHARGE as f32;
             p.yrot("left_arm", 0.4 + (0.85 - 0.4) * a);
             p.xrot("left_arm", -0.970_796_35 + (-PI / 2.0 + 0.970_796_35) * a);
+        }
+        ArmPose::Spellcasting => {
+            for (arm, x, z_rot) in [
+                ("right_arm", -5.0, PI * 0.75),
+                ("left_arm", 5.0, -PI * 0.75),
+            ] {
+                let v = p.get(arm);
+                v[2] = 0.0;
+                v[0] = x;
+                v[3] = (s.age * 0.6662).cos() * 0.25;
+                v[4] = 0.0;
+                v[5] = z_rot;
+            }
         }
         ArmPose::Crossed | ArmPose::Neutral => {}
     }

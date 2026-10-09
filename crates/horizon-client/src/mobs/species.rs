@@ -76,6 +76,8 @@ pub enum Species {
     Guardian,
     ElderGuardian,
     Shulker,
+    Evoker,
+    Vex,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -866,6 +868,30 @@ pub const ALL: &[Def] = &[
         Baby::None
     ),
     def!(
+        Evoker,
+        "evoker",
+        "evoker#main",
+        "entity/illager/evoker",
+        A::Illager,
+        [
+            "entity.evoker.ambient",
+            "entity.evoker.hurt",
+            "entity.evoker.death"
+        ],
+        None,
+        Baby::None
+    ),
+    def!(
+        Vex,
+        "vex",
+        "vex#main",
+        "entity/illager/vex",
+        A::Vex,
+        ["entity.vex.ambient", "entity.vex.hurt", "entity.vex.death"],
+        None,
+        Baby::None
+    ),
+    def!(
         Shulker,
         "shulker",
         "shulker#main",
@@ -1244,6 +1270,8 @@ impl Def {
                 | S::Guardian
                 | S::ElderGuardian
                 | S::Shulker
+                | S::Evoker
+                | S::Vex
         )
     }
     /// The item tag Animal.isFood tests.

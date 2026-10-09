@@ -32,6 +32,7 @@ pub mod spawning;
 pub mod species;
 pub mod tame;
 pub mod undead;
+pub mod vex;
 pub mod witch;
 mod world;
 
@@ -521,6 +522,17 @@ pub enum MobEvent {
     ElderCurse {
         at: [f64; 3],
     },
+    /// `EvokerWololoSpellGoal`: a blue sheep turns red.
+    Wololo {
+        mob: u32,
+    },
+    /// `EvokerFangs` rising at a point after `delay` ticks.
+    Fangs {
+        at: [f64; 3],
+        yaw: f32,
+        delay: i32,
+        owner: u32,
+    },
     Shoot([f64; 3], [f64; 3]),
     Explode([f64; 3], f32),
     /// Melee or ranged damage to another mob.
@@ -634,6 +646,10 @@ pub struct SpawnSetup {
     pub variant: Option<u8>,
     /// Zombified piglins and zoglins wake up nauseous (`ConversionParams`).
     pub nausea: bool,
+    /// Vexes: the summoning mob, the bound origin and the life in ticks.
+    pub owner_mob: Option<u32>,
+    pub home: Option<[i32; 3]>,
+    pub life: Option<i32>,
 }
 /// A snapshot of another entity mobs can see this tick.
 #[derive(Clone, Debug)]
@@ -651,6 +667,8 @@ pub struct Seen {
     pub target: Option<Who>,
     pub health: f32,
     pub variant: u8,
+    /// Dye colour (sheep).
+    pub color: u8,
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]

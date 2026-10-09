@@ -82,6 +82,7 @@ pub enum Family {
     Cube,
     Guardian,
     Shulker,
+    Vex,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -110,7 +111,8 @@ pub fn family(s: Species) -> Family {
         S::Wolf | S::Cat => Family::Tame,
         S::Blaze | S::Ghast => Family::Nether,
         S::IronGolem | S::SnowGolem => Family::Golem,
-        S::Pillager | S::Vindicator => Family::Illager,
+        S::Pillager | S::Vindicator | S::Evoker => Family::Illager,
+        S::Vex => Family::Vex,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse => Family::Equine,
         S::Phantom => Family::Phantom,
@@ -137,6 +139,7 @@ pub fn register(m: &mut Mob) {
         Family::Golem if m.species() == Species::IronGolem => super::golem::register_iron(m),
         Family::Golem => super::golem::register_snow(m),
         Family::Illager if m.species() == Species::Pillager => super::illager::register_pillager(m),
+        Family::Illager if m.species() == Species::Evoker => super::illager::register_evoker(m),
         Family::Illager => super::illager::register_vindicator(m),
         Family::Equine => super::equine::register(m),
         Family::Phantom => super::phantom::register(m),
@@ -150,6 +153,7 @@ pub fn register(m: &mut Mob) {
         Family::Cube => super::cube::register(m),
         Family::Guardian => super::guardian::register(m),
         Family::Shulker => super::shulker::register(m),
+        Family::Vex => super::vex::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -174,6 +178,9 @@ pub fn custom_move_control(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>
     }
     if family(m.species()) == Family::Guardian {
         return super::guardian::move_control(m);
+    }
+    if m.species() == Species::Vex {
+        return super::vex::move_control(m);
     }
     match family(m.species()) {
         Family::Aquatic => aquatic::fish_move_control(m),
@@ -501,6 +508,8 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Enderman => super::enderman::custom_server_ai_step(m, cx),
         Species::Blaze => super::nether::blaze_server_ai_step(m, cx),
         Species::ElderGuardian => super::guardian::elder_server_ai_step(m, cx),
+        // SpellcasterIllager.customServerAiStep.
+        Species::Evoker if m.extra.counter > 0 => m.extra.counter -= 1,
         _ => {}
     }
 }
@@ -527,6 +536,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         s if super::equine::is_equine(s) => super::equine::ai_step(m, w),
         Species::Phantom => super::phantom::flap_sound(m, events),
         Species::Guardian | Species::ElderGuardian => super::guardian::ai_step(m, w, events),
+        Species::Vex => super::vex::ai_step(m, w),
         Species::Shulker => {
             super::shulker::tick(m, w, events);
             super::shulker::ai_step(m, w, events);
@@ -722,6 +732,7 @@ pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<Mo
         Family::Guardian => super::guardian::travel(m, w, input, events),
         // Shulkers never move on their own.
         Family::Shulker => true,
+        Family::Vex => super::vex::travel(m),
         _ => false,
     }
 }
