@@ -41,6 +41,8 @@ pub struct Rider {
     pub steer: bool,
     /// Sprinting (camels run faster).
     pub sprint: bool,
+    /// Holding the jump key (a happy ghast rises).
+    pub jumping: bool,
 }
 
 pub fn is_equine(s: Species) -> bool {
@@ -155,6 +157,7 @@ pub fn controlled(m: &Mob) -> bool {
     match m.species() {
         // Pig/Strider.getControllingPassenger: saddled, the rider holding the stick.
         Species::Pig | Species::Strider => m.extra.saddled && r.steer,
+        Species::HappyGhast => super::happy_ghast::controlled(m),
         _ => m.extra.saddled || m.species() == Species::SkeletonHorse && m.extra.tame,
     }
 }
@@ -306,6 +309,9 @@ pub fn ridden_step(m: &mut Mob) {
     m.body_yaw = r.yaw;
     m.head_yaw = r.yaw;
     m.ai.nav.stop();
+    if m.species() == Species::HappyGhast {
+        return super::happy_ghast::ridden(m);
+    }
     if matches!(m.species(), Species::Pig | Species::Strider) {
         // Pig/Strider: always forward along the rider's look, at a fraction
         // of the movement speed, boosted by the stick.

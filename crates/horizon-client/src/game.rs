@@ -26,6 +26,7 @@ mod fishing;
 mod fov;
 mod frames;
 mod game_mode;
+mod ghasts;
 mod growth;
 mod jukebox;
 mod leads;
@@ -1370,6 +1371,11 @@ impl Game<'_> {
                     kind: "hatch_sniffer",
                     ..
                 } => self.hatch_sniffer([pos.x, pos.y, pos.z]),
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "spawn_ghastling",
+                } => self.spawn_ghastling([pos.x, pos.y, pos.z], state),
                 LevelEvent::BlockEvent {
                     pos,
                     state,

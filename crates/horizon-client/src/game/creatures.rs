@@ -702,6 +702,11 @@ impl Game<'_> {
             if m.species() == Species::Wither {
                 gear.push("minecraft:nether_star");
             }
+            if species_drops_harness(m)
+                && let Some(h) = m.extra.head.as_deref()
+            {
+                gear.push(h);
+            }
             if m.extra.chested && horizon_client::mobs::equine::is_equine(m.species()) {
                 gear.push("minecraft:chest");
             }
@@ -2011,7 +2016,11 @@ impl Game<'_> {
                 sound = Some("item.flintandsteel.use");
                 self.damage_held_tool();
             }
-            _ if is_food && m.kind.flags.animal => {
+            // HappyGhast.canFallInLove: never, so only a ghastling takes food.
+            _ if is_food
+                && m.kind.flags.animal
+                && (species != Species::HappyGhast || m.is_baby()) =>
+            {
                 // Animal.mobInteract: breed adults, speed up babies.
                 if m.extra.age == 0 && m.extra.in_love <= 0 {
                     m.extra.in_love = 600;
@@ -2392,6 +2401,9 @@ impl Game<'_> {
             }
         }
     }
+}
+fn species_drops_harness(m: &Mob) -> bool {
+    m.species() == Species::HappyGhast
 }
 fn eat_sound(s: Species) -> &'static str {
     match s {

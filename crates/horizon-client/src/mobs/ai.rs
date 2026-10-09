@@ -90,6 +90,7 @@ pub enum Family {
     Trader,
     Breeze,
     Sniffer,
+    HappyGhast,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -128,6 +129,7 @@ pub fn family(s: Species) -> Family {
         S::WanderingTrader => Family::Trader,
         S::Breeze => Family::Breeze,
         S::Sniffer => Family::Sniffer,
+        S::HappyGhast => Family::HappyGhast,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
         S::Horse
         | S::Donkey
@@ -183,6 +185,7 @@ pub fn register(m: &mut Mob) {
         Family::Trader => super::trader::register(m),
         Family::Breeze => super::breeze::register(m),
         Family::Sniffer => super::sniffer::register(m),
+        Family::HappyGhast => super::happy_ghast::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -204,6 +207,9 @@ fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
 pub fn custom_move_control(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.species() == Species::Ghast {
         return super::nether::ghast_move_control(m, w);
+    }
+    if m.species() == Species::HappyGhast {
+        return super::happy_ghast::move_control(m, w);
     }
     if m.species() == Species::Phantom {
         return super::phantom::move_control(m);
@@ -408,6 +414,17 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Axolotl if !m.fluids.in_water => "entity.axolotl.idle_air",
         Species::Bat if m.extra.flag && m.random.next_int_bound(4).unwrap_or(1) != 0 => return,
         Species::Allay if m.extra.main_hand.is_some() => "entity.allay.ambient_with_item",
+        // HappyGhast: its own voice, never pitched up.
+        Species::HappyGhast => {
+            let sound = super::happy_ghast::sounds(m)[0];
+            events.push(MobEvent::Sound(
+                sound,
+                m.center(),
+                super::happy_ghast::volume(m),
+                1.0,
+            ));
+            return;
+        }
         // Sniffer.getAmbientSound.
         Species::Sniffer => match super::sniffer::ambient(m) {
             Some(s) => s,
@@ -593,6 +610,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Allay => super::allay::ai_step(m),
         Species::Breeze => super::breeze::ai_step(m, events),
         Species::Sniffer => super::sniffer::ai_step(m, events),
+        Species::HappyGhast => super::happy_ghast::ai_step(m, w),
         Species::Villager => super::villager::ai_step(m, w),
         Species::WanderingTrader => {
             super::villager::ai_step(m, w);
@@ -658,6 +676,7 @@ pub fn speed_bonus(m: &Mob) -> f64 {
 pub fn sound_volume(m: &Mob) -> f32 {
     match m.species() {
         Species::Ghast => 5.0,
+        Species::HappyGhast => super::happy_ghast::volume(m),
         Species::Slime | Species::MagmaCube => 0.4 * m.extra.size.max(1) as f32,
         Species::Cod
         | Species::Salmon

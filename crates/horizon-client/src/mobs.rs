@@ -22,6 +22,7 @@ pub mod farm;
 pub mod goals;
 pub mod golem;
 pub mod guardian;
+pub mod happy_ghast;
 pub mod hostile;
 pub mod illager;
 pub mod keyframes;

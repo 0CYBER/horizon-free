@@ -85,6 +85,7 @@ pub enum Species {
     Allay,
     Breeze,
     Sniffer,
+    HappyGhast,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -931,6 +932,20 @@ pub const ALL: &[Def] = &[
         Baby::Abs(0.95, 1.4, 1.38)
     ),
     def!(
+        HappyGhast,
+        "happy_ghast",
+        "happy_ghast#main",
+        "entity/ghast/happy_ghast",
+        A::HappyGhast,
+        [
+            "entity.happy_ghast.ambient",
+            "entity.happy_ghast.hurt",
+            "entity.happy_ghast.death"
+        ],
+        None,
+        Baby::Scale(0.2375, Some(0.46875))
+    ),
+    def!(
         Sniffer,
         "sniffer",
         "sniffer#main",
@@ -1211,6 +1226,11 @@ impl Def {
             Species::Fox => &["fox_baby"],
             Species::Wolf => &["wolf_baby"],
             Species::Sniffer => &["sniffer_baby"],
+            Species::HappyGhast => &[
+                "happy_ghast_baby",
+                "happy_ghast_harness",
+                "happy_ghast_ropes",
+            ],
             Species::Cat => &["cat_baby"],
             Species::Ocelot => &["ocelot_baby"],
             Species::Bee => &["bee_baby"],
@@ -1283,6 +1303,7 @@ impl Def {
                     | S::Parrot
                     | S::Bee
                     | S::Ghast
+                    | S::HappyGhast
                     | S::Blaze
                     | S::Phantom
                     | S::IronGolem
@@ -1294,7 +1315,7 @@ impl Def {
                     | S::Wither
                     | S::Allay
             ),
-            flying: matches!(s, S::Ghast | S::Phantom),
+            flying: matches!(s, S::Ghast | S::Phantom | S::HappyGhast),
             climber: matches!(s, S::Spider | S::CaveSpider),
             lava_walker: s == S::Strider,
             omnidirectional: matches!(s, S::Bat | S::Bee | S::Parrot),
@@ -1402,6 +1423,7 @@ impl Def {
             S::Llama | S::TraderLlama => "llama_food",
             S::Goat => "goat_food",
             S::Sniffer => "sniffer_food",
+            S::HappyGhast => "happy_ghast_food",
             S::Panda => "panda_food",
             S::Fox => "fox_food",
             S::Wolf => "wolf_food",
@@ -1436,6 +1458,7 @@ impl Def {
     pub fn air_speed(&self) -> f32 {
         match self.species {
             Species::Phantom => 0.2,
+            Species::HappyGhast => super::happy_ghast::AIR_SPEED,
             _ => 0.02,
         }
     }

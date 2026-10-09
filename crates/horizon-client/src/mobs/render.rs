@@ -128,6 +128,14 @@ pub fn body(m: &Mob) -> (String, String) {
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
         ),
+        S::HappyGhast => (
+            baby_or(m, "happy_ghast#main", "happy_ghast_baby#main"),
+            if baby {
+                "entity/ghast/happy_ghast_baby".into()
+            } else {
+                "entity/ghast/happy_ghast".into()
+            },
+        ),
         S::Sniffer => (
             baby_or(m, "sniffer#main", "sniffer_baby#main"),
             if baby {
@@ -320,6 +328,17 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 abgr(DYE[m.extra.color as usize & 15]),
                 false,
             );
+        }
+        // SimpleEquipmentLayer: the harness over the body.
+        S::HappyGhast if !m.is_baby() => {
+            if let Some(texture) = m
+                .extra
+                .head
+                .as_deref()
+                .and_then(super::happy_ghast::harness_texture)
+            {
+                push(&mut v, "happy_ghast_harness#main", &texture, white, false);
+            }
         }
         // BreezeWindLayer (the scroll is not reproduced: atlas sprites do
         // not wrap) and BreezeEyesLayer.

@@ -106,6 +106,9 @@ impl Game<'_> {
         if horizon_client::mobs::llama::is_llama(species) {
             return self.interact_llama(index, item);
         }
+        if species == Species::HappyGhast {
+            return self.interact_happy_ghast(index, item);
+        }
         if !equine::is_equine(species) || !m.alive() || Some(m.id) == self.riding {
             return false;
         }
@@ -290,6 +293,7 @@ impl Game<'_> {
             jump: if jump > 0.0 { jump } else { pending },
             steer,
             sprint: self.keys.contains(&winit::keyboard::KeyCode::ControlLeft),
+            jumping: keys.jump,
         });
         true
     }
@@ -314,6 +318,15 @@ impl Game<'_> {
                 m.position.x - f64::from(0.5 * scale * yaw.sin()),
                 m.position.y + f64::from(anchor) - 0.6,
                 m.position.z + f64::from(0.5 * scale * yaw.cos()),
+            );
+        }
+        if m.species() == Species::HappyGhast {
+            // The first passenger attachment (0, 4, 1.7) of the harnessed back.
+            let yaw = f64::from(m.yaw.to_radians());
+            at = Vec3::new(
+                m.position.x - 1.7 * yaw.sin(),
+                m.position.y + 4.0 - 0.6,
+                m.position.z + 1.7 * yaw.cos(),
             );
         }
         if horizon_client::mobs::llama::is_llama(m.species()) {
@@ -346,6 +359,11 @@ impl Game<'_> {
             return;
         };
         m.rider = None;
+        if m.species() == Species::HappyGhast {
+            let id = m.id;
+            self.dismount_happy_ghast(id);
+            return;
+        }
         let yaw = m.yaw.to_radians();
         let side = Vec3::new(f64::from(yaw.cos()), 0.0, f64::from(yaw.sin()));
         let w = f64::from(m.width()) / 2.0 + 0.4;
