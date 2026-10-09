@@ -1040,7 +1040,7 @@ impl SaveDir {
     }
 }
 
-fn read_dat(path: &Path) -> Option<Tag> {
+pub fn read_dat(path: &Path) -> Option<Tag> {
     let bytes = fs::read(path).ok()?;
     let raw = match Compression::Gzip.decode(&bytes, 64 << 20) {
         Ok(raw) => raw,
@@ -1049,7 +1049,7 @@ fn read_dat(path: &Path) -> Option<Tag> {
     Some(nbt::read_named(&raw, Limits::default()).ok()?.0.tag)
 }
 /// Write a gzip NBT file the way vanilla does (`<name>_new`, keep `_old`).
-fn write_dat(path: &Path, tag: Tag) -> Result<()> {
+pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }

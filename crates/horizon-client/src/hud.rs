@@ -29,6 +29,8 @@ pub struct HudAtlas {
 }
 /// Atlas rows reserved for glyphs rasterized at run time.
 pub const GLYPH_ROWS: u32 = 512;
+/// 128x128 atlas slots for map textures.
+pub const MAP_SLOTS: usize = 16;
 pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
     let mut decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(path)?));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
@@ -79,6 +81,7 @@ impl HudAtlas {
         walk(&textures.join("entity"), &mut files);
         walk(&textures.join("particle"), &mut files);
         walk(&textures.join("mob_effect"), &mut files);
+        walk(&textures.join("map"), &mut files);
         files.retain(|p| {
             let s = p.to_string_lossy();
             (!s.contains("title/background") || s.contains("panorama_"))
@@ -129,6 +132,10 @@ impl HudAtlas {
                 .collect()
         });
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
+        // Map textures (game/maps.rs) are written into these slots at run time.
+        for i in 0..MAP_SLOTS {
+            images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
+        }
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let width = 4096u32;
         let mut placements = Vec::with_capacity(images.len());

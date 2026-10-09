@@ -20,6 +20,7 @@ mod growth;
 mod jukebox;
 mod lightning;
 mod machines;
+mod maps;
 mod minecarts;
 mod music;
 mod names;
@@ -547,6 +548,9 @@ struct Game<'a> {
     item_frames: Vec<horizon_client::entities::ItemFrame>,
     frame_model: frames::FrameModel,
     glow_frame_model: frames::FrameModel,
+    /// The `map=true` frame variants.
+    map_frame_model: frames::FrameModel,
+    glow_map_frame_model: frames::FrameModel,
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
     armor_stand_assets: armor_stands::ArmorStandAssets,
     boats: Vec<boats::Boat>,
@@ -555,6 +559,9 @@ struct Game<'a> {
     /// Songs playing from jukeboxes (tracked sound handles).
     jukebox_sounds: HashMap<(i32, i32, i32), u64>,
     bolts: Vec<lightning::Bolt>,
+    maps: maps::Maps,
+    /// Map textures waiting for the next HUD batch to upload them.
+    map_patches: Vec<horizon_client::font::Patch>,
     cart_models: minecarts::CartModels,
     /// The boat the player rides.
     riding: Option<u32>,
@@ -1579,6 +1586,7 @@ impl Game<'_> {
             || self.use_crossbow(&stack)
             || self.use_trident(&stack)
             || self.boost_firework(&stack)
+            || self.use_empty_map(&stack)
             || self.equip_from_hand(&stack)
         {
             return Ok(());
@@ -2253,6 +2261,7 @@ impl Game<'_> {
         self.tick_boats();
         self.tick_carts();
         self.tick_thunder();
+        self.tick_maps();
         self.tick_bolts();
         self.tick_fishing();
         self.tick_tridents();
@@ -2557,6 +2566,7 @@ impl Game<'_> {
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
+        batch.patches.append(&mut self.map_patches);
         let (w, h) = (batch.width, batch.height);
         if self.screen == Screen::Options {
             self.draw_options(&mut batch);
@@ -5537,6 +5547,9 @@ impl Game<'_> {
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let deg = |d: f32| d.to_radians();
         let sqrt_attack = attack.sqrt();
+        if self.held_map_geometry(to_world, attack, inverse_height, packed, &mut out) {
+            return out;
+        }
         match self.hand_item.clone() {
             None => {
                 let Some(arm) = self.res.player_arm.clone() else {
@@ -6199,6 +6212,7 @@ impl Game<'_> {
         self.save
             .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
         self.save_entities()?;
+        self.save_maps();
         self.level.selected_slot = self.selected as i32;
         let level = &mut self.level;
         level.creative = self.creative;
@@ -7265,6 +7279,8 @@ pub fn run() -> Result<()> {
         item_frames: Vec::new(),
         frame_model: frames::bake_frame(&root, "item_frame"),
         glow_frame_model: frames::bake_frame(&root, "glow_item_frame"),
+        map_frame_model: frames::bake_frame(&root, "item_frame_map"),
+        glow_map_frame_model: frames::bake_frame(&root, "glow_item_frame_map"),
         armor_stands: Vec::new(),
         armor_stand_assets: armor_stands::ArmorStandAssets::load(&root),
         boats: Vec::new(),
@@ -7272,6 +7288,8 @@ pub fn run() -> Result<()> {
         carts: Vec::new(),
         jukebox_sounds: HashMap::new(),
         bolts: Vec::new(),
+        maps: maps::Maps::default(),
+        map_patches: Vec::new(),
         cart_models: minecarts::CartModels::load(&root),
         riding: None,
         ender_items: vec![None; 27],

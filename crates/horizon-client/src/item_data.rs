@@ -29,6 +29,8 @@ pub struct StackData {
     /// `minecraft:fireworks`: flight duration and explosions (None: the
     /// item's default).
     pub fireworks: Option<(u8, Vec<crate::particles::FireworkExplosion>)>,
+    /// `minecraft:map_id` (filled maps).
+    pub map_id: Option<i32>,
 }
 impl StackData {
     pub fn is_empty(&self) -> bool {
@@ -243,6 +245,9 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
                 ]),
             ));
         }
+        if let Some(id) = d.map_id {
+            entries.push(("minecraft:map_id", Tag::Int(id)));
+        }
         if let Some((flight, explosions)) = &d.fireworks {
             let list = explosions
                 .iter()
@@ -316,6 +321,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             .max(0) as u32,
         custom_name: c.get("minecraft:custom_name").and_then(read_text),
         potion,
+        map_id: c.get("minecraft:map_id").and_then(int).map(|v| v as i32),
         fireworks: c.get("minecraft:fireworks").map(|f| {
             let flight = f
                 .get("flight_duration")

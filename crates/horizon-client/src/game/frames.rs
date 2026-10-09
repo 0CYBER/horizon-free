@@ -309,7 +309,9 @@ impl Game<'_> {
             })
             .collect();
         let sprites = &self.res.atlas.sprites;
+        let mut maps: Vec<(i32, glam::Mat4, u32)> = Vec::new();
         for (f, icon) in self.item_frames.iter().zip(icons) {
+            let map = f.item.as_ref().and_then(super::maps::map_id);
             let s = f.step();
             // Pose: to the block centre, then X/Y rotation by facing.
             let (x_rot, y_rot) = if s[1] == 0 {
@@ -350,10 +352,11 @@ impl Game<'_> {
                 uv.map(|[u, v]| [r.u0 + u * (r.u1 - r.u0), r.v0 + v * (r.v1 - r.v0)])
             };
             if !f.invisible {
-                let model = if f.glow {
-                    &self.glow_frame_model
-                } else {
-                    &self.frame_model
+                let model = match (f.glow, map.is_some()) {
+                    (true, true) => &self.glow_map_frame_model,
+                    (false, true) => &self.map_frame_model,
+                    (true, false) => &self.glow_frame_model,
+                    (false, false) => &self.frame_model,
                 };
                 for (corners, uv, sprite) in model {
                     let Some(r) = sprites.get(sprite) else {
@@ -372,6 +375,21 @@ impl Game<'_> {
                         packed,
                     );
                 }
+            }
+            if let Some(id) = map {
+                // ItemFrameRenderer: the map fills the face, in 90-degree steps.
+                let depth = if f.invisible { 0.5 } else { 0.4375 };
+                let item_light = if f.glow { 240 | 240 << 8 } else { packed };
+                let m = pose
+                    * glam::DMat4::from_translation(glam::DVec3::new(0.0, 0.0, depth))
+                    * glam::DMat4::from_rotation_z(
+                        (f64::from(f.rotation % 4 * 2) * 45.0).to_radians(),
+                    )
+                    * glam::DMat4::from_rotation_z(std::f64::consts::PI)
+                    * glam::DMat4::from_scale(glam::DVec3::splat(0.0078125))
+                    * glam::DMat4::from_translation(glam::DVec3::new(-64.0, -64.0, -1.0));
+                maps.push((id, m.as_mat4(), item_light));
+                continue;
             }
             let Some(icon) = icon else { continue };
             // GlowItemFrame items render full bright.
@@ -456,6 +474,9 @@ impl Game<'_> {
                     }
                 }
             }
+        }
+        for (id, m, light) in maps {
+            self.map_vertices(id, m, light, out);
         }
     }
 }

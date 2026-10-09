@@ -64,7 +64,19 @@ pub struct StateFacts {
     /// without the random offset; and its edges as LevelRenderer draws them.
     pub outline: Arc<[[f32; 6]]>,
     pub outline_edges: Arc<[[f32; 6]]>,
+    /// `getMapColor(..).id` (0 = NONE).
+    pub map_color: u8,
 }
+/// `MapColor.col` by id.
+pub const MAP_COLORS: [u32; 62] = [
+    0, 8368696, 16247203, 13092807, 16711680, 10526975, 10987431, 31744, 16777215, 10791096,
+    9923917, 7368816, 4210943, 9402184, 16776437, 14188339, 11685080, 6724056, 15066419, 8375321,
+    15892389, 5000268, 10066329, 5013401, 8339378, 3361970, 6704179, 6717235, 10040115, 1644825,
+    16445005, 6085589, 4882687, 55610, 8476209, 7340544, 13742497, 10441252, 9787244, 7367818,
+    12223780, 6780213, 10505550, 3746083, 8874850, 5725276, 8014168, 4996700, 4993571, 5001770,
+    9321518, 2430480, 12398641, 9715553, 6035741, 1474182, 3837580, 5647422, 1356933, 6579300,
+    14200723, 8365974,
+];
 /// The 12 edges of the unit cube (outline data predating the export).
 fn cube_edges() -> Vec<[f32; 6]> {
     let mut edges = Vec::new();
@@ -205,7 +217,15 @@ impl BlockFacts {
             let edges = move || if air { Vec::new() } else { cube_edges() };
             let outline = shape(&entry["outline"], &cube);
             let outline_edges = shape(&entry["outline_edges"], &edges);
+            // The export holds MapColor.col; ids are positions in MAP_COLORS.
+            let col = entry["map_color"].as_u64().unwrap_or(0) as u32;
+            let map_color = if col == 0 {
+                0
+            } else {
+                MAP_COLORS.iter().position(|c| *c == col).unwrap_or(0) as u8
+            };
             states.push(StateFacts {
+                map_color,
                 outline,
                 outline_edges,
                 name: intern(&state.name),

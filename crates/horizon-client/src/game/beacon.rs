@@ -98,7 +98,7 @@ impl Game<'_> {
         DYE_NAMES.iter().position(|d| *d == dye).map(|i| DYE[i])
     }
     /// `getHeight(WORLD_SURFACE)`: above the highest non-air block.
-    fn world_surface(&self, x: i32, z: i32) -> i32 {
+    pub(super) fn world_surface(&self, x: i32, z: i32) -> i32 {
         let (min, max) = (super::MIN_Y, super::MIN_Y + super::HEIGHT);
         (min..max)
             .rev()
