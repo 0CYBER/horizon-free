@@ -147,6 +147,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Observer => self.observer_tick(pos, state),
                 Class::Eyeblossom => self.eyeblossom_tick(state, pos, false),
                 Class::DriedGhast => self.dried_ghast_tick(state, pos),
+                Class::SnifferEgg => self.sniffer_egg_tick(state, pos),
                 Class::RedstoneLamp => self.lamp_tick(pos, state),
                 Class::RedstoneTorch => self.torch_tick(pos, state),
                 Class::Scaffolding => self.scaffolding_tick(pos, state),

@@ -242,7 +242,11 @@ impl Game<'_> {
             .spawn_mob(kind, at, true)
             .ok_or_else(|| format!("unknown or unsupported mob {kind}"))?;
         if baby && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-            m.extra.age = -24000;
+            m.extra.age = if m.species() == Species::Sniffer {
+                horizon_client::mobs::sniffer::BABY_START_AGE
+            } else {
+                -24000
+            };
         }
         Ok(id)
     }
@@ -652,6 +656,7 @@ impl Game<'_> {
         self.tick_fangs();
         self.tick_allays();
         self.tick_breeze_effects();
+        self.tick_sniffer_effects();
         self.tick_player_effects();
         self.piglin_pickups();
         Ok(())
@@ -1073,6 +1078,11 @@ impl Game<'_> {
             q.extra.in_love = 0;
         }
         let q = self.mobs.iter().find(|m| m.id == partner).cloned();
+        // Sniffer.spawnChildFromBreeding: an egg instead of a baby.
+        if p.species() == Species::Sniffer {
+            self.lay_sniffer_egg(&p);
+            return;
+        }
         let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         let coin2 = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         // A horse and a donkey have a mule.
@@ -2389,6 +2399,7 @@ fn eat_sound(s: Species) -> &'static str {
         Species::Horse | Species::Donkey | Species::Mule => "entity.horse.eat",
         Species::Llama | Species::TraderLlama => "entity.llama.eat",
         Species::Goat => "entity.goat.eat",
+        Species::Sniffer => "entity.sniffer.eat",
         Species::Fox => "entity.fox.eat",
         Species::Cat => "entity.cat.eat",
         Species::Panda => "entity.panda.eat",

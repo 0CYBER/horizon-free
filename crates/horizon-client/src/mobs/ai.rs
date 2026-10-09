@@ -89,6 +89,7 @@ pub enum Family {
     Villager,
     Trader,
     Breeze,
+    Sniffer,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -126,6 +127,7 @@ pub fn family(s: Species) -> Family {
         S::Villager => Family::Villager,
         S::WanderingTrader => Family::Trader,
         S::Breeze => Family::Breeze,
+        S::Sniffer => Family::Sniffer,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
         S::Horse
         | S::Donkey
@@ -180,6 +182,7 @@ pub fn register(m: &mut Mob) {
         Family::Villager => super::villager::register(m),
         Family::Trader => super::trader::register(m),
         Family::Breeze => super::breeze::register(m),
+        Family::Sniffer => super::sniffer::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -405,6 +408,11 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Axolotl if !m.fluids.in_water => "entity.axolotl.idle_air",
         Species::Bat if m.extra.flag && m.random.next_int_bound(4).unwrap_or(1) != 0 => return,
         Species::Allay if m.extra.main_hand.is_some() => "entity.allay.ambient_with_item",
+        // Sniffer.getAmbientSound.
+        Species::Sniffer => match super::sniffer::ambient(m) {
+            Some(s) => s,
+            None => return,
+        },
         // Breeze.playAmbientSound.
         Species::Breeze => match super::breeze::ambient(m) {
             Some(s) => s,
@@ -584,6 +592,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Wither => super::wither::ai_step(m, w, events),
         Species::Allay => super::allay::ai_step(m),
         Species::Breeze => super::breeze::ai_step(m, events),
+        Species::Sniffer => super::sniffer::ai_step(m, events),
         Species::Villager => super::villager::ai_step(m, w),
         Species::WanderingTrader => {
             super::villager::ai_step(m, w);

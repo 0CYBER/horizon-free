@@ -414,3 +414,36 @@ fn turtle_eggs_crack_at_dawn_on_sand() {
     f.behaviours.random_tick(&mut w.level, &mut w.ticks, pos);
     assert_eq!(w.name(pos), "minecraft:air", "hatched");
 }
+#[test]
+fn sniffer_eggs_crack_twice_then_hatch_a_snifflet() {
+    let Some(f) = fixture() else { return };
+    let mut w = World::new(f, 5);
+    w.floor("moss_block", 1);
+    let egg = w.id("sniffer_egg", &[]);
+    let pos = BlockPos::new(0, 64, 0);
+    f.behaviours
+        .set_block(&mut w.level, &mut w.ticks, pos, egg, flags::UPDATE_ALL);
+    let block = f.behaviours.block(egg);
+    assert!(
+        w.ticks.has_block_tick(pos, block),
+        "placing schedules the first stage"
+    );
+    for stage in 1..=2 {
+        f.behaviours
+            .scheduled_block_tick(&mut w.level, &mut w.ticks, pos);
+        assert_eq!(
+            w.level.block_state(pos),
+            w.id("sniffer_egg", &[("hatch", &stage.to_string())])
+        );
+    }
+    f.behaviours
+        .scheduled_block_tick(&mut w.level, &mut w.ticks, pos);
+    assert_eq!(w.name(pos), "minecraft:air", "hatched");
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::BlockEvent {
+            kind: "hatch_sniffer",
+            ..
+        }
+    )));
+}

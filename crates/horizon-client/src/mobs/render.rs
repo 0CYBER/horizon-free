@@ -128,6 +128,14 @@ pub fn body(m: &Mob) -> (String, String) {
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
         ),
+        S::Sniffer => (
+            baby_or(m, "sniffer#main", "sniffer_baby#main"),
+            if baby {
+                "entity/sniffer/snifflet".into()
+            } else {
+                "entity/sniffer/sniffer".into()
+            },
+        ),
         S::Shulker => ("shulker#main".into(), super::shulker::texture(m)),
         S::Vex => ("vex#main".into(), super::vex::texture(m).into()),
         S::Wither => ("wither#main".into(), super::wither::texture(m).into()),

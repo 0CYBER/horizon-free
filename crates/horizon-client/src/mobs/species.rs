@@ -84,6 +84,7 @@ pub enum Species {
     Camel,
     Allay,
     Breeze,
+    Sniffer,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -930,6 +931,20 @@ pub const ALL: &[Def] = &[
         Baby::Abs(0.95, 1.4, 1.38)
     ),
     def!(
+        Sniffer,
+        "sniffer",
+        "sniffer#main",
+        "entity/sniffer/sniffer",
+        A::Sniffer,
+        [
+            "entity.sniffer.idle",
+            "entity.sniffer.hurt",
+            "entity.sniffer.death"
+        ],
+        Some("entity.sniffer.step"),
+        Baby::Scale(0.5, None)
+    ),
+    def!(
         Breeze,
         "breeze",
         "breeze#main",
@@ -1195,6 +1210,7 @@ impl Def {
             Species::PolarBear => &["polar_bear_baby"],
             Species::Fox => &["fox_baby"],
             Species::Wolf => &["wolf_baby"],
+            Species::Sniffer => &["sniffer_baby"],
             Species::Cat => &["cat_baby"],
             Species::Ocelot => &["ocelot_baby"],
             Species::Bee => &["bee_baby"],
@@ -1385,6 +1401,7 @@ impl Def {
             S::Horse | S::Donkey | S::Mule => "horse_food",
             S::Llama | S::TraderLlama => "llama_food",
             S::Goat => "goat_food",
+            S::Sniffer => "sniffer_food",
             S::Panda => "panda_food",
             S::Fox => "fox_food",
             S::Wolf => "wolf_food",
@@ -1447,6 +1464,7 @@ impl Def {
             Species::Dolphin | Species::Axolotl => 1.0,
             Species::Frog => 5.0,
             Species::Breeze => 30.0,
+            Species::Sniffer => 50.0,
             Species::Goat => 15.0,
             Species::Armadillo => 32.0,
             _ => 75.0,

@@ -90,6 +90,10 @@ impl Mob {
     pub fn dims(&self) -> (f64, f64, f64) {
         let k = &self.kind;
         let (mut w, mut h, mut e) = (k.width, k.height, k.eye_height);
+        // Sniffer.DIGGING_DIMENSIONS: 0.4 lower, its eyes at 0.81.
+        if k.species == super::Species::Sniffer && super::sniffer::digging(self) {
+            (h, e) = (h - f64::from(0.4_f32), f64::from(0.81_f32));
+        }
         if self.is_baby() {
             match super::species::def(k.species).baby {
                 super::species::Baby::Abs(bw, bh, be) => (w, h, e) = (bw, bh, be),

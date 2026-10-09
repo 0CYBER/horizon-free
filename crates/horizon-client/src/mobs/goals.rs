@@ -1441,6 +1441,11 @@ impl Goal for Breed {
         }
         let id = m.id;
         // Horses and donkeys breed together (AbstractHorse.canParent: tame).
+        // Sniffer.canMate: calm states only.
+        let sniffer = species == Species::Sniffer;
+        if sniffer && !super::sniffer::can_mate_state(m.extra.variant) {
+            return false;
+        }
         let llama = super::llama::is_llama(species);
         let equine = matches!(species, Species::Horse | Species::Donkey) || llama;
         if equine && !m.extra.tame {
@@ -1461,6 +1466,7 @@ impl Goal for Breed {
                     && !s.baby
                     && (!tamable || s.tame)
                     && (!equine || s.tame)
+                    && (!sniffer || super::sniffer::can_mate_state(s.variant))
             })
             .map(|s| s.id)
             .next();

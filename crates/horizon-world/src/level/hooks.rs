@@ -122,6 +122,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     let delay = self.random().next_int_between(3600, 12000).unwrap_or(3600);
                     self.schedule_tick(pos, block, delay);
                 }
+                // SnifferEggBlock.onPlace: a third of the hatch time, boosted on moss.
+                Class::SnifferEgg => {
+                    let boosted = b
+                        .tag("minecraft:sniffer_egg_hatch_boost")
+                        .is_some_and(|t| b.in_set(self.below_state(pos), t));
+                    if boosted {
+                        self.level_event(3009, pos, 0);
+                    }
+                    let hatch = if boosted { 12000 } else { 24000 };
+                    let offset = self.random().next_int_bound(300).unwrap_or(0);
+                    self.schedule_tick(pos, block, hatch / 3 + offset);
+                }
                 Class::FrostedIce => {
                     let delay = self
                         .random()

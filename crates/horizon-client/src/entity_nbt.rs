@@ -316,6 +316,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 Tag::Long(if sitting { -1 } else { 0 }),
             );
         }
+        "minecraft:sniffer" => crate::mobs::sniffer::to_nbt(m, map),
         "minecraft:wither" => {
             map.insert("Invul".into(), Tag::Int(m.extra.counter));
         }
@@ -572,6 +573,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     }
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;
+    }
+    if m.species() == crate::mobs::Species::Sniffer {
+        crate::mobs::sniffer::from_nbt(&mut m, tag);
     }
     m.extra.leash_pending = crate::mobs::leash::pending_from_nbt(tag.get("leash"));
     if m.species() == crate::mobs::Species::Ravager {

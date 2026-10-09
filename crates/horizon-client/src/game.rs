@@ -51,6 +51,7 @@ mod render_tick;
 mod screens;
 mod shield;
 mod sign_edit;
+mod sniffers;
 mod station_control;
 mod stations;
 mod stats;
@@ -1364,6 +1365,11 @@ impl Game<'_> {
                         let _ = self.spawn_mob("minecraft:tadpole", spawn, true);
                     }
                 }
+                LevelEvent::BlockEvent {
+                    pos,
+                    kind: "hatch_sniffer",
+                    ..
+                } => self.hatch_sniffer([pos.x, pos.y, pos.z]),
                 LevelEvent::BlockEvent {
                     pos,
                     state,

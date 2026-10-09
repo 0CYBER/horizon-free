@@ -9,6 +9,7 @@ pub mod ai;
 pub mod allay;
 pub mod anim;
 pub mod aquatic;
+pub mod brain;
 pub mod breeze;
 pub mod camel;
 pub mod caravan;
@@ -35,6 +36,7 @@ pub mod piglin;
 pub mod ravager;
 pub mod render;
 pub mod shulker;
+pub mod sniffer;
 pub mod spawning;
 pub mod species;
 pub mod tame;
@@ -485,6 +487,8 @@ pub struct Extra {
     pub leash_spin: f64,
     /// More species scratch values.
     pub scratch: [i32; 4],
+    /// Block positions a species remembers (a sniffer's explored ground).
+    pub positions: Vec<[i32; 3]>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
