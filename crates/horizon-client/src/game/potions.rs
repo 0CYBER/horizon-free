@@ -199,6 +199,14 @@ impl Game<'_> {
                     let _ = p.hurt(&self.motion.health, rules, id, amount);
                 }
             }
+            EffectAction::Poison => {
+                if !creative
+                    && p.health.health() > 1.0
+                    && let Some(id) = self.motion.health.damage.id("minecraft:magic")
+                {
+                    let _ = p.hurt(&self.motion.health, rules, id, 1.0);
+                }
+            }
             EffectAction::Exhaust(amount) => {
                 p.health.food.exhaustion = (p.health.food.exhaustion + amount).min(40.0);
             }

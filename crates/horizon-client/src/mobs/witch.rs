@@ -3,7 +3,10 @@
 use super::{
     Mob, MobEvent, Species, Who,
     anim::{Poses, State},
-    goals::{Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, NearestTarget, RandomLookAround, Stroll, goal_clone},
+    goals::{
+        Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, NearestTarget, RandomLookAround,
+        Stroll, goal_clone,
+    },
 };
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -16,7 +19,8 @@ pub fn register(m: &mut Mob) {
     g.add(3, LookAtPlayer::new(8.0));
     g.add(3, RandomLookAround::default());
     m.ai.targets.add(1, HurtByTarget::new());
-    m.ai.targets.add(3, NearestTarget::player(true).interval(10));
+    m.ai.targets
+        .add(3, NearestTarget::player(true).interval(10));
 }
 /// The callback a ranged mob uses to fire (`RangedAttackMob.performRangedAttack`).
 pub type Fire = fn(&mut Mob, Who, f32, &mut Cx);
@@ -34,7 +38,15 @@ pub struct RangedAttack {
 }
 impl RangedAttack {
     pub fn new(speed: f64, min: i32, max: i32, radius: f32, fire: Fire) -> Self {
-        Self { speed, min, max, radius, fire, attack_time: -1, see_time: 0 }
+        Self {
+            speed,
+            min,
+            max,
+            radius,
+            fire,
+            attack_time: -1,
+            see_time: 0,
+        }
     }
 }
 impl Goal for RangedAttack {
@@ -57,7 +69,9 @@ impl Goal for RangedAttack {
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let Some(who) = m.ai.target else { return };
-        let Some(t) = cx.w.target_info(who) else { return };
+        let Some(t) = cx.w.target_info(who) else {
+            return;
+        };
         let d2 = m.distance_sqr(t.position);
         let sees = m.sees(cx.w, who);
         if sees {
@@ -68,7 +82,12 @@ impl Goal for RangedAttack {
         if d2 <= f64::from(self.radius * self.radius) && self.see_time >= 5 {
             m.nav_stop();
         } else {
-            m.nav_move_to_entity(cx.w, [t.position.x, t.position.y, t.position.z], 1, self.speed);
+            m.nav_move_to_entity(
+                cx.w,
+                [t.position.x, t.position.y, t.position.z],
+                1,
+                self.speed,
+            );
         }
         m.look_at_speed([t.position.x, t.eye_y, t.position.z], 30.0, 30.0);
         self.attack_time -= 1;
@@ -79,10 +98,12 @@ impl Goal for RangedAttack {
             let dist = (d2.sqrt() as f32) / self.radius;
             let power = dist.clamp(0.1, 1.0);
             (self.fire)(m, who, power, cx);
-            self.attack_time = (dist * (self.max - self.min) as f32 + self.min as f32).floor() as i32;
+            self.attack_time =
+                (dist * (self.max - self.min) as f32 + self.min as f32).floor() as i32;
         } else if self.attack_time < 0 {
             let f = d2.sqrt() / f64::from(self.radius);
-            self.attack_time = (f64::from(self.min) + f * f64::from(self.max - self.min)).floor() as i32;
+            self.attack_time =
+                (f64::from(self.min) + f * f64::from(self.max - self.min)).floor() as i32;
         }
     }
 }
@@ -92,12 +113,22 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     if m.extra.using_item > 0 {
         return;
     }
-    let Some(t) = cx.w.target_info(who) else { return };
+    let Some(t) = cx.w.target_info(who) else {
+        return;
+    };
     let xd = t.position.x - m.position.x;
     let yd = t.eye_y - 1.1 - m.position.y;
     let zd = t.position.z - m.position.z;
     let dist = (xd * xd + zd * zd).sqrt();
-    let health = if t.is_player { 20.0 } else { cx.w.seen(match who { Who::Mob(id) => id, Who::Player => 0 }).map_or(20.0, |s| s.health) };
+    let health = if t.is_player {
+        20.0
+    } else {
+        cx.w.seen(match who {
+            Who::Mob(id) => id,
+            Who::Player => 0,
+        })
+        .map_or(20.0, |s| s.health)
+    };
     let (effect, ticks, amplifier) = if dist >= 8.0 {
         ("minecraft:slowness", 1800, 0)
     } else if health >= 8.0 {
@@ -108,12 +139,31 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         ("minecraft:instant_damage", 1, 0)
     };
     let start = Vec3::new(m.position.x, m.eye_y() - 0.1, m.position.z);
-    let mut p = Projectile::new(ProjectileKind::Potion { effect, ticks, amplifier, color: 0 }, start, Some(Who::Mob(m.id)));
+    let mut p = Projectile::new(
+        ProjectileKind::Potion {
+            effect,
+            ticks,
+            amplifier,
+            color: 0,
+        },
+        start,
+        Some(Who::Mob(m.id)),
+    );
     // Splash potions throw with gravity 0.05.
-    p.shoot(&mut m.random, [xd, yd + dist * 0.2, zd], if dist <= 2.0 { 0.45 } else { 0.75 }, 8.0);
+    p.shoot(
+        &mut m.random,
+        [xd, yd + dist * 0.2, zd],
+        if dist <= 2.0 { 0.45 } else { 0.75 },
+        8.0,
+    );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 0.8 + m.random.next_float() * 0.4;
-    cx.events.push(MobEvent::Sound("entity.witch.throw", m.center(), 1.0, pitch));
+    cx.events.push(MobEvent::Sound(
+        "entity.witch.throw",
+        m.center(),
+        1.0,
+        pitch,
+    ));
 }
 /// Witch.aiStep: drink water breathing, fire resistance, healing or swiftness.
 pub fn ai_step(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
@@ -126,8 +176,12 @@ pub fn ai_step(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
             m.extra.using_item = 0;
             if let Some(potion) = m.extra.main_hand.take() {
                 match potion.as_ref() {
-                    "minecraft:water_breathing" => m.add_effect("minecraft:water_breathing", 3600, 0),
-                    "minecraft:fire_resistance" => m.add_effect("minecraft:fire_resistance", 3600, 0),
+                    "minecraft:water_breathing" => {
+                        m.add_effect("minecraft:water_breathing", 3600, 0)
+                    }
+                    "minecraft:fire_resistance" => {
+                        m.add_effect("minecraft:fire_resistance", 3600, 0)
+                    }
                     "minecraft:healing" => m.health = (m.health + 4.0).min(m.attrs.max_health),
                     "minecraft:swiftness" => m.add_effect("minecraft:speed", 3600, 0),
                     _ => {}
@@ -137,13 +191,23 @@ pub fn ai_step(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
         }
         return;
     }
-    let potion = if m.random.next_float() < 0.15 && m.fluids.eye_in_water && !m.has_effect("minecraft:water_breathing") {
+    let potion = if m.random.next_float() < 0.15
+        && m.fluids.eye_in_water
+        && !m.has_effect("minecraft:water_breathing")
+    {
         Some("minecraft:water_breathing")
-    } else if m.random.next_float() < 0.15 && (m.fire_ticks > 0 || m.last_damage.is_some_and(|(d, _)| d.is_fire())) && !m.has_effect("minecraft:fire_resistance") {
+    } else if m.random.next_float() < 0.15
+        && (m.fire_ticks > 0 || m.last_damage.is_some_and(|(d, _)| d.is_fire()))
+        && !m.has_effect("minecraft:fire_resistance")
+    {
         Some("minecraft:fire_resistance")
     } else if m.random.next_float() < 0.05 && m.health < m.attrs.max_health {
         Some("minecraft:healing")
-    } else if m.random.next_float() < 0.5 && m.ai.target.is_some() && !m.has_effect("minecraft:speed") && target_far {
+    } else if m.random.next_float() < 0.5
+        && m.ai.target.is_some()
+        && !m.has_effect("minecraft:speed")
+        && target_far
+    {
         Some("minecraft:swiftness")
     } else {
         None
@@ -154,7 +218,12 @@ pub fn ai_step(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
         m.extra.using_item = 32;
         m.extra.flag = true;
         let pitch = 0.8 + m.random.next_float() * 0.4;
-        cx_events.push(MobEvent::Sound("entity.witch.drink", m.center(), 1.0, pitch));
+        cx_events.push(MobEvent::Sound(
+            "entity.witch.drink",
+            m.center(),
+            1.0,
+            pitch,
+        ));
     }
 }
 /// WitchModel.setupAnim (VillagerModel base with a wobbling nose).
@@ -162,10 +231,19 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     p.yrot("head", s.y_rot.to_radians());
     p.xrot("head", s.x_rot.to_radians());
     p.xrot("right_leg", (s.pos * 0.6662).cos() * 1.4 * s.speed * 0.5);
-    p.xrot("left_leg", (s.pos * 0.6662 + std::f32::consts::PI).cos() * 1.4 * s.speed * 0.5);
+    p.xrot(
+        "left_leg",
+        (s.pos * 0.6662 + std::f32::consts::PI).cos() * 1.4 * s.speed * 0.5,
+    );
     let speed = 0.01 * (m.id % 10) as f32;
-    p.xrot("nose", (s.age * speed).sin() * 4.5 * std::f32::consts::PI / 180.0);
-    p.zrot("nose", (s.age * speed).cos() * 2.5 * std::f32::consts::PI / 180.0);
+    p.xrot(
+        "nose",
+        (s.age * speed).sin() * 4.5 * std::f32::consts::PI / 180.0,
+    );
+    p.zrot(
+        "nose",
+        (s.age * speed).cos() * 2.5 * std::f32::consts::PI / 180.0,
+    );
     if m.extra.main_hand.is_some() {
         let n = p.get("nose");
         n[0] = 0.0;

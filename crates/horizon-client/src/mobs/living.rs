@@ -410,6 +410,13 @@ impl Mob {
         self.velocity.y += if self.ai.nav.can_float { 0.04 } else { 0.3 };
     }
     pub fn jump_from_ground(&mut self) {
+        if matches!(
+            self.species(),
+            super::Species::Slime | super::Species::MagmaCube
+        ) {
+            super::cube::jump(self);
+            return;
+        }
         let power = self.jump_power();
         if power > 1.0e-5 {
             self.velocity.y = f64::from(power).max(self.velocity.y);

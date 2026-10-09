@@ -204,6 +204,7 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts) {
             m.extra.variant = villager_type(biome);
         }
         S::TropicalFish => super::aquatic::finalize(m),
+        S::Slime | S::MagmaCube => super::cube::finalize(m),
         _ => {}
     }
 }

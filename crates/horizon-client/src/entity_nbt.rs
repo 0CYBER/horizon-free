@@ -157,6 +157,10 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("powered".into(), Tag::Byte(i8::from(m.extra.charged)));
         }
+        "minecraft:slime" | "minecraft:magma_cube" => {
+            map.insert("Size".into(), Tag::Int(m.extra.size.max(1) - 1));
+            map.insert("wasOnGround".into(), Tag::Byte(i8::from(m.extra.flag2)));
+        }
         // Skeletons are spawned holding a bow (finalizeSpawn); a mob loaded
         // from NBT keeps only its saved equipment.
         "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged" => {
@@ -220,6 +224,15 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.name_visible = flag(tag, "CustomNameVisible");
     if m.species() == crate::mobs::Species::Creeper {
         m.extra.charged = flag(tag, "powered");
+    }
+    if matches!(
+        m.species(),
+        crate::mobs::Species::Slime | crate::mobs::Species::MagmaCube
+    ) {
+        let health = m.health;
+        crate::mobs::cube::set_size(&mut m, number(tag.get("Size")).unwrap_or(0) as i32 + 1);
+        m.health = health;
+        m.extra.flag2 = flag(tag, "wasOnGround");
     }
     // A mob saved mid-death finishes dying; one saved dead is dropped.
     if m.health <= 0.0 && m.death_time == 0 {

@@ -9,7 +9,9 @@ pub mod ai;
 pub mod anim;
 pub mod aquatic;
 pub mod control;
+pub mod cube;
 pub mod data;
+pub mod enderman;
 pub mod farm;
 pub mod goals;
 pub mod hostile;
@@ -21,6 +23,7 @@ pub mod render;
 pub mod spawning;
 pub mod species;
 pub mod undead;
+pub mod witch;
 mod world;
 
 use crate::{blocks::BlockFacts, mesher::Vertex, world::World};

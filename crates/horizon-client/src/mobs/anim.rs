@@ -205,6 +205,10 @@ pub enum ArmPose {
     CrossbowHold,
     CrossbowCharge,
 }
+/// HumanoidModel.setupAnim with empty hands (endermen).
+pub fn humanoid_pub(p: &mut Poses, s: &State, _m: &Mob) {
+    humanoid(p, s, ArmPose::Empty, ArmPose::Empty, None, false);
+}
 /// HumanoidModel.setupAnim up to (and including) the attack animation hook.
 fn humanoid(
     p: &mut Poses,
@@ -413,6 +417,9 @@ pub fn setup(
                 bob(p, "left_arm", s.age, -1.0);
             }
         }
+        Anim::Witch => super::witch::anim(m, s, p),
+        Anim::Enderman => super::enderman::anim(m, s, p),
+        Anim::Slime | Anim::MagmaCube => super::cube::anim(m, s, p),
         Anim::Creeper => {
             head(p, s);
             p.xrot("right_hind_leg", (s.pos * 0.6662).cos() * 1.4 * s.speed);

@@ -95,6 +95,8 @@ pub enum EffectAction {
     Heal(f32),
     /// Damage with a damage type id (`minecraft:magic`, `minecraft:wither`).
     Hurt(&'static str, f32),
+    /// PoisonMobEffect: one magic damage while above one health.
+    Poison,
     Exhaust(f32),
     /// FoodData.eat(nutrition, saturation modifier).
     Eat(i32, f32),
@@ -107,7 +109,7 @@ fn periodic(id: &str, tick: i32, amp: i32) -> Option<EffectAction> {
     };
     match id {
         "regeneration" if every(50) => Some(EffectAction::Heal(1.0)),
-        "poison" if every(25) => Some(EffectAction::Hurt("minecraft:magic", 1.0)),
+        "poison" if every(25) => Some(EffectAction::Poison),
         "wither" if every(40) => Some(EffectAction::Hurt("minecraft:wither", 1.0)),
         "hunger" => Some(EffectAction::Exhaust(0.005 * (amp + 1) as f32)),
         "saturation" if tick >= 1 => Some(EffectAction::Eat(amp + 1, 1.0)),

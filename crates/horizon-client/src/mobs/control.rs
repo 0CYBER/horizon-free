@@ -123,10 +123,10 @@ impl Mob {
         self.yaw = rotate_toward_max(self.yaw, y_rot, y_max);
     }
     /// MoveControl.tick (and the flying / smooth-swimming variants).
-    pub fn move_control_tick(&mut self, w: &MobWorld) {
+    pub fn move_control_tick(&mut self, w: &MobWorld, events: &mut Vec<super::MobEvent>) {
         let attr_speed = self.movement_speed();
         match self.ai.mov.kind {
-            MoveKind::Custom => super::ai::custom_move_control(self),
+            MoveKind::Custom => super::ai::custom_move_control(self, events),
             MoveKind::Ground => self.ground_move_tick(w, attr_speed),
             MoveKind::Flying { max_turn, hovers } => {
                 let m = &mut self.ai.mov;

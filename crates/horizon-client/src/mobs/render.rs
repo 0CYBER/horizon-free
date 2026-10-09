@@ -254,6 +254,8 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         })
     };
     match m.species() {
+        // SlimeOuterLayer: the translucent outer cube.
+        S::Slime => push(&mut v, "slime#outer", "entity/slime/slime", white, false),
         S::Sheep if !m.extra.sheared => {
             let color = abgr(sheep_wool_rgb(m.extra.color));
             if !m.is_baby() && m.extra.color != 0 {
@@ -471,6 +473,7 @@ fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
             let y = (1.0 + s4 * 0.1) / wobble;
             glam::Mat4::from_scale(glam::Vec3::new(xz, y, xz))
         }
+        Species::Slime | Species::MagmaCube => super::cube::scale(m, alpha),
         _ => glam::Mat4::IDENTITY,
     }
 }

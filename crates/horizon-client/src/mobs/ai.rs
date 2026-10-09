@@ -67,6 +67,10 @@ pub enum Family {
     Generic,
     /// No goals at all (Giant).
     Inert,
+    Witch,
+    Enderman,
+    /// Slimes and magma cubes.
+    Cube,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -90,6 +94,9 @@ pub fn family(s: Species) -> Family {
         | S::Pufferfish
         | S::Dolphin => Family::Aquatic,
         S::Giant => Family::Inert,
+        S::Witch => Family::Witch,
+        S::Enderman => Family::Enderman,
+        S::Slime | S::MagmaCube => Family::Cube,
         _ => Family::Generic,
     }
 }
@@ -101,6 +108,9 @@ pub fn register(m: &mut Mob) {
         Family::Aquatic => aquatic::register(m),
         Family::Generic => generic(m),
         Family::Inert => {}
+        Family::Witch => super::witch::register(m),
+        Family::Enderman => super::enderman::register(m),
+        Family::Cube => super::cube::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -116,9 +126,11 @@ fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     }
 }
 /// Move controls implemented by the species (MoveKind::Custom).
-pub fn custom_move_control(m: &mut Mob) {
-    if family(m.species()) == Family::Aquatic {
-        aquatic::fish_move_control(m)
+pub fn custom_move_control(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    match family(m.species()) {
+        Family::Aquatic => aquatic::fish_move_control(m),
+        Family::Cube => super::cube::move_control(m, events),
+        _ => {}
     }
 }
 /// A fallback for species without bespoke goals yet: animals stroll and
@@ -413,7 +425,7 @@ fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let mut cx = Cx { w, events };
         custom_server_ai_step(m, &mut cx);
     }
-    m.move_control_tick(w);
+    m.move_control_tick(w, events);
     m.look_control_tick();
     m.jump_control_tick();
 }
@@ -428,6 +440,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         | Species::Stray
         | Species::Bogged
         | Species::WitherSkeleton => undead::custom_server_ai_step(m, cx),
+        Species::Enderman => super::enderman::custom_server_ai_step(m, cx),
         _ => {}
     }
 }
@@ -436,6 +449,14 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         aquatic::ai_step(m, w, events);
     }
     match m.species() {
+        Species::Witch => {
+            let far = m
+                .target_info(w)
+                .is_some_and(|t| t.position.distance_squared(m.position) > 121.0);
+            super::witch::ai_step(m, events, far)
+        }
+        Species::Enderman => super::enderman::ai_step(m, w, events),
+        Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {
             m.extra.anim_ticks -= 1;
@@ -523,7 +544,7 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
 /// Species damage filters (LivingEntity.hurtServer overrides).
 pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
     match m.species() {
-        Species::Enderman if source.is_projectile() => false,
+        Species::Enderman => super::enderman::on_damage(m, source),
         Species::WitherSkeleton | Species::Blaze | Species::MagmaCube | Species::Strider
             if source.is_fire() =>
         {
@@ -533,8 +554,11 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
     }
 }
 /// Reactions after taking damage (sounds, anger).
-pub fn after_hurt(m: &mut Mob, _source: &Damage) {
+pub fn after_hurt(m: &mut Mob, source: &Damage) {
     m.ai.no_action_time = 0;
+    if m.species() == Species::Enderman {
+        super::enderman::after_hurt(m, source);
+    }
 }
 /// Mob.doHurtTarget: attack damage (+ species extras) to the target.
 pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {

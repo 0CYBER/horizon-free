@@ -28,7 +28,6 @@ use std::sync::Arc;
 pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
     /// Player status effects applied by mobs: (effect, ticks left, amplifier).
-    pub player_effects: Vec<(&'static str, i32, i32)>,
     pub player_fire: i32,
     pub pearl_cooldown: u32,
 }
@@ -621,8 +620,7 @@ impl Game<'_> {
                     if let Some(id) = self.spawn_mob(&m.kind.id, at, m.persistent)
                         && let Some(c) = self.mobs.iter_mut().find(|c| c.id == id)
                     {
-                        c.extra.size = size / 2;
-                        c.health = c.kind.max_health * (size / 2 * size / 2) as f32;
+                        horizon_client::mobs::cube::set_size(c, size / 2);
                     }
                 }
             }
@@ -755,12 +753,7 @@ impl Game<'_> {
                     ticks,
                     amplifier,
                 } => {
-                    if !self.creative {
-                        self.creatures.player_effects.retain(|e| e.0 != effect);
-                        self.creatures
-                            .player_effects
-                            .push((effect, ticks, amplifier));
-                    }
+                    self.give_player_effect(effect, ticks, amplifier);
                 }
                 MobEvent::Ignite { target, seconds } => match target {
                     Who::Player => {
@@ -898,7 +891,19 @@ impl Game<'_> {
             self.after_block(outcome, amount, attacker, projectile);
         }
     }
-    /// Poison, wither, hunger and burning applied to the player by mobs.
+    /// A status effect from a mob, arrow or splash potion (`addEffect`).
+    pub(super) fn give_player_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
+        if self.creative || self.spectator() {
+            return;
+        }
+        let id = effect.strip_prefix("minecraft:").unwrap_or(effect);
+        self.potions
+            .effects
+            .add(horizon_client::effects::EffectInstance::new(
+                id, ticks, amplifier,
+            ));
+    }
+    /// Burning applied to the player by mobs.
     fn tick_player_effects(&mut self) {
         let in_water = self.player.as_ref().is_some_and(|p| {
             let (x, y, z) = (
@@ -918,35 +923,6 @@ impl Game<'_> {
                 self.creatures.player_fire -= 1;
             }
         }
-        let mut effects = std::mem::take(&mut self.creatures.player_effects);
-        for (effect, ticks, amp) in &mut effects {
-            // MobEffect.shouldApplyEffectTickThisTick intervals.
-            let interval = |base: i32| (base >> (*amp).max(0)).max(1);
-            match *effect {
-                "minecraft:poison" if *ticks % interval(25) == 0 => {
-                    if self
-                        .player
-                        .as_ref()
-                        .is_some_and(|p| p.health.health() > 1.0)
-                    {
-                        self.hurt_player_by("minecraft:magic", 1.0);
-                    }
-                }
-                "minecraft:wither" if *ticks % interval(40) == 0 => {
-                    self.hurt_player_by("minecraft:wither", 1.0)
-                }
-                "minecraft:hunger" => {
-                    if let Some(p) = self.player.as_mut() {
-                        p.health.food.exhaustion =
-                            (p.health.food.exhaustion + 0.005 * (*amp + 1) as f32).min(40.0);
-                    }
-                }
-                _ => {}
-            }
-            *ticks -= 1;
-        }
-        effects.retain(|e| e.1 > 0);
-        self.creatures.player_effects = effects;
         if self.creatures.pearl_cooldown > 0 {
             self.creatures.pearl_cooldown -= 1;
         }
@@ -1045,7 +1021,7 @@ impl Game<'_> {
                                 "minecraft:arrow",
                             );
                             if let Some((e, t)) = effect {
-                                self.creatures.player_effects.push((e, *t, 0));
+                                self.give_player_effect(e, *t, 0);
                             }
                             self.audio.play(
                                 "minecraft:entity.arrow.hit_player",
@@ -1207,12 +1183,15 @@ impl Game<'_> {
                     if d2 < 16.0 && !self.creative {
                         let scale = 1.0 - d2.sqrt() / 4.0;
                         let t = (f64::from(*ticks) * scale + 0.5) as i32;
+                        if let Some(owner) = self.combat.projectile_owner {
+                            self.note_attacker("minecraft:indirect_magic", owner);
+                        }
                         match *effect {
                             "minecraft:instant_damage" => self.hurt_player_by(
                                 "minecraft:indirect_magic",
                                 6.0 * (1 << *amplifier) as f32 * scale as f32,
                             ),
-                            e if t > 20 => self.creatures.player_effects.push((e, t, *amplifier)),
+                            e if t > 20 => self.give_player_effect(e, t, *amplifier),
                             _ => {}
                         }
                     }
