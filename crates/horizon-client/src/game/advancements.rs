@@ -359,7 +359,7 @@ impl Game<'_> {
         }
         for r in unlocked {
             self.trigger("minecraft:recipe_unlocked", |c, _| {
-                c["recipe"].as_str().is_none_or(|want| want == r)
+                c["recipes"].as_str() == Some(r.as_str())
             });
         }
     }
@@ -388,7 +388,38 @@ impl Game<'_> {
             .flatten()
             .map(item_view)
             .collect();
-        self.trigger("minecraft:inventory_changed", |c, w| {
+        // InventoryChangeTrigger slots: occupied, full and empty counts.
+        let all: Vec<&Option<ItemStack>> = self
+            .inventory
+            .iter()
+            .chain(self.armor.iter())
+            .chain(std::iter::once(&self.offhand))
+            .collect();
+        let occupied = all.iter().filter(|s| s.is_some()).count() as f64;
+        let empty = all.len() as f64 - occupied;
+        let full = all
+            .iter()
+            .filter_map(|s| s.as_ref())
+            .filter(|s| {
+                self.res
+                    .items
+                    .get(&s.item)
+                    .is_some_and(|i| s.count >= i.max_stack)
+            })
+            .count() as f64;
+        self.trigger("minecraft:inventory_changed", move |c, w| {
+            let slots = &c["slots"];
+            let range = |k: &str, v: f64| {
+                let r = &slots[k];
+                r.is_null()
+                    || r.as_f64().is_some_and(|n| (n - v).abs() < 0.5)
+                    || r.is_object()
+                        && r["min"].as_f64().is_none_or(|m| v >= m)
+                        && r["max"].as_f64().is_none_or(|m| v <= m)
+            };
+            if !(range("occupied", occupied) && range("full", full) && range("empty", empty)) {
+                return false;
+            }
             let mut wanted: Vec<&Value> = c["items"]
                 .as_array()
                 .map(|a| a.iter().collect())
