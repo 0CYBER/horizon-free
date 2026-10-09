@@ -456,6 +456,7 @@ pub fn setup(
             }
         }
         Anim::Witch => super::witch::anim(m, s, p),
+        Anim::Villager => super::villager::anim(m, s, p),
         Anim::Wolf => super::tame::anim(m, s, p),
         Anim::IronGolem => super::golem::iron_anim(m, s, p),
         Anim::Illager => super::illager::anim(m, s, p),

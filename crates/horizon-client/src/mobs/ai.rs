@@ -86,6 +86,7 @@ pub enum Family {
     Ravager,
     Wither,
     Allay,
+    Villager,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -120,6 +121,7 @@ pub fn family(s: Species) -> Family {
         S::Ravager => Family::Ravager,
         S::Wither => Family::Wither,
         S::Allay => Family::Allay,
+        S::Villager => Family::Villager,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse | S::Camel => {
             Family::Equine
@@ -166,6 +168,7 @@ pub fn register(m: &mut Mob) {
         Family::Ravager => super::ravager::register(m),
         Family::Wither => super::wither::register(m),
         Family::Allay => super::allay::register(m),
+        Family::Villager => super::villager::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -560,6 +563,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Ravager => super::ravager::ai_step(m, w, events),
         Species::Wither => super::wither::ai_step(m, w, events),
         Species::Allay => super::allay::ai_step(m),
+        Species::Villager | Species::WanderingTrader => super::villager::ai_step(m, w),
         Species::Shulker => {
             super::shulker::tick(m, w, events);
             super::shulker::ai_step(m, w, events);

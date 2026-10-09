@@ -47,6 +47,14 @@ pub const PROFESSIONS: &[&str] = &[
     "weaponsmith",
 ];
 
+/// A villager's or wandering trader's trading state (`AbstractVillager.offers`
+/// and `Villager.villagerXp`); `None` on the mob until its offers are first asked for.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Trader {
+    pub xp: i32,
+    pub offers: Vec<MerchantOffer>,
+}
+
 /// An `ItemCost`: item and count (component predicates are not used by the
 /// 26.3 trade data except for one exact match, kept as the stack's data).
 #[derive(Clone, Debug, PartialEq)]

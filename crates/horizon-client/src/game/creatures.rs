@@ -109,6 +109,9 @@ fn seen(m: &Mob) -> Seen {
         health: m.health,
         variant: m.extra.variant,
         color: m.extra.color,
+        job: (m.species() == Species::Villager)
+            .then_some(m.extra.home)
+            .flatten(),
     }
 }
 impl Game<'_> {
@@ -1598,6 +1601,10 @@ impl Game<'_> {
             .unwrap_or_default();
         let creative = self.creative;
         let selected = self.selected;
+        if self.interact_trader(index, &item)? {
+            self.swing_arm();
+            return Ok(true);
+        }
         if self.interact_allay(index, &item) {
             self.swing_arm();
             return Ok(true);

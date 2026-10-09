@@ -57,7 +57,7 @@ pub fn sheep_wool_rgb(color: u8) -> u32 {
     let f = |c: u32| ((c as f32 * 0.75).floor() as u32).min(255);
     f(src >> 16 & 255) << 16 | f(src >> 8 & 255) << 8 | f(src & 255)
 }
-const VILLAGER_TYPES: [&str; 7] = [
+pub const VILLAGER_TYPES: [&str; 7] = [
     "plains", "desert", "jungle", "savanna", "snow", "swamp", "taiga",
 ];
 pub const PROFESSIONS: [&str; 15] = [

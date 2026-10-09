@@ -6,6 +6,11 @@ use super::{
     Game,
     stations::{INPUT, Kind, RESULT, Station},
 };
+use horizon_client::mobs::{
+    Species,
+    render::{PROFESSIONS, VILLAGER_TYPES},
+    villager,
+};
 use horizon_client::{
     hud::{HudBatch, rgba},
     items::ItemStack,
@@ -30,6 +35,16 @@ pub(super) struct MerchantState {
     pub(super) future_xp: i32,
     /// The offer button that keeps focus after a click (drawn highlighted).
     pub(super) focused: Option<usize>,
+    /// The trading mob (its offers and experience are written back on
+    /// close) and its custom name.
+    pub(super) mob: Option<u32>,
+    pub(super) name: Option<String>,
+}
+impl MerchantState {
+    /// `Merchant.showProgressBar`: villagers only.
+    pub(super) fn progress(&self) -> bool {
+        self.profession != "wandering_trader"
+    }
 }
 /// Player inventory slot positions in `MerchantMenu` (x from 108).
 pub(super) fn inventory_slot(i: usize) -> (f32, f32) {
@@ -64,6 +79,10 @@ impl Game<'_> {
     /// Offers a villager of `profession` gets on reaching `level`.
     fn new_offers(&mut self, profession: &str, variant: &str, level: i32) -> Vec<MerchantOffer> {
         let set = merchant::Trades::set_for(profession, level);
+        self.offers_from_set(&set, variant)
+    }
+    /// `AbstractVillager.addOffersFromTradeSet`.
+    fn offers_from_set(&mut self, set: &str, variant: &str) -> Vec<MerchantOffer> {
         let sequence = format!(
             "minecraft:trade_set/{}",
             set.trim_start_matches("minecraft:")
@@ -78,7 +97,97 @@ impl Game<'_> {
             enchantments: &self.res.stations.enchantments,
             variant,
         };
-        self.res.stations.trades.offers_from_set(&ctx, &set, random)
+        self.res.stations.trades.offers_from_set(&ctx, set, random)
+    }
+    /// `Villager.mobInteract` / `WanderingTrader.mobInteract`: shake the
+    /// head without offers, else open the trading screen.
+    pub(super) fn interact_trader(
+        &mut self,
+        index: usize,
+        item: &str,
+    ) -> horizon_client::Result<bool> {
+        let m = &self.mobs[index];
+        let species = m.species();
+        if !matches!(species, Species::Villager | Species::WanderingTrader)
+            || !m.alive()
+            || item == "minecraft:villager_spawn_egg"
+            || self.station.is_some()
+        {
+            return Ok(false);
+        }
+        if m.is_baby() {
+            let mut events = Vec::new();
+            villager::set_unhappy(&mut self.mobs[index], &mut events);
+            self.handle_mob_events(events)?;
+            return Ok(true);
+        }
+        // AbstractVillager.getOffers: generated on first use.
+        if self.mobs[index].extra.trade.is_none() {
+            let m = &self.mobs[index];
+            let variant = VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()];
+            let offers = if species == Species::WanderingTrader {
+                let mut v = Vec::new();
+                for set in ["buying", "uncommon", "common"] {
+                    v.extend(
+                        self.offers_from_set(&format!("minecraft:wandering_trader/{set}"), variant),
+                    );
+                }
+                v
+            } else {
+                let profession = PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()];
+                let level = i32::from(m.extra.variant3.max(1));
+                if matches!(profession, "none" | "nitwit") {
+                    Vec::new()
+                } else {
+                    self.new_offers(profession, variant, level)
+                }
+            };
+            self.mobs[index].extra.trade = Some(Box::new(merchant::Trader { xp: 0, offers }));
+        }
+        let m = &self.mobs[index];
+        let trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
+        if trade.offers.is_empty() {
+            let mut events = Vec::new();
+            villager::set_unhappy(&mut self.mobs[index], &mut events);
+            self.handle_mob_events(events)?;
+            return Ok(true);
+        }
+        let profession = if species == Species::WanderingTrader {
+            "wandering_trader"
+        } else {
+            PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()]
+        };
+        let state = MerchantState {
+            profession: profession.to_owned(),
+            variant: VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()].to_owned(),
+            level: i32::from(m.extra.variant3.max(1)).min(5),
+            xp: trade.xp,
+            offers: trade.offers,
+            shop_item: 0,
+            scroll: 0,
+            active: None,
+            future_xp: 0,
+            focused: None,
+            mob: Some(m.id),
+            name: m.custom_name.clone(),
+        };
+        self.open_merchant_state(state);
+        Ok(true)
+    }
+    /// `Villager.setTradingPlayer(null)`: the menu's offers and experience
+    /// go back to the mob.
+    pub(super) fn merchant_closed(&mut self, state: &MerchantState) {
+        let Some(id) = state.mob else { return };
+        let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
+            return;
+        };
+        if state.progress() {
+            m.extra.variant3 = state.level.clamp(1, 5) as u8;
+        }
+        m.extra.trade = Some(Box::new(merchant::Trader {
+            xp: state.xp,
+            offers: state.offers.clone(),
+        }));
     }
     /// Opens a merchant menu for a villager (or a generated one for tests).
     pub(super) fn open_merchant(&mut self, profession: &str, variant: &str, level: i32) {
@@ -86,8 +195,7 @@ impl Game<'_> {
         for l in 1..=level.clamp(1, 5) {
             offers.extend(self.new_offers(profession, variant, l));
         }
-        let mut s = Station::new_kind(Kind::Merchant, [0, 0, 0]);
-        s.merchant = Some(Box::new(MerchantState {
+        self.open_merchant_state(MerchantState {
             profession: profession.trim_start_matches("minecraft:").to_owned(),
             variant: variant.to_owned(),
             level: level.clamp(1, 5),
@@ -98,7 +206,13 @@ impl Game<'_> {
             active: None,
             future_xp: 0,
             focused: None,
-        }));
+            mob: None,
+            name: None,
+        });
+    }
+    fn open_merchant_state(&mut self, state: MerchantState) {
+        let mut s = Station::new_kind(Kind::Merchant, [0, 0, 0]);
+        s.merchant = Some(Box::new(state));
         self.station = Some(s);
         self.screen = super::Screen::Inventory;
         self.capture(false);
@@ -120,7 +234,8 @@ impl Game<'_> {
         m.offers[i].uses += 1;
         let mut pop = 3 + self.world.random.next_int_bound(4).unwrap_or(0);
         m.xp += offer.xp;
-        let level_up = merchant::can_level_up(m.level) && m.xp >= merchant::max_xp(m.level);
+        let level_up =
+            m.progress() && merchant::can_level_up(m.level) && m.xp >= merchant::max_xp(m.level);
         let at = self
             .player
             .as_ref()
@@ -246,6 +361,7 @@ impl Game<'_> {
         let Some(m) = self.station.as_ref().and_then(|s| s.merchant.as_ref()) else {
             return false;
         };
+        let (progress, custom) = (m.progress(), m.name.clone());
         let (profession, level, xp, scroll, shop, future, focused) = (
             m.profession.clone(),
             m.level,
@@ -274,13 +390,23 @@ impl Game<'_> {
         }
         let e = &self.res.stations.enchantments;
         let tr = |k: &str, f: &str| e.translate(k).unwrap_or(f).to_owned();
-        let name = tr(
-            &format!("entity.minecraft.villager.{profession}"),
-            &profession,
-        );
-        let title = tr("merchant.title", "%s - %s")
-            .replacen("%s", &name, 1)
-            .replacen("%s", &tr(&format!("merchant.level.{level}"), ""), 1);
+        let name = custom.unwrap_or_else(|| {
+            if progress {
+                tr(
+                    &format!("entity.minecraft.villager.{profession}"),
+                    &profession,
+                )
+            } else {
+                tr("entity.minecraft.wandering_trader", "Wandering Trader")
+            }
+        });
+        let title = if progress {
+            tr("merchant.title", "%s - %s")
+                .replacen("%s", &name, 1)
+                .replacen("%s", &tr(&format!("merchant.level.{level}"), ""), 1)
+        } else {
+            name
+        };
         let tw = HudBatch::text_width(atlas, &title);
         batch.text(
             atlas,
@@ -317,7 +443,7 @@ impl Game<'_> {
             );
         }
         // Experience bar (levels 1-4).
-        if level < 5 {
+        if progress && level < 5 {
             batch.sprite(
                 atlas,
                 "gui/sprites/container/villager/experience_bar_background",

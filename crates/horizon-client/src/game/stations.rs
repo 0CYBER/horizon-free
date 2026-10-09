@@ -299,6 +299,9 @@ impl Game<'_> {
         let Some(station) = self.station.take() else {
             return;
         };
+        if let Some(m) = &station.merchant {
+            self.merchant_closed(m);
+        }
         for stack in station.inputs.into_iter().flatten() {
             self.give_or_drop(stack);
         }

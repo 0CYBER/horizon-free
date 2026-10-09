@@ -246,6 +246,32 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("equipment".into(), Tag::Compound(equipment));
         }
+        "minecraft:villager" => {
+            use crate::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
+            let data = Tag::compound([
+                (
+                    "type",
+                    string(&format!(
+                        "minecraft:{}",
+                        VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()]
+                    )),
+                ),
+                (
+                    "profession",
+                    string(&format!(
+                        "minecraft:{}",
+                        PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()]
+                    )),
+                ),
+                ("level", Tag::Int(i32::from(m.extra.variant3.max(1)))),
+            ]);
+            map.insert("VillagerData".into(), data);
+            let xp = m.extra.trade.as_ref().map_or(0, |t| t.xp);
+            map.insert("Xp".into(), Tag::Int(xp));
+            put_offers(map, m);
+            put_job_site(map, m.extra.home);
+        }
+        "minecraft:wandering_trader" => put_offers(map, m),
         "minecraft:allay" => {
             // InventoryCarrier: the fetched stack; the liked player memory.
             let mut inv = Vec::new();
@@ -496,6 +522,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 .position(|(n, _)| *n == v)
                 .unwrap_or(0) as u8;
         }
+    }
+    if matches!(
+        m.species(),
+        crate::mobs::Species::Villager | crate::mobs::Species::WanderingTrader
+    ) {
+        read_villager(&mut m, tag);
     }
     if m.species() == crate::mobs::Species::Allay {
         if let Some(Tag::List(inv)) = tag.get("Inventory")
@@ -936,6 +968,105 @@ pub fn vehicle_to_nbt(
 }
 pub fn boat_from_nbt(tag: &Tag) -> Option<(Vec3, Vec3, f32)> {
     Some((position(tag)?, motion(tag), rotation(tag)[0]))
+}
+
+/// `AbstractVillager` "Offers" (`MerchantOffers.CODEC`).
+fn put_offers(map: &mut Compound, m: &Mob) {
+    let Some(t) = &m.extra.trade else { return };
+    let recipes = t
+        .offers
+        .iter()
+        .map(|o| {
+            let mut entries = vec![
+                ("buy", item_to_nbt(&o.base_cost_a.stack)),
+                ("sell", item_to_nbt(&o.result)),
+                ("uses", Tag::Int(o.uses)),
+                ("maxUses", Tag::Int(o.max_uses)),
+                ("rewardExp", Tag::Byte(i8::from(o.reward_exp))),
+                ("specialPrice", Tag::Int(o.special_price_diff)),
+                ("demand", Tag::Int(o.demand)),
+                ("priceMultiplier", Tag::Float(o.price_multiplier.to_bits())),
+                ("xp", Tag::Int(o.xp)),
+            ];
+            if let Some(b) = &o.cost_b {
+                entries.push(("buyB", item_to_nbt(&b.stack)));
+            }
+            Tag::compound(entries)
+        })
+        .collect();
+    map.insert(
+        "Offers".into(),
+        Tag::compound([("Recipes", Tag::List(recipes))]),
+    );
+}
+/// The villager brain's `job_site` memory.
+fn put_job_site(map: &mut Compound, site: Option<[i32; 3]>) {
+    let Some(p) = site else { return };
+    let pos = Tag::compound([
+        ("dimension", string("minecraft:overworld")),
+        ("pos", Tag::IntArray(p.to_vec())),
+    ]);
+    map.insert(
+        "Brain".into(),
+        Tag::compound([(
+            "memories",
+            Tag::compound([("minecraft:job_site", Tag::compound([("value", pos)]))]),
+        )]),
+    );
+}
+fn read_villager(m: &mut Mob, tag: &Tag) {
+    use crate::{
+        merchant::{ItemCost, MerchantOffer, Trader},
+        mobs::render::{PROFESSIONS, VILLAGER_TYPES},
+    };
+    if let Some(data) = tag.get("VillagerData") {
+        let name = |key| text(data.get(key)).map(|s| s.trim_start_matches("minecraft:").to_owned());
+        if let Some(t) = name("type").and_then(|t| VILLAGER_TYPES.iter().position(|v| *v == t)) {
+            m.extra.variant = t as u8;
+        }
+        m.extra.variant2 = name("profession")
+            .and_then(|p| PROFESSIONS.iter().position(|v| *v == p))
+            .unwrap_or(0) as u8;
+        m.extra.variant3 = number(data.get("level")).unwrap_or(1).clamp(1, 5) as u8;
+    }
+    m.extra.home = tag
+        .get("Brain")
+        .and_then(|b| b.get("memories"))
+        .and_then(|b| b.get("minecraft:job_site"))
+        .and_then(|j| j.get("value"))
+        .and_then(|v| match v.get("pos") {
+            Some(Tag::IntArray(a)) if a.len() == 3 => Some([a[0], a[1], a[2]]),
+            _ => None,
+        });
+    let Some(Tag::List(recipes)) = tag.get("Offers").and_then(|o| o.get("Recipes")) else {
+        return;
+    };
+    let offers = recipes
+        .iter()
+        .filter_map(|r| {
+            let cost = |key| {
+                r.get(key)
+                    .and_then(item_from_nbt)
+                    .map(|stack| ItemCost { stack })
+            };
+            Some(MerchantOffer {
+                base_cost_a: cost("buy")?,
+                cost_b: cost("buyB"),
+                result: r.get("sell").and_then(item_from_nbt)?,
+                uses: number(r.get("uses")).unwrap_or(0) as i32,
+                max_uses: number(r.get("maxUses")).unwrap_or(4) as i32,
+                reward_exp: number(r.get("rewardExp")).unwrap_or(1) != 0,
+                special_price_diff: number(r.get("specialPrice")).unwrap_or(0) as i32,
+                demand: number(r.get("demand")).unwrap_or(0) as i32,
+                price_multiplier: float(r.get("priceMultiplier")).unwrap_or(0.0) as f32,
+                xp: number(r.get("xp")).unwrap_or(1) as i32,
+            })
+        })
+        .collect();
+    m.extra.trade = Some(Box::new(Trader {
+        xp: number(tag.get("Xp")).unwrap_or(0) as i32,
+        offers,
+    }));
 }
 
 #[cfg(test)]

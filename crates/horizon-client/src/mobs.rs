@@ -36,6 +36,7 @@ pub mod species;
 pub mod tame;
 pub mod undead;
 pub mod vex;
+pub mod villager;
 pub mod witch;
 pub mod wither;
 mod world;
@@ -463,6 +464,8 @@ pub struct Extra {
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
     pub effects: Vec<(&'static str, i32, i32)>,
+    /// Villager and wandering trader offers and experience.
+    pub trade: Option<Box<crate::merchant::Trader>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -688,6 +691,8 @@ pub struct Seen {
     pub variant: u8,
     /// Dye colour (sheep).
     pub color: u8,
+    /// A villager's claimed job site.
+    pub job: Option<[i32; 3]>,
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]
