@@ -46,6 +46,7 @@ mod sign_edit;
 mod station_control;
 mod stations;
 mod stats;
+mod stats_screen;
 mod storage;
 mod titles;
 mod tnt;
@@ -238,6 +239,8 @@ enum Screen {
     Creative,
     Inventory,
     Dead,
+    /// The Statistics screen.
+    Stats,
 }
 #[derive(Clone)]
 enum Icon {
@@ -614,6 +617,7 @@ struct Game<'a> {
     combat: combat::CombatTracker,
     mount: mounts::MountState,
     stats: stats::Stats,
+    stats_ui: stats_screen::StatsUi,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -2926,6 +2930,7 @@ impl Game<'_> {
         match self.screen {
             Screen::Paused => self.draw_pause_menu(&mut batch),
             Screen::Dead => self.draw_death_screen(&mut batch),
+            Screen::Stats => self.draw_stats(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
             }
@@ -6656,6 +6661,7 @@ impl Game<'_> {
                     self.capture(true);
                 }
                 Screen::Dead => {}
+                Screen::Stats => self.screen = Screen::Paused,
                 Screen::Chat => self.close_chat(),
             },
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
@@ -6915,6 +6921,9 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Inventory && d != 0.0 {
                         self.station_scroll(d);
                     }
+                    if self.screen == Screen::Stats && d != 0.0 {
+                        self.stats_scroll(d);
+                    }
                     if self.screen == Screen::Playing && d != 0.0 {
                         self.selected =
                             (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
@@ -7013,6 +7022,13 @@ impl ApplicationHandler for Game<'_> {
                         }
                         Screen::Paused if pressed => self.pause_click()?,
                         Screen::Dead if pressed => self.death_click()?,
+                        Screen::Stats if pressed && button == MouseButton::Left => {
+                            let size = self
+                                .renderer
+                                .as_ref()
+                                .map_or([1, 1], |r| [r.config.width, r.config.height]);
+                            self.stats_click(size);
+                        }
                         _ => {}
                     }
                 }
@@ -7510,6 +7526,7 @@ pub fn run() -> Result<()> {
         combat: Default::default(),
         mount: Default::default(),
         stats: Default::default(),
+        stats_ui: Default::default(),
     };
     game.ui.vanilla_root = vanilla_root;
     game.res.atlas.font.uniform = game.settings.force_unicode;

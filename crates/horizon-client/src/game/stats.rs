@@ -147,7 +147,8 @@ impl Game<'_> {
         let d = p.position.subtract(self.previous_position);
         let horizontal = ((d.x * d.x + d.z * d.z).sqrt() * 100.0).round() as i32;
         let total = ((d.x * d.x + d.y * d.y + d.z * d.z).sqrt() * 100.0).round() as i32;
-        if total <= 0 {
+        // Teleports are not travel.
+        if total <= 0 || total > 1000 {
             return;
         }
         let crouching = p.pose == horizon_client::pose::Pose::Crouching;

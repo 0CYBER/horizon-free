@@ -16,7 +16,7 @@ fn pause_buttons(w: f32, h: f32) -> Vec<(f32, f32, f32, &'static str, u8, bool)>
     vec![
         (x0 + 4.0, y0 + 50.0, 204.0, "menu.returnToGame", 0, true),
         (x0 + 4.0, y0 + 74.0, 98.0, "gui.advancements", 9, false),
-        (x0 + 110.0, y0 + 74.0, 98.0, "gui.stats", 9, false),
+        (x0 + 110.0, y0 + 74.0, 98.0, "gui.stats", 3, true),
         (x0 + 4.0, y0 + 122.0, 98.0, "menu.options", 1, true),
         (
             x0 + 110.0,
@@ -112,6 +112,7 @@ impl Game<'_> {
                 self.capture(true);
             }
             Some(1) => self.open_options(false),
+            Some(3) => self.open_stats(),
             Some(2) => self.close_world()?,
             _ => {}
         }

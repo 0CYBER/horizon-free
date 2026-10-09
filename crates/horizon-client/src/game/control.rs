@@ -441,6 +441,7 @@ impl Game<'_> {
             Screen::Creative => "creative",
             Screen::Dead => "dead",
             Screen::Chat => "chat",
+            Screen::Stats => "stats",
         }
     }
 
