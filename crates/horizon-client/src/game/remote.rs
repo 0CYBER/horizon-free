@@ -420,6 +420,8 @@ impl Game<'_> {
             .is_none_or(|r| r.dimension.has_skylight);
         self.streaming.sky_light = has_sky;
         self.streaming.nether_shading = self.dim == Dim::Nether;
+        // The seed in SpawnInfo is already the hashed one the client's BiomeManager holds.
+        self.streaming.biome_zoom = horizon_core::biome::BiomeZoom::new(spawn.seed);
         self.player = None;
         self.apply_settings();
     }

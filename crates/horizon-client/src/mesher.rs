@@ -12,7 +12,9 @@ use crate::{
     chunk::{Chunk, MIN_Y},
     models::catalog::BakedFace,
 };
-use horizon_core::{geometry::Direction, position::BlockPos, random::position_seed};
+use horizon_core::{
+    biome::BiomeZoom, geometry::Direction, position::BlockPos, random::position_seed,
+};
 use horizon_world::{
     block_render::FaceVisibility,
     fluid::{FluidKind, FluidState},
@@ -161,6 +163,8 @@ struct Info {
     legacy_solid: bool,
     /// `HalfTransparentBlock`/`LeavesBlock`: water sides show the overlay sprite.
     overlay: bool,
+    /// `LeavesBlock`: with opaque leaves the faces between two leaf blocks are skipped.
+    leaves: bool,
     blocks_flow: bool,
     ice: bool,
     sturdy: u8,
@@ -313,6 +317,7 @@ impl MeshTables {
                 offset,
                 legacy_solid: s.legacy_solid,
                 overlay: s.has_class("HalfTransparentBlock") || s.has_class("LeavesBlock"),
+                leaves: s.has_class("LeavesBlock"),
                 blocks_flow: assets.blocks_fluid_flow.contains(&*s.name),
                 ice: s.has_class("IceBlock"),
                 sturdy: s.sturdy_full,
@@ -396,57 +401,113 @@ impl Padded {
         Self { blocks, light }
     }
 }
+/// Set on a vertex's sprite layer when its texture alpha must be ignored.
+pub const OPAQUE_LAYER: u32 = 1 << 31;
+const UNSET: u32 = u32::MAX;
+const NO_BIOME: u16 = u16::MAX;
+/// The `ColorResolver`s `ClientLevel` caches block tints for.
 #[derive(Clone, Copy)]
-struct Colors {
-    grass: [u32; 256],
-    tall_upper: [u32; 256],
-    foliage: [u32; 256],
-    dry: [u32; 256],
-    water: [u32; 256],
+enum Resolver {
+    Grass,
+    Foliage,
+    Dry,
+    Water,
 }
-fn blend(region: &[[Option<&Chunk>; 3]; 3], biomes: &Biomes, cx: i32, cz: i32, y: i32) -> Colors {
-    // Vanilla blends over a (2r+1)^2 area; r = 2 is the default option.
-    const R: i32 = 2;
-    let biome_at = |x: i32, z: i32| -> u16 {
-        region[((z + 16) >> 4) as usize][((x + 16) >> 4) as usize]
-            .map_or(0, |c| c.biome(x & 15, y, z & 15))
-    };
-    let mut colors = Colors {
-        grass: [0; 256],
-        tall_upper: [0; 256],
-        foliage: [0; 256],
-        dry: [0; 256],
-        water: [0; 256],
-    };
-    let avg = |f: &dyn Fn(u16, i32, i32) -> u32, x: i32, z: i32| -> u32 {
-        let (mut r, mut g, mut b) = (0, 0, 0);
-        for dz in -R..=R {
-            for dx in -R..=R {
-                let c = f(biome_at(x + dx, z + dz), x + dx, z + dz);
-                r += c >> 16 & 255;
-                g += c >> 8 & 255;
-                b += c & 255;
-            }
-        }
-        let n = ((2 * R + 1) * (2 * R + 1)) as u32;
-        (r / n) << 16 | (g / n) << 8 | (b / n)
-    };
-    for z in 0..16 {
-        for x in 0..16 {
-            let i = (z * 16 + x) as usize;
-            let (wx, wz) = (cx * 16 + x, cz * 16 + z);
-            colors.grass[i] = avg(
-                &|b, dx, dz| biomes.grass(b, f64::from(wx + dx - x), f64::from(wz + dz - z)),
-                x,
-                z,
-            );
-            colors.tall_upper[i] = colors.grass[i];
-            colors.foliage[i] = avg(&|b, _, _| biomes.get(b).foliage, x, z);
-            colors.dry[i] = avg(&|b, _, _| biomes.get(b).dry_foliage, x, z);
-            colors.water[i] = avg(&|b, _, _| biomes.get(b).water, x, z);
+/// Biome tints of one block layer: the zoomed biome of every block of the
+/// layer plus the blend radius around it, and the blended colours per column.
+struct Layer {
+    zoomed: Vec<u16>,
+    colors: [[u32; 256]; 4],
+}
+/// `ClientLevel.calculateBlockTint` behind a per-layer `BlockTintCache`: each
+/// block averages the colours of the biomes `BiomeManager.getBiome` picks (the
+/// eight-corner zoom) over a `(2r+1)^2` square at the block's own height.
+/// Layers and columns are only computed when a tinted block asks for them.
+struct Tints<'a> {
+    region: &'a [[Option<&'a Chunk>; 3]; 3],
+    biomes: &'a Biomes,
+    zoom: BiomeZoom,
+    radius: i32,
+    plains: u16,
+    /// Chunk x, chunk z and the section's lowest block y.
+    origin: [i32; 3],
+    layers: [Option<Box<Layer>>; 16],
+}
+impl<'a> Tints<'a> {
+    fn new(
+        region: &'a [[Option<&'a Chunk>; 3]; 3],
+        biomes: &'a Biomes,
+        zoom: BiomeZoom,
+        radius: i32,
+        origin: [i32; 3],
+    ) -> Self {
+        Self {
+            region,
+            biomes,
+            zoom,
+            radius: radius.clamp(0, 7),
+            plains: biomes.id("minecraft:plains"),
+            origin,
+            layers: Default::default(),
         }
     }
-    colors
+    /// The blended tint of block `(x, y, z)` (section-local x/z, y in 0..16).
+    fn get(&mut self, resolver: Resolver, x: i32, y: i32, z: i32) -> u32 {
+        let r = self.radius;
+        let dim = (16 + 2 * r) as usize;
+        let layer = self.layers[y as usize].get_or_insert_with(|| {
+            Box::new(Layer {
+                zoomed: vec![NO_BIOME; dim * dim],
+                colors: [[UNSET; 256]; 4],
+            })
+        });
+        let slot = (z * 16 + x) as usize;
+        let cached = layer.colors[resolver as usize][slot];
+        if cached != UNSET {
+            return cached;
+        }
+        let [cx, cz, base_y] = self.origin;
+        let (bx, by, bz) = (cx * 16, base_y + y, cz * 16);
+        let (mut red, mut green, mut blue) = (0, 0, 0);
+        for dz in -r..=r {
+            for dx in -r..=r {
+                let cell = ((z + dz + r) as usize) * dim + (x + dx + r) as usize;
+                let mut biome = layer.zoomed[cell];
+                if biome == NO_BIOME {
+                    // BiomeManager.getBiome over the loaded chunks (plains
+                    // where there is none).
+                    let q = self
+                        .zoom
+                        .quart_at_block(BlockPos::new(bx + x + dx, by, bz + z + dz));
+                    let (rx, rz) = ((q[0] >> 2) - cx + 1, (q[2] >> 2) - cz + 1);
+                    biome = if (0..3).contains(&rx) && (0..3).contains(&rz) {
+                        self.region[rz as usize][rx as usize].map_or(self.plains, |c| {
+                            c.biome((q[0] & 3) * 4, q[1] * 4, (q[2] & 3) * 4)
+                        })
+                    } else {
+                        self.plains
+                    };
+                    layer.zoomed[cell] = biome;
+                }
+                let c = match resolver {
+                    Resolver::Grass => {
+                        self.biomes
+                            .grass(biome, f64::from(bx + x + dx), f64::from(bz + z + dz))
+                    }
+                    Resolver::Foliage => self.biomes.get(biome).foliage,
+                    Resolver::Dry => self.biomes.get(biome).dry_foliage,
+                    Resolver::Water => self.biomes.get(biome).water,
+                };
+                red += c >> 16 & 255;
+                green += c >> 8 & 255;
+                blue += c & 255;
+            }
+        }
+        let n = ((2 * r + 1) * (2 * r + 1)) as u32;
+        let color = (red / n) << 16 | (green / n) << 8 | (blue / n);
+        layer.colors[resolver as usize][slot] = color;
+        color
+    }
 }
 /// Packs 8-bit RGB into the vertex's RGBA8 (red in the low byte), opaque.
 fn pack_rgb([r, g, b]: [u32; 3]) -> u32 {
@@ -464,6 +525,14 @@ pub struct Mesher<'a> {
     pub tables: &'a MeshTables,
     pub biomes: &'a Biomes,
     pub visibility: FaceVisibility,
+    /// The client's biome zoom (the hashed world seed `BiomeManager` holds).
+    pub zoom: BiomeZoom,
+    /// The `biomeBlendRadius` option, 0 to 7.
+    pub blend_radius: i32,
+    /// The `ao` option: smooth lighting for models that allow it.
+    pub smooth_lighting: bool,
+    /// The `cutoutLeaves` option (fancy graphics); off makes leaves opaque.
+    pub cutout_leaves: bool,
 }
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
@@ -477,7 +546,13 @@ impl Mesher<'_> {
         let pad = Padded::new(region, sy);
         out.visibility = visibility(&pad, &self.tables.info);
         let base_y = MIN_Y + sy * 16;
-        let colors = blend(region, self.biomes, center.x, center.z, base_y + 8);
+        let mut tints = Tints::new(
+            region,
+            self.biomes,
+            self.zoom,
+            self.blend_radius,
+            [center.x, center.z, base_y],
+        );
         let info = &self.tables.info;
         for y in 0..16 {
             for z in 0..16 {
@@ -502,7 +577,7 @@ impl Mesher<'_> {
                         continue;
                     }
                     if state.fluid.kind() != FluidKind::Empty {
-                        let water = colors.water[(z * 16 + x) as usize];
+                        let water = tints.get(Resolver::Water, x, y, z);
                         let nether = self.nether_shading;
                         fluid::tesselate(self.tables, nether, &pad, water, &mut out, [x, y, z]);
                     }
@@ -522,7 +597,7 @@ impl Mesher<'_> {
                     let Some((_, first)) = models.first() else {
                         continue;
                     };
-                    let ao = state.emission == 0 && first.ambient_occlusion;
+                    let ao = self.smooth_lighting && state.emission == 0 && first.ambient_occlusion;
                     let origin = match offset(state, world.x, world.z) {
                         Some(o) => [
                             x as f32 + o[0] as f32,
@@ -544,13 +619,26 @@ impl Mesher<'_> {
                                 true,
                             )
                             .unwrap_or(true);
+                        // LeavesBlock.skipRendering with opaque leaves.
+                        if !self.cutout_leaves && state.leaves && info[neighbor as usize].leaves {
+                            visible[d as usize] = false;
+                        }
                     }
                     for (_, model) in &models {
                         for face in &model.faces {
                             if face.quad.cull.is_some_and(|d| !visible[d as usize]) {
                                 continue;
                             }
-                            self.face(&pad, &colors, &mut out, [x, y, z], origin, face, ao, state);
+                            self.face(
+                                &pad,
+                                &mut tints,
+                                &mut out,
+                                [x, y, z],
+                                origin,
+                                face,
+                                ao,
+                                state,
+                            );
                         }
                     }
                 }
@@ -559,18 +647,17 @@ impl Mesher<'_> {
         out
     }
     /// `BlockColors` tint source `index`, or `None` for an untinted (-1) layer.
-    fn tint(state: &Info, index: i32, colors: &Colors, x: i32, z: i32) -> Option<u32> {
+    fn tint(state: &Info, index: i32, tints: &mut Tints, [x, y, z]: [i32; 3]) -> Option<u32> {
         if index < 0 || index >= i32::from(state.tint_count) {
             return None;
         }
-        let column = (z * 16 + x) as usize;
         Some(match state.tints[(index as usize).min(1)] {
             Tint::None => return None,
-            Tint::Grass => colors.grass[column],
-            Tint::TallGrassUpper => colors.tall_upper[column],
-            Tint::Foliage => colors.foliage[column],
-            Tint::DryFoliage => colors.dry[column],
-            Tint::Water => colors.water[column],
+            Tint::Grass => tints.get(Resolver::Grass, x, y, z),
+            Tint::TallGrassUpper => tints.get(Resolver::Grass, x, y, z),
+            Tint::Foliage => tints.get(Resolver::Foliage, x, y, z),
+            Tint::DryFoliage => tints.get(Resolver::Dry, x, y, z),
+            Tint::Water => tints.get(Resolver::Water, x, y, z),
             Tint::Constant(c) => c,
             Tint::Redstone(p) => redstone_color(p),
             Tint::Stem(age) => {
@@ -583,7 +670,7 @@ impl Mesher<'_> {
     fn face(
         &self,
         pad: &Padded,
-        colors: &Colors,
+        tints: &mut Tints,
         out: &mut SectionMesh,
         pos: [i32; 3],
         origin: [f32; 3],
@@ -608,7 +695,7 @@ impl Mesher<'_> {
             };
             ([lighting::gray(directional); 4], [coords; 4])
         };
-        let tint = Self::tint(state, q.tint_index, colors, pos[0], pos[2]);
+        let tint = Self::tint(state, q.tint_index, tints, pos);
         let target = if face.translucent {
             &mut out.translucent
         } else {
@@ -624,7 +711,12 @@ impl Mesher<'_> {
             target.push(Vertex {
                 pos: [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],
                 uv: q.uv[i],
-                layer: face.layer,
+                // Opaque leaves (forceOpaque) draw in the solid layer: no alpha cutout.
+                layer: if !self.cutout_leaves && state.leaves {
+                    face.layer | OPAQUE_LAYER
+                } else {
+                    face.layer
+                },
                 color: pack_rgb(rgb),
                 light: pack_coords(lighting::with_emission(coords[i], q.light_emission)),
             });

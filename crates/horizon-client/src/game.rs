@@ -97,7 +97,11 @@ use horizon_client::{
     vanillagen::VanillaTerrain,
     world::World,
 };
-use horizon_core::{geometry::Direction, position::BlockPos};
+use horizon_core::{
+    biome::{BiomeZoom, obfuscate_seed},
+    geometry::Direction,
+    position::BlockPos,
+};
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_world::{
     block_collision::BlockCollisionRegistry,
@@ -4768,6 +4772,10 @@ impl Game<'_> {
             )
         };
         streaming.radius = self.settings.render_distance;
+        streaming.biome_blend = self.settings.biome_blend;
+        streaming.smooth_lighting = self.settings.smooth_lighting;
+        streaming.cutout_leaves = self.settings.cutout_leaves;
+        streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
         streaming.sky_light = dim != Dim::Nether;
         streaming.nether_shading = dim == Dim::Nether;
         Ok((streaming, save))
@@ -6019,6 +6027,9 @@ impl Game<'_> {
     }
     fn apply_settings(&mut self) {
         self.streaming.radius = self.settings.render_distance;
+        self.streaming.biome_blend = self.settings.biome_blend;
+        self.streaming.smooth_lighting = self.settings.smooth_lighting;
+        self.streaming.cutout_leaves = self.settings.cutout_leaves;
         self.audio.master = self.settings.master_volume;
         horizon_client::hud::GUI_SCALE.store(
             self.settings.gui_scale,
