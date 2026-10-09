@@ -3050,7 +3050,7 @@ impl Game<'_> {
         }
         let mut v: Vec<usize> = (0..36).collect();
         match self.container_kind() {
-            Some(BlockEntity::Chest(items)) => v.extend((0..items.len()).map(|i| 300 + i)),
+            Some(BlockEntity::Chest(_)) => v.extend((0..self.container_size()).map(|i| 300 + i)),
             Some(BlockEntity::Furnace(_)) => v.extend(300..303),
             Some(BlockEntity::Brewing(_)) => v.extend(300..305),
             Some(BlockEntity::Crafter(_)) => v.extend(300..310),
@@ -3083,10 +3083,11 @@ impl Game<'_> {
         }
         let table = self.craft_size == 3;
         // ContainerScreen (3 rows) shifts the player inventory down by one pixel.
-        let shift = if matches!(self.container_kind(), Some(BlockEntity::Chest(_))) {
-            1.0
-        } else {
-            0.0
+        // ChestMenu: the inventory sits `18 * (rows - 3) + 1` lower than the
+        // 3-row layout of the other menus.
+        let shift = match self.chest_rows() {
+            Some(rows) => 1.0 + (rows as f32 - 3.0) * 18.0,
+            None => 0.0,
         };
         match i {
             0..9 => (8.0 + i as f32 * 18.0, 142.0 + shift),
@@ -3145,14 +3146,7 @@ impl Game<'_> {
             return &mut self.offhand;
         }
         if i >= 300 {
-            let key = self.container;
-            return match key.and_then(|k| self.world.block_entities.get_mut(&k)) {
-                Some(e) => e
-                    .slots_mut()
-                    .get_mut(i - 300)
-                    .unwrap_or(&mut self.scratch_slot),
-                None => &mut self.scratch_slot,
-            };
+            return self.container_slot_mut(i - 300);
         }
         if (100..109).contains(&i) {
             &mut self.craft_grid[i - 100]
@@ -3211,42 +3205,7 @@ impl Game<'_> {
                 .and_then(|k| self.world.block_entities.get(&k))
             {
                 Some(BlockEntity::Chest(_)) if self.draw_machine_screen(batch, ox, oy) => {}
-                Some(BlockEntity::Chest(_)) => {
-                    // ContainerScreen with 3 rows: top 71px, then the player inventory from v=126.
-                    part(
-                        batch,
-                        "gui/container/generic_54",
-                        0.0,
-                        0.0,
-                        176.0,
-                        71.0,
-                        ox,
-                        oy,
-                    );
-                    part(
-                        batch,
-                        "gui/container/generic_54",
-                        0.0,
-                        126.0,
-                        176.0,
-                        96.0,
-                        ox,
-                        oy + 71.0,
-                    );
-                    let name = self
-                        .container
-                        .map(|k| self.world.block(k.0, k.1, k.2))
-                        .map(|s| self.res.facts.get(s).name.clone());
-                    let title = if self.open_cart_kind().is_some() {
-                        "Minecart with Chest"
-                    } else if name.as_deref() == Some("minecraft:barrel") {
-                        "Barrel"
-                    } else {
-                        "Chest"
-                    };
-                    batch.text(atlas, title, ox + 8.0, oy + 6.0, grey, false);
-                    batch.text(atlas, "Inventory", ox + 8.0, oy + 73.0, grey, false);
-                }
+                Some(BlockEntity::Chest(_)) => self.draw_chest_screen(batch, ox, oy),
                 Some(BlockEntity::Furnace(f)) => {
                     let (tex, title) = match f.kind {
                         horizon_client::containers::FurnaceKind::Furnace => {
@@ -3451,6 +3410,12 @@ impl Game<'_> {
         let held_shift =
             self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
         if self.crafter_click(slot, held_shift) {
+            return;
+        }
+        if held_shift && self.container.is_some() && self.container_quick_move(slot) {
+            if let Some(key) = self.container {
+                self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+            }
             return;
         }
         if let Some(c) = &self.carried

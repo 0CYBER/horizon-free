@@ -313,7 +313,7 @@ impl Game<'_> {
         let c = self.container.and_then(|k| self.crafter_at(k))?;
         let i = slot.checked_sub(300).filter(|i| *i < 9)?;
         (self.carried.is_none() && c.items[i].is_none() && !c.disabled[i] && !self.spectator())
-            .then(|| self.translate("gui.togglable_slot", "Click to toggle"))
+            .then(|| self.translate("gui.togglable_slot", "Click to disable slot"))
     }
     /// A click in the crafter menu before the generic handling; true when
     /// it was fully handled (the result, shift-clicks).

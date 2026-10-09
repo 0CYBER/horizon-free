@@ -492,7 +492,11 @@ impl Game<'_> {
             // CrafterSlot.mayPlace: not a disabled slot.
             return (!c.disabled[slot - 300], 64);
         }
-        if (300..305).contains(&slot) {
+        if (300..400).contains(&slot) && !self.brewing_open() && self.refuses(slot, stack) {
+            // ShulkerBoxSlot.mayPlace.
+            return (false, 64);
+        }
+        if self.brewing_open() && (300..305).contains(&slot) {
             return match slot - 300 {
                 0..=2 => (data.brewing.is_bottle(stack), 1),
                 3 => (data.brewing.is_reagent(stack), 64),

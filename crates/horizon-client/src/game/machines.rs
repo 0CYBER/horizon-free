@@ -322,10 +322,16 @@ impl Game<'_> {
         if pos.1 == super::minecarts::CART_KEY_Y {
             return;
         }
-        self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
-        self.with_level(|b, level, ticks| {
-            b.container_changed(level, ticks, BlockPos::new(pos.0, pos.1, pos.2))
-        });
+        // A double chest's other half changes with it.
+        let halves: Vec<Pos> = std::iter::once(pos)
+            .chain(self.chest_other_half(pos))
+            .collect();
+        for pos in halves {
+            self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+            self.with_level(|b, level, ticks| {
+                b.container_changed(level, ticks, BlockPos::new(pos.0, pos.1, pos.2))
+            });
+        }
     }
     /// `HopperBlockEntity.tryMoveInItem`.
     fn try_move_in_item(
@@ -1056,6 +1062,13 @@ impl Game<'_> {
         {
             return super::beacon::HEIGHT;
         }
+        if let Some(rows) = self.chest_rows() {
+            // ContainerScreen: 114 + 18 per row.
+            return 114.0 + rows as f32 * 18.0;
+        }
+        if self.container_block_is_shulker() {
+            return 167.0;
+        }
         if self.machine_screen() == Some(Screen::Hopper) {
             133.0
         } else {
@@ -1091,7 +1104,13 @@ impl Game<'_> {
             return false;
         };
         let atlas = &self.res.atlas;
+        let key_is_cart = self
+            .container
+            .is_some_and(|k| k.1 == super::minecarts::CART_KEY_Y);
         let (texture, height, title) = match screen {
+            Screen::Hopper if key_is_cart => {
+                ("gui/container/hopper", 133.0, "Minecart with Hopper")
+            }
             Screen::Hopper => ("gui/container/hopper", 133.0, "Item Hopper"),
             Screen::Dispenser => ("gui/container/dispenser", 166.0, "Dispenser"),
             Screen::Dropper => ("gui/container/dispenser", 166.0, "Dropper"),
