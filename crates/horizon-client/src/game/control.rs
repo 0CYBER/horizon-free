@@ -474,6 +474,8 @@ impl Game<'_> {
             "day_time": self.world.day_time,
             "music": self.music.current(),
             "fishing": self.hook_status(),
+            "tridents": self.tridents.len(),
+            "using": self.using,
             "render_distance": self.streaming.radius,
             "chunks": self.world.chunks.len(),
             "pending_chunks": self.streaming.pending(),

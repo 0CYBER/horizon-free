@@ -36,6 +36,7 @@ mod titles;
 mod tnt;
 mod totem;
 mod trading;
+mod trident;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -542,6 +543,8 @@ struct Game<'a> {
     pending_shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
     /// The player's fishing hook.
     hook: Option<fishing::Hook>,
+    tridents: Vec<trident::ThrownTrident>,
+    trident_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     creative_screen: Creative,
@@ -1482,6 +1485,7 @@ impl Game<'_> {
         if self.raise_shield(self.selected)
             || self.use_fishing_rod(&stack)
             || self.use_crossbow(&stack)
+            || self.use_trident(&stack)
         {
             return Ok(());
         }
@@ -1614,6 +1618,9 @@ impl Game<'_> {
             if &*stack.item == "minecraft:spyglass" {
                 self.stop_spyglass();
             }
+            if &*stack.item == "minecraft:trident" && slot == self.selected {
+                self.release_trident(ticks);
+            }
             self.using = None;
             return;
         }
@@ -1635,6 +1642,10 @@ impl Game<'_> {
         }
         if &*stack.item == "minecraft:crossbow" {
             self.tick_crossbow(slot, ticks, &stack);
+            return;
+        }
+        if &*stack.item == "minecraft:trident" {
+            self.using = Some((slot, ticks + 1));
             return;
         }
         if &*stack.item == "minecraft:spyglass" {
@@ -2120,6 +2131,7 @@ impl Game<'_> {
         self.tick_armor_stands();
         self.tick_boats();
         self.tick_fishing();
+        self.tick_tridents();
         self.tick_mining()?;
         self.tick_items();
         self.spawn_loaded_entities();
@@ -3592,6 +3604,7 @@ impl Game<'_> {
         self.armor_stand_geometry(camera, alpha, &mut out);
         self.boat_geometry(camera, alpha, &mut out);
         self.fishing_geometry(camera, alpha, &mut out);
+        self.trident_geometry(camera, alpha, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
         let world = &self.world;
         self.particles.render(
@@ -7133,6 +7146,8 @@ pub fn run() -> Result<()> {
         ender_open: None,
         pending_shulker: HashMap::new(),
         hook: None,
+        tridents: Vec::new(),
+        trident_model: horizon_client::mobs::load_model(&root, "minecraft:trident#main"),
         tnts: Vec::new(),
         hoppers: HashMap::new(),
         creative_screen: Creative::load(&game_root)?,
