@@ -84,7 +84,8 @@ impl MotionWorld<'_, '_, '_> {
     /// LocalPlayer.aiStep computes crouching BEFORE KeyboardInput.tick, using
     /// the old shift input. This is distinct from Entity's current pose.
     pub fn update_local_crouching(&mut self) -> Result<()> {
-        self.player.local_crouching = self.can_fit_pose(Pose::Crouching)?
+        self.player.local_crouching = !self.player.flying
+            && self.can_fit_pose(Pose::Crouching)?
             && (self.player.shift_key_down || !self.can_fit_pose(Pose::Standing)?);
         Ok(())
     }
@@ -94,7 +95,7 @@ impl MotionWorld<'_, '_, '_> {
         if !self.can_fit_pose(Pose::Swimming)? {
             return Ok(());
         }
-        let desired = if self.player.shift_key_down {
+        let desired = if self.player.shift_key_down && !self.player.flying {
             Pose::Crouching
         } else {
             Pose::Standing

@@ -138,6 +138,11 @@ pub struct PlayerMotion {
     pub jumping: bool,
     pub no_jump_delay: i32,
     pub jump_trigger_time: i32,
+    /// Abilities.mayfly / flying (creative flight).
+    pub may_fly: bool,
+    pub flying: bool,
+    /// The jump key last tick (LocalPlayer.aiStep's wasJumping).
+    pub was_jumping: bool,
     pub sprinting: bool,
     pub sprint_input: crate::sprint::SprintState,
     pub shift_key_down: bool,
@@ -207,6 +212,9 @@ impl PlayerMotion {
             jumping: false,
             no_jump_delay: 0,
             jump_trigger_time: 0,
+            may_fly: false,
+            flying: false,
+            was_jumping: false,
             sprinting: false,
             sprint_input: crate::sprint::SprintState::default(),
             shift_key_down: false,
@@ -437,7 +445,38 @@ impl MotionWorld<'_, '_, '_> {
             self.player.jump_trigger_time -= 1;
         }
         self.player.peaceful_regeneration(self.scene.health_rules)?;
-        self.dry_tick(TickInput::PreparedLocal { direction, jumping })?;
+        // LocalPlayer.aiStep: double-tap jump toggles creative flight.
+        let was_jumping = std::mem::replace(&mut self.player.was_jumping, jumping);
+        if !self.player.may_fly {
+            self.player.flying = false;
+        } else if !was_jumping && jumping {
+            if self.player.jump_trigger_time == 0 {
+                self.player.jump_trigger_time = 7;
+            } else {
+                self.player.flying = !self.player.flying;
+                if self.player.flying && self.player.ground.on_ground {
+                    self.jump_from_ground()?;
+                }
+                self.player.jump_trigger_time = 0;
+            }
+        }
+        if self.player.flying {
+            // Vertical flight: jump up, shift down, three times the flying speed.
+            let ya = i32::from(jumping) - i32::from(self.player.shift_key_down);
+            if ya != 0 {
+                self.player.velocity.y += f64::from(ya as f32 * 0.05 * 3.0);
+            }
+        }
+        self.dry_tick(TickInput::PreparedLocal {
+            direction,
+            jumping: jumping && !self.player.flying,
+        })?;
+        if self.player.flying {
+            self.player.fall_distance = 0.0;
+            if self.player.ground.on_ground {
+                self.player.flying = false;
+            }
+        }
         self.player.head_yaw = self.player.yaw;
         // Player.aiStep refreshes speed after movement, not before travel.
         self.player.speed = self.player.attribute("minecraft:movement_speed")? as f32;
@@ -514,7 +553,14 @@ impl MotionWorld<'_, '_, '_> {
         } else {
             self.player.no_jump_delay = 0;
         }
-        self.travel_in_air(input)?;
+        if self.player.flying {
+            // Player.travel while flying: keep 0.6 of the vertical speed.
+            let y = self.player.velocity.y;
+            self.travel_in_air(input)?;
+            self.player.velocity.y = y * 0.6;
+        } else {
+            self.travel_in_air(input)?;
+        }
         self.player.remove_frost()
     }
     pub fn jump_from_ground(&mut self) -> Result<()> {
@@ -883,6 +929,10 @@ impl LivingAirWorld for MotionWorld<'_, '_, '_> {
         Ok(self.player.attribute("minecraft:movement_speed")? as f32)
     }
     fn flying_speed(&mut self) -> Result<f32> {
+        if self.player.flying {
+            // Abilities.flyingSpeed 0.05, doubled when sprinting.
+            return Ok(if self.player.sprinting { 0.1 } else { 0.05 });
+        }
         Ok(if self.player.sprinting {
             0.025999999
         } else {

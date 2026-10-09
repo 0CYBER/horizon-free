@@ -1934,6 +1934,7 @@ impl Game<'_> {
         };
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;
+        player.may_fly = self.creative;
         if self.level.health > 0.0 && self.ticks < 2 {
             player.set_health(self.level.health, false)?;
             player.health.food.food = self.level.food;
@@ -2007,6 +2008,7 @@ impl Game<'_> {
             self.previous_position = player.position;
         }
         player.yaw = self.yaw;
+        player.may_fly = self.creative;
         // LocalPlayer.modifyInput: walking while using an item.
         player.item_use_speed = self
             .using
