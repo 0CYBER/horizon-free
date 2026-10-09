@@ -124,6 +124,7 @@ impl FoodWorld for TickWorld<'_> {
         self.events
             .push(MotionEvent::Health(HealthEvent::StarvationDamage(amount)));
         let mut environment = Environment {
+            invulnerable: false,
             rules: self.rules,
             source: self
                 .resources

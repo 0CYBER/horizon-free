@@ -386,6 +386,12 @@ impl Game<'_> {
                 self.save_game()?;
                 ok()
             }
+            "dragon-hurt" => {
+                // Test hook: damage the dragon's head as the player would.
+                let amount: f32 = arg(1)?.parse()?;
+                self.hit_special(super::dragon::SPECIAL, amount, true);
+                ok()
+            }
             "quit" => {
                 if self.title.is_none() {
                     // Player.closeContainer: menu items go back before saving.
@@ -482,6 +488,7 @@ impl Game<'_> {
             "fishing": self.hook_status(),
             "tridents": self.tridents.len(),
             "rockets": self.rockets.len(),
+            "fight": self.dragon_status(),
             "carts": self.carts.iter().map(|c| serde_json::json!({"kind": c.kind.id(), "position": [c.position.x, c.position.y, c.position.z], "velocity": [c.velocity.x, c.velocity.y, c.velocity.z]})).collect::<Vec<_>>(),
             "riding": self.riding,
             "using": self.using,

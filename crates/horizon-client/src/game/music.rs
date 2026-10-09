@@ -33,6 +33,10 @@ impl Game<'_> {
                     .name
                     .as_str()
             });
+        // Minecraft.getSituationalMusic: the boss bar's music in the End.
+        if self.boss_music() {
+            return (Some(Music::end_boss()), 1.0);
+        }
         let dimension = self.dim.id();
         let tables = &self.res.music;
         // Player.isUnderWater: eyes in water.

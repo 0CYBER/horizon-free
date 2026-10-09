@@ -168,6 +168,7 @@ impl Game<'_> {
         if radius < 1.0e-5 {
             return;
         }
+        self.explosion_hits_special(center, radius);
         let diameter = f64::from(radius * 2.0);
         let distance = |p: [f64; 3]| {
             ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2) + (p[2] - center[2]).powi(2))

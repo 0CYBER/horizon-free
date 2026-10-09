@@ -140,6 +140,8 @@ pub struct PlayerMotion {
     pub jump_trigger_time: i32,
     /// Abilities.mayfly / flying (creative flight).
     pub may_fly: bool,
+    /// Abilities.invulnerable (creative): only damage bypassing invulnerability hurts.
+    pub invulnerable: bool,
     pub flying: bool,
     /// The jump key last tick (LocalPlayer.aiStep's wasJumping).
     pub was_jumping: bool,
@@ -222,6 +224,7 @@ impl PlayerMotion {
             no_jump_delay: 0,
             jump_trigger_time: 0,
             may_fly: false,
+            invulnerable: false,
             flying: false,
             was_jumping: false,
             glider: false,

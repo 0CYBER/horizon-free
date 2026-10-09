@@ -156,6 +156,20 @@ impl Game<'_> {
                             self.carts.push(c);
                         }
                     }
+                    "minecraft:ender_dragon" => {
+                        let seed = self.world.random.next_long();
+                        if self.dragon.is_none()
+                            && let Some(d) = super::dragon::Dragon::from_nbt(&tag, seed)
+                        {
+                            self.dragon = Some(d);
+                        }
+                    }
+                    "minecraft:end_crystal" => {
+                        let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
+                        if let Some(c) = super::dragon::Crystal::from_nbt(&tag, time) {
+                            self.crystals.push(c);
+                        }
+                    }
                     "minecraft:armor_stand" => {
                         self.next_entity += 1;
                         if let Some(a) = entity_nbt::armor_stand_from_nbt(&tag, self.next_entity) {
@@ -326,6 +340,20 @@ impl Game<'_> {
                 out.entry(chunk_of(b.position)).or_default().push(tag);
             }
         }
+        if let Some(d) = &self.dragon
+            && keys.contains(&chunk_of(d.position))
+        {
+            out.entry(chunk_of(d.position))
+                .or_default()
+                .push(d.to_nbt(random_uuid(), None));
+        }
+        for c in &self.crystals {
+            if keys.contains(&chunk_of(c.position)) {
+                out.entry(chunk_of(c.position))
+                    .or_default()
+                    .push(c.to_nbt(random_uuid(), None));
+            }
+        }
         for c in &self.carts {
             if keys.contains(&chunk_of(c.position)) {
                 let uuid = self
@@ -402,6 +430,10 @@ impl Game<'_> {
                 }
                 keep
             });
+            self.crystals.retain(|c| !gone(c.position));
+            if self.dragon.as_ref().is_some_and(|d| gone(d.position)) {
+                self.dragon = None;
+            }
             self.carts.retain(|c| {
                 let keep = !gone(c.position) || Some(c.id) == riding;
                 if !keep {

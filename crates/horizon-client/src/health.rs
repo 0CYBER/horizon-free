@@ -240,8 +240,10 @@ impl PlayerMotion {
             .source::<()>(source, None, None, None)
             .ok_or("unknown resident damage source")?;
         let totem_ready = self.health.totem_ready;
+        let invulnerable = self.invulnerable;
         let h = &mut self.health;
         let mut environment = Environment {
+            invulnerable,
             rules,
             source,
             events: &mut self.events,
@@ -293,6 +295,8 @@ impl PlayerMotion {
     }
 }
 pub(crate) struct Environment<'a> {
+    /// Abilities.invulnerable.
+    pub(crate) invulnerable: bool,
     pub(crate) rules: HealthRules,
     pub(crate) source: DamageSource<'a, ()>,
     pub(crate) events: &'a mut Vec<MotionEvent>,
@@ -418,7 +422,7 @@ impl ServerDamageEnvironment<Attributes> for Environment<'_> {
         Ok(self.source.definition().exhaustion)
     }
     fn ability_invulnerable(&self) -> bool {
-        false
+        self.invulnerable
     }
     fn level_is_client(&mut self) -> io::Result<bool> {
         Ok(false)
@@ -615,7 +619,7 @@ impl HurtWorld for Environment<'_> {
 }
 impl PlayerHurtWorld for Environment<'_> {
     fn ability_invulnerable(&self) -> bool {
-        false
+        self.invulnerable
     }
     fn bypasses_invulnerability(&mut self, _: &mut State) -> io::Result<bool> {
         Ok(self.source.in_tag("minecraft:bypasses_invulnerability"))

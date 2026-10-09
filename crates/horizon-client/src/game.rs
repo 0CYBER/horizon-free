@@ -11,6 +11,7 @@ mod commands;
 mod control;
 mod creatures;
 mod crossbow;
+mod dragon;
 mod enchant_effects;
 mod end;
 mod explosion;
@@ -569,6 +570,13 @@ struct Game<'a> {
     jukebox_sounds: HashMap<(i32, i32, i32), u64>,
     bolts: Vec<lightning::Bolt>,
     maps: maps::Maps,
+    /// The ender dragon fight (game/dragon.rs).
+    fight: dragon::Fight,
+    dragon: Option<dragon::Dragon>,
+    crystals: Vec<dragon::Crystal>,
+    dragon_fireballs: Vec<dragon::DragonFireball>,
+    breath_clouds: Vec<dragon::Breath>,
+    dragon_model: Option<horizon_client::mobs::Part>,
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
     cart_models: minecarts::CartModels,
@@ -2084,6 +2092,7 @@ impl Game<'_> {
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;
         player.may_fly = self.creative;
+        player.invulnerable = self.creative;
         player.pitch = self.pitch;
         // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
         player.glider = self.armor[1].as_ref().is_some_and(|s| {
@@ -2166,6 +2175,7 @@ impl Game<'_> {
         }
         player.yaw = self.yaw;
         player.may_fly = self.creative;
+        player.invulnerable = self.creative;
         player.pitch = self.pitch;
         // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
         player.glider = self.armor[1].as_ref().is_some_and(|s| {
@@ -2679,6 +2689,7 @@ impl Game<'_> {
         }
         self.draw_effect_icons(&mut batch);
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
+        self.draw_boss_bar(&mut batch);
         self.draw_titles(&mut batch);
         let atlas = &self.res.atlas;
         if !self.creative
@@ -3969,6 +3980,7 @@ impl Game<'_> {
             || self.attack_armor_stand()
             || self.attack_boat(hand_damage)
             || self.attack_cart(hand_damage)
+            || self.attack_dragon()
         {
             return true;
         }
@@ -6269,6 +6281,7 @@ impl Game<'_> {
             .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
         self.save_entities()?;
         self.save_maps();
+        self.save_fight();
         self.level.selected_slot = self.selected as i32;
         let level = &mut self.level;
         level.creative = self.creative;
@@ -6430,7 +6443,7 @@ impl Game<'_> {
         // Map textures changed since the last drawn frame (game/maps.rs).
         hud.patches.append(&mut self.map_patches);
         let title = self.title.is_some();
-        let entities = if title {
+        let mut entities = if title {
             Vec::new()
         } else {
             self.entity_geometry(camera, alpha)
@@ -6438,6 +6451,12 @@ impl Game<'_> {
         let mut additive = Vec::new();
         if !title {
             self.bolt_geometry(camera, &mut additive);
+            if self.dim == Dim::End {
+                let mut dragon = Vec::new();
+                self.dragon_geometry(camera, alpha, &mut dragon, &mut additive);
+                self.dragon_fireball_geometry(camera, alpha, &mut dragon);
+                entities.extend(dragon);
+            }
         }
         let celestial = if title {
             self.panorama_geometry()
@@ -6458,7 +6477,6 @@ impl Game<'_> {
         } else {
             self.screen_quads(alpha as f32, size)
         };
-        let mut entities = entities;
         if !title {
             self.end_geometry(camera, &mut entities);
         }
@@ -7366,6 +7384,12 @@ pub fn run() -> Result<()> {
         jukebox_sounds: HashMap::new(),
         bolts: Vec::new(),
         maps: maps::Maps::default(),
+        fight: dragon::Fight::default(),
+        dragon: None,
+        crystals: Vec::new(),
+        dragon_fireballs: Vec::new(),
+        breath_clouds: Vec::new(),
+        dragon_model: horizon_client::mobs::load_model(&root, "minecraft:ender_dragon#main"),
         map_patches: Vec::new(),
         cart_models: minecarts::CartModels::load(&root),
         riding: None,

@@ -956,6 +956,12 @@ impl Game<'_> {
             {
                 targets.push((Who::Player, p.bounds));
             }
+            // Dragon parts and end crystals under reserved ids (game/dragon.rs).
+            targets.extend(
+                self.special_targets()
+                    .into_iter()
+                    .map(|(id, b)| (Who::Mob(id), b)),
+            );
             let w = self.mob_world_base(&[]);
             let pw = ProjWorld { w: &w, targets };
             projectiles.retain_mut(|p| {
@@ -977,6 +983,19 @@ impl Game<'_> {
             Hit::Entity { at, .. } | Hit::Block { at, .. } => at,
             Hit::None => return Ok(()),
         };
+        if let Hit::Entity {
+            who: Who::Mob(id), ..
+        } = hit
+            && id >= super::dragon::SPECIAL
+        {
+            let amount = match p.kind {
+                ProjectileKind::Arrow { .. } => p.arrow_damage(&mut self.world.random),
+                ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => 6.0,
+                _ => 0.0,
+            };
+            self.hit_special(id, amount, p.owner == Some(Who::Player));
+            return Ok(());
+        }
         let atp = [at.x, at.y, at.z];
         let source_kind = match p.kind {
             ProjectileKind::Arrow { .. } => DamageKind::Arrow,

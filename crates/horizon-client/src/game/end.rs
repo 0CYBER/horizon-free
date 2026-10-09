@@ -1,7 +1,7 @@
 //! The End: End portal frames filled with eyes of ender, End portal and End
 //! gateway travel, the obsidian arrival platform, the exit portal and the End
-//! sky. The ender dragon is not implemented: the fight counts as already won,
-//! so the exit portal is active and the first gateway exists.
+//! sky. The dragon fight itself lives in game/dragon.rs: the podium is
+//! inactive until the dragon dies.
 use super::{Dim, Game};
 use horizon_client::{
     Result, environment::Environment, items::ItemStack, mesher::Vertex, motion::PlayerMotion,
@@ -343,6 +343,10 @@ impl Game<'_> {
     /// End portals, End gateways and the exit portal, once per tick.
     pub(super) fn tick_end(&mut self) -> Result<()> {
         self.end.gateway_cooldown = self.end.gateway_cooldown.saturating_sub(1);
+        if self.dim == Dim::End {
+            self.tick_fight();
+            self.tick_dragon_fireballs();
+        }
         self.scan_portals();
         self.tick_eyes();
         if self.dim == Dim::End {
@@ -510,13 +514,16 @@ impl Game<'_> {
     fn ensure_exit_portal(&mut self) -> Result<()> {
         if self.travelling.is_some()
             || !(-1..=0).all(|cz| (-1..=0).all(|cx| self.streaming.is_lit(cx, cz)))
+            || !self.fight_ready()
         {
             return Ok(());
         }
+        let won = self.fight.previously_killed;
         let gateway = self.first_gateway();
         if (0..256).any(|y| &*self.block_name([0, y, 0]) == "minecraft:bedrock") {
             // The podium exists; the gateway may have been out of range when it was placed.
-            if self.world.loaded(gateway[0], gateway[2])
+            if won
+                && self.world.loaded(gateway[0], gateway[2])
                 && &*self.block_name(gateway) != "minecraft:end_gateway"
                 && &*self.block_name([gateway[0], gateway[1] + 2, gateway[2]])
                     != "minecraft:bedrock"
@@ -538,11 +545,30 @@ impl Game<'_> {
             y -= 1;
         }
         let origin = [0, y.max(1), 0];
-        self.place_podium(origin)?;
-        if self.world.loaded(gateway[0], gateway[2]) {
+        self.set_exit_portal(origin);
+        self.place_podium(origin, won)?;
+        if won && self.world.loaded(gateway[0], gateway[2]) {
             self.place_gateway(gateway)?;
         }
         Ok(())
+    }
+    /// `spawnExitPortal(true)` after the dragon dies.
+    pub(super) fn activate_exit_portal(&mut self) -> Result<()> {
+        let origin = match self.exit_portal() {
+            Some(o) => o,
+            None => {
+                // The rim's level: the top of the bedrock column minus three.
+                let top = (0..256)
+                    .rev()
+                    .find(|&y| &*self.block_name([0, y, 0]) == "minecraft:bedrock")
+                    .unwrap_or(64);
+                [0, top - 3, 0]
+            }
+        };
+        self.place_podium(origin, true)
+    }
+    pub(super) fn place_gateway_at(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.place_gateway(pos)
     }
 
     /// The first gateway of the shuffled ring (EnderDragonFight constructor
@@ -564,7 +590,7 @@ impl Game<'_> {
     }
 
     /// EndPodiumFeature(active).place at `origin` (the portal level).
-    fn place_podium(&mut self, origin: [i32; 3]) -> Result<()> {
+    fn place_podium(&mut self, origin: [i32; 3], active: bool) -> Result<()> {
         for y in origin[1] - 1..=origin[1] + 32 {
             for z in origin[2] - 4..=origin[2] + 4 {
                 for x in origin[0] - 4..=origin[0] + 4 {
@@ -585,8 +611,10 @@ impl Game<'_> {
                         "minecraft:air"
                     } else if !inside_rim {
                         "minecraft:bedrock"
-                    } else {
+                    } else if active {
                         "minecraft:end_portal"
+                    } else {
+                        "minecraft:air"
                     };
                     self.set_state_named([x, y, z], name, &[])?;
                 }
@@ -1065,8 +1093,7 @@ impl Game<'_> {
         self.eye_geometry(camera, out);
     }
 
-    /// EndCrystalRenderer and EndCrystalModel for the crystals EndSpikeFeature
-    /// spawns on the spikes (render only; crystals are not entities yet).
+    /// EndCrystalRenderer and EndCrystalModel for the end crystals.
     fn end_crystal_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
         let Some(r) = self
             .res
@@ -1077,26 +1104,21 @@ impl Game<'_> {
         else {
             return;
         };
-        let age = self.ticks as f32 + self.clock.fraction() as f32;
         let sin45 = std::f32::consts::FRAC_PI_4.sin();
         let axis = glam::Vec3::new(sin45, 0.0, sin45).normalize();
         let tilt = glam::Quat::from_axis_angle(axis, std::f32::consts::FRAC_PI_3);
-        let spin = glam::Quat::from_rotation_y((age * 3.0).to_radians());
-        // getY: the bob, in blocks.
-        let hh = (age * 0.2).sin() / 2.0 + 0.5;
-        let bob = (hh * hh + hh) * 0.4 - 1.4;
         // A 8×8×8 model box at texture offset (u, v) of the 64×32 texture.
         let uv = |u: f32, v: f32, w: f32, h: f32| {
             let su = |x: f32| r.u0 + (r.u1 - r.u0) * x / 64.0;
             let sv = |y: f32| r.v0 + (r.v1 - r.v0) * y / 32.0;
             (su(u), su(u + w), sv(v), sv(v + h))
         };
-        for spike in horizon_world::worldgen::end_spike::spikes_for_seed(self.level.seed) {
-            let feet = glam::DVec3::new(
-                f64::from(spike.center_x) + 0.5,
-                f64::from(spike.height + 1),
-                f64::from(spike.center_z) + 0.5,
-            );
+        for crystal in &self.crystals {
+            let feet = glam::DVec3::new(crystal.position.x, crystal.position.y, crystal.position.z);
+            let age = crystal.time as f32 + self.clock.fraction() as f32;
+            let spin = glam::Quat::from_rotation_y((age * 3.0).to_radians());
+            let hh = (age * 0.2).sin() / 2.0 + 0.5;
+            let bob = (hh * hh + hh) * 0.4 - 1.4;
             let rel = feet - camera;
             if rel.length_squared() > 256.0 * 256.0 {
                 continue;
