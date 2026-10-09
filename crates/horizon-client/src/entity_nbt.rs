@@ -194,7 +194,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         | "minecraft:donkey"
         | "minecraft:mule"
         | "minecraft:skeleton_horse"
-        | "minecraft:zombie_horse" => {
+        | "minecraft:zombie_horse"
+        | "minecraft:llama"
+        | "minecraft:trader_llama" => {
             map.insert("Tame".into(), Tag::Byte(i8::from(m.extra.tame)));
             map.insert("Temper".into(), Tag::Int(i32::from(m.extra.variant3)));
             if let Some(owner) = m.extra.owner {
@@ -203,6 +205,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             if id == "minecraft:horse" {
                 let v = i32::from(m.extra.variant) | i32::from(m.extra.variant2) << 8;
                 map.insert("Variant".into(), Tag::Int(v));
+            }
+            if crate::mobs::llama::is_llama(m.species()) {
+                crate::mobs::llama::to_nbt(m, map);
             }
             map.insert("ChestedHorse".into(), Tag::Byte(i8::from(m.extra.chested)));
             let mut equipment = Vec::new();
@@ -478,6 +483,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         let v = number(tag.get("Variant")).unwrap_or(0) as i32;
         m.extra.variant = (v & 0xFF).clamp(0, 6) as u8;
         m.extra.variant2 = ((v >> 8) & 0xFF).clamp(0, 4) as u8;
+        if crate::mobs::llama::is_llama(m.species()) {
+            crate::mobs::llama::from_nbt(&mut m, tag);
+        }
         m.extra.chested = flag(tag, "ChestedHorse");
         let eq = tag.get("equipment");
         m.extra.saddled = eq.and_then(|e| e.get("saddle")).is_some();
@@ -565,6 +573,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;
     }
+    m.extra.leash_pending = crate::mobs::leash::pending_from_nbt(tag.get("leash"));
     if m.species() == crate::mobs::Species::Ravager {
         m.extra.counter = number(tag.get("AttackTick")).unwrap_or(0) as i32;
         m.extra.counter2 = number(tag.get("StunTick")).unwrap_or(0) as i32;

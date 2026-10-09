@@ -52,7 +52,17 @@ pub fn is_equine(s: Species) -> bool {
             | Species::SkeletonHorse
             | Species::ZombieHorse
             | Species::Camel
+            | Species::Llama
+            | Species::TraderLlama
     )
+}
+/// `AbstractHorse.getMaxTemper`: 100, 30 for llamas.
+pub fn max_temper(s: Species) -> i32 {
+    if super::llama::is_llama(s) {
+        super::llama::MAX_TEMPER
+    } else {
+        100
+    }
 }
 /// `canPerformRearing`: not donkeys or mules.
 fn can_rear(s: Species) -> bool {
@@ -64,6 +74,9 @@ fn can_rear(s: Species) -> bool {
 pub fn register(m: &mut Mob) {
     if m.species() == Species::Camel {
         return super::camel::register(m);
+    }
+    if super::llama::is_llama(m.species()) {
+        return super::llama::register(m);
     }
     let tempt = m.kind.tempt.clone();
     let rears = can_rear(m.species());
@@ -190,7 +203,7 @@ impl Goal for MountPanic {
 /// `RunAroundLikeCrazyGoal`: an untamed horse with a rider bolts about until
 /// it is tamed (temper) or throws the rider off.
 #[derive(Clone, Debug)]
-struct RunAroundLikeCrazy;
+pub(super) struct RunAroundLikeCrazy;
 impl Goal for RunAroundLikeCrazy {
     goal_clone!();
     fn flags(&self) -> u8 {
@@ -224,13 +237,14 @@ impl Goal for RunAroundLikeCrazy {
             return;
         }
         let temper = i32::from(m.extra.variant3);
-        if m.random.next_int_bound(100).unwrap_or(0) < temper {
+        let max = max_temper(m.species());
+        if m.random.next_int_bound(max).unwrap_or(0) < temper {
             // tameWithName
             m.extra.tame = true;
             cx.events.push(MobEvent::Tamed { mob: m.id });
             return;
         }
-        m.extra.variant3 = (temper + 5).min(100) as u8;
+        m.extra.variant3 = (temper + 5).min(max) as u8;
         cx.events.push(MobEvent::Buck { mob: m.id });
         make_mad(m, cx.events);
     }
@@ -247,6 +261,7 @@ pub fn make_mad(m: &mut Mob, events: &mut Vec<MobEvent>) {
     let sound = match m.species() {
         Species::Donkey => "entity.donkey.angry",
         Species::Mule => "entity.mule.angry",
+        Species::Llama | Species::TraderLlama => "entity.llama.angry",
         _ => "entity.horse.angry",
     };
     events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
@@ -374,6 +389,9 @@ pub fn ridden_step(m: &mut Mob) {
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.species() == Species::Camel {
         return super::camel::ai_step(m, events);
+    }
+    if super::llama::is_llama(m.species()) {
+        return super::llama::ai_step(m, w);
     }
     if m.alive() && m.random.next_int_bound(900).unwrap_or(1) == 0 && m.death_time == 0 {
         m.health = (m.health + 1.0).min(m.attrs.max_health);

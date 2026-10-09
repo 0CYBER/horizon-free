@@ -27,7 +27,9 @@ mod frames;
 mod game_mode;
 mod growth;
 mod jukebox;
+mod leads;
 mod lightning;
+mod llamas;
 mod machines;
 mod maps;
 mod minecarts;
@@ -59,6 +61,7 @@ mod tnt;
 mod totem;
 mod trading;
 mod trident;
+mod wandering_trader;
 mod wither;
 use horizon_client::{
     Result,
@@ -1648,6 +1651,7 @@ impl Game<'_> {
             || self.interact_boat()
             || self.interact_cart()
             || self.interact_mob()?
+            || self.interact_knot()
         {
             return Ok(());
         }
@@ -3999,6 +4003,7 @@ impl Game<'_> {
         self.cart_geometry(camera, alpha, &mut out);
         self.beacon_geometry(camera, alpha, &mut out);
         self.fishing_geometry(camera, alpha, &mut out);
+        self.leash_geometry(camera, alpha, &mut out);
         self.trident_geometry(camera, alpha, &mut out);
         self.rocket_geometry(camera, alpha, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
@@ -4674,6 +4679,7 @@ impl Game<'_> {
         self.spawn = None;
         self.spawn_search = 0;
         self.mobs.clear();
+        self.creatures.reset_trader();
         self.arrows.clear();
         self.dropped.clear();
         self.particles.clear();
@@ -6498,6 +6504,7 @@ impl Game<'_> {
         self.save_entities()?;
         self.save_maps();
         self.save_fight();
+        self.save_wandering_trader();
         self.save_stats();
         self.save_advancements();
         self.level.selected_slot = self.selected as i32;

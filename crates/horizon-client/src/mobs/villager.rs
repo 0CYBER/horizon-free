@@ -442,7 +442,7 @@ fn work(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
 }
 pub fn sleeping(m: &Mob) -> bool {
-    m.extra.ints[1] != 0
+    matches!(m.species(), Species::Villager | Species::WanderingTrader) && m.extra.ints[1] != 0
 }
 /// `LivingEntity.startSleeping`: lie in the bed (`setPosToBed`).
 fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld) {

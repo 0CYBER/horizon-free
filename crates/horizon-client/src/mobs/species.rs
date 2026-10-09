@@ -1174,7 +1174,7 @@ impl Def {
             Species::Donkey => &["donkey_baby"],
             Species::Mule => &["mule_baby"],
             Species::Llama => &["llama_baby"],
-            Species::TraderLlama => &["trader_llama_baby", "llama"],
+            Species::TraderLlama => &["trader_llama_baby", "llama", "llama_baby"],
             Species::Goat => &["goat_baby"],
             Species::Panda => &["panda_baby"],
             Species::PolarBear => &["polar_bear_baby"],

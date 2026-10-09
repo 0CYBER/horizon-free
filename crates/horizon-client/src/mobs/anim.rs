@@ -190,7 +190,7 @@ fn head(p: &mut Poses, s: &State) {
     p.yrot("head", s.y_rot.to_radians());
 }
 /// QuadrupedModel.setupAnim
-fn quadruped(p: &mut Poses, s: &State) {
+pub(super) fn quadruped(p: &mut Poses, s: &State) {
     head(p, s);
     let (pos, sp) = (s.pos, s.speed);
     p.xrot("right_hind_leg", (pos * 0.6662).cos() * 1.4 * sp);
@@ -345,6 +345,7 @@ pub fn setup(
 ) {
     match m.kind.anim {
         Anim::Camel => super::camel::anim(m, s, p, w_anims),
+        Anim::Llama => super::llama::anim(m, s, p),
         Anim::Allay => super::allay::anim(m, s, p),
         Anim::Squid | Anim::Fish | Anim::Pufferfish | Anim::Dolphin => {
             super::aquatic::anim(m, s, p)

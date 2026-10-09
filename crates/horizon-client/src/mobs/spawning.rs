@@ -103,6 +103,7 @@ pub fn spawn_rules_ok(
         | S::Horse
         | S::Donkey
         | S::Llama
+        | S::Camel
         | S::Wolf
         | S::Cat
         | S::Fox
@@ -116,6 +117,7 @@ pub fn spawn_rules_ok(
         | S::Bee => {
             let tag = match species {
                 S::Mooshroom => "minecraft:mooshrooms_spawnable_on",
+                S::Camel => "minecraft:camels_spawnable_on",
                 S::Wolf => "minecraft:wolves_spawnable_on",
                 S::Fox => "minecraft:foxes_spawnable_on",
                 S::Rabbit => "minecraft:rabbits_spawnable_on",
@@ -353,6 +355,7 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse => {
             super::equine::finalize(m)
         }
+        S::Llama | S::TraderLlama => super::llama::finalize(m),
         // Camel.finalizeSpawn: standing, with fixed attributes.
         S::Camel => super::camel::stand_up_instantly(m),
         // Piglin.createSpawnWeapon: half crossbows, half golden swords, and

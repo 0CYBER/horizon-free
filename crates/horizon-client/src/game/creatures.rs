@@ -32,6 +32,8 @@ pub(super) struct Creatures {
     pub pearl_cooldown: u32,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
+    /// The wandering trader spawner's clock.
+    pub trader: super::wandering_trader::Spawner,
 }
 /// MobCategory caps (maxInstancesPerChunk with the 17x17 spawnable chunk area).
 const CATEGORIES: [(&str, usize); 7] = [
@@ -115,6 +117,12 @@ fn seen(m: &Mob) -> Seen {
         bed: (m.species() == Species::Villager)
             .then_some(m.extra.bed)
             .flatten(),
+        yaw: m.yaw,
+        velocity: m.velocity,
+        leash: m.extra.leash,
+        caravan: horizon_client::mobs::caravan::head_of(m),
+        delay: m.extra.ints[5],
+        hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
     }
 }
 impl Game<'_> {
@@ -150,6 +158,8 @@ impl Game<'_> {
             gold_armor: self.wearing_gold(),
             hurt_by: self.player_hurt_by(),
             last_hurt: self.combat.last_hurt_mob.map(|(id, at)| (Who::Mob(id), at)),
+            velocity: p.velocity,
+            yaw: self.yaw,
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
@@ -259,13 +269,18 @@ impl Game<'_> {
                     "on_ground": m.on_ground,
                     "variant": m.extra.variant,
                     "color": m.extra.color,
+                    "leash": m.extra.leash.map(|h| format!("{h:?}")),
+                    "tame": m.extra.tame,
+                    "temper": m.extra.variant3,
+                    "chested": m.extra.chested,
+                    "head": m.extra.head.as_deref(),
                 })
             })
             .collect();
         serde_json::json!({ "count": self.mobs.len(), "near": list, "projectiles": self.creatures.projectiles.len() })
     }
     /// Highest motion-blocking (no leaves) block + 1 (Heightmap MOTION_BLOCKING_NO_LEAVES).
-    fn motion_top(&self, x: i32, z: i32) -> i32 {
+    pub(super) fn motion_top(&self, x: i32, z: i32) -> i32 {
         let top = if self.dim == Dim::Nether { 127 } else { 319 };
         for y in (horizon_client::chunk::MIN_Y..=top).rev() {
             let f = self.res.facts.get(self.world.block(x, y, z));
@@ -601,6 +616,8 @@ impl Game<'_> {
             self.spawn_generation_creatures(key.0, key.1);
         }
         self.tick_inhabited();
+        self.tick_leads();
+        self.tick_wandering_trader();
         self.spawn_natural();
         let snapshot: Vec<Seen> = self.mobs.iter().map(seen).collect();
         let mut events = Vec::new();
@@ -970,6 +987,7 @@ impl Game<'_> {
                     }
                 },
                 MobEvent::Breed { parent, partner } => self.breed(parent, partner),
+                MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),
                 MobEvent::GiftLoot { table, at } => {
                     let drops =
                         self.res
@@ -1069,6 +1087,9 @@ impl Game<'_> {
                 let other = q.clone().unwrap_or_else(|| p.clone());
                 let mut r = self.world.random.clone();
                 horizon_client::mobs::equine::inherit(child, &p, &other, &mut r);
+                if horizon_client::mobs::llama::is_llama(p.species()) {
+                    horizon_client::mobs::llama::offspring(child, &p, &other, &mut r);
+                }
                 // Horse.getBreedOffspring: coat from either parent or new.
                 if p.species() == Species::Horse && other.species() == Species::Horse {
                     let c = r.next_int_bound(9).unwrap_or(0);
@@ -1651,6 +1672,13 @@ impl Game<'_> {
         if self.name_mob(index) {
             return Ok(true);
         }
+        {
+            let item = self.held().map(|h| h.item.to_string()).unwrap_or_default();
+            if self.interact_leash(index, &item) {
+                self.swing_arm();
+                return Ok(true);
+            }
+        }
         let held = self.held().cloned();
         let item = held
             .as_ref()
@@ -1997,7 +2025,7 @@ impl Game<'_> {
         }
         Ok(true)
     }
-    fn damage_held_tool(&mut self) {
+    pub(super) fn damage_held_tool(&mut self) {
         if self.creative {
             return;
         }
@@ -2300,6 +2328,7 @@ fn eat_sound(s: Species) -> &'static str {
     match s {
         Species::Pig => "entity.pig.eat",
         Species::Horse | Species::Donkey | Species::Mule => "entity.horse.eat",
+        Species::Llama | Species::TraderLlama => "entity.llama.eat",
         Species::Goat => "entity.goat.eat",
         Species::Fox => "entity.fox.eat",
         Species::Cat => "entity.cat.eat",

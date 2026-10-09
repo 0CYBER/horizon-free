@@ -106,6 +106,17 @@ pub fn body(m: &Mob) -> (String, String) {
         return ("main".into(), m.kind.texture.to_string());
     }
     match m.species() {
+        S::Llama | S::TraderLlama => {
+            let name = if m.species() == S::Llama {
+                "llama"
+            } else {
+                "trader_llama"
+            };
+            (
+                baby_or(m, &format!("{name}#main"), &format!("{name}_baby#main")),
+                super::llama::texture(m),
+            )
+        }
         s if super::equine::is_equine(s) => {
             let name = super::equine::model_name(s);
             (
@@ -301,6 +312,12 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 abgr(DYE[m.extra.color as usize & 15]),
                 false,
             );
+        }
+        // LlamaDecorLayer: the carpet, or the trader's blanket.
+        S::Llama | S::TraderLlama => {
+            if let Some((model, texture)) = super::llama::decor(m) {
+                push(&mut v, &model, &texture, white, false);
+            }
         }
         // HorseMarkingLayer, the saddle and the horse armour.
         s if super::equine::is_equine(s) => {
@@ -739,6 +756,10 @@ pub fn render_with(
     extra: &[(&Part, [f32; 4], u32)],
     out: &mut Vec<Vertex>,
 ) {
+    // The invisibility effect hides the model (a drinking wandering trader).
+    if super::trader::is_invisible(m) {
+        return;
+    }
     let base = base_transform(m, alpha, camera);
     let overlay = u32::from(m.hurt_time > 0 || m.death_time > 0);
     let s = anim::state(m, alpha);

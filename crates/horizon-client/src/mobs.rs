@@ -10,6 +10,7 @@ pub mod allay;
 pub mod anim;
 pub mod aquatic;
 pub mod camel;
+pub mod caravan;
 pub mod control;
 pub mod cube;
 pub mod data;
@@ -22,7 +23,9 @@ pub mod guardian;
 pub mod hostile;
 pub mod illager;
 pub mod keyframes;
+pub mod leash;
 pub mod living;
+pub mod llama;
 pub mod nav;
 pub mod nether;
 pub mod path;
@@ -34,6 +37,7 @@ pub mod shulker;
 pub mod spawning;
 pub mod species;
 pub mod tame;
+pub mod trader;
 pub mod undead;
 pub mod vex;
 pub mod villager;
@@ -473,6 +477,11 @@ pub struct Extra {
     pub meeting: Option<[i32; 3]>,
     /// Villager and wandering trader offers and experience.
     pub trade: Option<Box<crate::merchant::Trader>>,
+    /// Who holds this mob's lead, a holder not yet found after loading, and
+    /// the spin the rope's torque gives it.
+    pub leash: Option<leash::Holder>,
+    pub leash_pending: Option<leash::Pending>,
+    pub leash_spin: f64,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -662,6 +671,12 @@ pub enum MobEvent {
         table: &'static str,
         at: [f64; 3],
     },
+    /// A lead snaps or loses its holder: the lead item drops when asked.
+    LeashBreak {
+        mob: u32,
+        drop: bool,
+        sound: bool,
+    },
 }
 /// How a spawned-by-kind mob should be set up.
 #[derive(Clone, Debug, Default)]
@@ -701,6 +716,16 @@ pub struct Seen {
     /// A villager's claimed job site and bed.
     pub job: Option<[i32; 3]>,
     pub bed: Option<[i32; 3]>,
+    pub yaw: f32,
+    pub velocity: Vec3,
+    /// Who holds this mob's lead.
+    pub leash: Option<leash::Holder>,
+    /// A llama's caravan head (its id plus one, 0 when not in a caravan).
+    pub caravan: u32,
+    /// A wandering trader's despawn delay.
+    pub delay: i32,
+    /// `getLastHurtByMob` and its timestamp.
+    pub hurt_by: Option<(Who, i32)>,
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]
@@ -723,6 +748,8 @@ pub struct PlayerView {
     pub hurt_by: Option<(Who, i64)>,
     /// `getLastHurtMob` and when.
     pub last_hurt: Option<(Who, i64)>,
+    pub velocity: Vec3,
+    pub yaw: f32,
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,
