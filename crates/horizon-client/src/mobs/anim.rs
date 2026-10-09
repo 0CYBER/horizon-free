@@ -420,6 +420,7 @@ pub fn setup(
         Anim::Witch => super::witch::anim(m, s, p),
         Anim::Wolf => super::tame::anim(m, s, p),
         Anim::IronGolem => super::golem::iron_anim(m, s, p),
+        Anim::Illager => super::illager::anim(m, s, p),
         Anim::Blaze => super::nether::blaze_anim(s, p),
         Anim::Ghast => super::nether::ghast_anim(s, p),
         Anim::Feline if m.species() == super::Species::Cat => super::tame::cat_anim(m, s, p),

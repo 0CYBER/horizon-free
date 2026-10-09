@@ -738,6 +738,9 @@ fn held_items(
         m.species(),
         Species::Skeleton | Species::Stray | Species::Bogged | Species::WitherSkeleton
     );
+    if !super::illager::shows_item(m) {
+        return;
+    }
     for (item, left) in [(&m.extra.main_hand, false), (&m.extra.off_hand, true)] {
         let Some(item) = item else { continue };
         let arm = if left { "left_arm" } else { "right_arm" };

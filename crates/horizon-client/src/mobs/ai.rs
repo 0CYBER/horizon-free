@@ -73,6 +73,7 @@ pub enum Family {
     /// Blazes and ghasts.
     Nether,
     Golem,
+    Illager,
     /// Slimes and magma cubes.
     Cube,
 }
@@ -103,6 +104,7 @@ pub fn family(s: Species) -> Family {
         S::Wolf | S::Cat => Family::Tame,
         S::Blaze | S::Ghast => Family::Nether,
         S::IronGolem | S::SnowGolem => Family::Golem,
+        S::Pillager | S::Vindicator => Family::Illager,
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
         _ => Family::Generic,
@@ -123,6 +125,8 @@ pub fn register(m: &mut Mob) {
         Family::Nether => super::nether::register_blaze(m),
         Family::Golem if m.species() == Species::IronGolem => super::golem::register_iron(m),
         Family::Golem => super::golem::register_snow(m),
+        Family::Illager if m.species() == Species::Pillager => super::illager::register_pillager(m),
+        Family::Illager => super::illager::register_vindicator(m),
         Family::Enderman => super::enderman::register(m),
         Family::Cube => super::cube::register(m),
     }
