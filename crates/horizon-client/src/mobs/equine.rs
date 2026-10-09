@@ -37,6 +37,8 @@ pub struct Rider {
     pub pitch: f32,
     /// `playerJumpPendingScale` from the jump bar.
     pub jump: f32,
+    /// Holding the mount's steering stick (pigs, striders).
+    pub steer: bool,
 }
 
 pub fn is_equine(s: Species) -> bool {
@@ -128,7 +130,35 @@ pub fn inherit(child: &mut Mob, a: &Mob, b: &Mob, r: &mut impl RandomSource) {
 }
 /// The rider controls the mount: saddled, with a player on it.
 pub fn controlled(m: &Mob) -> bool {
-    m.rider.is_some() && (m.extra.saddled || m.species() == Species::SkeletonHorse && m.extra.tame)
+    let Some(r) = m.rider else {
+        return false;
+    };
+    match m.species() {
+        // Pig/Strider.getControllingPassenger: saddled, the rider holding the stick.
+        Species::Pig | Species::Strider => m.extra.saddled && r.steer,
+        _ => m.extra.saddled || m.species() == Species::SkeletonHorse && m.extra.tame,
+    }
+}
+/// `ItemBasedSteering.boost`: 140 to 980 ticks of extra speed.
+pub fn boost(m: &mut Mob) -> bool {
+    if m.extra.counter2 > 0 {
+        return false;
+    }
+    m.extra.counter2 = m.random.next_int_bound(841).unwrap_or(0) + 140;
+    m.extra.counter = 0;
+    true
+}
+/// `ItemBasedSteering.tickBoost` and `boostFactor`.
+fn boost_factor(m: &mut Mob) -> f32 {
+    if m.extra.counter2 <= 0 {
+        return 1.0;
+    }
+    m.extra.counter += 1;
+    if m.extra.counter > m.extra.counter2 {
+        m.extra.counter2 = 0;
+        return 1.0;
+    }
+    1.0 + 1.15 * (m.extra.counter as f32 / m.extra.counter2 as f32 * PI).sin()
 }
 /// `AbstractHorse.MountPanicGoal`: only without a rider.
 #[derive(Clone, Debug)]
@@ -255,6 +285,21 @@ pub fn ridden_step(m: &mut Mob) {
     m.body_yaw = r.yaw;
     m.head_yaw = r.yaw;
     m.ai.nav.stop();
+    if matches!(m.species(), Species::Pig | Species::Strider) {
+        // Pig/Strider: always forward along the rider's look, at a fraction
+        // of the movement speed, boosted by the stick.
+        m.head_pitch = r.pitch * 0.5;
+        m.ai.xxa = 0.0;
+        m.ai.zza = 1.0;
+        let factor = if m.species() == Species::Pig {
+            0.225
+        } else {
+            0.55
+        };
+        let boost = boost_factor(m);
+        m.set_speed((m.attrs.speed * factor) as f32 * boost);
+        return;
+    }
     let standing = m.extra.counter > 0;
     if m.on_ground && r.jump == 0.0 && standing {
         m.ai.xxa = 0.0;

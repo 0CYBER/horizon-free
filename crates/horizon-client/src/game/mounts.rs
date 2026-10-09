@@ -5,6 +5,7 @@
 use super::Game;
 use horizon_client::{
     hud::HudBatch,
+    items::ItemStack,
     mobs::{MobEvent, Species, equine},
     sprint::Keys,
 };
@@ -13,6 +14,8 @@ use horizon_core::{geometry::Vec3, random::RandomSource};
 /// `passengerAttachments` minus the player's 0.6 vehicle attachment.
 fn seat(s: Species) -> f64 {
     let attach = match s {
+        Species::Pig => 0.86875,
+        Species::Strider => 1.7,
         Species::Horse => 1.44375,
         Species::Donkey => 1.1125,
         Species::Mule => 1.2125,
@@ -33,10 +36,65 @@ impl Game<'_> {
         let id = self.riding?;
         self.mobs.iter().position(|m| m.id == id)
     }
+    /// `Pig` / `Strider.mobInteract`: saddle an adult, or ride a saddled one.
+    fn interact_steerable(&mut self, index: usize, item: &str) -> bool {
+        let m = &mut self.mobs[index];
+        if m.is_baby() || !m.alive() || Some(m.id) == self.riding {
+            return false;
+        }
+        let at = m.center();
+        if item == "minecraft:saddle" && !m.extra.saddled {
+            m.extra.saddled = true;
+            let sound = if m.species() == Species::Strider {
+                "minecraft:entity.strider.saddle"
+            } else {
+                "minecraft:entity.pig.saddle"
+            };
+            self.audio.play(sound, Some(at), 0.5, 1.0);
+            self.consume_held();
+            self.world
+                .modified
+                .insert((at[0].floor() as i32 >> 4, at[2].floor() as i32 >> 4));
+            return true;
+        }
+        if !m.extra.saddled || self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
+            return false;
+        }
+        self.riding = Some(m.id);
+        true
+    }
+    /// `FoodOnAStickItem.use` while riding: boost the mount, wear the stick.
+    pub(super) fn use_steering_stick(&mut self, item: &str) -> bool {
+        let (species, wear) = match item {
+            "minecraft:carrot_on_a_stick" => (Species::Pig, 7),
+            "minecraft:warped_fungus_on_a_stick" => (Species::Strider, 1),
+            _ => return false,
+        };
+        let Some(i) = self.mount_index() else {
+            return false;
+        };
+        if self.mobs[i].species() != species || !equine::boost(&mut self.mobs[i]) {
+            return false;
+        }
+        if !self.creative
+            && let Some(stack) = self.inventory[self.selected].as_mut()
+        {
+            stack.damage += wear;
+            let max = self.res.items.get(&stack.item).map_or(25, |i| i.max_damage);
+            if stack.damage >= max {
+                self.inventory[self.selected] = Some(ItemStack::new("minecraft:fishing_rod", 1));
+            }
+        }
+        self.swing_arm();
+        true
+    }
     /// `AbstractHorse.mobInteract`. Returns whether the click was used.
     pub(super) fn interact_mount(&mut self, index: usize, item: &str) -> bool {
         let m = &self.mobs[index];
         let species = m.species();
+        if matches!(species, Species::Pig | Species::Strider) {
+            return self.interact_steerable(index, item);
+        }
         if !equine::is_equine(species) || !m.alive() || Some(m.id) == self.riding {
             return false;
         }
@@ -152,7 +210,13 @@ impl Game<'_> {
         let strafe = f32::from(u8::from(keys.left)) - f32::from(u8::from(keys.right));
         let forward = f32::from(u8::from(keys.forward)) - f32::from(u8::from(keys.backward));
         // LocalPlayer.aiStep: the riding jump charges while space is held.
-        let saddled = self.mobs[i].extra.saddled;
+        let held = self.held().map(|s| s.item.clone());
+        let steer = match self.mobs[i].species() {
+            Species::Pig => held.as_deref() == Some("minecraft:carrot_on_a_stick"),
+            Species::Strider => held.as_deref() == Some("minecraft:warped_fungus_on_a_stick"),
+            _ => false,
+        };
+        let saddled = self.mobs[i].extra.saddled && equine::is_equine(self.mobs[i].species());
         let mut jump = 0.0;
         if saddled {
             let st = &mut self.mount;
@@ -205,6 +269,7 @@ impl Game<'_> {
             yaw: self.yaw,
             pitch: self.pitch,
             jump: if jump > 0.0 { jump } else { pending },
+            steer,
         });
         true
     }

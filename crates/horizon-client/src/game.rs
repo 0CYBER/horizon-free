@@ -1587,6 +1587,13 @@ impl Game<'_> {
         if self.spectator() {
             return Ok(());
         }
+        // A carrot or warped fungus on a stick boosts the ridden pig or strider.
+        if self.riding.is_some()
+            && let Some(item) = self.held().map(|s| s.item.clone())
+            && self.use_steering_stick(&item)
+        {
+            return Ok(());
+        }
         if self.interact_frame()
             || self.interact_armor_stand()
             || self.interact_boat()

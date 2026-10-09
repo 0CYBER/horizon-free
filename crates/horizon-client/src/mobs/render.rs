@@ -327,6 +327,21 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 push(&mut v, "horse_armor#main", &tex, color, false);
             }
         }
+        // SimpleEquipmentLayer: pig and strider saddles.
+        S::Pig if m.extra.saddled && !m.is_baby() => push(
+            &mut v,
+            "pig#saddle",
+            "entity/equipment/pig_saddle/saddle",
+            white,
+            false,
+        ),
+        S::Strider if m.extra.saddled && !m.is_baby() => push(
+            &mut v,
+            "strider#saddle",
+            "entity/equipment/strider_saddle/saddle",
+            white,
+            false,
+        ),
         // CatCollarLayer.
         S::Cat if m.extra.tame => {
             let (model, texture) = if m.is_baby() {

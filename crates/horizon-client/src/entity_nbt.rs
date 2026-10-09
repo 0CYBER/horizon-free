@@ -231,6 +231,21 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 ]),
             );
         }
+        "minecraft:pig" | "minecraft:strider" => {
+            let mut equipment = match map.get(&"equipment".into()) {
+                Some(Tag::Compound(c)) => c.clone(),
+                _ => Compound::new(),
+            };
+            if m.extra.saddled {
+                equipment.insert(
+                    "saddle".into(),
+                    Tag::compound([("id", string("minecraft:saddle")), ("count", Tag::Int(1))]),
+                );
+            } else {
+                equipment.remove(&"saddle".into());
+            }
+            map.insert("equipment".into(), Tag::Compound(equipment));
+        }
         "minecraft:slime" | "minecraft:magma_cube" => {
             map.insert("Size".into(), Tag::Int(m.extra.size.max(1) - 1));
             map.insert("wasOnGround".into(), Tag::Byte(i8::from(m.extra.flag2)));
@@ -307,6 +322,13 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     ) {
         m.extra.flag2 = flag(tag, "IsImmuneToZombification");
         m.extra.counter2 = number(tag.get("TimeInOverworld")).unwrap_or(0) as i32;
+    }
+    if matches!(
+        m.species(),
+        crate::mobs::Species::Pig | crate::mobs::Species::Strider
+    ) {
+        m.extra.saddled =
+            tag.get("equipment").and_then(|e| e.get("saddle")).is_some() || flag(tag, "Saddle");
     }
     if crate::mobs::equine::is_equine(m.species()) {
         m.extra.tame = flag(tag, "Tame");

@@ -587,6 +587,22 @@ impl Game<'_> {
                     self.spawn_item(d, pos, [0.0, 0.2, 0.0], 10);
                 }
             }
+            // Saddles, horse armour and chests always drop.
+            let mut gear: Vec<&str> = Vec::new();
+            if m.extra.saddled {
+                gear.push("minecraft:saddle");
+            }
+            if m.extra.chested && horizon_client::mobs::equine::is_equine(m.species()) {
+                gear.push("minecraft:chest");
+            }
+            if horizon_client::mobs::equine::is_equine(m.species())
+                && let Some(armor) = m.extra.head.as_deref()
+            {
+                gear.push(armor);
+            }
+            for item in gear {
+                self.spawn_item(ItemStack::new(item, 1), pos, [0.0, 0.2, 0.0], 10);
+            }
             {
                 let item = &m.extra.main_hand;
                 // Equipment drop chance 8.5% (+ player kill only).
