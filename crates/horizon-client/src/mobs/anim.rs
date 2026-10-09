@@ -205,6 +205,15 @@ pub enum ArmPose {
     CrossbowHold,
     CrossbowCharge,
 }
+/// HumanoidModel.setupAnim holding an item or not (piglins).
+pub fn humanoid_item(p: &mut Poses, s: &State, holding: bool) {
+    let right = if holding {
+        ArmPose::Item
+    } else {
+        ArmPose::Empty
+    };
+    humanoid(p, s, right, ArmPose::Empty, None, holding);
+}
 /// HumanoidModel.setupAnim with empty hands (endermen).
 pub fn humanoid_pub(p: &mut Poses, s: &State, _m: &Mob) {
     humanoid(p, s, ArmPose::Empty, ArmPose::Empty, None, false);
@@ -421,6 +430,8 @@ pub fn setup(
         Anim::Wolf => super::tame::anim(m, s, p),
         Anim::IronGolem => super::golem::iron_anim(m, s, p),
         Anim::Illager => super::illager::anim(m, s, p),
+        Anim::Piglin => super::piglin::piglin_anim(m, s, p),
+        Anim::Hoglin => super::piglin::hoglin_anim(m, s, p),
         Anim::Blaze => super::nether::blaze_anim(s, p),
         Anim::Ghast => super::nether::ghast_anim(s, p),
         Anim::Feline if m.species() == super::Species::Cat => super::tame::cat_anim(m, s, p),

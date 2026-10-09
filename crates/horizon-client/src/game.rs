@@ -33,6 +33,7 @@ mod options;
 mod packs;
 mod paintings;
 mod persist;
+mod piglins;
 mod postprocess;
 mod potions;
 mod remote;
@@ -1378,6 +1379,10 @@ impl Game<'_> {
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
+            // Opening a piglin-guarded container angers the piglins who see it.
+            if self.guarded_by_piglins(&name) {
+                self.anger_piglins(true);
+            }
             let sound = if storage::is_shulker_box(&name) {
                 Some("minecraft:block.shulker_box.open")
             } else if name.contains("chest") {
@@ -1484,6 +1489,10 @@ impl Game<'_> {
     fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
+        // Block.playerWillDestroy: mining their gold angers all nearby piglins.
+        if self.guarded_by_piglins(&facts.name) {
+            self.anger_piglins(false);
+        }
         if !self.creative {
             if let Some(p) = self.player.as_mut() {
                 p.health.food.exhaustion = (p.health.food.exhaustion + 0.005).min(40.0);

@@ -129,6 +129,7 @@ impl Game<'_> {
             head: self.armor[0].as_ref().map(|s| s.item.clone()),
             armor_cover: self.armor.iter().filter(|a| a.is_some()).count() as f32 / 4.0,
             spectator: self.spectator(),
+            gold_armor: self.wearing_gold(),
             hurt_by: self.player_hurt_by(),
             last_hurt: self.combat.last_hurt_mob.map(|(id, at)| (Who::Mob(id), at)),
         })
@@ -557,6 +558,7 @@ impl Game<'_> {
         self.handle_mob_events(events)?;
         self.tick_projectiles()?;
         self.tick_player_effects();
+        self.piglin_pickups();
         Ok(())
     }
     /// LivingEntity.die / dropAllDeathLoot.
@@ -687,6 +689,7 @@ impl Game<'_> {
                         }
                     }
                 }
+                MobEvent::FinishAdmiring { mob } => self.finish_admiring(mob),
                 MobEvent::Launch { target, up } => match target {
                     Who::Player => {
                         if let Some(p) = self.player.as_mut() {
@@ -835,6 +838,9 @@ impl Game<'_> {
         };
         if setup.baby {
             m.extra.age = -24000;
+        }
+        if setup.nausea {
+            m.add_effect("minecraft:nausea", 200, 0);
         }
         if setup.size > 0 {
             m.extra.size = setup.size;
@@ -1361,6 +1367,17 @@ impl Game<'_> {
             .unwrap_or_default();
         let creative = self.creative;
         let selected = self.selected;
+        // PiglinAi.mobInteract: hand over something gold to admire.
+        if self.mobs[index].alive() && self.give_piglin(index, &item) {
+            self.swing_arm();
+            if !creative && let Some(stack) = self.inventory[selected].as_mut() {
+                stack.count -= 1;
+                if stack.count == 0 {
+                    self.inventory[selected] = None;
+                }
+            }
+            return Ok(true);
+        }
         let m = &mut self.mobs[index];
         if !m.alive() {
             return Ok(false);

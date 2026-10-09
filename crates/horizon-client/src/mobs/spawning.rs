@@ -209,6 +209,19 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts) {
         // ZombifiedPiglin.populateDefaultEquipmentSlots: a golden sword.
         S::ZombifiedPiglin => m.extra.main_hand = Some("minecraft:golden_sword".into()),
         S::Pillager => m.extra.main_hand = Some("minecraft:crossbow".into()),
+        // Piglin.createSpawnWeapon: half crossbows, half golden swords.
+        S::Piglin if !m.is_baby() => {
+            let crossbow = m.random.next_float() < 0.5;
+            m.extra.main_hand = Some(
+                if crossbow {
+                    "minecraft:crossbow"
+                } else {
+                    "minecraft:golden_sword"
+                }
+                .into(),
+            );
+        }
+        S::PiglinBrute => m.extra.main_hand = Some("minecraft:golden_axe".into()),
         S::Vindicator => m.extra.main_hand = Some("minecraft:iron_axe".into()),
         S::Villager => {
             m.extra.variant = villager_type(biome);

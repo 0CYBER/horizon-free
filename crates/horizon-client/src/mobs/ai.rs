@@ -74,6 +74,8 @@ pub enum Family {
     Nether,
     Golem,
     Illager,
+    /// Piglins, brutes, hoglins and zoglins.
+    Piglin,
     /// Slimes and magma cubes.
     Cube,
 }
@@ -105,6 +107,7 @@ pub fn family(s: Species) -> Family {
         S::Blaze | S::Ghast => Family::Nether,
         S::IronGolem | S::SnowGolem => Family::Golem,
         S::Pillager | S::Vindicator => Family::Illager,
+        S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
         _ => Family::Generic,
@@ -127,6 +130,12 @@ pub fn register(m: &mut Mob) {
         Family::Golem => super::golem::register_snow(m),
         Family::Illager if m.species() == Species::Pillager => super::illager::register_pillager(m),
         Family::Illager => super::illager::register_vindicator(m),
+        Family::Piglin => match m.species() {
+            Species::Piglin => super::piglin::register_piglin(m),
+            Species::PiglinBrute => super::piglin::register_brute(m),
+            Species::Hoglin => super::piglin::register_hoglin(m),
+            _ => super::piglin::register_zoglin(m),
+        },
         Family::Enderman => super::enderman::register(m),
         Family::Cube => super::cube::register(m),
     }
@@ -483,6 +492,10 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Cat => super::tame::cat_ai_step(m, events),
         Species::Blaze => super::nether::blaze_ai_step(m, events),
         Species::IronGolem => super::golem::iron_ai_step(m),
+        Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
+            super::piglin::ai_step(m, w, events)
+        }
+        Species::Zoglin if m.extra.anim_ticks > 0 => m.extra.anim_ticks -= 1,
         Species::SnowGolem => super::golem::snow_ai_step(m, w, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
@@ -588,6 +601,13 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
         Species::Enderman => super::enderman::after_hurt(m, source),
         Species::Wolf => super::tame::after_hurt(m, source),
         // NeutralMob: an iron golem hit by the player stays angry a while.
+        // PiglinAi.wasHurtBy: drop what is being admired, no admiring for
+        // a while after a player's hit, and anger.
+        Species::Piglin if source.attacker == Some(Who::Player) => {
+            m.extra.using_item = 0;
+            m.extra.egg_time = 400;
+            m.extra.anger = 600;
+        }
         Species::IronGolem if source.attacker == Some(Who::Player) => {
             m.extra.anger = 400 + m.random.next_int_bound(380).unwrap_or(0);
         }
@@ -598,6 +618,9 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
 pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     if m.species() == Species::IronGolem {
         return super::golem::iron_hurt_target(m, who, cx);
+    }
+    if matches!(m.species(), Species::Hoglin | Species::Zoglin) {
+        return super::piglin::hoglin_hurt_target(m, who, cx);
     }
     let mut amount = m.attrs.attack_damage;
     let from = [m.position.x, m.position.y, m.position.z];

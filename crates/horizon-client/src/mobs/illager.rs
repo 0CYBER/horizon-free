@@ -83,6 +83,10 @@ impl CrossbowAttack {
         }
     }
 }
+/// The crossbow goal for other crossbow users (piglins).
+pub fn crossbow_goal(speed: f64, radius: f64) -> impl Goal {
+    CrossbowAttack::new(speed, radius)
+}
 /// `CrossbowItem.getChargeDuration` without Quick Charge.
 const CHARGE: i32 = 25;
 fn holding_crossbow(m: &Mob) -> bool {

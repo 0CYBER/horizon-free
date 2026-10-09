@@ -183,6 +183,13 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.entry("sound_variant".into())
                 .or_insert_with(|| string("minecraft:classic"));
         }
+        "minecraft:piglin" | "minecraft:piglin_brute" | "minecraft:hoglin" => {
+            map.insert(
+                "IsImmuneToZombification".into(),
+                Tag::Byte(i8::from(m.extra.flag2)),
+            );
+            map.insert("TimeInOverworld".into(), Tag::Int(m.extra.counter2));
+        }
         "minecraft:slime" | "minecraft:magma_cube" => {
             map.insert("Size".into(), Tag::Int(m.extra.size.max(1) - 1));
             map.insert("wasOnGround".into(), Tag::Byte(i8::from(m.extra.flag2)));
@@ -250,6 +257,15 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.name_visible = flag(tag, "CustomNameVisible");
     if m.species() == crate::mobs::Species::Creeper {
         m.extra.charged = flag(tag, "powered");
+    }
+    if matches!(
+        m.species(),
+        crate::mobs::Species::Piglin
+            | crate::mobs::Species::PiglinBrute
+            | crate::mobs::Species::Hoglin
+    ) {
+        m.extra.flag2 = flag(tag, "IsImmuneToZombification");
+        m.extra.counter2 = number(tag.get("TimeInOverworld")).unwrap_or(0) as i32;
     }
     if m.species() == crate::mobs::Species::Cat {
         m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));

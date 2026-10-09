@@ -22,6 +22,7 @@ pub mod living;
 pub mod nav;
 pub mod nether;
 pub mod path;
+pub mod piglin;
 pub mod render;
 pub mod spawning;
 pub mod species;
@@ -568,6 +569,10 @@ pub enum MobEvent {
         name: &'static str,
         effect: bool,
     },
+    /// A piglin's admiring is over: barter or keep the item.
+    FinishAdmiring {
+        mob: u32,
+    },
     /// Throw an entity upward (iron golem swings).
     Launch {
         target: Who,
@@ -595,6 +600,8 @@ pub struct SpawnSetup {
     pub health: Option<f32>,
     pub persistent: bool,
     pub variant: Option<u8>,
+    /// Zombified piglins and zoglins wake up nauseous (`ConversionParams`).
+    pub nausea: bool,
 }
 /// A snapshot of another entity mobs can see this tick.
 #[derive(Clone, Debug)]
@@ -628,6 +635,8 @@ pub struct PlayerView {
     pub head: Option<Arc<str>>,
     pub armor_cover: f32,
     pub spectator: bool,
+    /// `PiglinAi.isWearingSafeArmor`: some golden armour.
+    pub gold_armor: bool,
     /// `getLastHurtByMob` (within 100 ticks) and when.
     pub hurt_by: Option<(Who, i64)>,
     /// `getLastHurtMob` and when.
