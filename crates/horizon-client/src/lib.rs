@@ -65,6 +65,7 @@ pub mod sprites;
 pub mod stations;
 pub mod streaming;
 pub mod structure_blocks;
+pub mod subtitles;
 pub mod testgen;
 pub mod text;
 pub mod title;

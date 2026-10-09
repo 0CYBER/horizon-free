@@ -55,6 +55,7 @@ mod stats;
 mod stats_screen;
 mod storage;
 mod structures;
+mod subtitle_hud;
 mod titles;
 mod tnt;
 mod totem;
@@ -629,6 +630,7 @@ struct Game<'a> {
     mount: mounts::MountState,
     stats: stats::Stats,
     score: scoreboard::ScoreState,
+    subtitles: subtitle_hud::SubtitleState,
     adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
@@ -2823,6 +2825,7 @@ impl Game<'_> {
         self.draw_boss_bar(&mut batch);
         self.draw_titles(&mut batch);
         self.draw_scoreboard(&mut batch);
+        self.draw_subtitles(&mut batch);
         // Gui.renderVehicleHealth / the jump bar while riding a mount.
         let mounted = !self.creative && !spectator && self.draw_mount_hud(&mut batch, w, h);
         let atlas = &self.res.atlas;
@@ -4369,6 +4372,7 @@ impl Game<'_> {
         self.position_rider();
         self.tick_stats();
         self.tick_scoreboard();
+        self.tick_subtitles();
         self.spawn_phantoms();
         self.tick_advancements();
         self.tick_player_model();
@@ -7690,6 +7694,7 @@ pub fn run() -> Result<()> {
         mount: Default::default(),
         stats: Default::default(),
         score: Default::default(),
+        subtitles: Default::default(),
         adv: Default::default(),
         stats_ui: Default::default(),
         adv_ui: Default::default(),
