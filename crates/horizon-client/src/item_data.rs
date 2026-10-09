@@ -26,6 +26,9 @@ pub struct StackData {
     pub container: Vec<(u8, ItemStack)>,
     /// `minecraft:charged_projectiles` (a loaded crossbow).
     pub charged: Vec<ItemStack>,
+    /// `minecraft:fireworks`: flight duration and explosions (None: the
+    /// item's default).
+    pub fireworks: Option<(u8, Vec<crate::particles::FireworkExplosion>)>,
 }
 impl StackData {
     pub fn is_empty(&self) -> bool {
@@ -240,6 +243,33 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
                 ]),
             ));
         }
+        if let Some((flight, explosions)) = &d.fireworks {
+            let list = explosions
+                .iter()
+                .map(|e| {
+                    Tag::compound([
+                        ("shape", Tag::String(e.shape.name().into())),
+                        (
+                            "colors",
+                            Tag::IntArray(e.colors.iter().map(|c| *c as i32).collect()),
+                        ),
+                        (
+                            "fade_colors",
+                            Tag::IntArray(e.fade.iter().map(|c| *c as i32).collect()),
+                        ),
+                        ("has_trail", Tag::Byte(i8::from(e.trail))),
+                        ("has_twinkle", Tag::Byte(i8::from(e.twinkle))),
+                    ])
+                })
+                .collect();
+            entries.push((
+                "minecraft:fireworks",
+                Tag::compound([
+                    ("flight_duration", Tag::Byte(*flight as i8)),
+                    ("explosions", Tag::List(list)),
+                ]),
+            ));
+        }
         if !d.charged.is_empty() {
             entries.push((
                 "minecraft:charged_projectiles",
@@ -286,6 +316,36 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             .max(0) as u32,
         custom_name: c.get("minecraft:custom_name").and_then(read_text),
         potion,
+        fireworks: c.get("minecraft:fireworks").map(|f| {
+            let flight = f
+                .get("flight_duration")
+                .and_then(int)
+                .unwrap_or(0)
+                .clamp(0, 255) as u8;
+            let ints = |t: Option<&Tag>| match t {
+                Some(Tag::IntArray(v)) => v.iter().map(|c| *c as u32).collect(),
+                _ => Vec::new(),
+            };
+            let explosions = match f.get("explosions") {
+                Some(Tag::List(list)) => list
+                    .iter()
+                    .map(|e| crate::particles::FireworkExplosion {
+                        shape: crate::particles::FireworkShape::from_name(
+                            e.get("shape")
+                                .and_then(string)
+                                .as_deref()
+                                .unwrap_or("small_ball"),
+                        ),
+                        colors: ints(e.get("colors")),
+                        fade: ints(e.get("fade_colors")),
+                        trail: e.get("has_trail").and_then(int).unwrap_or(0) != 0,
+                        twinkle: e.get("has_twinkle").and_then(int).unwrap_or(0) != 0,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            (flight, explosions)
+        }),
         charged: match c.get("minecraft:charged_projectiles") {
             Some(Tag::List(list)) => list.iter().filter_map(crate::save::item_from_nbt).collect(),
             _ => Vec::new(),
@@ -312,6 +372,34 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
     (damage, (!data.is_empty()).then(|| Box::new(data)))
 }
 
+/// The `[id=value,...]` component list of an item argument (`ItemParser`)
+/// as a `components` compound; `!id` removals are skipped.
+pub fn command_components(text: &str) -> Result<Tag, String> {
+    let inner = text
+        .strip_prefix('[')
+        .and_then(|t| t.strip_suffix(']'))
+        .ok_or("expected '['")?;
+    let mut entries = horizon_world::nbt::Compound::new();
+    let mut rest = inner.trim_start();
+    while !rest.is_empty() {
+        let end = rest.find(['=', ',']).unwrap_or(rest.len());
+        let key = rest[..end].trim();
+        rest = &rest[end..];
+        if let Some(value) = rest.strip_prefix('=') {
+            let (tag, used) = horizon_world::nbt::parse_snbt(value)?;
+            let id = if key.contains(':') {
+                key.to_owned()
+            } else {
+                format!("minecraft:{key}")
+            };
+            entries.insert(JavaString::from(id.as_str()), tag);
+            rest = &value[used..];
+        }
+        rest = rest.trim_start();
+        rest = rest.strip_prefix(',').unwrap_or(rest).trim_start();
+    }
+    Ok(Tag::Compound(entries))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,5 +450,22 @@ mod tests {
         assert_eq!(book.crafting_enchantments()[0].1, 1);
         let book = ItemStack::new("minecraft:book", 1).transmute("minecraft:enchanted_book", 1);
         assert!(book.extra.is_none());
+    }
+    #[test]
+    fn command_components_decode_fireworks() {
+        let tag = command_components(
+            "[fireworks={flight_duration:2,explosions:[{shape:large_ball,colors:[I;16711680],has_twinkle:true}]},damage=3]",
+        )
+        .unwrap();
+        let (damage, data) = decode_components(Some(&tag));
+        assert_eq!(damage, 3);
+        let (flight, explosions) = data.unwrap().fireworks.unwrap();
+        assert_eq!(flight, 2);
+        assert_eq!(
+            explosions[0].shape,
+            crate::particles::FireworkShape::LargeBall
+        );
+        assert_eq!(explosions[0].colors, vec![0xFF0000]);
+        assert!(explosions[0].twinkle && !explosions[0].trail);
     }
 }

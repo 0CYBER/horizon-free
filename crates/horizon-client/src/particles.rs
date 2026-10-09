@@ -99,6 +99,7 @@ particle_types! {
     Note = "note",
     Dust = "dust",
     TotemOfUndying = "totem_of_undying",
+    Firework = "firework",
     EndRod = "end_rod",
     Ash = "ash",
     WhiteAsh = "white_ash",
@@ -233,6 +234,12 @@ enum Behaviour {
     Campfire,
     SimpleAnimated {
         fade: Option<[f32; 3]>,
+    },
+    /// FireworkParticles.SparkParticle.
+    Spark {
+        fade: Option<[f32; 3]>,
+        trail: bool,
+        twinkle: bool,
     },
     Spell {
         original_alpha: f32,
@@ -579,6 +586,8 @@ pub struct ParticleEngine {
     emitters: Vec<(ParticleOptions, [f64; 3], f64, f64, u32)>,
     /// Camera position for the 32-block spawn limiter.
     pub camera: [f64; 3],
+    /// FireworkParticles.Starter instances.
+    starters: Vec<Starter>,
     /// Local sounds requested by particles (dripstone drips): (event, position, volume, pitch).
     pub sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
 }
@@ -596,6 +605,7 @@ impl ParticleEngine {
             sets: HashMap::new(),
             set_sprites: Vec::new(),
             emitters: Vec::new(),
+            starters: Vec::new(),
             camera: [0.0; 3],
             sounds: Vec::new(),
         };
@@ -1483,6 +1493,23 @@ impl ParticleEngine {
                 q.set = set;
                 q
             }
+            // FireworkParticles.SparkProvider (a rocket's trail).
+            T::Firework => {
+                let mut q = Particle::at(r, ty, p);
+                q.velocity = v;
+                q.gravity = 0.1;
+                q.friction = 0.91;
+                q.size *= 0.75;
+                q.lifetime = 48 + r.next_int_bound(12).unwrap_or(0);
+                q.rgba[3] = 0.99;
+                q.behaviour = Behaviour::Spark {
+                    fade: None,
+                    trail: false,
+                    twinkle: false,
+                };
+                q.set = set;
+                q
+            }
             T::TotemOfUndying | T::EndRod => {
                 let mut q = Particle::at(r, ty, p);
                 q.friction = 0.91;
@@ -1646,7 +1673,204 @@ impl ParticleEngine {
     }
 
     /// `ParticleEngine.tick`: tick live particles, then admit queued ones.
+    /// A firework spark (`SparkParticle`: gravity 0.1, friction 0.91, 3/4 size,
+    /// 48..59 ticks).
+    fn spark(
+        &mut self,
+        at: [f64; 3],
+        v: [f64; 3],
+        rgba: [f32; 4],
+        fade: Option<[f32; 3]>,
+        trail: bool,
+        twinkle: bool,
+    ) -> Particle {
+        let mut q = Particle::at(&mut self.random, ParticleType::Firework, at);
+        q.velocity = v;
+        q.gravity = 0.1;
+        q.friction = 0.91;
+        q.size *= 0.75;
+        q.lifetime = 48 + self.random.next_int_bound(12).unwrap_or(0);
+        q.rgba = [rgba[0], rgba[1], rgba[2], 0.99];
+        q.behaviour = Behaviour::Spark {
+            fade,
+            trail,
+            twinkle,
+        };
+        q.set = self.set_of(ParticleType::Firework);
+        self.sprite_from_age(&mut q);
+        q
+    }
+    /// ClientLevel.createFireworks: a Starter (or poofs without explosions).
+    pub fn fireworks(
+        &mut self,
+        at: [f64; 3],
+        v: [f64; 3],
+        explosions: Vec<FireworkExplosion>,
+        camera: [f64; 3],
+    ) {
+        if explosions.is_empty() {
+            for _ in 0..self.random.next_int_bound(3).unwrap_or(0) + 2 {
+                let g = |r: &mut LegacyRandom| r.next_gaussian() * 0.05;
+                let (vx, vz) = (g(&mut self.random), g(&mut self.random));
+                self.add(
+                    &ParticleOptions::simple(ParticleType::Poof),
+                    at,
+                    [vx, 0.005, vz],
+                );
+            }
+            return;
+        }
+        let twinkle = explosions.iter().any(|e| e.twinkle);
+        let lifetime = explosions.len() as i32 * 2 - 1 + if twinkle { 15 } else { 0 };
+        let far = (0..3).map(|i| (at[i] - camera[i]).powi(2)).sum::<f64>() >= 256.0;
+        self.starters.push(Starter {
+            at,
+            v,
+            explosions,
+            life: 0,
+            lifetime,
+            twinkle_delay: twinkle,
+            far,
+        });
+    }
+    fn tick_starters(&mut self) {
+        for mut s in std::mem::take(&mut self.starters) {
+            if s.life == 0 {
+                let large = s.explosions.len() >= 3
+                    || s.explosions
+                        .iter()
+                        .any(|e| e.shape == FireworkShape::LargeBall);
+                let sound = match (large, s.far) {
+                    (true, true) => "minecraft:entity.firework_rocket.large_blast_far",
+                    (true, false) => "minecraft:entity.firework_rocket.large_blast",
+                    (false, true) => "minecraft:entity.firework_rocket.blast_far",
+                    (false, false) => "minecraft:entity.firework_rocket.blast",
+                };
+                let pitch = 0.95 + self.random.next_float() * 0.1;
+                self.sounds.push((sound, s.at, 20.0, pitch));
+            }
+            if s.life % 2 == 0 && ((s.life / 2) as usize) < s.explosions.len() {
+                let e = s.explosions[(s.life / 2) as usize].clone();
+                // DyeColor.BLACK.getFireworkColor without colours.
+                let colors = if e.colors.is_empty() {
+                    vec![0x1E1B1B]
+                } else {
+                    e.colors.clone()
+                };
+                match e.shape {
+                    FireworkShape::SmallBall => self.spark_ball(&s, 0.25, 2, &colors, &e),
+                    FireworkShape::LargeBall => self.spark_ball(&s, 0.5, 4, &colors, &e),
+                    FireworkShape::Star => self.spark_shape(&s, 0.5, &STAR, &colors, &e, false),
+                    FireworkShape::Creeper => {
+                        self.spark_shape(&s, 0.5, &CREEPER, &colors, &e, true)
+                    }
+                    FireworkShape::Burst => {
+                        let g = |r: &mut LegacyRandom| r.next_gaussian();
+                        let (bx, bz) = (g(&mut self.random) * 0.05, g(&mut self.random) * 0.05);
+                        for _ in 0..70 {
+                            let xa = s.v[0] * 0.5 + g(&mut self.random) * 0.15 + bx;
+                            let za = s.v[2] * 0.5 + g(&mut self.random) * 0.15 + bz;
+                            let ya = s.v[1] * 0.5 + self.random.next_double() * 0.5;
+                            self.spark_from(&s, [xa, ya, za], &colors, &e);
+                        }
+                    }
+                }
+            }
+            s.life += 1;
+            if s.life > s.lifetime {
+                if s.twinkle_delay {
+                    let sound = if s.far {
+                        "minecraft:entity.firework_rocket.twinkle_far"
+                    } else {
+                        "minecraft:entity.firework_rocket.twinkle"
+                    };
+                    let pitch = 0.9 + self.random.next_float() * 0.15;
+                    self.sounds.push((sound, s.at, 20.0, pitch));
+                }
+                continue;
+            }
+            self.starters.push(s);
+        }
+    }
+    /// Starter.createParticle: a random colour and fade colour.
+    fn spark_from(&mut self, s: &Starter, v: [f64; 3], colors: &[u32], e: &FireworkExplosion) {
+        let rgb = |c: u32| {
+            [
+                ((c >> 16) & 255) as f32 / 255.0,
+                ((c >> 8) & 255) as f32 / 255.0,
+                (c & 255) as f32 / 255.0,
+            ]
+        };
+        let c = colors[self.random.next_int_bound(colors.len() as i32).unwrap_or(0) as usize];
+        let fade = (!e.fade.is_empty()).then(|| {
+            rgb(e.fade[self.random.next_int_bound(e.fade.len() as i32).unwrap_or(0) as usize])
+        });
+        let [r, g, b] = rgb(c);
+        let p = self.spark(s.at, v, [r, g, b, 0.99], fade, e.trail, e.twinkle);
+        self.pending.push(p);
+    }
+    fn spark_ball(
+        &mut self,
+        s: &Starter,
+        speed: f64,
+        steps: i32,
+        colors: &[u32],
+        e: &FireworkExplosion,
+    ) {
+        for y in -steps..=steps {
+            for x in -steps..=steps {
+                let mut z = -steps;
+                while z <= steps {
+                    let d = |r: &mut LegacyRandom| (r.next_double() - r.next_double()) * 0.5;
+                    let xa = f64::from(x) + d(&mut self.random);
+                    let ya = f64::from(y) + d(&mut self.random);
+                    let za = f64::from(z) + d(&mut self.random);
+                    let len = (xa * xa + ya * ya + za * za).sqrt() / speed
+                        + self.random.next_gaussian() * 0.05;
+                    self.spark_from(s, [xa / len, ya / len, za / len], colors, e);
+                    if y != -steps && y != steps && x != -steps && x != steps {
+                        z += steps * 2 - 1;
+                    }
+                    z += 1;
+                }
+            }
+        }
+    }
+    fn spark_shape(
+        &mut self,
+        s: &Starter,
+        speed: f64,
+        coords: &[[f64; 2]],
+        colors: &[u32],
+        e: &FireworkExplosion,
+        flat: bool,
+    ) {
+        let (sx, sy) = (coords[0][0], coords[0][1]);
+        self.spark_from(s, [sx * speed, sy * speed, 0.0], colors, e);
+        let base = f64::from(self.random.next_float() * std::f32::consts::PI);
+        let modifier = if flat { 0.034 } else { 0.34 };
+        for step in 0..3 {
+            let angle = base + f64::from(step as f32 * std::f32::consts::PI) * modifier;
+            let (mut ox, mut oy) = (sx, sy);
+            for c in &coords[1..] {
+                let (tx, ty) = (c[0], c[1]);
+                let mut sub = 0.25;
+                while sub <= 1.0 {
+                    let mut xa = (ox + (tx - ox) * sub) * speed;
+                    let ya = (oy + (ty - oy) * sub) * speed;
+                    let za = xa * angle.sin();
+                    xa *= angle.cos();
+                    for flip in [-1.0, 1.0] {
+                        self.spark_from(s, [xa * flip, ya, za * flip], colors, e);
+                    }
+                    sub += 0.25;
+                }
+                (ox, oy) = (tx, ty);
+            }
+        }
+    }
     pub fn tick(&mut self, level: &ParticleLevel) {
+        self.tick_starters();
         for (options, feet, width, height, life) in std::mem::take(&mut self.emitters) {
             self.emit(&options, feet, width, height);
             if life > 1 {
@@ -1983,6 +2207,27 @@ impl ParticleEngine {
                     }
                 }
             }
+            Behaviour::Spark {
+                fade,
+                trail,
+                twinkle,
+            } => {
+                p.base_tick(level);
+                self.sprite_from_age(p);
+                if p.age > p.lifetime / 2 {
+                    p.rgba[3] = 1.0 - (p.age as f32 - (p.lifetime / 2) as f32) / p.lifetime as f32;
+                    if let Some(f) = fade {
+                        for i in 0..3 {
+                            p.rgba[i] += (f[i] - p.rgba[i]) * 0.2;
+                        }
+                    }
+                }
+                if trail && p.age < p.lifetime / 2 && (p.age + p.lifetime) % 2 == 0 {
+                    let mut child = self.spark(p.position, [0.0; 3], p.rgba, fade, false, twinkle);
+                    child.age = child.lifetime / 2;
+                    self.pending.push(child);
+                }
+            }
             Behaviour::Spell { original_alpha } => {
                 p.base_tick(level);
                 self.sprite_from_age(p);
@@ -2129,6 +2374,13 @@ impl ParticleEngine {
             if p.no_render {
                 continue;
             }
+            // SparkParticle.extract: twinkling sparks blink after a third of their life.
+            if let Behaviour::Spark { twinkle: true, .. } = p.behaviour
+                && p.age >= p.lifetime / 3
+                && ((p.age + p.lifetime) / 3) % 2 != 0
+            {
+                continue;
+            }
             let rect = match &p.sprite {
                 Sprite::Index(i) => self.rects.get(*i as usize).copied().flatten(),
                 Sprite::Named(name) => self.atlas.get(name).copied(),
@@ -2252,3 +2504,73 @@ mod tests {
         assert!((lifetime_alpha(a, 40, 40, 0.0) - 0.6).abs() < 1e-6);
     }
 }
+/// FireworkExplosion.Shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FireworkShape {
+    #[default]
+    SmallBall,
+    LargeBall,
+    Star,
+    Creeper,
+    Burst,
+}
+impl FireworkShape {
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "large_ball" => Self::LargeBall,
+            "star" => Self::Star,
+            "creeper" => Self::Creeper,
+            "burst" => Self::Burst,
+            _ => Self::SmallBall,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::SmallBall => "small_ball",
+            Self::LargeBall => "large_ball",
+            Self::Star => "star",
+            Self::Creeper => "creeper",
+            Self::Burst => "burst",
+        }
+    }
+}
+/// The `firework_explosion` component.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FireworkExplosion {
+    pub shape: FireworkShape,
+    pub colors: Vec<u32>,
+    pub fade: Vec<u32>,
+    pub trail: bool,
+    pub twinkle: bool,
+}
+struct Starter {
+    at: [f64; 3],
+    v: [f64; 3],
+    explosions: Vec<FireworkExplosion>,
+    life: i32,
+    lifetime: i32,
+    twinkle_delay: bool,
+    far: bool,
+}
+const STAR: [[f64; 2]; 6] = [
+    [0.0, 1.0],
+    [0.3455, 0.309],
+    [0.9511, 0.309],
+    [0.379_591_836_734_693_9, -0.126_530_612_244_897_95],
+    [0.612_244_897_959_183_7, -0.804_081_632_653_061_2],
+    [0.0, -0.359_183_673_469_387_73],
+];
+const CREEPER: [[f64; 2]; 12] = [
+    [0.0, 0.2],
+    [0.2, 0.2],
+    [0.2, 0.6],
+    [0.6, 0.6],
+    [0.6, 0.2],
+    [0.2, 0.2],
+    [0.2, 0.0],
+    [0.4, 0.0],
+    [0.4, -0.6],
+    [0.2, -0.6],
+    [0.2, -0.4],
+    [0.0, -0.4],
+];

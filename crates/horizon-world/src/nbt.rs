@@ -478,6 +478,169 @@ pub fn write_network(tag: &Tag, limits: Limits) -> Result<Vec<u8>, Error> {
     Ok(writer.bytes)
 }
 
+/// SNBT (`TagParser`): compounds, lists, typed arrays, quoted and bare
+/// strings, booleans and suffixed numbers. Returns the tag and the bytes read.
+pub fn parse_snbt(text: &str) -> Result<(Tag, usize), String> {
+    let mut p = Snbt {
+        s: text.as_bytes(),
+        i: 0,
+    };
+    let tag = p.value()?;
+    Ok((tag, p.i))
+}
+struct Snbt<'a> {
+    s: &'a [u8],
+    i: usize,
+}
+impl Snbt<'_> {
+    fn skip(&mut self) {
+        while self.i < self.s.len() && self.s[self.i].is_ascii_whitespace() {
+            self.i += 1;
+        }
+    }
+    fn peek(&mut self) -> Option<u8> {
+        self.skip();
+        self.s.get(self.i).copied()
+    }
+    fn expect(&mut self, c: u8) -> Result<(), String> {
+        if self.peek() == Some(c) {
+            self.i += 1;
+            Ok(())
+        } else {
+            Err(format!("expected '{}' at {}", c as char, self.i))
+        }
+    }
+    fn bare(c: u8) -> bool {
+        c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.' | b'+')
+    }
+    fn string(&mut self) -> Result<String, String> {
+        match self.peek() {
+            Some(q @ (b'"' | b'\'')) => {
+                self.i += 1;
+                let mut out = Vec::new();
+                while let Some(&c) = self.s.get(self.i) {
+                    self.i += 1;
+                    if c == b'\\' {
+                        if let Some(&n) = self.s.get(self.i) {
+                            self.i += 1;
+                            out.push(match n {
+                                b'n' => b'\n',
+                                b't' => b'\t',
+                                other => other,
+                            });
+                        }
+                    } else if c == q {
+                        return String::from_utf8(out).map_err(|e| e.to_string());
+                    } else {
+                        out.push(c);
+                    }
+                }
+                Err("unterminated string".into())
+            }
+            _ => {
+                let start = self.i;
+                while self.s.get(self.i).is_some_and(|&c| Self::bare(c)) {
+                    self.i += 1;
+                }
+                if start == self.i {
+                    return Err(format!("expected a value at {start}"));
+                }
+                Ok(String::from_utf8_lossy(&self.s[start..self.i]).into_owned())
+            }
+        }
+    }
+    fn value(&mut self) -> Result<Tag, String> {
+        match self.peek() {
+            Some(b'{') => {
+                self.i += 1;
+                let mut map = Compound::new();
+                if self.peek() == Some(b'}') {
+                    self.i += 1;
+                    return Ok(Tag::Compound(map));
+                }
+                loop {
+                    let key = self.string()?;
+                    self.expect(b':')?;
+                    map.insert(JavaString::from(key.as_str()), self.value()?);
+                    match self.peek() {
+                        Some(b',') => self.i += 1,
+                        Some(b'}') => {
+                            self.i += 1;
+                            return Ok(Tag::Compound(map));
+                        }
+                        _ => return Err(format!("expected ',' or '}}' at {}", self.i)),
+                    }
+                }
+            }
+            Some(b'[') => {
+                self.i += 1;
+                let typed = match (self.s.get(self.i), self.s.get(self.i + 1)) {
+                    (Some(&t @ (b'B' | b'I' | b'L')), Some(b';')) => {
+                        self.i += 2;
+                        Some(t)
+                    }
+                    _ => None,
+                };
+                let mut items = Vec::new();
+                if self.peek() != Some(b']') {
+                    loop {
+                        items.push(self.value()?);
+                        match self.peek() {
+                            Some(b',') => self.i += 1,
+                            Some(b']') => break,
+                            _ => return Err(format!("expected ',' or ']' at {}", self.i)),
+                        }
+                    }
+                }
+                self.i += 1;
+                let long = |t: &Tag| match *t {
+                    Tag::Byte(v) => i64::from(v),
+                    Tag::Short(v) => i64::from(v),
+                    Tag::Int(v) => i64::from(v),
+                    Tag::Long(v) => v,
+                    _ => 0,
+                };
+                Ok(match typed {
+                    Some(b'B') => Tag::ByteArray(items.iter().map(|t| long(t) as u8).collect()),
+                    Some(b'I') => Tag::IntArray(items.iter().map(|t| long(t) as i32).collect()),
+                    Some(_) => Tag::LongArray(items.iter().map(long).collect()),
+                    None => Tag::List(items),
+                })
+            }
+            Some(b'"' | b'\'') => Ok(Tag::String(JavaString::from(self.string()?.as_str()))),
+            _ => {
+                let word = self.string()?;
+                Ok(Self::scalar(&word))
+            }
+        }
+    }
+    /// A bare word: a typed number, a boolean, or else a string.
+    fn scalar(word: &str) -> Tag {
+        match word {
+            "true" => return Tag::Byte(1),
+            "false" => return Tag::Byte(0),
+            _ => {}
+        }
+        let lower = word.to_ascii_lowercase();
+        let (body, suffix) = match lower.as_bytes().last() {
+            Some(c @ (b'b' | b's' | b'l' | b'f' | b'd')) => (&word[..word.len() - 1], Some(*c)),
+            _ => (word, None),
+        };
+        let parsed = match suffix {
+            Some(b'b') => body.parse::<i8>().ok().map(Tag::Byte),
+            Some(b's') => body.parse::<i16>().ok().map(Tag::Short),
+            Some(b'l') => body.parse::<i64>().ok().map(Tag::Long),
+            Some(b'f') => body.parse::<f32>().ok().map(|v| Tag::Float(v.to_bits())),
+            Some(_) => body.parse::<f64>().ok().map(|v| Tag::Double(v.to_bits())),
+            None if body.contains('.') || body.contains('e') || body.contains('E') => {
+                body.parse::<f64>().ok().map(|v| Tag::Double(v.to_bits()))
+            }
+            None => body.parse::<i32>().ok().map(Tag::Int),
+        };
+        parsed.unwrap_or_else(|| Tag::String(JavaString::from(word)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,5 +765,20 @@ mod tests {
             write_network(&Tag::Double((-0.0_f64).to_bits()), Limits::default()).unwrap()[1],
             0x80
         );
+    }
+    #[test]
+    fn snbt_parses_typed_values() {
+        let text = "{a:1b,b:[I;1,2],c:'x y',d:[{e:2.5f}],f:true,g:id}";
+        let (tag, used) = parse_snbt(&format!("{text}rest")).unwrap();
+        assert_eq!(used, text.len());
+        assert_eq!(tag.get("a"), Some(&Tag::Byte(1)));
+        assert_eq!(tag.get("b"), Some(&Tag::IntArray(vec![1, 2])));
+        assert_eq!(tag.get("c"), Some(&Tag::String("x y".into())));
+        assert_eq!(tag.get("f"), Some(&Tag::Byte(1)));
+        assert_eq!(tag.get("g"), Some(&Tag::String("id".into())));
+        let Some(Tag::List(d)) = tag.get("d") else {
+            panic!()
+        };
+        assert_eq!(d[0].get("e"), Some(&Tag::Float(2.5f32.to_bits())));
     }
 }

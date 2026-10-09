@@ -11,6 +11,7 @@ mod crossbow;
 mod enchant_effects;
 mod end;
 mod explosion;
+mod fireworks;
 mod fishing;
 mod fov;
 mod frames;
@@ -544,6 +545,7 @@ struct Game<'a> {
     /// The player's fishing hook.
     hook: Option<fishing::Hook>,
     tridents: Vec<trident::ThrownTrident>,
+    rockets: Vec<fireworks::Rocket>,
     trident_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
@@ -1486,6 +1488,7 @@ impl Game<'_> {
             || self.use_fishing_rod(&stack)
             || self.use_crossbow(&stack)
             || self.use_trident(&stack)
+            || self.boost_firework(&stack)
             || self.equip_from_hand(&stack)
         {
             return Ok(());
@@ -1520,7 +1523,8 @@ impl Game<'_> {
             return Ok(());
         }
         if let Some(hit) = self.pick()
-            && (self.place_painting(&hit, &stack)
+            && (self.launch_firework(&hit, &stack)
+                || self.place_painting(&hit, &stack)
                 || self.place_item_frame(&hit, &stack)
                 || self.place_armor_stand(&hit, &stack))
         {
@@ -2158,6 +2162,7 @@ impl Game<'_> {
         self.tick_boats();
         self.tick_fishing();
         self.tick_tridents();
+        self.tick_rockets();
         self.tick_mining()?;
         self.tick_items();
         self.spawn_loaded_entities();
@@ -3631,6 +3636,7 @@ impl Game<'_> {
         self.boat_geometry(camera, alpha, &mut out);
         self.fishing_geometry(camera, alpha, &mut out);
         self.trident_geometry(camera, alpha, &mut out);
+        self.rocket_geometry(camera, alpha, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
         let world = &self.world;
         self.particles.render(
@@ -7173,6 +7179,7 @@ pub fn run() -> Result<()> {
         pending_shulker: HashMap::new(),
         hook: None,
         tridents: Vec::new(),
+        rockets: Vec::new(),
         trident_model: horizon_client::mobs::load_model(&root, "minecraft:trident#main"),
         tnts: Vec::new(),
         hoppers: HashMap::new(),

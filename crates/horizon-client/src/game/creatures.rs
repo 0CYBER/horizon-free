@@ -332,7 +332,7 @@ impl Game<'_> {
             }
         }
     }
-    fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
+    pub(super) fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
         let (rain, thunder) = self.world.weather.levels(1.0);
         MobWorld {
             world: &self.world,
@@ -924,7 +924,7 @@ impl Game<'_> {
             self.creatures.pearl_cooldown -= 1;
         }
     }
-    fn hurt_player_by(&mut self, damage_type: &str, amount: f32) {
+    pub(super) fn hurt_player_by(&mut self, damage_type: &str, amount: f32) {
         if self.creative {
             return;
         }

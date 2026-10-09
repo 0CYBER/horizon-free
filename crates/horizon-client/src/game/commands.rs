@@ -584,8 +584,16 @@ impl Game<'_> {
         map.get(item).cloned().unwrap_or_else(|| "common".into())
     }
     fn cmd_give(&mut self, ctx: &Context) -> R<i32> {
-        let Some(Arg::Item(ItemInput { id, .. })) = ctx.get("item").cloned() else {
+        let Some(Arg::Item(ItemInput { id, components, .. })) = ctx.get("item").cloned() else {
             return Ok(0);
+        };
+        let (damage, extra) = match components
+            .as_deref()
+            .map(horizon_client::item_data::command_components)
+        {
+            Some(Ok(tag)) => horizon_client::item_data::decode_components(Some(&tag)),
+            Some(Err(e)) => return Err(CommandError::new(Text::literal(e))),
+            None => (0, None),
         };
         let count = Self::int(ctx, "count").unwrap_or(1);
         let targets = self.entities(ctx, "targets", true)?;
@@ -607,8 +615,8 @@ impl Game<'_> {
                 let left = self.give(ItemStack {
                     item: id.as_str().into(),
                     count: size as u32,
-                    damage: 0,
-                    extra: None,
+                    damage,
+                    extra: extra.clone(),
                 });
                 if let Some(rest) = left {
                     // Inventory full: drop the rest at the player's feet without pickup delay.
