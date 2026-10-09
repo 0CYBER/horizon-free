@@ -5,6 +5,8 @@
 //! [`args`]; the vanilla command tree in [`vanilla`].
 pub mod args;
 pub mod tree_data;
+pub mod tree_execute;
+pub mod tree_misc;
 pub mod tree_scoreboard;
 pub mod vanilla;
 

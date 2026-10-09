@@ -37,6 +37,13 @@ pub struct Registries {
     pub functions: Vec<String>,
     /// `/data ... storage` ids.
     pub storages: Vec<String>,
+    /// Boss bar ids and datapack predicate ids.
+    pub bossbars: Vec<String>,
+    pub predicates: Vec<String>,
+    pub schedules: Vec<String>,
+    pub random_sequences: Vec<String>,
+    pub datapacks_enabled: Vec<String>,
+    pub datapacks_disabled: Vec<String>,
     pub function_tags: Vec<String>,
     /// The block the source is looking at (relevant coordinates).
     pub target_block: Option<[i32; 3]>,
@@ -147,7 +154,65 @@ pub enum ArgType {
     NbtPath,
     /// NbtTagArgument: any SNBT value (kept as text).
     NbtTag,
+    /// One of a fixed set of words.
+    Enum(&'static [&'static str]),
+    /// A (possibly quoted) name suggested from a registry list.
+    Name(&'static str),
+    /// FunctionArgument: `ns:path`, or `#ns:path` for a function tag.
+    Function,
+    /// SlotsArgument: a slot name or a wildcard group (`container.*`).
+    Slots,
+    /// SlotArgument: one slot (`container.5`, `weapon.mainhand`).
+    Slot,
 }
+
+/// Every slot name a command can address (`SlotRanges`), without wildcards.
+pub fn slot_names() -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    let mut range = |prefix: &str, n: usize| {
+        for i in 0..n {
+            v.push(format!("{prefix}.{i}"));
+        }
+    };
+    range("container", 54);
+    range("hotbar", 9);
+    range("inventory", 27);
+    range("enderchest", 27);
+    range("villager", 8);
+    range("horse", 15);
+    range("player.crafting", 4);
+    for name in [
+        "weapon",
+        "weapon.mainhand",
+        "weapon.offhand",
+        "armor.head",
+        "armor.chest",
+        "armor.legs",
+        "armor.feet",
+        "armor.body",
+        "saddle",
+        "horse.saddle",
+        "horse.chest",
+        "player.cursor",
+        "contents",
+    ] {
+        v.push(name.to_owned());
+    }
+    v
+}
+/// The wildcard groups of `slot_names` (`container.*`, `armor.*`, ...).
+pub const SLOT_GROUPS: [&str; 10] = [
+    "container.*",
+    "hotbar.*",
+    "inventory.*",
+    "enderchest.*",
+    "villager.*",
+    "horse.*",
+    "player.crafting.*",
+    "armor.*",
+    "weapon.*",
+    "player.*",
+];
 pub fn integer(min: i32) -> ArgType {
     ArgType::Integer { min, max: i32::MAX }
 }
@@ -1672,6 +1737,38 @@ impl ArgType {
                 Arg::Str(name.to_owned())
             }
             ArgType::IntRange => Arg::IntRange(range_int(reader)?),
+            ArgType::Name(_) => Arg::Str(reader.read_string()?),
+            ArgType::Enum(words) => {
+                let word = reader.read_unquoted_string();
+                if !words.contains(&word) {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at("command.unknown.argument", &[], reader));
+                }
+                Arg::Str(word.to_owned())
+            }
+            ArgType::Function => {
+                let tag = reader.can_read() && reader.peek() == '#';
+                if tag {
+                    reader.skip();
+                }
+                let id = read_id(reader)?;
+                Arg::Resource(if tag { format!("#{id}") } else { id })
+            }
+            ArgType::Slots | ArgType::Slot => {
+                let mut end = reader.cursor;
+                while reader.can_read() && reader.peek() != ' ' {
+                    reader.skip();
+                    end = reader.cursor;
+                }
+                let word = &reader.string[start..end];
+                let known = slot_names().iter().any(|n| n == word)
+                    || (matches!(self, ArgType::Slots) && SLOT_GROUPS.contains(&word));
+                if !known {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at("slot.unknown", &[&word], reader));
+                }
+                Arg::Str(word.to_owned())
+            }
             ArgType::NbtPath => {
                 let (path, used) = crate::nbt_path::NbtPath::parse_prefix(reader.remaining())
                     .map_err(|e| {
@@ -1747,6 +1844,10 @@ impl ArgType {
             ArgType::Id(list) => {
                 let values = match *list {
                     "storages" => reg.storages.clone(),
+                    "bossbars" => reg.bossbars.clone(),
+                    "schedules" => reg.schedules.clone(),
+                    "random_sequences" => reg.random_sequences.clone(),
+                    "predicates" => reg.predicates.clone(),
                     "time_markers" => reg.time_markers.clone(),
                     "advancements" => reg.advancements.clone(),
                     _ => Vec::new(),
@@ -1809,6 +1910,27 @@ impl ArgType {
                 builder.suggest_matching(slots.iter().map(String::as_str));
             }
             ArgType::Operation => builder.suggest_matching(OPERATIONS),
+            ArgType::Enum(words) => builder.suggest_matching(words.iter().copied()),
+            ArgType::Name(list) => {
+                let names = match *list {
+                    "datapacks_enabled" => reg.datapacks_enabled.clone(),
+                    _ => reg.datapacks_disabled.clone(),
+                };
+                builder.suggest_matching(names.iter().map(String::as_str));
+            }
+            ArgType::Function => {
+                let functions = reg.functions.clone();
+                suggest_resources(builder, &functions, "");
+                let tags = reg.function_tags.clone();
+                suggest_resources(builder, &tags, "#");
+            }
+            ArgType::Slots | ArgType::Slot => {
+                let mut names = slot_names();
+                if matches!(self, ArgType::Slots) {
+                    names.extend(SLOT_GROUPS.iter().map(|s| (*s).to_owned()));
+                }
+                builder.suggest_matching(names.iter().map(String::as_str));
+            }
             ArgType::TeamColor => builder.suggest_matching(crate::scoreboard::team_colors()),
             ArgType::Anchor => builder.suggest_matching(["eyes", "feet"]),
             ArgType::Swizzle | ArgType::Component => {}

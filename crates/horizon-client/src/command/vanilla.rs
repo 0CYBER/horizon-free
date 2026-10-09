@@ -344,67 +344,9 @@ pub fn build() -> Dispatcher {
 
     super::tree_scoreboard::register(&mut d, root);
     super::tree_data::register(&mut d, root);
-    execute(&mut d, root);
+    super::tree_execute::register(&mut d, root);
+    super::tree_misc::register(&mut d, root);
     d
-}
-
-/// ExecuteCommand: modifiers redirect back to `execute`, `run` to the root;
-/// conditions both execute (as a test) and continue the chain. `store`,
-/// `summon`, `on` and score/data conditions are not implemented.
-fn execute(d: &mut Dispatcher, root: usize) {
-    let ex = d.literal(root, "execute");
-    d.requires(ex, GAMEMASTERS);
-    let run = d.literal(ex, "run");
-    d.redirect(run, root);
-    for name in ["as", "at"] {
-        let l = d.literal(ex, name);
-        let t = d.argument(l, "targets", ENTITIES);
-        d.redirect(t, ex);
-    }
-    let positioned = d.literal(ex, "positioned");
-    let pos = d.argument(positioned, "pos", ArgType::Vec3 { center: true });
-    d.redirect(pos, ex);
-    let as_ = d.literal(positioned, "as");
-    let t = d.argument(as_, "targets", ENTITIES);
-    d.redirect(t, ex);
-    let rotated = d.literal(ex, "rotated");
-    let rot = d.argument(rotated, "rot", ArgType::Rotation);
-    d.redirect(rot, ex);
-    let as_ = d.literal(rotated, "as");
-    let t = d.argument(as_, "targets", ENTITIES);
-    d.redirect(t, ex);
-    let facing = d.literal(ex, "facing");
-    let pos = d.argument(facing, "pos", ArgType::Vec3 { center: true });
-    d.redirect(pos, ex);
-    let entity = d.literal(facing, "entity");
-    let t = d.argument(entity, "targets", ENTITIES);
-    let anchor = d.argument(t, "anchor", ArgType::Anchor);
-    d.redirect(anchor, ex);
-    let align = d.literal(ex, "align");
-    let axes = d.argument(align, "axes", ArgType::Swizzle);
-    d.redirect(axes, ex);
-    let anchored = d.literal(ex, "anchored");
-    let anchor = d.argument(anchored, "anchor", ArgType::Anchor);
-    d.redirect(anchor, ex);
-    let in_ = d.literal(ex, "in");
-    let dim = d.argument(in_, "dimension", ArgType::Dimension);
-    d.redirect(dim, ex);
-    for mode in ["if", "unless"] {
-        let m = d.literal(ex, mode);
-        let block = d.literal(m, "block");
-        let pos = d.argument(block, "pos", ArgType::BlockPos);
-        let predicate = d.argument(pos, "block", ArgType::BlockPredicate);
-        let entity = d.literal(m, "entity");
-        let targets = d.argument(entity, "entities", ENTITIES);
-        let loaded = d.literal(m, "loaded");
-        let lpos = d.argument(loaded, "pos", ArgType::BlockPos);
-        let dimension = d.literal(m, "dimension");
-        let dim = d.argument(dimension, "dimension", ArgType::Dimension);
-        for node in [predicate, targets, lpos, dim] {
-            d.executes(node, "execute");
-            d.redirect(node, ex);
-        }
-    }
 }
 
 /// AdvancementCommands: grant|revoke <targets> only|from|until|through

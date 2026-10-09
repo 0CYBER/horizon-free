@@ -255,3 +255,113 @@ fn data_and_tag_commands_parse() {
     assert!(run("kill @e[scores={a=1..},team=red,nbt={x:1b},tag=t]").is_ok());
     assert!(run("kill @e[scores={a=1..]").is_err());
 }
+
+#[test]
+fn smoke_commands_parse() {
+    for line in [
+        "tag @s list",
+        "random value 1..6",
+        "team list",
+        "data get storage a:b",
+        "scoreboard objectives list",
+        "function test:a",
+        "execute store result score #r t run function test:a",
+        "schedule function test:a 20t",
+        "datapack list",
+        "bossbar list",
+        "item replace entity @s hotbar.0 with minecraft:stone 3",
+    ] {
+        assert!(run(line).is_ok(), "{line}: {:?}", run(line).err());
+    }
+}
+
+#[test]
+fn execute_tree_covers_vanilla_forms() {
+    for line in [
+        "execute as @a at @s run say hi",
+        "execute store result score @s x run data get entity @s Health",
+        "execute store success bossbar minecraft:b value run say hi",
+        "execute store result storage a:b out int 1.5 run time query gametime",
+        "execute store result entity @s Air short 1 run say hi",
+        "execute if score @s a = @s b run say hi",
+        "execute unless score @s a matches ..5 run say hi",
+        "execute if block ~ ~ ~ minecraft:stone",
+        "execute if blocks 0 0 0 1 1 1 5 5 5 masked run say hi",
+        "execute if biome ~ ~ ~ minecraft:plains",
+        "execute if loaded ~ ~ ~",
+        "execute if dimension minecraft:overworld",
+        "execute if data entity @s Inventory[0]",
+        "execute unless data storage a:b x run say hi",
+        "execute if predicate a:b",
+        "execute if function a:b run say hi",
+        "execute if items entity @s hotbar.* minecraft:stone",
+        "execute if slots block 0 0 0 container.*",
+        "execute positioned over world_surface run say hi",
+        "execute summon minecraft:pig run say hi",
+        "execute on vehicle run say hi",
+        "execute on passengers as @s run say hi",
+        "execute rotated as @s facing entity @s eyes align xyz anchored feet in minecraft:overworld run say hi",
+    ] {
+        assert!(run(line).is_ok(), "{line}: {:?}", run(line).err());
+    }
+    assert!(run("execute positioned over nothing run say hi").is_err());
+    assert!(run("execute on nobody run say hi").is_err());
+    assert!(run("execute store result score @s").is_err());
+}
+
+#[test]
+fn function_and_misc_trees() {
+    assert_eq!(run("function a:b").unwrap().0, "function");
+    assert_eq!(run("function #a:tag {x:1}").unwrap().0, "function");
+    assert_eq!(
+        run("function a:b with storage c:d path.x").unwrap().0,
+        "function"
+    );
+    assert_eq!(run("return 5").unwrap().0, "return.value");
+    assert_eq!(run("return fail").unwrap().0, "return.fail");
+    assert_eq!(run("return run say hi").unwrap().0, "say");
+    assert_eq!(
+        run("schedule function a:b 5s append").unwrap().0,
+        "schedule.function"
+    );
+    assert_eq!(run("schedule clear a:b").unwrap().0, "schedule.clear");
+    assert_eq!(run("random roll 1..20").unwrap().0, "random.roll");
+    assert_eq!(
+        run("random reset * 5 true false").unwrap().0,
+        "random.reset"
+    );
+    assert_eq!(run("teammsg hi there").unwrap().0, "teammsg");
+    assert_eq!(run("tm hi").unwrap().0, "teammsg");
+    assert_eq!(
+        run("bossbar set a:b color pink").unwrap().0,
+        "bossbar.set.color"
+    );
+    assert_eq!(
+        run("bossbar set a:b players @a").unwrap().0,
+        "bossbar.set.players"
+    );
+    assert_eq!(run("bossbar get a:b max").unwrap().0, "bossbar.get");
+    assert_eq!(
+        run("item fill block 1 2 3 container.* with minecraft:stone 5")
+            .unwrap()
+            .0,
+        "item"
+    );
+    assert_eq!(
+        run("item replace entity @s armor.head from block 0 0 0 container.3")
+            .unwrap()
+            .0,
+        "item"
+    );
+    assert_eq!(run("tick rate 40").unwrap().0, "tick.rate");
+    assert_eq!(run("tick step 1s").unwrap().0, "tick.step");
+    assert_eq!(run("reload").unwrap().0, "reload");
+    assert_eq!(
+        run("datapack enable \"file/x\" after \"file/y\"")
+            .unwrap()
+            .0,
+        "datapack.enable"
+    );
+    assert!(run("bossbar set a:b value -1").is_err());
+    assert!(run("item replace entity @s nowhere.0 with minecraft:stone").is_err());
+}

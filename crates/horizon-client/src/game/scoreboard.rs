@@ -324,6 +324,21 @@ impl Game<'_> {
 
     // ---- commands ------------------------------------------------------------
 
+    /// The scoreboard names a score holder argument resolves to.
+    pub(super) fn score_holder_names(
+        &mut self,
+        ctx: &Context,
+        name: &str,
+        default_wildcard: bool,
+    ) -> super::commands::R<Vec<String>> {
+        let mut env = GameEnv { g: self };
+        Ok(
+            scoreboard_cmd::holders(ctx, name, &mut env, default_wildcard)?
+                .into_iter()
+                .map(|h| h.name)
+                .collect(),
+        )
+    }
     pub(super) fn cmd_scoreboard(&mut self, id: &str, ctx: &Context) -> super::commands::R<i32> {
         let mut env = GameEnv { g: self };
         let result = scoreboard_cmd::execute(id, ctx, &mut env).unwrap_or_else(|| {
@@ -337,7 +352,7 @@ impl Game<'_> {
     }
     /// ComponentUtils.updateForEntity for the pieces scoreboards store:
     /// `selector` and `score` components become their text.
-    fn resolve_component(&mut self, c: Comp) -> Comp {
+    pub(super) fn resolve_component(&mut self, c: Comp) -> Comp {
         match c {
             Comp::Object(mut o) => {
                 if let Some(sel) = o.get("selector").and_then(Comp::as_str).map(str::to_owned) {

@@ -148,7 +148,7 @@ impl Game<'_> {
         }
         Ok(())
     }
-    fn data_block_name(&self, p: [i32; 3]) -> String {
+    pub(in crate::game) fn data_block_name(&self, p: [i32; 3]) -> String {
         let state = self.world.block(p[0], p[1], p[2]);
         self.res
             .assets
@@ -182,7 +182,16 @@ impl Game<'_> {
     // ---- accessors -----------------------------------------------------
 
     /// The `role`th provider of the command (`entity`, `block` or `storage`).
-    fn data_ref(&mut self, ctx: &Context, role: usize) -> R<DataRef> {
+    pub(in crate::game) fn data_ref(&mut self, ctx: &Context, role: usize) -> R<DataRef> {
+        let prefix = if role == 0 { "target" } else { "source" };
+        self.data_ref_named(ctx, role, prefix)
+    }
+    pub(in crate::game) fn data_ref_named(
+        &mut self,
+        ctx: &Context,
+        role: usize,
+        prefix: &str,
+    ) -> R<DataRef> {
         let kind = ctx
             .literals
             .iter()
@@ -190,7 +199,6 @@ impl Game<'_> {
             .nth(role)
             .cloned()
             .unwrap_or_default();
-        let prefix = if role == 0 { "target" } else { "source" };
         match kind.as_str() {
             "entity" => {
                 let Some(Arg::Entity(sel)) = ctx.get(prefix).cloned() else {
@@ -215,7 +223,7 @@ impl Game<'_> {
             },
         }
     }
-    fn data_of(&mut self, r: &DataRef) -> R<Tag> {
+    pub(in crate::game) fn data_of(&mut self, r: &DataRef) -> R<Tag> {
         match r {
             DataRef::Entity(t) => self
                 .entity_nbt(*t)
@@ -233,7 +241,7 @@ impl Game<'_> {
             DataRef::Storage(id) => Ok(self.score.storage.get(id)),
         }
     }
-    fn set_data_of(&mut self, r: &DataRef, tag: Tag) -> R<()> {
+    pub(in crate::game) fn set_data_of(&mut self, r: &DataRef, tag: Tag) -> R<()> {
         match r {
             DataRef::Entity(t) => self.apply_entity_nbt(*t, tag),
             DataRef::Block(p) => {

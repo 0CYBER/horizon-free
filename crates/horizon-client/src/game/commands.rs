@@ -3,6 +3,8 @@
 mod data;
 mod effects;
 pub(super) mod execute;
+mod items;
+mod misc;
 mod text_commands;
 
 use super::{Dim, Game, Screen, chat::PLAYER_NAME};
@@ -35,7 +37,7 @@ pub(super) enum Target {
     Boat(u32),
     Cart(u32),
 }
-fn err(key: &str, args: &[&dyn std::fmt::Display]) -> CommandError {
+pub(super) fn err(key: &str, args: &[&dyn std::fmt::Display]) -> CommandError {
     CommandError::tr(key, args)
 }
 fn texts(args: &[Text]) -> Vec<Text> {
@@ -64,19 +66,11 @@ impl Game<'_> {
                 self.syntax_failure(&e, command);
                 return;
             }
-            Ok((ctx, id)) => {
+            Ok((ctx, _)) => {
                 let ctx = ctx.clone();
-                if parse
-                    .context
-                    .literals
-                    .first()
-                    .is_some_and(|w| w == "execute")
-                {
-                    let root = parse.context.clone();
-                    self.run_execute(&root)
-                } else {
-                    self.execute_command(id, &ctx)
-                }
+                let root = parse.context.clone();
+                self.exec = Default::default();
+                self.run_chain(&root, &ctx)
             }
         };
         if let Err(e) = result {
@@ -119,11 +113,17 @@ impl Game<'_> {
         self.command_failure(context.with_color(text::GRAY).with_style(&suggest));
     }
     /// CommandSourceStack.sendFailure: red text.
-    fn command_failure(&mut self, message: Text) {
+    pub(super) fn command_failure(&mut self, message: Text) {
+        if self.command_source.is_some_and(|s| s.silent) {
+            return;
+        }
         self.system_message(message.with_color(text::RED));
     }
     /// sendSuccess honouring `send_command_feedback`.
     pub(super) fn feedback(&mut self, message: Text) {
+        if self.command_source.is_some_and(|s| s.silent) {
+            return;
+        }
         if self.ui.rules.bool("send_command_feedback") {
             self.system_message(message);
         }
@@ -183,7 +183,7 @@ impl Game<'_> {
     }
     // ---- entities -------------------------------------------------------
 
-    fn target_position(&self, t: Target) -> Option<[f64; 3]> {
+    pub(super) fn target_position(&self, t: Target) -> Option<[f64; 3]> {
         match t {
             Target::Player => self
                 .player
@@ -240,7 +240,7 @@ impl Game<'_> {
                 .map(|c| [c.position.x, c.position.y, c.position.z]),
         }
     }
-    fn target_type(&self, t: Target) -> String {
+    pub(super) fn target_type(&self, t: Target) -> String {
         match t {
             Target::Player => "minecraft:player".into(),
             Target::Mob(id) => self
@@ -524,6 +524,16 @@ impl Game<'_> {
             "spawnpoint" => self.cmd_spawnpoint(ctx),
             "setworldspawn" => self.cmd_setworldspawn(ctx),
             "clear" => self.cmd_clear(ctx),
+            "item" => self.cmd_item(ctx),
+            "teammsg" => self.cmd_teammsg(ctx),
+            id if id.starts_with("tick.") => self.cmd_tick(id, ctx),
+            id if id.starts_with("random.") => self.cmd_random(id, ctx),
+            "function" => self.cmd_function(ctx),
+            "return.value" | "return.fail" => self.cmd_return(id, ctx),
+            "schedule.function" | "schedule.clear" => self.cmd_schedule(id, ctx),
+            "reload" => self.cmd_reload(),
+            id if id.starts_with("datapack.") => self.cmd_datapack(id, ctx),
+            id if id.starts_with("bossbar.") => self.cmd_bossbar(id, ctx),
             id if id.starts_with("data.") => self.cmd_data(id, ctx),
             id if id.starts_with("tag.") => self.cmd_tag(id, ctx),
             id if id.starts_with("scoreboard.")
@@ -2087,7 +2097,7 @@ impl Game<'_> {
         Ok(1)
     }
     /// MessageArgument: `@p`-style selectors in a message become names.
-    fn expand_selectors(&mut self, raw: &str) -> Text {
+    pub(super) fn expand_selectors(&mut self, raw: &str) -> Text {
         let mut out = Text::empty();
         let mut rest = raw;
         while let Some(at) = rest.find('@') {

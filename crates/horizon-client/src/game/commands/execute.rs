@@ -1,10 +1,17 @@
 //! `/execute` (ExecuteCommand): walk the parsed redirect chain, forking and
-//! filtering command sources, then run the final command once per source.
-use super::{Arg, Context, Game, R, Target, err};
-use horizon_client::text::Text;
+//! filtering command sources, then run the final command once per source,
+//! reporting each result to the `store` callbacks of its source.
+use super::{Arg, Context, Game, R, Target, data::DataRef, err};
+use horizon_client::{
+    command::{CommandError, vanilla},
+    nbt_path::NbtPath,
+    text::Text,
+};
+use horizon_world::nbt::Tag;
 
 /// `CommandSourceStack` fields Horizon models: the executing entity (None for
-/// the server), position, rotation and anchor.
+/// the server), position, rotation, anchor, whether feedback is suppressed
+/// and the chain of `store` callbacks.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::game) struct Source {
     pub entity: Option<Target>,
@@ -12,19 +19,71 @@ pub(in crate::game) struct Source {
     pub rot: [f32; 2],
     /// EntityAnchorArgument.Anchor: eyes (true) or feet.
     pub eyes: bool,
+    /// `withSuppressedOutput`: functions do not print feedback.
+    pub silent: bool,
+    /// Index of the newest `store` in `ExecState::stores`.
+    pub store: Option<u32>,
+}
+
+/// Where `execute store` writes.
+#[derive(Clone, Debug)]
+pub(in crate::game) enum StoreTarget {
+    Score(Vec<String>, String),
+    Bossbar(String, bool),
+    Data(DataRef, NbtPath, String, f64),
+}
+#[derive(Clone, Debug)]
+pub(in crate::game) struct StoreEntry {
+    /// `store result` (true) or `store success`.
+    result: bool,
+    target: StoreTarget,
+    parent: Option<u32>,
+}
+/// Command execution state shared across nested commands and functions.
+#[derive(Default)]
+pub(in crate::game) struct ExecState {
+    stores: Vec<StoreEntry>,
+    /// Commands run since the outermost one began.
+    pub commands: u32,
+    /// What the last leaf command reports to its `store` callbacks: None for
+    /// the default, `Some(None)` for nothing (a function that did not
+    /// `return`), `Some(Some((success, result)))` for an explicit value.
+    pub callback: Option<Option<(bool, i32)>>,
+    /// The innermost function frame's `return`.
+    pub returned: Option<Option<i32>>,
+    /// Depth of function calls.
+    pub function_depth: u32,
+}
+
+/// Java's `(int)`/`(short)`/`(byte)` narrowing of a double.
+fn java_int(v: f64) -> i32 {
+    v as i32
 }
 
 impl Game<'_> {
     /// The source a command typed by the player starts from.
-    pub(super) fn player_source(&self) -> Source {
+    pub(in crate::game) fn player_source(&self) -> Source {
         Source {
             entity: Some(Target::Player),
             pos: self.source_position(),
             rot: self.source_rotation(),
             eyes: false,
+            silent: false,
+            store: None,
         }
     }
-    fn target_rotation(&self, t: Target) -> [f32; 2] {
+    /// The server as a source (function ticks and schedules): the world spawn.
+    pub(in crate::game) fn server_source(&self) -> Source {
+        Source {
+            entity: None,
+            pos: self.spawn.map_or([0.0, 64.0, 0.0], |s| [s.x, s.y, s.z]),
+            rot: [0.0, 0.0],
+            eyes: false,
+            silent: true,
+            store: None,
+        }
+    }
+    pub(super) fn target_rotation(&self, t: Target) -> [f32; 2] {
         match t {
             Target::Player => [self.yaw, self.pitch],
             Target::Mob(id) => self
@@ -32,6 +91,21 @@ impl Game<'_> {
                 .iter()
                 .find(|m| m.id == id)
                 .map_or([0.0; 2], |m| [m.yaw, m.head_pitch]),
+            Target::Stand(id) => self
+                .armor_stands
+                .iter()
+                .find(|a| a.id == id)
+                .map_or([0.0; 2], |a| [a.yaw, 0.0]),
+            Target::Boat(id) => self
+                .boats
+                .iter()
+                .find(|b| b.id == id)
+                .map_or([0.0; 2], |b| [b.yaw, 0.0]),
+            Target::Cart(id) => self
+                .carts
+                .iter()
+                .find(|c| c.id == id)
+                .map_or([0.0; 2], |c| [c.yaw, 0.0]),
             _ => [0.0; 2],
         }
     }
@@ -57,14 +131,108 @@ impl Game<'_> {
         }
     }
     /// Evaluate `f` with `source` as the command source.
-    fn with_source<T>(&mut self, source: Source, f: impl FnOnce(&mut Self) -> T) -> T {
+    pub(in crate::game) fn with_source<T>(
+        &mut self,
+        source: Source,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
         let previous = self.command_source.replace(source);
         let out = f(self);
         self.command_source = previous;
         out
     }
+
+    // ---- running commands -----------------------------------------------
+
+    /// Run one command line with `source` (no error reporting): the entry
+    /// for functions and `execute run`.
+    pub(in crate::game) fn execute_line(&mut self, line: &str, source: Source) -> R<i32> {
+        let d = vanilla::dispatcher();
+        let parse = d.parse(line, &self.ui.registries);
+        let (ctx, _) = parse.executable()?;
+        let ctx = ctx.clone();
+        let root = parse.context.clone();
+        self.with_source(source, |g| g.run_chain(&root, &ctx))
+    }
+    /// Run a parsed command (`root` is the first context; `ctx` the one with
+    /// the executable node): `execute` and `return` walk their own chains.
+    pub(in crate::game) fn run_chain(&mut self, root: &Context, ctx: &Context) -> R<i32> {
+        self.exec.commands += 1;
+        let limit = self.ui.rules.int("max_command_sequence_length").max(1) as u32;
+        if self.exec.commands > limit {
+            return Err(err("command.failed", &[]));
+        }
+        match root.literals.first().map(String::as_str) {
+            Some("execute") => self.run_execute(root),
+            Some("return") if root.child.is_some() => self.run_return_run(root),
+            _ => {
+                let id = ctx.command.unwrap_or("");
+                self.run_leaf(id, ctx)
+            }
+        }
+    }
+    /// Run a leaf command and report its outcome to the `store` callbacks.
+    pub(in crate::game) fn run_leaf(&mut self, id: &str, ctx: &Context) -> R<i32> {
+        self.exec.callback = None;
+        let store = self.command_source.and_then(|s| s.store);
+        let result = self.execute_command(id, ctx);
+        let custom = self.exec.callback.take();
+        let outcome = match (&result, custom) {
+            (_, Some(c)) => c,
+            (Ok(v), None) => Some((true, *v)),
+            (Err(_), None) => Some((false, 0)),
+        };
+        if let Some((success, value)) = outcome {
+            self.deliver(store, success, value);
+        }
+        result
+    }
+    /// `CommandResultCallback`s of a source's `store` chain, oldest first.
+    fn deliver(&mut self, store: Option<u32>, success: bool, value: i32) {
+        let mut chain = Vec::new();
+        let mut at = store;
+        while let Some(i) = at {
+            let Some(e) = self.exec.stores.get(i as usize) else {
+                break;
+            };
+            chain.push(e.clone());
+            at = e.parent;
+        }
+        for e in chain.into_iter().rev() {
+            let v = if e.result { value } else { i32::from(success) };
+            self.store_value(&e.target, v);
+        }
+    }
+    fn store_value(&mut self, target: &StoreTarget, value: i32) {
+        match target {
+            StoreTarget::Score(holders, objective) => {
+                for h in holders {
+                    self.score.board.set(h, objective, value);
+                }
+            }
+            StoreTarget::Bossbar(id, is_value) => self.set_bossbar_value(id, *is_value, value),
+            StoreTarget::Data(r, path, kind, scale) => {
+                let Ok(mut data) = self.data_of(r) else {
+                    return;
+                };
+                let v = f64::from(value) * scale;
+                let tag = match kind.as_str() {
+                    "int" => Tag::Int(java_int(v)),
+                    "float" => Tag::Float((v as f32).to_bits()),
+                    "short" => Tag::Short(java_int(v) as i16),
+                    "long" => Tag::Long(v as i64),
+                    "double" => Tag::Double(v.to_bits()),
+                    _ => Tag::Byte(java_int(v) as i8),
+                };
+                if path.set(&mut data, &tag).is_ok() {
+                    let _ = self.set_data_of(r, data);
+                }
+            }
+        }
+    }
+
     /// ExecuteCommand: `ctx` is the context holding the `execute` literal.
-    pub(super) fn run_execute(&mut self, ctx: &Context) -> R<i32> {
+    pub(in crate::game) fn run_execute(&mut self, ctx: &Context) -> R<i32> {
         let mut sources = vec![self.command_source.unwrap_or_else(|| self.player_source())];
         let mut c = ctx;
         loop {
@@ -80,57 +248,41 @@ impl Game<'_> {
                         return Err(err("command.unknown.command", &[]));
                     };
                     let last = command.last_child();
-                    let Some(id) = last.command else {
+                    if last.command.is_none() {
                         return Err(err("command.unknown.command", &[]));
-                    };
-                    // A nested execute walks its own chain.
-                    let nested = command.literals.first().is_some_and(|w| w == "execute");
+                    }
                     let mut total = 0;
+                    let many = sources.len() > 1;
+                    let mut failure = None;
                     for s in sources {
-                        let result = self.with_source(s, |g| {
-                            if nested {
-                                g.run_execute(command)
-                            } else {
-                                g.execute_command(id, last)
-                            }
-                        });
-                        match result {
+                        match self.with_source(s, |g| g.run_chain(command, last)) {
                             Ok(n) => total += n,
                             // Forked executions report failures and carry on.
-                            Err(e) => self.command_failure(e.message),
+                            Err(e) if many => self.command_failure(e.message),
+                            Err(e) => failure = Some(e),
+                        }
+                        if self.exec.returned.is_some() {
+                            break;
                         }
                     }
-                    return Ok(total);
+                    return match failure {
+                        Some(e) => Err(e),
+                        None => Ok(total),
+                    };
                 }
                 "if" | "unless" => {
                     let want = word == "if";
+                    if c.child.is_none() {
+                        return self.run_conditional_terminal(c, sources, want);
+                    }
                     let mut kept = Vec::new();
-                    let mut count = 0;
                     for s in sources {
-                        let n = self.with_source(s, |g| g.condition(c))?;
-                        if (n > 0) == want {
+                        let (keep, _) = self.with_source(s, |g| g.condition(c, want))?;
+                        if keep {
                             kept.push(s);
-                            count += if want { n } else { 1 };
                         }
                     }
                     sources = kept;
-                    if c.child.is_none() {
-                        // A condition ending the chain is a test.
-                        return if sources.is_empty() {
-                            Err(err("commands.execute.conditional.fail", &[]))
-                        } else {
-                            let entity = c.has("entity") && want;
-                            self.feedback(if entity {
-                                Text::translate(
-                                    "commands.execute.conditional.pass_count",
-                                    &[Text::literal(count.to_string())],
-                                )
-                            } else {
-                                Text::translate("commands.execute.conditional.pass", &[])
-                            });
-                            Ok(if entity { count } else { 1 })
-                        };
-                    }
                 }
                 _ => {
                     let mut next = Vec::new();
@@ -146,6 +298,89 @@ impl Game<'_> {
             }
         }
     }
+    /// A conditional that ends the chain runs as a command: a test per source.
+    fn run_conditional_terminal(
+        &mut self,
+        c: &Context,
+        sources: Vec<Source>,
+        want: bool,
+    ) -> R<i32> {
+        let numeric = ["entity", "data", "blocks", "items", "slots"]
+            .iter()
+            .any(|k| c.has(k));
+        let many = sources.len() > 1;
+        let mut total = 0;
+        let mut failure: Option<CommandError> = None;
+        for s in sources {
+            self.exec.callback = None;
+            let (keep, count) = match self.with_source(s, |g| g.condition(c, want)) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.deliver(s.store, false, 0);
+                    if many {
+                        self.command_failure(e.message);
+                    } else {
+                        failure = Some(e);
+                    }
+                    continue;
+                }
+            };
+            if keep {
+                let n = if want && numeric { count } else { 1 };
+                let message = if want && numeric {
+                    Text::translate(
+                        "commands.execute.conditional.pass_count",
+                        &[Text::literal(count.to_string())],
+                    )
+                } else {
+                    Text::translate("commands.execute.conditional.pass", &[])
+                };
+                self.with_source(s, |g| g.feedback(message));
+                self.deliver(s.store, true, n);
+                total += n;
+            } else {
+                self.deliver(s.store, false, 0);
+                let e = if !want && numeric {
+                    err("commands.execute.conditional.fail_count", &[&count])
+                } else {
+                    err("commands.execute.conditional.fail", &[])
+                };
+                if many {
+                    self.command_failure(e.message);
+                } else {
+                    failure = Some(e);
+                }
+            }
+        }
+        match failure {
+            Some(e) => Err(e),
+            None => Ok(total),
+        }
+    }
+    /// `return run <command>`: run it and return its result from the frame.
+    fn run_return_run(&mut self, root: &Context) -> R<i32> {
+        let Some(command) = root.child.as_deref() else {
+            return Err(err("command.unknown.command", &[]));
+        };
+        let last = command.last_child();
+        let result = self.run_chain(command, last);
+        // The command's own callbacks do not fire; the function frame gets
+        // its result instead.
+        match result {
+            Ok(v) => self.finish_return(Some(v)),
+            Err(e) => {
+                self.finish_return(None);
+                self.command_failure(e.message);
+            }
+        }
+        self.exec.callback = Some(None);
+        Ok(0)
+    }
+    /// `Frame.returnSuccess`/`returnFailure` then `discard`.
+    pub(in crate::game) fn finish_return(&mut self, value: Option<i32>) {
+        self.exec.returned = Some(value);
+    }
+
     /// The sources one modifier produces from `s`.
     fn modify(&mut self, word: &str, c: &Context, s: Source) -> R<Vec<Source>> {
         let targets = |g: &mut Self| -> R<Vec<Target>> {
@@ -186,6 +421,20 @@ impl Game<'_> {
                     })
                 })
                 .collect(),
+            "positioned" if c.has("over") => {
+                let Some(Arg::Str(kind)) = c.get("heightmap") else {
+                    return Ok(vec![s]);
+                };
+                let (x, z) = (s.pos[0].floor() as i32, s.pos[2].floor() as i32);
+                if !self.world.chunks.contains_key(&(x >> 4, z >> 4)) {
+                    return Err(err("argument.pos.unloaded", &[]));
+                }
+                let y = self.heightmap_at(kind, x, z);
+                vec![Source {
+                    pos: [s.pos[0], f64::from(y), s.pos[2]],
+                    ..s
+                }]
+            }
             "positioned" => {
                 let pos = self
                     .position_arg(c, "pos")
@@ -257,7 +506,181 @@ impl Game<'_> {
                 }
                 vec![s]
             }
+            "summon" => {
+                let Some(Arg::Resource(kind)) = c.get("entity").cloned() else {
+                    return Ok(vec![s]);
+                };
+                let target = self.summon_with_nbt(&kind, s.pos, "{}")?;
+                let Some(t) = target else {
+                    return Err(err("commands.summon.failed", &[]));
+                };
+                vec![Source {
+                    entity: Some(t),
+                    ..s
+                }]
+            }
+            "on" => self.relation(c, s),
+            "store" => vec![self.store_source(c, s)?],
             _ => return Err(err("command.unknown.command", &[])),
+        })
+    }
+    /// The entities `on <relation>` reaches from the source entity.
+    fn relation(&mut self, c: &Context, s: Source) -> Vec<Source> {
+        let Some(entity) = s.entity else {
+            return Vec::new();
+        };
+        let found: Vec<Target> = match c.literals.last().map(String::as_str) {
+            Some("owner") => match entity {
+                Target::Mob(id) => self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .and_then(|m| m.extra.owner)
+                    .and_then(|u| self.target_with_uuid(u))
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            },
+            Some("vehicle") => match entity {
+                Target::Player => self.riding.map(Target::Mob).into_iter().collect(),
+                _ => Vec::new(),
+            },
+            Some("controller") | Some("passengers") => match entity {
+                Target::Mob(id) if self.mobs.iter().any(|m| m.id == id && m.rider.is_some()) => {
+                    vec![Target::Player]
+                }
+                _ => Vec::new(),
+            },
+            Some("target") | Some("attacker") => {
+                let attacker = c.literals.last().is_some_and(|l| l == "attacker");
+                match entity {
+                    Target::Mob(id) => self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .and_then(|m| {
+                            if attacker {
+                                m.ai.last_hurt_by
+                            } else {
+                                m.ai.target
+                            }
+                        })
+                        .map(|w| match w {
+                            horizon_client::mobs::Who::Player => Target::Player,
+                            horizon_client::mobs::Who::Mob(i) => Target::Mob(i),
+                        })
+                        .into_iter()
+                        .collect(),
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        };
+        found
+            .into_iter()
+            .filter(|t| self.target_position(*t).is_some())
+            .map(|t| Source {
+                entity: Some(t),
+                ..s
+            })
+            .collect()
+    }
+    fn target_with_uuid(&self, uuid: [i32; 4]) -> Option<Target> {
+        if Some(uuid) == self.level.player_uuid {
+            return Some(Target::Player);
+        }
+        let id = self
+            .persist
+            .uuids
+            .iter()
+            .find(|(_, u)| **u == uuid)
+            .map(|(id, _)| *id)?;
+        self.mobs
+            .iter()
+            .any(|m| m.id == id)
+            .then_some(Target::Mob(id))
+    }
+    /// The highest block of a heightmap type at a column (`Level.getHeight`).
+    fn heightmap_at(&self, kind: &str, x: i32, z: i32) -> i32 {
+        let top = horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT;
+        for y in (horizon_client::chunk::MIN_Y..top).rev() {
+            let state = self.world.block(x, y, z);
+            if state == self.world.air {
+                continue;
+            }
+            let facts = self.res.facts.get(state);
+            let blocks = facts.legacy_solid || facts.fluid != horizon_client::blocks::Fluid::None;
+            let leaves = self
+                .res
+                .assets
+                .registry
+                .state(state)
+                .is_some_and(|s| s.name.ends_with("_leaves"));
+            let found = match kind {
+                "ocean_floor" => facts.legacy_solid,
+                "motion_blocking" => blocks,
+                "motion_blocking_no_leaves" => blocks && !leaves,
+                _ => true,
+            };
+            if found {
+                return y + 1;
+            }
+        }
+        horizon_client::chunk::MIN_Y
+    }
+    /// A `store` modifier: a new callback in the source's chain.
+    fn store_source(&mut self, c: &Context, s: Source) -> R<Source> {
+        let result = c.has("result");
+        let target = if c.has("score") {
+            let holders = self.score_holder_names(c, "targets", true)?;
+            let Some(Arg::Str(objective)) = c.get("objective") else {
+                return Err(err("command.failed", &[]));
+            };
+            if self.score.board.objective(objective).is_none() {
+                return Err(err("arguments.objective.notFound", &[objective]));
+            }
+            StoreTarget::Score(holders, objective.clone())
+        } else if c.has("bossbar") {
+            let Some(Arg::Resource(id)) = c.get("id") else {
+                return Err(err("command.failed", &[]));
+            };
+            if !self.bossbar_exists(id) {
+                return Err(err("commands.bossbar.unknown", &[id]));
+            }
+            StoreTarget::Bossbar(id.clone(), c.has("value"))
+        } else {
+            let r = self.data_ref(c, 0)?;
+            let path = match c.get("path") {
+                Some(Arg::Str(p)) => {
+                    NbtPath::parse(p).map_err(horizon_client::data_cmd::path_error)?
+                }
+                _ => return Err(err("command.failed", &[])),
+            };
+            let kind = c
+                .literals
+                .iter()
+                .find(|l| {
+                    matches!(
+                        l.as_str(),
+                        "int" | "float" | "short" | "long" | "double" | "byte"
+                    )
+                })
+                .cloned()
+                .unwrap_or_else(|| "int".into());
+            let scale = match c.get("scale") {
+                Some(Arg::Double(v)) => *v,
+                _ => 1.0,
+            };
+            StoreTarget::Data(r, path, kind, scale)
+        };
+        self.exec.stores.push(StoreEntry {
+            result,
+            target,
+            parent: s.store,
+        });
+        Ok(Source {
+            store: Some(self.exec.stores.len() as u32 - 1),
+            ..s
         })
     }
     /// CommandSourceStack.facing: rotation from the anchor point to `to`.
@@ -272,35 +695,229 @@ impl Game<'_> {
             ..s
         }
     }
-    /// The count an if/unless condition yields (0 = false).
-    fn condition(&mut self, c: &Context) -> R<i32> {
+
+    // ---- conditions ----------------------------------------------------------
+
+    /// Whether the source stays for `if`/`unless` (`want`), and the count the
+    /// numeric conditions report.
+    fn condition(&mut self, c: &Context, want: bool) -> R<(bool, i32)> {
+        if c.has("function") {
+            return self.condition_function(c, want);
+        }
+        let (matched, count) = self.condition_matches(c)?;
+        Ok((matched == want, count))
+    }
+    /// `if function`/`unless function`: the source stays when a function
+    /// returns a non-zero (`if`) or zero (`unless`) value; one that does not
+    /// return leaves it out either way.
+    fn condition_function(&mut self, c: &Context, want: bool) -> R<(bool, i32)> {
+        let Some(Arg::Resource(name)) = c.get("name").cloned() else {
+            return Ok((false, 0));
+        };
+        let results = self.call_function_ref(&name, None)?;
+        let keep = results.iter().any(|r| r.is_some_and(|v| (v != 0) == want));
+        Ok((keep, 0))
+    }
+    fn condition_matches(&mut self, c: &Context) -> R<(bool, i32)> {
+        let flag = |b: bool| (b, i32::from(b));
+        if c.has("data") {
+            let r = self.data_ref_named(c, 0, "source")?;
+            let data = self.data_of(&r)?;
+            let Some(Arg::Str(p)) = c.get("path") else {
+                return Ok((false, 0));
+            };
+            let path = NbtPath::parse(p).map_err(horizon_client::data_cmd::path_error)?;
+            let n = path.count(&data) as i32;
+            return Ok((n > 0, n));
+        }
+        if c.has("items") || c.has("slots") {
+            return self.condition_items(c);
+        }
         if c.has("entity") {
             let Some(Arg::Entity(sel)) = c.get("entities").cloned() else {
-                return Ok(0);
+                return Ok((false, 0));
             };
-            return Ok(self.select(&sel).len() as i32);
+            let n = self.select(&sel).len() as i32;
+            return Ok((n > 0, n));
         }
         if c.has("loaded") {
             let p = self
                 .coords(c, "pos")
                 .map(|co| co.block(self.source_position(), self.source_rotation()));
-            return Ok(
-                p.is_some_and(|p| self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4))) as i32,
-            );
+            return Ok(flag(p.is_some_and(|p| {
+                self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4))
+            })));
         }
         if c.has("dimension") {
-            return Ok(
-                matches!(c.get("dimension"), Some(Arg::Resource(d)) if d == self.dim.id()) as i32,
-            );
+            return Ok(flag(
+                matches!(c.get("dimension"), Some(Arg::Resource(d)) if d == self.dim.id()),
+            ));
         }
         if c.has("block") {
             let p = self.block_pos_arg(c, "pos")?;
             let Some(Arg::Block(b)) = c.get("block").cloned() else {
-                return Ok(0);
+                return Ok((false, 0));
             };
             let state = self.world.block(p[0], p[1], p[2]);
-            return Ok(self.block_matches(&b, state) as i32);
+            return Ok(flag(self.block_matches(&b, state)));
         }
-        Ok(0)
+        if c.has("biome") {
+            let p = self.block_pos_arg(c, "pos")?;
+            let Some(Arg::Resource(want_biome)) = c.get("biome").cloned() else {
+                return Ok((false, 0));
+            };
+            let name = self.biome_name_at_block(p);
+            return Ok(flag(
+                name.is_some_and(|n| self.biome_matches(&want_biome, &n)),
+            ));
+        }
+        if c.has("score") {
+            return self.condition_score(c).map(flag);
+        }
+        if c.has("blocks") {
+            return self.condition_blocks(c);
+        }
+        if c.has("predicate") {
+            let Some(Arg::Resource(id)) = c.get("predicate").cloned() else {
+                return Ok((false, 0));
+            };
+            return Ok(flag(self.check_predicate(&id)?));
+        }
+        Ok((false, 0))
+    }
+    fn condition_score(&mut self, c: &Context) -> R<bool> {
+        let target = self.score_holder_names(c, "target", false)?;
+        let Some(Arg::Str(to)) = c.get("targetObjective").cloned() else {
+            return Ok(false);
+        };
+        if self.score.board.objective(&to).is_none() {
+            return Err(err("arguments.objective.notFound", &[&to]));
+        }
+        let Some(a) = target
+            .first()
+            .and_then(|t| self.score.board.score(t, &to))
+            .map(|s| s.value)
+        else {
+            return Ok(false);
+        };
+        if c.has("matches") {
+            let Some(Arg::IntRange((lo, hi))) = c.get("range") else {
+                return Ok(false);
+            };
+            return Ok(lo.is_none_or(|l| a >= l) && hi.is_none_or(|h| a <= h));
+        }
+        let source = self.score_holder_names(c, "source", false)?;
+        let Some(Arg::Str(so)) = c.get("sourceObjective").cloned() else {
+            return Ok(false);
+        };
+        if self.score.board.objective(&so).is_none() {
+            return Err(err("arguments.objective.notFound", &[&so]));
+        }
+        let Some(b) = source
+            .first()
+            .and_then(|t| self.score.board.score(t, &so))
+            .map(|s| s.value)
+        else {
+            return Ok(false);
+        };
+        let op = c.literals.last().map_or("", String::as_str);
+        Ok(match op {
+            "=" => a == b,
+            "<" => a < b,
+            "<=" => a <= b,
+            ">" => a > b,
+            ">=" => a >= b,
+            _ => false,
+        })
+    }
+    /// `if blocks`: the region at `start..end` equals the one at `destination`.
+    fn condition_blocks(&mut self, c: &Context) -> R<(bool, i32)> {
+        let (a, b, d) = (
+            self.block_pos_arg(c, "start")?,
+            self.block_pos_arg(c, "end")?,
+            self.block_pos_arg(c, "destination")?,
+        );
+        let masked = c.has("masked");
+        let lo = [a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])];
+        let hi = [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])];
+        let area = i64::from(hi[0] - lo[0] + 1)
+            * i64::from(hi[1] - lo[1] + 1)
+            * i64::from(hi[2] - lo[2] + 1);
+        if area > 32768 {
+            return Err(err("commands.execute.blocks.toobig", &[&32768, &area]));
+        }
+        let offset = [d[0] - lo[0], d[1] - lo[1], d[2] - lo[2]];
+        let mut count = 0;
+        for z in lo[2]..=hi[2] {
+            for y in lo[1]..=hi[1] {
+                for x in lo[0]..=hi[0] {
+                    let src = self.world.block(x, y, z);
+                    if masked && src == self.world.air {
+                        continue;
+                    }
+                    let (dx, dy, dz) = (x + offset[0], y + offset[1], z + offset[2]);
+                    if src != self.world.block(dx, dy, dz) {
+                        return Ok((false, 0));
+                    }
+                    let (se, de) = (
+                        self.world.block_entities.get(&(x, y, z)),
+                        self.world.block_entities.get(&(dx, dy, dz)),
+                    );
+                    if let Some(se) = se {
+                        let name = self.data_block_name([x, y, z]);
+                        let Some(de) = de else {
+                            return Ok((false, 0));
+                        };
+                        let st = horizon_client::save::encode_block_entity((0, 0, 0), se, &name);
+                        let dt = horizon_client::save::encode_block_entity((0, 0, 0), de, &name);
+                        if st != dt {
+                            return Ok((false, 0));
+                        }
+                    }
+                    count += 1;
+                }
+            }
+        }
+        Ok((true, count))
+    }
+    /// The biome name at a block position.
+    fn biome_name_at_block(&self, p: [i32; 3]) -> Option<String> {
+        let chunk = self.world.chunks.get(&(p[0] >> 4, p[2] >> 4))?;
+        Some(
+            self.res
+                .biomes
+                .get(chunk.biome(p[0], p[1], p[2]))
+                .name
+                .clone(),
+        )
+    }
+    /// A biome id or `#tag` matched against a biome name.
+    fn biome_matches(&self, wanted: &str, biome: &str) -> bool {
+        match wanted.strip_prefix('#') {
+            Some(tag) => self.biome_tag_has(tag, biome, 0),
+            None => wanted == biome,
+        }
+    }
+    fn biome_tag_has(&self, tag: &str, biome: &str, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let (ns, path) = tag.split_once(':').unwrap_or(("minecraft", tag));
+        let file = self
+            .options
+            .resources
+            .join(format!("data/{ns}/tags/worldgen/biome/{path}.json"));
+        let Ok(bytes) = std::fs::read(file) else {
+            return self.res.mob_data.biome_has(tag, biome);
+        };
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        v["values"].as_array().is_some_and(|a| {
+            a.iter()
+                .filter_map(|e| e.as_str())
+                .any(|e| match e.strip_prefix('#') {
+                    Some(inner) => self.biome_tag_has(inner, biome, depth + 1),
+                    None => e == biome,
+                })
+        })
     }
 }

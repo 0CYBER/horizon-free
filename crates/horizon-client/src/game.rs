@@ -8,6 +8,7 @@ mod beacon;
 mod blockctl;
 mod boats;
 mod books;
+mod bossbars;
 mod cartography;
 mod chat;
 mod combat;
@@ -24,6 +25,7 @@ mod fireworks;
 mod fishing;
 mod fov;
 mod frames;
+mod functions;
 mod game_mode;
 mod growth;
 mod jukebox;
@@ -630,6 +632,10 @@ struct Game<'a> {
     mount: mounts::MountState,
     stats: stats::Stats,
     score: scoreboard::ScoreState,
+    fns: functions::FnState,
+    bosses: bossbars::BossState,
+    exec: commands::execute::ExecState,
+    rand_sequences: horizon_client::random_sequences::RandomSequences,
     subtitles: subtitle_hud::SubtitleState,
     adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
@@ -2219,15 +2225,21 @@ impl Game<'_> {
             return self.tick_remote();
         }
         self.ticks += 1;
-        self.world.game_time += 1;
-        if self.ui.rules.bool("advance_weather") {
-            self.world.weather.tick(&mut self.world.random);
+        // `/tick freeze` stops the world but not the player.
+        let running = self.clock.world_runs();
+        if running {
+            self.world.game_time += 1;
+            if self.ui.rules.bool("advance_weather") {
+                self.world.weather.tick(&mut self.world.random);
+            }
+            self.tick_weather_effects();
         }
-        self.tick_weather_effects();
         if self.ticks.is_multiple_of(6000) {
             self.save_game()?;
         }
-        self.advance_clock();
+        if running {
+            self.advance_clock();
+        }
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
@@ -2432,31 +2444,41 @@ impl Game<'_> {
         self.tick_burning();
         self.tick_using();
         self.titles.tick();
-        self.tick_paintings();
-        self.tick_item_frames();
-        self.tick_armor_stands();
-        self.tick_boats();
-        self.tick_carts();
-        self.tick_thunder();
-        self.tick_lecterns();
-        self.tick_maps();
-        self.tick_bolts();
-        self.tick_fishing();
-        self.tick_tridents();
-        self.tick_rockets();
+        if running {
+            self.tick_paintings();
+            self.tick_item_frames();
+            self.tick_armor_stands();
+            self.tick_boats();
+            self.tick_carts();
+            self.tick_thunder();
+            self.tick_lecterns();
+            self.tick_maps();
+            self.tick_bolts();
+            self.tick_fishing();
+            self.tick_tridents();
+            self.tick_rockets();
+        }
         self.tick_mining()?;
-        self.tick_items();
+        if running {
+            self.tick_items();
+        }
         self.spawn_loaded_entities();
-        self.tick_mobs()?;
-        self.tick_experience();
+        if running {
+            self.tick_mobs()?;
+            self.tick_experience();
+        }
         self.tick_hand();
         self.tick_sleep();
         self.tick_portal()?;
-        self.tick_end()?;
+        if running {
+            self.tick_end()?;
+        }
         self.postprocess_chunks()?;
-        self.tick_blocks()?;
-        self.tick_falling()?;
-        self.tick_tnt()?;
+        if running {
+            self.tick_blocks()?;
+            self.tick_falling()?;
+            self.tick_tnt()?;
+        }
         if let Some(p) = &self.player {
             // Player.aiStep bob and Entity.walkDist (0.6 per block).
             let (dx, dz) = (
@@ -2474,8 +2496,10 @@ impl Game<'_> {
             };
             self.bob.1 += (target - self.bob.1) * 0.4;
         }
-        self.tick_block_entities()?;
-        self.tick_brewing_stands()?;
+        if running {
+            self.tick_block_entities()?;
+            self.tick_brewing_stands()?;
+        }
         if let Some(r) = &self.renderer {
             let eye = self.player.as_ref().map(|p| {
                 [
@@ -2823,6 +2847,7 @@ impl Game<'_> {
         self.draw_effect_icons(&mut batch);
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
         self.draw_boss_bar(&mut batch);
+        self.draw_custom_bossbars(&mut batch, 12.0 + 19.0 * self.builtin_bar_count() as f32);
         self.draw_titles(&mut batch);
         self.draw_scoreboard(&mut batch);
         self.draw_subtitles(&mut batch);
@@ -4372,6 +4397,8 @@ impl Game<'_> {
         self.position_rider();
         self.tick_stats();
         self.tick_scoreboard();
+        self.load_bossbars();
+        self.tick_functions();
         self.tick_subtitles();
         self.spawn_phantoms();
         self.tick_advancements();
@@ -4572,6 +4599,9 @@ impl Game<'_> {
         horizon_client::save::migrate_legacy(&save_root)?;
         self.persist = Default::default();
         self.score = Default::default();
+        self.fns = Default::default();
+        self.bosses = Default::default();
+        self.rand_sequences = Default::default();
         let level = Level::read(&save_root).unwrap_or_else(|| Level {
             name: name.unwrap_or(folder).to_owned(),
             // WorldOptions.randomSeed when no seed was given.
@@ -6590,6 +6620,8 @@ impl Game<'_> {
         self.save_stats();
         self.save_advancements();
         self.save_scoreboard();
+        self.save_bossbars();
+        self.save_schedule();
         self.sync_level();
         self.level.write(&self.world_root)?;
         self.save_world_state();
@@ -7319,12 +7351,14 @@ impl ApplicationHandler for Game<'_> {
                     }
                     let steps = self.clock.advance(elapsed);
                     for _ in 0..steps {
+                        let started = Instant::now();
                         if self.title.is_none() {
                             self.tick()?;
                             self.tick_ambience();
                             self.tick_fov();
                         }
                         self.tick_music();
+                        self.clock.record(started.elapsed());
                     }
                     let rendered = self.render()?;
                     let finished = self
@@ -7698,6 +7732,10 @@ pub fn run() -> Result<()> {
         mount: Default::default(),
         stats: Default::default(),
         score: Default::default(),
+        fns: Default::default(),
+        bosses: Default::default(),
+        exec: Default::default(),
+        rand_sequences: Default::default(),
         subtitles: Default::default(),
         adv: Default::default(),
         stats_ui: Default::default(),

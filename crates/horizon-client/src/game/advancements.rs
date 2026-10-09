@@ -223,6 +223,42 @@ impl Game<'_> {
         }
     }
     /// The player as predicates see it.
+    /// The predicate view of a command target.
+    pub(super) fn entity_view_of(&self, t: super::commands::Target) -> EntityView {
+        use super::commands::Target;
+        match t {
+            Target::Player => self.player_entity(),
+            Target::Mob(id) => self
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| self.mob_entity(m))
+                .unwrap_or_default(),
+            other => EntityView {
+                kind: self.target_type(other),
+                position: self.target_position(other).unwrap_or_default(),
+                ..EntityView::default()
+            },
+        }
+    }
+    /// A `ContextAwarePredicate` for `this` at `origin`.
+    pub(super) fn conditions_hold(
+        &self,
+        v: &Value,
+        this: Option<&EntityView>,
+        origin: [f64; 3],
+    ) -> bool {
+        adv::conditions(
+            v,
+            &adv::Entities {
+                this,
+                origin,
+                tool: None,
+                block_pos: None,
+            },
+            &View(self),
+        )
+    }
     pub(super) fn player_entity(&self) -> EntityView {
         let Some(p) = self.player.as_ref() else {
             return EntityView::default();
