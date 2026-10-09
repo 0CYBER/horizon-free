@@ -4064,6 +4064,8 @@ impl Game<'_> {
         let player = self.player.as_ref();
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
         self.swing_arm();
+        // LivingEntity.setLastHurtMob (tamed wolves join in).
+        self.combat.last_hurt_mob = Some((self.mobs[index].id, self.world.game_time));
         let mob = &mut self.mobs[index];
         let center = [
             mob.position.x,

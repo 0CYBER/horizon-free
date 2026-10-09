@@ -20,6 +20,8 @@ pub struct BiomeFacts {
     pub jungle: bool,
     /// Frog variant from `spawns_warm/cold_variant_frogs` (0 temperate, 1 warm, 2 cold).
     pub frog: u8,
+    /// Wolf variant index (`tame::WOLF_VARIANTS`).
+    pub wolf: u8,
 }
 /// SpawnPlacementTypes for the species.
 pub fn placement_ok(species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> bool {
@@ -169,6 +171,7 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts) {
         S::Sheep => m.extra.color = super::farm::sheep_color(biome.climate, &mut m.random),
         S::Mooshroom => m.extra.variant = 0,
         S::Frog => m.extra.variant = biome.frog,
+        S::Wolf => m.extra.variant = biome.wolf,
         S::Zombie | S::Husk | S::Drowned | S::ZombieVillager => {
             // Zombie.finalizeSpawn: 5% babies (normal difficulty).
             if m.random.next_float() < 0.05 {

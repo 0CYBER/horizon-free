@@ -103,6 +103,10 @@ pub fn body(m: &Mob) -> (String, String) {
         }
     };
     match m.species() {
+        S::Wolf => (
+            baby_or(m, "wolf#main", "wolf_baby#main"),
+            super::tame::texture(m),
+        ),
         S::Frog => (
             "frog#main".into(),
             format!("entity/frog/frog_{}", climate(m)),
@@ -234,8 +238,9 @@ pub fn body(m: &Mob) -> (String, String) {
     }
 }
 /// LivingEntityRenderer.getModelTint (tropical fish base colour).
-pub fn body_color(m: &Mob) -> u32 {
+pub fn body_color(m: &Mob, alpha: f32) -> u32 {
     match m.species() {
+        Species::Wolf => super::tame::tint(m, alpha),
         Species::TropicalFish => abgr(DYE[m.extra.variant2 as usize & 15]),
         _ => 0xFFFF_FFFF,
     }
@@ -254,6 +259,21 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         })
     };
     match m.species() {
+        // WolfCollarLayer.
+        S::Wolf if m.extra.tame => {
+            let (model, texture) = if m.is_baby() {
+                ("wolf_baby#main", "entity/wolf/wolf_collar_baby")
+            } else {
+                ("wolf#main", "entity/wolf/wolf_collar")
+            };
+            push(
+                &mut v,
+                model,
+                texture,
+                abgr(DYE[m.extra.color as usize & 15]),
+                false,
+            );
+        }
         // SlimeOuterLayer: the translucent outer cube.
         S::Slime => push(&mut v, "slime#outer", "entity/slime/slime", white, false),
         S::Sheep if !m.extra.sheared => {
@@ -543,7 +563,16 @@ pub fn render(
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
     if let Some(uv) = atlas(&texture) {
-        draw(&model, base, &poses, uv, body_color(m), light, overlay, out);
+        draw(
+            &model,
+            base,
+            &poses,
+            uv,
+            body_color(m, alpha),
+            light,
+            overlay,
+            out,
+        );
     }
     held_items(m, &model, base, &poses, atlas, light, out);
     for layer in layers(m) {

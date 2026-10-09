@@ -157,6 +157,19 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("powered".into(), Tag::Byte(i8::from(m.extra.charged)));
         }
+        "minecraft:wolf" => {
+            if let Some(owner) = m.extra.owner {
+                map.insert("Owner".into(), Tag::IntArray(owner.to_vec()));
+            } else {
+                map.remove(&"Owner".into());
+            }
+            map.insert("Sitting".into(), Tag::Byte(i8::from(m.extra.sitting)));
+            map.insert("CollarColor".into(), Tag::Byte(m.extra.color as i8));
+            let variant = crate::mobs::tame::WOLF_VARIANTS[(m.extra.variant as usize).min(8)].0;
+            map.insert("variant".into(), string(&format!("minecraft:{variant}")));
+            map.entry("sound_variant".into())
+                .or_insert_with(|| string("minecraft:classic"));
+        }
         "minecraft:slime" | "minecraft:magma_cube" => {
             map.insert("Size".into(), Tag::Int(m.extra.size.max(1) - 1));
             map.insert("wasOnGround".into(), Tag::Byte(i8::from(m.extra.flag2)));
@@ -224,6 +237,24 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.name_visible = flag(tag, "CustomNameVisible");
     if m.species() == crate::mobs::Species::Creeper {
         m.extra.charged = flag(tag, "powered");
+    }
+    if m.species() == crate::mobs::Species::Wolf {
+        let health = m.health;
+        m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
+        let tame = m.extra.owner.is_some();
+        crate::mobs::tame::set_tame(&mut m, tame);
+        m.health = health;
+        m.extra.sitting = flag(tag, "Sitting");
+        m.extra.color =
+            number(tag.get("CollarColor")).map_or(crate::mobs::tame::RED, |c| (c as u8) & 15);
+        if let Some(Tag::String(v)) = tag.get("variant") {
+            let v = v.to_string().unwrap_or_default();
+            let v = v.trim_start_matches("minecraft:");
+            m.extra.variant = crate::mobs::tame::WOLF_VARIANTS
+                .iter()
+                .position(|(n, _)| *n == v)
+                .unwrap_or(0) as u8;
+        }
     }
     if matches!(
         m.species(),

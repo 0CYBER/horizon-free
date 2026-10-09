@@ -21,6 +21,8 @@ pub(super) struct CombatTracker {
     pending: Vec<(String, (u32, Text))>,
     /// `LivingEntity.lastHurtByMob` and its timestamp (the kill credit).
     last_hurt_by: Option<((u32, Text), i64)>,
+    /// The mob the player last hurt (`getLastHurtMob`) and when.
+    pub(super) last_hurt_mob: Option<(u32, i64)>,
     /// The mob whose projectile is hitting the player now.
     pub(super) projectile_owner: Option<u32>,
     /// The player's fall distance before this tick's movement (as of the
@@ -35,6 +37,11 @@ impl Game<'_> {
             Some(name) => Text::literal(name.clone()),
             None => Text::translate(&format!("entity.{}", m.kind.id.replace(':', ".")), &[]),
         })
+    }
+    /// `getLastHurtByMob`: the last mob to hurt the player, for 100 ticks.
+    pub(super) fn player_hurt_by(&self) -> Option<(horizon_client::mobs::Who, i64)> {
+        let ((id, _), at) = self.combat.last_hurt_by.as_ref()?;
+        (self.world.game_time - at <= 100).then_some((horizon_client::mobs::Who::Mob(*id), *at))
     }
     /// Remember who deals the next `damage_type` damage to the player.
     pub(super) fn note_attacker(&mut self, damage_type: &str, mob: u32) {

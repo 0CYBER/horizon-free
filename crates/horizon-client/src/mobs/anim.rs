@@ -418,6 +418,7 @@ pub fn setup(
             }
         }
         Anim::Witch => super::witch::anim(m, s, p),
+        Anim::Wolf => super::tame::anim(m, s, p),
         Anim::Enderman => super::enderman::anim(m, s, p),
         Anim::Slime | Anim::MagmaCube => super::cube::anim(m, s, p),
         Anim::Creeper => {

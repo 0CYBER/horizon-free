@@ -128,6 +128,9 @@ impl Game<'_> {
             off_hand: None,
             head: self.armor[0].as_ref().map(|s| s.item.clone()),
             armor_cover: self.armor.iter().filter(|a| a.is_some()).count() as f32 / 4.0,
+            spectator: self.spectator(),
+            hurt_by: self.player_hurt_by(),
+            last_hurt: self.combat.last_hurt_mob.map(|(id, at)| (Who::Mob(id), at)),
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
@@ -156,6 +159,7 @@ impl Game<'_> {
             mushroom: b.name == "minecraft:mushroom_fields",
             desert: b.name == "minecraft:desert",
             jungle: has("minecraft:is_jungle"),
+            wolf: horizon_client::mobs::tame::wolf_variant_for(&b.name, &has),
             frog: if has("minecraft:spawns_warm_variant_frogs") {
                 1
             } else if has("minecraft:spawns_cold_variant_frogs") {
@@ -746,7 +750,26 @@ impl Game<'_> {
                     }
                     self.world.set(pos[0], pos[1], pos[2], self.world.air)?;
                 }
-                MobEvent::Particles { .. } => {}
+                MobEvent::Particles { kind, at, count } => {
+                    // Mob particle bursts (hearts, smoke, splashes) around a point.
+                    if let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) {
+                        let options = horizon_client::particles::ParticleOptions::simple(ty);
+                        for _ in 0..count {
+                            let r = &mut self.world.random;
+                            let p = [
+                                at[0] + (f64::from(r.next_float()) - 0.5),
+                                at[1] + (f64::from(r.next_float()) - 0.5) * 0.5,
+                                at[2] + (f64::from(r.next_float()) - 0.5),
+                            ];
+                            let v = [
+                                r.next_gaussian() * 0.02,
+                                r.next_gaussian() * 0.02,
+                                r.next_gaussian() * 0.02,
+                            ];
+                            self.particles.add(&options, p, v);
+                        }
+                    }
+                }
                 MobEvent::Experience { at, amount } => self.spawn_orbs(at, amount),
                 MobEvent::EffectPlayer {
                     effect,
@@ -812,11 +835,36 @@ impl Game<'_> {
             q.extra.age = 6000;
             q.extra.in_love = 0;
         }
+        let q = self.mobs.iter().find(|m| m.id == partner).cloned();
+        let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
+        let coin2 = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         if let Some(id) =
             self.spawn_mob(&p.kind.id, [p.position.x, p.position.y, p.position.z], true)
             && let Some(child) = self.mobs.iter_mut().find(|m| m.id == id)
         {
             child.extra.age = -24000;
+            if p.species() == Species::Wolf {
+                // Wolf.getBreedOffspring: a parent's variant; tame parents
+                // give a tame baby with one of their collar colours.
+                let other = q.as_ref().unwrap_or(&p);
+                child.extra.variant = if coin {
+                    p.extra.variant
+                } else {
+                    other.extra.variant
+                };
+                if p.extra.tame {
+                    horizon_client::mobs::tame::set_tame(child, true);
+                    child.extra.owner = p.extra.owner;
+                    child.extra.color = if coin2 {
+                        p.extra.color
+                    } else {
+                        other.extra.color
+                    };
+                }
+                let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
+                self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+                return;
+            }
             // Offspring inherit a parent's variant (pigs/cows/chickens) or mixed wool.
             child.extra.variant = p.extra.variant;
             if p.species() == Species::Sheep {
@@ -1338,6 +1386,83 @@ impl Game<'_> {
                 } else {
                     handled = false;
                 }
+            }
+            // Wolf.mobInteract: heal, dye the collar or sit/stand when tame;
+            // a bone tames a wild one a third of the time.
+            Species::Wolf if m.extra.tame && is_food && m.health < m.attrs.max_health => {
+                let heal = self
+                    .res
+                    .items
+                    .get(&item)
+                    .and_then(|i| i.food.as_ref())
+                    .map_or(2.0, |f| f.0 as f32);
+                m.health = (m.health + heal).min(m.attrs.max_health);
+                consume = true;
+                sound = Some("entity.wolf.eat");
+            }
+            Species::Wolf
+                if m.extra.tame
+                    && item.ends_with("_dye")
+                    && horizon_client::mobs::render::DYE_NAMES
+                        .iter()
+                        .position(|d| {
+                            item.trim_start_matches("minecraft:")
+                                .trim_end_matches("_dye")
+                                == *d
+                        })
+                        .is_some_and(|c| c as u8 != m.extra.color) =>
+            {
+                let name = item
+                    .trim_start_matches("minecraft:")
+                    .trim_end_matches("_dye");
+                if let Some(c) = horizon_client::mobs::render::DYE_NAMES
+                    .iter()
+                    .position(|d| *d == name)
+                {
+                    m.extra.color = c as u8;
+                }
+                consume = true;
+            }
+            Species::Wolf
+                if m.extra.tame && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
+            {
+                m.extra.sitting = !m.extra.sitting;
+                m.ai.jumping = false;
+                m.nav_stop();
+                m.ai.target = None;
+                self.world.modified.insert((
+                    m.position.x.floor() as i32 >> 4,
+                    m.position.z.floor() as i32 >> 4,
+                ));
+            }
+            Species::Wolf
+                if !m.extra.tame
+                    && item == "minecraft:bone"
+                    && !horizon_client::mobs::tame::angry(m) =>
+            {
+                consume = true;
+                let at = [
+                    m.position.x,
+                    m.position.y + f64::from(m.height()) * 0.5 + 0.5,
+                    m.position.z,
+                ];
+                let tamed = m.random.next_int_bound(3).unwrap_or(1) == 0;
+                if tamed {
+                    horizon_client::mobs::tame::set_tame(m, true);
+                    m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+                    m.persistent = true;
+                    m.nav_stop();
+                    m.ai.target = None;
+                    m.extra.sitting = true;
+                }
+                // TamableAnimal.spawnTamingParticles.
+                let kind = if tamed { "heart" } else { "smoke" };
+                self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }])?;
+                let m = &self.mobs[index];
+                self.world.modified.insert((
+                    m.position.x.floor() as i32 >> 4,
+                    m.position.z.floor() as i32 >> 4,
+                ));
             }
             Species::Creeper if item == "minecraft:flint_and_steel" => {
                 m.extra.flag = true;

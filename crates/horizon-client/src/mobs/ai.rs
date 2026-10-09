@@ -69,6 +69,7 @@ pub enum Family {
     Inert,
     Witch,
     Enderman,
+    Tame,
     /// Slimes and magma cubes.
     Cube,
 }
@@ -95,6 +96,7 @@ pub fn family(s: Species) -> Family {
         | S::Dolphin => Family::Aquatic,
         S::Giant => Family::Inert,
         S::Witch => Family::Witch,
+        S::Wolf => Family::Tame,
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
         _ => Family::Generic,
@@ -109,6 +111,7 @@ pub fn register(m: &mut Mob) {
         Family::Generic => generic(m),
         Family::Inert => {}
         Family::Witch => super::witch::register(m),
+        Family::Tame => super::tame::register(m),
         Family::Enderman => super::enderman::register(m),
         Family::Cube => super::cube::register(m),
     }
@@ -456,6 +459,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             super::witch::ai_step(m, events, far)
         }
         Species::Enderman => super::enderman::ai_step(m, w, events),
+        Species::Wolf => super::tame::ai_step(m, w, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {
@@ -556,8 +560,10 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
 /// Reactions after taking damage (sounds, anger).
 pub fn after_hurt(m: &mut Mob, source: &Damage) {
     m.ai.no_action_time = 0;
-    if m.species() == Species::Enderman {
-        super::enderman::after_hurt(m, source);
+    match m.species() {
+        Species::Enderman => super::enderman::after_hurt(m, source),
+        Species::Wolf => super::tame::after_hurt(m, source),
+        _ => {}
     }
 }
 /// Mob.doHurtTarget: attack damage (+ species extras) to the target.

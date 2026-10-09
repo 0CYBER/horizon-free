@@ -22,6 +22,7 @@ pub mod path;
 pub mod render;
 pub mod spawning;
 pub mod species;
+pub mod tame;
 pub mod undead;
 pub mod witch;
 mod world;
@@ -410,6 +411,8 @@ pub struct Extra {
     pub chested: bool,
     pub tame: bool,
     pub sitting: bool,
+    /// The owner's UUID (tamed animals).
+    pub owner: Option<[i32; 4]>,
     /// Slime/magma cube size (0 = not sized).
     pub size: i32,
     /// Sheep eat-grass / iron golem attack / ravager animation ticks.
@@ -610,6 +613,11 @@ pub struct PlayerView {
     pub off_hand: Option<Arc<str>>,
     pub head: Option<Arc<str>>,
     pub armor_cover: f32,
+    pub spectator: bool,
+    /// `getLastHurtByMob` (within 100 ticks) and when.
+    pub hurt_by: Option<(Who, i64)>,
+    /// `getLastHurtMob` and when.
+    pub last_hurt: Option<(Who, i64)>,
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,

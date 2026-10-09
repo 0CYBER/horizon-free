@@ -1411,10 +1411,15 @@ impl Goal for Breed {
             return false;
         }
         let species = m.species();
+        // Wolf.canMate: both tame and standing.
+        let tamable = species == Species::Wolf;
+        if tamable && (!m.extra.tame || m.extra.sitting) {
+            return false;
+        }
         let id = m.id;
         self.partner =
             cx.w.nearby(m.position, 8.0, move |s| {
-                s.id != id && s.species == species && s.in_love && !s.baby
+                s.id != id && s.species == species && s.in_love && !s.baby && (!tamable || s.tame)
             })
             .map(|s| s.id)
             .next();
