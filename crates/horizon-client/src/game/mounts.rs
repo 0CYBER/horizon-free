@@ -61,6 +61,7 @@ impl Game<'_> {
             return false;
         }
         self.riding = Some(m.id);
+        self.trigger_player("minecraft:started_riding");
         true
     }
     /// `FoodOnAStickItem.use` while riding: boost the mount, wear the stick.
@@ -145,6 +146,7 @@ impl Game<'_> {
         self.riding = Some(m.id);
         self.mount.jump_ticks = 0;
         self.mount.jump_scale = 0.0;
+        self.trigger_player("minecraft:started_riding");
         true
     }
     /// `AbstractHorse.handleEating`.
@@ -330,6 +332,14 @@ impl Game<'_> {
         match *e {
             MobEvent::Tamed { mob } => {
                 let owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+                if let Some(view) = self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == mob)
+                    .map(|m| self.mob_entity(m))
+                {
+                    self.trigger_entity("minecraft:tame_animal", "entity", &view);
+                }
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                     m.extra.owner = owner;
                     m.persistent = true;

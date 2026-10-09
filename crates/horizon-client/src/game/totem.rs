@@ -60,6 +60,10 @@ impl Game<'_> {
         }
         self.audio
             .play("minecraft:item.totem.use", Some(at), 1.0, 1.0);
+        self.trigger_item(
+            "minecraft:used_totem",
+            &horizon_client::items::ItemStack::new("minecraft:totem_of_undying", 1),
+        );
         self.particles.tracking_emitter_for(
             ParticleOptions::simple(ParticleType::TotemOfUndying),
             at,

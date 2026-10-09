@@ -32,6 +32,7 @@ pub const YELLOW: u32 = 0xFFFF55;
 pub const GOLD: u32 = 0xFFAA00;
 pub const WHITE: u32 = 0xFFFFFF;
 pub const LIGHT_PURPLE: u32 = 0xFF55FF;
+pub const DARK_PURPLE: u32 = 0xAA00AA;
 
 pub fn named_color(name: &str) -> Option<u32> {
     COLORS.iter().find(|c| c.1 == name).map(|c| c.2)

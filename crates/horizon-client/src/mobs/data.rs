@@ -46,6 +46,8 @@ pub struct MobData {
     pub animations: HashMap<String, Animation>,
     /// Biome tags (spawns_warm_variant_farm_animals, is_ocean...) by tag id.
     pub biome_tags: HashMap<String, std::collections::HashSet<String>>,
+    /// Entity type tags (`data/*/tags/entity_type`).
+    pub entity_tags: HashMap<String, std::collections::HashSet<String>>,
 }
 impl MobData {
     pub fn load(root: &Path, facts: &BlockFacts) -> Self {
@@ -63,7 +65,13 @@ impl MobData {
             _ => Self::fallback(facts),
         };
         data.biome_tags = crate::items::load_tags(root, "worldgen/biome").unwrap_or_default();
+        data.entity_tags = crate::items::load_tags(root, "entity_type").unwrap_or_default();
         data
+    }
+    pub fn entity_has(&self, tag: &str, entity: &str) -> bool {
+        self.entity_tags
+            .get(tag)
+            .is_some_and(|s| s.contains(entity))
     }
     pub fn biome_has(&self, tag: &str, biome: &str) -> bool {
         self.biome_tags.get(tag).is_some_and(|s| s.contains(biome))
@@ -104,6 +112,7 @@ impl MobData {
             placements,
             animations,
             biome_tags: HashMap::new(),
+            entity_tags: HashMap::new(),
         }
     }
     /// Without the export, approximate path types from the gameplay facts.
@@ -156,6 +165,7 @@ impl MobData {
             placements: HashMap::new(),
             animations: HashMap::new(),
             biome_tags: HashMap::new(),
+            entity_tags: HashMap::new(),
         }
     }
     pub fn state(&self, id: horizon_world::registry::BlockStateId) -> StateData {

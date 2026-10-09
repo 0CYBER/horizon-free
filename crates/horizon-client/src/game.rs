@@ -1,5 +1,6 @@
 //! The playable game loop: streaming world, player simulation at 20 ticks/s,
 //! block interaction, inventory and HUD.
+mod advancements;
 mod armor_stands;
 mod beacon;
 mod blockctl;
@@ -48,6 +49,7 @@ mod stations;
 mod stats;
 mod stats_screen;
 mod storage;
+mod structures;
 mod titles;
 mod tnt;
 mod totem;
@@ -617,6 +619,7 @@ struct Game<'a> {
     combat: combat::CombatTracker,
     mount: mounts::MountState,
     stats: stats::Stats,
+    adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1803,8 +1806,9 @@ impl Game<'_> {
             sounds.pitch * 0.8,
         );
         self.process_level_events()?;
-        // BlockItem.place: the used statistic.
+        // BlockItem.place: the used statistic and the placed_block trigger.
         self.stats.add("used", &stack.item, 1);
+        self.trigger_block("minecraft:placed_block", target, &stack);
         self.consume_held();
         Ok(())
     }
@@ -1929,6 +1933,7 @@ impl Game<'_> {
                     0.5,
                     self.world.random.next_float() * 0.1 + 0.9,
                 );
+                self.trigger_item("minecraft:consume_item", &stack);
                 self.consume_held();
             }
         } else {
@@ -2369,6 +2374,11 @@ impl Game<'_> {
             self.stats.custom("deaths", 1);
             if let Some(kind) = killer {
                 self.stats.add("killed_by", &kind, 1);
+                let view = horizon_client::advancements::EntityView {
+                    kind,
+                    ..Default::default()
+                };
+                self.trigger_entity("minecraft:entity_killed_player", "entity", &view);
             }
             self.stats.reset("custom", "minecraft:time_since_death");
             self.stats.reset("custom", "minecraft:time_since_rest");
@@ -2971,6 +2981,7 @@ impl Game<'_> {
             Screen::Chat => self.draw_chat_screen(&mut batch),
             Screen::Playing | Screen::Options => {}
         }
+        self.draw_toasts(&mut batch);
         self.remote_hud(&mut batch);
         self.draw_sign_editor(&mut batch);
         self.draw_book(&mut batch);
@@ -4288,6 +4299,7 @@ impl Game<'_> {
         self.position_rider();
         self.tick_stats();
         self.spawn_phantoms();
+        self.tick_advancements();
         Ok(())
     }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
@@ -4708,7 +4720,9 @@ impl Game<'_> {
         self.streaming = streaming;
         self.world = world;
         self.save = save;
+        let from = self.dim;
         self.dim = target;
+        self.trigger_dimension(from, target);
         self.level.dimension = target.id().to_owned();
         self.block_ticks = Ticks::new(self.level.seed as i32);
         self.tick_chunks.clear();
@@ -5256,6 +5270,7 @@ impl Game<'_> {
             self.world
                 .set(hit.pos[0], hit.pos[1], hit.pos[2], self.world.air)?;
             self.audio.play(sound, Some(at(hit.pos)), 1.0, 1.0);
+            self.trigger_item("minecraft:filled_bucket", &ItemStack::new(filled, 1));
             if !self.creative {
                 self.consume_held();
                 let filled = ItemStack {
@@ -6136,6 +6151,7 @@ impl Game<'_> {
         self.message = Some(("Respawn point set".into(), Instant::now()));
         self.sleeping = Some((head, 0));
         self.stats.custom("sleep_in_bed", 1);
+        self.trigger_player("minecraft:slept_in_bed");
         self.stats.reset("custom", "minecraft:time_since_rest");
     }
     fn tick_sleep(&mut self) {
@@ -6414,6 +6430,7 @@ impl Game<'_> {
         self.save_maps();
         self.save_fight();
         self.save_stats();
+        self.save_advancements();
         self.level.selected_slot = self.selected as i32;
         let mode = self.mode_id();
         let level = &mut self.level;
@@ -7567,6 +7584,7 @@ pub fn run() -> Result<()> {
         combat: Default::default(),
         mount: Default::default(),
         stats: Default::default(),
+        adv: Default::default(),
         stats_ui: Default::default(),
     };
     game.ui.vanilla_root = vanilla_root;

@@ -567,6 +567,8 @@ impl Game<'_> {
         if by_player {
             self.stats.add("killed", &m.kind.id, 1);
             self.stats.custom("mob_kills", 1);
+            let view = self.mob_entity(m);
+            self.trigger_entity("minecraft:player_killed_entity", "entity", &view);
         }
         let held = self.held().cloned();
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
@@ -892,6 +894,28 @@ impl Game<'_> {
         // Animal.finalizeSpawnChildFromBreeding: the player who fed them.
         if p.extra.love_player {
             self.stats.custom("animals_bred", 1);
+            let parent = self.mob_entity(&p);
+            let partner_view = self
+                .mobs
+                .iter()
+                .find(|m| m.id == partner)
+                .map(|m| self.mob_entity(m))
+                .unwrap_or_else(|| parent.clone());
+            let mut child = parent.clone();
+            child.baby = true;
+            if matches!(
+                (
+                    p.species(),
+                    self.mobs
+                        .iter()
+                        .find(|m| m.id == partner)
+                        .map(|m| m.species())
+                ),
+                (Species::Horse, Some(Species::Donkey)) | (Species::Donkey, Some(Species::Horse))
+            ) {
+                child.kind = "minecraft:mule".into();
+            }
+            self.trigger_bred(&parent, &partner_view, Some(&child));
         }
         if let Some(q) = self.mobs.iter_mut().find(|m| m.id == partner) {
             q.extra.age = 6000;
@@ -1595,6 +1619,10 @@ impl Game<'_> {
                 // TamableAnimal.spawnTamingParticles.
                 let kind = if tamed { "heart" } else { "smoke" };
                 self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }])?;
+                if tamed {
+                    let view = self.mob_entity(&self.mobs[index]);
+                    self.trigger_entity("minecraft:tame_animal", "entity", &view);
+                }
                 let m = &self.mobs[index];
                 self.world.modified.insert((
                     m.position.x.floor() as i32 >> 4,
@@ -1663,6 +1691,10 @@ impl Game<'_> {
                 }
                 let kind = if tamed { "heart" } else { "smoke" };
                 self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }])?;
+                if tamed {
+                    let view = self.mob_entity(&self.mobs[index]);
+                    self.trigger_entity("minecraft:tame_animal", "entity", &view);
+                }
                 let m = &self.mobs[index];
                 self.world.modified.insert((
                     m.position.x.floor() as i32 >> 4,
