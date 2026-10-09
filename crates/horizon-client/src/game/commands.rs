@@ -1882,7 +1882,7 @@ impl Game<'_> {
         Ok(distance)
     }
     /// The structures of a `worldgen/structure` tag, nested tags expanded.
-    fn structure_tag(&self, tag: &str) -> Vec<String> {
+    pub(super) fn structure_tag(&self, tag: &str) -> Vec<String> {
         let mut out = Vec::new();
         let mut pending = vec![tag.to_owned()];
         let mut seen = std::collections::HashSet::new();

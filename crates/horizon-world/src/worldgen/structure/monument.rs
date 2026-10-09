@@ -342,6 +342,19 @@ struct W<'x, 'c> {
     water: BlockStateId,
 }
 impl W<'_, '_> {
+    /// OceanMonumentPiece.spawnElder.
+    fn elder(&mut self, x: i32, y: i32, z: i32) -> Result<()> {
+        let pos = self.f.world_pos(x, y, z);
+        if self.c.chunk_box.is_inside(pos) {
+            self.c.world.entity(super::legacy::spawn_nbt(
+                "minecraft:elder_guardian",
+                pos,
+                true,
+                false,
+            ))?;
+        }
+        Ok(())
+    }
     #[allow(clippy::too_many_arguments)]
     fn bx(
         &mut self,
@@ -1191,7 +1204,7 @@ fn room(w: &mut W<'_, '_>, p: &Palette, child: &Child, rooms: &[Room]) -> Result
             w.bx(8, 0, 10, 8, 2, 10, l)?;
             w.bx(6, -1, 7, 7, -1, 8, k)?;
             w.water(6, -1, 3, 7, -1, 4)?;
-            // spawnElder: entities are not created.
+            w.elder(6, 1, 6)?;
         }
         Kind::Simple(design) => {
             if upper {
@@ -1395,6 +1408,7 @@ fn room(w: &mut W<'_, '_>, p: &Palette, child: &Child, rooms: &[Room]) -> Result
             w.put(l, 13, 7, 20)?;
             w.bx(6, 0, 21, 7, 4, 21, l)?;
             w.bx(15, 0, 21, 16, 4, 21, l)?;
+            w.elder(11, 2, 16)?;
         }
         Kind::Wing(_) => {
             w.bx(9, 3, 18, 13, 3, 20, l)?;
@@ -1420,6 +1434,7 @@ fn room(w: &mut W<'_, '_>, p: &Palette, child: &Child, rooms: &[Room]) -> Result
             }
             w.bx(8, 3, 8, 8, 3, 13, k)?;
             w.bx(14, 3, 8, 14, 3, 13, k)?;
+            w.elder(11, 5, 13)?;
         }
     }
     Ok(())

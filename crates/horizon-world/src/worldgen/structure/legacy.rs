@@ -50,6 +50,8 @@ pub trait PieceWorld {
     fn min_y(&mut self) -> Result<i32>;
     fn max_y(&mut self) -> Result<i32>;
     fn block_entity(&mut self, pos: [i32; 3], nbt: Compound) -> Result<()>;
+    /// `addFreshEntity`: an entity from its NBT (absolute `Pos`).
+    fn entity(&mut self, nbt: Compound) -> Result<()>;
     fn post_process(&mut self, pos: [i32; 3]) -> Result<()>;
     /// WorldGenLevel.getSeed.
     fn seed(&mut self) -> Result<i64>;
@@ -95,6 +97,9 @@ impl<W: FeatureWorld + PlacementContext> PieceWorld for W {
     }
     fn max_y(&mut self) -> Result<i32> {
         PlacementContext::max_y(self)
+    }
+    fn entity(&mut self, nbt: Compound) -> Result<()> {
+        self.add_entity(nbt)
     }
     fn block_entity(&mut self, pos: [i32; 3], nbt: Compound) -> Result<()> {
         self.set_block_entity(pos, nbt)
@@ -715,6 +720,33 @@ pub fn counter_clockwise(d: Direction) -> Direction {
 
 /// TemplateStructurePiece: one template with fixed settings; data markers
 /// are handed to the owning structure.
+/// NBT for an entity a structure piece spawns at the block centre of `pos`
+/// (y at the block's floor): `finalize` asks the game for `finalizeSpawn`
+/// (STRUCTURE), `persistent` sets `PersistenceRequired`.
+pub fn spawn_nbt(id: &str, pos: [i32; 3], finalize: bool, persistent: bool) -> Compound {
+    let mut nbt = Compound::new();
+    nbt.insert("id".into(), Tag::String(id.into()));
+    let p = [
+        f64::from(pos[0]) + 0.5,
+        f64::from(pos[1]),
+        f64::from(pos[2]) + 0.5,
+    ];
+    nbt.insert(
+        "Pos".into(),
+        Tag::List(p.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+    );
+    nbt.insert(
+        "Rotation".into(),
+        Tag::List(vec![Tag::Float(0f32.to_bits()), Tag::Float(0f32.to_bits())]),
+    );
+    if persistent {
+        nbt.insert("PersistenceRequired".into(), Tag::Byte(1));
+    }
+    if finalize {
+        nbt.insert("horizon:finalize".into(), Tag::Byte(1));
+    }
+    nbt
+}
 #[derive(Debug)]
 pub struct TemplatePiece {
     pub type_name: &'static str,

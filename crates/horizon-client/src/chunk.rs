@@ -105,6 +105,9 @@ pub struct Chunk {
     pub saved: Option<Arc<crate::save::ChunkExtras>>,
     /// Entities read from a save (vanilla entity NBT), spawned on arrival.
     pub entities: Vec<horizon_world::nbt::Tag>,
+    /// Structure starts reaching into this chunk (`structures.References`):
+    /// structure id and the start's chunk.
+    pub structure_refs: Vec<(Arc<str>, (i32, i32))>,
 }
 impl Chunk {
     pub fn empty(x: i32, z: i32) -> Self {
@@ -119,6 +122,7 @@ impl Chunk {
             lit: false,
             fresh: false,
             block_entities: Vec::new(),
+            structure_refs: Vec::new(),
             postprocess: Vec::new(),
             saved: None,
             entities: Vec::new(),

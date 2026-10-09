@@ -3,6 +3,7 @@ use super::{
     BoundingBox,
     legacy::{LegacyPiece, PieceContext, PieceFrame, Result, solid_render},
 };
+use crate::nbt::Tag;
 use crate::worldgen::biome::BiomeId;
 use horizon_core::{geometry::Direction, random::RandomSource};
 use std::{
@@ -612,9 +613,24 @@ impl MineshaftPiece {
             };
             let rail = c.state_with("rail", &[("shape", shape)]);
             self.frame.place(c, rail, x, y, z)?;
-            // The chest minecart entity (loot table seed drawn here) is not
-            // stored: worldgen output carries no entities.
-            c.random.long();
+            // A chest minecart with the mineshaft loot table.
+            let seed = c.random.long();
+            let mut nbt = super::legacy::spawn_nbt("minecraft:chest_minecart", pos, false, false);
+            let p = [
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]) + 0.5,
+                f64::from(pos[2]) + 0.5,
+            ];
+            nbt.insert(
+                "Pos".into(),
+                Tag::List(p.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+            );
+            nbt.insert(
+                "LootTable".into(),
+                Tag::String("minecraft:chests/abandoned_mineshaft".into()),
+            );
+            nbt.insert("LootTableSeed".into(), Tag::Long(seed));
+            c.world.entity(nbt)?;
         }
         Ok(())
     }

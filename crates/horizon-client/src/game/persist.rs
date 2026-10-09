@@ -222,6 +222,19 @@ impl Game<'_> {
                                     m.position.z.floor() as i32,
                                 );
                                 horizon_client::mobs::spawning::finalize(&mut m, &facts);
+                                // Cat.finalizeSpawn: black in #cats_spawn_as_black.
+                                if m.species() == horizon_client::mobs::Species::Cat {
+                                    let p = [
+                                        m.position.x.floor() as i32,
+                                        m.position.y.floor() as i32,
+                                        m.position.z.floor() as i32,
+                                    ];
+                                    let black = self.structure_tag("minecraft:cats_spawn_as_black");
+                                    if self.structures_at(p).iter().any(|s| black.contains(s)) {
+                                        m.extra.variant = 10;
+                                        m.persistent = true;
+                                    }
+                                }
                             }
                             self.remember(m.id, uuid, tag);
                             self.mobs.push(m);

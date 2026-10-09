@@ -18,6 +18,8 @@ pub struct VanillaTerrain {
     biome_map: Vec<u16>,
     /// Loot tables for generated containers.
     loot: Option<Arc<horizon_world::loot::LootData>>,
+    /// A worker for structure queries from the game thread.
+    query: std::sync::Mutex<Option<GeneratorWorker>>,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -66,7 +68,18 @@ impl VanillaTerrain {
             generator,
             biome_map,
             loot,
+            query: std::sync::Mutex::new(None),
         })
+    }
+    /// The structure starts owned by a chunk (cached by the generator).
+    pub fn starts_at(
+        &self,
+        x: i32,
+        z: i32,
+    ) -> Vec<Arc<horizon_world::worldgen::structure::start::StructureStart>> {
+        let mut worker = self.query.lock().unwrap_or_else(|e| e.into_inner());
+        let worker = worker.get_or_insert_with(|| self.generator.worker());
+        worker.structure_starts(ChunkPos::new(x, z))
     }
     /// `/locate structure`: the nearest start of one of `names` within
     /// `radius` placement sectors of block `from`.
@@ -200,8 +213,17 @@ impl ChunkGenerator for VanillaTerrain {
         }
         out.biomes = Arc::new(biomes);
         out.block_entities = crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
-        out.entities = std::mem::take(&mut chunk.entities)
+        out.structure_refs = chunk
+            .structures()
             .into_iter()
+            .map(|(id, start, _, _)| (Arc::from(id), (start.x, start.z)))
+            .collect();
+        let entities = std::mem::take(&mut chunk.entities);
+        out.entities = entities
+            .into_iter()
+            .map(|nbt| {
+                crate::structure_blocks::unpack_entity_loot(&chunk, nbt, self.loot.as_deref())
+            })
             .map(horizon_world::nbt::Tag::Compound)
             .collect();
         for s in &mut out.sections {

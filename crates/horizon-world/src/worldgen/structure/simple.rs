@@ -493,6 +493,14 @@ impl LegacyPiece for SwampHutPiece {
                 f.fill_column_down(c, log, x, -1, z)?;
             }
         }
+        // The witch, then spawnCat, both at (2, 2, 5).
+        let pos = f.world_pos(2, 2, 5);
+        if c.chunk_box.is_inside(pos) {
+            for id in ["minecraft:witch", "minecraft:cat"] {
+                c.world
+                    .entity(super::legacy::spawn_nbt(id, pos, true, true))?;
+            }
+        }
         Ok(())
     }
 }

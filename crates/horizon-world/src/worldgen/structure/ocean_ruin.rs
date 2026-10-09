@@ -338,7 +338,12 @@ pub fn post_process(piece: &TemplatePiece, c: &mut PieceContext<'_>) -> Result<(
                 };
                 c.loot_table(pos, "minecraft:chest", table)?;
             } else if marker == "drowned" {
-                // The drowned entity is not created; its marker block is cleared.
+                c.world.entity(super::legacy::spawn_nbt(
+                    "minecraft:drowned",
+                    pos,
+                    true,
+                    true,
+                ))?;
                 let sea = 63;
                 let state = if pos[1] > sea {
                     c.state("air")

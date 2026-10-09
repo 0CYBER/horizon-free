@@ -441,8 +441,12 @@ impl Game<'_> {
                         break;
                     };
                     let biome = self.res.biomes.get(chunk.biome(x, y, z)).clone();
-                    let Some(list) = biome.spawns.get(category).cloned() else {
-                        break;
+                    let list = match self.structure_spawns(category, [x, y, z]) {
+                        Some(list) => list,
+                        None => match biome.spawns.get(category).cloned() {
+                            Some(list) => list,
+                            None => break,
+                        },
                     };
                     let list: Vec<_> = list
                         .into_iter()

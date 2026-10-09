@@ -939,9 +939,14 @@ pub fn post_process(piece: &TemplatePiece, c: &mut PieceContext<'_>) -> Result<(
             let state = c.state_with("chest", &[("facing", direction_name(facing))]);
             create_chest(c, pos, "minecraft:chests/woodland_mansion", Some(state))?;
         } else if matches!(marker.as_str(), "Mage" | "Warrior" | "Group of Allays") {
-            // Mobs are not spawned; the marker is cleared as after a spawn.
-            if marker == "Group of Allays" {
-                c.world.level_int(3)?;
+            let (id, count) = match marker.as_str() {
+                "Mage" => ("minecraft:evoker", 1),
+                "Warrior" => ("minecraft:vindicator", 1),
+                _ => ("minecraft:allay", c.world.level_int(3)? + 1),
+            };
+            for _ in 0..count {
+                c.world
+                    .entity(super::legacy::spawn_nbt(id, pos, true, true))?;
             }
             c.world.set(pos, c.state("air"), 2)?;
         }

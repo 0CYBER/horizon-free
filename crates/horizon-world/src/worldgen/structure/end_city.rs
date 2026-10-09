@@ -5,6 +5,7 @@ use super::{
     legacy::{LegacyPiece, PieceContext, Result, TemplateHandler, TemplatePiece, offset},
     processor::ProcessorList,
 };
+use crate::nbt::{Compound, Tag};
 use horizon_core::{geometry::Direction, random::RandomSource};
 use std::sync::Arc;
 
@@ -413,9 +414,31 @@ impl LegacyPiece for EndCityPiece {
             return Ok(());
         };
         for (marker, pos) in markers {
-            // Sentry shulkers and elytra item frames are entities, which
-            // generation does not produce yet.
-            if marker.starts_with("Chest") {
+            if marker.starts_with("Sentry") {
+                c.world.entity(super::legacy::spawn_nbt(
+                    "minecraft:shulker",
+                    pos,
+                    false,
+                    false,
+                ))?;
+            } else if marker.starts_with("Elytra") {
+                // An item frame on the marker, facing the rotated south.
+                let facing = self.0.rotation.rotate_direction(Direction::South);
+                let mut nbt = super::legacy::spawn_nbt("minecraft:item_frame", pos, false, false);
+                nbt.insert("block_pos".into(), Tag::IntArray(pos.to_vec()));
+                let data = match facing {
+                    Direction::North => 2,
+                    Direction::South => 3,
+                    Direction::West => 4,
+                    _ => 5,
+                };
+                nbt.insert("Facing".into(), Tag::Byte(data));
+                let mut item = Compound::new();
+                item.insert("id".into(), Tag::String("minecraft:elytra".into()));
+                item.insert("count".into(), Tag::Int(1));
+                nbt.insert("Item".into(), Tag::Compound(item));
+                c.world.entity(nbt)?;
+            } else if marker.starts_with("Chest") {
                 let chest = offset(pos, Direction::Down, 1);
                 if c.chunk_box.is_inside(chest) {
                     c.loot_table(

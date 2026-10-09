@@ -710,6 +710,21 @@ pub fn encode_with(
                 ("starts", Tag::Compound(Compound::new())),
             ])
         });
+        if !chunk.structure_refs.is_empty()
+            && let Some(Tag::Compound(s)) = map.get_mut(&"structures".into())
+        {
+            let mut refs: std::collections::BTreeMap<&str, Vec<i64>> = Default::default();
+            for (id, (x, z)) in &chunk.structure_refs {
+                refs.entry(id)
+                    .or_default()
+                    .push(i64::from(*x as u32) | i64::from(*z) << 32);
+            }
+            let refs: Compound = refs
+                .into_iter()
+                .map(|(id, v)| (id.into(), Tag::LongArray(v)))
+                .collect();
+            s.insert("References".into(), Tag::Compound(refs));
+        }
         map.entry("PostProcessing".into())
             .or_insert_with(|| Tag::List(vec![Tag::List(Vec::new()); SECTIONS]));
     }
@@ -766,6 +781,19 @@ pub fn decode_with(
         return None;
     }
     let mut chunk = Chunk::empty(*x, *z);
+    // structures.References: structure id -> packed start chunk positions.
+    if let Some(Tag::Compound(refs)) = tag.get("structures").and_then(|s| s.get("References")) {
+        for (id, v) in refs {
+            if let Tag::LongArray(starts) = v {
+                let id: Arc<str> = Arc::from(id.to_string_lossy());
+                for &p in starts {
+                    chunk
+                        .structure_refs
+                        .push((id.clone(), (p as i32, (p >> 32) as i32)));
+                }
+            }
+        }
+    }
     let air = registry.default_state("minecraft:air")?.0 as u16;
     let mut cache: HashMap<String, u16> = HashMap::new();
     let mut biome_data = (*chunk.biomes).clone();
