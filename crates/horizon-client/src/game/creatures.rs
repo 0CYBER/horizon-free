@@ -871,10 +871,12 @@ impl Game<'_> {
                     amount,
                     source,
                 } => {
+                    let mut killed = false;
                     if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
                         let hit = t.damage(amount, source);
                         if hit {
                             let (kind, center, dead) = (t.kind.clone(), t.center(), !t.alive());
+                            killed = dead;
                             let pitch = (self.world.random.next_float()
                                 - self.world.random.next_float())
                                 * 0.2
@@ -889,6 +891,9 @@ impl Game<'_> {
                                 );
                             }
                         }
+                    }
+                    if killed && let Some(Who::Mob(killer)) = source.attacker {
+                        self.zombie_killed(killer, target);
                     }
                 }
                 MobEvent::FinishAdmiring { mob } => self.finish_admiring(mob),
@@ -1037,6 +1042,7 @@ impl Game<'_> {
                 MobEvent::CreakingTearDown { center, spread } => {
                     self.creaking_tear_down(center, spread)
                 }
+                MobEvent::CureZombieVillager { mob } => self.cure_zombie_villager(mob),
                 MobEvent::VillagerMeet { mob, other } => self.villager_meet(mob, other),
                 MobEvent::VillagerBirth { parent, partner } => self.villager_birth(parent, partner),
                 MobEvent::GolemCheck { mob, needed } => self.villager_golem_check(mob, needed),
@@ -1773,6 +1779,9 @@ impl Game<'_> {
             .unwrap_or_default();
         let creative = self.creative;
         let selected = self.selected;
+        if self.interact_zombie_villager(index, &item) {
+            return Ok(true);
+        }
         if self.interact_trader(index, &item)? {
             self.swing_arm();
             return Ok(true);

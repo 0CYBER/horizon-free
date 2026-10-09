@@ -199,6 +199,9 @@ fn zombified_piglin_step(m: &mut Mob, cx: &mut Cx) {
     }
 }
 pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
+    if m.species() == Species::ZombieVillager {
+        super::zombie_villager::step(m, cx);
+    }
     if m.species() == Species::ZombifiedPiglin {
         return zombified_piglin_step(m, cx);
     }

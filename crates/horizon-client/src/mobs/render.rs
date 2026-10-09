@@ -504,11 +504,7 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             } else {
                 "entity/zombie_villager"
             };
-            let baby = if m.is_baby() && m.species() == S::Villager {
-                "baby/"
-            } else {
-                ""
-            };
+            let baby = if m.is_baby() { "baby/" } else { "" };
             push(
                 &mut v,
                 &model,
@@ -525,9 +521,10 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                     white,
                     false,
                 );
-                if m.species() == S::Villager && prof != "nitwit" {
+                if prof != "nitwit" {
+                    // `LEVEL_LOCATIONS` clamps the level to 1..=5.
                     let level = ["stone", "iron", "gold", "emerald", "diamond"]
-                        [(m.extra.variant3 as usize).min(4)];
+                        [(m.extra.variant3.max(1) as usize - 1).min(4)];
                     push(
                         &mut v,
                         &model,
@@ -612,7 +609,12 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
         m.previous.y + (m.position.y - m.previous.y) * a,
         m.previous.z + (m.position.z - m.previous.z) * a,
     ) - camera;
-    let body = m.previous_body_yaw + wrap(m.body_yaw - m.previous_body_yaw) * alpha;
+    let mut body = m.previous_body_yaw + wrap(m.body_yaw - m.previous_body_yaw) * alpha;
+    if shaking(m) {
+        // LivingEntityRenderer.setupRotations: a rapid wobble.
+        let ticks = (m.age as f32 + alpha).floor();
+        body += (f64::from(ticks * 3.25).cos() * std::f64::consts::PI * 0.4) as f32;
+    }
     let sleep = (m.species() == Species::Villager)
         .then(|| super::villager::sleep_pose(m))
         .flatten();
@@ -643,6 +645,18 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
     base *= glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
     base *= species_scale(m, alpha);
     base * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0))
+}
+/// `LivingEntityRenderer.isShaking`: converting zombies, piglins and
+/// hoglins, and a zombie villager being cured.
+fn shaking(m: &Mob) -> bool {
+    match m.species() {
+        Species::ZombieVillager => super::zombie_villager::is_converting(m),
+        Species::Zombie | Species::Husk => m.extra.counter2 > 0,
+        Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
+            !m.extra.flag2 && m.extra.counter2 > 0
+        }
+        _ => false,
+    }
 }
 fn flip_degrees(m: &Mob) -> f32 {
     match m.species() {

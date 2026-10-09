@@ -19,6 +19,23 @@ pub(super) struct ThrownPotion {
     velocity: Vec3,
     age: u32,
 }
+/// A mob's effect ids carry the `minecraft:` namespace.
+fn mob_effect_id(id: &str) -> Option<&'static str> {
+    use std::{collections::HashMap, sync::OnceLock};
+    static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    let id = id.trim_start_matches("minecraft:");
+    IDS.get_or_init(|| {
+        brewing::EFFECTS
+            .iter()
+            .map(|e| {
+                let full: &'static str = Box::leak(format!("minecraft:{}", e.id).into_boxed_str());
+                (e.id, full)
+            })
+            .collect()
+    })
+    .get(id)
+    .copied()
+}
 impl Game<'_> {
     /// A splash potion, lingering potion or experience bottle in flight (the
     /// player's throws and dispensers both end up here).
@@ -489,11 +506,21 @@ impl Game<'_> {
             }
         }
         for (i, intensity, inverted) in hits {
-            for (id, _, amp) in def.effects {
+            for (id, duration, amp) in def.effects {
                 let harm = match *id {
                     "instant_damage" => !inverted,
                     "instant_health" => inverted,
-                    _ => continue,
+                    _ => {
+                        // `Potion.applySplash`: timed effects last in
+                        // proportion to how close the mob was.
+                        let d = (intensity * f64::from(*duration) * scale + 0.5) as i32;
+                        if d > 20
+                            && let Some(name) = mob_effect_id(id)
+                        {
+                            self.mobs[i].add_effect(name, d, *amp);
+                        }
+                        continue;
+                    }
                 };
                 let m = &mut self.mobs[i];
                 if harm {

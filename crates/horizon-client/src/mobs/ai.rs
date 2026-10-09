@@ -605,7 +605,7 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
     let Some(p) = &w.player else { return true };
     let d = m.distance_sqr(p.position);
     // Patrols and raiders (`removeWhenFarAway`, `requiresCustomPersistence`).
-    if super::raider::keeps_alive(m, d) {
+    if super::raider::keeps_alive(m, d) || super::zombie_villager::keeps_alive(m) {
         return true;
     }
     let despawn = if m.kind.category == "water_ambient" {

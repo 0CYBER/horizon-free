@@ -65,6 +65,7 @@ mod trading;
 mod trident;
 mod villagers;
 mod wither;
+mod zombie_villagers;
 use horizon_client::{
     Result,
     assets::Assets,

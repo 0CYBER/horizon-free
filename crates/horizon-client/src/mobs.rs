@@ -42,6 +42,7 @@ pub mod villager;
 pub mod witch;
 pub mod wither;
 mod world;
+pub mod zombie_villager;
 
 use crate::{blocks::BlockFacts, mesher::Vertex, world::World};
 pub use data::MobData;
@@ -707,6 +708,10 @@ pub enum MobEvent {
     GiftLoot {
         table: &'static str,
         at: [f64; 3],
+    },
+    /// A zombie villager's cure is complete: the game turns it back into a villager.
+    CureZombieVillager {
+        mob: u32,
     },
     /// A creaking bound to the heart at `home` was hurt (`creakingHurt` when a player did it).
     CreakingHurt {
