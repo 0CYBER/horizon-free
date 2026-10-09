@@ -483,6 +483,9 @@ impl Game<'_> {
     /// `Slot.mayPlace` and `getMaxStackSize` for station and brewing slots.
     fn slot_rules(&self, slot: usize, stack: &ItemStack) -> (bool, u32) {
         let data = self.data();
+        if slot >= super::mount_menu::SADDLE {
+            return self.mount_slot_rules(slot, stack);
+        }
         if let Some(BlockEntity::Crafter(c)) = self.container_kind()
             && (300..309).contains(&slot)
         {
@@ -531,7 +534,7 @@ impl Game<'_> {
         }
     }
     /// `AbstractContainerMenu.doClick` PICKUP on a filtered slot.
-    fn click_filtered(&mut self, slot: usize, right: bool) {
+    pub(super) fn click_filtered(&mut self, slot: usize, right: bool) {
         let carried = self.carried.take();
         let current = self.slot_mut(slot).take();
         let (new_slot, new_carried) = match (carried, current) {

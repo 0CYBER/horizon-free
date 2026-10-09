@@ -33,6 +33,7 @@ mod loom;
 mod machines;
 mod maps;
 mod minecarts;
+mod mount_menu;
 mod mounts;
 mod music;
 mod names;
@@ -614,6 +615,8 @@ struct Game<'a> {
     pending_banner: HashMap<[i32; 3], horizon_client::containers::Banner>,
     /// The recipe book of the open screen (game/recipe_book.rs).
     recipe_ui: recipe_book::RecipeUi,
+    /// The horse inventory (game/mount_menu.rs).
+    mount_menu: mount_menu::MountMenu,
     /// The player's fishing hook.
     hook: Option<fishing::Hook>,
     tridents: Vec<trident::ThrownTrident>,
@@ -3042,7 +3045,7 @@ impl Game<'_> {
     }
     /// 300.. are the open container's slots.
     fn slots(&self) -> Vec<usize> {
-        if let Some(v) = self.station_slots() {
+        if let Some(v) = self.station_slots().or_else(|| self.mount_slots()) {
             return v;
         }
         let mut v: Vec<usize> = (0..36).collect();
@@ -3074,6 +3077,7 @@ impl Game<'_> {
             .station_slot_position(i)
             .or_else(|| self.machine_slot_position(i))
             .or_else(|| self.crafter_slot_position(i))
+            .or_else(|| self.mount_slot_position(i))
         {
             return p;
         }
@@ -3128,6 +3132,9 @@ impl Game<'_> {
         })
     }
     fn slot_mut(&mut self, i: usize) -> &mut Option<ItemStack> {
+        if i >= mount_menu::SADDLE {
+            return self.mount_slot_mut(i);
+        }
         if i >= stations::INPUT {
             return self.station_slot_mut(i);
         }
@@ -3294,6 +3301,7 @@ impl Game<'_> {
                     | BlockEntity::Lectern(_)
                     | BlockEntity::Banner(_),
                 ) => {}
+                None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
                     let texture = if self.craft_size == 3 {
                         "gui/container/crafting_table"
@@ -3320,7 +3328,7 @@ impl Game<'_> {
                 }
             }
         }
-        if self.container.is_none() && self.craft_size != 3 {
+        if self.container.is_none() && self.craft_size != 3 && !self.mount_active() {
             self.draw_inventory_player(batch, ox, oy);
         }
         for i in self.slots() {
@@ -3366,6 +3374,7 @@ impl Game<'_> {
     }
     pub(super) fn close_container(&mut self) {
         self.close_station();
+        self.mount_closed();
         self.recipe_ui.reset_screen();
         if self.remote.is_some() {
             return self.remote_close_container();
@@ -3416,6 +3425,9 @@ impl Game<'_> {
         self.close_cart_container();
     }
     fn click_inventory(&mut self, right: bool) {
+        if self.mount_click(right) {
+            return;
+        }
         if self.recipe_book_click(right) {
             return;
         }
@@ -4356,6 +4368,7 @@ impl Game<'_> {
     fn tick_block_entities(&mut self) -> Result<()> {
         self.tick_hoppers()?;
         self.tick_crafters();
+        self.tick_mount_menu();
         self.tick_jukeboxes();
         self.tick_beacons();
         // ChestLidController: 0.1 per tick towards open/closed.
@@ -6867,12 +6880,15 @@ impl Game<'_> {
             KeyCode::KeyE => match self.screen {
                 Screen::Playing if self.spectator() => {}
                 Screen::Playing => {
-                    self.screen = if self.creative {
-                        Screen::Creative
-                    } else {
-                        Screen::Inventory
-                    };
-                    self.capture(false);
+                    // key.inventory while riding a tamed mount opens its inventory.
+                    if !self.open_ridden_mount_menu() {
+                        self.screen = if self.creative {
+                            Screen::Creative
+                        } else {
+                            Screen::Inventory
+                        };
+                        self.capture(false);
+                    }
                 }
                 Screen::Creative => {
                     if let Some(c) = self.carried.take() {
@@ -7737,6 +7753,7 @@ pub fn run() -> Result<()> {
         pending_shulker: HashMap::new(),
         pending_banner: HashMap::new(),
         recipe_ui: Default::default(),
+        mount_menu: Default::default(),
         hook: None,
         tridents: Vec::new(),
         rockets: Vec::new(),

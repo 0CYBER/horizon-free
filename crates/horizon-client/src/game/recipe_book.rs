@@ -99,6 +99,9 @@ impl Game<'_> {
         if self.screen != Screen::Inventory || self.remote.is_some() || self.station.is_some() {
             return None;
         }
+        if self.mount_active() {
+            return None;
+        }
         match self.container_kind() {
             None if self.container.is_none() => Some(BookType::Crafting),
             Some(BlockEntity::Furnace(f)) => Some(match f.kind {

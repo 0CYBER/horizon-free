@@ -435,6 +435,8 @@ pub struct Extra {
     pub sheared: bool,
     pub saddled: bool,
     pub chested: bool,
+    /// The chest contents of a donkey or mule (15 slots).
+    pub items: Vec<Option<crate::items::ItemStack>>,
     pub tame: bool,
     pub sitting: bool,
     /// The owner's UUID (tamed animals).

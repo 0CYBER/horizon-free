@@ -688,6 +688,10 @@ impl Game<'_> {
             for item in gear {
                 self.spawn_item(ItemStack::new(item, 1), pos, [0.0, 0.2, 0.0], 10);
             }
+            // AbstractChestedHorse.dropEquipment: the chest contents.
+            for stack in m.extra.items.clone().into_iter().flatten() {
+                self.spawn_item(stack, pos, [0.0, 0.2, 0.0], 10);
+            }
             let worn = if horizon_client::mobs::equine::is_equine(m.species()) {
                 [None, None, None, None]
             } else {

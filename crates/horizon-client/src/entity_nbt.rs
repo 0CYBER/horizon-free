@@ -205,6 +205,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 map.insert("Variant".into(), Tag::Int(v));
             }
             map.insert("ChestedHorse".into(), Tag::Byte(i8::from(m.extra.chested)));
+            if m.extra.chested && !m.extra.items.is_empty() {
+                map.insert("Items".into(), crate::save::encode_items(&m.extra.items));
+            } else {
+                map.remove(&"Items".into());
+            }
             let mut equipment = Vec::new();
             if m.extra.saddled {
                 equipment.push((
@@ -479,6 +484,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.variant = (v & 0xFF).clamp(0, 6) as u8;
         m.extra.variant2 = ((v >> 8) & 0xFF).clamp(0, 4) as u8;
         m.extra.chested = flag(tag, "ChestedHorse");
+        if m.extra.chested {
+            m.extra.items = crate::save::decode_items(tag.get("Items"), 15);
+        }
         let eq = tag.get("equipment");
         m.extra.saddled = eq.and_then(|e| e.get("saddle")).is_some();
         m.extra.head = eq
