@@ -81,6 +81,9 @@ impl Game<'_> {
                     self.combat.in_combat = true;
                 }
             }
+            // Player.actuallyHurt: damage_taken in tenths.
+            self.stats
+                .custom("damage_taken", (amount * 10.0).round() as i32);
             self.combat.entries.push(Entry {
                 damage_type: name,
                 damage: amount,
@@ -138,6 +141,14 @@ impl Game<'_> {
         damage.id(name).is_some_and(|id| {
             damage.in_tag(id, tag) || damage.in_tag(id, &format!("minecraft:{tag}"))
         })
+    }
+    /// The type of the mob that dealt the killing blow (`killed_by`).
+    pub(super) fn combat_killer_kind(&self) -> Option<String> {
+        let (id, _) = self.combat.entries.last()?.attacker.clone()?;
+        self.mobs
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.kind.id.clone())
     }
     /// `CombatTracker.getMostSignificantFall`.
     fn most_significant_fall(&self) -> Option<usize> {

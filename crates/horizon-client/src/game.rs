@@ -983,6 +983,9 @@ impl Game<'_> {
             count,
             ..stack.clone()
         };
+        // Player.drop: the drop statistics.
+        self.stats.add("dropped", &thrown.item, count as i32);
+        self.stats.custom("drop", 1);
         stack.count -= count;
         if stack.count == 0 {
             self.inventory[self.selected] = None;
@@ -1037,8 +1040,10 @@ impl Game<'_> {
                 && b.max_position().z > min[2];
             if touching && item.pickup_delay == 0 {
                 let before = item.stack.count;
+                let kind = item.stack.item.clone();
                 match self.give(item.stack.clone()) {
                     None => {
+                        self.stats.add("picked_up", &kind, before as i32);
                         let pitch = ((self.world.random.next_float()
                             - self.world.random.next_float())
                             * 0.7
@@ -1050,6 +1055,8 @@ impl Game<'_> {
                     }
                     Some(rest) => {
                         if rest.count < before {
+                            self.stats
+                                .add("picked_up", &kind, (before - rest.count) as i32);
                             self.audio
                                 .play("minecraft:entity.item.pickup", Some(feet), 0.2, 1.0);
                         }
@@ -1387,6 +1394,19 @@ impl Game<'_> {
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
+            let stat = match &*name {
+                "minecraft:chest" => "open_chest",
+                "minecraft:trapped_chest" => "trigger_trapped_chest",
+                "minecraft:barrel" => "open_barrel",
+                "minecraft:hopper" => "inspect_hopper",
+                "minecraft:dropper" => "inspect_dropper",
+                "minecraft:dispenser" => "inspect_dispenser",
+                n if storage::is_shulker_box(n) => "open_shulker_box",
+                _ => "",
+            };
+            if !stat.is_empty() {
+                self.stats.custom(stat, 1);
+            }
             // Opening a piglin-guarded container angers the piglins who see it.
             if self.guarded_by_piglins(&name) {
                 self.anger_piglins(true);
@@ -1783,6 +1803,8 @@ impl Game<'_> {
             sounds.pitch * 0.8,
         );
         self.process_level_events()?;
+        // BlockItem.place: the used statistic.
+        self.stats.add("used", &stack.item, 1);
         self.consume_held();
         Ok(())
     }
@@ -2246,6 +2268,7 @@ impl Game<'_> {
             })
             .and_then(|s| self.res.items.get(&s.item))
             .map(|i| i.use_speed);
+        let grounded = player.ground.on_ground;
         if !riding {
             MotionWorld {
                 player,
@@ -2255,6 +2278,10 @@ impl Game<'_> {
                 resources: self.motion,
             }
             .controlled_simulation_tick(keys)?;
+            // Player.jumpFromGround: the jump statistic.
+            if grounded && keys.jump && !player.flying && player.velocity.y > 0.2 {
+                self.stats.custom("jump", 1);
+            }
         }
         let events = std::mem::take(&mut player.events);
         let glider_wear = std::mem::take(&mut player.glider_wear);
@@ -2336,9 +2363,13 @@ impl Game<'_> {
                 player.position.y + 1.32,
                 player.position.z,
             ];
+            let killer = self.combat_killer_kind();
             self.death_message();
             // ServerPlayer.die: deaths, and the time-since counters restart.
             self.stats.custom("deaths", 1);
+            if let Some(kind) = killer {
+                self.stats.add("killed_by", &kind, 1);
+            }
             self.stats.reset("custom", "minecraft:time_since_death");
             self.stats.reset("custom", "minecraft:time_since_rest");
             if !self.creative && !self.ui.rules.bool("keep_inventory") {
@@ -3379,6 +3410,7 @@ impl Game<'_> {
             // ResultSlot: take the crafted stack and consume one of each ingredient.
             let mut crafted = 0;
             while let Some(result) = self.craft_result() {
+                let made = (result.item.clone(), result.count);
                 if shift {
                     if self.give(result).is_some() {
                         break;
@@ -3404,6 +3436,7 @@ impl Game<'_> {
                     }
                 }
                 crafted += 1;
+                self.stats.add("crafted", &made.0, made.1 as i32);
                 if !shift || crafted >= 64 {
                     break;
                 }
@@ -4118,7 +4151,9 @@ impl Game<'_> {
             mob.position.y + mob.kind.height / 2.0,
             mob.position.z,
         ];
+        let dealt = (amount.min(mob.health.max(0.0)) * 10.0).round() as i32;
         if mob.hurt(amount, from, &mut self.world.random) {
+            self.stats.custom("damage_dealt", dealt);
             // Player.attack: crit emitter and damage indicator hearts.
             let (feet, width, height) = (
                 [mob.position.x, mob.position.y, mob.position.z],
@@ -4932,6 +4967,7 @@ impl Game<'_> {
         if self.remote.is_some() {
             return self.leave_server(None);
         }
+        self.stats.custom("leave_game", 1);
         self.save_game()?;
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
@@ -5180,6 +5216,8 @@ impl Game<'_> {
         {
             stack.damage += amount;
             if stack.damage >= info.max_damage {
+                let broken = stack.item.clone();
+                self.stats.add("broken", &broken, 1);
                 self.inventory[self.selected] = None;
                 if let Some(eye) = self.eye_position() {
                     self.audio.play(
@@ -6861,6 +6899,9 @@ impl ApplicationHandler for Game<'_> {
                 WindowEvent::CloseRequested => {
                     if self.title.is_none() {
                         self.close_container();
+                        if self.remote.is_none() {
+                            self.stats.custom("leave_game", 1);
+                        }
                         self.save_game()?;
                     }
                     event_loop.exit();

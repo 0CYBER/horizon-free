@@ -168,6 +168,8 @@ impl Game<'_> {
                 Some(hook.open_water),
             );
             self.world.random = random;
+            // FishingHook.retrieve: fish_caught for a catch.
+            self.stats.custom("fish_caught", 1);
             for stack in items {
                 let mut item = ItemStack {
                     item: Arc::from(stack.item.as_str()),

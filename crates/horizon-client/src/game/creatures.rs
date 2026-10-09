@@ -889,6 +889,10 @@ impl Game<'_> {
         let Some(p) = self.mobs.iter().find(|m| m.id == parent).cloned() else {
             return;
         };
+        // Animal.finalizeSpawnChildFromBreeding: the player who fed them.
+        if p.extra.love_player {
+            self.stats.custom("animals_bred", 1);
+        }
         if let Some(q) = self.mobs.iter_mut().find(|m| m.id == partner) {
             q.extra.age = 6000;
             q.extra.in_love = 0;

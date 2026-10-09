@@ -273,6 +273,25 @@ impl Game<'_> {
         self.station = Some(Station::new(kind, pos));
         self.station_changed();
         self.beacon_opened();
+        // The block's interaction statistic.
+        let stat = match name {
+            "minecraft:crafting_table" => "interact_with_crafting_table",
+            "minecraft:furnace" => "interact_with_furnace",
+            "minecraft:blast_furnace" => "interact_with_blast_furnace",
+            "minecraft:smoker" => "interact_with_smoker",
+            "minecraft:brewing_stand" => "interact_with_brewingstand",
+            "minecraft:beacon" => "interact_with_beacon",
+            "minecraft:grindstone" => "interact_with_grindstone",
+            "minecraft:smithing_table" => "interact_with_smithing_table",
+            "minecraft:stonecutter" => "interact_with_stonecutter",
+            "minecraft:loom" => "interact_with_loom",
+            "minecraft:cartography_table" => "interact_with_cartography_table",
+            n if n.ends_with("anvil") => "interact_with_anvil",
+            _ => "",
+        };
+        if !stat.is_empty() {
+            self.stats.custom(stat, 1);
+        }
         true
     }
     /// `AbstractContainerMenu.clearContainer`: inputs go back to the player.
@@ -944,6 +963,7 @@ impl Game<'_> {
             }
         }
         let pitch = self.world.random.next_float() * 0.1 + 0.9;
+        self.stats.custom("enchant_item", 1);
         self.play_at("minecraft:block.enchantment_table.use", pos, 1.0, pitch);
         self.station_changed();
     }
