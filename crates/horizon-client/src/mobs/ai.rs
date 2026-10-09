@@ -173,6 +173,7 @@ pub fn register(m: &mut Mob) {
         Family::Villager => super::villager::register(m),
         Family::Creaking => super::creaking::register(m),
     }
+    super::raider::register(m);
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
 fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
@@ -603,6 +604,10 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
     }
     let Some(p) = &w.player else { return true };
     let d = m.distance_sqr(p.position);
+    // Patrols and raiders (`removeWhenFarAway`, `requiresCustomPersistence`).
+    if super::raider::keeps_alive(m, d) {
+        return true;
+    }
     let despawn = if m.kind.category == "water_ambient" {
         64.0
     } else {

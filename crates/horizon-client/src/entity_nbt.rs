@@ -371,6 +371,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         }
         _ => {}
     }
+    crate::mobs::raider::write_nbt(m, map);
     // LivingEntity equipment: what the mob holds now.
     if !crate::mobs::equine::is_equine(m.species()) {
         let mut equipment = match map.get(&"equipment".into()) {
@@ -391,7 +392,22 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                         equipment.get(&slot.into()).and_then(|e| e.get("id")),
                         Some(Tag::String(s)) if s.to_string_lossy() == **id
                     );
-                    if !keep {
+                    if slot == "head"
+                        && &**id == crate::mobs::raider::BANNER
+                        && crate::mobs::raider::is_raider(m.species())
+                    {
+                        // The captain's ominous banner keeps its patterns.
+                        let has_patterns = equipment
+                            .get(&slot.into())
+                            .and_then(|e| e.get("components"))
+                            .is_some();
+                        if !has_patterns {
+                            equipment.insert(
+                                slot.into(),
+                                crate::save::item_to_nbt(&crate::mobs::raider::ominous_banner()),
+                            );
+                        }
+                    } else if !keep {
                         equipment.insert(
                             slot.into(),
                             Tag::compound([
@@ -616,6 +632,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.health = health;
         m.extra.flag2 = flag(tag, "wasOnGround");
     }
+    crate::mobs::raider::read_nbt(&mut m, tag);
     // A mob saved mid-death finishes dying; one saved dead is dropped.
     if m.health <= 0.0 && m.death_time == 0 {
         return None;

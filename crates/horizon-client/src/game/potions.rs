@@ -52,7 +52,7 @@ impl Game<'_> {
     /// Right-click with a potion, splash/lingering potion or glass bottle.
     pub(super) fn use_potion_item(&mut self, stack: &ItemStack) -> horizon_client::Result<bool> {
         match &*stack.item {
-            "minecraft:potion" => {
+            "minecraft:potion" | "minecraft:ominous_bottle" => {
                 if self.using.is_none() {
                     self.using = Some((self.selected, 0));
                 }
@@ -152,7 +152,8 @@ impl Game<'_> {
     }
     /// Drinking a potion while right-click is held; true when handled.
     pub(super) fn tick_drinking(&mut self, slot: usize, ticks: u32, stack: &ItemStack) -> bool {
-        if &*stack.item != "minecraft:potion" {
+        let ominous = &*stack.item == "minecraft:ominous_bottle";
+        if &*stack.item != "minecraft:potion" && !ominous {
             return false;
         }
         let ticks = ticks + 1;
@@ -169,6 +170,10 @@ impl Game<'_> {
             return true;
         }
         self.using = None;
+        if ominous {
+            self.drink_ominous_bottle(slot, stack);
+            return true;
+        }
         let (lasting, now) = PlayerEffects::potion_effects(stack.potion(), 1.0);
         for e in lasting {
             self.potions.effects.add(e);

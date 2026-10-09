@@ -115,6 +115,7 @@ fn seen(m: &Mob) -> Seen {
         bed: (m.species() == Species::Villager)
             .then_some(m.extra.bed)
             .flatten(),
+        active_raid: horizon_client::mobs::raider::has_active_raid(m),
     }
 }
 impl Game<'_> {
@@ -191,6 +192,17 @@ impl Game<'_> {
     }
     /// Create a mob of `kind` at a position, finalized like a natural spawn.
     pub(super) fn spawn_mob(&mut self, kind: &str, at: [f64; 3], persistent: bool) -> Option<u32> {
+        self.spawn_mob_for(kind, at, persistent, false)
+    }
+    /// `spawn_mob` for a patrol or raid (`EntitySpawnReason.PATROL` / `EVENT`),
+    /// which never rolls a patrol leader.
+    pub(super) fn spawn_mob_for(
+        &mut self,
+        kind: &str,
+        at: [f64; 3],
+        persistent: bool,
+        scripted: bool,
+    ) -> Option<u32> {
         let kind = if kind.contains(':') {
             kind.to_owned()
         } else {
@@ -208,6 +220,14 @@ impl Game<'_> {
         );
         let difficulty = self.local_difficulty(at);
         spawning::finalize(&mut mob, &facts, &difficulty);
+        if !scripted {
+            let reason = if persistent {
+                horizon_client::mobs::raider::Reason::Other
+            } else {
+                horizon_client::mobs::raider::Reason::Natural
+            };
+            horizon_client::mobs::raider::finalize(&mut mob, reason);
+        }
         let id = mob.id;
         self.mobs.push(mob);
         Some(id)
@@ -265,7 +285,7 @@ impl Game<'_> {
         serde_json::json!({ "count": self.mobs.len(), "near": list, "projectiles": self.creatures.projectiles.len() })
     }
     /// Highest motion-blocking (no leaves) block + 1 (Heightmap MOTION_BLOCKING_NO_LEAVES).
-    fn motion_top(&self, x: i32, z: i32) -> i32 {
+    pub(super) fn motion_top(&self, x: i32, z: i32) -> i32 {
         let top = if self.dim == Dim::Nether { 127 } else { 319 };
         for y in (horizon_client::chunk::MIN_Y..=top).rev() {
             let f = self.res.facts.get(self.world.block(x, y, z));
@@ -602,6 +622,7 @@ impl Game<'_> {
         }
         self.tick_inhabited();
         self.spawn_natural();
+        self.tick_patrol_spawner();
         let snapshot: Vec<Seen> = self.mobs.iter().map(seen).collect();
         let mut events = Vec::new();
         let mut mobs = std::mem::take(&mut self.mobs);
@@ -688,6 +709,7 @@ impl Game<'_> {
             for item in gear {
                 self.spawn_item(ItemStack::new(item, 1), pos, [0.0, 0.2, 0.0], 10);
             }
+            self.raider_death_loot(m, pos);
             let worn = if horizon_client::mobs::equine::is_equine(m.species()) {
                 [None, None, None, None]
             } else {
@@ -703,6 +725,7 @@ impl Game<'_> {
                 // Vexes never drop their sword.
                 if let Some(item) = &item
                     && by_player
+                    && &**item != horizon_client::mobs::raider::BANNER
                     && m.species() != Species::Vex
                     && self.world.random.next_float() < 0.085
                 {
@@ -977,6 +1000,21 @@ impl Game<'_> {
                 } => self.creaking_hurt(home, id, by_player),
                 MobEvent::CreakingTearDown { center, spread } => {
                     self.creaking_tear_down(center, spread)
+                }
+                MobEvent::PatrolTarget { mob, target } => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        horizon_client::mobs::raider::set_patrol_target(m, target);
+                    }
+                }
+                MobEvent::RaiderTarget {
+                    mob,
+                    target,
+                    aggressive,
+                } => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        m.ai.target = Some(target);
+                        m.ai.aggressive |= aggressive;
+                    }
                 }
                 MobEvent::GiftLoot { table, at } => {
                     let drops =

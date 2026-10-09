@@ -29,6 +29,7 @@ pub mod nether;
 pub mod path;
 pub mod phantom;
 pub mod piglin;
+pub mod raider;
 pub mod ravager;
 pub mod render;
 pub mod shulker;
@@ -476,6 +477,8 @@ pub struct Extra {
     pub meeting: Option<[i32; 3]>,
     /// Villager and wandering trader offers and experience.
     pub trade: Option<Box<crate::merchant::Trader>>,
+    /// A raider's patrol and raid state.
+    pub raider: Option<Box<raider::State>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -660,6 +663,17 @@ pub enum MobEvent {
         kind: DamageKind,
         amount: f32,
     },
+    /// A patrol leader hands its patrol target to a companion.
+    PatrolTarget {
+        mob: u32,
+        target: [i32; 3],
+    },
+    /// A raider is told to attack (`HoldGroundAttackGoal` shouting).
+    RaiderTarget {
+        mob: u32,
+        target: Who,
+        aggressive: bool,
+    },
     /// Drop the loot of a gift table (chicken eggs, armadillo scutes).
     GiftLoot {
         table: &'static str,
@@ -715,6 +729,8 @@ pub struct Seen {
     /// A villager's claimed job site and bed.
     pub job: Option<[i32; 3]>,
     pub bed: Option<[i32; 3]>,
+    /// A raider in an active raid.
+    pub active_raid: bool,
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]
