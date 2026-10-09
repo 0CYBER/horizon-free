@@ -39,7 +39,7 @@ pub(super) struct MapData {
 }
 impl MapData {
     /// `MapItemSavedData.createFresh`: centred on the scale's grid cell.
-    fn new(x: f64, z: f64, scale: u8, dimension: &str) -> Self {
+    pub(super) fn fresh(x: f64, z: f64, scale: u8, dimension: &str) -> Self {
         let size = 128 * (1 << scale);
         let cell = |v: f64| (v.floor() as i32 + 64).div_euclid(size) * size + size / 2 - 64;
         Self {
@@ -183,6 +183,12 @@ impl Game<'_> {
         self.maps.last_id = Some(last + 1);
         last + 1
     }
+    /// Registers `data` under a free map id.
+    pub(super) fn new_map_id(&mut self, data: MapData) -> i32 {
+        let id = self.next_map_id();
+        self.maps.data.insert(id, data);
+        id
+    }
     /// `EmptyMapItem.use`: a new map centred around the player.
     pub(super) fn use_empty_map(&mut self, stack: &ItemStack) -> bool {
         if &*stack.item != "minecraft:map" {
@@ -192,7 +198,7 @@ impl Game<'_> {
             return false;
         };
         let id = self.next_map_id();
-        let data = MapData::new(p.x, p.z, 0, self.dimension_id());
+        let data = MapData::fresh(p.x, p.z, 0, self.dimension_id());
         self.maps.data.insert(id, data);
         let mut filled = ItemStack::new("minecraft:filled_map", 1);
         filled.data_mut().map_id = Some(id);

@@ -384,6 +384,8 @@ impl Game<'_> {
             }
             "quit" => {
                 if self.title.is_none() {
+                    // Player.closeContainer: menu items go back before saving.
+                    self.close_container();
                     self.save_game()?;
                 }
                 event_loop.exit();

@@ -4,6 +4,7 @@ mod armor_stands;
 mod beacon;
 mod blockctl;
 mod boats;
+mod cartography;
 mod chat;
 mod commands;
 mod control;
@@ -2566,7 +2567,6 @@ impl Game<'_> {
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
-        batch.patches.append(&mut self.map_patches);
         let (w, h) = (batch.width, batch.height);
         if self.screen == Screen::Options {
             self.draw_options(&mut batch);
@@ -3129,7 +3129,7 @@ impl Game<'_> {
         }
         self.draw_slot_tooltip(batch);
     }
-    fn close_container(&mut self) {
+    pub(super) fn close_container(&mut self) {
         self.close_station();
         if self.remote.is_some() {
             return self.remote_close_container();
@@ -6370,7 +6370,9 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
-        let hud = self.hud(size);
+        let mut hud = self.hud(size);
+        // Map textures changed since the last drawn frame (game/maps.rs).
+        hud.patches.append(&mut self.map_patches);
         let title = self.title.is_some();
         let entities = if title {
             Vec::new()
@@ -6686,6 +6688,7 @@ impl ApplicationHandler for Game<'_> {
             match event {
                 WindowEvent::CloseRequested => {
                     if self.title.is_none() {
+                        self.close_container();
                         self.save_game()?;
                     }
                     event_loop.exit();

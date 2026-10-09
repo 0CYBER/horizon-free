@@ -30,6 +30,8 @@ pub(super) enum Kind {
     Merchant,
     /// The beacon menu (game/beacon.rs).
     Beacon,
+    /// The cartography table (game/cartography.rs).
+    Cartography,
 }
 impl Kind {
     fn from_block(name: &str) -> Option<Self> {
@@ -42,6 +44,7 @@ impl Kind {
             "minecraft:smithing_table" => Self::Smithing,
             "minecraft:stonecutter" => Self::Stonecutter,
             "minecraft:beacon" => Self::Beacon,
+            "minecraft:cartography_table" => Self::Cartography,
             _ => return None,
         })
     }
@@ -61,6 +64,7 @@ impl Kind {
             Self::Stonecutter => "gui/container/stonecutter",
             Self::Merchant => "gui/container/villager",
             Self::Beacon => "gui/container/beacon",
+            Self::Cartography => "gui/container/cartography_table",
         }
     }
     fn title_key(self) -> &'static str {
@@ -72,6 +76,7 @@ impl Kind {
             Self::Stonecutter => "container.stonecutter",
             Self::Merchant => "merchant.trades",
             Self::Beacon => "container.beacon",
+            Self::Cartography => "container.cartography_table",
         }
     }
     /// (titleLabelX, titleLabelY).
@@ -80,6 +85,7 @@ impl Kind {
             Self::Anvil => (60.0, 6.0),
             Self::Smithing => (44.0, 15.0),
             Self::Stonecutter => (8.0, 5.0),
+            Self::Cartography => (8.0, 4.0),
             _ => (8.0, 6.0),
         }
     }
@@ -92,6 +98,7 @@ impl Kind {
             Self::Stonecutter => &[(20.0, 33.0)],
             Self::Merchant => &[(86.0, 37.0), (112.0, 37.0)],
             Self::Beacon => &[(109.0, 110.0)],
+            Self::Cartography => &[(15.0, 15.0), (15.0, 52.0)],
         };
         table[i.min(table.len() - 1)]
     }
@@ -104,6 +111,7 @@ impl Kind {
             Self::Stonecutter => Some((143.0, 33.0)),
             Self::Merchant => Some((170.0, 37.0)),
             Self::Beacon => None,
+            Self::Cartography => Some((145.0, 39.0)),
         }
     }
 }
@@ -406,6 +414,7 @@ impl Game<'_> {
             }
             Kind::Merchant => super::trading::update(&mut s, items),
             Kind::Beacon => {}
+            Kind::Cartography => s.result = self.cartography_result(&s),
             Kind::Stonecutter => {
                 let item = s.inputs[0].as_ref().map(|i| i.item.clone());
                 if item != s.input_item {
@@ -467,6 +476,14 @@ impl Game<'_> {
         match s.kind {
             Kind::Enchanting if i == 0 => (true, 1),
             Kind::Beacon => (super::beacon::is_payment(&stack.item), 1),
+            Kind::Cartography if i == 0 => (super::maps::map_id(stack).is_some(), 64),
+            Kind::Cartography => (
+                matches!(
+                    &*stack.item,
+                    "minecraft:paper" | "minecraft:map" | "minecraft:glass_pane"
+                ),
+                64,
+            ),
             Kind::Enchanting => (&*stack.item == "minecraft:lapis_lazuli", 64),
             Kind::Grindstone => (stations::grindstone_accepts(&self.res.items, stack), 64),
             Kind::Smithing => (data.recipes.smithing_accepts(i, stack), 64),
@@ -641,7 +658,10 @@ impl Game<'_> {
                         moved = self.move_to(&mut stack, &[INPUT], false);
                     }
                 }
-                Some(Kind::Smithing) | Some(Kind::Anvil) | Some(Kind::Stonecutter) => {
+                Some(Kind::Smithing)
+                | Some(Kind::Anvil)
+                | Some(Kind::Stonecutter)
+                | Some(Kind::Cartography) => {
                     let n = self.station.as_ref().map_or(0, |s| s.inputs.len());
                     let inputs: Vec<usize> = (0..n).map(|i| INPUT + i).collect();
                     moved = self.move_to(&mut stack, &inputs, false);
@@ -804,6 +824,20 @@ impl Game<'_> {
             }
             Kind::Merchant => self.merchant_take(&mut s),
             Kind::Beacon => {}
+            Kind::Cartography => {
+                for slot in &mut s.inputs {
+                    if let Some(x) = slot.as_mut() {
+                        x.count -= 1;
+                        if x.count == 0 {
+                            *slot = None;
+                        }
+                    }
+                }
+                if s.last_sound != self.ticks {
+                    s.last_sound = self.ticks;
+                    self.cartography_taken(pos);
+                }
+            }
             Kind::Enchanting => {}
         }
         self.station = Some(s);
@@ -817,6 +851,15 @@ impl Game<'_> {
             if !self.may_take_result() {
                 return;
             }
+            let result = if self
+                .station
+                .as_ref()
+                .is_some_and(|s| s.kind == Kind::Cartography)
+            {
+                self.cartography_post(result)
+            } else {
+                result
+            };
             if shift {
                 let mut stack = result.clone();
                 let player = Self::player_slots();
@@ -1225,18 +1268,24 @@ impl Game<'_> {
             }
         } else if let Some(kind) = self.station.as_ref().map(|s| s.kind) {
             let title = self.translate(kind.title_key(), "");
+            {
+                let atlas = &self.res.atlas;
+                Self::part(
+                    batch,
+                    atlas,
+                    kind.texture(),
+                    (0.0, 0.0),
+                    (176.0, 166.0),
+                    (ox, oy),
+                );
+                let (tx, ty) = kind.title_pos();
+                batch.text(atlas, &title, ox + tx, oy + ty, GREY, false);
+                batch.text(atlas, &inventory_label, ox + 8.0, oy + 72.0, GREY, false);
+            }
+            if kind == Kind::Cartography {
+                self.draw_cartography(batch, ox, oy);
+            }
             let atlas = &self.res.atlas;
-            Self::part(
-                batch,
-                atlas,
-                kind.texture(),
-                (0.0, 0.0),
-                (176.0, 166.0),
-                (ox, oy),
-            );
-            let (tx, ty) = kind.title_pos();
-            batch.text(atlas, &title, ox + tx, oy + ty, GREY, false);
-            batch.text(atlas, &inventory_label, ox + 8.0, oy + 72.0, GREY, false);
             let s = self.station.as_ref().expect("open station");
             let has_input = s.inputs.iter().any(Option::is_some);
             match kind {
@@ -1526,7 +1575,7 @@ impl Game<'_> {
                         }
                     }
                 }
-                Kind::Merchant | Kind::Beacon => {}
+                Kind::Merchant | Kind::Beacon | Kind::Cartography => {}
                 Kind::Stonecutter => {
                     let display = s.inputs[0].is_some() && !s.recipes.is_empty();
                     let active = display && s.recipes.len() > 12;
