@@ -142,6 +142,8 @@ pub struct PlayerMotion {
     pub may_fly: bool,
     /// Abilities.invulnerable (creative): only damage bypassing invulnerability hurts.
     pub invulnerable: bool,
+    /// Spectator mode: no physics, always flying (`Player.tick`).
+    pub spectator: bool,
     pub flying: bool,
     /// The jump key last tick (LocalPlayer.aiStep's wasJumping).
     pub was_jumping: bool,
@@ -225,6 +227,7 @@ impl PlayerMotion {
             jump_trigger_time: 0,
             may_fly: false,
             invulnerable: false,
+            spectator: false,
             flying: false,
             was_jumping: false,
             glider: false,
@@ -465,7 +468,10 @@ impl MotionWorld<'_, '_, '_> {
         // LocalPlayer.aiStep: double-tap jump toggles creative flight.
         let was_jumping = std::mem::replace(&mut self.player.was_jumping, jumping);
         let flying_before = self.player.flying;
-        if !self.player.may_fly {
+        if self.player.spectator {
+            self.player.flying = true;
+            self.player.ground.on_ground = false;
+        } else if !self.player.may_fly {
             self.player.flying = false;
         } else if !was_jumping && jumping {
             if self.player.jump_trigger_time == 0 {
@@ -509,9 +515,12 @@ impl MotionWorld<'_, '_, '_> {
             direction,
             jumping: jumping && !self.player.flying,
         })?;
+        if self.player.spectator {
+            self.player.ground.on_ground = false;
+        }
         if self.player.flying {
             self.player.fall_distance = 0.0;
-            if self.player.ground.on_ground {
+            if self.player.ground.on_ground && !self.player.spectator {
                 self.player.flying = false;
             }
         }
@@ -733,7 +742,7 @@ impl EdgeBackoffWorld for MotionWorld<'_, '_, '_> {
 impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
     type Error = Box<dyn std::error::Error>;
     fn no_physics(&self) -> bool {
-        false
+        self.player.spectator
     }
     fn position(&self) -> Vec3 {
         self.player.position

@@ -213,7 +213,7 @@ impl Game<'_> {
         self.container = None;
         self.carried = None;
         self.using = None;
-        self.creative = false;
+        self.set_mode_id(0);
         self.experience = Experience {
             level: 0,
             progress: 0.0,
@@ -425,7 +425,7 @@ impl Game<'_> {
         r.dimension = dimension;
         r.game_mode = spawn.game_type;
         r.loaded_sent = false;
-        self.creative = spawn.game_type == 1;
+        self.set_mode_id(spawn.game_type);
         self.dim = if spawn.dimension == "minecraft:the_nether" {
             Dim::Nether
         } else {
@@ -997,7 +997,7 @@ impl Game<'_> {
                 }
                 3 => {
                     let mode = p.param as i32;
-                    self.creative = mode == 1;
+                    self.set_mode_id(mode);
                     if let Some(r) = self.remote.as_mut() {
                         r.game_mode = mode;
                     }

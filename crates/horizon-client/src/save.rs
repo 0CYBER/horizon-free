@@ -1260,6 +1260,9 @@ pub struct Level {
     pub name: String,
     pub seed: i64,
     pub creative: bool,
+    /// The game mode id (0 survival, 1 creative, 2 adventure, 3 spectator);
+    /// `creative` wins when the two disagree.
+    pub game_mode: i32,
     pub time: i64,
     pub day_time: i64,
     /// The player's respawn point (bed, or the world spawn).
@@ -1310,6 +1313,14 @@ impl Level {
             .or_else(|| GAME_RULES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v))
             .unwrap_or(0)
     }
+    /// The saved game mode id.
+    pub fn mode(&self) -> i32 {
+        match (self.creative, self.game_mode) {
+            (true, _) => 1,
+            (false, 1) => 0,
+            (false, m) => m.clamp(0, 3),
+        }
+    }
     pub fn read(dir: &Path) -> Option<Self> {
         let root = read_dat(&dir.join("level.dat"))?;
         let data = root.get("Data")?;
@@ -1317,6 +1328,7 @@ impl Level {
         let mut level = Self {
             name: text(data.get("LevelName")).unwrap_or_else(|| "World".into()),
             creative: n(data.get("GameType")) == 1,
+            game_mode: n(data.get("GameType")) as i32,
             time: n(data.get("Time")),
             health: 20.0,
             food: 20,
@@ -1436,6 +1448,7 @@ impl Level {
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
         if let Some(mode) = n("playerGameType") {
             self.creative = mode == 1;
+            self.game_mode = mode as i32;
         }
         if let Some(d) = text(p.get("Dimension")) {
             self.dimension = d;
@@ -1534,16 +1547,21 @@ impl Level {
                 _ => {}
             }
         }
-        let creative = self.creative;
+        // GameType.updatePlayerAbilities.
+        let mode = self.mode();
+        let (creative, spectator) = (mode == 1, mode == 3);
         let mut abilities = compound_or_empty(p.get("abilities").cloned());
         for (k, v) in [
-            ("invulnerable", creative),
-            ("mayfly", creative),
+            ("invulnerable", creative || spectator),
+            ("mayfly", creative || spectator),
             ("instabuild", creative),
+            ("mayBuild", mode < 2),
         ] {
             put(&mut abilities, k, Tag::Byte(i8::from(v)));
         }
-        if !creative {
+        if spectator {
+            put(&mut abilities, "flying", Tag::Byte(1));
+        } else if !creative {
             put(&mut abilities, "flying", Tag::Byte(0));
         }
         if let Tag::Compound(map) = &mut abilities {
@@ -1593,7 +1611,7 @@ impl Level {
                         .collect(),
                 ),
             ),
-            ("playerGameType", Tag::Int(i32::from(self.creative))),
+            ("playerGameType", Tag::Int(self.mode())),
             ("Inventory", Tag::List(inventory)),
             ("EnderItems", encode_items(&self.ender_items)),
             ("abilities", abilities),
@@ -1762,7 +1780,7 @@ impl Level {
             ("version_history", Tag::List(history)),
             ("version", Tag::Int(19133)),
             ("LevelName", string(&self.name)),
-            ("GameType", Tag::Int(i32::from(self.creative))),
+            ("GameType", Tag::Int(self.mode())),
             ("Time", Tag::Long(self.time)),
             ("LastPlayed", Tag::Long(now)),
             (

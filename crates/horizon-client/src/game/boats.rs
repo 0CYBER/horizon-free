@@ -427,7 +427,7 @@ impl Game<'_> {
     }
     /// `getDismountLocationForPassenger`: in front of the player if there is
     /// floor there, else on top of the boat.
-    fn dismount(&mut self, i: usize) {
+    pub(super) fn dismount(&mut self, i: usize) {
         self.riding = None;
         let b = &self.boats[i];
         let r = self.yaw.to_radians();

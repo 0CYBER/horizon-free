@@ -19,6 +19,7 @@ mod fireworks;
 mod fishing;
 mod fov;
 mod frames;
+mod game_mode;
 mod growth;
 mod jukebox;
 mod lightning;
@@ -460,6 +461,8 @@ struct Game<'a> {
     destroy_delay: u32,
     use_delay: u32,
     creative: bool,
+    /// The game mode; `creative` mirrors `mode == Creative`.
+    mode: horizon_client::command::args::GameMode,
     keys: HashSet<KeyCode>,
     left: bool,
     right: bool,
@@ -994,7 +997,7 @@ impl Game<'_> {
             self.dropped = items;
             return;
         };
-        if p.health.dead_or_dying() {
+        if p.health.dead_or_dying() || self.spectator() {
             self.dropped = items;
             return;
         }
@@ -1054,7 +1057,9 @@ impl Game<'_> {
     ) -> R {
         let darken = self.sky_darken();
         let (rain, thunder) = self.world.weather.levels(1.0);
-        let player_box = self.player.as_ref().map(|p| {
+        // Spectators ignore block triggers (Entity.isIgnoringBlockTriggers).
+        let spectator = self.spectator();
+        let player_box = self.player.as_ref().filter(|_| !spectator).map(|p| {
             let w = f64::from(p.dimensions.width) / 2.0;
             (
                 [p.position.x - w, p.position.y, p.position.z - w],
@@ -1565,6 +1570,10 @@ impl Game<'_> {
         Ok(())
     }
     fn use_item(&mut self) -> Result<()> {
+        // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
+        if self.spectator() {
+            return Ok(());
+        }
         if self.interact_frame()
             || self.interact_armor_stand()
             || self.interact_boat()
@@ -1598,7 +1607,7 @@ impl Game<'_> {
             let player = PlayerContext {
                 yaw: self.yaw,
                 pitch: self.pitch,
-                may_build: true,
+                may_build: self.may_build(),
                 can_eat: self.creative
                     || self
                         .player
@@ -1691,6 +1700,9 @@ impl Game<'_> {
         };
         if info.block.is_none() {
             self.use_offhand();
+            return Ok(());
+        }
+        if !self.may_build() {
             return Ok(());
         }
         let face = match hit.face {
@@ -1885,6 +1897,11 @@ impl Game<'_> {
             self.mining = None;
             return Ok(());
         };
+        // GameType.isBlockPlacingRestricted: adventure and spectator.
+        if !self.may_build() {
+            self.mining = None;
+            return Ok(());
+        }
         if self.creative {
             if self.destroy_delay == 0 {
                 self.break_block(hit.pos)?;
@@ -2092,8 +2109,10 @@ impl Game<'_> {
         };
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;
-        player.may_fly = self.creative;
-        player.invulnerable = self.creative;
+        let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
+        player.may_fly = self.creative || spectator;
+        player.invulnerable = self.creative || spectator;
+        player.spectator = spectator;
         player.pitch = self.pitch;
         // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
         player.glider = self.armor[1].as_ref().is_some_and(|s| {
@@ -2175,8 +2194,10 @@ impl Game<'_> {
             self.previous_position = player.position;
         }
         player.yaw = self.yaw;
-        player.may_fly = self.creative;
-        player.invulnerable = self.creative;
+        let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
+        player.may_fly = self.creative || spectator;
+        player.invulnerable = self.creative || spectator;
+        player.spectator = spectator;
         player.pitch = self.pitch;
         // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
         player.glider = self.armor[1].as_ref().is_some_and(|s| {
@@ -2659,7 +2680,12 @@ impl Game<'_> {
                 (w - 15.0) / 2.0,
                 (h - 15.0) / 2.0,
             );
-            // Hotbar.
+        }
+        // Gui: spectators get the (closed) spectator menu instead of the
+        // hotbar and no player health.
+        let spectator = self.spectator();
+        if !spectator {
+            let atlas = &self.res.atlas;
             batch.sprite(atlas, "gui/sprites/hud/hotbar", w / 2.0 - 91.0, h - 22.0);
             batch.sprite(
                 atlas,
@@ -2669,7 +2695,7 @@ impl Game<'_> {
             );
         }
         // Hud.extractItemHotbar: the off hand left of the hotbar (right-handed).
-        if let Some(stack) = self.offhand.clone() {
+        if let Some(stack) = self.offhand.clone().filter(|_| !spectator) {
             batch.sprite(
                 &self.res.atlas,
                 "gui/sprites/hud/hotbar_offhand_left",
@@ -2679,7 +2705,7 @@ impl Game<'_> {
             self.draw_item(&mut batch, &stack, w / 2.0 - 91.0 - 26.0, h - 19.0);
         }
         for i in 0..9 {
-            if let Some(stack) = self.inventory[i].clone() {
+            if let Some(stack) = self.inventory[i].clone().filter(|_| !spectator) {
                 self.draw_item(
                     &mut batch,
                     &stack,
@@ -2694,6 +2720,7 @@ impl Game<'_> {
         self.draw_titles(&mut batch);
         let atlas = &self.res.atlas;
         if !self.creative
+            && !spectator
             && let Some(p) = &self.player
         {
             // Experience bar and hearts/food (Gui.renderPlayerHealth).
@@ -3957,6 +3984,9 @@ impl Game<'_> {
     }
     /// Player.attack with the attack-strength charge, crits and knockback.
     fn attack(&mut self) -> bool {
+        if self.spectator() {
+            return false;
+        }
         // A painting nearer than the targeted block and mob breaks instead.
         if let Some((i, d)) = self.painting_hit()
             && self.mob_hit().is_none_or(|m| d < m.1)
@@ -4404,7 +4434,7 @@ impl Game<'_> {
                 thunder_level: if thunder { (1.0, 1.0) } else { (0.0, 0.0) },
             };
         }
-        self.creative = level.creative;
+        self.set_mode_id(level.mode());
         let mut inventory = vec![None; 36];
         self.armor = [None, None, None, None];
         self.offhand = None;
@@ -5365,7 +5395,11 @@ impl Game<'_> {
         if self.xp_delay > 0 {
             self.xp_delay -= 1;
         }
-        let player = self.player.as_ref().filter(|p| !p.health.dead_or_dying());
+        let spectator = self.spectator();
+        let player = self
+            .player
+            .as_ref()
+            .filter(|p| !p.health.dead_or_dying() && !spectator);
         let target = player.map(|p| {
             [
                 p.position.x,
@@ -5582,10 +5616,11 @@ impl Game<'_> {
     /// space, converted to camera-relative world space.
     fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
         let mut out = Vec::new();
-        if self
-            .player
-            .as_ref()
-            .is_none_or(|p| p.health.dead_or_dying())
+        if self.spectator()
+            || self
+                .player
+                .as_ref()
+                .is_none_or(|p| p.health.dead_or_dying())
             || self.screen == Screen::Dead
         {
             return out;
@@ -6284,8 +6319,10 @@ impl Game<'_> {
         self.save_maps();
         self.save_fight();
         self.level.selected_slot = self.selected as i32;
+        let mode = self.mode_id();
         let level = &mut self.level;
         level.creative = self.creative;
+        level.game_mode = mode;
         level.time = self.world.game_time;
         level.weather = self.world.weather;
         level.day_time = self.world.day_time;
@@ -6416,7 +6453,7 @@ impl Game<'_> {
             sky.sky_light_factor = 1.0;
         }
         // LevelRenderer.renderHitOutline: the outline shape's edges.
-        let outline = if self.screen == Screen::Playing {
+        let outline = if self.screen == Screen::Playing && !self.spectator() {
             self.pick()
                 .map(|h| {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
@@ -6576,6 +6613,7 @@ impl Game<'_> {
             KeyCode::KeyE
                 if self.screen == Screen::Creative && self.creative_screen.tab().search => {}
             KeyCode::KeyE => match self.screen {
+                Screen::Playing if self.spectator() => {}
                 Screen::Playing => {
                     self.screen = if self.creative {
                         Screen::Creative
@@ -7295,6 +7333,11 @@ pub fn run() -> Result<()> {
         destroy_delay: 0,
         use_delay: 0,
         creative,
+        mode: if creative {
+            horizon_client::command::args::GameMode::Creative
+        } else {
+            horizon_client::command::args::GameMode::Survival
+        },
         keys: HashSet::new(),
         left: false,
         right: false,

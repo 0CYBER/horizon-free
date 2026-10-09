@@ -121,7 +121,8 @@ impl Game<'_> {
                 p.position.z,
             ],
             alive: !p.health.dead_or_dying(),
-            creative: self.creative,
+            // EntitySelector.NO_CREATIVE_OR_SPECTATOR.
+            creative: self.creative || self.spectator(),
             sneaking: self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft),
             look: view_vector(self.yaw, self.pitch),
             main_hand: self.held().map(|s| s.item.clone()),

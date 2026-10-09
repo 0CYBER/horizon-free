@@ -813,7 +813,7 @@ impl Game<'_> {
         true
     }
     /// `getDismountLocationForPassenger`: beside the cart (across its motion), else on top.
-    fn dismount_cart(&mut self, i: usize) {
+    pub(super) fn dismount_cart(&mut self, i: usize) {
         self.riding = None;
         let c = &self.carts[i];
         let (bx, by, bz) = (

@@ -111,9 +111,11 @@ impl Game<'_> {
             p.position.z,
         ];
         // LevelExtractor.getViewBlockingState: 8 points around the eye.
+        // ScreenEffectRenderer: none of it for a spectator (noPhysics).
+        let spectator = self.spectator();
         let mut block_overlay = None;
         let w = f64::from(p.dimensions.width) * 0.8;
-        for i in 0..8 {
+        for i in (0..8).filter(|_| !spectator) {
             let t = [
                 p.position.x + (f64::from(i & 1) - 0.5) * w,
                 eye[1] + (f64::from((i >> 1) & 1) - 0.5) * 0.1,
@@ -135,7 +137,8 @@ impl Game<'_> {
         }
         let in_water =
             fog_type(&self.world, &self.res.facts, eye, self.forward()) == FogType::Water;
-        let water = in_water.then(|| (self.eye_brightness(eye), self.yaw, self.pitch));
+        let water =
+            (in_water && !spectator).then(|| (self.eye_brightness(eye), self.yaw, self.pitch));
         let camera_overlays = match &self.armor[0] {
             Some(stack) if &*stack.item == "minecraft:carved_pumpkin" => {
                 vec!["misc/pumpkinblur".to_owned()]

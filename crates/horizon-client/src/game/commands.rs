@@ -503,12 +503,11 @@ impl Game<'_> {
         }
     }
     fn set_game_mode(&mut self, mode: GameMode) -> bool {
-        let creative = mode == GameMode::Creative;
-        if self.creative == creative && matches!(mode, GameMode::Survival | GameMode::Creative) {
+        if self.mode == mode {
             return false;
         }
-        self.creative = creative;
-        if self.screen == Screen::Inventory && creative {
+        self.set_mode(mode);
+        if self.screen == Screen::Inventory && (self.creative || self.spectator()) {
             self.screen = Screen::Playing;
         }
         true
