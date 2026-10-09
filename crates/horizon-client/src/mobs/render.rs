@@ -333,7 +333,14 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             white,
             false,
         ),
-        S::Creeper if m.extra.charged => {}
+        // EnergySwirlLayer (the scroll is not reproduced: atlas sprites do not wrap).
+        S::Creeper if m.extra.charged => push(
+            &mut v,
+            "creeper#armor",
+            "entity/creeper/creeper_armor",
+            0x80FF_FFFF,
+            true,
+        ),
         S::TropicalFish => {
             // TropicalFishPatternLayer: the pattern tinted with the pattern colour.
             let (model, letter, n) = if m.extra.variant < 6 {

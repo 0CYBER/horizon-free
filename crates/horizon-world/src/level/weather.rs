@@ -41,7 +41,11 @@ impl Behaviours {
         }
     }
     /// `getHeightmapPos(MOTION_BLOCKING, pos)`.
-    fn motion_blocking_top<L: LevelAccess + ?Sized>(&self, level: &L, pos: BlockPos) -> BlockPos {
+    pub fn motion_blocking_top<L: LevelAccess + ?Sized>(
+        &self,
+        level: &L,
+        pos: BlockPos,
+    ) -> BlockPos {
         let blocks = self.tag("minecraft:blocks_motion_in_heightmap");
         for y in (level.min_y()..level.max_y()).rev() {
             let state = level.block_state(BlockPos::new(pos.x, y, pos.z));

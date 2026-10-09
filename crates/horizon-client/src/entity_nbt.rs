@@ -149,11 +149,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             for (key, value) in [
                 ("Fuse", Tag::Short(30)),
                 ("ExplosionRadius", Tag::Byte(3)),
-                ("powered", Tag::Byte(0)),
                 ("ignited", Tag::Byte(0)),
             ] {
                 map.entry(key.into()).or_insert(value);
             }
+            map.insert("powered".into(), Tag::Byte(i8::from(m.extra.charged)));
         }
         // Skeletons are spawned holding a bow (finalizeSpawn); a mob loaded
         // from NBT keeps only its saved equipment.
@@ -212,6 +212,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.persistent = flag(tag, "PersistenceRequired");
     m.custom_name = custom_name(tag);
     m.name_visible = flag(tag, "CustomNameVisible");
+    if m.species() == crate::mobs::Species::Creeper {
+        m.extra.charged = flag(tag, "powered");
+    }
     // A mob saved mid-death finishes dying; one saved dead is dropped.
     if m.health <= 0.0 && m.death_time == 0 {
         return None;

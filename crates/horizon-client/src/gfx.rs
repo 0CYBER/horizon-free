@@ -67,6 +67,8 @@ pub struct Frame<'a> {
     pub hud: &'a HudBatch,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    /// Additive translucent geometry after the entities (lightning, dragon rays).
+    pub additive: &'a [Vertex],
     /// Camera-relative sun, moon and stars (drawn behind everything, additive).
     pub celestial: &'a [Vertex],
     /// First-person hand and held item, drawn after clearing depth.
@@ -89,6 +91,7 @@ pub struct Renderer {
     dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     entity_pipeline: wgpu::RenderPipeline,
+    additive_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
     /// Screen effects: alpha-blended and vignette (`dst * (1 - src)`) pipelines.
@@ -665,6 +668,52 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        // BlendFunction.LIGHTNING: src alpha, one; no depth writes.
+        let additive_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Additive entities"),
+            layout: Some(&entity_layout),
+            vertex: wgpu::VertexState {
+                module: &entity_shader,
+                entry_point: Some("vs_entity"),
+                compilation_options: Default::default(),
+                buffers: &entity_vertex,
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &entity_shader,
+                entry_point: Some("fs_celestial"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format.remove_srgb_suffix(),
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let celestial_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Celestial bodies"),
             layout: Some(&entity_layout),
@@ -795,6 +844,7 @@ impl Renderer {
             dark_disc,
             lines,
             entity_pipeline,
+            additive_pipeline,
             celestial_pipeline,
             celestial_buffer,
             screen_pipelines,
@@ -1311,15 +1361,18 @@ impl Renderer {
                 .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
         }
         let mut combined;
-        let all_entities: &[Vertex] = if frame.hand.is_empty() {
+        let all_entities: &[Vertex] = if frame.hand.is_empty() && frame.additive.is_empty() {
             frame.entities
         } else {
-            combined = Vec::with_capacity(frame.entities.len() + frame.hand.len());
+            combined =
+                Vec::with_capacity(frame.entities.len() + frame.additive.len() + frame.hand.len());
             combined.extend_from_slice(frame.entities);
+            combined.extend_from_slice(frame.additive);
             combined.extend_from_slice(frame.hand);
             &combined
         };
         let hand_quads = (frame.hand.len() / 4) as u32;
+        let additive_quads = (frame.additive.len() / 4) as u32;
         let entity_vertices = all_entities.len() as u64;
         if entity_vertices > self.entity_capacity {
             self.entity_capacity = entity_vertices.next_power_of_two();
@@ -1342,9 +1395,9 @@ impl Renderer {
                 bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
             );
         }
-        let entity_quads = (entity_vertices / 4) as u32 - hand_quads;
-        if entity_quads + hand_quads > self.index_quads {
-            self.index_quads = (entity_quads + hand_quads).next_power_of_two();
+        let entity_quads = (entity_vertices / 4) as u32 - hand_quads - additive_quads;
+        if entity_quads + additive_quads + hand_quads > self.index_quads {
+            self.index_quads = (entity_quads + additive_quads + hand_quads).next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         let view_target = surface_frame
@@ -1437,6 +1490,13 @@ impl Renderer {
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if additive_quads > 0 {
+                pass.set_pipeline(&self.additive_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(0..additive_quads * 6, (entity_quads * 4) as i32, 0..1);
+                pass.set_bind_group(0, &self.group, &[]);
+            }
             if outline_edges > 0 {
                 pass.set_pipeline(&self.lines);
                 pass.set_vertex_buffer(0, self.outline.slice(..));
@@ -1484,7 +1544,11 @@ impl Renderer {
             pass.set_bind_group(0, &self.entity_group, &[]);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
-            pass.draw_indexed(0..hand_quads * 6, (entity_quads * 4) as i32, 0..1);
+            pass.draw_indexed(
+                0..hand_quads * 6,
+                ((entity_quads + additive_quads) * 4) as i32,
+                0..1,
+            );
         }
         if !frame.screen.is_empty() {
             let vertices: Vec<crate::screen_effects::ScreenVertex> =

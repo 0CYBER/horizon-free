@@ -141,6 +141,12 @@ impl Game<'_> {
                 "minecraft:experience_orb",
                 "minecraft:falling_block",
                 "minecraft:arrow",
+                "minecraft:lightning_bolt",
+                "minecraft:minecart",
+                "minecraft:chest_minecart",
+                "minecraft:hopper_minecart",
+                "minecraft:furnace_minecart",
+                "minecraft:tnt_minecart",
             ]
             .map(String::from),
         );

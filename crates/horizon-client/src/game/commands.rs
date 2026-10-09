@@ -1068,6 +1068,22 @@ impl Game<'_> {
                     });
                     name = Text::translate("entity.minecraft.experience_orb", &[]);
                 }
+                "lightning_bolt" => {
+                    self.spawn_bolt(pos, false);
+                    name = Text::translate("entity.minecraft.lightning_bolt", &[]);
+                }
+                k if super::minecarts::CartKind::from_id(&kind).is_some() => {
+                    let cart_kind = super::minecarts::CartKind::from_id(&kind)
+                        .unwrap_or(super::minecarts::CartKind::Rideable);
+                    self.next_entity += 1;
+                    let cart = super::minecarts::Minecart::new(
+                        self.next_entity,
+                        cart_kind,
+                        Vec3::new(pos[0], pos[1], pos[2]),
+                    );
+                    self.carts.push(cart);
+                    name = Text::translate(&format!("entity.minecraft.{k}"), &[]);
+                }
                 _ => return Err(err("commands.summon.failed", &[])),
             }
         }

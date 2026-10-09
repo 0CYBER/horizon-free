@@ -17,6 +17,7 @@ mod fov;
 mod frames;
 mod growth;
 mod jukebox;
+mod lightning;
 mod machines;
 mod minecarts;
 mod music;
@@ -552,6 +553,7 @@ struct Game<'a> {
     carts: Vec<minecarts::Minecart>,
     /// Songs playing from jukeboxes (tracked sound handles).
     jukebox_sounds: HashMap<(i32, i32, i32), u64>,
+    bolts: Vec<lightning::Bolt>,
     cart_models: minecarts::CartModels,
     /// The boat the player rides.
     riding: Option<u32>,
@@ -2245,6 +2247,8 @@ impl Game<'_> {
         self.tick_armor_stands();
         self.tick_boats();
         self.tick_carts();
+        self.tick_thunder();
+        self.tick_bolts();
         self.tick_fishing();
         self.tick_tridents();
         self.tick_rockets();
@@ -5729,7 +5733,7 @@ impl Game<'_> {
         if self.flash > 0 {
             self.flash -= 1;
         }
-        let (rain, thunder) = self.world.weather.levels(1.0);
+        let (rain, _) = self.world.weather.levels(1.0);
         let Some(eye) = self.eye_position() else {
             return;
         };
@@ -5757,38 +5761,6 @@ impl Game<'_> {
                     Some([f64::from(x) + 0.5, f64::from(top), f64::from(z) + 0.5]),
                     volume,
                     pitch,
-                );
-            }
-        }
-        // ServerLevel.tickChunk lightning: 1 in 100000 per chunk per tick while thundering.
-        if thunder > 0.0 && self.world.weather.thundering {
-            let chunks = self.world.chunks.len().max(1) as i32;
-            if self
-                .world
-                .random
-                .next_int_bound((100_000 / chunks).max(1))
-                .unwrap_or(1)
-                == 0
-            {
-                self.flash = 2;
-                let r = &mut self.world.random;
-                let (dx, dz) = (
-                    f64::from(r.next_int_bound(160).unwrap_or(0) - 80),
-                    f64::from(r.next_int_bound(160).unwrap_or(0) - 80),
-                );
-                let at = [eye[0] + dx, eye[1], eye[2] + dz];
-                let pitch = 0.8 + self.world.random.next_float() * 0.2;
-                self.audio.play(
-                    "minecraft:entity.lightning_bolt.thunder",
-                    Some(at),
-                    10000.0,
-                    pitch,
-                );
-                self.audio.play(
-                    "minecraft:entity.lightning_bolt.impact",
-                    Some(at),
-                    2.0,
-                    0.5 + self.world.random.next_float() * 0.2,
                 );
             }
         }
@@ -6384,6 +6356,10 @@ impl Game<'_> {
         } else {
             self.entity_geometry(camera, alpha)
         };
+        let mut additive = Vec::new();
+        if !title {
+            self.bolt_geometry(camera, &mut additive);
+        }
         let celestial = if title {
             self.panorama_geometry()
         } else if self.dim == Dim::Overworld {
@@ -6460,6 +6436,7 @@ impl Game<'_> {
             outline,
             hud: &hud,
             entities: &entities,
+            additive: &additive,
             celestial: &celestial,
             hand: &hand,
             screen: &screen,
@@ -7287,6 +7264,7 @@ pub fn run() -> Result<()> {
         boat_models: boats::BoatModels::load(&root),
         carts: Vec::new(),
         jukebox_sounds: HashMap::new(),
+        bolts: Vec::new(),
         cart_models: minecarts::CartModels::load(&root),
         riding: None,
         ender_items: vec![None; 27],
