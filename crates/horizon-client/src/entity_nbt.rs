@@ -246,6 +246,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("equipment".into(), Tag::Compound(equipment));
         }
+        "minecraft:ravager" => {
+            map.insert("AttackTick".into(), Tag::Int(m.extra.counter));
+            map.insert("StunTick".into(), Tag::Int(m.extra.counter2));
+            map.insert("RoarTick".into(), Tag::Int(m.extra.anim_ticks));
+        }
         "minecraft:vex" => {
             if let Some(h) = m.extra.home {
                 map.insert("bound_pos".into(), Tag::IntArray(h.to_vec()));
@@ -407,6 +412,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 .position(|(n, _)| *n == v)
                 .unwrap_or(0) as u8;
         }
+    }
+    if m.species() == crate::mobs::Species::Ravager {
+        m.extra.counter = number(tag.get("AttackTick")).unwrap_or(0) as i32;
+        m.extra.counter2 = number(tag.get("StunTick")).unwrap_or(0) as i32;
+        m.extra.anim_ticks = number(tag.get("RoarTick")).unwrap_or(0) as i32;
     }
     if m.species() == crate::mobs::Species::Vex {
         if let Some(Tag::IntArray(v)) = tag.get("bound_pos")

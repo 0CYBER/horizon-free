@@ -83,6 +83,7 @@ pub enum Family {
     Guardian,
     Shulker,
     Vex,
+    Ravager,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -113,6 +114,7 @@ pub fn family(s: Species) -> Family {
         S::IronGolem | S::SnowGolem => Family::Golem,
         S::Pillager | S::Vindicator | S::Evoker => Family::Illager,
         S::Vex => Family::Vex,
+        S::Ravager => Family::Ravager,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse => Family::Equine,
         S::Phantom => Family::Phantom,
@@ -154,6 +156,7 @@ pub fn register(m: &mut Mob) {
         Family::Guardian => super::guardian::register(m),
         Family::Shulker => super::shulker::register(m),
         Family::Vex => super::vex::register(m),
+        Family::Ravager => super::ravager::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -397,7 +400,10 @@ fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     );
     m.ai.xxa *= 0.98;
     m.ai.zza *= 0.98;
-    if m.alive() {
+    // LivingEntity.isImmobile: no goals or input (a biting, stunned or
+    // roaring ravager).
+    let immobile = m.species() == Species::Ravager && super::ravager::immobile(m);
+    if m.alive() && !immobile {
         server_ai_step(m, w, events);
     } else {
         m.ai.jumping = false;
@@ -537,6 +543,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Phantom => super::phantom::flap_sound(m, events),
         Species::Guardian | Species::ElderGuardian => super::guardian::ai_step(m, w, events),
         Species::Vex => super::vex::ai_step(m, w),
+        Species::Ravager => super::ravager::ai_step(m, w, events),
         Species::Shulker => {
             super::shulker::tick(m, w, events);
             super::shulker::ai_step(m, w, events);
@@ -672,6 +679,9 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     }
     if matches!(m.species(), Species::Hoglin | Species::Zoglin) {
         return super::piglin::hoglin_hurt_target(m, who, cx);
+    }
+    if m.species() == Species::Ravager {
+        super::ravager::on_attack(m, cx.events);
     }
     let mut amount = m.attrs.attack_damage;
     let from = [m.position.x, m.position.y, m.position.z];

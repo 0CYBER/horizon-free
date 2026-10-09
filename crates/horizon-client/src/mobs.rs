@@ -26,6 +26,7 @@ pub mod nether;
 pub mod path;
 pub mod phantom;
 pub mod piglin;
+pub mod ravager;
 pub mod render;
 pub mod shulker;
 pub mod spawning;
@@ -521,6 +522,11 @@ pub enum MobEvent {
     /// `ElderGuardian`'s curse on players within 50 blocks.
     ElderCurse {
         at: [f64; 3],
+    },
+    /// `Entity.push`: add to a target's velocity.
+    Push {
+        target: Who,
+        velocity: [f64; 3],
     },
     /// `EvokerWololoSpellGoal`: a blue sheep turns red.
     Wololo {

@@ -695,6 +695,21 @@ impl Game<'_> {
                     self.mob_hits_player(amount, from, kind)
                 }
                 MobEvent::ElderCurse { at } => self.elder_curse(at),
+                MobEvent::Push { target, velocity } => {
+                    let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
+                    match target {
+                        Who::Player => {
+                            if let Some(p) = self.player.as_mut() {
+                                p.velocity = p.velocity.add_vector(v);
+                            }
+                        }
+                        Who::Mob(id) => {
+                            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                                m.velocity = m.velocity.add_vector(v);
+                            }
+                        }
+                    }
+                }
                 MobEvent::Wololo { mob } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         // DyeColor.RED.

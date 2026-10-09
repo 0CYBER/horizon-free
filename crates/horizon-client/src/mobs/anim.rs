@@ -9,6 +9,7 @@ use std::f32::consts::PI;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anim {
     Vex,
+    Ravager,
     Guardian,
     Shulker,
     Quadruped,
@@ -458,6 +459,7 @@ pub fn setup(
         Anim::Phantom => super::phantom::anim(m, s, p),
         Anim::Guardian => super::guardian::anim(m, s, p),
         Anim::Vex => super::vex::anim(m, s, p),
+        Anim::Ravager => super::ravager::anim(m, s, p),
         Anim::Shulker => super::shulker::anim(m, s, p),
         Anim::Horse => {
             super::equine::anim(m, s, p);

@@ -185,6 +185,32 @@ impl Game<'_> {
             .as_deref()
             .and_then(|item| self.res.items.get(item))
             .map_or(0.0, |i| i.disable_blocking_seconds);
+        // Ravager.blockedByItem: stunned half the time (the defender pushed
+        // apart), else the defender flung away; no roar in progress.
+        if m.species() == horizon_client::mobs::Species::Ravager {
+            let mut events = Vec::new();
+            let roaring = m.extra.anim_ticks != 0;
+            let stunned = self
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == id)
+                .is_some_and(|m| horizon_client::mobs::ravager::blocked(m, &mut events));
+            if !roaring && let Some(p) = self.player.as_mut() {
+                let (xd, zd) = (p.position.x - mx, p.position.z - mz);
+                let push = if stunned {
+                    // Entity.push(entity): apart by 0.05 per block of overlap.
+                    let d = (xd * xd + zd * zd).sqrt().max(0.01);
+                    let k = (1.0 / d).min(1.0) * 0.05;
+                    horizon_core::geometry::Vec3::new(xd / d * k, 0.0, zd / d * k)
+                } else {
+                    let dd = (xd * xd + zd * zd).max(0.001);
+                    horizon_core::geometry::Vec3::new(xd / dd * 4.0, 0.2, zd / dd * 4.0)
+                };
+                p.velocity = p.velocity.add_vector(push);
+            }
+            let _ = self.handle_mob_events(events);
+            return;
+        }
         // LivingEntity.blockedByItem: defender.knockback(0.5, defender - attacker),
         // which moves the defender along -(xd, zd).
         if !fully && let Some(p) = self.player.as_mut() {

@@ -16,7 +16,11 @@ use std::f32::consts::PI;
 fn raider(s: Species) -> bool {
     matches!(
         s,
-        Species::Pillager | Species::Vindicator | Species::Witch | Species::Evoker
+        Species::Pillager
+            | Species::Vindicator
+            | Species::Witch
+            | Species::Evoker
+            | Species::Ravager
     )
 }
 fn targets(m: &mut Mob, villagers_seen: bool) {
@@ -27,6 +31,7 @@ fn targets(m: &mut Mob, villagers_seen: bool) {
         Species::Witch,
         Species::Evoker,
         Species::Vex,
+        Species::Ravager,
     ];
     m.ai.targets.add(1, hurt);
     m.ai.targets.add(2, NearestTarget::player(true));
