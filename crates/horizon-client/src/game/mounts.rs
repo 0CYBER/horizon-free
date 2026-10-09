@@ -26,7 +26,7 @@ fn seat(s: Species) -> f64 {
 #[derive(Default)]
 pub(super) struct MountState {
     /// `jumpRidingTicks`: -10 cooling down after a jump, >= 0 charging.
-    jump_ticks: i32,
+    pub(super) jump_ticks: i32,
     /// `jumpRidingScale` (0..1).
     pub(super) jump_scale: f32,
     was_jumping: bool,

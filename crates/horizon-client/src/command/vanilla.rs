@@ -346,6 +346,7 @@ pub fn build() -> Dispatcher {
     super::tree_data::register(&mut d, root);
     super::tree_execute::register(&mut d, root);
     super::tree_misc::register(&mut d, root);
+    super::tree_world::register(&mut d, root);
     d
 }
 

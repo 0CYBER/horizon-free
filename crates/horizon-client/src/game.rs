@@ -636,6 +636,7 @@ struct Game<'a> {
     bosses: bossbars::BossState,
     exec: commands::execute::ExecState,
     rand_sequences: horizon_client::random_sequences::RandomSequences,
+    border: horizon_client::worldborder::WorldBorder,
     subtitles: subtitle_hud::SubtitleState,
     adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
@@ -4399,6 +4400,7 @@ impl Game<'_> {
         self.tick_scoreboard();
         self.load_bossbars();
         self.tick_functions();
+        self.tick_worldborder();
         self.tick_subtitles();
         self.spawn_phantoms();
         self.tick_advancements();
@@ -4602,6 +4604,7 @@ impl Game<'_> {
         self.fns = Default::default();
         self.bosses = Default::default();
         self.rand_sequences = Default::default();
+        self.border = Default::default();
         let level = Level::read(&save_root).unwrap_or_else(|| Level {
             name: name.unwrap_or(folder).to_owned(),
             // WorldOptions.randomSeed when no seed was given.
@@ -7736,6 +7739,7 @@ pub fn run() -> Result<()> {
         bosses: Default::default(),
         exec: Default::default(),
         rand_sequences: Default::default(),
+        border: Default::default(),
         subtitles: Default::default(),
         adv: Default::default(),
         stats_ui: Default::default(),

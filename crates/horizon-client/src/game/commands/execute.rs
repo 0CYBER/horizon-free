@@ -109,7 +109,7 @@ impl Game<'_> {
             _ => [0.0; 2],
         }
     }
-    fn target_eye_height(&self, t: Target) -> f64 {
+    pub(super) fn target_eye_height(&self, t: Target) -> f64 {
         match t {
             Target::Player => self
                 .player
@@ -892,7 +892,7 @@ impl Game<'_> {
         )
     }
     /// A biome id or `#tag` matched against a biome name.
-    fn biome_matches(&self, wanted: &str, biome: &str) -> bool {
+    pub(super) fn biome_matches(&self, wanted: &str, biome: &str) -> bool {
         match wanted.strip_prefix('#') {
             Some(tag) => self.biome_tag_has(tag, biome, 0),
             None => wanted == biome,

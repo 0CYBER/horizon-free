@@ -365,3 +365,96 @@ fn function_and_misc_trees() {
     assert!(run("bossbar set a:b value -1").is_err());
     assert!(run("item replace entity @s nowhere.0 with minecraft:stone").is_err());
 }
+
+#[test]
+fn world_command_trees() {
+    for (line, id) in [
+        ("recipe give @s *", "recipe.give"),
+        ("recipe take @a minecraft:stick", "recipe.take"),
+        ("damage @e[limit=1] 5", "damage"),
+        (
+            "damage @s 3.5 minecraft:magic by @e[limit=1] from @s",
+            "damage",
+        ),
+        ("damage @s 3 minecraft:fall at ~ ~ ~", "damage"),
+        ("rotate @s 90 0", "rotate"),
+        ("rotate @s facing entity @e[limit=1] eyes", "rotate"),
+        ("rotate @s facing 0 64 0", "rotate"),
+        ("swing", "swing"),
+        ("swing @e offhand whack 10", "swing"),
+        ("playsound minecraft:entity.cow.ambient", "playsound"),
+        (
+            "playsound minecraft:block.stone.break block @s ~ ~ ~ 1 1 0.5",
+            "playsound",
+        ),
+        ("stopsound @s", "stopsound"),
+        ("stopsound @s * minecraft:ambient.cave", "stopsound"),
+        ("stopsound @s music minecraft:music.game", "stopsound"),
+        ("particle minecraft:smoke", "particle"),
+        (
+            "particle minecraft:dust 1 0 0 2 ~ ~ ~ 0.1 0.1 0.1 0 10 force @a",
+            "particle",
+        ),
+        ("particle minecraft:block minecraft:stone ~ ~ ~", "particle"),
+        ("attribute @s minecraft:max_health get 2", "attribute.get"),
+        (
+            "attribute @s minecraft:max_health base set 40",
+            "attribute.base.set",
+        ),
+        (
+            "attribute @s minecraft:scale modifier add a:b 1.5 add_multiplied_base",
+            "attribute.modifier.add",
+        ),
+        (
+            "attribute @s minecraft:scale modifier remove a:b",
+            "attribute.modifier.remove",
+        ),
+        (
+            "attribute @s minecraft:scale modifier value get a:b 2",
+            "attribute.modifier.get",
+        ),
+        ("ride @s mount @e[limit=1]", "ride.mount"),
+        ("ride @s dismount", "ride.dismount"),
+        ("spreadplayers 0 0 5 20 false @a", "spreadplayers"),
+        ("spreadplayers ~ ~ 5 20 under 100 true @e", "spreadplayers"),
+        ("forceload add 0 0 100 100", "forceload.add"),
+        ("forceload remove all", "forceload.remove.all"),
+        ("forceload query", "forceload.query"),
+        ("forceload query ~ ~", "forceload.query"),
+        (
+            "fillbiome 0 0 0 10 10 10 minecraft:plains replace minecraft:desert",
+            "fillbiome",
+        ),
+        ("worldborder set 100 5s", "worldborder.set"),
+        ("worldborder add -10", "worldborder.add"),
+        ("worldborder center 5 5", "worldborder.center"),
+        ("worldborder damage amount 1", "worldborder.damage.amount"),
+        ("worldborder warning time 10s", "worldborder.warning.time"),
+        ("worldborder get", "worldborder.get"),
+        (
+            "loot give @s loot minecraft:chests/simple_dungeon",
+            "loot.loot",
+        ),
+        ("loot spawn ~ ~ ~ kill @e[limit=1]", "loot.kill"),
+        ("loot insert 0 0 0 mine 1 2 3 mainhand", "loot.mine"),
+        (
+            "loot replace entity @s hotbar.0 3 fish minecraft:gameplay/fishing 0 0 0",
+            "loot.fish",
+        ),
+        (
+            "loot replace block 1 2 3 container.5 loot minecraft:chests/x",
+            "loot.loot",
+        ),
+    ] {
+        assert_eq!(
+            run(line).unwrap_or_else(|e| panic!("{line}: {e:?}")).0,
+            id,
+            "{line}"
+        );
+    }
+    assert!(run("playsound minecraft:x invalid_source").is_err());
+    assert!(run("particle minecraft:not_a_particle").is_err());
+    assert!(run("damage @s -1").is_err());
+    assert!(run("spreadplayers 0 0 5 0 false @a").is_err());
+    assert!(run("worldborder warning distance -1").is_err());
+}

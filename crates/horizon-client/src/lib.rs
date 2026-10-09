@@ -79,5 +79,6 @@ pub mod title;
 pub mod ui;
 pub mod vanillagen;
 pub mod world;
+pub mod worldborder;
 pub mod zip;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

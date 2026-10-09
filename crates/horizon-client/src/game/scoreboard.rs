@@ -57,6 +57,11 @@ impl Game<'_> {
         }
         self.score.storage =
             horizon_client::command_storage::CommandStorage::load(&self.world_root);
+        if let Some(root) = save::read_dat(&self.world_root.join("data/minecraft/world_border.dat"))
+            && let Some(data) = root.get("data")
+        {
+            self.border = horizon_client::worldborder::WorldBorder::unpack(data);
+        }
         self.sync_score_registries();
     }
     pub(super) fn save_scoreboard(&mut self) {
@@ -64,6 +69,15 @@ impl Game<'_> {
             return;
         }
         self.score.storage.save(&self.world_root);
+        if self.border != horizon_client::worldborder::WorldBorder::default() {
+            let _ = save::write_dat(
+                &self.world_root.join("data/minecraft/world_border.dat"),
+                Tag::compound([
+                    ("data", self.border.pack()),
+                    ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
+                ]),
+            );
+        }
         let path = self.scoreboard_path();
         let board = &self.score.board;
         if board == &Scoreboard::default() && !path.exists() {

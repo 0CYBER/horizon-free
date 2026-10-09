@@ -5,7 +5,9 @@ mod effects;
 pub(super) mod execute;
 mod items;
 mod misc;
+mod terrain_cmds;
 mod text_commands;
+mod world_cmds;
 
 use super::{Dim, Game, Screen, chat::PLAYER_NAME};
 use horizon_client::{
@@ -142,20 +144,20 @@ impl Game<'_> {
             .map_or([self.yaw, self.pitch], |s| s.rot)
     }
     /// LocalCoordinates use the anchored position; world coordinates the position.
-    fn resolve_coords(&self, c: &Coordinates) -> [f64; 3] {
+    pub(super) fn resolve_coords(&self, c: &Coordinates) -> [f64; 3] {
         let origin = match (c, &self.command_source) {
             (Coordinates::Local(_), Some(s)) => self.anchor_position(s),
             _ => self.source_position(),
         };
         c.position(origin, self.source_rotation())
     }
-    fn coords(&self, ctx: &Context, name: &str) -> Option<Coordinates> {
+    pub(super) fn coords(&self, ctx: &Context, name: &str) -> Option<Coordinates> {
         match ctx.get(name) {
             Some(Arg::Coords(c)) => Some(c.clone()),
             _ => None,
         }
     }
-    fn position_arg(&self, ctx: &Context, name: &str) -> Option<[f64; 3]> {
+    pub(super) fn position_arg(&self, ctx: &Context, name: &str) -> Option<[f64; 3]> {
         self.coords(ctx, name).map(|c| self.resolve_coords(&c))
     }
     /// BlockPosArgument.getLoadedBlockPos.
@@ -525,6 +527,20 @@ impl Game<'_> {
             "setworldspawn" => self.cmd_setworldspawn(ctx),
             "clear" => self.cmd_clear(ctx),
             "item" => self.cmd_item(ctx),
+            "recipe.give" | "recipe.take" => self.cmd_recipe(id, ctx),
+            "damage" => self.cmd_damage(ctx),
+            "rotate" => self.cmd_rotate(ctx),
+            "swing" => self.cmd_swing(ctx),
+            "playsound" => self.cmd_playsound(ctx),
+            "stopsound" => self.cmd_stopsound(ctx),
+            "particle" => self.cmd_particle(ctx),
+            id if id.starts_with("attribute.") => self.cmd_attribute(id, ctx),
+            "ride.mount" | "ride.dismount" => self.cmd_ride(id, ctx),
+            "spreadplayers" => self.cmd_spreadplayers(ctx),
+            id if id.starts_with("forceload.") => self.cmd_forceload(id, ctx),
+            "fillbiome" => self.cmd_fillbiome(ctx),
+            id if id.starts_with("worldborder.") => self.cmd_worldborder(id, ctx),
+            id if id.starts_with("loot.") => self.cmd_loot(id, ctx),
             "teammsg" => self.cmd_teammsg(ctx),
             id if id.starts_with("tick.") => self.cmd_tick(id, ctx),
             id if id.starts_with("random.") => self.cmd_random(id, ctx),
@@ -1236,7 +1252,7 @@ impl Game<'_> {
         Ok(1)
     }
     /// BlockStateArgument -> registry state.
-    fn block_state(&self, b: &BlockInput) -> R<BlockStateId> {
+    pub(super) fn block_state(&self, b: &BlockInput) -> R<BlockStateId> {
         let state = horizon_world::chunk::BlockState {
             name: b.id.clone(),
             properties: b.properties.iter().cloned().collect(),

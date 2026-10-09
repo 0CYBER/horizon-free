@@ -41,6 +41,11 @@ pub struct Registries {
     pub bossbars: Vec<String>,
     pub predicates: Vec<String>,
     pub schedules: Vec<String>,
+    pub recipes: Vec<String>,
+    pub sounds: Vec<String>,
+    pub damage_types: Vec<String>,
+    pub attributes: Vec<String>,
+    pub loot_tables: Vec<String>,
     pub random_sequences: Vec<String>,
     pub datapacks_enabled: Vec<String>,
     pub datapacks_disabled: Vec<String>,
@@ -154,6 +159,12 @@ pub enum ArgType {
     NbtPath,
     /// NbtTagArgument: any SNBT value (kept as text).
     NbtTag,
+    /// Vec2Argument: `x z` with `~` relative parts.
+    Vec2,
+    /// ColumnPosArgument: block `x z`.
+    ColumnPos,
+    /// ParticleArgument: a particle id and its options (kept as text).
+    Particle,
     /// One of a fixed set of words.
     Enum(&'static [&'static str]),
     /// A (possibly quoted) name suggested from a registry list.
@@ -1738,6 +1749,70 @@ impl ArgType {
             }
             ArgType::IntRange => Arg::IntRange(range_int(reader)?),
             ArgType::Name(_) => Arg::Str(reader.read_string()?),
+            ArgType::Vec2 | ArgType::ColumnPos => {
+                let block = matches!(self, ArgType::ColumnPos);
+                let one = |reader: &mut Reader| {
+                    if block {
+                        parse_coord_int(reader)
+                    } else {
+                        parse_coord_double(reader, false)
+                    }
+                };
+                let x = one(reader)?;
+                if !reader.can_read() || reader.peek() != ' ' {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at(
+                        "argument.pos2d.incomplete",
+                        &[],
+                        reader,
+                    ));
+                }
+                reader.skip();
+                let z = one(reader)?;
+                Arg::Coords(Coordinates::World([
+                    x,
+                    Coord {
+                        relative: true,
+                        value: 0.0,
+                    },
+                    z,
+                ]))
+            }
+            ArgType::Particle => {
+                let id = read_id(reader)?;
+                let name = id.trim_start_matches("minecraft:").to_owned();
+                if crate::particles::ParticleType::from_name(&id).is_none() {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at("particle.notFound", &[&id], reader));
+                }
+                let floats = |reader: &mut Reader, n: usize| -> CmdResult<()> {
+                    for _ in 0..n {
+                        reader.expect(' ')?;
+                        reader.read_float()?;
+                    }
+                    Ok(())
+                };
+                match name.as_str() {
+                    "dust" => floats(reader, 4)?,
+                    "dust_color_transition" => floats(reader, 7)?,
+                    "entity_effect" | "tinted_leaves" | "flash" => floats(reader, 4)?,
+                    "sculk_charge" => floats(reader, 1)?,
+                    "shriek" => {
+                        reader.expect(' ')?;
+                        reader.read_int()?;
+                    }
+                    "block" | "block_marker" | "falling_dust" | "dust_pillar" | "block_crumble" => {
+                        reader.expect(' ')?;
+                        parse_block(reader, reg, false)?;
+                    }
+                    "item" => {
+                        reader.expect(' ')?;
+                        parse_item(reader, reg, false)?;
+                    }
+                    _ => {}
+                }
+                Arg::Str(reader.string[start..reader.cursor].to_owned())
+            }
             ArgType::Enum(words) => {
                 let word = reader.read_unquoted_string();
                 if !words.contains(&word) {
@@ -1846,6 +1921,11 @@ impl ArgType {
                     "storages" => reg.storages.clone(),
                     "bossbars" => reg.bossbars.clone(),
                     "schedules" => reg.schedules.clone(),
+                    "recipes" => reg.recipes.clone(),
+                    "sounds" => reg.sounds.clone(),
+                    "damage_types" => reg.damage_types.clone(),
+                    "attributes" => reg.attributes.clone(),
+                    "loot_tables" => reg.loot_tables.clone(),
                     "random_sequences" => reg.random_sequences.clone(),
                     "predicates" => reg.predicates.clone(),
                     "time_markers" => reg.time_markers.clone(),
@@ -1911,6 +1991,14 @@ impl ArgType {
             }
             ArgType::Operation => builder.suggest_matching(OPERATIONS),
             ArgType::Enum(words) => builder.suggest_matching(words.iter().copied()),
+            ArgType::Particle => {
+                let names: Vec<String> = crate::particles::ParticleType::ALL
+                    .iter()
+                    .map(|t| format!("minecraft:{}", t.name()))
+                    .collect();
+                suggest_resources(builder, &names, "");
+            }
+            ArgType::Vec2 | ArgType::ColumnPos => builder.suggest_matching(["~", "~ ~"]),
             ArgType::Name(list) => {
                 let names = match *list {
                     "datapacks_enabled" => reg.datapacks_enabled.clone(),

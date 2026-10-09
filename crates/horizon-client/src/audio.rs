@@ -26,6 +26,9 @@ struct Voice {
     step: f64,
     left: f32,
     right: f32,
+    /// The sound event and `SoundSource` index (what `/stopsound` matches).
+    event: Arc<str>,
+    source: usize,
 }
 #[derive(Default)]
 struct Mixer {
@@ -79,6 +82,8 @@ pub struct Audio {
     pub master: f32,
     music: Option<MusicTrack>,
     next_tracked: u64,
+    /// A `SoundSource` index the next sound plays on (`/playsound`).
+    source_override: Option<usize>,
 }
 fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
     use symphonia::core::{
@@ -186,6 +191,7 @@ impl Audio {
             master: 1.0,
             music: None,
             next_tracked: 0,
+            source_override: None,
         }
     }
     fn open(mixer: Arc<Mutex<Mixer>>) -> Result<(cpal::Stream, u32)> {
@@ -336,9 +342,12 @@ impl Audio {
         let Some((samples, rate)) = entry.clone() else {
             return;
         };
+        let source = self
+            .source_override
+            .unwrap_or_else(|| crate::settings::sound_source(event));
         let volume = (volume * variant.volume).clamp(0.0, 1.0)
             * self.master
-            * crate::settings::event_volume(event);
+            * crate::settings::source_volume(source);
         let pitch = (pitch * variant.pitch).clamp(0.5, 2.0);
         let (mut left, mut right) = (volume, volume);
         if let Some(p) = at {
@@ -372,6 +381,8 @@ impl Audio {
                 step,
                 left,
                 right,
+                event: event.into(),
+                source,
             });
         }
     }
@@ -395,6 +406,7 @@ impl Audio {
         let step_scale = f64::from(variant.pitch.clamp(0.5, 2.0)) / f64::from(self.rate);
         let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (mixer, done) = (self.mixer.clone(), ready.clone());
+        let music_event = event.to_owned();
         std::thread::spawn(move || {
             if let Some((samples, rate)) = decode(&path)
                 && let Ok(mut m) = mixer.lock()
@@ -406,6 +418,8 @@ impl Audio {
                     step: f64::from(rate) * step_scale,
                     left: volume,
                     right: volume,
+                    event: music_event.as_str().into(),
+                    source: 1,
                 });
             }
             done.store(true, std::sync::atomic::Ordering::Release);
@@ -445,6 +459,46 @@ impl Audio {
     /// The event of the current music track.
     pub fn music_event(&self) -> Option<&str> {
         self.music.as_ref().map(|t| t.event.as_str())
+    }
+    /// Every sound event id (for command completion).
+    pub fn event_names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.events.keys().cloned().collect();
+        v.sort();
+        v
+    }
+    /// Play a sound on a given `SoundSource` index (`/playsound`).
+    pub fn play_on(
+        &mut self,
+        source: usize,
+        event: &str,
+        at: Option<[f64; 3]>,
+        volume: f32,
+        pitch: f32,
+    ) {
+        self.source_override = Some(source);
+        self.play(event, at, volume, pitch);
+        self.source_override = None;
+    }
+    /// `ClientboundStopSoundPacket`: stop the playing sounds of an event
+    /// and/or a source.
+    pub fn stop_sounds(&mut self, event: Option<&str>, source: Option<usize>) {
+        let matches = |v: &Voice| {
+            event.is_none_or(|e| &*v.event == e) && source.is_none_or(|s| v.source == s)
+        };
+        if let Ok(mut m) = self.mixer.lock() {
+            m.voices.retain(|v| !matches(v));
+            m.tracked.retain(|t| !matches(&t.voice));
+            if m.music.as_ref().is_some_and(matches) {
+                m.music = None;
+            }
+        }
+        if self
+            .music
+            .as_ref()
+            .is_some_and(|t| event.is_none_or(|e| t.event == e) && source.is_none_or(|s| s == 1))
+        {
+            self.music = None;
+        }
     }
     /// The sounds played since the last call, for the subtitle overlay.
     pub fn take_heard(&mut self) -> Vec<Heard> {
@@ -496,6 +550,8 @@ impl Audio {
                 step,
                 left: gain,
                 right: gain,
+                event: event.into(),
+                source: crate::settings::sound_source(event),
             },
             looping,
             volume: volume.clamp(0.0, 1.0),

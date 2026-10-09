@@ -78,7 +78,10 @@ pub fn sound_source(event: &str) -> usize {
 }
 /// Volume multiplier of an event's source (master applied separately).
 pub fn event_volume(event: &str) -> f32 {
-    let i = sound_source(event);
+    source_volume(sound_source(event))
+}
+/// Volume multiplier of a sound source by index.
+pub fn source_volume(i: usize) -> f32 {
     if i == 0 {
         1.0
     } else {

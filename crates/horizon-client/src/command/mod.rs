@@ -8,6 +8,7 @@ pub mod tree_data;
 pub mod tree_execute;
 pub mod tree_misc;
 pub mod tree_scoreboard;
+pub mod tree_world;
 pub mod vanilla;
 
 use crate::text::Text;
