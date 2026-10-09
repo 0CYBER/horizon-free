@@ -361,7 +361,7 @@ mod tests {
         fx.add(EffectInstance::new("poison", 432, 1));
         let hurts = (0..432)
             .flat_map(|_| fx.tick())
-            .filter(|a| matches!(a, EffectAction::Hurt(..)))
+            .filter(|a| matches!(a, EffectAction::Poison))
             .count();
         // Interval 25 >> 1 = 12: 432/12 = 36 hits.
         assert_eq!(hurts, 36);
