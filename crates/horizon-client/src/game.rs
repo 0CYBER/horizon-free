@@ -72,7 +72,7 @@ use horizon_client::{
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
     chunk::{HEIGHT, MIN_Y},
-    clock::FixedStep,
+    clock::{ServerTickRateManager, Timer},
     collisions,
     containers::{BlockEntity, Providers},
     crafting::Recipes,
@@ -472,7 +472,11 @@ struct Game<'a> {
     options: Options,
     player: Option<PlayerMotion>,
     spawn: Option<Vec3>,
-    clock: FixedStep,
+    clock: Timer,
+    /// `/tick` freeze, step and sprint state (TickRateManager).
+    tick_rate: ServerTickRateManager,
+    /// Minecraft.pause: a single-player screen that pauses the game is open.
+    pause: bool,
     previous_position: Vec3,
     eye: f32,
     previous_eye: f32,
@@ -2227,7 +2231,8 @@ impl Game<'_> {
         self.apply_equipment();
         self.eye = 1.62;
         self.previous_eye = 1.62;
-        self.clock.reset();
+        let now = self.started.elapsed().as_millis() as i64;
+        self.clock = Timer::new(20.0, now);
         Ok(())
     }
     fn tick(&mut self) -> Result<()> {
@@ -2235,15 +2240,21 @@ impl Game<'_> {
             return self.tick_remote();
         }
         self.ticks += 1;
-        self.world.game_time += 1;
-        if self.ui.rules.bool("advance_weather") {
-            self.world.weather.tick(&mut self.world.random);
+        // TickRateManager: a frozen level only ticks players (and what they ride).
+        let frozen = !self.tick_rate.base.runs_normally();
+        if !frozen {
+            self.world.game_time += 1;
+            if self.ui.rules.bool("advance_weather") {
+                self.world.weather.tick(&mut self.world.random);
+            }
+            self.tick_weather_effects();
         }
-        self.tick_weather_effects();
         if self.ticks.is_multiple_of(6000) {
             self.save_game()?;
         }
-        self.advance_clock();
+        if !frozen {
+            self.advance_clock();
+        }
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
@@ -2448,31 +2459,37 @@ impl Game<'_> {
         self.tick_burning();
         self.tick_using();
         self.titles.tick();
-        self.tick_paintings();
-        self.tick_item_frames();
-        self.tick_armor_stands();
-        self.tick_boats();
-        self.tick_carts();
-        self.tick_thunder();
-        self.tick_lecterns();
-        self.tick_maps();
-        self.tick_bolts();
-        self.tick_fishing();
-        self.tick_tridents();
-        self.tick_rockets();
+        if !frozen {
+            self.tick_paintings();
+            self.tick_item_frames();
+            self.tick_armor_stands();
+            self.tick_boats();
+            self.tick_carts();
+            self.tick_thunder();
+            self.tick_lecterns();
+            self.tick_maps();
+            self.tick_bolts();
+            self.tick_fishing();
+            self.tick_tridents();
+            self.tick_rockets();
+        }
         self.tick_mining()?;
-        self.tick_items();
-        self.spawn_loaded_entities();
-        self.tick_mobs()?;
+        if !frozen {
+            self.tick_items();
+            self.spawn_loaded_entities();
+            self.tick_mobs()?;
+        }
         self.tick_experience();
         self.tick_hand();
         self.tick_sleep();
         self.tick_portal()?;
         self.tick_end()?;
         self.postprocess_chunks()?;
-        self.tick_blocks()?;
-        self.tick_falling()?;
-        self.tick_tnt()?;
+        if !frozen {
+            self.tick_blocks()?;
+            self.tick_falling()?;
+            self.tick_tnt()?;
+        }
         if let Some(p) = &self.player {
             // Player.aiStep bob and Entity.walkDist (0.6 per block).
             let (dx, dz) = (
@@ -2490,8 +2507,10 @@ impl Game<'_> {
             };
             self.bob.1 += (target - self.bob.1) * 0.4;
         }
-        self.tick_block_entities()?;
-        self.tick_brewing_stands()?;
+        if !frozen {
+            self.tick_block_entities()?;
+            self.tick_brewing_stands()?;
+        }
         if let Some(r) = &self.renderer {
             let eye = self.player.as_ref().map(|p| {
                 [
@@ -2502,7 +2521,9 @@ impl Game<'_> {
             });
             self.res.block_entity_render.tick(r.block_entities(), eye);
         }
-        self.tick_particles();
+        if !frozen {
+            self.tick_particles();
+        }
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
             self.use_item()?;
             self.use_delay = 4;
@@ -6614,7 +6635,7 @@ impl Game<'_> {
         else {
             return Ok(false);
         };
-        let alpha = self.clock.fraction();
+        let alpha = f64::from(self.clock.game_time_delta_partial_tick(false));
         let (camera, underwater, view_yaw, view_pitch) = match &self.player {
             Some(p) => {
                 let (a, b) = (self.previous_position, p.position);
@@ -7564,7 +7585,9 @@ pub fn run() -> Result<()> {
         options,
         player: None,
         spawn: None,
-        clock: FixedStep::default(),
+        clock: Timer::new(20.0, 0),
+        tick_rate: ServerTickRateManager::default(),
+        pause: false,
         previous_position: Vec3::ZERO,
         eye: 1.62,
         previous_eye: 1.62,
