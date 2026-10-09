@@ -103,6 +103,10 @@ pub fn body(m: &Mob) -> (String, String) {
         }
     };
     match m.species() {
+        S::Frog => (
+            "frog#main".into(),
+            format!("entity/frog/frog_{}", climate(m)),
+        ),
         S::Pig => {
             let model = if baby {
                 "pig_baby#main".into()

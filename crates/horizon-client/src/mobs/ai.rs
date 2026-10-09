@@ -84,6 +84,7 @@ pub fn family(s: Species) -> Family {
         S::Squid
         | S::GlowSquid
         | S::Cod
+        | S::Tadpole
         | S::Salmon
         | S::TropicalFish
         | S::Pufferfish

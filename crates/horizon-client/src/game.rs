@@ -1281,6 +1281,33 @@ impl Game<'_> {
                     kind: "dispense",
                 } => self.dispense_from(pos, state)?,
                 LevelEvent::BlockEvent {
+                    pos, kind: "hatch", ..
+                } => {
+                    // FrogspawnBlock.hatchFrogspawn: 2-5 tadpoles.
+                    let at = [
+                        f64::from(pos.x) + 0.5,
+                        f64::from(pos.y) + 0.5,
+                        f64::from(pos.z) + 0.5,
+                    ];
+                    self.audio
+                        .play("minecraft:block.frogspawn.hatch", Some(at), 1.0, 1.0);
+                    let count = 2 + self.world.random.next_int_bound(4).unwrap_or(0);
+                    for _ in 0..count {
+                        // getRandomTadpolePositionOffset: 0.2..0.8 inside the block.
+                        let r = &mut self.world.random;
+                        let off = |r: &mut horizon_core::random::LegacyRandom| {
+                            f64::from(r.next_float()) * 0.6 + 0.2
+                        };
+                        let (dx, dz) = (off(r), off(r));
+                        let spawn = [
+                            f64::from(pos.x) + dx,
+                            f64::from(pos.y) - 0.5,
+                            f64::from(pos.z) + dz,
+                        ];
+                        let _ = self.spawn_mob("minecraft:tadpole", spawn, true);
+                    }
+                }
+                LevelEvent::BlockEvent {
                     pos,
                     state,
                     kind: "pop_block_item",

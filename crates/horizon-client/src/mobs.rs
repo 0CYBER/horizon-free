@@ -389,8 +389,10 @@ pub struct Attrs {
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
-    /// AgeableMob.age: negative while a baby.
+    /// AgeableMob.age: negative while a baby (a tadpole counts up to 24000).
     pub age: i32,
+    /// `AgeLocked` (tadpoles fed a slime ball... and ageable mobs).
+    pub age_locked: bool,
     pub in_love: i32,
     pub love_player: bool,
     /// Texture/model variant index (cat type, horse colour, rabbit type...).

@@ -34,6 +34,14 @@ pub fn register(m: &mut Mob) {
             let speed = 1.0 / (m.random.next_float() + 1.0) * 0.2;
             m.anim.v[TENTACLE_SPEED] = speed;
         }
+        S::Tadpole => {
+            // TadpoleAi: panic, swim around and look about.
+            let g = &mut m.ai.goals;
+            g.add(0, Panic::new(2.0));
+            g.add(4, Stroll::swimming(1.0, 40));
+            m.ai.mov.kind = MoveKind::Custom;
+            m.ai.nav.kind = NavKind::Water { breach: false };
+        }
         S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish => {
             let puffer = m.species() == S::Pufferfish;
             let g = &mut m.ai.goals;
@@ -108,6 +116,35 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     use Species as S;
     match m.species() {
         S::Squid | S::GlowSquid => squid_ai_step(m),
+        S::Tadpole => {
+            // Tadpole.aiStep: growing up into a frog after 24000 ticks.
+            if m.extra.age >= 0 && !m.extra.age_locked {
+                m.extra.age += 1;
+                if m.extra.age >= 24_000 && !m.removed {
+                    m.removed = true;
+                    m.sound("entity.tadpole.grow_up", events);
+                    events.push(MobEvent::SpawnKind {
+                        kind: "minecraft:frog".into(),
+                        at: [m.position.x, m.position.y, m.position.z],
+                        setup: super::SpawnSetup {
+                            yaw: m.yaw,
+                            persistent: true,
+                            ..Default::default()
+                        },
+                    });
+                }
+            }
+            if !m.fluids.in_water && m.on_ground && m.vertical_collision_below {
+                let (a, b) = (m.random.next_float(), m.random.next_float());
+                m.velocity = Vec3::new(
+                    m.velocity.x + f64::from((a * 2.0 - 1.0) * 0.05),
+                    m.velocity.y + 0.4,
+                    m.velocity.z + f64::from((b * 2.0 - 1.0) * 0.05),
+                );
+                m.on_ground = false;
+                m.sound("entity.tadpole.flop", events);
+            }
+        }
         S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish => {
             // AbstractFish.aiStep flops on land (applied before travel next tick).
             if !m.fluids.in_water && m.on_ground && m.vertical_collision_below {
@@ -460,6 +497,11 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
             }
         }
         S::Cod => p.yrot("tail_fin", -amp * 0.45 * (0.6 * s.age).sin()),
+        // TadpoleModel: a stronger tail swing out of water.
+        S::Tadpole => {
+            let a = if m.fluids.in_water { 1.0 } else { 1.5 };
+            p.yrot("tail", -a * 0.25 * (0.3 * s.age).sin())
+        }
         S::TropicalFish => p.yrot("tail", -amp * 0.45 * (0.6 * s.age).sin()),
         S::Salmon => {
             let (a, k) = if m.fluids.in_water {

@@ -5,6 +5,7 @@ use super::{Brain, Flags, anim::Anim};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Species {
+    Tadpole,
     ZombieHorse,
     SkeletonHorse,
     Giant,
@@ -486,6 +487,16 @@ pub const ALL: &[Def] = &[
         ],
         None,
         Baby::Abs(0.5, 0.5, 0.37)
+    ),
+    def!(
+        Tadpole,
+        "tadpole",
+        "tadpole#main",
+        "entity/tadpole/tadpole",
+        A::Fish,
+        ["", "entity.tadpole.hurt", "entity.tadpole.death"],
+        None,
+        Baby::None
     ),
     def!(
         Cod,
@@ -1078,6 +1089,7 @@ impl Def {
             S::Squid
                 | S::GlowSquid
                 | S::Cod
+                | S::Tadpole
                 | S::Salmon
                 | S::TropicalFish
                 | S::Pufferfish
@@ -1270,6 +1282,7 @@ impl Def {
             S::Squid
             | S::GlowSquid
             | S::Cod
+            | S::Tadpole
             | S::Salmon
             | S::TropicalFish
             | S::Pufferfish
