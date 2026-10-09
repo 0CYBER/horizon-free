@@ -431,6 +431,20 @@ pub fn setup(
         Anim::IronGolem => super::golem::iron_anim(m, s, p),
         Anim::Illager => super::illager::anim(m, s, p),
         Anim::Piglin => super::piglin::piglin_anim(m, s, p),
+        Anim::Horse => {
+            super::equine::anim(m, s, p);
+            // DonkeyModel: the chests show once fitted.
+            if !m.extra.chested {
+                for part in ["left_chest", "right_chest"] {
+                    if p.has(part) {
+                        let v = p.get(part);
+                        v[6] = 0.0;
+                        v[7] = 0.0;
+                        v[8] = 0.0;
+                    }
+                }
+            }
+        }
         Anim::Hoglin => super::piglin::hoglin_anim(m, s, p),
         Anim::Blaze => super::nether::blaze_anim(s, p),
         Anim::Ghast => super::nether::ghast_anim(s, p),

@@ -190,6 +190,47 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             );
             map.insert("TimeInOverworld".into(), Tag::Int(m.extra.counter2));
         }
+        "minecraft:horse"
+        | "minecraft:donkey"
+        | "minecraft:mule"
+        | "minecraft:skeleton_horse"
+        | "minecraft:zombie_horse" => {
+            map.insert("Tame".into(), Tag::Byte(i8::from(m.extra.tame)));
+            map.insert("Temper".into(), Tag::Int(i32::from(m.extra.variant3)));
+            if let Some(owner) = m.extra.owner {
+                map.insert("Owner".into(), Tag::IntArray(owner.to_vec()));
+            }
+            if id == "minecraft:horse" {
+                let v = i32::from(m.extra.variant) | i32::from(m.extra.variant2) << 8;
+                map.insert("Variant".into(), Tag::Int(v));
+            }
+            map.insert("ChestedHorse".into(), Tag::Byte(i8::from(m.extra.chested)));
+            let mut equipment = Vec::new();
+            if m.extra.saddled {
+                equipment.push((
+                    "saddle",
+                    Tag::compound([("id", string("minecraft:saddle")), ("count", Tag::Int(1))]),
+                ));
+            }
+            if let Some(armor) = &m.extra.head {
+                equipment.push((
+                    "body",
+                    Tag::compound([("id", string(armor)), ("count", Tag::Int(1))]),
+                ));
+            }
+            map.insert("equipment".into(), Tag::compound(equipment));
+            let attr = |id: &str, v: f64| {
+                Tag::compound([("id", string(id)), ("base", Tag::Double(v.to_bits()))])
+            };
+            map.insert(
+                "attributes".into(),
+                Tag::List(vec![
+                    attr("minecraft:max_health", f64::from(m.attrs.max_health)),
+                    attr("minecraft:movement_speed", m.attrs.speed),
+                    attr("minecraft:jump_strength", m.extra.vector[0]),
+                ]),
+            );
+        }
         "minecraft:slime" | "minecraft:magma_cube" => {
             map.insert("Size".into(), Tag::Int(m.extra.size.max(1) - 1));
             map.insert("wasOnGround".into(), Tag::Byte(i8::from(m.extra.flag2)));
@@ -266,6 +307,38 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     ) {
         m.extra.flag2 = flag(tag, "IsImmuneToZombification");
         m.extra.counter2 = number(tag.get("TimeInOverworld")).unwrap_or(0) as i32;
+    }
+    if crate::mobs::equine::is_equine(m.species()) {
+        m.extra.tame = flag(tag, "Tame");
+        m.extra.variant3 = number(tag.get("Temper")).unwrap_or(0).clamp(0, 100) as u8;
+        m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
+        let v = number(tag.get("Variant")).unwrap_or(0) as i32;
+        m.extra.variant = (v & 0xFF).clamp(0, 6) as u8;
+        m.extra.variant2 = ((v >> 8) & 0xFF).clamp(0, 4) as u8;
+        m.extra.chested = flag(tag, "ChestedHorse");
+        let eq = tag.get("equipment");
+        m.extra.saddled = eq.and_then(|e| e.get("saddle")).is_some();
+        m.extra.head = eq
+            .and_then(|e| e.get("body"))
+            .and_then(|b| text(b.get("id")))
+            .map(Into::into);
+        if let Some(Tag::List(attrs)) = tag.get("attributes") {
+            for a in attrs {
+                let (Some(id), Some(Tag::Double(bits))) = (text(a.get("id")), a.get("base")) else {
+                    continue;
+                };
+                let v = f64::from_bits(*bits);
+                match id.as_str() {
+                    "minecraft:max_health" => m.attrs.max_health = v as f32,
+                    "minecraft:movement_speed" => m.attrs.speed = v,
+                    "minecraft:jump_strength" => m.extra.vector[0] = v,
+                    _ => {}
+                }
+            }
+        }
+        if m.extra.vector[0] <= 0.0 {
+            m.extra.vector[0] = 0.7;
+        }
     }
     if m.species() == crate::mobs::Species::Cat {
         m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));

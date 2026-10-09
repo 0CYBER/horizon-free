@@ -12,6 +12,7 @@ pub mod control;
 pub mod cube;
 pub mod data;
 pub mod enderman;
+pub mod equine;
 pub mod farm;
 pub mod goals;
 pub mod golem;
@@ -493,6 +494,8 @@ pub struct Mob {
     pub anim: anim::AnimState,
     /// Attribute values that differ per mob (slime size, babies, effects).
     pub attrs: Attrs,
+    /// The player riding this mob and its input.
+    pub rider: Option<equine::Rider>,
 }
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
@@ -568,6 +571,14 @@ pub enum MobEvent {
         pos: [i32; 3],
         name: &'static str,
         effect: bool,
+    },
+    /// A horse's rider tamed it.
+    Tamed {
+        mob: u32,
+    },
+    /// A horse throws its rider off.
+    Buck {
+        mob: u32,
     },
     /// A piglin's admiring is over: barter or keep the item.
     FinishAdmiring {
@@ -711,6 +722,7 @@ impl Mob {
             custom_name: None,
             name_visible: false,
             anim: anim::AnimState::default(),
+            rider: None,
             attrs: Attrs {
                 speed: kind.speed,
                 attack_damage: kind.attack_damage,

@@ -1417,9 +1417,21 @@ impl Goal for Breed {
             return false;
         }
         let id = m.id;
+        // Horses and donkeys breed together (AbstractHorse.canParent: tame).
+        let equine = matches!(species, Species::Horse | Species::Donkey);
+        if equine && !m.extra.tame {
+            return false;
+        }
         self.partner =
             cx.w.nearby(m.position, 8.0, move |s| {
-                s.id != id && s.species == species && s.in_love && !s.baby && (!tamable || s.tame)
+                let same = s.species == species
+                    || equine && matches!(s.species, Species::Horse | Species::Donkey);
+                s.id != id
+                    && same
+                    && s.in_love
+                    && !s.baby
+                    && (!tamable || s.tame)
+                    && (!equine || s.tame)
             })
             .map(|s| s.id)
             .next();

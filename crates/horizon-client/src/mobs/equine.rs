@@ -1,0 +1,460 @@
+//! Horses, donkeys, mules and the undead horses (`AbstractHorse`): random
+//! stats, coat colours and markings, eating, rearing, taming by riding,
+//! the ridden movement and jump, offspring stats and `AbstractEquineModel`.
+use super::{
+    Mob, MobEvent, MobWorld, Species,
+    anim::{Poses, State},
+    goals::{
+        Breed, Cx, Float, FollowParent, Goal, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll,
+        Tempt, goal_clone,
+    },
+};
+use horizon_core::random::RandomSource;
+use std::f32::consts::PI;
+
+pub const COLORS: [&str; 7] = [
+    "white",
+    "creamy",
+    "chestnut",
+    "brown",
+    "black",
+    "gray",
+    "darkbrown",
+];
+pub const MARKINGS: [&str; 5] = ["", "white", "whitefield", "whitedots", "blackdots"];
+
+// AnimState slots.
+const EAT: usize = 0;
+const STAND: usize = 1;
+const MOUTH: usize = 2;
+
+/// What a rider asks of its mount this tick.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Rider {
+    pub strafe: f32,
+    pub forward: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+    /// `playerJumpPendingScale` from the jump bar.
+    pub jump: f32,
+}
+
+pub fn is_equine(s: Species) -> bool {
+    matches!(
+        s,
+        Species::Horse
+            | Species::Donkey
+            | Species::Mule
+            | Species::SkeletonHorse
+            | Species::ZombieHorse
+    )
+}
+/// `canPerformRearing`: not donkeys or mules.
+fn can_rear(s: Species) -> bool {
+    matches!(
+        s,
+        Species::Horse | Species::SkeletonHorse | Species::ZombieHorse
+    )
+}
+pub fn register(m: &mut Mob) {
+    let tempt = m.kind.tempt.clone();
+    let rears = can_rear(m.species());
+    let g = &mut m.ai.goals;
+    g.add(0, Float);
+    g.add(1, MountPanic(Panic::new(1.2)));
+    g.add(1, RunAroundLikeCrazy);
+    g.add(2, Breed::new(1.0));
+    g.add(3, Tempt::new(1.25, tempt, false));
+    g.add(4, FollowParent::new(1.0));
+    g.add(6, Stroll::avoiding_water(0.7));
+    g.add(7, LookAtPlayer::new(6.0));
+    g.add(8, RandomLookAround::default());
+    if rears {
+        g.add(9, RandomStand { next: -80 });
+    }
+}
+/// `generateMaxHealth`, `generateSpeed`, `generateJumpStrength` and the coat.
+pub fn finalize(m: &mut Mob) {
+    let r = &mut m.random;
+    let health =
+        15.0 + r.next_int_bound(8).unwrap_or(0) as f32 + r.next_int_bound(9).unwrap_or(0) as f32;
+    let speed =
+        (0.45 + r.next_double() * 0.3 + r.next_double() * 0.3 + r.next_double() * 0.3) * 0.25;
+    let jump = 0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2;
+    match m.species() {
+        Species::Horse => {
+            m.attrs.max_health = health;
+            m.attrs.speed = speed;
+            m.extra.vector[0] = jump;
+            m.extra.variant = m.random.next_int_bound(7).unwrap_or(0) as u8;
+            m.extra.variant2 = m.random.next_int_bound(5).unwrap_or(0) as u8;
+        }
+        Species::Donkey | Species::Mule => {
+            // AbstractChestedHorse.randomizeAttributes: fixed speed, generated health.
+            m.attrs.max_health = health;
+            m.extra.vector[0] = jump;
+        }
+        _ => m.extra.vector[0] = jump,
+    }
+    m.health = m.attrs.max_health;
+}
+/// `AbstractHorse.createOffspringAttribute`.
+pub fn offspring(a: f64, b: f64, min: f64, max: f64, r: &mut impl RandomSource) -> f64 {
+    let (a, b) = (a.clamp(min, max), b.clamp(min, max));
+    let margin = 0.15 * (max - min);
+    let range = (a - b).abs() + margin * 2.0;
+    let quality = (r.next_double() + r.next_double() + r.next_double()) / 3.0 - 0.5;
+    let v = (a + b) / 2.0 + range * quality;
+    if v > max {
+        max - (v - max)
+    } else if v < min {
+        min + (min - v)
+    } else {
+        v
+    }
+}
+/// `AbstractHorse.setOffspringAttributes` from two parents.
+pub fn inherit(child: &mut Mob, a: &Mob, b: &Mob, r: &mut impl RandomSource) {
+    child.attrs.max_health = offspring(
+        f64::from(a.attrs.max_health),
+        f64::from(b.attrs.max_health),
+        15.0,
+        30.0,
+        r,
+    ) as f32;
+    child.health = child.attrs.max_health;
+    child.extra.vector[0] = offspring(a.extra.vector[0], b.extra.vector[0], 0.4, 1.0, r);
+    child.attrs.speed = offspring(a.attrs.speed, b.attrs.speed, 0.1125, 0.3375, r);
+}
+/// The rider controls the mount: saddled, with a player on it.
+pub fn controlled(m: &Mob) -> bool {
+    m.rider.is_some() && (m.extra.saddled || m.species() == Species::SkeletonHorse && m.extra.tame)
+}
+/// `AbstractHorse.MountPanicGoal`: only without a rider.
+#[derive(Clone, Debug)]
+struct MountPanic(Panic);
+impl Goal for MountPanic {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.rider.is_none() && self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.rider.is_none() && self.0.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx)
+    }
+}
+/// `RunAroundLikeCrazyGoal`: an untamed horse with a rider bolts about until
+/// it is tamed (temper) or throws the rider off.
+#[derive(Clone, Debug)]
+struct RunAroundLikeCrazy;
+impl Goal for RunAroundLikeCrazy {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.extra.tame || m.rider.is_none() {
+            return false;
+        }
+        let r = &mut m.random;
+        let (dx, dz) = (
+            r.next_int_bound(11).unwrap_or(5) - 5,
+            r.next_int_bound(11).unwrap_or(5) - 5,
+        );
+        let dy = r.next_int_bound(9).unwrap_or(4) - 4;
+        let t = [
+            m.position.x + f64::from(dx),
+            m.position.y + f64::from(dy),
+            m.position.z + f64::from(dz),
+        ];
+        m.nav_move_to(cx.w, t, 1.2)
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.extra.tame && !m.ai.nav.is_done() && m.rider.is_some()
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if m.extra.tame || m.random.next_int_bound(50).unwrap_or(1) != 0 {
+            return;
+        }
+        let temper = i32::from(m.extra.variant3);
+        if m.random.next_int_bound(100).unwrap_or(0) < temper {
+            // tameWithName
+            m.extra.tame = true;
+            cx.events.push(MobEvent::Tamed { mob: m.id });
+            return;
+        }
+        m.extra.variant3 = (temper + 5).min(100) as u8;
+        cx.events.push(MobEvent::Buck { mob: m.id });
+        make_mad(m, cx.events);
+    }
+}
+/// `AbstractHorse.makeMad`: rear with the angry sound.
+pub fn make_mad(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if m.extra.counter > 0 {
+        return;
+    }
+    if can_rear(m.species()) {
+        m.extra.counter = 20;
+        m.extra.flag = false;
+    }
+    let sound = match m.species() {
+        Species::Donkey => "entity.donkey.angry",
+        Species::Mule => "entity.mule.angry",
+        _ => "entity.horse.angry",
+    };
+    events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
+}
+/// `RandomStandGoal`.
+#[derive(Clone, Debug)]
+struct RandomStand {
+    next: i32,
+}
+impl Goal for RandomStand {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        self.next += 1;
+        if self.next > 0 && m.random.next_int_bound(1000).unwrap_or(1000) < self.next {
+            self.next = -80;
+            return m.random.next_int_bound(10).unwrap_or(1) == 0;
+        }
+        false
+    }
+    fn can_continue(&mut self, _: &mut Mob, _: &mut Cx) -> bool {
+        false
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.extra.counter = 20;
+        m.extra.flag = false;
+        if m.species() == Species::Horse {
+            cx.events
+                .push(MobEvent::Sound("entity.horse.angry", m.center(), 1.0, 1.0));
+        }
+    }
+}
+/// The mount takes its rider's input (`getRiddenInput`, `tickRidden`).
+pub fn ridden_step(m: &mut Mob) {
+    let Some(r) = m.rider else {
+        return;
+    };
+    m.yaw = r.yaw;
+    m.head_pitch = r.pitch * 0.5;
+    m.body_yaw = r.yaw;
+    m.head_yaw = r.yaw;
+    m.ai.nav.stop();
+    let standing = m.extra.counter > 0;
+    if m.on_ground && r.jump == 0.0 && standing {
+        m.ai.xxa = 0.0;
+        m.ai.zza = 0.0;
+        return;
+    }
+    let forward = if r.forward <= 0.0 {
+        r.forward * 0.25
+    } else {
+        r.forward
+    };
+    m.ai.xxa = r.strafe * 0.5;
+    m.ai.zza = forward;
+    let speed = m.attrs.speed as f32;
+    m.set_speed(speed);
+    if m.on_ground && r.jump > 0.0 {
+        // executeRidersJump
+        let impulse = m.extra.vector[0] as f32 * r.jump;
+        m.velocity.y = f64::from(impulse);
+        if forward > 0.0 {
+            let (s, c) = (m.yaw.to_radians().sin(), m.yaw.to_radians().cos());
+            m.velocity.x += f64::from(-0.4 * s * r.jump);
+            m.velocity.z += f64::from(0.4 * c * r.jump);
+        }
+        if let Some(rider) = m.rider.as_mut() {
+            rider.jump = 0.0;
+        }
+    }
+}
+/// `AbstractHorse.aiStep` and `tick`: healing, grazing, the rear and the
+/// eating/standing/mouth animations.
+pub fn ai_step(m: &mut Mob, w: &MobWorld) {
+    if m.alive() && m.random.next_int_bound(900).unwrap_or(1) == 0 && m.death_time == 0 {
+        m.health = (m.health + 1.0).min(m.attrs.max_health);
+    }
+    // Grazing (canEatGrass: horses and donkeys alike).
+    if m.alive() && m.rider.is_none() {
+        let below = w.facts.get(w.world.block(
+            m.position.x.floor() as i32,
+            (m.position.y - 0.5).floor() as i32,
+            m.position.z.floor() as i32,
+        ));
+        if !m.extra.flag
+            && m.random.next_int_bound(300).unwrap_or(1) == 0
+            && &*below.name == "minecraft:grass_block"
+        {
+            m.extra.flag = true;
+            m.extra.counter2 = 0;
+        }
+    }
+    if m.extra.flag {
+        m.extra.counter2 += 1;
+        if m.extra.counter2 > 50 {
+            m.extra.counter2 = 0;
+            m.extra.flag = false;
+        }
+    }
+    if m.extra.counter > 0 {
+        m.extra.counter -= 1;
+    }
+    let (eating, standing) = (m.extra.flag, m.extra.counter > 0);
+    let v = &mut m.anim.v;
+    if standing {
+        v[EAT] = 0.0;
+        m.anim.vo[EAT] = 0.0;
+        v[STAND] = (v[STAND] + (1.0 - v[STAND]) * 0.4 + 0.05).min(1.0);
+    } else {
+        if eating {
+            v[EAT] = (v[EAT] + (1.0 - v[EAT]) * 0.4 + 0.05).min(1.0);
+        } else {
+            v[EAT] = (v[EAT] - v[EAT] * 0.4 - 0.05).max(0.0);
+        }
+        let s = v[STAND];
+        v[STAND] = (s + (0.8 * s * s * s - s) * 0.6 - 0.05).max(0.0);
+    }
+    v[MOUTH] = (v[MOUTH] - v[MOUTH] * 0.7 - 0.05).max(0.0);
+}
+/// Body texture and the markings overlay.
+pub fn texture(m: &Mob) -> String {
+    let baby = if m.is_baby() { "_baby" } else { "" };
+    match m.species() {
+        Species::Horse => {
+            let c = COLORS[(m.extra.variant as usize).min(6)];
+            format!("entity/horse/horse_{c}{baby}")
+        }
+        Species::Donkey => format!("entity/horse/donkey{baby}"),
+        Species::Mule => format!("entity/horse/mule{baby}"),
+        Species::SkeletonHorse => format!("entity/horse/horse_skeleton{baby}"),
+        _ => format!("entity/horse/horse_zombie{baby}"),
+    }
+}
+pub fn markings(m: &Mob) -> Option<String> {
+    if m.species() != Species::Horse {
+        return None;
+    }
+    let mk = MARKINGS[(m.extra.variant2 as usize).min(4)];
+    if mk.is_empty() {
+        return None;
+    }
+    let baby = if m.is_baby() { "_baby" } else { "" };
+    Some(format!("entity/horse/horse_markings_{mk}{baby}"))
+}
+/// The model key prefix for the species.
+pub fn model_name(s: Species) -> &'static str {
+    match s {
+        Species::Horse => "horse",
+        Species::Donkey => "donkey",
+        Species::Mule => "mule",
+        Species::SkeletonHorse => "skeleton_horse",
+        _ => "zombie_horse",
+    }
+}
+/// The saddle layer texture.
+pub fn saddle_texture(s: Species) -> &'static str {
+    match s {
+        Species::Donkey => "entity/equipment/donkey_saddle/saddle",
+        Species::Mule => "entity/equipment/mule_saddle/saddle",
+        Species::SkeletonHorse => "entity/equipment/skeleton_horse_saddle/saddle",
+        Species::ZombieHorse => "entity/equipment/zombie_horse_saddle/saddle",
+        _ => "entity/equipment/horse_saddle/saddle",
+    }
+}
+/// `AbstractEquineModel.setupAnim` with the adult and baby offsets.
+pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
+    let baby = m.is_baby();
+    let donkey = matches!(m.species(), Species::Donkey | Species::Mule);
+    // Leg/tail/head parameters (getLeg*, getTailXRotOffset).
+    let (stand_angle, stand_y, stand_z, stand_x_off, tail_off) = match (baby, donkey) {
+        (false, _) => (PI / 12.0, 12.0, 4.0, -PI / 3.0, 0.0),
+        (true, false) => (PI / 12.0, 4.0, 0.0, -PI / 3.0, -PI / 2.0),
+        (true, true) => (PI / 3.0, 1.0, 0.5, 0.0, -PI / 4.0),
+    };
+    let clamped = s.y_rot.clamp(-20.0, 20.0);
+    let mut head_x = s.x_rot.to_radians();
+    let (speed, pos) = (s.speed, s.pos);
+    if speed > 0.2 {
+        head_x += (pos * 0.8).cos() * 0.15 * speed;
+    }
+    let eating = m.anim.lerp(EAT, s.partial);
+    let standing = m.anim.lerp(STAND, s.partial);
+    let istand = 1.0 - standing;
+    let feeding = m.anim.lerp(MOUTH, s.partial);
+    let in_water = if m.fluids.in_water { 0.2 } else { 1.0 };
+    let leg1 = (in_water * pos * 0.6662 + PI).cos();
+    let leg_x = leg1 * 0.8 * speed;
+    let base = (1.0 - standing.max(eating)) * (PI / 6.0 + head_x + feeding * s.age.sin() * 0.05);
+    p.xrot(
+        "head_parts",
+        standing * (PI / 12.0 + head_x) + eating * (2.181_661_6 + s.age.sin() * 0.05) + base,
+    );
+    p.yrot(
+        "head_parts",
+        standing * clamped.to_radians() + (1.0 - standing.max(eating)) * clamped.to_radians(),
+    );
+    // animateHeadPartsPlacement
+    {
+        let hp = p.get("head_parts");
+        let lerp = |t: f32, a: f32, b: f32| a + (b - a) * t;
+        if baby && donkey {
+            hp[1] = lerp(eating, hp[1], -1.2);
+            hp[2] = lerp(standing, hp[2], -3.6);
+        } else if baby {
+            hp[1] += lerp(eating, lerp(standing, 0.0, -2.0), 2.0);
+            hp[2] = lerp(standing, hp[2], -4.0);
+        } else {
+            hp[1] += lerp(eating, lerp(standing, 0.0, -8.0), 7.0);
+            hp[2] = lerp(standing, hp[2], -4.0);
+        }
+    }
+    let body_x = p.get("body")[3];
+    p.xrot("body", standing * (-PI / 4.0) + istand * body_x);
+    {
+        let lf = p.get("left_front_leg");
+        lf[1] -= stand_y * standing;
+        lf[2] += stand_z * standing;
+        let (y, z) = (lf[1], lf[2]);
+        let rf = p.get("right_front_leg");
+        rf[1] = y;
+        rf[2] = z;
+    }
+    let stand = stand_angle * standing;
+    let bob = (s.age * 0.6 + PI).cos();
+    let rleg = (stand_x_off + bob) * standing + leg_x * istand;
+    let lleg = (stand_x_off - bob) * standing - leg_x * istand;
+    p.xrot("left_hind_leg", stand - leg1 * 0.5 * speed * istand);
+    p.xrot("right_hind_leg", stand + leg1 * 0.5 * speed * istand);
+    p.xrot("left_front_leg", rleg);
+    p.xrot("right_front_leg", lleg);
+    if baby && donkey {
+        let lerp = |t: f32, a: f32, b: f32| a + (b - a) * t;
+        let y = lerp(standing, p.get("left_hind_leg")[1], -0.3);
+        p.get("left_hind_leg")[1] = y;
+        p.get("right_hind_leg")[1] = y;
+    }
+    let age = if baby { 0.5 } else { 1.0 };
+    p.xrot("tail", tail_off + PI / 6.0 + speed * 0.75);
+    {
+        let t = p.get("tail");
+        t[1] += speed * age;
+        t[2] += speed * 2.0 * age;
+    }
+    p.yrot("tail", 0.0);
+}

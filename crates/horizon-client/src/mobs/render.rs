@@ -103,6 +103,13 @@ pub fn body(m: &Mob) -> (String, String) {
         }
     };
     match m.species() {
+        s if super::equine::is_equine(s) => {
+            let name = super::equine::model_name(s);
+            (
+                baby_or(m, &format!("{name}#main"), &format!("{name}_baby#main")),
+                super::equine::texture(m),
+            )
+        }
         S::Wolf => (
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
@@ -285,6 +292,40 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 abgr(DYE[m.extra.color as usize & 15]),
                 false,
             );
+        }
+        // HorseMarkingLayer, the saddle and the horse armour.
+        s if super::equine::is_equine(s) => {
+            let name = super::equine::model_name(s);
+            let body = if m.is_baby() {
+                format!("{name}_baby#main")
+            } else {
+                format!("{name}#main")
+            };
+            if let Some(tex) = super::equine::markings(m) {
+                push(&mut v, &body, &tex, white, false);
+            }
+            if m.extra.saddled && !m.is_baby() {
+                push(
+                    &mut v,
+                    &format!("{name}#saddle"),
+                    super::equine::saddle_texture(s),
+                    white,
+                    false,
+                );
+            }
+            if let Some(armor) = m.extra.head.as_deref()
+                && let Some(material) = armor
+                    .strip_prefix("minecraft:")
+                    .and_then(|a| a.strip_suffix("_horse_armor"))
+            {
+                let tex = format!("entity/equipment/horse_body/{material}");
+                let color = if material == "leather" {
+                    abgr(0xA06540)
+                } else {
+                    white
+                };
+                push(&mut v, "horse_armor#main", &tex, color, false);
+            }
         }
         // CatCollarLayer.
         S::Cat if m.extra.tame => {

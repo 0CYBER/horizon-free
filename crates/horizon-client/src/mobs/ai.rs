@@ -76,6 +76,7 @@ pub enum Family {
     Illager,
     /// Piglins, brutes, hoglins and zoglins.
     Piglin,
+    Equine,
     /// Slimes and magma cubes.
     Cube,
 }
@@ -108,6 +109,7 @@ pub fn family(s: Species) -> Family {
         S::IronGolem | S::SnowGolem => Family::Golem,
         S::Pillager | S::Vindicator => Family::Illager,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
+        S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse => Family::Equine,
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
         _ => Family::Generic,
@@ -130,6 +132,7 @@ pub fn register(m: &mut Mob) {
         Family::Golem => super::golem::register_snow(m),
         Family::Illager if m.species() == Species::Pillager => super::illager::register_pillager(m),
         Family::Illager => super::illager::register_vindicator(m),
+        Family::Equine => super::equine::register(m),
         Family::Piglin => match m.species() {
             Species::Piglin => super::piglin::register_piglin(m),
             Species::PiglinBrute => super::piglin::register_brute(m),
@@ -434,6 +437,11 @@ fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
 /// Mob.serverAiStep
 fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.ai.no_action_time += 1;
+    // A saddled mount follows its rider instead of its goals.
+    if super::equine::controlled(m) {
+        super::equine::ridden_step(m);
+        return;
+    }
     let tick_count = m.age as i64;
     let id_based = tick_count + i64::from(m.id);
     let mut targets = std::mem::take(&mut m.ai.targets);
@@ -496,6 +504,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             super::piglin::ai_step(m, w, events)
         }
         Species::Zoglin if m.extra.anim_ticks > 0 => m.extra.anim_ticks -= 1,
+        s if super::equine::is_equine(s) => super::equine::ai_step(m, w),
         Species::SnowGolem => super::golem::snow_ai_step(m, w, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),

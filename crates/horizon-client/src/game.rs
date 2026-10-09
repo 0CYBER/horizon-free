@@ -27,6 +27,7 @@ mod lightning;
 mod machines;
 mod maps;
 mod minecarts;
+mod mounts;
 mod music;
 mod names;
 mod options;
@@ -610,6 +611,7 @@ struct Game<'a> {
     remote: Option<remote::Remote>,
     ui: chat::UiState,
     combat: combat::CombatTracker,
+    mount: mounts::MountState,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dim {
@@ -2172,7 +2174,7 @@ impl Game<'_> {
                 backward: held(KeyCode::KeyS),
                 left: held(KeyCode::KeyA),
                 right: held(KeyCode::KeyD),
-                jump: false,
+                jump: held(KeyCode::Space),
                 shift: held(KeyCode::ShiftLeft),
                 sprint: false,
             };
@@ -2730,27 +2732,36 @@ impl Game<'_> {
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
         self.draw_boss_bar(&mut batch);
         self.draw_titles(&mut batch);
+        // Gui.renderVehicleHealth / the jump bar while riding a mount.
+        let mounted = !self.creative && !spectator && self.draw_mount_hud(&mut batch, w, h);
         let atlas = &self.res.atlas;
         if !self.creative
             && !spectator
             && let Some(p) = &self.player
         {
             // Experience bar and hearts/food (Gui.renderPlayerHealth).
-            batch.sprite(
-                atlas,
-                "gui/sprites/hud/experience_bar_background",
-                w / 2.0 - 91.0,
-                h - 29.0,
-            );
-            let filled = (self.experience.progress * 183.0).floor() / 182.0;
-            if filled > 0.0 {
-                batch.sprite_part(
+            let saddled_mount = mounted
+                && self
+                    .riding
+                    .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+                    .is_some_and(|m| m.extra.saddled);
+            if !saddled_mount {
+                batch.sprite(
                     atlas,
-                    "gui/sprites/hud/experience_bar_progress",
+                    "gui/sprites/hud/experience_bar_background",
                     w / 2.0 - 91.0,
                     h - 29.0,
-                    filled.min(1.0),
                 );
+                let filled = (self.experience.progress * 183.0).floor() / 182.0;
+                if filled > 0.0 {
+                    batch.sprite_part(
+                        atlas,
+                        "gui/sprites/hud/experience_bar_progress",
+                        w / 2.0 - 91.0,
+                        h - 29.0,
+                        filled.min(1.0),
+                    );
+                }
             }
             if self.experience.level > 0 {
                 // Gui.renderExperienceLevel: green text with a black outline.
@@ -2780,7 +2791,7 @@ impl Game<'_> {
                 }
             }
             let food = p.health.food.food;
-            for i in 0..10 {
+            for i in (0..10).filter(|_| !mounted) {
                 let x = w / 2.0 + 91.0 - i as f32 * 8.0 - 9.0;
                 batch.sprite(atlas, "gui/sprites/hud/food_empty", x, top);
                 let v = food - i * 2;
@@ -4218,7 +4229,9 @@ impl Game<'_> {
         Arc::new(c)
     }
     fn tick_mobs(&mut self) -> Result<()> {
-        self.tick_creatures()
+        self.tick_creatures()?;
+        self.position_rider();
+        Ok(())
     }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
     fn celestial_geometry(&self, sky: &horizon_client::environment::Sky) -> Vec<Vertex> {
@@ -7475,6 +7488,7 @@ pub fn run() -> Result<()> {
         remote: None,
         ui: Default::default(),
         combat: Default::default(),
+        mount: Default::default(),
     };
     game.ui.vanilla_root = vanilla_root;
     game.res.atlas.font.uniform = game.settings.force_unicode;

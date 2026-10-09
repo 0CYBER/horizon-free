@@ -690,6 +690,7 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::FinishAdmiring { mob } => self.finish_admiring(mob),
+                MobEvent::Tamed { .. } | MobEvent::Buck { .. } => self.mount_event(&e),
                 MobEvent::Launch { target, up } => match target {
                     Who::Player => {
                         if let Some(p) = self.player.as_mut() {
@@ -868,11 +869,45 @@ impl Game<'_> {
         let q = self.mobs.iter().find(|m| m.id == partner).cloned();
         let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         let coin2 = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
-        if let Some(id) =
-            self.spawn_mob(&p.kind.id, [p.position.x, p.position.y, p.position.z], true)
+        // A horse and a donkey have a mule.
+        let kind = match (p.species(), q.as_ref().map(|q| q.species())) {
+            (Species::Horse, Some(Species::Donkey)) | (Species::Donkey, Some(Species::Horse)) => {
+                "minecraft:mule".to_owned()
+            }
+            _ => p.kind.id.clone(),
+        };
+        if let Some(id) = self.spawn_mob(&kind, [p.position.x, p.position.y, p.position.z], true)
             && let Some(child) = self.mobs.iter_mut().find(|m| m.id == id)
         {
             child.extra.age = -24000;
+            if horizon_client::mobs::equine::is_equine(p.species()) {
+                let other = q.clone().unwrap_or_else(|| p.clone());
+                let mut r = self.world.random.clone();
+                horizon_client::mobs::equine::inherit(child, &p, &other, &mut r);
+                // Horse.getBreedOffspring: coat from either parent or new.
+                if p.species() == Species::Horse && other.species() == Species::Horse {
+                    let c = r.next_int_bound(9).unwrap_or(0);
+                    child.extra.variant = if c < 4 {
+                        p.extra.variant
+                    } else if c < 8 {
+                        other.extra.variant
+                    } else {
+                        r.next_int_bound(7).unwrap_or(0) as u8
+                    };
+                    let mk = r.next_int_bound(5).unwrap_or(0);
+                    child.extra.variant2 = if mk < 2 {
+                        p.extra.variant2
+                    } else if mk < 4 {
+                        other.extra.variant2
+                    } else {
+                        r.next_int_bound(5).unwrap_or(0) as u8
+                    };
+                }
+                self.world.random = r;
+                let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
+                self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+                return;
+            }
             if p.species() == Species::Cat {
                 // Cat.getBreedOffspring.
                 let other = q.as_ref().unwrap_or(&p);
@@ -1367,6 +1402,11 @@ impl Game<'_> {
             .unwrap_or_default();
         let creative = self.creative;
         let selected = self.selected;
+        // AbstractHorse.mobInteract: feed, equip or ride.
+        if self.interact_mount(index, &item) {
+            self.swing_arm();
+            return Ok(true);
+        }
         // PiglinAi.mobInteract: hand over something gold to admire.
         if self.mobs[index].alive() && self.give_piglin(index, &item) {
             self.swing_arm();
