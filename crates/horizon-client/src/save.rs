@@ -1982,21 +1982,29 @@ mod tests {
         let mut extra = back.player_extra.clone().unwrap();
         put(
             &mut extra,
-            "EnderItems",
-            Tag::List(vec![Tag::compound([
-                ("Slot", Tag::Byte(0)),
-                ("id", string("minecraft:diamond")),
-                ("count", Tag::Int(2)),
-            ])]),
+            "ShoulderEntityLeft",
+            Tag::compound([("id", string("minecraft:parrot"))]),
         );
+        let mut ender = vec![None; 27];
+        ender[3] = Some(crate::items::ItemStack::new("minecraft:diamond", 2));
         let mut again = Level {
             player_extra: Some(extra),
+            ender_items: ender,
             ..back
         };
         again.write(&dir).unwrap();
         let third = Level::read(&dir).unwrap();
-        assert!(
-            matches!(third.player_extra.as_ref().and_then(|p| p.get("EnderItems")), Some(Tag::List(l)) if l.len() == 1)
+        assert!(matches!(
+            third
+                .player_extra
+                .as_ref()
+                .and_then(|p| p.get("ShoulderEntityLeft")),
+            Some(Tag::Compound(_))
+        ));
+        // EnderItems round-trip by slot.
+        assert_eq!(
+            third.ender_items[3].as_ref().map(|s| (&*s.item, s.count)),
+            Some(("minecraft:diamond", 2))
         );
         assert!(dir.join("data/minecraft/world_gen_settings.dat").exists());
         let _ = fs::remove_dir_all(&dir);
