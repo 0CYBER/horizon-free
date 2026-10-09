@@ -755,6 +755,10 @@ impl Game<'_> {
                     // Mob particle bursts (hearts, smoke, splashes) around a point.
                     if let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) {
                         let options = horizon_client::particles::ParticleOptions::simple(ty);
+                        // Count 0: one particle exactly there, at rest.
+                        if count == 0 {
+                            self.particles.add(&options, at, [0.0; 3]);
+                        }
                         for _ in 0..count {
                             let r = &mut self.world.random;
                             let p = [
@@ -1233,6 +1237,10 @@ impl Game<'_> {
                             }
                         }
                     }
+                }
+                // Fireball explosions are caused by the shooter.
+                if let Some(owner) = self.combat.projectile_owner {
+                    self.note_attacker("minecraft:explosion", owner);
                 }
                 self.explode(atp, *power as f32)?;
             }

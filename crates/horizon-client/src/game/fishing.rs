@@ -491,7 +491,7 @@ impl Game<'_> {
                 });
             }
         };
-        if let Some(r) = atlas.sprites.get("entity/fishing_hook").copied() {
+        if let Some(r) = atlas.sprites.get("entity/fishing/fishing_hook").copied() {
             let c = p + glam::DVec3::new(0.0, SIZE / 2.0, 0.0);
             let s = 0.25;
             quad(

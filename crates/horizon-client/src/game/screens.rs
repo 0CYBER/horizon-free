@@ -36,7 +36,7 @@ fn pause_icons(w: f32, h: f32) -> [(f32, f32, &'static str); 4] {
     [
         (x0, y, "gui/sprites/pause_menu/bug"),
         (x0 + 24.0, y, "gui/sprites/pause_menu/social_interactions"),
-        (x0 + 48.0, y, "gui/sprites/icon/friends"),
+        (x0 + 48.0, y, "gui/sprites/friends/friends"),
         (x0 + 72.0, y, "gui/sprites/pause_menu/player_reporting"),
     ]
 }

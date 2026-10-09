@@ -70,6 +70,8 @@ pub enum Family {
     Witch,
     Enderman,
     Tame,
+    /// Blazes and ghasts.
+    Nether,
     /// Slimes and magma cubes.
     Cube,
 }
@@ -97,6 +99,7 @@ pub fn family(s: Species) -> Family {
         S::Giant => Family::Inert,
         S::Witch => Family::Witch,
         S::Wolf | S::Cat => Family::Tame,
+        S::Blaze | S::Ghast => Family::Nether,
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
         _ => Family::Generic,
@@ -113,6 +116,8 @@ pub fn register(m: &mut Mob) {
         Family::Witch => super::witch::register(m),
         Family::Tame if m.species() == Species::Cat => super::tame::register_cat(m),
         Family::Tame => super::tame::register(m),
+        Family::Nether if m.species() == Species::Ghast => super::nether::register_ghast(m),
+        Family::Nether => super::nether::register_blaze(m),
         Family::Enderman => super::enderman::register(m),
         Family::Cube => super::cube::register(m),
     }
@@ -130,7 +135,10 @@ fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     }
 }
 /// Move controls implemented by the species (MoveKind::Custom).
-pub fn custom_move_control(m: &mut Mob, events: &mut Vec<MobEvent>) {
+pub fn custom_move_control(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if m.species() == Species::Ghast {
+        return super::nether::ghast_move_control(m, w);
+    }
     match family(m.species()) {
         Family::Aquatic => aquatic::fish_move_control(m),
         Family::Cube => super::cube::move_control(m, events),
@@ -445,6 +453,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         | Species::Bogged
         | Species::WitherSkeleton => undead::custom_server_ai_step(m, cx),
         Species::Enderman => super::enderman::custom_server_ai_step(m, cx),
+        Species::Blaze => super::nether::blaze_server_ai_step(m, cx),
         _ => {}
     }
 }
@@ -462,6 +471,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Enderman => super::enderman::ai_step(m, w, events),
         Species::Wolf => super::tame::ai_step(m, w, events),
         Species::Cat => super::tame::cat_ai_step(m, events),
+        Species::Blaze => super::nether::blaze_ai_step(m, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {

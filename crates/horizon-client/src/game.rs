@@ -3724,7 +3724,13 @@ impl Game<'_> {
                 .render(&scene, r.block_entities(), &mut out);
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
-        if let Some(r) = self.res.atlas.sprites.get("entity/experience_orb").copied() {
+        if let Some(r) = self
+            .res
+            .atlas
+            .sprites
+            .get("entity/experience/experience_orb")
+            .copied()
+        {
             let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
             let forward = glam::Vec3::new(
                 -yaw.sin() * pitch.cos(),

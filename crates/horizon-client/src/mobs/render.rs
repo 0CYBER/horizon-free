@@ -107,6 +107,14 @@ pub fn body(m: &Mob) -> (String, String) {
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
         ),
+        S::Ghast => (
+            "ghast#main".into(),
+            if m.extra.flag {
+                "entity/ghast/ghast_shooting".into()
+            } else {
+                "entity/ghast/ghast".into()
+            },
+        ),
         S::Cat => (
             baby_or(m, "cat#main", "cat_baby#main"),
             super::tame::cat_texture(m),

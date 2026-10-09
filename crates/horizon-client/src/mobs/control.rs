@@ -126,7 +126,7 @@ impl Mob {
     pub fn move_control_tick(&mut self, w: &MobWorld, events: &mut Vec<super::MobEvent>) {
         let attr_speed = self.movement_speed();
         match self.ai.mov.kind {
-            MoveKind::Custom => super::ai::custom_move_control(self, events),
+            MoveKind::Custom => super::ai::custom_move_control(self, w, events),
             MoveKind::Ground => self.ground_move_tick(w, attr_speed),
             MoveKind::Flying { max_turn, hovers } => {
                 let m = &mut self.ai.mov;

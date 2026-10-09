@@ -790,7 +790,7 @@ pub const ALL: &[Def] = &[
         Endermite,
         "endermite",
         "endermite#main",
-        "entity/endermite",
+        "entity/endermite/endermite",
         A::Silverfish,
         [
             "entity.endermite.ambient",
@@ -804,7 +804,7 @@ pub const ALL: &[Def] = &[
         Silverfish,
         "silverfish",
         "silverfish#main",
-        "entity/silverfish",
+        "entity/silverfish/silverfish",
         A::Silverfish,
         [
             "entity.silverfish.ambient",
@@ -978,7 +978,7 @@ pub const ALL: &[Def] = &[
         Blaze,
         "blaze",
         "blaze#main",
-        "entity/blaze",
+        "entity/blaze/blaze",
         A::Blaze,
         [
             "entity.blaze.ambient",

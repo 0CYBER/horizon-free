@@ -18,6 +18,7 @@ pub mod hostile;
 pub mod keyframes;
 pub mod living;
 pub mod nav;
+pub mod nether;
 pub mod path;
 pub mod render;
 pub mod spawning;
