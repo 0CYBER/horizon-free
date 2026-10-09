@@ -60,6 +60,26 @@ pub struct StateFacts {
     pub sturdy_full: u8,
     /// The block's class chain (`TransparentBlock`, `LeavesBlock`, ...), most specific first.
     pub classes: Arc<[Arc<str>]>,
+    /// `getShape` (the outline used for picking) as boxes in block space,
+    /// without the random offset; and its edges as LevelRenderer draws them.
+    pub outline: Arc<[[f32; 6]]>,
+    pub outline_edges: Arc<[[f32; 6]]>,
+}
+/// The 12 edges of the unit cube (outline data predating the export).
+fn cube_edges() -> Vec<[f32; 6]> {
+    let mut edges = Vec::new();
+    for a in 0..3 {
+        for (u, v) in [(0., 0.), (1., 0.), (0., 1.), (1., 1.)] {
+            let mut from = [0.0f32; 3];
+            let (b, c) = ((a + 1) % 3, (a + 2) % 3);
+            from[b] = u;
+            from[c] = v;
+            let mut to = from;
+            to[a] = 1.0;
+            edges.push([from[0], from[1], from[2], to[0], to[1], to[2]]);
+        }
+    }
+    edges
 }
 impl StateFacts {
     pub fn has_class(&self, name: &str) -> bool {
@@ -115,6 +135,25 @@ impl BlockFacts {
                 .or_insert_with(|| Arc::from(s))
                 .clone()
         };
+        let mut shapes: HashMap<String, Arc<[[f32; 6]]>> = HashMap::new();
+        let mut shape = |v: &Value, fallback: &dyn Fn() -> Vec<[f32; 6]>| -> Arc<[[f32; 6]]> {
+            let Some(list) = v.as_array() else {
+                return fallback().into();
+            };
+            shapes
+                .entry(v.to_string())
+                .or_insert_with(|| {
+                    list.iter()
+                        .filter_map(|b| {
+                            let b = b.as_array()?;
+                            let n =
+                                |i: usize| b.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+                            Some([n(0), n(1), n(2), n(3), n(4), n(5)])
+                        })
+                        .collect()
+                })
+                .clone()
+        };
         let mut states = Vec::with_capacity(entries.len());
         for (index, entry) in entries.iter().enumerate() {
             let id = BlockStateId(index as u32);
@@ -152,7 +191,23 @@ impl BlockFacts {
                 _ if prop("waterlogged") == Some("true") => (Fluid::Water, 8, false),
                 _ => (Fluid::None, 0, false),
             };
+            let air = matches!(
+                state.name.as_str(),
+                "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+            );
+            let cube = move || {
+                if air {
+                    Vec::new()
+                } else {
+                    vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]
+                }
+            };
+            let edges = move || if air { Vec::new() } else { cube_edges() };
+            let outline = shape(&entry["outline"], &cube);
+            let outline_edges = shape(&entry["outline_edges"], &edges);
             states.push(StateFacts {
+                outline,
+                outline_edges,
                 name: intern(&state.name),
                 emission: num("emission") as u8,
                 dampening: num("dampening") as u8,

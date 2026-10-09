@@ -301,6 +301,9 @@ impl Game<'_> {
     }
     /// `BlockEntity.setChanged` at `pos`: comparators re-read the container.
     pub(super) fn container_changed(&mut self, pos: Pos) {
+        if pos.1 == super::minecarts::CART_KEY_Y {
+            return;
+        }
         self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
         self.with_level(|b, level, ticks| {
             b.container_changed(level, ticks, BlockPos::new(pos.0, pos.1, pos.2))
@@ -1011,6 +1014,10 @@ enum Screen {
 impl Game<'_> {
     fn machine_screen(&self) -> Option<Screen> {
         let key = self.container?;
+        if key.1 == super::minecarts::CART_KEY_Y {
+            return (self.open_cart_kind() == Some(super::minecarts::CartKind::Hopper))
+                .then_some(Screen::Hopper);
+        }
         let state = self.world.block(key.0, key.1, key.2);
         match &*self.res.facts.get(state).name {
             "minecraft:hopper" => Some(Screen::Hopper),

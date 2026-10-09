@@ -49,6 +49,24 @@ public final class VanillaGameplayFactsExporter {
             o.addProperty("offset", state.hasOffsetFunction());
             o.addProperty("full_collision", state.isCollisionShapeFullBlock(level, BlockPos.ZERO));
             o.addProperty("map_color", state.getMapColor(level, BlockPos.ZERO).col);
+            // The outline (selection) shape without the random offset, as boxes
+            // for picking and as the edges LevelRenderer draws.
+            var offset = state.getOffset(BlockPos.ZERO);
+            var shape = state.getShape(level, BlockPos.ZERO).move(-offset.x, -offset.y, -offset.z);
+            var boxes = new JsonArray();
+            for (var box : shape.toAabbs()) {
+                var b = new JsonArray();
+                for (double v : new double[] {box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ}) b.add(v);
+                boxes.add(b);
+            }
+            o.add("outline", boxes);
+            var edges = new JsonArray();
+            shape.forAllEdges((x0, y0, z0, x1, y1, z1) -> {
+                var e = new JsonArray();
+                for (double v : new double[] {x0, y0, z0, x1, y1, z1}) e.add(v);
+                edges.add(e);
+            });
+            o.add("outline_edges", edges);
             o.addProperty("friction", block.getFriction());
             o.addProperty("speed_factor", block.getSpeedFactor());
             o.addProperty("jump_factor", block.getJumpFactor());

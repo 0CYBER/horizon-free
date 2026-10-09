@@ -15,6 +15,8 @@ pub(super) struct Titles {
     pub fade_out: i32,
     pub overlay: Option<Text>,
     pub overlay_time: i32,
+    /// `animateOverlayMessageColor`: the "Now Playing" rainbow.
+    pub overlay_animated: bool,
 }
 impl Default for Titles {
     fn default() -> Self {
@@ -27,6 +29,7 @@ impl Default for Titles {
             fade_out: 20,
             overlay: None,
             overlay_time: 0,
+            overlay_animated: false,
         }
     }
 }
@@ -60,6 +63,7 @@ impl Titles {
     pub fn set_overlay(&mut self, text: Text) {
         self.overlay = Some(text);
         self.overlay_time = 60;
+        self.overlay_animated = false;
     }
     /// Gui.tick.
     pub fn tick(&mut self) {
@@ -88,7 +92,12 @@ impl Game<'_> {
             let alpha = ((ticks * 255.0 / 20.0) as i32).min(255);
             if alpha > 0 {
                 let width = atlas.font.width_text(text);
-                let color = rgba(255, 255, 255, alpha as u8);
+                let color = if t.overlay_animated {
+                    let [r, g, b] = hsv_to_rgb(ticks / 50.0, 0.7, 0.6);
+                    rgba(r, g, b, alpha as u8)
+                } else {
+                    rgba(255, 255, 255, alpha as u8)
+                };
                 batch.text_posed(
                     atlas,
                     text,
@@ -139,4 +148,22 @@ impl Game<'_> {
             );
         }
     }
+}
+/// `Mth.hsvToRgb`.
+fn hsv_to_rgb(hue: f32, saturation: f32, value: f32) -> [u8; 3] {
+    let h = (hue * 6.0) as i32 % 6;
+    let f = hue * 6.0 - (hue * 6.0).floor();
+    let p = value * (1.0 - saturation);
+    let q = value * (1.0 - f * saturation);
+    let t = value * (1.0 - (1.0 - f) * saturation);
+    let (r, g, b) = match h {
+        0 => (value, t, p),
+        1 => (q, value, p),
+        2 => (p, value, t),
+        3 => (p, q, value),
+        4 => (t, p, value),
+        _ => (value, p, q),
+    };
+    let c = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
+    [c(r), c(g), c(b)]
 }

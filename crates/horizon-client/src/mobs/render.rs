@@ -427,6 +427,10 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
             .sqrt()
             .min(1.0);
         base *= glam::Mat4::from_rotation_z(f * flip_degrees(m).to_radians());
+    } else if matches!(m.custom_name.as_deref(), Some("Dinnerbone" | "Grumm")) {
+        // isEntityUpsideDown
+        base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
+            * glam::Mat4::from_rotation_z(PI);
     }
     base *= species_rotations(m, alpha);
     base *= glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));

@@ -33,6 +33,8 @@ struct SectionGpu {
     solid: u32,
     translucent: u32,
 }
+/// Line segments the hit outline can hold.
+const MAX_OUTLINE_EDGES: u64 = 256;
 pub struct Frame<'a> {
     pub camera: DVec3,
     pub yaw: f32,
@@ -60,7 +62,8 @@ pub struct Frame<'a> {
     pub fog: Option<crate::fog::FogData>,
     /// Camera eye below the horizon height and not under water (`shouldRenderDarkDisc`).
     pub dark_disc: bool,
-    pub outline: Option<[f64; 6]>,
+    /// The hit block outline as line segments (from, to) in world space.
+    pub outline: Vec<[f64; 6]>,
     pub hud: &'a HudBatch,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
@@ -514,7 +517,7 @@ impl Renderer {
         });
         let outline = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Outline"),
-            size: 24 * 12,
+            size: 24 * MAX_OUTLINE_EDGES,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1277,39 +1280,33 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.instances, 0, bytemuck::cast_slice(&origins));
         }
-        if let Some(b) = frame.outline {
-            let o = [
-                (b[0] - camera.x) as f32 - 0.002,
-                (b[1] - camera.y) as f32 - 0.002,
-                (b[2] - camera.z) as f32 - 0.002,
-            ];
-            let e = [
-                (b[3] - camera.x) as f32 + 0.002,
-                (b[4] - camera.y) as f32 + 0.002,
-                (b[5] - camera.z) as f32 + 0.002,
-            ];
-            let c = |i: usize| -> [f32; 3] {
-                [
-                    if i & 1 == 0 { o[0] } else { e[0] },
-                    if i & 2 == 0 { o[1] } else { e[1] },
-                    if i & 4 == 0 { o[2] } else { e[2] },
-                ]
-            };
-            let edges = [
-                (0, 1),
-                (2, 3),
-                (4, 5),
-                (6, 7),
-                (0, 2),
-                (1, 3),
-                (4, 6),
-                (5, 7),
-                (0, 4),
-                (1, 5),
-                (2, 6),
-                (3, 7),
-            ];
-            let lines: Vec<[f32; 3]> = edges.iter().flat_map(|&(a, b)| [c(a), c(b)]).collect();
+        let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
+        if outline_edges > 0 {
+            // A hair outside the block, like vanilla's line depth offset.
+            let lines: Vec<[f32; 3]> = frame.outline[..outline_edges]
+                .iter()
+                .flat_map(|e| {
+                    let center = [
+                        (e[0] + e[3]) / 2.0,
+                        (e[1] + e[4]) / 2.0,
+                        (e[2] + e[5]) / 2.0,
+                    ];
+                    let point = |i: usize| -> [f32; 3] {
+                        std::array::from_fn(|a| {
+                            let v = e[i + a];
+                            let grow = if v < center[a] {
+                                -0.002
+                            } else if v > center[a] {
+                                0.002
+                            } else {
+                                0.0
+                            };
+                            (v - [camera.x, camera.y, camera.z][a]) as f32 + grow
+                        })
+                    };
+                    [point(0), point(3)]
+                })
+                .collect();
             self.queue
                 .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
         }
@@ -1440,10 +1437,10 @@ impl Renderer {
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if frame.outline.is_some() {
+            if outline_edges > 0 {
                 pass.set_pipeline(&self.lines);
                 pass.set_vertex_buffer(0, self.outline.slice(..));
-                pass.draw(0..24, 0..1);
+                pass.draw(0..outline_edges as u32 * 2, 0..1);
             }
             pass.set_pipeline(&self.translucent);
             pass.set_vertex_buffer(1, self.instances.slice(..));

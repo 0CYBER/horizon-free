@@ -108,8 +108,15 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             Tag::Short(m.death_time.clamp(0, i32::from(i16::MAX)) as i16),
         ),
         ("PersistenceRequired", Tag::Byte(i8::from(m.persistent))),
+        ("CustomNameVisible", Tag::Byte(i8::from(m.name_visible))),
     ] {
         put(&mut tag, key, value);
+    }
+    // A styled name from the save stays unless the name changed.
+    if custom_name(&tag) != m.custom_name
+        && let Some(name) = &m.custom_name
+    {
+        put(&mut tag, "CustomName", Tag::String(name.as_str().into()));
     }
     let Tag::Compound(map) = &mut tag else {
         return tag;
@@ -177,6 +184,17 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     }
     tag
 }
+/// `CustomName`: a text component saved as a string or a `{text: ..}` compound.
+fn custom_name(tag: &Tag) -> Option<String> {
+    match tag.get("CustomName")? {
+        Tag::String(s) => Some(s.to_string_lossy()),
+        t @ Tag::Compound(_) => match t.get("text") {
+            Some(Tag::String(s)) => Some(s.to_string_lossy()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -> Option<Mob> {
     let kind = types.get(&self::kind(tag)?)?.clone();
     let position = position(tag)?;
@@ -192,6 +210,8 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.hurt_time = number(tag.get("HurtTime")).unwrap_or(0) as i32;
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
     m.persistent = flag(tag, "PersistenceRequired");
+    m.custom_name = custom_name(tag);
+    m.name_visible = flag(tag, "CustomNameVisible");
     // A mob saved mid-death finishes dying; one saved dead is dropped.
     if m.health <= 0.0 && m.death_time == 0 {
         return None;
@@ -537,6 +557,26 @@ pub fn boat_to_nbt(
     };
     Base {
         id: &id,
+        uuid,
+        position,
+        motion,
+        rotation: [yaw, 0.0],
+        on_ground: false,
+        fall_distance: 0.0,
+    }
+    .tag(raw)
+}
+/// A vehicle's base entity tag (boats and minecarts).
+pub fn vehicle_to_nbt(
+    id: &str,
+    position: Vec3,
+    motion: Vec3,
+    yaw: f32,
+    uuid: [i32; 4],
+    raw: Option<&Tag>,
+) -> Tag {
+    Base {
+        id,
         uuid,
         position,
         motion,

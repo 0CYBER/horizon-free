@@ -147,6 +147,15 @@ impl Game<'_> {
                             self.boats.push(b);
                         }
                     }
+                    k if super::minecarts::CartKind::from_id(k).is_some() => {
+                        let kind = super::minecarts::CartKind::from_id(k).unwrap();
+                        let id = self.next_entity + 1;
+                        if let Some(c) = super::minecarts::Minecart::from_nbt(&tag, id, kind) {
+                            self.next_entity = id;
+                            self.remember(id, uuid, tag);
+                            self.carts.push(c);
+                        }
+                    }
                     "minecraft:armor_stand" => {
                         self.next_entity += 1;
                         if let Some(a) = entity_nbt::armor_stand_from_nbt(&tag, self.next_entity) {
@@ -317,6 +326,18 @@ impl Game<'_> {
                 out.entry(chunk_of(b.position)).or_default().push(tag);
             }
         }
+        for c in &self.carts {
+            if keys.contains(&chunk_of(c.position)) {
+                let uuid = self
+                    .persist
+                    .uuids
+                    .get(&c.id)
+                    .copied()
+                    .unwrap_or_else(random_uuid);
+                let tag = c.to_nbt(uuid, self.persist.raw.get(&c.id));
+                out.entry(chunk_of(c.position)).or_default().push(tag);
+            }
+        }
         for a in &self.armor_stands {
             if keys.contains(&chunk_of(a.position)) {
                 let uuid = self
@@ -378,6 +399,13 @@ impl Game<'_> {
                 let keep = !gone(b.position) || Some(b.id) == riding;
                 if !keep {
                     removed.push(b.id);
+                }
+                keep
+            });
+            self.carts.retain(|c| {
+                let keep = !gone(c.position) || Some(c.id) == riding;
+                if !keep {
+                    removed.push(c.id);
                 }
                 keep
             });

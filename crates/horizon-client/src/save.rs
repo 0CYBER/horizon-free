@@ -379,6 +379,12 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
             entries.push(("speed_multiplier", Tag::Float(b.speed.to_bits())));
         }
         BlockEntity::Sign(sign) => entries.extend(sign.encode()),
+        BlockEntity::Jukebox(j) => {
+            if let Some(record) = &j.record {
+                entries.push(("RecordItem", item_to_nbt(record)));
+            }
+            entries.push(("ticks_since_song_started", Tag::Long(j.ticks)));
+        }
     }
     Tag::compound(entries)
 }
@@ -387,6 +393,19 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
+    if id == "minecraft:jukebox" {
+        let record = tag.get("RecordItem").and_then(item_from_nbt);
+        let ticks = number(tag.get("ticks_since_song_started")).unwrap_or(0);
+        let playing = record.is_some();
+        return Some((
+            pos,
+            BlockEntity::Jukebox(crate::containers::Jukebox {
+                record,
+                ticks,
+                playing,
+            }),
+        ));
+    }
     let mut entity = BlockEntity::for_block(&id)?;
     match &mut entity {
         BlockEntity::Chest(items) => *items = decode_items(tag.get("Items"), items.len()),
@@ -423,6 +442,7 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             };
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
+        BlockEntity::Jukebox(_) => {}
     }
     Some((pos, entity))
 }

@@ -462,6 +462,9 @@ pub struct Mob {
     pub ambient_timer: i32,
     pub fall_distance: f64,
     pub persistent: bool,
+    /// `CustomName` (plain text) and `CustomNameVisible`.
+    pub custom_name: Option<String>,
+    pub name_visible: bool,
     pub random: LegacyRandom,
     pub ai: Box<ai::Ai>,
     pub extra: Extra,
@@ -666,6 +669,8 @@ impl Mob {
             last_hurt: 0.0,
             last_damage: None,
             removed: false,
+            custom_name: None,
+            name_visible: false,
             anim: anim::AnimState::default(),
             attrs: Attrs {
                 speed: kind.speed,

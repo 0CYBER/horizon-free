@@ -1225,6 +1225,9 @@ impl Game<'_> {
                 return Ok(false);
             }
         }
+        if self.name_mob(index) {
+            return Ok(true);
+        }
         let held = self.held().cloned();
         let item = held
             .as_ref()

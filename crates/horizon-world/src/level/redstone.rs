@@ -54,7 +54,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     0
                 }
             }
-            Class::TrappedChest => self.level.block_entity_signal(pos, state, direction),
+            Class::TrappedChest | Class::Jukebox => {
+                self.level.block_entity_signal(pos, state, direction)
+            }
             _ => Self::nibble(b.facts(state).weak, direction),
         }
     }

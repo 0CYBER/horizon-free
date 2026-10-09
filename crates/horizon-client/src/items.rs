@@ -54,6 +54,8 @@ pub struct ItemInfo {
     /// `equippable.swappable` and `equip_sound`.
     pub swappable: bool,
     pub equip_sound: Option<String>,
+    /// `jukebox_playable`: the jukebox song it plays.
+    pub jukebox_song: Option<String>,
 }
 /// A reduction of `blocks_attacks.damage_reductions`.
 #[derive(Clone, Debug)]
@@ -144,6 +146,53 @@ pub struct Items {
     pub block_tags: HashMap<String, HashSet<String>>,
     pub item_tags: HashMap<String, HashSet<String>>,
     loot: HashMap<String, Value>,
+    /// The `jukebox_song` registry.
+    pub songs: HashMap<String, Song>,
+}
+/// A `JukeboxSong`.
+#[derive(Clone, Debug)]
+pub struct Song {
+    pub sound: String,
+    pub length_ticks: i64,
+    pub comparator: i32,
+    pub description: Value,
+}
+impl Song {
+    /// `hasFinished`: the length plus one second.
+    pub fn finished(&self, ticks: i64) -> bool {
+        ticks >= self.length_ticks + 20
+    }
+}
+fn load_songs(root: &Path) -> HashMap<String, Song> {
+    let mut songs = HashMap::new();
+    let Ok(dir) = fs::read_dir(root.join("data/minecraft/jukebox_song")) else {
+        return songs;
+    };
+    for entry in dir.flatten() {
+        let path = entry.path();
+        let (Some(stem), Ok(bytes)) = (path.file_stem().and_then(|s| s.to_str()), fs::read(&path))
+        else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
+            continue;
+        };
+        let sound = match &v["sound_event"] {
+            Value::String(s) => s.clone(),
+            other => other["sound_id"].as_str().unwrap_or("").to_owned(),
+        };
+        songs.insert(
+            format!("minecraft:{stem}"),
+            Song {
+                sound,
+                length_ticks: (v["length_in_seconds"].as_f64().unwrap_or(0.0) as f32 * 20.0).ceil()
+                    as i64,
+                comparator: v["comparator_output"].as_i64().unwrap_or(0) as i32,
+                description: v["description"].clone(),
+            },
+        );
+    }
+    songs
 }
 pub(crate) fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashSet<String>>> {
     let dir = root.join(format!("data/minecraft/tags/{kind}"));
@@ -277,6 +326,7 @@ impl Items {
                     equip_sound: c["minecraft:equippable"]["equip_sound"]
                         .as_str()
                         .map(str::to_owned),
+                    jukebox_song: c["minecraft:jukebox_playable"].as_str().map(str::to_owned),
                     use_speed: c["minecraft:use_effects"]["speed_multiplier"]
                         .as_f64()
                         .unwrap_or(0.2) as f32,
@@ -351,6 +401,7 @@ impl Items {
             block_tags: load_tags(root, "block")?,
             item_tags: load_tags(root, "item")?,
             loot,
+            songs: load_songs(root),
         })
     }
     pub fn get(&self, id: &str) -> Option<&ItemInfo> {
@@ -364,6 +415,7 @@ impl Items {
             block_tags: load_tags(root, "block")?,
             item_tags: load_tags(root, "item")?,
             loot: HashMap::new(),
+            songs: HashMap::new(),
         })
     }
     /// An item table with only tags, for unit tests of item rules.
@@ -375,6 +427,7 @@ impl Items {
             block_tags: HashMap::new(),
             item_tags,
             loot: HashMap::new(),
+            songs: HashMap::new(),
         }
     }
     fn block_matches(&self, spec: &str, block: &str) -> bool {

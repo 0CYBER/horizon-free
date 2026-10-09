@@ -52,6 +52,15 @@ pub enum BlockEntity {
     Brewing(Box<crate::brewing::BrewingStand>),
     /// Signs and hanging signs (`SignBlockEntity`).
     Sign(crate::signs::SignData),
+    /// `JukeboxBlockEntity`: the record and its `JukeboxSongPlayer`.
+    Jukebox(Jukebox),
+}
+#[derive(Clone, Debug, Default)]
+pub struct Jukebox {
+    pub record: Option<ItemStack>,
+    /// `ticks_since_song_started`, while a song plays.
+    pub ticks: i64,
+    pub playing: bool,
 }
 impl BlockEntity {
     pub fn for_block(name: &str) -> Option<Self> {
@@ -114,6 +123,7 @@ impl BlockEntity {
             },
             Self::Brewing(_) => "minecraft:brewing_stand",
             Self::Sign(s) => s.id(),
+            Self::Jukebox(_) => "minecraft:jukebox",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -122,6 +132,7 @@ impl BlockEntity {
             Self::Furnace(f) => f.items.iter().flatten().cloned().collect(),
             Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
             Self::Sign(_) => Vec::new(),
+            Self::Jukebox(j) => j.record.iter().cloned().collect(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -129,7 +140,7 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &f.items,
             Self::Brewing(b) => &b.items,
-            Self::Sign(_) => &[],
+            Self::Sign(_) | Self::Jukebox(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -137,7 +148,7 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &mut f.items,
             Self::Brewing(b) => &mut b.items,
-            Self::Sign(_) => &mut [],
+            Self::Sign(_) | Self::Jukebox(_) => &mut [],
         }
     }
 }

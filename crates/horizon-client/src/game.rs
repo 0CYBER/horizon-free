@@ -16,8 +16,11 @@ mod fishing;
 mod fov;
 mod frames;
 mod growth;
+mod jukebox;
 mod machines;
+mod minecarts;
 mod music;
+mod names;
 mod options;
 mod packs;
 mod paintings;
@@ -276,7 +279,18 @@ impl LevelAccess for GameLevel<'_> {
         _state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        if let Some((_, comparator)) = jukebox::jukebox_signals(self.world, self.items, pos) {
+            return comparator;
+        }
         machines::container_signal(self.world, self.behaviours, self.items, self.registry, pos)
+    }
+    fn block_entity_signal(
+        &self,
+        pos: BlockPos,
+        _state: BlockStateId,
+        _direction: Direction,
+    ) -> i32 {
+        jukebox::jukebox_signals(self.world, self.items, pos).map_or(0, |(signal, _)| signal)
     }
     fn biome_name(&self, pos: BlockPos) -> Option<&str> {
         let chunk = self.world.chunks.get(&(pos.x >> 4, pos.z >> 4))?;
@@ -535,6 +549,10 @@ struct Game<'a> {
     armor_stand_assets: armor_stands::ArmorStandAssets,
     boats: Vec<boats::Boat>,
     boat_models: boats::BoatModels,
+    carts: Vec<minecarts::Minecart>,
+    /// Songs playing from jukeboxes (tracked sound handles).
+    jukebox_sounds: HashMap<(i32, i32, i32), u64>,
+    cart_models: minecarts::CartModels,
     /// The boat the player rides.
     riding: Option<u32>,
     /// The ender inventory (27 slots) and the ender chest showing it.
@@ -608,7 +626,31 @@ impl Game<'_> {
     fn reach(&self) -> f64 {
         if self.creative { 5.0 } else { 4.5 }
     }
-    /// Voxel traversal against non-air, non-fluid blocks (outline = full cube).
+    /// A block's outline boxes in world space (`getShape` plus the random offset).
+    fn outline_boxes(&self, pos: [i32; 3]) -> Vec<[f64; 6]> {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let f = self.res.facts.get(state);
+        let o = if f.random_offset {
+            self.res
+                .context
+                .tables
+                .offset(state, pos[0], pos[2])
+                .unwrap_or([0.0; 3])
+        } else {
+            [0.0; 3]
+        };
+        let base = [
+            f64::from(pos[0]) + o[0],
+            f64::from(pos[1]) + o[1],
+            f64::from(pos[2]) + o[2],
+        ];
+        f.outline
+            .iter()
+            .map(|b| std::array::from_fn(|i| base[i % 3] + f64::from(b[i])))
+            .collect()
+    }
+    /// Voxel traversal against non-air, non-fluid blocks, clipped against
+    /// each block's outline shape (`BlockGetter.clip` with `ClipContext.Block.OUTLINE`).
     fn pick(&self) -> Option<Hit> {
         let origin = self.eye_position()?;
         let dir = view_vector(self.yaw, self.pitch);
@@ -650,15 +692,49 @@ impl Game<'_> {
                     "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column"
                 )
             {
-                return Some(Hit {
-                    pos,
-                    face,
-                    point: [
-                        origin[0] + dir[0] * t,
-                        origin[1] + dir[1] * t,
-                        origin[2] + dir[2] * t,
-                    ],
-                });
+                // The nearest entry into one of the outline's boxes (slab method).
+                let mut best: Option<(f64, [i32; 3])> = None;
+                for b in self.outline_boxes(pos) {
+                    let (mut t0, mut t1, mut axis_in, mut sign) = (0.0f64, f64::INFINITY, None, 0);
+                    let mut miss = false;
+                    for a in 0..3 {
+                        if dir[a] == 0.0 {
+                            miss |= origin[a] < b[a] || origin[a] > b[a + 3];
+                            continue;
+                        }
+                        let (lo, hi) =
+                            ((b[a] - origin[a]) / dir[a], (b[a + 3] - origin[a]) / dir[a]);
+                        let (near, far) = if lo < hi { (lo, hi) } else { (hi, lo) };
+                        if near > t0 {
+                            t0 = near;
+                            axis_in = Some(a);
+                            sign = if dir[a] > 0.0 { -1 } else { 1 };
+                        }
+                        t1 = t1.min(far);
+                    }
+                    if miss || t0 > t1 || t0 > reach {
+                        continue;
+                    }
+                    let mut normal = face;
+                    if let Some(a) = axis_in {
+                        normal = [0; 3];
+                        normal[a] = sign;
+                    }
+                    if best.is_none_or(|(bt, _)| t0 < bt) {
+                        best = Some((t0, normal));
+                    }
+                }
+                if let Some((t, face)) = best {
+                    return Some(Hit {
+                        pos,
+                        face,
+                        point: [
+                            origin[0] + dir[0] * t,
+                            origin[1] + dir[1] * t,
+                            origin[2] + dir[2] * t,
+                        ],
+                    });
+                }
             }
             let axis = if t_max[0] < t_max[1] {
                 if t_max[0] < t_max[2] { 0 } else { 2 }
@@ -1117,6 +1193,7 @@ impl Game<'_> {
                     self.audio.play(&name, Some(c), volume, pitch);
                 }
                 LevelEvent::DropResources { pos, state } => {
+                    self.jukebox_removed([pos.x, pos.y, pos.z]);
                     if let Some(entity) = self.world.block_entities.remove(&(pos.x, pos.y, pos.z)) {
                         let name = self.res.facts.get(state).name.clone();
                         self.release_contents([pos.x, pos.y, pos.z], entity, &name);
@@ -1429,6 +1506,7 @@ impl Game<'_> {
         if self.interact_frame()
             || self.interact_armor_stand()
             || self.interact_boat()
+            || self.interact_cart()
             || self.interact_mob()?
         {
             return Ok(());
@@ -1438,6 +1516,11 @@ impl Game<'_> {
         if !(sneaking && self.held().is_some())
             && let Some(hit) = self.pick()
         {
+            let held = self.held().cloned();
+            if self.use_jukebox(hit.pos, held.as_ref()) {
+                self.swing_arm();
+                return Ok(());
+            }
             let face = match hit.face {
                 [0, 1, 0] => Direction::Up,
                 [0, -1, 0] => Direction::Down,
@@ -1524,6 +1607,7 @@ impl Game<'_> {
         }
         if let Some(hit) = self.pick()
             && (self.launch_firework(&hit, &stack)
+                || self.place_minecart(&hit, &stack)
                 || self.place_painting(&hit, &stack)
                 || self.place_item_frame(&hit, &stack)
                 || self.place_armor_stand(&hit, &stack))
@@ -2160,6 +2244,7 @@ impl Game<'_> {
         self.tick_item_frames();
         self.tick_armor_stands();
         self.tick_boats();
+        self.tick_carts();
         self.tick_fishing();
         self.tick_tridents();
         self.tick_rockets();
@@ -2734,7 +2819,7 @@ impl Game<'_> {
             Some(BlockEntity::Chest(items)) => v.extend((0..items.len()).map(|i| 300 + i)),
             Some(BlockEntity::Furnace(_)) => v.extend(300..303),
             Some(BlockEntity::Brewing(_)) => v.extend(300..305),
-            Some(BlockEntity::Sign(_)) => {}
+            Some(BlockEntity::Sign(_) | BlockEntity::Jukebox(_)) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
                 v.push(200);
@@ -2898,7 +2983,9 @@ impl Game<'_> {
                         .container
                         .map(|k| self.world.block(k.0, k.1, k.2))
                         .map(|s| self.res.facts.get(s).name.clone());
-                    let title = if name.as_deref() == Some("minecraft:barrel") {
+                    let title = if self.open_cart_kind().is_some() {
+                        "Minecart with Chest"
+                    } else if name.as_deref() == Some("minecraft:barrel") {
                         "Barrel"
                     } else {
                         "Chest"
@@ -2952,7 +3039,7 @@ impl Game<'_> {
                     }
                 }
                 Some(BlockEntity::Brewing(_)) => {}
-                Some(BlockEntity::Sign(_)) => {}
+                Some(BlockEntity::Sign(_) | BlockEntity::Jukebox(_)) => {}
                 None => {
                     let texture = if self.craft_size == 3 {
                         "gui/container/crafting_table"
@@ -3071,6 +3158,7 @@ impl Game<'_> {
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
         self.close_ender_chest();
+        self.close_cart_container();
     }
     fn click_inventory(&mut self, right: bool) {
         if self.station_click(right) {
@@ -3397,6 +3485,7 @@ impl Game<'_> {
         }
         // Mobs and their projectiles.
         self.mob_geometry(camera, alpha, &mut out);
+        self.name_tag_geometry(camera, alpha, &mut out);
         // Arrows: two crossed quads along the flight direction.
         if let Some(r) = self
             .res
@@ -3634,6 +3723,7 @@ impl Game<'_> {
         self.frame_geometry(camera, &mut out);
         self.armor_stand_geometry(camera, alpha, &mut out);
         self.boat_geometry(camera, alpha, &mut out);
+        self.cart_geometry(camera, alpha, &mut out);
         self.fishing_geometry(camera, alpha, &mut out);
         self.trident_geometry(camera, alpha, &mut out);
         self.rocket_geometry(camera, alpha, &mut out);
@@ -3799,7 +3889,11 @@ impl Game<'_> {
                 .held()
                 .and_then(|h| self.res.items.get(&h.item))
                 .map_or(0.0, |i| i.attack_damage);
-        if self.attack_frame() || self.attack_armor_stand() || self.attack_boat(hand_damage) {
+        if self.attack_frame()
+            || self.attack_armor_stand()
+            || self.attack_boat(hand_damage)
+            || self.attack_cart(hand_damage)
+        {
             return true;
         }
         let Some((index, distance)) = self.mob_hit() else {
@@ -3931,6 +4025,7 @@ impl Game<'_> {
     }
     fn tick_block_entities(&mut self) -> Result<()> {
         self.tick_hoppers()?;
+        self.tick_jukeboxes();
         // ChestLidController: 0.1 per tick towards open/closed.
         if let Some(key) = self.container {
             self.chest_open.entry(key).or_insert((0.0, 0.0));
@@ -6257,13 +6352,30 @@ impl Game<'_> {
             sky.sky_color = [0.9, 0.9, 1.0];
             sky.sky_light_factor = 1.0;
         }
+        // LevelRenderer.renderHitOutline: the outline shape's edges.
         let outline = if self.screen == Screen::Playing {
-            self.pick().map(|h| {
-                let p = h.pos.map(f64::from);
-                [p[0], p[1], p[2], p[0] + 1.0, p[1] + 1.0, p[2] + 1.0]
-            })
+            self.pick()
+                .map(|h| {
+                    let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
+                    let f = self.res.facts.get(state);
+                    let o = if f.random_offset {
+                        self.res
+                            .context
+                            .tables
+                            .offset(state, h.pos[0], h.pos[2])
+                            .unwrap_or([0.0; 3])
+                    } else {
+                        [0.0; 3]
+                    };
+                    let p = h.pos.map(f64::from);
+                    f.outline_edges
+                        .iter()
+                        .map(|e| std::array::from_fn(|i| p[i % 3] + o[i % 3] + f64::from(e[i])))
+                        .collect()
+                })
+                .unwrap_or_default()
         } else {
-            None
+            Vec::new()
         };
         let hud = self.hud(size);
         let title = self.title.is_some();
@@ -7173,6 +7285,9 @@ pub fn run() -> Result<()> {
         armor_stand_assets: armor_stands::ArmorStandAssets::load(&root),
         boats: Vec::new(),
         boat_models: boats::BoatModels::load(&root),
+        carts: Vec::new(),
+        jukebox_sounds: HashMap::new(),
+        cart_models: minecarts::CartModels::load(&root),
         riding: None,
         ender_items: vec![None; 27],
         ender_open: None,

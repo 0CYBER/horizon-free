@@ -822,6 +822,21 @@ impl BlockEntityRenderer {
             self.render_one(scene, *pos, kind, base, packed, lights, out);
         }
     }
+    /// One block entity of `state` drawn under `base` (minecart contents).
+    pub fn render_state(
+        &self,
+        scene: &Scene,
+        state: u32,
+        base: Mat4,
+        packed: u8,
+        out: &mut Vec<Vertex>,
+    ) {
+        let kind = self.kind(state);
+        if !matches!(kind, Kind::None) {
+            let lights = diffuse_lights(scene.nether);
+            self.render_one(scene, [i32::MAX; 3], kind, base, packed, lights, out);
+        }
+    }
     #[allow(clippy::too_many_arguments)]
     fn render_one(
         &self,
