@@ -14,6 +14,7 @@ pub mod data;
 pub mod enderman;
 pub mod farm;
 pub mod goals;
+pub mod golem;
 pub mod hostile;
 pub mod keyframes;
 pub mod living;
@@ -566,6 +567,17 @@ pub enum MobEvent {
         name: &'static str,
         effect: bool,
     },
+    /// Throw an entity upward (iron golem swings).
+    Launch {
+        target: Who,
+        up: f64,
+    },
+    /// Damage the mob itself (snow golems melting).
+    HurtSelf {
+        mob: u32,
+        kind: DamageKind,
+        amount: f32,
+    },
     /// Drop the loot of a gift table (chicken eggs, armadillo scutes).
     GiftLoot {
         table: &'static str,
@@ -634,6 +646,9 @@ pub struct MobWorld<'a> {
     pub thundering: bool,
     pub nether: bool,
     pub block_tags: &'a HashMap<String, std::collections::HashSet<String>>,
+    pub biomes: &'a crate::biome::Biomes,
+    /// The `mob_griefing` game rule.
+    pub mob_griefing: bool,
 }
 impl Mob {
     pub fn new(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {

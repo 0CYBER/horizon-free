@@ -72,6 +72,7 @@ pub enum Family {
     Tame,
     /// Blazes and ghasts.
     Nether,
+    Golem,
     /// Slimes and magma cubes.
     Cube,
 }
@@ -101,6 +102,7 @@ pub fn family(s: Species) -> Family {
         S::Witch => Family::Witch,
         S::Wolf | S::Cat => Family::Tame,
         S::Blaze | S::Ghast => Family::Nether,
+        S::IronGolem | S::SnowGolem => Family::Golem,
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
         _ => Family::Generic,
@@ -119,6 +121,8 @@ pub fn register(m: &mut Mob) {
         Family::Tame => super::tame::register(m),
         Family::Nether if m.species() == Species::Ghast => super::nether::register_ghast(m),
         Family::Nether => super::nether::register_blaze(m),
+        Family::Golem if m.species() == Species::IronGolem => super::golem::register_iron(m),
+        Family::Golem => super::golem::register_snow(m),
         Family::Enderman => super::enderman::register(m),
         Family::Cube => super::cube::register(m),
     }
@@ -474,6 +478,8 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Wolf => super::tame::ai_step(m, w, events),
         Species::Cat => super::tame::cat_ai_step(m, events),
         Species::Blaze => super::nether::blaze_ai_step(m, events),
+        Species::IronGolem => super::golem::iron_ai_step(m),
+        Species::SnowGolem => super::golem::snow_ai_step(m, w, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {
@@ -577,11 +583,18 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
     match m.species() {
         Species::Enderman => super::enderman::after_hurt(m, source),
         Species::Wolf => super::tame::after_hurt(m, source),
+        // NeutralMob: an iron golem hit by the player stays angry a while.
+        Species::IronGolem if source.attacker == Some(Who::Player) => {
+            m.extra.anger = 400 + m.random.next_int_bound(380).unwrap_or(0);
+        }
         _ => {}
     }
 }
 /// Mob.doHurtTarget: attack damage (+ species extras) to the target.
 pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
+    if m.species() == Species::IronGolem {
+        return super::golem::iron_hurt_target(m, who, cx);
+    }
     let mut amount = m.attrs.attack_damage;
     let from = [m.position.x, m.position.y, m.position.z];
     let source = Damage::mob(m.id, from);

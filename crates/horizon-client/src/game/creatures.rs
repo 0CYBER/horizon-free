@@ -360,6 +360,8 @@ impl Game<'_> {
             thundering: thunder > 0.9,
             nether: self.dim == Dim::Nether,
             block_tags: &self.res.items.block_tags,
+            biomes: &self.res.biomes,
+            mob_griefing: self.ui.rules.bool("mob_griefing"),
         }
     }
     /// NaturalSpawner.spawnForChunk over the chunks within 8 of the player.
@@ -683,6 +685,23 @@ impl Game<'_> {
                                 );
                             }
                         }
+                    }
+                }
+                MobEvent::Launch { target, up } => match target {
+                    Who::Player => {
+                        if let Some(p) = self.player.as_mut() {
+                            p.velocity.y += up;
+                        }
+                    }
+                    Who::Mob(id) => {
+                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                            m.velocity.y += up;
+                        }
+                    }
+                },
+                MobEvent::HurtSelf { mob, kind, amount } => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        m.damage(amount, horizon_client::mobs::Damage::of(kind));
                     }
                 }
                 MobEvent::SetTarget { mob, target } => {
@@ -1561,6 +1580,14 @@ impl Game<'_> {
                     m.position.x.floor() as i32 >> 4,
                     m.position.z.floor() as i32 >> 4,
                 ));
+            }
+            // IronGolem.mobInteract: an iron ingot repairs 25 health.
+            Species::IronGolem
+                if item == "minecraft:iron_ingot" && m.health < m.attrs.max_health =>
+            {
+                m.health = (m.health + 25.0).min(m.attrs.max_health);
+                consume = true;
+                sound = Some("entity.iron_golem.repair");
             }
             Species::Creeper if item == "minecraft:flint_and_steel" => {
                 m.extra.flag = true;

@@ -301,6 +301,12 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 false,
             );
         }
+        // IronGolemCrackinessLayer.
+        S::IronGolem => {
+            if let Some(texture) = super::golem::crackiness(m) {
+                push(&mut v, "iron_golem#main", texture, white, false);
+            }
+        }
         // SlimeOuterLayer: the translucent outer cube.
         S::Slime => push(&mut v, "slime#outer", "entity/slime/slime", white, false),
         S::Sheep if !m.extra.sheared => {

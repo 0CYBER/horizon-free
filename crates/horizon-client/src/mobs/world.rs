@@ -19,6 +19,13 @@ pub struct TargetInfo {
     pub creative: bool,
 }
 impl MobWorld<'_> {
+    /// The biome's base temperature at a position.
+    pub fn temperature(&self, x: i32, y: i32, z: i32) -> f32 {
+        self.world
+            .chunks
+            .get(&(x >> 4, z >> 4))
+            .map_or(0.8, |c| self.biomes.get(c.biome(x, y, z)).temperature)
+    }
     /// `Heightmap.Types.MOTION_BLOCKING`: above the highest blocking block.
     pub fn motion_blocking_height(&self, x: i32, z: i32) -> i32 {
         let top = crate::chunk::MIN_Y + crate::chunk::HEIGHT;
