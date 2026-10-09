@@ -73,6 +73,8 @@ pub enum Species {
     Ghast,
     Blaze,
     Strider,
+    Guardian,
+    ElderGuardian,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -863,6 +865,34 @@ pub const ALL: &[Def] = &[
         Baby::None
     ),
     def!(
+        Guardian,
+        "guardian",
+        "guardian#main",
+        "entity/guardian/guardian",
+        A::Guardian,
+        [
+            "entity.guardian.ambient",
+            "entity.guardian.hurt",
+            "entity.guardian.death"
+        ],
+        None,
+        Baby::None
+    ),
+    def!(
+        ElderGuardian,
+        "elder_guardian",
+        "elder_guardian#main",
+        "entity/guardian/guardian_elder",
+        A::Guardian,
+        [
+            "entity.elder_guardian.ambient",
+            "entity.elder_guardian.hurt",
+            "entity.elder_guardian.death"
+        ],
+        None,
+        Baby::None
+    ),
+    def!(
         Pillager,
         "pillager",
         "pillager#main",
@@ -1147,6 +1177,8 @@ impl Def {
                     S::Axolotl
                         | S::Frog
                         | S::Turtle
+                        | S::Guardian
+                        | S::ElderGuardian
                         | S::IronGolem
                         | S::SnowGolem
                         | S::Ghast
@@ -1194,6 +1226,8 @@ impl Def {
                 | S::Zoglin
                 | S::Ghast
                 | S::Blaze
+                | S::Guardian
+                | S::ElderGuardian
         )
     }
     /// The item tag Animal.isFood tests.

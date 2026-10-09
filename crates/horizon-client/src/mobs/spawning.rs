@@ -76,6 +76,25 @@ pub fn spawn_rules_ok(
     let light = w.world.light(x, y, z);
     let raw = i32::from(light >> 4).max(i32::from(light & 15));
     match species {
+        // Guardian.checkGuardianSpawnRules.
+        S::Guardian | S::ElderGuardian => {
+            let sky_from_below = || {
+                let sea = 63;
+                if y >= sea {
+                    return w.can_see_sky(x, y, z);
+                }
+                if !w.can_see_sky(x, sea, z) {
+                    return false;
+                }
+                ((y + 1)..sea).all(|yy| {
+                    let f = w.facts.get(w.world.block(x, yy, z));
+                    !f.full_collision || f.fluid != Fluid::None
+                })
+            };
+            (random.next_int_bound(20).unwrap_or(1) == 0 || !sky_from_below())
+                && w.fluid(x, y, z) == Fluid::Water
+                && w.fluid(x, y - 1, z) == Fluid::Water
+        }
         // Animal.checkAnimalSpawnRules: animals_spawnable_on below and bright.
         S::Pig
         | S::Cow

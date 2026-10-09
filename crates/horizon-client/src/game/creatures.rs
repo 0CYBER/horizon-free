@@ -30,6 +30,8 @@ pub(super) struct Creatures {
     /// Player status effects applied by mobs: (effect, ticks left, amplifier).
     pub player_fire: i32,
     pub pearl_cooldown: u32,
+    /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
+    pub elder_apparition: i32,
 }
 /// MobCategory caps (maxInstancesPerChunk with the 17x17 spawnable chunk area).
 const CATEGORIES: [(&str, usize); 7] = [
@@ -489,7 +491,11 @@ impl Game<'_> {
                     let light_ok = !kind.category.eq("monster")
                         || matches!(
                             kind.species,
-                            Species::Slime | Species::Ghast | Species::MagmaCube
+                            Species::Slime
+                                | Species::Ghast
+                                | Species::MagmaCube
+                                | Species::Guardian
+                                | Species::ElderGuardian
                         )
                         || w.brightness(x, y, z) <= 0.5;
                     let consumed = r;
@@ -674,6 +680,10 @@ impl Game<'_> {
                 MobEvent::AttackPlayer(amount, from) => {
                     self.mob_hits_player(amount, from, "minecraft:mob_attack")
                 }
+                MobEvent::DamagePlayer { amount, from, kind } => {
+                    self.mob_hits_player(amount, from, kind)
+                }
+                MobEvent::ElderCurse { at } => self.elder_curse(at),
                 MobEvent::Shoot(..) => {}
                 MobEvent::Explode(at, radius) => {
                     // The exploding mob causes the damage (Creeper.explodeCreeper).
@@ -1018,6 +1028,30 @@ impl Game<'_> {
         }
         let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
         self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+    }
+    /// `MobEffectUtil.addEffectToPlayersAround` for an elder guardian:
+    /// mining fatigue III for five minutes unless a stronger or longer one
+    /// is on, with the curse sound and the elder's apparition.
+    fn elder_curse(&mut self, at: [f64; 3]) {
+        if self.creative || self.spectator() {
+            return;
+        }
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let d = p.position.subtract(Vec3::new(at[0], at[1], at[2]));
+        if d.x * d.x + d.y * d.y + d.z * d.z >= 2500.0 || p.health.dead_or_dying() {
+            return;
+        }
+        let active = self.potions.effects.get("minecraft:mining_fatigue");
+        if active.is_some_and(|e| e.amplifier >= 2 && e.duration >= 1200) {
+            return;
+        }
+        let at = [p.position.x, p.position.y, p.position.z];
+        self.give_player_effect("minecraft:mining_fatigue", 6000, 2);
+        self.audio
+            .play("minecraft:entity.elder_guardian.curse", Some(at), 1.0, 1.0);
+        self.creatures.elder_apparition = 30;
     }
     fn mob_hits_player(&mut self, amount: f32, from: [f64; 3], damage_type: &str) {
         if self.creative {
@@ -1889,6 +1923,30 @@ impl Game<'_> {
         }
         Ok(true)
     }
+    /// A beam target's centre (half its height), interpolated.
+    fn beam_target(&self, who: Option<Who>, alpha: f64) -> Option<glam::DVec3> {
+        match who? {
+            Who::Player => {
+                let p = self.player.as_ref()?;
+                let (a, b) = (self.previous_position, p.position);
+                Some(glam::DVec3::new(
+                    a.x + (b.x - a.x) * alpha,
+                    a.y + (b.y - a.y) * alpha + f64::from(p.dimensions.height) * 0.5,
+                    a.z + (b.z - a.z) * alpha,
+                ))
+            }
+            Who::Mob(id) => {
+                let m = self.mobs.iter().find(|m| m.id == id)?;
+                Some(glam::DVec3::new(
+                    m.previous.x + (m.position.x - m.previous.x) * alpha,
+                    m.previous.y
+                        + (m.position.y - m.previous.y) * alpha
+                        + f64::from(m.height()) * 0.5,
+                    m.previous.z + (m.position.z - m.previous.z) * alpha,
+                ))
+            }
+        }
+    }
     /// Mob models and projectiles for the entity pass.
     pub(super) fn mob_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let atlas = &self.res.atlas;
@@ -1916,6 +1974,26 @@ impl Game<'_> {
                 &self.res.mob_data,
                 out,
             );
+            // GuardianRenderer: the laser to the locked target.
+            if let Some((time, scale)) = horizon_client::mobs::guardian::beam(mob, alpha as f32)
+                && let Some(target) = self.beam_target(mob.ai.target, alpha)
+                && let Some(uv) = lookup("entity/guardian/guardian_beam")
+            {
+                let a = alpha;
+                let eye = glam::DVec3::new(
+                    mob.previous.x + (mob.position.x - mob.previous.x) * a,
+                    mob.previous.y + (mob.position.y - mob.previous.y) * a + mob.eye_height(),
+                    mob.previous.z + (mob.position.z - mob.previous.z) * a,
+                ) - camera;
+                horizon_client::mobs::guardian::beam_geometry(
+                    eye.as_vec3(),
+                    (target - camera).as_vec3(),
+                    time,
+                    scale,
+                    uv,
+                    out,
+                );
+            }
         }
         // Projectiles: arrows as crossed quads, the rest as item billboards.
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());

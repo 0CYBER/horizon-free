@@ -16,6 +16,7 @@ pub mod equine;
 pub mod farm;
 pub mod goals;
 pub mod golem;
+pub mod guardian;
 pub mod hostile;
 pub mod illager;
 pub mod keyframes;
@@ -319,6 +320,7 @@ pub enum DamageKind {
     Cactus,
     Generic,
     InWall,
+    Thorns,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -508,6 +510,16 @@ pub enum MobEvent {
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
     AttackPlayer(f32, [f64; 3]),
+    /// Damage of a given type to the player (guardian lasers, thorns).
+    DamagePlayer {
+        amount: f32,
+        from: [f64; 3],
+        kind: &'static str,
+    },
+    /// `ElderGuardian`'s curse on players within 50 blocks.
+    ElderCurse {
+        at: [f64; 3],
+    },
     Shoot([f64; 3], [f64; 3]),
     Explode([f64; 3], f32),
     /// Melee or ranged damage to another mob.

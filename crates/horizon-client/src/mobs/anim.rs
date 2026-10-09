@@ -8,6 +8,7 @@ use std::f32::consts::PI;
 /// The setupAnim implementation a model uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anim {
+    Guardian,
     Quadruped,
     Sheep,
     Chicken,
@@ -453,6 +454,7 @@ pub fn setup(
         Anim::Illager => super::illager::anim(m, s, p),
         Anim::Piglin => super::piglin::piglin_anim(m, s, p),
         Anim::Phantom => super::phantom::anim(m, s, p),
+        Anim::Guardian => super::guardian::anim(m, s, p),
         Anim::Horse => {
             super::equine::anim(m, s, p);
             // DonkeyModel: the chests show once fitted.

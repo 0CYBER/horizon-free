@@ -80,6 +80,7 @@ pub enum Family {
     Phantom,
     /// Slimes and magma cubes.
     Cube,
+    Guardian,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -114,6 +115,7 @@ pub fn family(s: Species) -> Family {
         S::Phantom => Family::Phantom,
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
+        S::Guardian | S::ElderGuardian => Family::Guardian,
         _ => Family::Generic,
     }
 }
@@ -144,6 +146,7 @@ pub fn register(m: &mut Mob) {
         },
         Family::Enderman => super::enderman::register(m),
         Family::Cube => super::cube::register(m),
+        Family::Guardian => super::guardian::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -165,6 +168,9 @@ pub fn custom_move_control(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>
     }
     if m.species() == Species::Phantom {
         return super::phantom::move_control(m);
+    }
+    if family(m.species()) == Family::Guardian {
+        return super::guardian::move_control(m);
     }
     match family(m.species()) {
         Family::Aquatic => aquatic::fish_move_control(m),
@@ -352,6 +358,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Cat if !m.extra.tame => "entity.cat.stray_ambient",
         Species::PolarBear if m.is_baby() => "entity.polar_bear.ambient_baby",
         Species::Dolphin if !m.fluids.in_water => "entity.dolphin.ambient",
+        Species::Guardian if !m.fluids.in_water => "entity.guardian.ambient_land",
+        Species::ElderGuardian if !m.fluids.in_water => "entity.elder_guardian.ambient_land",
         Species::Axolotl if !m.fluids.in_water => "entity.axolotl.idle_air",
         Species::Bat if m.extra.flag && m.random.next_int_bound(4).unwrap_or(1) != 0 => return,
         Species::ZombifiedPiglin if m.ai.target.is_some() => "entity.zombified_piglin.angry",
@@ -487,6 +495,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         | Species::ZombifiedPiglin => undead::custom_server_ai_step(m, cx),
         Species::Enderman => super::enderman::custom_server_ai_step(m, cx),
         Species::Blaze => super::nether::blaze_server_ai_step(m, cx),
+        Species::ElderGuardian => super::guardian::elder_server_ai_step(m, cx),
         _ => {}
     }
 }
@@ -512,6 +521,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Zoglin if m.extra.anim_ticks > 0 => m.extra.anim_ticks -= 1,
         s if super::equine::is_equine(s) => super::equine::ai_step(m, w),
         Species::Phantom => super::phantom::flap_sound(m, events),
+        Species::Guardian | Species::ElderGuardian => super::guardian::ai_step(m, w, events),
         Species::SnowGolem => super::golem::snow_ai_step(m, w, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
@@ -582,6 +592,10 @@ pub fn sound_volume(m: &Mob) -> f32 {
 /// PathfinderMob.getWalkTargetValue (Animal and Monster overrides).
 pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     let light = || w.brightness(p[0], p[1], p[2]) - 0.5;
+    // Guardian.getWalkTargetValue: water first.
+    if family(m.species()) == Family::Guardian && w.fluid(p[0], p[1], p[2]) == Fluid::Water {
+        return 10.0 + light();
+    }
     if m.hostile()
         && !matches!(
             m.species(),
@@ -694,6 +708,7 @@ pub fn ate(m: &mut Mob) {
 pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
     match family(m.species()) {
         Family::Aquatic => aquatic::travel(m, w, input, events),
+        Family::Guardian => super::guardian::travel(m, w, input, events),
         _ => false,
     }
 }
