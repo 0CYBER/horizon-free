@@ -639,6 +639,17 @@ impl Game<'_> {
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
         let by_player = self.last_hurt_by_player.remove(&m.id) || m.ai.last_hurt_by_player > 0;
+        // LivingEntity.die: the death is heard, and a sculk catalyst nearby
+        // takes the experience.
+        self.sculk_mob_died(m);
+        let consumed =
+            self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |game| {
+                if by_player {
+                    experience_reward(m, &mut game.world.random)
+                } else {
+                    0
+                }
+            });
         if by_player {
             self.stats.add("killed", &m.kind.id, 1);
             self.stats.custom("mob_kills", 1);
@@ -720,7 +731,7 @@ impl Game<'_> {
                 }
             }
         }
-        if by_player {
+        if by_player && !consumed {
             let xp = experience_reward(m, &mut self.world.random);
             if xp > 0 {
                 self.spawn_orbs(pos, xp);
@@ -970,6 +981,11 @@ impl Game<'_> {
                     }
                 },
                 MobEvent::Breed { parent, partner } => self.breed(parent, partner),
+                MobEvent::Vibration { from, to, ticks } => {
+                    self.mob_vibration_particle(from, to, ticks)
+                }
+                MobEvent::DigParticles { at } => self.warden_dig_particles(at),
+                MobEvent::Darkness { at, radius } => self.apply_darkness(at, radius),
                 MobEvent::GiftLoot { table, at } => {
                     let drops =
                         self.res

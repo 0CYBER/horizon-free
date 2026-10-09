@@ -400,6 +400,7 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
                 entries.push(("Page", Tag::Int(l.page)));
             }
         }
+        BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
     }
     Tag::compound(entries)
 }
@@ -474,6 +475,7 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             };
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
+        BlockEntity::Sculk(s) => s.load(tag),
         BlockEntity::Jukebox(_) | BlockEntity::Beacon(_) | BlockEntity::Lectern(_) => {}
     }
     Some((pos, entity))

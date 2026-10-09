@@ -46,6 +46,7 @@ mod remote;
 mod render_control;
 mod render_tick;
 mod screens;
+mod sculk;
 mod shield;
 mod sign_edit;
 mod station_control;
@@ -299,9 +300,12 @@ impl LevelAccess for GameLevel<'_> {
     fn block_entity_analog_signal(
         &self,
         pos: BlockPos,
-        _state: BlockStateId,
+        state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        if let Some(signal) = sculk::sensor_signal(self.world, self.behaviours, state, pos) {
+            return signal;
+        }
         if let Some((_, comparator)) = jukebox::jukebox_signals(self.world, self.items, pos) {
             return comparator;
         }
@@ -517,6 +521,7 @@ struct Game<'a> {
     mobs: Vec<Mob>,
     arrows: Vec<Arrow>,
     creatures: creatures::Creatures,
+    sculk: sculk::SculkState,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
     chest_open: HashMap<(i32, i32, i32), (f32, f32)>,
@@ -1226,6 +1231,12 @@ impl Game<'_> {
                         sounds.pitch * 0.8,
                     );
                 }
+                LevelEvent::LevelEvent {
+                    id: 3006,
+                    pos,
+                    data,
+                } => self.sculk_charge_event(pos, data),
+                LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
                 LevelEvent::LevelEvent { id, pos, .. } => {
                     let c = Some([
                         f64::from(pos.x) + 0.5,
@@ -1375,10 +1386,17 @@ impl Game<'_> {
                         },
                     );
                 }
+                LevelEvent::GameEvent { pos, event, state } => {
+                    self.sculk_level_event(pos, event, state)
+                }
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "shrieker_respond",
+                } => self.shrieker_block_event(pos, state),
                 LevelEvent::GrowTree { .. }
                 | LevelEvent::PlaceFeature { .. }
-                | LevelEvent::BlockEvent { .. }
-                | LevelEvent::GameEvent { .. } => {}
+                | LevelEvent::BlockEvent { .. } => {}
             }
         }
         Ok(())
@@ -1536,6 +1554,9 @@ impl Game<'_> {
         self.process_level_events()
     }
     fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.with_player_actor(|game| game.break_block_as_player(pos))
+    }
+    fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
@@ -1632,6 +1653,9 @@ impl Game<'_> {
         Ok(())
     }
     fn use_item(&mut self) -> Result<()> {
+        self.with_player_actor(|game| game.use_item_as_player())
+    }
+    fn use_item_as_player(&mut self) -> Result<()> {
         // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
         if self.spectator() {
             return Ok(());
@@ -2470,6 +2494,7 @@ impl Game<'_> {
             self.bob.1 += (target - self.bob.1) * 0.4;
         }
         self.tick_block_entities()?;
+        self.tick_sculk()?;
         self.tick_brewing_stands()?;
         if let Some(r) = &self.renderer {
             let eye = self.player.as_ref().map(|p| {
@@ -3040,7 +3065,8 @@ impl Game<'_> {
                 BlockEntity::Sign(_)
                 | BlockEntity::Jukebox(_)
                 | BlockEntity::Beacon(_)
-                | BlockEntity::Lectern(_),
+                | BlockEntity::Lectern(_)
+                | BlockEntity::Sculk(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -3265,7 +3291,8 @@ impl Game<'_> {
                     BlockEntity::Sign(_)
                     | BlockEntity::Jukebox(_)
                     | BlockEntity::Beacon(_)
-                    | BlockEntity::Lectern(_),
+                    | BlockEntity::Lectern(_)
+                    | BlockEntity::Sculk(_),
                 ) => {}
                 None => {
                     let texture = if self.craft_size == 3 {
@@ -7597,6 +7624,7 @@ pub fn run() -> Result<()> {
         mobs: Vec::new(),
         arrows: Vec::new(),
         creatures: Default::default(),
+        sculk: Default::default(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
         chest_open: HashMap::new(),

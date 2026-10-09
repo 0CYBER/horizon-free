@@ -55,6 +55,7 @@ pub mod pose;
 pub mod projectiles;
 pub mod save;
 pub mod screen_effects;
+pub mod sculk;
 pub mod settings;
 pub mod shadows;
 pub mod signs;

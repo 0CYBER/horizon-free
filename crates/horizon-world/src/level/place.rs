@@ -1514,7 +1514,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             volume: (sounds.volume + 1.0) / 2.0,
             pitch: sounds.pitch * 0.8,
         });
-        self.game_event(ctx.pos, "minecraft:block_place");
+        self.game_event_state(ctx.pos, "minecraft:block_place", placed);
         PlaceOutcome::Placed {
             pos: ctx.pos,
             state: placed,

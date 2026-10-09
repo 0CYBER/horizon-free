@@ -37,6 +37,7 @@ pub mod tame;
 pub mod undead;
 pub mod vex;
 pub mod villager;
+pub mod warden;
 pub mod witch;
 pub mod wither;
 mod world;
@@ -336,6 +337,7 @@ pub enum DamageKind {
     Generic,
     InWall,
     Thorns,
+    SonicBoom,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -390,6 +392,7 @@ impl Damage {
                 | DamageKind::Magic
                 | DamageKind::InWall
                 | DamageKind::Generic
+                | DamageKind::SonicBoom
         )
     }
     pub fn is_fire(&self) -> bool {
@@ -473,6 +476,8 @@ pub struct Extra {
     pub meeting: Option<[i32; 3]>,
     /// Villager and wandering trader offers and experience.
     pub trade: Option<Box<crate::merchant::Trader>>,
+    /// A warden's brain, anger and vibrations.
+    pub warden: Option<Box<warden::Warden>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -661,6 +666,21 @@ pub enum MobEvent {
     GiftLoot {
         table: &'static str,
         at: [f64; 3],
+    },
+    /// A vibration travelling to a listener (`VibrationParticleOption`).
+    Vibration {
+        from: [f64; 3],
+        to: [f64; 3],
+        ticks: i32,
+    },
+    /// The crumbs of the block under a digging or emerging warden.
+    DigParticles {
+        at: [f64; 3],
+    },
+    /// `Warden.applyDarknessAround`: darkness for survival players nearby.
+    Darkness {
+        at: [f64; 3],
+        radius: f64,
     },
 }
 /// How a spawned-by-kind mob should be set up.

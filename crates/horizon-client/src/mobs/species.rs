@@ -83,6 +83,7 @@ pub enum Species {
     Wither,
     Camel,
     Allay,
+    Warden,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -1148,6 +1149,20 @@ pub const ALL: &[Def] = &[
         Some("entity.strider.step"),
         Baby::Abs(0.45, 0.85, 0.4375)
     ),
+    def!(
+        Warden,
+        "warden",
+        "warden#main",
+        "entity/warden/warden",
+        A::Warden,
+        [
+            "entity.warden.ambient",
+            "entity.warden.hurt",
+            "entity.warden.death"
+        ],
+        None,
+        Baby::None
+    ),
 ];
 pub fn def(s: Species) -> &'static Def {
     ALL.iter().find(|d| d.species == s).unwrap_or(&ALL[0])
@@ -1356,6 +1371,7 @@ impl Def {
                 | S::Vex
                 | S::Ravager
                 | S::Wither
+                | S::Warden
         )
     }
     /// The item tag Animal.isFood tests.
