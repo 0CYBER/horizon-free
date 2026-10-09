@@ -8,6 +8,7 @@ use std::f32::consts::PI;
 /// The setupAnim implementation a model uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anim {
+    Wither,
     Vex,
     Ravager,
     Guardian,
@@ -459,6 +460,7 @@ pub fn setup(
         Anim::Phantom => super::phantom::anim(m, s, p),
         Anim::Guardian => super::guardian::anim(m, s, p),
         Anim::Vex => super::vex::anim(m, s, p),
+        Anim::Wither => super::wither::anim(m, s, p),
         Anim::Ravager => super::ravager::anim(m, s, p),
         Anim::Shulker => super::shulker::anim(m, s, p),
         Anim::Horse => {

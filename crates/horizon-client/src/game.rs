@@ -58,6 +58,7 @@ mod tnt;
 mod totem;
 mod trading;
 mod trident;
+mod wither;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -1716,7 +1717,9 @@ impl Game<'_> {
             || self.boost_firework(&stack)
             || self.use_empty_map(&stack)
             || self.use_book(&stack)
-            || self.equip_from_hand(&stack)
+            // Block items (heads, carved pumpkins) aimed at a block are
+            // placed first (useItemOn before useItem).
+            || (!(info.block.is_some() && self.pick().is_some()) && self.equip_from_hand(&stack))
         {
             return Ok(());
         }
@@ -1825,6 +1828,7 @@ impl Game<'_> {
         // BlockItem.place: the used statistic and the placed_block trigger.
         self.stats.add("used", &stack.item, 1);
         self.trigger_block("minecraft:placed_block", target, &stack);
+        self.check_wither_spawn(target)?;
         self.consume_held();
         Ok(())
     }
@@ -5491,11 +5495,13 @@ impl Game<'_> {
                 return Ok(true);
             }
         }
-        // Equippable items swap into their armor slot (Equippable.swapWithEquipmentSlot).
+        // Equippable items swap into their armor slot (Equippable.swapWithEquipmentSlot);
+        // block items aimed at a block are placed instead.
         if let Some(slot) = self
             .res
             .items
             .get(&stack.item)
+            .filter(|i| i.block.is_none())
             .and_then(|i| i.equip_slot.clone())
         {
             let index = match slot.as_str() {

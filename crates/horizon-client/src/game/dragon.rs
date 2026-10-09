@@ -1841,12 +1841,11 @@ impl Game<'_> {
     }
     /// The boss bar (`BossHealthOverlay`): name and the pink progress bar.
     pub(super) fn draw_boss_bar(&self, batch: &mut HudBatch) {
-        let Some(d) = self.dragon.as_ref() else {
+        let dragon = self.dragon.as_ref().filter(|_| self.dim == Dim::End);
+        self.draw_wither_bars(batch, if dragon.is_some() { 31.0 } else { 12.0 });
+        let Some(d) = dragon else {
             return;
         };
-        if self.dim != Dim::End {
-            return;
-        }
         let atlas = &self.res.atlas;
         let x = (batch.width / 2.0 - 91.0).floor();
         let y = 12.0;
@@ -1866,7 +1865,7 @@ impl Game<'_> {
     }
     /// `music.dragon` while the boss bar plays music.
     pub(super) fn boss_music(&self) -> bool {
-        self.dim == Dim::End && self.dragon.is_some()
+        self.dim == Dim::End && self.dragon.is_some() || self.wither_near()
     }
 }
 pub(super) struct DragonFireball {

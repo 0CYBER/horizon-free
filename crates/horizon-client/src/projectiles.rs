@@ -34,6 +34,10 @@ pub enum ProjectileKind {
         delta: [f64; 3],
         seed: u64,
     },
+    /// `WitherSkull`: blue (dangerous) skulls keep their speed better.
+    WitherSkull {
+        dangerous: bool,
+    },
     /// Splash potion thrown by witches: effect id, duration.
     Potion {
         effect: &'static str,
@@ -122,13 +126,17 @@ impl Projectile {
     pub fn is_fireball(&self) -> bool {
         matches!(
             self.kind,
-            ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. }
+            ProjectileKind::SmallFireball
+                | ProjectileKind::LargeFireball { .. }
+                | ProjectileKind::WitherSkull { .. }
         )
     }
     fn gravity(&self) -> f64 {
         match self.kind {
             ProjectileKind::Arrow { .. } => 0.05,
-            ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => 0.0,
+            ProjectileKind::SmallFireball
+            | ProjectileKind::LargeFireball { .. }
+            | ProjectileKind::WitherSkull { .. } => 0.0,
             ProjectileKind::LlamaSpit => 0.06,
             ProjectileKind::Potion { .. } => 0.05,
             _ => 0.03,
@@ -209,7 +217,6 @@ impl Projectile {
         self.yaw = v.x.atan2(v.z).to_degrees() as f32;
         self.pitch = v.y.atan2(sd).to_degrees() as f32;
     }
-    /// One tick: returns whether to keep the projectile and what it hit.
     /// A shulker's bullet from its block toward `target`, first leaving
     /// along an axis other than the one it is attached on.
     pub fn shulker_bullet(
@@ -446,6 +453,7 @@ impl Projectile {
         }
         (self.position.y > -128.0, Hit::None)
     }
+    /// One tick: returns whether to keep the projectile and what it hit.
     pub fn tick(&mut self, w: &impl ProjectileWorld) -> (bool, Hit) {
         self.previous = self.position;
         self.age += 1;
@@ -458,8 +466,15 @@ impl Projectile {
         }
         let water = w.in_water(self.position);
         match self.kind {
-            ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => {
-                let inertia = if water { 0.8 } else { 0.95 };
+            ProjectileKind::SmallFireball
+            | ProjectileKind::LargeFireball { .. }
+            | ProjectileKind::WitherSkull { .. } => {
+                // WitherSkull.getInertia: 0.73 for dangerous skulls.
+                let inertia = match self.kind {
+                    ProjectileKind::WitherSkull { dangerous: true } => 0.73,
+                    _ if water => 0.8,
+                    _ => 0.95,
+                };
                 let v = self.velocity;
                 let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1.0e-9);
                 self.velocity = Vec3::new(
@@ -581,6 +596,8 @@ impl Projectile {
             ProjectileKind::Potion { .. } => "item/splash_potion",
             ProjectileKind::LlamaSpit => "entity/llama/llama_spit",
             ProjectileKind::ShulkerBullet { .. } => "entity/shulker/spark",
+            ProjectileKind::WitherSkull { dangerous: false } => "entity/wither/wither",
+            ProjectileKind::WitherSkull { dangerous: true } => "entity/wither/wither_invulnerable",
             ProjectileKind::Arrow { .. } => return None,
         })
     }

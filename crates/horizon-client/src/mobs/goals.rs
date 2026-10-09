@@ -557,6 +557,10 @@ impl Stroll {
         self.interval = i;
         self
     }
+    /// WaterAvoidingRandomFlyingGoal (a nearby air position).
+    pub fn flying(speed: f64) -> Self {
+        Self::new(speed)
+    }
     /// RandomSwimmingGoal(speed, interval)
     pub fn swimming(speed: f64, interval: i32) -> Self {
         Self {

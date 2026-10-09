@@ -35,6 +35,7 @@ pub mod tame;
 pub mod undead;
 pub mod vex;
 pub mod witch;
+pub mod wither;
 mod world;
 
 use crate::{blocks::BlockFacts, mesher::Vertex, world::World};
@@ -443,6 +444,8 @@ pub struct Extra {
     pub using_item: i32,
     pub flag: bool,
     pub flag2: bool,
+    /// Species scratch values (the wither's head targets and clocks).
+    pub ints: [i32; 6],
     pub counter: i32,
     pub counter2: i32,
     pub home: Option<[i32; 3]>,

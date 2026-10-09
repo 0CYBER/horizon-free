@@ -619,6 +619,10 @@ impl Game<'_> {
             if m.extra.saddled {
                 gear.push("minecraft:saddle");
             }
+            // WitherBoss.dropCustomDeathLoot.
+            if m.species() == Species::Wither {
+                gear.push("minecraft:nether_star");
+            }
             if m.extra.chested && horizon_client::mobs::equine::is_equine(m.species()) {
                 gear.push("minecraft:chest");
             }
@@ -633,8 +637,10 @@ impl Game<'_> {
             {
                 let item = &m.extra.main_hand;
                 // Equipment drop chance 8.5% (+ player kill only).
+                // Vexes never drop their sword.
                 if let Some(item) = item
                     && by_player
+                    && m.species() != Species::Vex
                     && self.world.random.next_float() < 0.085
                 {
                     self.spawn_item(
@@ -1517,6 +1523,13 @@ impl Game<'_> {
                     }
                 }
             },
+            (ProjectileKind::WitherSkull { .. }, hit) => {
+                let who = match hit {
+                    Hit::Entity { who, .. } => Some(who),
+                    _ => None,
+                };
+                self.wither_skull_hit(p, who, atp)?;
+            }
             (ProjectileKind::ShulkerBullet { .. }, Hit::Block { .. }) => {
                 self.audio
                     .play("minecraft:entity.shulker_bullet.hit", Some(atp), 1.0, 1.0);
@@ -2152,6 +2165,40 @@ impl Game<'_> {
                             light: packed,
                         });
                     }
+                }
+                continue;
+            }
+            // WitherSkullRenderer: the skull model facing its flight.
+            if let Some(dangerous) = super::wither::skull_kind(a) {
+                static SKULL: std::sync::OnceLock<Option<horizon_client::mobs::Part>> =
+                    std::sync::OnceLock::new();
+                let model = SKULL.get_or_init(|| {
+                    horizon_client::mobs::load_model(
+                        &self.options.resources,
+                        "minecraft:wither_skull#main",
+                    )
+                });
+                let tex = if dangerous {
+                    "entity/wither/wither_invulnerable"
+                } else {
+                    "entity/wither/wither"
+                };
+                if let (Some(model), Some(r)) = (model, atlas.sprites.get(tex).copied()) {
+                    let mut poses = horizon_client::mobs::anim::Poses::new(model);
+                    poses.yrot("head", a.yaw.to_radians());
+                    poses.xrot("head", a.pitch.to_radians());
+                    let base = glam::Mat4::from_translation(c)
+                        * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
+                    horizon_client::mobs::render::draw(
+                        model,
+                        base,
+                        &poses,
+                        [r.u0, r.v0, r.u1, r.v1],
+                        0xFFFF_FFFF,
+                        packed,
+                        0,
+                        out,
+                    );
                 }
                 continue;
             }

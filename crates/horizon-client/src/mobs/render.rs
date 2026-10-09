@@ -119,6 +119,7 @@ pub fn body(m: &Mob) -> (String, String) {
         ),
         S::Shulker => ("shulker#main".into(), super::shulker::texture(m)),
         S::Vex => ("vex#main".into(), super::vex::texture(m).into()),
+        S::Wither => ("wither#main".into(), super::wither::texture(m).into()),
         S::Ghast => (
             "ghast#main".into(),
             if m.extra.flag {
@@ -582,6 +583,9 @@ fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
 }
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
     match m.species() {
+        Species::Wither => {
+            glam::Mat4::from_scale(glam::Vec3::splat(super::wither::scale(m, alpha)))
+        }
         Species::Creeper => {
             // CreeperRenderer.scale: swelling with a wobble.
             let s = ((m.previous_swell as f32 + (m.swell - m.previous_swell) as f32 * alpha)

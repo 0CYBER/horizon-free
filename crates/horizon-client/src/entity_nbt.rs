@@ -246,6 +246,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("equipment".into(), Tag::Compound(equipment));
         }
+        "minecraft:wither" => {
+            map.insert("Invul".into(), Tag::Int(m.extra.counter));
+        }
         "minecraft:ravager" => {
             map.insert("AttackTick".into(), Tag::Int(m.extra.counter));
             map.insert("StunTick".into(), Tag::Int(m.extra.counter2));
@@ -412,6 +415,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 .position(|(n, _)| *n == v)
                 .unwrap_or(0) as u8;
         }
+    }
+    if m.species() == crate::mobs::Species::Wither {
+        m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;
     }
     if m.species() == crate::mobs::Species::Ravager {
         m.extra.counter = number(tag.get("AttackTick")).unwrap_or(0) as i32;

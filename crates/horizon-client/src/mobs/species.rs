@@ -79,6 +79,7 @@ pub enum Species {
     Evoker,
     Vex,
     Ravager,
+    Wither,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -883,6 +884,20 @@ pub const ALL: &[Def] = &[
         Baby::None
     ),
     def!(
+        Wither,
+        "wither",
+        "wither#main",
+        "entity/wither/wither",
+        A::Wither,
+        [
+            "entity.wither.ambient",
+            "entity.wither.hurt",
+            "entity.wither.death"
+        ],
+        None,
+        Baby::None
+    ),
+    def!(
         Ravager,
         "ravager",
         "ravager#main",
@@ -1169,6 +1184,7 @@ impl Def {
                 | S::Phantom
                 | S::ZombifiedPiglin
                 | S::Zoglin
+                | S::Wither
         );
         let aquatic = matches!(
             s,
@@ -1198,6 +1214,7 @@ impl Def {
                     | S::Frog
                     | S::Slime
                     | S::MagmaCube
+                    | S::Wither
             ),
             flying: matches!(s, S::Ghast | S::Phantom),
             climber: matches!(s, S::Spider | S::CaveSpider),
@@ -1214,6 +1231,7 @@ impl Def {
                         | S::ZombifiedPiglin
                         | S::Zoglin
                         | S::Hoglin
+                        | S::Wither
                 ),
             burns_in_day: matches!(
                 s,
@@ -1288,6 +1306,7 @@ impl Def {
                 | S::Evoker
                 | S::Vex
                 | S::Ravager
+                | S::Wither
         )
     }
     /// The item tag Animal.isFood tests.

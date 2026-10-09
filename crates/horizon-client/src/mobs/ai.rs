@@ -84,6 +84,7 @@ pub enum Family {
     Shulker,
     Vex,
     Ravager,
+    Wither,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -115,6 +116,7 @@ pub fn family(s: Species) -> Family {
         S::Pillager | S::Vindicator | S::Evoker => Family::Illager,
         S::Vex => Family::Vex,
         S::Ravager => Family::Ravager,
+        S::Wither => Family::Wither,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
         S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse => Family::Equine,
         S::Phantom => Family::Phantom,
@@ -157,10 +159,14 @@ pub fn register(m: &mut Mob) {
         Family::Shulker => super::shulker::register(m),
         Family::Vex => super::vex::register(m),
         Family::Ravager => super::ravager::register(m),
+        Family::Wither => super::wither::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
 fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if m.species() == Species::Wither && m.alive() {
+        super::wither::steer(m);
+    }
     match family(m.species()) {
         Family::Hostile => {
             if m.species() == Species::Creeper {
@@ -544,6 +550,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Guardian | Species::ElderGuardian => super::guardian::ai_step(m, w, events),
         Species::Vex => super::vex::ai_step(m, w),
         Species::Ravager => super::ravager::ai_step(m, w, events),
+        Species::Wither => super::wither::ai_step(m, w, events),
         Species::Shulker => {
             super::shulker::tick(m, w, events);
             super::shulker::ai_step(m, w, events);
@@ -641,6 +648,7 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
 /// Species damage filters (LivingEntity.hurtServer overrides).
 pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
     match m.species() {
+        Species::Wither => super::wither::accepts(m, source.kind, source.attacker, false),
         Species::Shulker => super::shulker::accepts(m, source),
         Species::Enderman => super::enderman::on_damage(m, source),
         Species::WitherSkeleton | Species::Blaze | Species::MagmaCube | Species::Strider
