@@ -266,10 +266,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 ("level", Tag::Int(i32::from(m.extra.variant3.max(1)))),
             ]);
             map.insert("VillagerData".into(), data);
-            let xp = m.extra.trade.as_ref().map_or(0, |t| t.xp);
-            map.insert("Xp".into(), Tag::Int(xp));
+            let t = m.extra.trade.as_deref().cloned().unwrap_or_default();
+            map.insert("Xp".into(), Tag::Int(t.xp));
+            map.insert("LastRestock".into(), Tag::Long(t.last_restock));
+            map.insert("RestocksToday".into(), Tag::Int(t.restocks_today));
             put_offers(map, m);
-            put_job_site(map, m.extra.home);
+            put_memories(map, m);
         }
         "minecraft:wandering_trader" => put_offers(map, m),
         "minecraft:allay" => {
@@ -999,19 +1001,25 @@ fn put_offers(map: &mut Compound, m: &Mob) {
         Tag::compound([("Recipes", Tag::List(recipes))]),
     );
 }
-/// The villager brain's `job_site` memory.
-fn put_job_site(map: &mut Compound, site: Option<[i32; 3]>) {
-    let Some(p) = site else { return };
-    let pos = Tag::compound([
-        ("dimension", string("minecraft:overworld")),
-        ("pos", Tag::IntArray(p.to_vec())),
-    ]);
+/// The villager brain's `job_site`, `home` and `meeting_point` memories.
+fn put_memories(map: &mut Compound, m: &Mob) {
+    let memories: Vec<(&str, Tag)> = [
+        ("minecraft:job_site", m.extra.home),
+        ("minecraft:home", m.extra.bed),
+        ("minecraft:meeting_point", m.extra.meeting),
+    ]
+    .into_iter()
+    .filter_map(|(key, p)| {
+        let pos = Tag::compound([
+            ("dimension", string("minecraft:overworld")),
+            ("pos", Tag::IntArray(p?.to_vec())),
+        ]);
+        Some((key, Tag::compound([("value", pos)])))
+    })
+    .collect();
     map.insert(
         "Brain".into(),
-        Tag::compound([(
-            "memories",
-            Tag::compound([("minecraft:job_site", Tag::compound([("value", pos)]))]),
-        )]),
+        Tag::compound([("memories", Tag::compound(memories))]),
     );
 }
 fn read_villager(m: &mut Mob, tag: &Tag) {
@@ -1029,15 +1037,19 @@ fn read_villager(m: &mut Mob, tag: &Tag) {
             .unwrap_or(0) as u8;
         m.extra.variant3 = number(data.get("level")).unwrap_or(1).clamp(1, 5) as u8;
     }
-    m.extra.home = tag
-        .get("Brain")
-        .and_then(|b| b.get("memories"))
-        .and_then(|b| b.get("minecraft:job_site"))
-        .and_then(|j| j.get("value"))
-        .and_then(|v| match v.get("pos") {
-            Some(Tag::IntArray(a)) if a.len() == 3 => Some([a[0], a[1], a[2]]),
-            _ => None,
-        });
+    let memory = |key: &str| {
+        tag.get("Brain")
+            .and_then(|b| b.get("memories"))
+            .and_then(|b| b.get(key))
+            .and_then(|j| j.get("value"))
+            .and_then(|v| match v.get("pos") {
+                Some(Tag::IntArray(a)) if a.len() == 3 => Some([a[0], a[1], a[2]]),
+                _ => None,
+            })
+    };
+    m.extra.home = memory("minecraft:job_site");
+    m.extra.bed = memory("minecraft:home");
+    m.extra.meeting = memory("minecraft:meeting_point");
     let Some(Tag::List(recipes)) = tag.get("Offers").and_then(|o| o.get("Recipes")) else {
         return;
     };
@@ -1066,6 +1078,9 @@ fn read_villager(m: &mut Mob, tag: &Tag) {
     m.extra.trade = Some(Box::new(Trader {
         xp: number(tag.get("Xp")).unwrap_or(0) as i32,
         offers,
+        last_restock: number(tag.get("LastRestock")).unwrap_or(0),
+        restocks_today: number(tag.get("RestocksToday")).unwrap_or(0) as i32,
+        check_day: 0,
     }));
 }
 

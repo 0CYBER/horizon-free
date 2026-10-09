@@ -142,7 +142,10 @@ impl Game<'_> {
                     self.new_offers(profession, variant, level)
                 }
             };
-            self.mobs[index].extra.trade = Some(Box::new(merchant::Trader { xp: 0, offers }));
+            self.mobs[index].extra.trade = Some(Box::new(merchant::Trader {
+                offers,
+                ..Default::default()
+            }));
         }
         let m = &self.mobs[index];
         let trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
@@ -184,10 +187,9 @@ impl Game<'_> {
         if state.progress() {
             m.extra.variant3 = state.level.clamp(1, 5) as u8;
         }
-        m.extra.trade = Some(Box::new(merchant::Trader {
-            xp: state.xp,
-            offers: state.offers.clone(),
-        }));
+        let trade = m.extra.trade.get_or_insert_default();
+        trade.xp = state.xp;
+        trade.offers = state.offers.clone();
     }
     /// Opens a merchant menu for a villager (or a generated one for tests).
     pub(super) fn open_merchant(&mut self, profession: &str, variant: &str, level: i32) {

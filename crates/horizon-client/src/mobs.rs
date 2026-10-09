@@ -464,6 +464,9 @@ pub struct Extra {
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
     pub effects: Vec<(&'static str, i32, i32)>,
+    /// A villager's claimed bed head and meeting bell.
+    pub bed: Option<[i32; 3]>,
+    pub meeting: Option<[i32; 3]>,
     /// Villager and wandering trader offers and experience.
     pub trade: Option<Box<crate::merchant::Trader>>,
 }
@@ -691,8 +694,9 @@ pub struct Seen {
     pub variant: u8,
     /// Dye colour (sheep).
     pub color: u8,
-    /// A villager's claimed job site.
+    /// A villager's claimed job site and bed.
     pub job: Option<[i32; 3]>,
+    pub bed: Option<[i32; 3]>,
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]
@@ -718,6 +722,7 @@ pub struct PlayerView {
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,
+    pub registry: &'a horizon_world::registry::BlockRegistry,
     pub facts: &'a BlockFacts,
     pub collision: &'a BlockCollisionRegistry<'a>,
     pub data: &'a MobData,

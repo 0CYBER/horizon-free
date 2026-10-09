@@ -47,6 +47,13 @@ impl MobWorld<'_> {
     pub fn block_name(&self, x: i32, y: i32, z: i32) -> &str {
         &self.facts.get(self.world.block(x, y, z)).name
     }
+    /// A block state property's value.
+    pub fn prop(&self, x: i32, y: i32, z: i32, key: &str) -> Option<&str> {
+        self.registry
+            .state(self.world.block(x, y, z))
+            .and_then(|s| s.properties.get(key))
+            .map(String::as_str)
+    }
     pub fn has_tag(&self, tag: &str, block: &str) -> bool {
         self.block_tags.get(tag).is_some_and(|s| s.contains(block))
     }

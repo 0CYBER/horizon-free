@@ -550,8 +550,21 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
         m.previous.z + (m.position.z - m.previous.z) * a,
     ) - camera;
     let body = m.previous_body_yaw + wrap(m.body_yaw - m.previous_body_yaw) * alpha;
-    let rotation = super::aquatic::rotations(m, alpha, body)
-        .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians()));
+    let sleep = (m.species() == Species::Villager)
+        .then(|| super::villager::sleep_pose(m))
+        .flatten();
+    let rotation = match sleep {
+        // setupRotations for Pose.SLEEPING, with the head moved toward the pillow.
+        Some((angle, step)) => {
+            let head = (m.eye_y() - m.position.y) as f32 - 0.1;
+            glam::Mat4::from_translation(glam::Vec3::new(-step[0] * head, 0.0, -step[1] * head))
+                * glam::Mat4::from_rotation_y(angle.to_radians())
+                * glam::Mat4::from_rotation_z(90.0_f32.to_radians())
+                * glam::Mat4::from_rotation_y(270.0_f32.to_radians())
+        }
+        None => super::aquatic::rotations(m, alpha, body)
+            .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
+    };
     let mut base = glam::Mat4::from_translation(p.as_vec3()) * rotation;
     if m.death_time > 0 {
         let f = ((m.death_time as f32 + alpha - 1.0) / 20.0 * 1.6)

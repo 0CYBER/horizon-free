@@ -418,7 +418,8 @@ fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.ai.zza *= 0.98;
     // LivingEntity.isImmobile: no goals or input (a biting, stunned or
     // roaring ravager).
-    let immobile = m.species() == Species::Ravager && super::ravager::immobile(m);
+    let immobile = m.species() == Species::Ravager && super::ravager::immobile(m)
+        || super::villager::sleeping(m);
     if m.alive() && !immobile {
         server_ai_step(m, w, events);
     } else {
@@ -766,6 +767,7 @@ pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<Mo
         // Shulkers never move on their own.
         Family::Shulker => true,
         Family::Vex => super::vex::travel(m),
+        Family::Villager => super::villager::travel(m),
         _ => false,
     }
 }

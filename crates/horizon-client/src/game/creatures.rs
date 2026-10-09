@@ -112,6 +112,9 @@ fn seen(m: &Mob) -> Seen {
         job: (m.species() == Species::Villager)
             .then_some(m.extra.home)
             .flatten(),
+        bed: (m.species() == Species::Villager)
+            .then_some(m.extra.bed)
+            .flatten(),
     }
 }
 impl Game<'_> {
@@ -248,6 +251,8 @@ impl Game<'_> {
                     "goals": m.ai.goals.running_names(),
                     "held": m.extra.main_hand.as_deref(),
                     "ints": m.extra.ints,
+                    "pois": [m.extra.home, m.extra.bed, m.extra.meeting],
+                    "profession": m.extra.variant2,
                     "targets": m.ai.targets.running_names(),
                     "path": m.ai.nav.path.as_ref().map(|p| p.nodes.len() - p.next.min(p.nodes.len())),
                     "on_ground": m.on_ground,
@@ -366,6 +371,7 @@ impl Game<'_> {
         let (rain, thunder) = self.world.weather.levels(1.0);
         MobWorld {
             world: &self.world,
+            registry: self.res.assets.registry,
             facts: &self.res.facts,
             collision: self.collision,
             data: &self.res.mob_data,

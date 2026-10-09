@@ -53,6 +53,49 @@ pub const PROFESSIONS: &[&str] = &[
 pub struct Trader {
     pub xp: i32,
     pub offers: Vec<MerchantOffer>,
+    /// `lastRestockGameTime`, `numberOfRestocksToday` and `lastRestockCheckDay`.
+    pub last_restock: i64,
+    pub restocks_today: i32,
+    pub check_day: i64,
+}
+impl Trader {
+    fn update_demand(&mut self) {
+        for o in &mut self.offers {
+            o.update_demand();
+        }
+    }
+    /// `Villager.shouldRestock`.
+    pub fn should_restock(&mut self, game_time: i64, day: i64) -> bool {
+        let mut new_day = game_time > self.last_restock + 12000;
+        new_day |= self.check_day > 0 && day > self.check_day;
+        self.check_day = day;
+        if new_day {
+            self.last_restock = game_time;
+            // resetNumberOfRestocks / catchUpDemand.
+            let missed = 2 - self.restocks_today;
+            if missed > 0 {
+                for o in &mut self.offers {
+                    o.uses = 0;
+                }
+            }
+            for _ in 0..missed {
+                self.update_demand();
+            }
+            self.restocks_today = 0;
+        }
+        let allowed = self.restocks_today == 0
+            || self.restocks_today < 2 && game_time > self.last_restock + 2400;
+        allowed && self.offers.iter().any(|o| o.uses > 0)
+    }
+    /// `Villager.restock`.
+    pub fn restock(&mut self, game_time: i64) {
+        self.update_demand();
+        for o in &mut self.offers {
+            o.uses = 0;
+        }
+        self.last_restock = game_time;
+        self.restocks_today += 1;
+    }
 }
 
 /// An `ItemCost`: item and count (component predicates are not used by the
@@ -580,6 +623,32 @@ mod tests {
         assert_eq!(o.cost_a_count(&items), 13);
         o.special_price_diff = -20;
         assert_eq!(o.cost_a_count(&items), 1);
+    }
+
+    #[test]
+    fn restocks_twice_a_day() {
+        let mut t = Trader {
+            offers: vec![offer(4, None)],
+            ..Default::default()
+        };
+        assert!(!t.should_restock(100, 0), "nothing used yet");
+        t.offers[0].uses = 12;
+        assert!(t.should_restock(100, 0));
+        t.restock(100);
+        assert_eq!(
+            (t.offers[0].uses, t.offers[0].demand, t.restocks_today),
+            (0, 12, 1)
+        );
+        t.offers[0].uses = 1;
+        // The second restock needs 2400 ticks since the first.
+        assert!(!t.should_restock(2000, 0));
+        assert!(t.should_restock(2600, 0));
+        t.restock(2600);
+        t.offers[0].uses = 1;
+        assert!(!t.should_restock(6000, 0), "two a day");
+        // A new day resets the count and catches up on demand.
+        assert!(t.should_restock(30000, 1));
+        assert_eq!(t.restocks_today, 0);
     }
 
     #[test]
