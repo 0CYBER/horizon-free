@@ -13,6 +13,7 @@ pub enum Pose {
     Standing,
     Crouching,
     Swimming,
+    FallFlying,
 }
 impl Pose {
     pub fn name(self) -> &'static str {
@@ -20,13 +21,14 @@ impl Pose {
             Self::Standing => "STANDING",
             Self::Crouching => "CROUCHING",
             Self::Swimming => "SWIMMING",
+            Self::FallFlying => "FALL_FLYING",
         }
     }
     pub fn dimensions(self, scale: f32) -> Dimensions {
         let (height, eye_height) = match self {
             Self::Standing => (1.8, 1.62),
             Self::Crouching => (1.5, 1.27),
-            Self::Swimming => (0.6, 0.4),
+            Self::Swimming | Self::FallFlying => (0.6, 0.4),
         };
         Dimensions {
             width: 0.6 * scale,
@@ -95,7 +97,9 @@ impl MotionWorld<'_, '_, '_> {
         if !self.can_fit_pose(Pose::Swimming)? {
             return Ok(());
         }
-        let desired = if self.player.shift_key_down && !self.player.flying {
+        let desired = if self.player.fall_flying {
+            Pose::FallFlying
+        } else if self.player.shift_key_down && !self.player.flying {
             Pose::Crouching
         } else {
             Pose::Standing

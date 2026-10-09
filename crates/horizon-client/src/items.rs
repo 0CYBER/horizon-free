@@ -49,6 +49,11 @@ pub struct ItemInfo {
     pub disable_blocking_seconds: f32,
     /// `use_effects.speed_multiplier` (UseEffects.DEFAULT: 0.2).
     pub use_speed: f32,
+    /// `glider` (elytra).
+    pub glider: bool,
+    /// `equippable.swappable` and `equip_sound`.
+    pub swappable: bool,
+    pub equip_sound: Option<String>,
 }
 /// A reduction of `blocks_attacks.damage_reductions`.
 #[derive(Clone, Debug)]
@@ -265,6 +270,13 @@ impl Items {
                         .as_str()
                         .unwrap_or(name)
                         .to_owned(),
+                    glider: c["minecraft:glider"].is_object(),
+                    swappable: c["minecraft:equippable"]["swappable"]
+                        .as_bool()
+                        .unwrap_or(true),
+                    equip_sound: c["minecraft:equippable"]["equip_sound"]
+                        .as_str()
+                        .map(str::to_owned),
                     use_speed: c["minecraft:use_effects"]["speed_multiplier"]
                         .as_f64()
                         .unwrap_or(0.2) as f32,

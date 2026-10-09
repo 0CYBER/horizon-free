@@ -143,6 +143,15 @@ pub struct PlayerMotion {
     pub flying: bool,
     /// The jump key last tick (LocalPlayer.aiStep's wasJumping).
     pub was_jumping: bool,
+    /// A usable glider (elytra) is worn; the game sets it each tick.
+    pub glider: bool,
+    /// The view pitch (xRot), for gliding.
+    pub pitch: f32,
+    /// Gliding (shared flag 7) and LivingEntity.fallFlyTicks.
+    pub fall_flying: bool,
+    pub fall_fly_ticks: i32,
+    /// Glider durability to take this tick (updateFallFlying).
+    pub glider_wear: u32,
     pub sprinting: bool,
     pub sprint_input: crate::sprint::SprintState,
     pub shift_key_down: bool,
@@ -215,6 +224,11 @@ impl PlayerMotion {
             may_fly: false,
             flying: false,
             was_jumping: false,
+            glider: false,
+            pitch: 0.0,
+            fall_flying: false,
+            fall_fly_ticks: 0,
+            glider_wear: 0,
             sprinting: false,
             sprint_input: crate::sprint::SprintState::default(),
             shift_key_down: false,
@@ -447,6 +461,7 @@ impl MotionWorld<'_, '_, '_> {
         self.player.peaceful_regeneration(self.scene.health_rules)?;
         // LocalPlayer.aiStep: double-tap jump toggles creative flight.
         let was_jumping = std::mem::replace(&mut self.player.was_jumping, jumping);
+        let flying_before = self.player.flying;
         if !self.player.may_fly {
             self.player.flying = false;
         } else if !was_jumping && jumping {
@@ -459,6 +474,26 @@ impl MotionWorld<'_, '_, '_> {
                 }
                 self.player.jump_trigger_time = 0;
             }
+        }
+        let toggled = flying_before != self.player.flying;
+        // Player.tryToStartFallFlying (canGlide: airborne, not flying, a glider).
+        let can_glide = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
+        if jumping && !toggled && !was_jumping && !self.player.fall_flying && can_glide {
+            self.player.fall_flying = true;
+        }
+        // LivingEntity.tick fallFlyTicks, then updateFallFlying.
+        if self.player.fall_flying {
+            self.player.fall_fly_ticks += 1;
+            let still = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
+            if !still {
+                self.player.fall_flying = false;
+            } else if (self.player.fall_fly_ticks + 1) % 10 == 0
+                && ((self.player.fall_fly_ticks + 1) / 10) % 2 == 0
+            {
+                self.player.glider_wear += 1;
+            }
+        } else {
+            self.player.fall_fly_ticks = 0;
         }
         if self.player.flying {
             // Vertical flight: jump up, shift down, three times the flying speed.
@@ -553,7 +588,9 @@ impl MotionWorld<'_, '_, '_> {
         } else {
             self.player.no_jump_delay = 0;
         }
-        if self.player.flying {
+        if self.player.fall_flying {
+            self.travel_fall_flying()?;
+        } else if self.player.flying {
             // Player.travel while flying: keep 0.6 of the vertical speed.
             let y = self.player.velocity.y;
             self.travel_in_air(input)?;
@@ -576,6 +613,48 @@ impl MotionWorld<'_, '_, '_> {
             .food
             .add_exhaustion(if self.player.sprinting { 0.2 } else { 0.05 });
         Ok(())
+    }
+    /// LivingEntity.travelFallFlying with updateFallFlyingMovement.
+    fn travel_fall_flying(&mut self) -> Result<()> {
+        let v = self.player.velocity;
+        let (yaw, pitch) = (self.player.yaw.to_radians(), self.player.pitch.to_radians());
+        let look = Vec3::new(
+            f64::from(-yaw.sin() * pitch.cos()),
+            f64::from(-pitch.sin()),
+            f64::from(yaw.cos() * pitch.cos()),
+        );
+        let lean = pitch;
+        let look_h = (look.x * look.x + look.z * look.z).sqrt();
+        let move_h = (v.x * v.x + v.z * v.z).sqrt();
+        let gravity = 0.08;
+        let lift = f64::from(lean.cos()).powi(2);
+        let mut m = Vec3::new(v.x, v.y + gravity * (-1.0 + lift * 0.75), v.z);
+        if m.y < 0.0 && look_h > 0.0 {
+            let convert = m.y * -0.1 * lift;
+            m = Vec3::new(
+                m.x + look.x * convert / look_h,
+                m.y + convert,
+                m.z + look.z * convert / look_h,
+            );
+        }
+        if lean < 0.0 && look_h > 0.0 {
+            let convert = move_h * f64::from(-lean.sin()) * 0.04;
+            m = Vec3::new(
+                m.x - look.x * convert / look_h,
+                m.y + convert * 3.2,
+                m.z - look.z * convert / look_h,
+            );
+        }
+        if look_h > 0.0 {
+            m = Vec3::new(
+                m.x + (look.x / look_h * move_h - m.x) * 0.1,
+                m.y,
+                m.z + (look.z / look_h * move_h - m.z) * 0.1,
+            );
+        }
+        self.player.velocity = Vec3::new(m.x * 0.99, m.y * 0.98, m.z * 0.99);
+        let movement = self.player.velocity;
+        self.move_self(movement)
     }
     pub fn move_self(&mut self, movement: Vec3) -> Result<()> {
         entity_move::move_entity(self, MoverType::SelfMovement, movement)

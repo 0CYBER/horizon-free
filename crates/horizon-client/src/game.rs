@@ -1486,6 +1486,7 @@ impl Game<'_> {
             || self.use_fishing_rod(&stack)
             || self.use_crossbow(&stack)
             || self.use_trident(&stack)
+            || self.equip_from_hand(&stack)
         {
             return Ok(());
         }
@@ -1935,6 +1936,14 @@ impl Game<'_> {
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;
         player.may_fly = self.creative;
+        player.pitch = self.pitch;
+        // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
+        player.glider = self.armor[1].as_ref().is_some_and(|s| {
+            self.res
+                .items
+                .get(&s.item)
+                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
+        });
         if self.level.health > 0.0 && self.ticks < 2 {
             player.set_health(self.level.health, false)?;
             player.health.food.food = self.level.food;
@@ -2009,6 +2018,14 @@ impl Game<'_> {
         }
         player.yaw = self.yaw;
         player.may_fly = self.creative;
+        player.pitch = self.pitch;
+        // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
+        player.glider = self.armor[1].as_ref().is_some_and(|s| {
+            self.res
+                .items
+                .get(&s.item)
+                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
+        });
         // LocalPlayer.modifyInput: walking while using an item.
         player.item_use_speed = self
             .using
@@ -2032,6 +2049,13 @@ impl Game<'_> {
             .controlled_simulation_tick(keys)?;
         }
         let events = std::mem::take(&mut player.events);
+        let glider_wear = std::mem::take(&mut player.glider_wear);
+        if glider_wear > 0
+            && !self.creative
+            && let Some(elytra) = self.armor[1].as_mut()
+        {
+            elytra.damage += glider_wear;
+        }
         let feet = [player.position.x, player.position.y, player.position.z];
         self.previous_eye = self.eye;
         self.eye += (player.dimensions.eye_height - self.eye) * 0.5;

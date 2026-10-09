@@ -456,3 +456,60 @@ fn overlaps(a: Aabb, b: Aabb) -> bool {
     );
     a0.x < b1.x && b0.x < a1.x && a0.y < b1.y && b0.y < a1.y && a0.z < b1.z && b0.z < a1.z
 }
+impl Game<'_> {
+    /// `Equippable.swapWithEquipmentSlot`: right-clicking armor swaps it into
+    /// its slot (the worn piece comes back to the hand).
+    pub(super) fn equip_from_hand(&mut self, stack: &ItemStack) -> bool {
+        let Some(info) = self.res.items.get(&stack.item) else {
+            return false;
+        };
+        let index = match info.equip_slot.as_deref() {
+            Some("head") => 0,
+            Some("chest") => 1,
+            Some("legs") => 2,
+            Some("feet") => 3,
+            _ => return false,
+        };
+        if !info.swappable {
+            return false;
+        }
+        let sound = info.equip_sound.clone();
+        let current = self.armor[index].clone();
+        // PREVENT_ARMOR_CHANGE (Curse of Binding) outside creative, or the same stack.
+        if current.as_ref().is_some_and(|c| {
+            (c.enchantment_level("minecraft:binding_curse") > 0 && !self.creative) || c == stack
+        }) {
+            return true;
+        }
+        self.armor[index] = Some(ItemStack {
+            count: 1,
+            ..stack.clone()
+        });
+        if !self.creative {
+            let mut held = stack.clone();
+            held.count -= 1;
+            if held.count == 0 {
+                // The worn piece comes back to the hand.
+                self.inventory[self.selected] = current;
+            } else {
+                self.inventory[self.selected] = Some(held);
+                if let Some(old) = current
+                    && let Some(rest) = self.give(old)
+                    && let Some(eye) = self.eye_position()
+                {
+                    self.spawn_item(rest, eye, [0.0; 3], 40);
+                }
+            }
+        }
+        self.apply_equipment();
+        if let Some(sound) = sound {
+            let at = self
+                .player
+                .as_ref()
+                .map(|p| [p.position.x, p.position.y, p.position.z]);
+            self.audio.play(&sound, at, 1.0, 1.0);
+        }
+        self.swing_arm();
+        true
+    }
+}
