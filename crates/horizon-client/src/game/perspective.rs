@@ -232,13 +232,14 @@ impl Game<'_> {
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let atlas = &self.res.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
-        horizon_client::mobs::render::render(
+        horizon_client::mobs::render::render_with(
             m,
             alpha as f32,
             camera,
             &lookup,
             packed,
             &self.res.mob_data,
+            &self.player_armor_layers(),
             out,
         );
     }
@@ -284,13 +285,14 @@ impl Game<'_> {
         let atlas = &self.res.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let mut verts = Vec::new();
-        horizon_client::mobs::render::render(
+        horizon_client::mobs::render::render_with(
             &m,
             1.0,
             camera,
             &lookup,
             240 | 240 << 8,
             &self.res.mob_data,
+            &self.player_armor_layers(),
             &mut verts,
         );
         let height = if m.extra.crouching { 1.5 } else { 1.8 };

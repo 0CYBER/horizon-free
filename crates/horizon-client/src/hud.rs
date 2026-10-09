@@ -282,43 +282,49 @@ impl HudBatch {
         let quads: Vec<[HudVertex; 6]> = self.vertices[start..].as_chunks::<6>().0.to_vec();
         self.vertices.truncate(start);
         for q in quads {
-            let (a, b, c, d) = (q[0], q[1], q[2], q[5]);
-            let aligned = a.pos[1] == b.pos[1]
-                && a.pos[0] == d.pos[0]
-                && c.pos[0] == b.pos[0]
-                && c.pos[1] == d.pos[1];
-            if !aligned {
-                let cx = (a.pos[0] + c.pos[0]) / 2.0;
-                let cy = (a.pos[1] + c.pos[1]) / 2.0;
+            let corners = [q[0], q[1], q[2], q[5]];
+            let (mut x_lo, mut x_hi) = (f32::INFINITY, f32::NEG_INFINITY);
+            let (mut y_lo, mut y_hi) = (f32::INFINITY, f32::NEG_INFINITY);
+            for v in &corners {
+                x_lo = x_lo.min(v.pos[0]);
+                x_hi = x_hi.max(v.pos[0]);
+                y_lo = y_lo.min(v.pos[1]);
+                y_hi = y_hi.max(v.pos[1]);
+            }
+            // An axis-aligned rectangle, its corners in any order.
+            let find = |x: f32, y: f32| corners.iter().find(|v| v.pos == [x, y]).copied();
+            let rect = (
+                find(x_lo, y_lo),
+                find(x_hi, y_lo),
+                find(x_hi, y_hi),
+                find(x_lo, y_hi),
+            );
+            let (Some(tl), Some(tr), Some(br), Some(bl)) = rect else {
+                let cx = corners.iter().map(|v| v.pos[0]).sum::<f32>() / 4.0;
+                let cy = corners.iter().map(|v| v.pos[1]).sum::<f32>() / 4.0;
                 if cx >= x0 && cx < x1 && cy >= y0 && cy < y1 {
                     self.vertices.extend_from_slice(&q);
                 }
                 continue;
-            }
-            let (px0, py0, px1, py1) = (a.pos[0], a.pos[1], c.pos[0], c.pos[1]);
-            let (cx0, cy0) = (px0.max(x0), py0.max(y0));
-            let (cx1, cy1) = (px1.min(x1), py1.min(y1));
+            };
+            let (cx0, cy0) = (x_lo.max(x0), y_lo.max(y0));
+            let (cx1, cy1) = (x_hi.min(x1), y_hi.min(y1));
             if cx0 >= cx1 || cy0 >= cy1 {
                 continue;
             }
-            let lerp = |t0: f32, t1: f32, p: f32, lo: f32, hi: f32| {
-                if hi == lo {
-                    t0
-                } else {
-                    t0 + (t1 - t0) * (p - lo) / (hi - lo)
-                }
+            let t = |p: f32, lo: f32, hi: f32| if hi == lo { 0.0 } else { (p - lo) / (hi - lo) };
+            let uv = |x: f32, y: f32| {
+                let (s, r) = (t(x, x_lo, x_hi), t(y, y_lo, y_hi));
+                std::array::from_fn(|i| {
+                    let top = tl.uv[i] + (tr.uv[i] - tl.uv[i]) * s;
+                    let bottom = bl.uv[i] + (br.uv[i] - bl.uv[i]) * s;
+                    top + (bottom - top) * r
+                })
             };
-            let u = |x: f32| lerp(a.uv[0], c.uv[0], x, px0, px1);
-            let v = |y: f32| lerp(a.uv[1], c.uv[1], y, py0, py1);
             self.quad(
                 [[cx0, cy0], [cx1, cy0], [cx1, cy1], [cx0, cy1]],
-                [
-                    [u(cx0), v(cy0)],
-                    [u(cx1), v(cy0)],
-                    [u(cx1), v(cy1)],
-                    [u(cx0), v(cy1)],
-                ],
-                a.color,
+                [uv(cx0, cy0), uv(cx1, cy0), uv(cx1, cy1), uv(cx0, cy1)],
+                tl.color,
             );
         }
     }

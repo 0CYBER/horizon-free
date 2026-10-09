@@ -21,6 +21,8 @@ pub(super) struct ArmorStandAssets {
     pub small: Option<Part>,
     /// (slot model suffix, small) -> model.
     pub layers: HashMap<(&'static str, bool), Part>,
+    /// The player's armour models by slot (helmet, chestplate, leggings, boots).
+    pub player: HashMap<&'static str, Part>,
     /// asset id -> layer kind (humanoid / humanoid_leggings) -> (texture, undyed colour).
     pub equipment: HashMap<String, HashMap<String, (String, Option<u32>)>>,
 }
@@ -28,7 +30,11 @@ impl ArmorStandAssets {
     pub fn load(root: &std::path::Path) -> Self {
         let load = |key: &str| horizon_client::mobs::load_model(root, key);
         let mut layers = HashMap::new();
+        let mut player = HashMap::new();
         for slot in ["helmet", "chestplate", "leggings", "boots"] {
+            if let Some(part) = load(&format!("minecraft:player#{slot}")) {
+                player.insert(slot, part);
+            }
             for (small, model) in [(false, "armor_stand"), (true, "armor_stand_small")] {
                 if let Some(part) = load(&format!("minecraft:{model}#{slot}")) {
                     layers.insert((slot, small), part);
@@ -71,11 +77,54 @@ impl ArmorStandAssets {
             main: load("minecraft:armor_stand#main"),
             small: load("minecraft:armor_stand_small#main"),
             layers,
+            player,
             equipment,
         }
     }
 }
 impl Game<'_> {
+    /// `HumanoidArmorLayer` for the player: (model, texture rect, colour) of
+    /// each worn piece, head to feet.
+    pub(super) fn player_armor_layers(&self) -> Vec<(&Part, [f32; 4], u32)> {
+        let assets = &self.armor_stand_assets;
+        let mut out = Vec::new();
+        for (i, layer) in ["helmet", "chestplate", "leggings", "boots"]
+            .into_iter()
+            .enumerate()
+        {
+            let Some(stack) = &self.armor[i] else {
+                continue;
+            };
+            let Some(asset) = self
+                .res
+                .items
+                .get(&stack.item)
+                .and_then(|i| i.equip_asset.clone())
+            else {
+                continue;
+            };
+            let kind = if layer == "leggings" {
+                "humanoid_leggings"
+            } else {
+                "humanoid"
+            };
+            let Some((texture, undyed)) = assets.equipment.get(&asset).and_then(|k| k.get(kind))
+            else {
+                continue;
+            };
+            let (Some(r), Some(part)) = (
+                self.res.atlas.sprites.get(texture.as_str()),
+                assets.player.get(layer),
+            ) else {
+                continue;
+            };
+            let color = undyed.map_or(0xFFFF_FFFF, |c| {
+                0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
+            });
+            out.push((part, [r.u0, r.v0, r.u1, r.v1], color));
+        }
+        out
+    }
     /// `ArmorStandItem.useOn`.
     pub(super) fn place_armor_stand(&mut self, hit: &super::Hit, stack: &ItemStack) -> bool {
         if &*stack.item != "minecraft:armor_stand" || hit.face == [0, -1, 0] {

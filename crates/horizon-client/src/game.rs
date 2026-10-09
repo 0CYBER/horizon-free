@@ -3475,7 +3475,40 @@ impl Game<'_> {
             }
             return;
         }
+        if shift && (500..504).contains(&slot) {
+            // InventoryMenu.quickMoveStack: armour back to the main
+            // inventory, then the hotbar.
+            if let Some(stack) = self.armor[slot - 500].take() {
+                if let Some(i) = (9..36).chain(0..9).find(|&i| self.inventory[i].is_none()) {
+                    self.inventory[i] = Some(stack);
+                } else {
+                    self.armor[slot - 500] = Some(stack);
+                }
+                self.apply_equipment();
+            }
+            return;
+        }
         if shift && slot < 36 {
+            // InventoryMenu.quickMoveStack: armour into its empty slot, an
+            // off-hand item into an empty off hand.
+            let equip = self.inventory[slot]
+                .as_ref()
+                .and_then(|s| self.res.items.get(&s.item))
+                .and_then(|i| i.equip_slot.clone());
+            let armor = ["head", "chest", "legs", "feet"]
+                .iter()
+                .position(|s| equip.as_deref() == Some(*s));
+            if let Some(a) = armor
+                && self.armor[a].is_none()
+            {
+                self.armor[a] = self.inventory[slot].take();
+                self.apply_equipment();
+                return;
+            }
+            if equip.as_deref() == Some("offhand") && self.offhand.is_none() {
+                self.offhand = self.inventory[slot].take();
+                return;
+            }
             // Quick move between hotbar and main inventory.
             if let Some(stack) = self.inventory[slot].take() {
                 let range = if slot < 9 { 9..36 } else { 0..9 };

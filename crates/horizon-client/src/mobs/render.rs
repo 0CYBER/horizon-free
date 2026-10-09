@@ -648,6 +648,21 @@ pub fn render(
     data: &MobData,
     out: &mut Vec<Vertex>,
 ) {
+    render_with(m, alpha, camera, atlas, light, data, &[], out);
+}
+/// `render` plus extra layers posed like the body (`HumanoidArmorLayer`:
+/// the armour model's parts copy the body's): (model, texture rect, colour).
+#[allow(clippy::too_many_arguments)]
+pub fn render_with(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    atlas: Atlas,
+    light: u32,
+    data: &MobData,
+    extra: &[(&Part, [f32; 4], u32)],
+    out: &mut Vec<Vertex>,
+) {
     let base = base_transform(m, alpha, camera);
     let overlay = u32::from(m.hurt_time > 0 || m.death_time > 0);
     let s = anim::state(m, alpha);
@@ -670,6 +685,9 @@ pub fn render(
             overlay,
             out,
         );
+    }
+    for (part, uv, color) in extra {
+        draw(part, base, &poses, *uv, *color, light, overlay, out);
     }
     held_items(m, &model, base, &poses, atlas, light, out);
     for layer in layers(m) {
