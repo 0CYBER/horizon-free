@@ -433,6 +433,8 @@ pub struct Extra {
     /// Dye colour id (sheep wool, collars).
     pub color: u8,
     pub sheared: bool,
+    /// `Mob.canPickUpLoot` (also lets dispensers equip it).
+    pub pick_up_loot: bool,
     pub saddled: bool,
     pub chested: bool,
     pub tame: bool,

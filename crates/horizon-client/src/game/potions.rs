@@ -19,6 +19,18 @@ pub(super) struct ThrownPotion {
     velocity: Vec3,
     age: u32,
 }
+impl Game<'_> {
+    /// A splash potion, lingering potion or experience bottle in flight (the
+    /// player's throws and dispensers both end up here).
+    pub(super) fn launch_thrown(&mut self, stack: ItemStack, position: Vec3, velocity: Vec3) {
+        self.potions.thrown.push(ThrownPotion {
+            stack,
+            position,
+            velocity,
+            age: 0,
+        });
+    }
+}
 /// Effects, thrown potions and the attribute modifiers last applied.
 #[derive(Default)]
 pub(super) struct PotionState {
@@ -46,15 +58,19 @@ impl Game<'_> {
                 }
                 Ok(true)
             }
-            "minecraft:splash_potion" | "minecraft:lingering_potion" => {
+            "minecraft:splash_potion"
+            | "minecraft:lingering_potion"
+            | "minecraft:experience_bottle" => {
                 let Some(eye) = self.eye_position() else {
                     return Ok(true);
                 };
                 let pitch = 0.4 / (self.world.random.next_float() * 0.4 + 0.8);
-                let sound = if &*stack.item == "minecraft:splash_potion" {
-                    "minecraft:entity.splash_potion.throw"
-                } else {
-                    "minecraft:entity.lingering_potion.throw"
+                let (sound, power) = match &*stack.item {
+                    "minecraft:splash_potion" => ("minecraft:entity.splash_potion.throw", 0.5),
+                    "minecraft:experience_bottle" => {
+                        ("minecraft:entity.experience_bottle.throw", 0.7)
+                    }
+                    _ => ("minecraft:entity.lingering_potion.throw", 0.5),
                 };
                 self.audio.play(sound, Some(eye), 0.5, pitch);
                 // Projectile.shootFromRotation(xRot, yRot, -20, 0.5, 1.0).
@@ -74,9 +90,9 @@ impl Game<'_> {
                 let r = &mut self.world.random;
                 let mut jitter = || r.triangle(0.0, 0.0172275);
                 let v = Vec3::new(
-                    (f64::from(dir[0]) / l + jitter()) * 0.5,
-                    (f64::from(dir[1]) / l + jitter()) * 0.5,
-                    (f64::from(dir[2]) / l + jitter()) * 0.5,
+                    (f64::from(dir[0]) / l + jitter()) * power,
+                    (f64::from(dir[1]) / l + jitter()) * power,
+                    (f64::from(dir[2]) / l + jitter()) * power,
                 );
                 let pv = self.player.as_ref().map_or(Vec3::ZERO, |p| p.velocity);
                 let on_ground = self.player.as_ref().is_some_and(|p| p.ground.on_ground);
@@ -85,15 +101,14 @@ impl Game<'_> {
                     v.y + if on_ground { 0.0 } else { pv.y },
                     v.z + pv.z,
                 );
-                self.potions.thrown.push(ThrownPotion {
-                    stack: ItemStack {
+                self.launch_thrown(
+                    ItemStack {
                         count: 1,
                         ..stack.clone()
                     },
-                    position: Vec3::new(eye[0], eye[1] - 0.1, eye[2]),
-                    velocity: v,
-                    age: 0,
-                });
+                    Vec3::new(eye[0], eye[1] - 0.1, eye[2]),
+                    v,
+                );
                 self.swing_arm();
                 self.consume_held();
                 Ok(true)
@@ -326,19 +341,25 @@ impl Game<'_> {
             }
             t.position = next;
             // ThrowableItemProjectile: drag 0.99 then gravity 0.05.
+            // ThrownExperienceBottle.getDefaultGravity is 0.07.
+            let gravity = if &*t.stack.item == "minecraft:experience_bottle" {
+                0.07
+            } else {
+                0.05
+            };
             t.velocity = Vec3::new(
                 t.velocity.x * 0.99,
-                t.velocity.y * 0.99 - 0.05,
+                t.velocity.y * 0.99 - gravity,
                 t.velocity.z * 0.99,
             );
             t.age < 1200 && t.position.y > -128.0
         });
         // ThrownItemRenderer stand-in: a short-lived sprite of the potion at its position.
         for t in &thrown {
-            let sprite = if &*t.stack.item == "minecraft:lingering_potion" {
-                "item/lingering_potion"
-            } else {
-                "item/splash_potion"
+            let sprite = match &*t.stack.item {
+                "minecraft:lingering_potion" => "item/lingering_potion",
+                "minecraft:experience_bottle" => "item/experience_bottle",
+                _ => "item/splash_potion",
             };
             let mut fixed = horizon_core::random::LegacyRandom::new(0);
             let mut p = horizon_client::particles::Particle::terrain(
@@ -362,6 +383,36 @@ impl Game<'_> {
     }
     /// `ThrownSplashPotion.onHitAsPotion` (lingering clouds apply as a weaker splash).
     fn splash(&mut self, stack: &ItemStack, at: Vec3) {
+        if &*stack.item == "minecraft:experience_bottle" {
+            // ThrownExperienceBottle.onHit: the water-coloured splash (level
+            // event 2002) and 3 to 11 experience.
+            let pitch = self.world.random.next_float() * 0.1 + 0.9;
+            self.audio.play(
+                "minecraft:entity.splash_potion.break",
+                Some([at.x, at.y, at.z]),
+                1.0,
+                pitch,
+            );
+            for _ in 0..8 {
+                let v = [
+                    f64::from(self.world.random.next_float() - 0.5) * 0.3,
+                    0.2,
+                    f64::from(self.world.random.next_float() - 0.5) * 0.3,
+                ];
+                let p = horizon_client::particles::Particle::terrain(
+                    &mut self.world.random,
+                    [at.x, at.y, at.z],
+                    v,
+                    "item/splash_potion".into(),
+                    0x38_5DC6,
+                );
+                self.particles.push(p);
+            }
+            let r = &mut self.world.random;
+            let value = 3 + r.next_int_bound(5).unwrap_or(0) + r.next_int_bound(5).unwrap_or(0);
+            self.spawn_orbs([at.x, at.y, at.z], value as u32);
+            return;
+        }
         let lingering = &*stack.item == "minecraft:lingering_potion";
         let event = if lingering {
             "minecraft:entity.lingering_potion.break"

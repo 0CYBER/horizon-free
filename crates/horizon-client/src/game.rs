@@ -15,6 +15,7 @@ mod commands;
 mod control;
 mod creatures;
 mod crossbow;
+mod dispenser;
 mod dragon;
 mod enchant_effects;
 mod end;
@@ -25,6 +26,7 @@ mod fishing;
 mod fov;
 mod frames;
 mod game_mode;
+mod golems;
 mod growth;
 mod jukebox;
 mod lightning;
@@ -1830,6 +1832,7 @@ impl Game<'_> {
         self.stats.add("used", &stack.item, 1);
         self.trigger_block("minecraft:placed_block", target, &stack);
         self.check_wither_spawn(target)?;
+        self.check_golem_spawn(target)?;
         self.consume_held();
         Ok(())
     }

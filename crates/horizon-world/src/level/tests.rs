@@ -917,3 +917,66 @@ fn dripstone_fills_cauldrons() {
     }
     assert_eq!(w.name(BlockPos::new(0, 5, 0)), "water_cauldron[level=1]");
 }
+
+#[test]
+fn dispenser_buckets_pick_up_and_empty() {
+    let mut w = world!();
+    let at = BlockPos::new(0, 10, 0);
+    let water = w.id("water", &[("level", "0")]);
+    w.put(at, water);
+    let picked = w.b().bucket_pickup(&mut w.level, &mut w.ticks, at);
+    assert_eq!(picked, Some("minecraft:water_bucket"));
+    assert_eq!(w.get(at), w.b().air());
+    // Flowing water gives nothing.
+    let flowing = w.id("water", &[("level", "3")]);
+    w.put(at, flowing);
+    assert_eq!(w.b().bucket_pickup(&mut w.level, &mut w.ticks, at), None);
+    // A waterlogged slab is drained and stays a slab.
+    let slab = w.id("oak_slab", &[("waterlogged", "true")]);
+    w.put(at, slab);
+    assert_eq!(
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at),
+        Some("minecraft:water_bucket")
+    );
+    assert_eq!(w.prop(at, "waterlogged"), "false");
+    // Powder snow comes up as its bucket.
+    let snow = w.id("powder_snow", &[]);
+    w.put(at, snow);
+    assert_eq!(
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at),
+        Some("minecraft:powder_snow_bucket")
+    );
+    // Emptying water into air makes a source; stone refuses.
+    let sound = "minecraft:item.bucket.empty";
+    let content = BucketContent::Fluid(crate::fluid::FluidKind::Water);
+    assert!(
+        w.b()
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound)
+    );
+    assert_eq!(w.name(at), "water[level=0]");
+    let stone = w.id("stone", &[]);
+    w.put(at, stone);
+    assert!(
+        !w.b()
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound)
+    );
+    // Water fills a waterloggable slab instead of replacing it.
+    let dry = w.id("oak_slab", &[]);
+    w.put(at, dry);
+    assert!(
+        w.b()
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound)
+    );
+    assert_eq!(w.prop(at, "waterlogged"), "true");
+    // Powder snow only goes into empty space.
+    let air = w.b().air();
+    w.put(at, air);
+    assert!(w.b().bucket_empty(
+        &mut w.level,
+        &mut w.ticks,
+        at,
+        BucketContent::Powder,
+        "minecraft:item.bucket.empty_powder_snow"
+    ));
+    assert_eq!(w.name(at), "powder_snow[]");
+}
