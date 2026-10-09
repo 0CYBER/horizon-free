@@ -35,6 +35,8 @@ pub struct Registries {
     pub tracked: Vec<String>,
     /// Loaded datapack functions (`ns:path`) and function tags (`ns:path`).
     pub functions: Vec<String>,
+    /// `/data ... storage` ids.
+    pub storages: Vec<String>,
     pub function_tags: Vec<String>,
     /// The block the source is looking at (relevant coordinates).
     pub target_block: Option<[i32; 3]>,
@@ -141,6 +143,10 @@ pub enum ArgType {
     TeamColor,
     /// RangeArgument.Ints (`1`, `1..`, `..5`, `1..5`).
     IntRange,
+    /// NbtPathArgument (kept as text).
+    NbtPath,
+    /// NbtTagArgument: any SNBT value (kept as text).
+    NbtTag,
 }
 pub fn integer(min: i32) -> ArgType {
     ArgType::Integer { min, max: i32::MAX }
@@ -1551,7 +1557,11 @@ impl ArgType {
                         reader,
                     ));
                 }
-                Arg::Str(read_braced(reader, '{', '}')?)
+                let text = read_braced(reader, '{', '}')?;
+                if let Err(e) = horizon_world::nbt::parse_snbt(&text) {
+                    return Err(CommandError::at(crate::text::Text::literal(e), reader));
+                }
+                Arg::Str(text)
             }
             ArgType::Component => {
                 let (value, used) =
@@ -1662,6 +1672,24 @@ impl ArgType {
                 Arg::Str(name.to_owned())
             }
             ArgType::IntRange => Arg::IntRange(range_int(reader)?),
+            ArgType::NbtPath => {
+                let (path, used) = crate::nbt_path::NbtPath::parse_prefix(reader.remaining())
+                    .map_err(|e| {
+                        reader.cursor += e.cursor.min(reader.remaining().len());
+                        let args: Vec<&dyn std::fmt::Display> =
+                            e.args.iter().map(|a| a as &dyn std::fmt::Display).collect();
+                        CommandError::tr_at(e.key, &args, reader)
+                    })?;
+                reader.cursor += used;
+                Arg::Str(path.as_str().to_owned())
+            }
+            ArgType::NbtTag => {
+                let (_, used) = horizon_world::nbt::parse_snbt(reader.remaining())
+                    .map_err(|e| CommandError::at(crate::text::Text::literal(e), reader))?;
+                let text = reader.remaining()[..used].to_owned();
+                reader.cursor += used;
+                Arg::Str(text)
+            }
             ArgType::Anchor => {
                 let name = reader.read_unquoted_string();
                 match name {
@@ -1718,6 +1746,7 @@ impl ArgType {
             }
             ArgType::Id(list) => {
                 let values = match *list {
+                    "storages" => reg.storages.clone(),
                     "time_markers" => reg.time_markers.clone(),
                     "advancements" => reg.advancements.clone(),
                     _ => Vec::new(),

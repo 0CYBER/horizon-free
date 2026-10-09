@@ -1,5 +1,6 @@
 //! Command execution (the `execute` side of each vanilla command class):
 //! entity selectors resolved against the game, vanilla feedback and errors.
+mod data;
 mod effects;
 pub(super) mod execute;
 mod text_commands;
@@ -28,6 +29,11 @@ pub(super) enum Target {
     Item(u32),
     Orb(usize),
     Arrow(usize),
+    Stand(u32),
+    Frame(u32),
+    Painting(u32),
+    Boat(u32),
+    Cart(u32),
 }
 fn err(key: &str, args: &[&dyn std::fmt::Display]) -> CommandError {
     CommandError::tr(key, args)
@@ -153,7 +159,7 @@ impl Game<'_> {
         self.coords(ctx, name).map(|c| self.resolve_coords(&c))
     }
     /// BlockPosArgument.getLoadedBlockPos.
-    fn block_pos_arg(&self, ctx: &Context, name: &str) -> R<[i32; 3]> {
+    pub(super) fn block_pos_arg(&self, ctx: &Context, name: &str) -> R<[i32; 3]> {
         let c = self
             .coords(ctx, name)
             .ok_or_else(|| err("argument.pos.missing.int", &[]))?;
@@ -201,6 +207,37 @@ impl Game<'_> {
                 .arrows
                 .get(i)
                 .map(|a| [a.position.x, a.position.y, a.position.z]),
+            Target::Stand(id) => self
+                .armor_stands
+                .iter()
+                .find(|a| a.id == id)
+                .map(|a| [a.position.x, a.position.y, a.position.z]),
+            Target::Frame(id) => self.item_frames.iter().find(|f| f.id == id).map(|f| {
+                let (lo, hi) = f.bounds();
+                [
+                    (lo[0] + hi[0]) / 2.0,
+                    (lo[1] + hi[1]) / 2.0,
+                    (lo[2] + hi[2]) / 2.0,
+                ]
+            }),
+            Target::Painting(id) => self.paintings.iter().find(|p| p.id == id).map(|p| {
+                let (lo, hi) = p.bounds();
+                [
+                    (lo[0] + hi[0]) / 2.0,
+                    (lo[1] + hi[1]) / 2.0,
+                    (lo[2] + hi[2]) / 2.0,
+                ]
+            }),
+            Target::Boat(id) => self
+                .boats
+                .iter()
+                .find(|b| b.id == id)
+                .map(|b| [b.position.x, b.position.y, b.position.z]),
+            Target::Cart(id) => self
+                .carts
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| [c.position.x, c.position.y, c.position.z]),
         }
     }
     fn target_type(&self, t: Target) -> String {
@@ -216,6 +253,27 @@ impl Game<'_> {
             Target::Item(_) => "minecraft:item".into(),
             Target::Orb(_) => "minecraft:experience_orb".into(),
             Target::Arrow(_) => "minecraft:arrow".into(),
+            Target::Stand(_) => "minecraft:armor_stand".into(),
+            Target::Frame(id) => {
+                if self.item_frames.iter().any(|f| f.id == id && f.glow) {
+                    "minecraft:glow_item_frame".into()
+                } else {
+                    "minecraft:item_frame".into()
+                }
+            }
+            Target::Painting(_) => "minecraft:painting".into(),
+            Target::Boat(id) => self.boats.iter().find(|b| b.id == id).map_or_else(
+                || "minecraft:oak_boat".into(),
+                |b| {
+                    let kind = if &*b.wood == "bamboo" { "raft" } else { "boat" };
+                    format!("minecraft:{}_{kind}", b.wood)
+                },
+            ),
+            Target::Cart(id) => self
+                .carts
+                .iter()
+                .find(|c| c.id == id)
+                .map_or_else(|| "minecraft:minecart".into(), |c| c.kind.id().into()),
         }
     }
     /// Entity.getDisplayName.
@@ -230,6 +288,19 @@ impl Game<'_> {
                     .map(|i| i.stack.item.to_string())
                     .unwrap_or_default();
                 Text::literal(self.res.names.item(&item))
+            }
+            Target::Mob(id)
+                if self
+                    .mobs
+                    .iter()
+                    .any(|m| m.id == id && m.custom_name.is_some()) =>
+            {
+                let name = self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .and_then(|m| m.custom_name.clone());
+                Text::literal(name.unwrap_or_default())
             }
             other => {
                 let ty = self.target_type(other);
@@ -271,6 +342,11 @@ impl Game<'_> {
             candidates.extend(self.dropped.iter().map(|i| Target::Item(i.id)));
             candidates.extend((0..self.orbs.len()).map(Target::Orb));
             candidates.extend((0..self.arrows.len()).map(Target::Arrow));
+            candidates.extend(self.armor_stands.iter().map(|a| Target::Stand(a.id)));
+            candidates.extend(self.item_frames.iter().map(|f| Target::Frame(f.id)));
+            candidates.extend(self.paintings.iter().map(|p| Target::Painting(p.id)));
+            candidates.extend(self.boats.iter().map(|b| Target::Boat(b.id)));
+            candidates.extend(self.carts.iter().map(|c| Target::Cart(c.id)));
         }
         let level = self.experience.level;
         let creative = self.creative;
@@ -374,7 +450,7 @@ impl Game<'_> {
             })
     }
     /// EntityArgument.getEntities / getPlayers / getEntity / getPlayer.
-    fn entities(&mut self, ctx: &Context, name: &str, players: bool) -> R<Vec<Target>> {
+    pub(super) fn entities(&mut self, ctx: &Context, name: &str, players: bool) -> R<Vec<Target>> {
         let Some(Arg::Entity(s)) = ctx.get(name).cloned() else {
             return Ok(vec![Target::Player]);
         };
@@ -448,6 +524,8 @@ impl Game<'_> {
             "spawnpoint" => self.cmd_spawnpoint(ctx),
             "setworldspawn" => self.cmd_setworldspawn(ctx),
             "clear" => self.cmd_clear(ctx),
+            id if id.starts_with("data.") => self.cmd_data(id, ctx),
+            id if id.starts_with("tag.") => self.cmd_tag(id, ctx),
             id if id.starts_with("scoreboard.")
                 || id.starts_with("team.")
                 || id.starts_with("trigger") =>
@@ -703,6 +781,34 @@ impl Game<'_> {
                     a.previous = v;
                 }
             }
+            Target::Stand(id) => {
+                if let Some(a) = self.armor_stands.iter_mut().find(|a| a.id == id) {
+                    a.position = v;
+                    if let Some([yaw, _]) = rotation {
+                        a.yaw = yaw;
+                    }
+                }
+            }
+            Target::Boat(id) => {
+                if let Some(b) = self.boats.iter_mut().find(|b| b.id == id) {
+                    b.position = v;
+                    b.previous = v;
+                    if let Some([yaw, _]) = rotation {
+                        b.yaw = yaw;
+                    }
+                }
+            }
+            Target::Cart(id) => {
+                if let Some(c) = self.carts.iter_mut().find(|c| c.id == id) {
+                    c.position = v;
+                    c.previous = v;
+                    if let Some([yaw, _]) = rotation {
+                        c.yaw = yaw;
+                    }
+                }
+            }
+            // Wall-mounted entities do not move.
+            Target::Frame(_) | Target::Painting(_) => {}
         }
     }
     fn cmd_teleport(&mut self, id: &str, ctx: &Context) -> R<i32> {
@@ -999,6 +1105,11 @@ impl Game<'_> {
                     self.arrows[i].age = u32::MAX / 2;
                 }
             }
+            Target::Stand(id) => self.armor_stands.retain(|a| a.id != id),
+            Target::Frame(id) => self.item_frames.retain(|f| f.id != id),
+            Target::Painting(id) => self.paintings.retain(|p| p.id != id),
+            Target::Boat(id) => self.boats.retain(|b| b.id != id),
+            Target::Cart(id) => self.carts.retain(|c| c.id != id),
         }
     }
     fn cmd_kill(&mut self, ctx: &Context) -> R<i32> {
@@ -1044,6 +1155,25 @@ impl Game<'_> {
             return Err(err("commands.summon.invalidPosition", &[]));
         }
         let short = kind.trim_start_matches("minecraft:").to_owned();
+        if let Some(Arg::Str(nbt)) = ctx.get("nbt").cloned() {
+            // With an NBT argument the entity is built from it, unfinalized.
+            if self.ui.difficulty == 0
+                && self
+                    .res
+                    .mob_types
+                    .get(&format!("minecraft:{short}"))
+                    .is_some_and(|t| t.category == "monster")
+            {
+                return Err(err("commands.summon.failed.peaceful", &[]));
+            }
+            let Some(target) = self.summon_with_nbt(&format!("minecraft:{short}"), pos, &nbt)?
+            else {
+                return Err(err("commands.summon.failed", &[]));
+            };
+            let name = self.target_name(target);
+            self.feedback(Text::translate("commands.summon.success", &[name]));
+            return Ok(1);
+        }
         let name;
         if let Some(t) = self
             .res

@@ -121,6 +121,17 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let Tag::Compound(map) = &mut tag else {
         return tag;
     };
+    for (key, on) in [
+        ("NoAI", m.no_ai),
+        ("Silent", m.silent),
+        ("Invulnerable", m.invulnerable_flag),
+    ] {
+        if on {
+            map.insert(key.into(), Tag::Byte(1));
+        } else {
+            map.remove(&horizon_world::nbt::JavaString::from(key));
+        }
+    }
     for (key, value) in [
         ("AbsorptionAmount", Tag::Float(0)),
         ("FallFlying", Tag::Byte(0)),
@@ -452,6 +463,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.age_locked = flag(tag, "AgeLocked");
     }
     m.name_visible = flag(tag, "CustomNameVisible");
+    m.no_ai = flag(tag, "NoAI");
+    m.silent = flag(tag, "Silent");
+    m.invulnerable_flag = flag(tag, "Invulnerable");
+    m.no_gravity = m.no_gravity || flag(tag, "NoGravity");
     if m.species() == crate::mobs::Species::Creeper {
         m.extra.charged = flag(tag, "powered");
     }

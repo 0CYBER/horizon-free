@@ -6493,24 +6493,8 @@ impl Game<'_> {
             self.carried = None;
         }
     }
-    fn save_game(&mut self) -> Result<()> {
-        if self.remote.is_some() {
-            return Ok(());
-        }
-        let keys: Vec<_> = self.world.modified.drain().collect();
-        let chunks: Vec<_> = keys
-            .iter()
-            .filter_map(|k| self.world.chunks.get(k))
-            .map(|c| self.with_entities(c))
-            .collect();
-        self.save
-            .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
-        self.save_entities()?;
-        self.save_maps();
-        self.save_fight();
-        self.save_stats();
-        self.save_advancements();
-        self.save_scoreboard();
+    /// Copy the live player and world state into the `Level` that gets saved.
+    pub(super) fn sync_level(&mut self) {
         self.level.selected_slot = self.selected as i32;
         let mode = self.mode_id();
         let level = &mut self.level;
@@ -6587,7 +6571,27 @@ impl Game<'_> {
                 )
             })
             .collect();
-        level.write(&self.world_root)?;
+    }
+    fn save_game(&mut self) -> Result<()> {
+        if self.remote.is_some() {
+            return Ok(());
+        }
+        let keys: Vec<_> = self.world.modified.drain().collect();
+        let chunks: Vec<_> = keys
+            .iter()
+            .filter_map(|k| self.world.chunks.get(k))
+            .map(|c| self.with_entities(c))
+            .collect();
+        self.save
+            .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
+        self.save_entities()?;
+        self.save_maps();
+        self.save_fight();
+        self.save_stats();
+        self.save_advancements();
+        self.save_scoreboard();
+        self.sync_level();
+        self.level.write(&self.world_root)?;
         self.save_world_state();
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())

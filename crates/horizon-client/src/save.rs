@@ -349,7 +349,11 @@ fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
         _ => e.id().to_owned(),
     }
 }
-fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, block: &str) -> Tag {
+pub fn encode_block_entity(
+    p: (i32, i32, i32),
+    e: &crate::containers::BlockEntity,
+    block: &str,
+) -> Tag {
     use crate::containers::BlockEntity;
     let mut entries = vec![
         ("id", string(&block_entity_id(e, block))),
@@ -403,7 +407,7 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
     }
     Tag::compound(entries)
 }
-fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
+pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
@@ -1543,7 +1547,7 @@ impl Level {
         };
     }
     /// The player compound: the loaded one with Horizon's state written over it.
-    fn player_tag(&self) -> Tag {
+    pub fn player_tag(&self) -> Tag {
         let mut p = compound_or_empty(self.player_extra.clone());
         // Keys rewritten from scratch.
         if let Tag::Compound(map) = &mut p {

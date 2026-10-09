@@ -515,6 +515,12 @@ pub struct Mob {
     pub extra: Extra,
     pub fluids: living::Fluids,
     pub no_gravity: bool,
+    /// `NoAI`: no goals and no movement.
+    pub no_ai: bool,
+    /// `Silent`.
+    pub silent: bool,
+    /// `Invulnerable`: immune to damage (but not to `/kill`).
+    pub invulnerable_flag: bool,
     pub climbing: bool,
     pub fire_ticks: i32,
     pub air: i32,
@@ -785,6 +791,9 @@ impl Mob {
             extra: Extra::default(),
             fluids: living::Fluids::default(),
             no_gravity: false,
+            no_ai: false,
+            silent: false,
+            invulnerable_flag: false,
             climbing: false,
             fire_ticks: 0,
             air: 300,
@@ -858,7 +867,7 @@ impl Mob {
         .fold((0.0, 0.0), |(a, t), (x, y)| (a + x, t + y))
     }
     pub fn damage(&mut self, amount: f32, source: Damage) -> bool {
-        if !self.alive() || self.removed {
+        if !self.alive() || self.removed || self.invulnerable_flag {
             return false;
         }
         if source.is_fire() && (self.kind.flags.fire_immune) {

@@ -4,6 +4,7 @@
 //! usage text and the vanilla error messages. Argument types live in
 //! [`args`]; the vanilla command tree in [`vanilla`].
 pub mod args;
+pub mod tree_data;
 pub mod tree_scoreboard;
 pub mod vanilla;
 

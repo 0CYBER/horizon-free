@@ -254,7 +254,9 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
     if m.death_time >= 20 {
         return false;
     }
-    ai_step(m, w, events);
+    if !m.no_ai {
+        ai_step(m, w, events);
+    }
     // Mob.tickHeadTurn -> BodyRotationControl.clientTick
     if m.alive() {
         m.body_rotation_tick();

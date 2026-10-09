@@ -30,6 +30,8 @@ pub(super) struct Recorded {
 #[derive(Default)]
 pub(super) struct ScoreState {
     pub board: Scoreboard,
+    /// `/data ... storage`.
+    pub storage: horizon_client::command_storage::CommandStorage,
     loaded: bool,
     recorded: Recorded,
 }
@@ -53,12 +55,15 @@ impl Game<'_> {
         {
             self.score.board = Scoreboard::unpack(data);
         }
+        self.score.storage =
+            horizon_client::command_storage::CommandStorage::load(&self.world_root);
         self.sync_score_registries();
     }
-    pub(super) fn save_scoreboard(&self) {
+    pub(super) fn save_scoreboard(&mut self) {
         if !self.score.loaded || self.remote.is_some() {
             return;
         }
+        self.score.storage.save(&self.world_root);
         let path = self.scoreboard_path();
         let board = &self.score.board;
         if board == &Scoreboard::default() && !path.exists() {
@@ -79,6 +84,7 @@ impl Game<'_> {
         reg.objectives = board.objectives.iter().map(|o| o.name.clone()).collect();
         reg.teams = board.teams.iter().map(|t| t.name.clone()).collect();
         reg.tracked = board.tracked();
+        reg.storages = self.score.storage.keys();
     }
 
     // ---- score holders ---------------------------------------------------
@@ -190,11 +196,46 @@ impl Game<'_> {
                     }
                 }
             }
+            if ok && !s.nbt.is_empty() {
+                // NbtPredicate: the entity's saved data contains the pattern.
+                let data = self.entity_nbt(t);
+                for (pattern, negated) in &s.nbt {
+                    let matches = match (&data, horizon_world::nbt::parse_snbt(pattern)) {
+                        (Some(d), Ok((p, _))) => horizon_client::nbt_path::compare_nbt(&p, Some(d)),
+                        _ => false,
+                    };
+                    if matches == *negated {
+                        ok = false;
+                    }
+                }
+            }
+            if ok && !s.advancements.is_empty() {
+                ok = t == Target::Player && self.advancements_match(&s.advancements);
+            }
             if ok {
                 pass.insert(t);
             }
         }
         pass
+    }
+
+    /// `advancements=` of a selector, against the player's progress.
+    fn advancements_match(
+        &self,
+        wanted: &[(String, horizon_client::command::args::AdvCondition)],
+    ) -> bool {
+        use horizon_client::command::args::AdvCondition;
+        wanted.iter().all(|(id, cond)| {
+            let Some(a) = self.adv.tree.get(id) else {
+                return false;
+            };
+            match cond {
+                AdvCondition::Done(want) => self.adv.progress.done(a) == *want,
+                AdvCondition::Criteria(list) => list
+                    .iter()
+                    .all(|(c, want)| self.adv.progress.has(id, c) == *want),
+            }
+        })
     }
 
     // ---- criteria ----------------------------------------------------------

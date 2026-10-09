@@ -109,6 +109,18 @@ impl Tracker {
         single: impl Fn(&Holder, i32) -> Text,
         multiple: impl Fn(usize, i32) -> Text,
     ) -> CmdResult<i32> {
+        let (message, total) = self.message(any, zero, single, multiple)?;
+        env.feedback(message);
+        Ok(total)
+    }
+    /// The feedback `send` would produce, and the command's result.
+    pub fn message(
+        &self,
+        any: bool,
+        zero: Option<CommandError>,
+        single: impl Fn(&Holder, i32) -> Text,
+        multiple: impl Fn(usize, i32) -> Text,
+    ) -> CmdResult<(Text, i32)> {
         let (only, count) = if any {
             (&self.only, self.count)
         } else {
@@ -123,8 +135,7 @@ impl Tracker {
             Some(h) => single(h, self.total),
             None => multiple(count, self.total),
         };
-        env.feedback(message);
-        Ok(self.total)
+        Ok((message, self.total))
     }
 }
 

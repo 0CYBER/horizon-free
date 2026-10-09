@@ -215,3 +215,43 @@ fn local_coordinates_follow_view() {
     ]);
     assert_eq!(w.position([10.0, 64.0, 3.0], [0.0, 0.0]), [11.0, 5.0, 3.0]);
 }
+
+#[test]
+fn data_and_tag_commands_parse() {
+    let (id, args) = run("data get entity @s Pos 2.5").unwrap();
+    assert_eq!(id, "data.get");
+    assert_eq!(args, ["target", "path", "scale"]);
+    assert_eq!(run("data get block ~ ~ ~ Items[0]").unwrap().0, "data.get");
+    assert_eq!(run("data get storage my:store").unwrap().0, "data.get");
+    assert_eq!(run("data merge storage a:b {x:1}").unwrap().0, "data.merge");
+    assert_eq!(
+        run("data remove entity @s foo.bar[1]").unwrap().0,
+        "data.remove"
+    );
+    let (id, args) = run("data modify storage a:b x.y insert 2 from entity @s Pos[0]").unwrap();
+    assert_eq!(id, "data.modify");
+    assert_eq!(
+        args,
+        ["target", "targetPath", "index", "source", "sourcePath"]
+    );
+    assert_eq!(
+        run("data modify block 1 2 3 Text1 set string storage a:b x 1 3")
+            .unwrap()
+            .0,
+        "data.modify"
+    );
+    assert_eq!(
+        run("data modify storage a:b l append value [1,2]")
+            .unwrap()
+            .0,
+        "data.modify"
+    );
+    assert!(run("data modify storage a:b l explode value 1").is_err());
+    assert!(run("data get storage a:b {broken").is_err());
+    assert!(run("data merge storage a:b 5").is_err());
+    assert_eq!(run("tag @e[tag=!x] add foo").unwrap().0, "tag.add");
+    assert_eq!(run("tag @s list").unwrap().0, "tag.list");
+    // Selector options added for scoreboards and NBT.
+    assert!(run("kill @e[scores={a=1..},team=red,nbt={x:1b},tag=t]").is_ok());
+    assert!(run("kill @e[scores={a=1..]").is_err());
+}

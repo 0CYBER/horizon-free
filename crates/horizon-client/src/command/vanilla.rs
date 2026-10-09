@@ -11,19 +11,19 @@ use crate::gamerules::{RULES, Value};
 pub const ALL: u8 = 0;
 pub const GAMEMASTERS: u8 = 2;
 
-const PLAYERS: ArgType = ArgType::Entity {
+pub const PLAYERS: ArgType = ArgType::Entity {
     single: false,
     players: true,
 };
-const PLAYER: ArgType = ArgType::Entity {
+pub const PLAYER: ArgType = ArgType::Entity {
     single: true,
     players: true,
 };
-const ENTITIES: ArgType = ArgType::Entity {
+pub const ENTITIES: ArgType = ArgType::Entity {
     single: false,
     players: false,
 };
-const ENTITY: ArgType = ArgType::Entity {
+pub const ENTITY: ArgType = ArgType::Entity {
     single: true,
     players: false,
 };
@@ -343,6 +343,7 @@ pub fn build() -> Dispatcher {
     d.executes(fade_out, "title");
 
     super::tree_scoreboard::register(&mut d, root);
+    super::tree_data::register(&mut d, root);
     execute(&mut d, root);
     d
 }
