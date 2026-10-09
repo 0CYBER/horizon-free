@@ -1636,6 +1636,32 @@ impl Game<'_> {
                         }
                     }
                 }
+                // A witch's healing potions reach the raiders around the splash.
+                if matches!(
+                    *effect,
+                    "minecraft:instant_health" | "minecraft:regeneration"
+                ) {
+                    let center = at;
+                    for m in &mut self.mobs {
+                        let d2 = m.position.distance_squared(center);
+                        if !m.alive()
+                            || d2 >= 16.0
+                            || !horizon_client::mobs::raider::is_raider(m.species())
+                        {
+                            continue;
+                        }
+                        let scale = 1.0 - d2.sqrt() / 4.0;
+                        if *effect == "minecraft:instant_health" {
+                            let heal = (4 << *amplifier) as f64 * scale;
+                            m.health = (m.health + heal as f32).min(m.attrs.max_health);
+                        } else {
+                            let t = (f64::from(*ticks) * scale + 0.5) as i32;
+                            if t > 20 {
+                                m.add_effect(effect, t, *amplifier);
+                            }
+                        }
+                    }
+                }
                 self.audio.play(
                     "minecraft:entity.splash_potion.break",
                     Some(atp),
