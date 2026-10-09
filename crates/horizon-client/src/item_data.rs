@@ -35,7 +35,27 @@ pub struct StackData {
     pub writable_pages: Vec<String>,
     /// `minecraft:written_book_content`.
     pub written: Option<WrittenBook>,
+    /// `minecraft:banner_patterns` (banners and shields).
+    pub banner_patterns: Vec<crate::banner::BannerLayer>,
+    /// `minecraft:base_color` (a shield's dye).
+    pub base_color: Option<Arc<str>>,
+    /// The raid captain's banner: `minecraft:banner_patterns` with the
+    /// ominous layers, its item name, rarity and hidden tooltip.
+    pub ominous_banner: bool,
+    /// `minecraft:ominous_bottle_amplifier` (None: the item's default, 0).
+    pub ominous_amplifier: Option<u8>,
 }
+/// `Raid.getBannerComponentPatch`: the ominous banner's pattern layers.
+pub const OMINOUS_LAYERS: [(&str, &str); 8] = [
+    ("rhombus", "cyan"),
+    ("stripe_bottom", "light_gray"),
+    ("stripe_center", "gray"),
+    ("border", "light_gray"),
+    ("stripe_middle", "black"),
+    ("half_horizontal", "light_gray"),
+    ("circle", "light_gray"),
+    ("border", "black"),
+];
 /// `WrittenBookContent` with the pages as plain text.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WrittenBook {
@@ -267,6 +287,15 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
         if let Some(id) = d.map_id {
             entries.push(("minecraft:map_id", Tag::Int(id)));
         }
+        if !d.banner_patterns.is_empty() {
+            entries.push((
+                "minecraft:banner_patterns",
+                crate::banner::layers_to_nbt(&d.banner_patterns),
+            ));
+        }
+        if let Some(color) = &d.base_color {
+            entries.push(("minecraft:base_color", Tag::String((&**color).into())));
+        }
         // Filterable values are saved as {raw: ..}.
         let raw = |t: Tag| Tag::compound([("raw", t)]);
         if !d.writable_pages.is_empty() {
@@ -330,6 +359,39 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
                 Tag::List(d.charged.iter().map(crate::save::item_to_nbt).collect()),
             ));
         }
+        if d.ominous_banner {
+            let layer = |pattern: &str, color: &str| {
+                Tag::compound([
+                    (
+                        "pattern",
+                        Tag::String(format!("minecraft:{pattern}").as_str().into()),
+                    ),
+                    ("color", Tag::String(color.into())),
+                ])
+            };
+            entries.push((
+                "minecraft:banner_patterns",
+                Tag::List(OMINOUS_LAYERS.iter().map(|(p, c)| layer(p, c)).collect()),
+            ));
+            entries.push((
+                "minecraft:tooltip_display",
+                Tag::compound([(
+                    "hidden_components",
+                    Tag::List(vec![Tag::String("minecraft:banner_patterns".into())]),
+                )]),
+            ));
+            entries.push((
+                "minecraft:item_name",
+                Tag::compound([(
+                    "translate",
+                    Tag::String("block.minecraft.ominous_banner".into()),
+                )]),
+            ));
+            entries.push(("minecraft:rarity", Tag::String("uncommon".into())));
+        }
+        if let Some(a) = d.ominous_amplifier {
+            entries.push(("minecraft:ominous_bottle_amplifier", Tag::Int(i32::from(a))));
+        }
         if !d.container.is_empty() {
             let slots = d
                 .container
@@ -371,6 +433,11 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         custom_name: c.get("minecraft:custom_name").and_then(read_text),
         potion,
         map_id: c.get("minecraft:map_id").and_then(int).map(|v| v as i32),
+        banner_patterns: crate::banner::layers_from_nbt(c.get("minecraft:banner_patterns")),
+        base_color: c
+            .get("minecraft:base_color")
+            .and_then(string)
+            .map(|s| Arc::from(s.as_str())),
         writable_pages: match c
             .get("minecraft:writable_book_content")
             .and_then(|b| b.get("pages"))
@@ -435,6 +502,15 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                 .collect(),
             _ => Vec::new(),
         },
+        ominous_banner: matches!(
+            c.get("minecraft:banner_patterns"),
+            Some(Tag::List(layers)) if layers.first().is_some_and(|l|
+                l.get("pattern").and_then(string).as_deref() == Some("minecraft:rhombus"))
+        ),
+        ominous_amplifier: c
+            .get("minecraft:ominous_bottle_amplifier")
+            .and_then(int)
+            .map(|v| v.clamp(0, 4) as u8),
         trim: c.get("minecraft:trim").and_then(|t| {
             Some((
                 Arc::from(t.get("material").and_then(string)?.as_str()),
@@ -499,6 +575,34 @@ mod tests {
         assert_eq!(back.custom_name(), Some("Blade"));
     }
 
+    #[test]
+    fn banner_layers_and_shield_base_round_trip() {
+        let mut stack = ItemStack::new("minecraft:shield", 1);
+        stack.data_mut().base_color = Some(Arc::from("red"));
+        stack.data_mut().banner_patterns = vec![
+            crate::banner::BannerLayer::new("minecraft:flower", "black"),
+            crate::banner::BannerLayer::new("minecraft:border", "white"),
+        ];
+        let tag = encode_components(&stack).expect("components");
+        let (_, extra) = decode_components(Some(&tag));
+        let extra = extra.expect("data");
+        assert_eq!(extra.base_color.as_deref(), Some("red"));
+        assert_eq!(extra.banner_patterns, stack.data().unwrap().banner_patterns);
+    }
+
+    #[test]
+    fn ominous_items_round_trip() {
+        let mut banner = ItemStack::new("minecraft:white_banner", 1);
+        banner.data_mut().ominous_banner = true;
+        let tag = encode_components(&banner).unwrap();
+        assert!(tag.get("minecraft:banner_patterns").is_some());
+        let (_, back) = decode_components(Some(&tag));
+        assert!(back.unwrap().ominous_banner);
+        let mut bottle = ItemStack::new("minecraft:ominous_bottle", 1);
+        bottle.data_mut().ominous_amplifier = Some(3);
+        let (_, back) = decode_components(encode_components(&bottle).as_ref());
+        assert_eq!(back.unwrap().ominous_amplifier, Some(3));
+    }
     #[test]
     fn plain_stacks_have_no_components() {
         let stack = ItemStack::new("minecraft:stone", 64);

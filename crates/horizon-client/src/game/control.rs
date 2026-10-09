@@ -295,6 +295,9 @@ impl Game<'_> {
                 match self.screen {
                     Screen::Chat => self.chat_type(text),
                     Screen::Options => self.ui.options.type_text(text),
+                    Screen::Inventory if self.recipe_search_focused() => {
+                        self.recipe_text(Some(text), false)
+                    }
                     _ => {
                         return Err(
                             "type needs the chat screen (key t tap) or the language search".into(),

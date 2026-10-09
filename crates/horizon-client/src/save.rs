@@ -349,7 +349,11 @@ fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
         _ => e.id().to_owned(),
     }
 }
-fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, block: &str) -> Tag {
+pub fn encode_block_entity(
+    p: (i32, i32, i32),
+    e: &crate::containers::BlockEntity,
+    block: &str,
+) -> Tag {
     use crate::containers::BlockEntity;
     let mut entries = vec![
         ("id", string(&block_entity_id(e, block))),
@@ -401,10 +405,37 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
             }
         }
         BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
+        BlockEntity::Crafter(c) => {
+            entries.push(("Items", encode_items(&c.items)));
+            entries.push((
+                "disabled_slots",
+                Tag::IntArray(
+                    (0..9)
+                        .filter(|&i| c.disabled[i])
+                        .map(|i| i as i32)
+                        .collect(),
+                ),
+            ));
+            entries.push(("triggered", Tag::Int(i32::from(c.triggered))));
+            entries.push(("crafting_ticks_remaining", Tag::Int(c.crafting_ticks)));
+        }
+        BlockEntity::Banner(b) => {
+            if !b.layers.is_empty() {
+                entries.push(("patterns", crate::banner::layers_to_nbt(&b.layers)));
+            }
+            if let Some(name) = &b.name {
+                entries.push(("CustomName", string(name)));
+            }
+        }
+        BlockEntity::CreakingHeart(h) => {
+            if let Some((_, uuid)) = h.creaking {
+                entries.push(("creaking", uuid_tag(uuid)));
+            }
+        }
     }
     Tag::compound(entries)
 }
-fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
+pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
@@ -422,12 +453,28 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             }),
         ));
     }
+    if id == "minecraft:creaking_heart" {
+        let heart = crate::containers::CreakingHeart {
+            creaking: uuid_from_tag(tag.get("creaking")).map(|uuid| (None, uuid)),
+            ..Default::default()
+        };
+        return Some((pos, BlockEntity::CreakingHeart(Box::new(heart))));
+    }
     if id == "minecraft:lectern" {
         let lectern = crate::containers::Lectern {
             book: tag.get("Book").and_then(item_from_nbt),
             page: int("Page").unwrap_or(0),
         };
         return Some((pos, BlockEntity::Lectern(lectern)));
+    }
+    if id == "minecraft:banner" {
+        return Some((
+            pos,
+            BlockEntity::Banner(crate::containers::Banner {
+                layers: crate::banner::layers_from_nbt(tag.get("patterns")),
+                name: text(tag.get("CustomName")),
+            }),
+        ));
     }
     if id == "minecraft:beacon" {
         let beacon = crate::containers::Beacon {
@@ -476,7 +523,25 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
         BlockEntity::Sculk(s) => s.load(tag),
-        BlockEntity::Jukebox(_) | BlockEntity::Beacon(_) | BlockEntity::Lectern(_) => {}
+        BlockEntity::Crafter(c) => {
+            for (slot, item) in decode_items(tag.get("Items"), 9).into_iter().enumerate() {
+                c.items[slot] = item;
+            }
+            if let Some(Tag::IntArray(slots)) = tag.get("disabled_slots") {
+                for &slot in slots {
+                    if (0..9).contains(&slot) && c.items[slot as usize].is_none() {
+                        c.disabled[slot as usize] = true;
+                    }
+                }
+            }
+            c.triggered = int("triggered").unwrap_or(0) != 0;
+            c.crafting_ticks = int("crafting_ticks_remaining").unwrap_or(0);
+        }
+        BlockEntity::Jukebox(_)
+        | BlockEntity::Beacon(_)
+        | BlockEntity::Lectern(_)
+        | BlockEntity::Banner(_)
+        | BlockEntity::CreakingHeart(_) => {}
     }
     Some((pos, entity))
 }
@@ -903,6 +968,60 @@ pub fn decode_with(
     Some(chunk)
 }
 
+/// Read the stored `SkyLight`/`BlockLight` layers of a chunk saved with
+/// `isLightOn` (`SerializableChunkData.read` + `ThreadedLevelLightEngine`),
+/// so it needs no relighting. A missing sky layer repeats the bottom layer of
+/// the section above it (15 above the highest stored one); a missing block
+/// layer is dark.
+pub fn load_light(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
+    if tag.get("isLightOn") != Some(&Tag::Byte(1)) {
+        return;
+    }
+    let Some(Tag::List(sections)) = tag.get("sections") else {
+        return;
+    };
+    let mut layers: Vec<(Option<&[u8]>, Option<&[u8]>)> = vec![(None, None); SECTIONS];
+    for section in sections {
+        let Some(y) = number(section.get("Y")) else {
+            continue;
+        };
+        let si = y as i32 - (MIN_Y >> 4);
+        if !(0..SECTIONS as i32).contains(&si) {
+            continue;
+        }
+        let layer = |name: &str| match section.get(name) {
+            Some(Tag::ByteArray(a)) if a.len() == 2048 => Some(&a[..]),
+            _ => None,
+        };
+        layers[si as usize] = (layer("SkyLight"), layer("BlockLight"));
+    }
+    let sky_default = if sky_light { 15u8 } else { 0 };
+    // Sky nibbles of the section above's bottom layer, going down.
+    let mut above: [u8; 256] = [sky_default; 256];
+    for si in (0..SECTIONS).rev() {
+        let (sky, block) = layers[si];
+        let mut data = Box::new([0u8; 4096]);
+        let nibble = |a: &[u8], i: usize| (a[i >> 1] >> ((i & 1) * 4)) & 15;
+        for (i, packed) in data.iter_mut().enumerate() {
+            let s = match sky {
+                Some(a) if sky_light => nibble(a, i),
+                _ => above[i & 255],
+            };
+            let b = block.map_or(0, |a| nibble(a, i));
+            *packed = s << 4 | b;
+        }
+        for (i, a) in above.iter_mut().enumerate() {
+            *a = data[i] >> 4;
+        }
+        let mut section = (*chunk.sections[si]).clone();
+        section.light = Light::Full(data);
+        section.compact();
+        chunk.sections[si] = Arc::new(section);
+    }
+    chunk.lit = true;
+    chunk.light_loaded = true;
+}
+
 type RegionCache = Mutex<HashMap<(i32, i32), Option<Arc<Mutex<RegionFile>>>>>;
 /// One dimension folder (`dimensions/minecraft/<name>`). Region files are
 /// read lazily by worker threads.
@@ -953,7 +1072,9 @@ impl SaveDir {
     pub fn load(&self, x: i32, z: i32, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
         let root = self.read_record("region", x, z)?;
         let tables = self.tables.get().map(|t| &**t);
-        decode_with(&root, registry, biomes, tables)
+        let mut chunk = decode_with(&root, registry, biomes, tables)?;
+        load_light(&root.tag, &mut chunk, self.sky_light);
+        Some(chunk)
     }
     /// Entities saved for a chunk (`entities/`; older chunks may still keep
     /// them in the chunk's own `entities` list).
@@ -1139,7 +1260,7 @@ fn write_saved_data(world: &Path, name: &str, data: Tag) -> Result<()> {
         Tag::compound([("data", data), ("DataVersion", Tag::Int(DATA_VERSION))]),
     )
 }
-fn uuid_text(u: [i32; 4]) -> String {
+pub fn uuid_text(u: [i32; 4]) -> String {
     let hex: String = u.iter().map(|v| format!("{:08x}", *v as u32)).collect();
     format!(
         "{}-{}-{}-{}-{}",
@@ -1150,7 +1271,7 @@ fn uuid_text(u: [i32; 4]) -> String {
         &hex[20..32]
     )
 }
-fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
+pub fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
     let hex: String = s.chars().filter(|c| *c != '-').collect();
     if hex.len() != 32 {
         return None;
@@ -1312,6 +1433,8 @@ pub struct Level {
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
     pub ender_items: Vec<Option<crate::items::ItemStack>>,
+    /// The `recipeBook` compound: open/filter settings and unlocked recipes.
+    pub recipe_book: crate::recipe_book::Settings,
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
@@ -1524,6 +1647,7 @@ impl Level {
         }
         self.inventory = inventory;
         self.ender_items = decode_items(p.get("EnderItems"), 27);
+        self.recipe_book = crate::recipe_book::Settings::read(p.get("recipeBook"));
         self.inventory_components = inventory_components;
         self.xp_seed = n("XpSeed").unwrap_or(0) as i32;
         self.active_effects = match p.get("active_effects") {
@@ -1545,11 +1669,18 @@ impl Level {
         };
     }
     /// The player compound: the loaded one with Horizon's state written over it.
-    fn player_tag(&self) -> Tag {
+    pub fn player_tag(&self) -> Tag {
         let mut p = compound_or_empty(self.player_extra.clone());
         // Keys rewritten from scratch.
         if let Tag::Compound(map) = &mut p {
-            for key in ["Inventory", "EnderItems", "equipment", "Pos", "respawn"] {
+            for key in [
+                "Inventory",
+                "EnderItems",
+                "equipment",
+                "Pos",
+                "respawn",
+                "recipeBook",
+            ] {
                 map.remove(&JavaString::from(key));
             }
         }
@@ -1644,6 +1775,7 @@ impl Level {
             ("playerGameType", Tag::Int(self.mode())),
             ("Inventory", Tag::List(inventory)),
             ("EnderItems", encode_items(&self.ender_items)),
+            ("recipeBook", self.recipe_book.write()),
             ("abilities", abilities),
             (
                 "Dimension",
@@ -1995,6 +2127,48 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn crafter_block_entity_round_trips() {
+        let mut crafter = crate::containers::Crafter::default();
+        crafter.items[2] = Some(crate::items::ItemStack::new("minecraft:stick", 5));
+        crafter.disabled[4] = true;
+        crafter.triggered = true;
+        crafter.crafting_ticks = 3;
+        let tag = encode_block_entity(
+            (7, 8, 9),
+            &crate::containers::BlockEntity::Crafter(crafter),
+            "minecraft:crafter",
+        );
+        let (pos, back) = decode_block_entity(&tag).expect("crafter");
+        assert_eq!(pos, (7, 8, 9));
+        let crate::containers::BlockEntity::Crafter(back) = back else {
+            panic!("not a crafter");
+        };
+        assert_eq!(back.items[2].as_ref().map(|s| s.count), Some(5));
+        assert!(back.disabled[4] && !back.disabled[3]);
+        assert!(back.triggered);
+        assert_eq!(back.crafting_ticks, 3);
+        assert_eq!(back.redstone_signal(), 2);
+    }
+    #[test]
+    fn banner_block_entity_round_trips() {
+        let banner = crate::containers::Banner {
+            layers: vec![crate::banner::BannerLayer::new("minecraft:creeper", "lime")],
+            name: Some("Flag".into()),
+        };
+        let tag = encode_block_entity(
+            (1, 2, 3),
+            &crate::containers::BlockEntity::Banner(banner.clone()),
+            "minecraft:red_banner",
+        );
+        let (pos, back) = decode_block_entity(&tag).expect("banner");
+        assert_eq!(pos, (1, 2, 3));
+        let crate::containers::BlockEntity::Banner(back) = back else {
+            panic!("not a banner");
+        };
+        assert_eq!(back.layers, banner.layers);
+        assert_eq!(back.name, banner.name);
+    }
     use super::*;
 
     #[test]
@@ -2009,6 +2183,37 @@ mod tests {
         assert_eq!((r[1] >> 12) & 0xF, 4, "version 4");
     }
     #[test]
+    fn creaking_heart_keeps_its_protector_uuid() {
+        use crate::containers::{BlockEntity, CreakingHeart};
+        let heart = CreakingHeart {
+            creaking: Some((Some(7), [1, 2, 3, 4])),
+            ..Default::default()
+        };
+        let tag = encode_block_entity(
+            (3, 70, -5),
+            &BlockEntity::CreakingHeart(Box::new(heart)),
+            "minecraft:creaking_heart",
+        );
+        assert_eq!(
+            tag.get("creaking"),
+            Some(&Tag::IntArray(vec![1, 2, 3, 4])),
+            "vanilla stores the protector's UUID under `creaking`"
+        );
+        let (pos, entity) = decode_block_entity(&tag).expect("heart decodes");
+        assert_eq!(pos, (3, 70, -5));
+        let BlockEntity::CreakingHeart(h) = entity else {
+            panic!("a creaking heart");
+        };
+        // The entity id is resolved again once the creaking is loaded.
+        assert_eq!(h.creaking, Some((None, [1, 2, 3, 4])));
+        let lonely = encode_block_entity(
+            (0, 0, 0),
+            &BlockEntity::CreakingHeart(Box::default()),
+            "minecraft:creaking_heart",
+        );
+        assert!(lonely.get("creaking").is_none());
+    }
+    #[test]
     fn light_nibbles_use_vanilla_order() {
         let mut a = Box::new([0u8; 4096]);
         a[0] = 0xF3; // sky 15, block 3 at x=0
@@ -2016,6 +2221,52 @@ mod tests {
         let light = Light::Full(a);
         assert_eq!(nibbles(&light, false)[0], 0x23);
         assert_eq!(nibbles(&light, true)[0], 0x5F);
+    }
+    #[test]
+    fn stored_light_loads_with_vanilla_defaults() {
+        let mut sky = vec![0u8; 2048];
+        sky[0] = 0x5A; // x=0 -> 10, x=1 -> 5
+        let section = |y: i8, entries: Vec<(&str, Tag)>| {
+            let mut all = vec![("Y", Tag::Byte(y))];
+            all.extend(entries);
+            Tag::compound(all)
+        };
+        let tag = Tag::compound([
+            ("isLightOn", Tag::Byte(1)),
+            (
+                "sections",
+                Tag::List(vec![
+                    section(
+                        -4,
+                        vec![
+                            ("SkyLight", Tag::ByteArray(sky)),
+                            ("BlockLight", Tag::ByteArray(vec![0x21; 2048])),
+                        ],
+                    ),
+                    // No sky layer: repeats the bottom layer of the section above.
+                    section(-3, vec![]),
+                ]),
+            ),
+        ]);
+        let mut chunk = Chunk::empty(0, 0);
+        load_light(&tag, &mut chunk, true);
+        assert!(chunk.lit && chunk.light_loaded);
+        let at = |c: &Chunk, si: usize, i: usize| c.sections[si].light(i);
+        assert_eq!(at(&chunk, 0, 0), 0xA1, "stored sky 10, block 1");
+        assert_eq!(at(&chunk, 0, 1), 0x52, "stored sky 5, block 2");
+        // Section -3 has no layers; above it (-2..) sky defaults to 15.
+        assert_eq!(at(&chunk, 1, 0), 0xF0);
+        assert_eq!(at(&chunk, SECTIONS - 1, 5), 0xF0);
+        let mut dark = Chunk::empty(0, 0);
+        load_light(&tag, &mut dark, false);
+        assert_eq!(at(&dark, 1, 0), 0x00, "no skylight dimension");
+        let mut unlit = Chunk::empty(0, 0);
+        load_light(
+            &Tag::compound([("isLightOn", Tag::Byte(0))]),
+            &mut unlit,
+            true,
+        );
+        assert!(!unlit.lit && !unlit.light_loaded);
     }
     #[test]
     fn level_round_trips_through_the_vanilla_files() {

@@ -11,6 +11,7 @@ pub mod anim;
 pub mod aquatic;
 pub mod camel;
 pub mod control;
+pub mod creaking;
 pub mod cube;
 pub mod data;
 pub mod enderman;
@@ -28,6 +29,7 @@ pub mod nether;
 pub mod path;
 pub mod phantom;
 pub mod piglin;
+pub mod raider;
 pub mod ravager;
 pub mod render;
 pub mod shulker;
@@ -436,8 +438,12 @@ pub struct Extra {
     /// Dye colour id (sheep wool, collars).
     pub color: u8,
     pub sheared: bool,
+    /// `Mob.canPickUpLoot` (also lets dispensers equip it).
+    pub pick_up_loot: bool,
     pub saddled: bool,
     pub chested: bool,
+    /// The chest contents of a donkey or mule (15 slots).
+    pub items: Vec<Option<crate::items::ItemStack>>,
     pub tame: bool,
     pub sitting: bool,
     /// The owner's UUID (tamed animals).
@@ -478,6 +484,10 @@ pub struct Extra {
     pub trade: Option<Box<crate::merchant::Trader>>,
     /// A warden's brain, anger and vibrations.
     pub warden: Option<Box<warden::Warden>>,
+    /// A raider's patrol and raid state.
+    pub raider: Option<Box<raider::State>>,
+    /// A villager's raid activity and gossip.
+    pub villager: Option<Box<villager::Ext>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -520,6 +530,12 @@ pub struct Mob {
     pub extra: Extra,
     pub fluids: living::Fluids,
     pub no_gravity: bool,
+    /// `NoAI`: no goals and no movement.
+    pub no_ai: bool,
+    /// `Silent`.
+    pub silent: bool,
+    /// `Invulnerable`: immune to damage (but not to `/kill`).
+    pub invulnerable_flag: bool,
     pub climbing: bool,
     pub fire_ticks: i32,
     pub air: i32,
@@ -662,6 +678,44 @@ pub enum MobEvent {
         kind: DamageKind,
         amount: f32,
     },
+    /// Two villagers are close: swap gossip and share food and wares.
+    VillagerMeet {
+        mob: u32,
+        other: u32,
+    },
+    /// Two villagers make a baby.
+    VillagerBirth {
+        parent: u32,
+        partner: u32,
+    },
+    /// A villager asks whether enough neighbours want an iron golem.
+    GolemCheck {
+        mob: u32,
+        needed: usize,
+    },
+    /// A villager launches a firework rocket (celebrating a won raid).
+    Firework {
+        at: [f64; 3],
+        color: usize,
+        flight: u8,
+    },
+    /// A villager throws a hero's gift (a loot table) toward the player.
+    ThrowGift {
+        table: String,
+        from: [f64; 3],
+        to: [f64; 3],
+    },
+    /// A patrol leader hands its patrol target to a companion.
+    PatrolTarget {
+        mob: u32,
+        target: [i32; 3],
+    },
+    /// A raider is told to attack (`HoldGroundAttackGoal` shouting).
+    RaiderTarget {
+        mob: u32,
+        target: Who,
+        aggressive: bool,
+    },
     /// Drop the loot of a gift table (chicken eggs, armadillo scutes).
     GiftLoot {
         table: &'static str,
@@ -681,6 +735,17 @@ pub enum MobEvent {
     Darkness {
         at: [f64; 3],
         radius: f64,
+    },
+    /// A creaking bound to the heart at `home` was hurt (`creakingHurt` when a player did it).
+    CreakingHurt {
+        home: [i32; 3],
+        by_player: bool,
+        id: u32,
+    },
+    /// `Creaking.tearDown`: crumbling particles around the creaking.
+    CreakingTearDown {
+        center: [f64; 3],
+        spread: [f64; 3],
     },
 }
 /// How a spawned-by-kind mob should be set up.
@@ -721,6 +786,10 @@ pub struct Seen {
     /// A villager's claimed job site and bed.
     pub job: Option<[i32; 3]>,
     pub bed: Option<[i32; 3]>,
+    /// A raider in an active raid.
+    pub active_raid: bool,
+    /// A villager's reputation of the player (`getPlayerReputation`).
+    pub player_rep: i32,
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]
@@ -743,6 +812,10 @@ pub struct PlayerView {
     pub hurt_by: Option<(Who, i64)>,
     /// `getLastHurtMob` and when.
     pub last_hurt: Option<(Who, i64)>,
+    /// The Hero of the Village effect.
+    pub hero: bool,
+    /// The player's UUID (villagers' gossip is keyed by it).
+    pub uuid: [i32; 4],
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,
@@ -805,6 +878,9 @@ impl Mob {
             extra: Extra::default(),
             fluids: living::Fluids::default(),
             no_gravity: false,
+            no_ai: false,
+            silent: false,
+            invulnerable_flag: false,
             climbing: false,
             fire_ticks: 0,
             air: 300,
@@ -878,7 +954,7 @@ impl Mob {
         .fold((0.0, 0.0), |(a, t), (x, y)| (a + x, t + y))
     }
     pub fn damage(&mut self, amount: f32, source: Damage) -> bool {
-        if !self.alive() || self.removed {
+        if !self.alive() || self.removed || self.invulnerable_flag {
             return false;
         }
         if source.is_fire() && (self.kind.flags.fire_immune) {

@@ -17,6 +17,7 @@ pub(super) const HELP: &[&str] = &[
     "effect ID SECONDS [AMPLIFIER]  give a status effect (effect clear removes all)",
     "effects                        list active status effects",
     "trade PROFESSION [LEVEL] [TYPE] open a villager trading menu (offers from the world's trade sequences)",
+    "mount-menu [tame] [chest]      open the inventory of the nearest horse, donkey or mule (tame, chest set those)",
     "close                          close the open menu",
 ];
 fn id(name: &str) -> String {
@@ -194,6 +195,29 @@ impl Game<'_> {
             "effects" => Ok(Some(
                 json!({ "effects": self.effects_json(), "health": self.player.as_ref().map(|p| p.health.health()) }),
             )),
+            "mount-menu" => {
+                let eye = self.eye_position().ok_or("no player")?;
+                let index = (0..self.mobs.len())
+                    .filter(|&i| horizon_client::mobs::equine::is_equine(self.mobs[i].species()))
+                    .min_by(|&a, &b| {
+                        let d = |i: usize| {
+                            let c = self.mobs[i].center();
+                            (c[0] - eye[0]).powi(2)
+                                + (c[1] - eye[1]).powi(2)
+                                + (c[2] - eye[2]).powi(2)
+                        };
+                        d(a).total_cmp(&d(b))
+                    })
+                    .ok_or("no horse around")?;
+                if flag("tame") {
+                    self.mobs[index].extra.tame = true;
+                }
+                if flag("chest") {
+                    self.mobs[index].extra.chested = true;
+                }
+                self.open_mount_menu(index);
+                ok()
+            }
             "close" => {
                 self.close_container();
                 self.screen = Screen::Playing;

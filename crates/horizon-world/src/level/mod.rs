@@ -101,6 +101,8 @@ pub mod states;
 pub mod ticks;
 
 mod bonemeal;
+mod buckets;
+mod creaking;
 mod falling;
 mod feature_world;
 mod fluids;
@@ -127,6 +129,7 @@ mod growth_tests;
 #[cfg(test)]
 mod tests;
 
+pub use buckets::BucketContent;
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
 pub use falling::Landing;
 pub use interact::{InteractionResult, PlayerContext, PlayerEffect};

@@ -442,7 +442,12 @@ impl Mob {
         let distance = (dx * dx + dy * dy + dz * dz).sqrt() as f32;
         self.previous_limb_speed = self.limb_speed;
         if self.alive() {
-            let target = (distance * 4.0).min(1.0);
+            // Creaking.updateWalkAnimation walks the model faster.
+            let target = if self.species() == super::Species::Creaking {
+                (distance * 25.0).min(3.0)
+            } else {
+                (distance * 4.0).min(1.0)
+            };
             self.limb_speed += (target - self.limb_speed) * 0.4;
             self.limb_position += self.limb_speed * if self.is_baby() { 3.0 } else { 1.0 };
         } else {

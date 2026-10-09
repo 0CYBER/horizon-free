@@ -78,7 +78,10 @@ pub fn sound_source(event: &str) -> usize {
 }
 /// Volume multiplier of an event's source (master applied separately).
 pub fn event_volume(event: &str) -> f32 {
-    let i = sound_source(event);
+    source_volume(sound_source(event))
+}
+/// Volume multiplier of a sound source by index.
+pub fn source_volume(i: usize) -> f32 {
     if i == 0 {
         1.0
     } else {
@@ -155,6 +158,10 @@ pub struct Settings {
     pub auto_suggestions: bool,
     pub reduced_debug_info: bool,
     pub high_contrast: bool,
+    /// `showSubtitles`: the closed-caption overlay.
+    pub show_subtitles: bool,
+    /// `notificationDisplayTime`: a multiplier for subtitle and toast times.
+    pub notification_display_time: f32,
     pub main_hand_left: bool,
     /// Enabled resource packs, bottom first (resourcePacks).
     pub resource_packs: Vec<String>,
@@ -219,6 +226,8 @@ impl Default for Settings {
             auto_suggestions: true,
             reduced_debug_info: false,
             high_contrast: false,
+            show_subtitles: false,
+            notification_display_time: 1.0,
             main_hand_left: false,
             resource_packs: vec!["vanilla".into()],
             keys: KeyBinds::default(),
@@ -313,6 +322,10 @@ impl Settings {
                 "autoSuggestions" => s.auto_suggestions = b(true),
                 "reducedDebugInfo" => s.reduced_debug_info = b(false),
                 "highContrast" => s.high_contrast = b(false),
+                "showSubtitles" => s.show_subtitles = b(false),
+                "notificationDisplayTime" => {
+                    s.notification_display_time = f(1.0).clamp(0.5, 10.0);
+                }
                 "mainHand" => s.main_hand_left = unquote(v) == "left",
                 "resourcePacks" => s.resource_packs = parse_list(v),
                 _ if k.starts_with("key_") => {
@@ -405,6 +418,11 @@ impl Settings {
             ("toggleSprint".into(), self.toggle_sprint.to_string()),
             ("mouseSensitivity".into(), self.sensitivity.to_string()),
             ("highContrast".into(), self.high_contrast.to_string()),
+            ("showSubtitles".into(), self.show_subtitles.to_string()),
+            (
+                "notificationDisplayTime".into(),
+                self.notification_display_time.to_string(),
+            ),
             (
                 "resourcePacks".into(),
                 serde_json::to_string(&self.resource_packs).unwrap_or_else(|_| "[]".into()),
@@ -525,5 +543,22 @@ mod tests {
         let again = Settings::parse(&out);
         assert_eq!(again.fov, 90.0);
         assert_eq!(again.keys.get("key.jump"), "key.keyboard.j");
+    }
+    #[test]
+    fn subtitle_options() {
+        let s = Settings::parse("showSubtitles:true\nnotificationDisplayTime:2.5\n");
+        assert!(s.show_subtitles);
+        assert_eq!(s.notification_display_time, 2.5);
+        let again = Settings::parse(&s.serialize());
+        assert!(again.show_subtitles);
+        assert_eq!(again.notification_display_time, 2.5);
+        let d = Settings::parse("");
+        assert!(!d.show_subtitles);
+        assert_eq!(d.notification_display_time, 1.0);
+        // The multiplier stays within the slider's range.
+        assert_eq!(
+            Settings::parse("notificationDisplayTime:50\n").notification_display_time,
+            10.0
+        );
     }
 }

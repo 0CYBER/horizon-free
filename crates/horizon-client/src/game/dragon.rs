@@ -1842,7 +1842,8 @@ impl Game<'_> {
     /// The boss bar (`BossHealthOverlay`): name and the pink progress bar.
     pub(super) fn draw_boss_bar(&self, batch: &mut HudBatch) {
         let dragon = self.dragon.as_ref().filter(|_| self.dim == Dim::End);
-        self.draw_wither_bars(batch, if dragon.is_some() { 31.0 } else { 12.0 });
+        let y = self.draw_wither_bars(batch, if dragon.is_some() { 31.0 } else { 12.0 });
+        self.draw_raid_bar(batch, y);
         let Some(d) = dragon else {
             return;
         };

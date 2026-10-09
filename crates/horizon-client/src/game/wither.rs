@@ -75,9 +75,9 @@ impl Game<'_> {
         Ok(())
     }
     /// The wither boss bars (purple, below the dragon's), within range.
-    pub(super) fn draw_wither_bars(&self, batch: &mut HudBatch, mut y: f32) {
+    pub(super) fn draw_wither_bars(&self, batch: &mut HudBatch, mut y: f32) -> f32 {
         let Some(p) = self.player.as_ref() else {
-            return;
+            return y;
         };
         let atlas = &self.res.atlas;
         for m in self
@@ -117,6 +117,7 @@ impl Game<'_> {
             );
             y += 19.0;
         }
+        y
     }
     pub(super) fn wither_near(&self) -> bool {
         self.player.as_ref().is_some_and(|p| {

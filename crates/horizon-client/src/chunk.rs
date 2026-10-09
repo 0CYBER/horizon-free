@@ -94,6 +94,8 @@ pub struct Chunk {
     /// Highest non-air, light-blocking-or-fluid Y per column (MOTION_BLOCKING-like), for rain/sky.
     pub heights: Arc<[i16; 256]>,
     pub lit: bool,
+    /// Light read from a save with `isLightOn`: no light job is needed.
+    pub light_loaded: bool,
     /// Newly generated (not loaded from a save): eligible for generation-time spawns.
     pub fresh: bool,
     /// Block entities read from a save, moved into the world on arrival.
@@ -120,6 +122,7 @@ impl Chunk {
             biomes: Arc::new(vec![0; 16 * (HEIGHT as usize / 4)]),
             heights: Arc::new([MIN_Y as i16; 256]),
             lit: false,
+            light_loaded: false,
             fresh: false,
             block_entities: Vec::new(),
             structure_refs: Vec::new(),

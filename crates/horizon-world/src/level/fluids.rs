@@ -178,7 +178,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     // ---- liquid containers ----
 
     /// `LiquidBlockContainer` membership (`canHoldAnyFluid` first clause).
-    fn is_liquid_container(&self, state: BlockStateId) -> bool {
+    pub(super) fn is_liquid_container(&self, state: BlockStateId) -> bool {
         self.b.implements(state, Interface::LiquidBlockContainer)
             || self.b.implements(state, Interface::SimpleWaterlogged)
     }
