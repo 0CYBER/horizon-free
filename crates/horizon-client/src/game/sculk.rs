@@ -171,6 +171,27 @@ impl Game<'_> {
             "chunks_known": self.sculk.known.len(),
         })
     }
+    /// `WardenSpawnTrackerCommand`: clear the player's tracker or set its
+    /// warning level.
+    pub(super) fn cmd_warden_spawn_tracker(&mut self, level: Option<i32>) {
+        use horizon_client::text::Text;
+        let key = match level {
+            Some(level) => {
+                self.sculk.tracker.set_warning_level(level);
+                "commands.warden_spawn_tracker.set.success.single"
+            }
+            None => {
+                self.sculk.tracker.reset();
+                "commands.warden_spawn_tracker.clear.success.single"
+            }
+        };
+        if self.ui.rules.bool("send_command_feedback") {
+            self.system_message(Text::translate(
+                key,
+                &[Text::literal(super::chat::PLAYER_NAME)],
+            ));
+        }
+    }
     /// `ServerPlayer`'s `warden_spawn_tracker` from the player data.
     fn load_warden_tracker(&mut self) {
         if self.sculk.tracker_loaded {
@@ -388,7 +409,9 @@ impl Game<'_> {
     }
     /// `GameEvent.Context.of(mob, state)`.
     pub(super) fn mob_context(&self, id: u32, state: Option<BlockStateId>) -> Context {
-        let mob = self.mobs.iter().find(|m| m.id == id);
+        self.context_of_mob(self.mobs.iter().find(|m| m.id == id), id, state)
+    }
+    fn context_of_mob(&self, mob: Option<&Mob>, id: u32, state: Option<BlockStateId>) -> Context {
         Context {
             source: Some(Who::Mob(id)),
             owner: None,
@@ -1509,7 +1532,7 @@ impl Game<'_> {
     /// `LivingEntity.die` with the catalyst's reach: a death event at the
     /// mob's position.
     pub(super) fn sculk_mob_died(&mut self, m: &Mob) {
-        let ctx = self.mob_context(m.id, None);
+        let ctx = self.context_of_mob(Some(m), m.id, None);
         self.post_game_event(
             "minecraft:entity_die",
             [m.position.x, m.position.y, m.position.z],

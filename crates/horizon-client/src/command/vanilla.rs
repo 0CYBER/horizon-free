@@ -295,6 +295,15 @@ pub fn build() -> Dispatcher {
     let a = d.argument(b, "biome", ArgType::Resource(Resource::Biome));
     d.executes(a, "locate.biome");
 
+    // warden_spawn_tracker (clear | set <warning_level>)
+    let tracker = d.literal(root, "warden_spawn_tracker");
+    d.requires(tracker, GAMEMASTERS);
+    let clear = d.literal(tracker, "clear");
+    d.executes(clear, "warden_spawn_tracker.clear");
+    let set = d.literal(tracker, "set");
+    let level = d.argument(set, "warning_level", ArgType::Integer { min: 0, max: 4 });
+    d.executes(level, "warden_spawn_tracker.set");
+
     // say / me / msg / list
     let say = d.literal(root, "say");
     d.requires(say, GAMEMASTERS);

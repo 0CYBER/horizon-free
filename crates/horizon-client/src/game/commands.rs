@@ -450,6 +450,11 @@ impl Game<'_> {
             "setworldspawn" => self.cmd_setworldspawn(ctx),
             "clear" => self.cmd_clear(ctx),
             "locate.structure" | "locate.biome" => self.cmd_locate(id, ctx),
+            "warden_spawn_tracker.clear" | "warden_spawn_tracker.set" => {
+                let level = Self::int(ctx, "warning_level");
+                self.cmd_warden_spawn_tracker(level);
+                Ok(1)
+            }
             "say" | "me" | "msg" => self.cmd_say(id, ctx),
             "list" => {
                 let names = if ctx.has("uuids") {
