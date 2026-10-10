@@ -111,6 +111,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let data = self.b.data(state);
         if data.is(super::classes::Class::PistonBase) {
             self.piston_trigger_event(pos, state, a, b)
+        } else if data.is(super::classes::Class::Note) {
+            self.note_trigger_event(pos, state);
+            true
         } else {
             false
         }

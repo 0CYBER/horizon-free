@@ -30,8 +30,12 @@ pub(super) struct Creatures {
     /// Player status effects applied by mobs: (effect, ticks left, amplifier).
     pub player_fire: i32,
     pub pearl_cooldown: u32,
+    /// The wind charge's use cooldown (ticks).
+    pub wind_cooldown: u32,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
+    /// The wandering trader spawner's clock.
+    pub trader: super::wandering_trader::Spawner,
 }
 /// MobCategory caps (maxInstancesPerChunk with the 17x17 spawnable chunk area).
 const CATEGORIES: [(&str, usize); 7] = [
@@ -121,6 +125,12 @@ fn seen(m: &Mob, player: Option<[i32; 4]>) -> Seen {
         bed: (m.species() == Species::Villager)
             .then_some(m.extra.bed)
             .flatten(),
+        yaw: m.yaw,
+        velocity: m.velocity,
+        leash: m.extra.leash,
+        caravan: horizon_client::mobs::caravan::head_of(m),
+        delay: m.extra.ints[5],
+        hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
         active_raid: horizon_client::mobs::raider::has_active_raid(m),
         player_rep: match (villager, player) {
             (true, Some(uuid)) => {
@@ -163,6 +173,8 @@ impl Game<'_> {
             gold_armor: self.wearing_gold(),
             hurt_by: self.player_hurt_by(),
             last_hurt: self.combat.last_hurt_mob.map(|(id, at)| (Who::Mob(id), at)),
+            velocity: p.velocity,
+            yaw: self.yaw,
             hero: self.potions.effects.get("hero_of_the_village").is_some(),
             uuid: self.level.player_uuid.unwrap_or_default(),
         })
@@ -268,7 +280,11 @@ impl Game<'_> {
             .spawn_mob(kind, at, true)
             .ok_or_else(|| format!("unknown or unsupported mob {kind}"))?;
         if baby && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-            m.extra.age = -24000;
+            m.extra.age = if m.species() == Species::Sniffer {
+                horizon_client::mobs::sniffer::BABY_START_AGE
+            } else {
+                -24000
+            };
         }
         self.spawn_jockeys(id, false);
         Ok(id)
@@ -301,6 +317,11 @@ impl Game<'_> {
                     "on_ground": m.on_ground,
                     "variant": m.extra.variant,
                     "color": m.extra.color,
+                    "leash": m.extra.leash.map(|h| format!("{h:?}")),
+                    "tame": m.extra.tame,
+                    "temper": m.extra.variant3,
+                    "chested": m.extra.chested,
+                    "head": m.extra.head.as_deref(),
                     "warden": horizon_client::mobs::warden::describe(m),
                     "villager": horizon_client::mobs::villager::ext(m).map(|e| serde_json::json!({
                         "food_level": e.food_level,
@@ -659,6 +680,8 @@ impl Game<'_> {
             self.spawn_generation_creatures(key.0, key.1);
         }
         self.tick_inhabited();
+        self.tick_leads();
+        self.tick_wandering_trader();
         self.spawn_natural();
         self.tick_patrol_spawner();
         self.tick_raids();
@@ -699,6 +722,8 @@ impl Game<'_> {
         self.tick_projectiles()?;
         self.tick_fangs();
         self.tick_allays();
+        self.tick_breeze_effects();
+        self.tick_sniffer_effects();
         self.tick_player_effects();
         self.piglin_pickups();
         Ok(())
@@ -758,6 +783,11 @@ impl Game<'_> {
             // WitherBoss.dropCustomDeathLoot.
             if m.species() == Species::Wither {
                 gear.push("minecraft:nether_star");
+            }
+            if species_drops_harness(m)
+                && let Some(h) = m.extra.head.as_deref()
+            {
+                gear.push(h);
             }
             if m.extra.chested && horizon_client::mobs::equine::is_equine(m.species()) {
                 gear.push("minecraft:chest");
@@ -1072,6 +1102,7 @@ impl Game<'_> {
                     }
                 },
                 MobEvent::Breed { parent, partner } => self.breed(parent, partner),
+                MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),
                 MobEvent::Vibration { from, to, ticks } => {
                     self.mob_vibration_particle(from, to, ticks)
                 }
@@ -1190,6 +1221,11 @@ impl Game<'_> {
             q.extra.in_love = 0;
         }
         let q = self.mobs.iter().find(|m| m.id == partner).cloned();
+        // Sniffer.spawnChildFromBreeding: an egg instead of a baby.
+        if p.species() == Species::Sniffer {
+            self.lay_sniffer_egg(&p);
+            return;
+        }
         let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         let coin2 = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         // A horse and a donkey have a mule.
@@ -1207,6 +1243,9 @@ impl Game<'_> {
                 let other = q.clone().unwrap_or_else(|| p.clone());
                 let mut r = self.world.random.clone();
                 horizon_client::mobs::equine::inherit(child, &p, &other, &mut r);
+                if horizon_client::mobs::llama::is_llama(p.species()) {
+                    horizon_client::mobs::llama::offspring(child, &p, &other, &mut r);
+                }
                 // Horse.getBreedOffspring: coat from either parent or new.
                 if p.species() == Species::Horse && other.species() == Species::Horse {
                     let c = r.next_int_bound(9).unwrap_or(0);
@@ -1408,6 +1447,7 @@ impl Game<'_> {
                 self.creatures.player_fire -= 1;
             }
         }
+        self.creatures.wind_cooldown = self.creatures.wind_cooldown.saturating_sub(1);
         if self.creatures.pearl_cooldown > 0 {
             self.creatures.pearl_cooldown -= 1;
         }
@@ -1425,6 +1465,7 @@ impl Game<'_> {
     fn tick_projectiles(&mut self) -> Result<()> {
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
         let mut hits = Vec::new();
+        let mut deflections: Vec<[f64; 3]> = Vec::new();
         {
             let mut targets: Vec<(Who, Aabb)> = self
                 .mobs
@@ -1443,15 +1484,54 @@ impl Game<'_> {
                     .into_iter()
                     .map(|(id, b)| (Who::Mob(id), b)),
             );
+            let breezes: Vec<u32> = self
+                .mobs
+                .iter()
+                .filter(|m| m.alive() && m.species() == Species::Breeze)
+                .map(|m| m.id)
+                .collect();
+            let jitter = self.world.random.next_float();
             let w = self.mob_world_base(&[]);
             let pw = ProjWorld { w: &w, targets };
             projectiles.retain_mut(|p| {
                 let (keep, hit) = p.tick(&pw);
+                let wind = matches!(
+                    p.kind,
+                    ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+                );
+                // Entity.deflection: a breeze turns every projectile but wind charges away.
+                if let Hit::Entity {
+                    who: Who::Mob(id),
+                    at,
+                } = hit
+                    && !wind
+                    && breezes.contains(&id)
+                {
+                    super::wind::reverse(p, jitter);
+                    deflections.push([at.x, at.y, at.z]);
+                    return true;
+                }
+                // AbstractWindCharge.tick: out of the world's top it bursts.
+                if wind && keep && p.position.y > 350.0 {
+                    hits.push((
+                        p.clone(),
+                        Hit::Block {
+                            pos: [0; 3],
+                            at: p.position,
+                            face: [0; 3],
+                        },
+                    ));
+                    return false;
+                }
                 if hit != Hit::None {
                     hits.push((p.clone(), hit));
                 }
                 keep
             });
+        }
+        for at in deflections {
+            self.audio
+                .play("minecraft:entity.breeze.deflect", Some(at), 1.0, 1.0);
         }
         self.creatures.projectiles.append(&mut projectiles);
         for (p, hit) in hits {
@@ -1468,6 +1548,12 @@ impl Game<'_> {
             Hit::Entity { at, .. } | Hit::Block { at, .. } => at,
             Hit::None => return Ok(()),
         };
+        if matches!(
+            p.kind,
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+        ) {
+            return self.wind_charge_hit(p, hit);
+        }
         if let Hit::Entity {
             who: Who::Mob(id), ..
         } = hit
@@ -1832,6 +1918,13 @@ impl Game<'_> {
         if self.name_mob(index) {
             return Ok(true);
         }
+        {
+            let item = self.held().map(|h| h.item.to_string()).unwrap_or_default();
+            if self.interact_leash(index, &item) {
+                self.swing_arm();
+                return Ok(true);
+            }
+        }
         let held = self.held().cloned();
         let item = held
             .as_ref()
@@ -2107,7 +2200,11 @@ impl Game<'_> {
                 sound = Some("item.flintandsteel.use");
                 self.damage_held_tool();
             }
-            _ if is_food && m.kind.flags.animal => {
+            // HappyGhast.canFallInLove: never, so only a ghastling takes food.
+            _ if is_food
+                && m.kind.flags.animal
+                && (species != Species::HappyGhast || m.is_baby()) =>
+            {
                 // Animal.mobInteract: breed adults, speed up babies.
                 if m.extra.age == 0 && m.extra.in_love <= 0 {
                     m.extra.in_love = 600;
@@ -2181,7 +2278,7 @@ impl Game<'_> {
         }
         Ok(true)
     }
-    fn damage_held_tool(&mut self) {
+    pub(super) fn damage_held_tool(&mut self) {
         if self.creative {
             return;
         }
@@ -2208,6 +2305,7 @@ impl Game<'_> {
                 self.creatures.pearl_cooldown = 20;
                 ProjectileKind::EnderPearl
             }
+            "minecraft:wind_charge" => return self.throw_wind_charge(),
             _ if item.ends_with("_spawn_egg") => return self.use_spawn_egg(stack),
             _ => return Ok(false),
         };
@@ -2426,6 +2524,14 @@ impl Game<'_> {
                 }
                 continue;
             }
+            // WindChargeRenderer.
+            if matches!(
+                a.kind,
+                ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+            ) {
+                self.wind_charge_geometry(a, c, packed, out);
+                continue;
+            }
             // WitherSkullRenderer: the skull model facing its flight.
             if let Some(dangerous) = super::wither::skull_kind(a) {
                 static SKULL: std::sync::OnceLock<Option<horizon_client::mobs::Part>> =
@@ -2483,11 +2589,16 @@ impl Game<'_> {
         }
     }
 }
+fn species_drops_harness(m: &Mob) -> bool {
+    m.species() == Species::HappyGhast
+}
 fn eat_sound(s: Species) -> &'static str {
     match s {
         Species::Pig => "entity.pig.eat",
         Species::Horse | Species::Donkey | Species::Mule => "entity.horse.eat",
+        Species::Llama | Species::TraderLlama => "entity.llama.eat",
         Species::Goat => "entity.goat.eat",
+        Species::Sniffer => "entity.sniffer.eat",
         Species::Fox => "entity.fox.eat",
         Species::Cat => "entity.cat.eat",
         Species::Panda => "entity.panda.eat",
@@ -2498,7 +2609,7 @@ fn eat_sound(s: Species) -> &'static str {
 fn experience_reward(m: &Mob, random: &mut impl RandomSource) -> u32 {
     use Species as S;
     match m.species() {
-        S::Blaze | S::Ghast | S::Hoglin | S::Zoglin | S::PiglinBrute => 10,
+        S::Blaze | S::Ghast | S::Hoglin | S::Zoglin | S::PiglinBrute | S::Breeze => 10,
         S::Slime | S::MagmaCube => m.extra.size.max(1) as u32,
         S::Endermite => 3,
         S::Bat

@@ -10,6 +10,7 @@ mod blockctl;
 mod boats;
 mod books;
 mod bossbars;
+mod breezes;
 mod cartography;
 mod chat;
 mod combat;
@@ -30,6 +31,7 @@ mod fov;
 mod frames;
 mod functions;
 mod game_mode;
+mod ghasts;
 mod golems;
 mod growth;
 mod health_hud;
@@ -37,7 +39,9 @@ mod jukebox;
 mod lan;
 mod lan_actions;
 mod lan_screen;
+mod leads;
 mod lightning;
+mod llamas;
 mod loom;
 mod machines;
 mod maps;
@@ -67,6 +71,7 @@ mod screens;
 mod sculk;
 mod shield;
 mod sign_edit;
+mod sniffers;
 mod station_control;
 mod stations;
 mod stats;
@@ -80,6 +85,8 @@ mod totem;
 mod trading;
 mod trident;
 mod villagers;
+mod wandering_trader;
+mod wind;
 mod wither;
 mod zombie_villagers;
 use horizon_client::{
@@ -1445,6 +1452,16 @@ impl Game<'_> {
                 }
                 LevelEvent::BlockEvent {
                     pos,
+                    kind: "hatch_sniffer",
+                    ..
+                } => self.hatch_sniffer([pos.x, pos.y, pos.z]),
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "spawn_ghastling",
+                } => self.spawn_ghastling([pos.x, pos.y, pos.z], state),
+                LevelEvent::BlockEvent {
+                    pos,
                     state,
                     kind: "pop_block_item",
                 } => {
@@ -1752,6 +1769,7 @@ impl Game<'_> {
             || self.interact_boat()
             || self.interact_cart()
             || self.interact_mob()?
+            || self.interact_knot()
         {
             return Ok(());
         }
@@ -4161,6 +4179,7 @@ impl Game<'_> {
         self.cart_geometry(camera, alpha, &mut out);
         self.beacon_geometry(camera, alpha, &mut out);
         self.fishing_geometry(camera, alpha, &mut out);
+        self.leash_geometry(camera, alpha, &mut out);
         self.trident_geometry(camera, alpha, &mut out);
         self.rocket_geometry(camera, alpha, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
@@ -4854,6 +4873,7 @@ impl Game<'_> {
         self.spawn = None;
         self.spawn_search = 0;
         self.mobs.clear();
+        self.creatures.reset_trader();
         self.arrows.clear();
         self.dropped.clear();
         self.particles.clear();
@@ -6767,6 +6787,7 @@ impl Game<'_> {
         self.save_maps();
         self.save_raids();
         self.save_fight();
+        self.save_wandering_trader();
         self.save_stats();
         self.save_advancements();
         self.save_scoreboard();

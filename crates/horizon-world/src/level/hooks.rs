@@ -171,6 +171,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Scaffolding => {
                     self.schedule_tick(pos, block, 1);
                 }
+                Class::SnifferEgg => {
+                    let boosted = b.is_block(self.below_state(pos), b.named.moss_block);
+                    if boosted {
+                        self.level_event(3009, pos, 0);
+                    }
+                    let delay = if boosted { 12000 } else { 24000 } / 3;
+                    let jitter = self.random().next_int_bound(300).unwrap_or(0);
+                    self.schedule_tick(pos, block, delay + jitter);
+                }
                 Class::SculkSensor => {
                     if !same
                         && b.table.int(state, b.props.power) > 0

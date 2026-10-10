@@ -213,7 +213,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         | "minecraft:donkey"
         | "minecraft:mule"
         | "minecraft:skeleton_horse"
-        | "minecraft:zombie_horse" => {
+        | "minecraft:zombie_horse"
+        | "minecraft:llama"
+        | "minecraft:trader_llama" => {
             map.insert("Tame".into(), Tag::Byte(i8::from(m.extra.tame)));
             map.insert("Temper".into(), Tag::Int(i32::from(m.extra.variant3)));
             if let Some(owner) = m.extra.owner {
@@ -223,8 +225,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 let v = i32::from(m.extra.variant) | i32::from(m.extra.variant2) << 8;
                 map.insert("Variant".into(), Tag::Int(v));
             }
-            // Only donkeys and mules carry chests.
-            if matches!(id, "minecraft:donkey" | "minecraft:mule") {
+            let llama = crate::mobs::llama::is_llama(m.species());
+            if llama {
+                crate::mobs::llama::to_nbt(m, map);
+            }
+            // Only llamas, donkeys and mules carry chests.
+            if llama || matches!(id, "minecraft:donkey" | "minecraft:mule") {
                 map.insert("ChestedHorse".into(), Tag::Byte(i8::from(m.extra.chested)));
             }
             if m.extra.chested && !m.extra.items.is_empty() {
@@ -341,6 +347,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 Tag::Long(if sitting { -1 } else { 0 }),
             );
         }
+        "minecraft:sniffer" => crate::mobs::sniffer::to_nbt(m, map),
         "minecraft:wither" => {
             map.insert("Invul".into(), Tag::Int(m.extra.counter));
         }
@@ -413,7 +420,15 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         for (index, (slot, item)) in [
             ("mainhand", &m.extra.main_hand),
             ("offhand", &m.extra.off_hand),
-            ("head", &m.extra.head),
+            (
+                // A happy ghast wears its harness in the body slot.
+                if m.species() == crate::mobs::Species::HappyGhast {
+                    "body"
+                } else {
+                    "head"
+                },
+                &m.extra.head,
+            ),
             ("chest", &m.extra.chest),
             ("legs", &m.extra.legs),
             ("feet", &m.extra.feet),
@@ -511,7 +526,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             .map(Into::into);
         if !crate::mobs::equine::is_equine(m.species()) {
             let slot = |key| eq.get(key).and_then(|i| text(i.get("id"))).map(Into::into);
-            m.extra.head = slot("head");
+            m.extra.head = slot(if m.species() == crate::mobs::Species::HappyGhast {
+                "body"
+            } else {
+                "head"
+            });
             m.extra.chest = slot("chest");
             m.extra.legs = slot("legs");
             m.extra.feet = slot("feet");
@@ -562,6 +581,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         let v = number(tag.get("Variant")).unwrap_or(0) as i32;
         m.extra.variant = (v & 0xFF).clamp(0, 6) as u8;
         m.extra.variant2 = ((v >> 8) & 0xFF).clamp(0, 4) as u8;
+        if crate::mobs::llama::is_llama(m.species()) {
+            crate::mobs::llama::from_nbt(&mut m, tag);
+        }
         m.extra.chested = flag(tag, "ChestedHorse");
         if m.extra.chested {
             m.extra.items = crate::save::decode_items(tag.get("Items"), 15);
@@ -666,6 +688,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;
     }
+    if m.species() == crate::mobs::Species::Sniffer {
+        crate::mobs::sniffer::from_nbt(&mut m, tag);
+    }
+    m.extra.leash_pending = crate::mobs::leash::pending_from_nbt(tag.get("leash"));
     if m.species() == crate::mobs::Species::Warden {
         // The brain starts afresh: a minute before it digs back down.
         crate::mobs::warden::finalize(&mut m, false, &mut Vec::new());

@@ -9,6 +9,9 @@ use std::f32::consts::PI;
 /// The setupAnim implementation a model uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anim {
+    HappyGhast,
+    Sniffer,
+    Breeze,
     Warden,
     Allay,
     Creaking,
@@ -455,6 +458,10 @@ pub fn setup(
     }
     match m.kind.anim {
         Anim::Camel => super::camel::anim(m, s, p, w_anims),
+        Anim::Breeze => super::breeze::anim(m, s, p, w_anims),
+        Anim::Sniffer => super::sniffer::anim(m, s, p, w_anims),
+        Anim::HappyGhast => super::happy_ghast::anim(m, s, p),
+        Anim::Llama => super::llama::anim(m, s, p),
         Anim::Warden => super::warden::anim(m, s, p, w_anims),
         Anim::Allay => super::allay::anim(m, s, p),
         Anim::Creaking => super::creaking::anim(m, s, p, w_anims),

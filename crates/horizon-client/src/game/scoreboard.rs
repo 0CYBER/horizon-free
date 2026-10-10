@@ -32,6 +32,7 @@ pub(super) struct ScoreState {
     pub board: Scoreboard,
     /// `/data ... storage`.
     pub storage: horizon_client::command_storage::CommandStorage,
+    pub stopwatches: horizon_client::stopwatches::Stopwatches,
     loaded: bool,
     recorded: Recorded,
 }
@@ -62,6 +63,7 @@ impl Game<'_> {
         {
             self.border = horizon_client::worldborder::WorldBorder::unpack(data);
         }
+        self.score.stopwatches = horizon_client::stopwatches::Stopwatches::load(&self.world_root);
         self.sync_score_registries();
     }
     pub(super) fn save_scoreboard(&mut self) {
@@ -69,6 +71,7 @@ impl Game<'_> {
             return;
         }
         self.score.storage.save(&self.world_root);
+        self.score.stopwatches.save(&self.world_root);
         if self.border != horizon_client::worldborder::WorldBorder::default() {
             let _ = save::write_dat(
                 &self.world_root.join("data/minecraft/world_border.dat"),
@@ -99,6 +102,7 @@ impl Game<'_> {
         reg.teams = board.teams.iter().map(|t| t.name.clone()).collect();
         reg.tracked = board.tracked();
         reg.storages = self.score.storage.keys();
+        reg.stopwatches = self.score.stopwatches.ids();
     }
 
     // ---- score holders ---------------------------------------------------

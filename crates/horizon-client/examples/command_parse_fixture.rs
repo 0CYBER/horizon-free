@@ -1,0 +1,197 @@
+//! Command parsing for differential tests against vanilla's Brigadier tree
+//! (tools/test_command_parse_parity.py): reads one command per line and prints
+//! the parse result, the error (rendered text and UTF-16 cursor), the parsed
+//! node names and the completion suggestions at the end of the input, in the
+//! same JSON-lines shape as VanillaCommandParseOracle.
+//!
+//! usage: command_parse_fixture RESOURCES REGISTRIES.json CORPUS PERMISSION OUTPUT
+use horizon_client::{
+    command::{ArgType, Dispatcher, NodeKind, Registries, vanilla},
+    lang,
+};
+use serde_json::{Value, json};
+use std::{fs, path::Path};
+
+fn strings(v: &Value) -> Vec<String> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn utf16(input: &str, byte: usize) -> usize {
+    let mut end = byte.min(input.len());
+    while !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    input[..end].encode_utf16().count()
+}
+
+fn parser_id(ty: &ArgType) -> String {
+    match ty {
+        ArgType::Bool => "brigadier:bool".into(),
+        ArgType::Integer { .. } => "brigadier:integer".into(),
+        ArgType::Float { .. } => "brigadier:float".into(),
+        ArgType::Double { .. } => "brigadier:double".into(),
+        ArgType::Word | ArgType::Str | ArgType::Greedy => "brigadier:string".into(),
+        ArgType::Entity { .. } => "minecraft:entity".into(),
+        ArgType::BlockPos => "minecraft:block_pos".into(),
+        ArgType::Vec3 { .. } => "minecraft:vec3".into(),
+        ArgType::Rotation => "minecraft:rotation".into(),
+        ArgType::Angle => "minecraft:angle".into(),
+        ArgType::Item => "minecraft:item_stack".into(),
+        ArgType::ItemPredicate => "minecraft:item_predicate".into(),
+        ArgType::BlockState => "minecraft:block_state".into(),
+        ArgType::BlockPredicate => "minecraft:block_predicate".into(),
+        ArgType::Resource(r) => format!("resource:{r:?}"),
+        ArgType::Id(n) | ArgType::Name(n) => format!("id:{n}"),
+        ArgType::Time { .. } => "minecraft:time".into(),
+        ArgType::GameMode => "minecraft:gamemode".into(),
+        ArgType::Message => "minecraft:message".into(),
+        ArgType::Dimension => "minecraft:dimension".into(),
+        ArgType::Anchor => "minecraft:entity_anchor".into(),
+        ArgType::Swizzle => "minecraft:swizzle".into(),
+        ArgType::Component => "minecraft:component".into(),
+        ArgType::Nbt => "minecraft:nbt_compound_tag".into(),
+        ArgType::ScoreHolder { .. } => "minecraft:score_holder".into(),
+        ArgType::Objective => "minecraft:objective".into(),
+        ArgType::Team => "minecraft:team".into(),
+        ArgType::Criteria => "minecraft:objective_criteria".into(),
+        ArgType::ScoreboardSlot => "minecraft:scoreboard_slot".into(),
+        ArgType::Operation => "minecraft:operation".into(),
+        ArgType::TeamColor => "minecraft:team_color".into(),
+        ArgType::IntRange => "minecraft:int_range".into(),
+        ArgType::FloatRange => "minecraft:float_range".into(),
+        ArgType::NbtPath => "minecraft:nbt_path".into(),
+        ArgType::NbtTag => "minecraft:nbt_tag".into(),
+        ArgType::Vec2 => "minecraft:vec2".into(),
+        ArgType::ColumnPos => "minecraft:column_pos".into(),
+        ArgType::Particle => "minecraft:particle".into(),
+        ArgType::Enum(words) => format!("enum:{}", words.join("|")),
+        ArgType::Function => "minecraft:function".into(),
+        ArgType::Slots => "minecraft:slots".into(),
+        ArgType::Slot => "minecraft:item_slot".into(),
+    }
+}
+
+fn tree(d: &Dispatcher, node: usize) -> Value {
+    let n = &d.nodes[node];
+    let mut children = serde_json::Map::new();
+    for &c in &n.children {
+        let child = &d.nodes[c];
+        let mut v = tree(d, c);
+        match &child.kind {
+            NodeKind::Literal(_) => v["type"] = json!("literal"),
+            NodeKind::Argument { ty, .. } => {
+                v["type"] = json!("argument");
+                v["parser"] = json!(parser_id(ty));
+            }
+            NodeKind::Root => {}
+        }
+        children.insert(child.name().to_owned(), v);
+    }
+    let mut v = json!({"children": children});
+    if n.command.is_some() {
+        v["executable"] = json!(true);
+    }
+    if n.redirect.is_some() {
+        v["redirect"] = json!(true);
+    }
+    v
+}
+
+fn main() -> horizon_client::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("tree") {
+        let d = vanilla::dispatcher();
+        let mut v = tree(d, 0);
+        v["type"] = json!("root");
+        fs::write(&args[2], v.to_string())?;
+        return Ok(());
+    }
+    if args.len() != 6 {
+        return Err(
+            "usage: command_parse_fixture RESOURCES REGISTRIES CORPUS PERMISSION OUTPUT".into(),
+        );
+    }
+    let root = Path::new(&args[1]).to_path_buf();
+    lang::set(lang::Language::load(&[&root], lang::DEFAULT));
+    let r: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
+    let mut reg = Registries {
+        permission: args[4].parse()?,
+        ..Registries::default()
+    };
+    reg.items = strings(&r["items"]);
+    reg.item_tags = strings(&r["item_tags"]);
+    reg.block_tags = strings(&r["block_tags"]);
+    for (id, props) in r["blocks"].as_object().into_iter().flatten() {
+        let props = props
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| (p[0].as_str().unwrap_or("").to_owned(), strings(&p[1])))
+            .collect();
+        reg.blocks.insert(id.clone(), props);
+    }
+    reg.summonable = strings(&r["summonable"]);
+    reg.entity_types = strings(&r["entity_types"]);
+    reg.effects = strings(&r["effects"]);
+    reg.attributes = strings(&r["attributes"]);
+    reg.sounds = strings(&r["sounds"]);
+    reg.enchantments = strings(&r["enchantments"]);
+    reg.structures = strings(&r["structures"]);
+    reg.biomes = strings(&r["biomes"]);
+    reg.damage_types = strings(&r["damage_types"]);
+    reg.clocks = strings(&r["clocks"]);
+    reg.timelines = strings(&r["timelines"]);
+    reg.dimensions = strings(&r["dimensions"]);
+    reg.players = strings(&r["players"]);
+    reg.teams = strings(&r["teams"]);
+    reg.objectives = strings(&r["objectives"]);
+    reg.tracked = strings(&r["tracked"]);
+    let dispatcher = vanilla::dispatcher();
+    let mut out = String::new();
+    for input in fs::read_to_string(&args[3])?.lines() {
+        let parse = dispatcher.parse(input, &reg);
+        let result = match parse.executable() {
+            Ok(_) => {
+                let mut nodes = Vec::new();
+                let mut c = Some(&parse.context);
+                while let Some(ctx) = c {
+                    nodes.extend(
+                        ctx.nodes
+                            .iter()
+                            .map(|(n, _)| dispatcher.nodes[*n].name().to_owned()),
+                    );
+                    c = ctx.child.as_deref();
+                }
+                json!({"ok": true, "nodes": nodes})
+            }
+            Err(e) => json!({
+                "ok": false,
+                "error": e.message.plain(),
+                "cursor": utf16(input, if e.input.is_some() { e.cursor } else { parse.cursor }),
+            }),
+        };
+        let (range, list) = dispatcher.suggestions(&parse, input.len(), &reg);
+        let list: Vec<String> = list
+            .into_iter()
+            .map(|s| match s.tooltip {
+                Some(t) => format!("{}\t{t}", s.text),
+                None => s.text,
+            })
+            .collect();
+        let row = json!({
+            "in": input,
+            "parse": result,
+            "sugg": {"start": utf16(input, range.0), "end": utf16(input, range.1), "list": list},
+        });
+        out.push_str(&row.to_string());
+        out.push('\n');
+    }
+    fs::write(&args[5], out)?;
+    Ok(())
+}

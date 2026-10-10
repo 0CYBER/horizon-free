@@ -672,6 +672,7 @@ name = "horizon-assets"
 version = "0.1.0"
 dependencies = [
  "horizon-core",
+ "png",
  "serde",
  "serde_json",
 ]

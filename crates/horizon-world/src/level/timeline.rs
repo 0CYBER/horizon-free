@@ -173,6 +173,25 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             });
         }
     }
+    /// `SnifferEggBlock.tick`: crack twice, then hatch a snifflet.
+    pub(crate) fn sniffer_egg_tick(&mut self, state: BlockStateId, pos: BlockPos) {
+        let b = self.b;
+        let hatch = b.table.int(state, b.props.hatch);
+        let pitch = 0.9 + self.random().next_float() * 0.2;
+        if hatch < 2 {
+            self.play(pos, "minecraft:block.sniffer_egg.crack", 0.7, pitch);
+            self.set_block(pos, b.table.set_int(state, b.props.hatch, hatch + 1), 2);
+        } else {
+            self.play(pos, "minecraft:block.sniffer_egg.hatch", 0.7, pitch);
+            self.destroy_block(pos, false, 512);
+            // The snifflet is an entity the caller spawns.
+            self.emit(LevelEvent::BlockEvent {
+                pos,
+                state,
+                kind: "hatch_sniffer",
+            });
+        }
+    }
     /// `DriedGhastBlock.tick`: hydrate while waterlogged, dry out otherwise.
     pub(crate) fn dried_ghast_tick(&mut self, state: BlockStateId, pos: BlockPos) {
         let b = self.b;

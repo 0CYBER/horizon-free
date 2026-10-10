@@ -777,6 +777,9 @@ impl Game<'_> {
         if c.has("blocks") {
             return self.condition_blocks(c);
         }
+        if c.has("range") && c.has("id") {
+            return self.condition_stopwatch(c).map(flag);
+        }
         if c.has("predicate") {
             let Some(Arg::Resource(id)) = c.get("predicate").cloned() else {
                 return Ok((false, 0));
@@ -784,6 +787,18 @@ impl Game<'_> {
             return Ok(flag(self.check_predicate(&id)?));
         }
         Ok((false, 0))
+    }
+    fn condition_stopwatch(&mut self, c: &Context) -> R<bool> {
+        let Some(Arg::Resource(id)) = c.get("id").cloned() else {
+            return Ok(false);
+        };
+        let Some(Arg::DoubleRange((lo, hi))) = c.get("range").cloned() else {
+            return Ok(false);
+        };
+        let Some(t) = self.score.stopwatches.elapsed_seconds(&id) else {
+            return Err(err("commands.stopwatch.does_not_exist", &[&id]));
+        };
+        Ok(lo.is_none_or(|l| t >= l) && hi.is_none_or(|h| t <= h))
     }
     fn condition_score(&mut self, c: &Context) -> R<bool> {
         let target = self.score_holder_names(c, "target", false)?;
