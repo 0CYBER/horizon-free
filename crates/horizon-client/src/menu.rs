@@ -128,6 +128,8 @@ pub struct Menu {
     pub creative: bool,
     /// Dropped stacks (canonical text), `xp+N` and the like, in order.
     pub drops: Vec<String>,
+    /// The dropped stacks themselves, for the caller to throw.
+    pub dropped: Vec<ItemStack>,
     quick_status: i32,
     quick_type: i32,
     quick_slots: Vec<usize>,
@@ -302,6 +304,7 @@ impl Menu {
             data: vec![0; data],
             creative: false,
             drops: Vec::new(),
+            dropped: Vec::new(),
             quick_status: 0,
             quick_type: 0,
             quick_slots: Vec::new(),
@@ -531,6 +534,7 @@ impl Menu {
     fn drop_stack(&mut self, stack: &ItemStack) {
         if stack.count > 0 {
             self.drops.push(crate::item_data::canon_stack(Some(stack)));
+            self.dropped.push(stack.clone());
         }
     }
 

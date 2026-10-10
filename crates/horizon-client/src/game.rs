@@ -505,6 +505,10 @@ struct Game<'a> {
     carried: Option<ItemStack>,
     craft_grid: Vec<Option<ItemStack>>,
     craft_size: usize,
+    /// A quick craft drag over inventory slots: (button, game slots so far).
+    inv_drag: Option<(i32, Vec<usize>)>,
+    /// The last inventory click, for the double click that gathers a stack.
+    last_inv_click: Option<(std::time::Instant, usize, bool)>,
     /// Open container block entity, if any.
     container: Option<(i32, i32, i32)>,
     /// Open workstation menu (enchanting table, anvil, ...).
@@ -1072,9 +1076,9 @@ impl Game<'_> {
     }
     /// Player.drop: thrown from the eyes along the view direction.
     fn drop_held(&mut self, all: bool) {
-        let Some(eye) = self.eye_position() else {
+        if self.eye_position().is_none() {
             return;
-        };
+        }
         let Some(stack) = self.inventory[self.selected].as_mut() else {
             return;
         };
@@ -1083,13 +1087,20 @@ impl Game<'_> {
             count,
             ..stack.clone()
         };
-        // Player.drop: the drop statistics.
-        self.stats.add("dropped", &thrown.item, count as i32);
-        self.stats.custom("drop", 1);
         stack.count -= count;
         if stack.count == 0 {
             self.inventory[self.selected] = None;
         }
+        self.player_drop(thrown);
+    }
+    /// `Player.drop`: the statistics and a thrown item entity in front of the player.
+    fn player_drop(&mut self, thrown: ItemStack) {
+        let Some(eye) = self.eye_position() else {
+            return;
+        };
+        // Player.drop: the drop statistics.
+        self.stats.add("dropped", &thrown.item, thrown.count as i32);
+        self.stats.custom("drop", 1);
         let (yaw, pitch) = (
             f64::from(self.yaw).to_radians(),
             f64::from(self.pitch).to_radians(),
@@ -3527,68 +3538,302 @@ impl Game<'_> {
         self.close_ender_chest();
         self.close_cart_container();
     }
-    /// `quickMoveStack` of the player inventory or crafting table menu for a
-    /// shift-click, run by the verified menu engine (`horizon_client::menu`).
+    /// `quickMoveStack` of the open plain menu for a shift-click.
     fn inventory_quick_move(&mut self, slot: usize) -> bool {
-        use horizon_client::menu::{Env, Input, Kind, Menu};
-        let table = self.craft_size == 3;
-        let cells = self.craft_size * self.craft_size;
-        // Game slot <-> menu index.
-        let main = if table { 10 } else { 9 };
-        let to_menu = |g: usize| match g {
-            100..109 if g - 100 < cells => Some(1 + g - 100),
-            500..504 if !table => Some(5 + g - 500),
-            9..36 => Some(main + g - 9),
-            0..9 => Some(main + 27 + g),
-            _ => None,
-        };
-        let Some(index) = to_menu(slot) else {
-            return false;
-        };
-        let total = main + 36 + usize::from(!table);
-        let mut game_slots: Vec<Option<usize>> = vec![None; total];
-        for g in (100..109).chain(500..504).chain(0..36) {
-            if let Some(i) = to_menu(g) {
-                game_slots[i] = Some(g);
+        self.menu_click(Some(slot), 0, horizon_client::menu::Input::QuickMove)
+    }
+    /// `AbstractContainerMenu.clicked` on the open inventory, crafting table,
+    /// chest, hopper, dispenser or furnace menu, run by the verified menu
+    /// engine (`horizon_client::menu`). `slot` None is outside the window.
+    /// False when the open screen is not one the engine models.
+    fn menu_click(
+        &mut self,
+        slot: Option<usize>,
+        button: i32,
+        input: horizon_client::menu::Input,
+    ) -> bool {
+        use horizon_client::menu::{Env, Kind, Menu};
+        #[derive(Clone, Copy)]
+        struct Map {
+            container: usize,
+            table: bool,
+            cells: usize,
+            plain: bool,
+        }
+        impl Map {
+            fn main(&self) -> usize {
+                match (self.plain, self.table) {
+                    (false, _) => self.container,
+                    (true, true) => 10,
+                    (true, false) => 9,
+                }
+            }
+            fn to_menu(&self, g: usize) -> Option<usize> {
+                let main = self.main();
+                if self.plain {
+                    match g {
+                        200 => Some(0),
+                        100..109 if g - 100 < self.cells => Some(1 + g - 100),
+                        500..504 if !self.table => Some(5 + g - 500),
+                        504 if !self.table => Some(45),
+                        9..36 => Some(main + g - 9),
+                        0..9 => Some(main + 27 + g),
+                        _ => None,
+                    }
+                } else {
+                    match g {
+                        300.. if g < 300 + self.container => Some(g - 300),
+                        9..36 => Some(main + g - 9),
+                        0..9 => Some(main + 27 + g),
+                        _ => None,
+                    }
+                }
+            }
+            fn to_game(&self, i: usize) -> Option<usize> {
+                let main = self.main();
+                if self.plain {
+                    match i {
+                        0 => None,
+                        1..=9 if i - 1 < self.cells => Some(100 + i - 1),
+                        5..9 if !self.table => Some(500 + i - 5),
+                        45 if !self.table => Some(504),
+                        _ if i >= main && i < main + 27 => Some(9 + i - main),
+                        _ if i >= main + 27 && i < main + 36 => Some(i - main - 27),
+                        _ => None,
+                    }
+                } else if i < self.container {
+                    Some(300 + i)
+                } else if i < self.container + 27 {
+                    Some(9 + i - self.container)
+                } else {
+                    Some(i - self.container - 27)
+                }
             }
         }
-        let mut menu = Menu::new(if table {
-            Kind::Crafting
+        let (kind, map) = if self.container.is_some() {
+            let size = self.container_size();
+            let (kind, count) = match self.container_kind() {
+                Some(BlockEntity::Chest(_)) => {
+                    let shulker = self.container.is_some_and(|k| {
+                        let id = self.world.block(k.0, k.1, k.2);
+                        storage::is_shulker_box(&self.res.facts.get(id).name)
+                    });
+                    let kind = match size {
+                        5 => Kind::Hopper,
+                        9 => Kind::Dispenser,
+                        27 if shulker => Kind::Shulker,
+                        n => Kind::Chest((n / 9).clamp(1, 6)),
+                    };
+                    (kind, size)
+                }
+                Some(BlockEntity::Furnace(f)) => (
+                    Kind::Furnace(
+                        match f.kind.recipe_type().trim_start_matches("minecraft:") {
+                            "blasting" => "blasting",
+                            "smoking" => "smoking",
+                            _ => "smelting",
+                        },
+                    ),
+                    3,
+                ),
+                _ => return false,
+            };
+            let map = Map {
+                container: count,
+                table: false,
+                cells: 0,
+                plain: false,
+            };
+            (kind, map)
+        } else if self.station.is_none() && !self.mount_active() && self.remote.is_none() {
+            let table = self.craft_size == 3;
+            let map = Map {
+                container: 0,
+                table,
+                cells: self.craft_size * self.craft_size,
+                plain: true,
+            };
+            (
+                if table {
+                    Kind::Crafting
+                } else {
+                    Kind::Inventory
+                },
+                map,
+            )
         } else {
-            Kind::Inventory
-        });
-        let before: Vec<Option<ItemStack>> = game_slots
-            .iter()
-            .map(|g| g.and_then(|g| self.slot_mut(g).clone()))
+            return false;
+        };
+        let menu_slot = match slot {
+            Some(g) => {
+                if g == 200 && input != horizon_client::menu::Input::QuickMove {
+                    return false;
+                }
+                match map.to_menu(g) {
+                    Some(i) => i as i32,
+                    None => return false,
+                }
+            }
+            None => -999,
+        };
+        let mut menu = Menu::new(kind);
+        let total = menu.slot_count();
+        let before: Vec<Option<ItemStack>> = (0..total)
+            .map(|i| map.to_game(i).and_then(|g| self.slot_mut(g).clone()))
             .collect();
-        let offhand = self.offhand.clone();
-        let after: Vec<Option<ItemStack>> = {
+        let carried = self.carried.clone();
+        let creative = self.creative;
+        let (after, carried, dropped): (Vec<Option<ItemStack>>, Option<ItemStack>, Vec<ItemStack>) = {
             let env = Env {
                 items: &self.res.items,
                 recipes: &self.res.recipes,
                 brewing: &self.res.stations.brewing,
             };
+            menu.creative = creative;
             for (i, stack) in before.iter().enumerate() {
                 menu.set_slot(&env, i, stack.clone());
             }
-            if !table {
-                menu.set_slot(&env, 45, offhand);
-            }
-            if menu.click(&env, index as i32, 0, Input::QuickMove).is_err() {
+            menu.carried = carried;
+            if menu.click(&env, menu_slot, button, input).is_err() {
                 return true;
             }
-            (0..total).map(|i| menu.slot(i).cloned()).collect()
+            (
+                (0..total).map(|i| menu.slot(i).cloned()).collect(),
+                menu.carried.take(),
+                std::mem::take(&mut menu.dropped),
+            )
         };
-        for (i, g) in game_slots.iter().enumerate() {
-            if let Some(g) = g {
-                *self.slot_mut(*g) = after[i].clone();
+        for (i, stack) in after.into_iter().enumerate() {
+            if let Some(g) = map.to_game(i) {
+                *self.slot_mut(g) = stack;
             }
         }
-        if !table {
-            self.offhand = after[45].clone();
+        self.carried = carried;
+        for stack in dropped {
+            self.player_drop(stack);
+        }
+        if matches!(kind, Kind::Furnace(_))
+            && let Some(BlockEntity::Furnace(f)) = self
+                .container
+                .and_then(|k| self.world.block_entities.get_mut(&k))
+        {
+            f.cooking_timer = 0;
         }
         self.apply_equipment();
         true
+    }
+    /// Number keys, F and Q over a slot of the open menu: SWAP with a hotbar
+    /// slot or the off hand, THROW one or the whole stack.
+    fn inventory_hotkey(&mut self, key: KeyCode) -> bool {
+        use horizon_client::menu::Input;
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return false;
+        };
+        let batch = HudBatch::new(size);
+        let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
+            return false;
+        };
+        let digit = [
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit5,
+            KeyCode::Digit6,
+            KeyCode::Digit7,
+            KeyCode::Digit8,
+            KeyCode::Digit9,
+        ]
+        .iter()
+        .position(|k| *k == key);
+        let done = match (digit, key) {
+            (Some(n), _) => self.menu_click(Some(slot), n as i32, Input::Swap),
+            (None, KeyCode::KeyF) => self.menu_click(Some(slot), 40, Input::Swap),
+            (None, KeyCode::KeyQ) => {
+                let all = self.keys.contains(&KeyCode::ControlLeft);
+                self.menu_click(Some(slot), i32::from(all), Input::Throw)
+            }
+            _ => false,
+        };
+        if done && let Some(key) = self.container {
+            self.container_changed(key);
+        }
+        done
+    }
+    /// The plain inventory mouse press: starts a quick craft drag when a
+    /// stack is held, gathers on a double click, else the normal click.
+    fn inventory_press(&mut self, right: bool) {
+        use horizon_client::menu::Input;
+        let slot = self.renderer.as_ref().and_then(|r| {
+            let batch = HudBatch::new([r.config.width, r.config.height]);
+            self.slot_at(&batch, self.cursor.0, self.cursor.1)
+        });
+        let shift =
+            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        if let Some(slot) = slot
+            && !shift
+            && slot != 200
+        {
+            let now = std::time::Instant::now();
+            let double = !right
+                && self.carried.is_some()
+                && self.last_inv_click.is_some_and(|(at, last, was_right)| {
+                    last == slot && !was_right && now.duration_since(at).as_millis() < 250
+                });
+            self.last_inv_click = Some((now, slot, right));
+            if double && self.menu_click(Some(slot), 0, Input::PickupAll) {
+                self.last_inv_click = None;
+                return;
+            }
+            if self.carried.is_some() {
+                self.inv_drag = Some((i32::from(right), vec![slot]));
+                return;
+            }
+        }
+        self.click_inventory(right);
+    }
+    /// Mouse movement while a quick craft drag is running.
+    fn inventory_drag_move(&mut self) {
+        let Some((_, slots)) = self.inv_drag.as_ref() else {
+            return;
+        };
+        let Some(r) = self.renderer.as_ref() else {
+            return;
+        };
+        let batch = HudBatch::new([r.config.width, r.config.height]);
+        if let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1)
+            && slot != 200
+            && !slots.contains(&slot)
+            && let Some((_, slots)) = self.inv_drag.as_mut()
+        {
+            slots.push(slot);
+        }
+    }
+    /// Mouse release: finishes a quick craft drag (one slot is a plain click).
+    fn inventory_release(&mut self) {
+        use horizon_client::menu::Input;
+        let Some((ty, slots)) = self.inv_drag.take() else {
+            return;
+        };
+        if slots.len() == 1 {
+            if !self.menu_click(Some(slots[0]), ty, Input::Pickup) {
+                self.click_inventory(ty == 1);
+            }
+        } else {
+            let mask = |header: i32| header | (ty << 2);
+            self.menu_click(None, mask(0), Input::QuickCraft);
+            for slot in slots {
+                self.menu_click(Some(slot), mask(1), Input::QuickCraft);
+            }
+            self.menu_click(None, mask(2), Input::QuickCraft);
+        }
+        if let Some(key) = self.container {
+            self.container_changed(key);
+        }
     }
     fn click_inventory(&mut self, right: bool) {
         if self.mount_click(right) {
@@ -7129,6 +7374,18 @@ impl Game<'_> {
                 Screen::WorldOptions => self.close_world_options(),
                 Screen::Chat => self.close_chat(),
             },
+            KeyCode::Digit1
+            | KeyCode::Digit2
+            | KeyCode::Digit3
+            | KeyCode::Digit4
+            | KeyCode::Digit5
+            | KeyCode::Digit6
+            | KeyCode::Digit7
+            | KeyCode::Digit8
+            | KeyCode::Digit9
+            | KeyCode::KeyF
+            | KeyCode::KeyQ
+                if self.screen == Screen::Inventory && self.inventory_hotkey(key) => {}
             KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
             // key.advancements.
@@ -7376,6 +7633,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                         if self.screen == Screen::Inventory {
                             self.loom_drag();
+                            self.inventory_drag_move();
                         }
                         if self.dragging && self.screen == Screen::Options {
                             let _ = b;
@@ -7503,12 +7761,15 @@ impl ApplicationHandler for Game<'_> {
                             }
                         }
                         Screen::Inventory if pressed => {
-                            self.click_inventory(button == MouseButton::Right);
+                            self.inventory_press(button == MouseButton::Right);
                             if let Some(key) = self.container {
                                 self.container_changed(key);
                             }
                         }
-                        Screen::Inventory => self.loom_release(),
+                        Screen::Inventory => {
+                            self.inventory_release();
+                            self.loom_release();
+                        }
                         Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
@@ -7913,6 +8174,8 @@ pub fn run() -> Result<()> {
         carried: None,
         craft_grid: vec![None; 9],
         craft_size: 2,
+        inv_drag: None,
+        last_inv_click: None,
         container: None,
         station: None,
         potions: Default::default(),
