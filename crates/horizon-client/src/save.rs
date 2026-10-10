@@ -1299,7 +1299,7 @@ pub fn random_uuid() -> [i32; 4] {
     let b = (b & !(0xC000_0000_0000_0000)) | 0x8000_0000_0000_0000;
     [(a >> 32) as i32, a as i32, (b >> 32) as i32, b as i32]
 }
-fn uuid_tag(u: [i32; 4]) -> Tag {
+pub(crate) fn uuid_tag(u: [i32; 4]) -> Tag {
     Tag::IntArray(u.to_vec())
 }
 pub(crate) fn uuid_from_tag(tag: Option<&Tag>) -> Option<[i32; 4]> {
@@ -1580,7 +1580,7 @@ impl Level {
         level.player_extra = player;
         Some(level)
     }
-    fn read_player(&mut self, p: &Tag) {
+    pub fn read_player(&mut self, p: &Tag) {
         let n = |k: &str| number(p.get(k));
         let f = |k: &str| float(p.get(k));
         self.position = read_doubles::<3>(p.get("Pos"));
