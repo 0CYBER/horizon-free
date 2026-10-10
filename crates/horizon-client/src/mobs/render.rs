@@ -505,11 +505,7 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             } else {
                 "entity/zombie_villager"
             };
-            let baby = if m.is_baby() && m.species() == S::Villager {
-                "baby/"
-            } else {
-                ""
-            };
+            let baby = if m.is_baby() { "baby/" } else { "" };
             push(
                 &mut v,
                 &model,
@@ -526,9 +522,10 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                     white,
                     false,
                 );
-                if m.species() == S::Villager && prof != "nitwit" {
+                if prof != "nitwit" {
+                    // `LEVEL_LOCATIONS` clamps the level to 1..=5.
                     let level = ["stone", "iron", "gold", "emerald", "diamond"]
-                        [(m.extra.variant3 as usize).min(4)];
+                        [(m.extra.variant3.max(1) as usize - 1).min(4)];
                     push(
                         &mut v,
                         &model,
@@ -613,7 +610,12 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
         m.previous.y + (m.position.y - m.previous.y) * a,
         m.previous.z + (m.position.z - m.previous.z) * a,
     ) - camera;
-    let body = m.previous_body_yaw + wrap(m.body_yaw - m.previous_body_yaw) * alpha;
+    let mut body = m.previous_body_yaw + wrap(m.body_yaw - m.previous_body_yaw) * alpha;
+    if shaking(m) {
+        // LivingEntityRenderer.setupRotations: a rapid wobble.
+        let ticks = (m.age as f32 + alpha).floor();
+        body += (f64::from(ticks * 3.25).cos() * std::f64::consts::PI * 0.4) as f32;
+    }
     let sleep = (m.species() == Species::Villager)
         .then(|| super::villager::sleep_pose(m))
         .flatten();
@@ -644,6 +646,18 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
     base *= glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
     base *= species_scale(m, alpha);
     base * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0))
+}
+/// `LivingEntityRenderer.isShaking`: converting zombies, piglins and
+/// hoglins, and a zombie villager being cured.
+fn shaking(m: &Mob) -> bool {
+    match m.species() {
+        Species::ZombieVillager => super::zombie_villager::is_converting(m),
+        Species::Zombie | Species::Husk => m.extra.counter2 > 0,
+        Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
+            !m.extra.flag2 && m.extra.counter2 > 0
+        }
+        _ => false,
+    }
 }
 fn flip_degrees(m: &Mob) -> f32 {
     match m.species() {
@@ -803,8 +817,27 @@ pub fn render_with(
         } else {
             light
         };
+        let overlay = if armor_slot(&layer.model).is_some_and(|s| super::gear::enchanted(m, s)) {
+            glint_overlay(overlay)
+        } else {
+            overlay
+        };
         draw(&part, base, &poses, uv, layer.color, light, overlay, out);
     }
+}
+/// The equipment slot of a `HumanoidArmorLayer` model (`zombie#helmet`).
+fn armor_slot(model: &str) -> Option<usize> {
+    Some(match model.rsplit('#').next()? {
+        "helmet" => super::gear::HEAD,
+        "chestplate" => super::gear::CHEST,
+        "leggings" => super::gear::LEGS,
+        "boots" => super::gear::FEET,
+        _ => return None,
+    })
+}
+/// The entity shader's glint overlay (7), keeping the hurt tint (8).
+fn glint_overlay(overlay: u32) -> u32 {
+    if overlay == 1 { 8 } else { 7 }
 }
 /// Render with a fixed texture rect (the earlier API).
 pub fn render_single(
@@ -904,6 +937,100 @@ fn item_sprite(m: &Mob, item: &str) -> String {
     }
     format!("item/{name}")
 }
+/// The hand of a mob in model space, up to the item's own transform
+/// (`ItemInHandLayer.submitArmWithItem`).
+fn hand_base(
+    m: &Mob,
+    model: &Part,
+    base: glam::Mat4,
+    poses: &Poses,
+    left: bool,
+) -> Option<glam::Mat4> {
+    let skeleton = matches!(
+        m.species(),
+        Species::Skeleton
+            | Species::Stray
+            | Species::Bogged
+            | Species::Parched
+            | Species::WitherSkeleton
+    );
+    let arm = if left { "left_arm" } else { "right_arm" };
+    let offset = if skeleton {
+        if left { -1.0 } else { 1.0 }
+    } else {
+        0.0
+    };
+    let mut t = part_matrix(model, base, poses, arm, offset)?;
+    let (ox, oy, oz) = if m.is_baby() {
+        (0.0, 1.0, -4.5)
+    } else {
+        (1.0, 2.0, -10.0)
+    };
+    t *= glam::Mat4::from_rotation_x((-90.0f32).to_radians()) * glam::Mat4::from_rotation_y(PI);
+    t *= glam::Mat4::from_translation(glam::Vec3::new(
+        if left { -ox } else { ox } / 16.0,
+        oy / 16.0,
+        oz / 16.0,
+    ));
+    Some(t)
+}
+/// The transform of one of a mob's model parts, in camera space
+/// (`ModelPart.translateAndRotate` down the tree).
+pub fn part_transform(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    data: &MobData,
+    part: &str,
+) -> Option<glam::Mat4> {
+    let base = base_transform(m, alpha, camera);
+    let s = anim::state(m, alpha);
+    let (model_key, _) = body(m);
+    let model = m
+        .kind
+        .layer(&model_key)
+        .cloned()
+        .unwrap_or_else(|| m.kind.model.clone());
+    let mut poses = Poses::new(&model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    part_matrix(&model, base, &poses, part, 0.0)
+}
+/// Where a mob holds a block item (`block/block` thirdperson display: turned
+/// 75 and 45 degrees, at 0.375 scale), as the hand transform for `left`, or
+/// `None` when the mob shows no held items.
+pub fn held_block_transform(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    data: &MobData,
+    left: bool,
+) -> Option<glam::Mat4> {
+    if !super::illager::shows_item(m) {
+        return None;
+    }
+    let base = base_transform(m, alpha, camera);
+    let s = anim::state(m, alpha);
+    let (model_key, _) = body(m);
+    let model = m
+        .kind
+        .layer(&model_key)
+        .cloned()
+        .unwrap_or_else(|| m.kind.model.clone());
+    let mut poses = Poses::new(&model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    let mut t = hand_base(m, &model, base, &poses, left)?;
+    let ry = if left { -45.0f32 } else { 45.0 };
+    t *= glam::Mat4::from_translation(glam::Vec3::new(0.0, 2.5, 0.0) / 16.0);
+    t *= glam::Mat4::from_quat(glam::Quat::from_euler(
+        glam::EulerRot::XYZ,
+        75.0f32.to_radians(),
+        ry.to_radians(),
+        0.0,
+    ));
+    t *= glam::Mat4::from_scale(glam::Vec3::splat(0.375));
+    t *= glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
+    Some(t)
+}
 /// ItemInHandLayer: items in the mob's hands.
 fn held_items(
     m: &Mob,
@@ -914,43 +1041,17 @@ fn held_items(
     light: u32,
     out: &mut Vec<Vertex>,
 ) {
-    let skeleton = matches!(
-        m.species(),
-        Species::Skeleton
-            | Species::Stray
-            | Species::Bogged
-            | Species::Parched
-            | Species::WitherSkeleton
-    );
     if !super::illager::shows_item(m) {
         return;
     }
     for (item, left) in [(&m.extra.main_hand, false), (&m.extra.off_hand, true)] {
         let Some(item) = item else { continue };
-        let arm = if left { "left_arm" } else { "right_arm" };
-        let offset = if skeleton {
-            if left { -1.0 } else { 1.0 }
-        } else {
-            0.0
-        };
-        let Some(mut t) = part_matrix(model, base, poses, arm, offset) else {
+        let Some(mut t) = hand_base(m, model, base, poses, left) else {
             continue;
         };
         let Some(uv) = atlas(&item_sprite(m, item)) else {
             continue;
         };
-        let baby = m.is_baby();
-        let (ox, oy, oz) = if baby {
-            (0.0, 1.0, -4.5)
-        } else {
-            (1.0, 2.0, -10.0)
-        };
-        t *= glam::Mat4::from_rotation_x((-90.0f32).to_radians()) * glam::Mat4::from_rotation_y(PI);
-        t *= glam::Mat4::from_translation(glam::Vec3::new(
-            if left { -ox } else { ox } / 16.0,
-            oy / 16.0,
-            oz / 16.0,
-        ));
         // ItemTransform.apply (mirrored for the left hand).
         let (rot, tr, sc) = item_display(item);
         let (ry, rz, tx) = if left {
@@ -967,11 +1068,29 @@ fn held_items(
         ));
         t *= glam::Mat4::from_scale(glam::Vec3::from(sc));
         t *= glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
-        draw_item_plane(t, uv, light, out);
+        let glint = super::gear::enchanted(
+            m,
+            if left {
+                super::gear::OFF
+            } else {
+                super::gear::MAIN
+            },
+        );
+        draw_item_plane_with(t, uv, light, if glint { 7 } else { 0 }, out);
     }
 }
 /// A generated item model: the sprite on two faces 1/16 apart.
 pub fn draw_item_plane(t: glam::Mat4, uv: [f32; 4], light: u32, out: &mut Vec<Vertex>) {
+    draw_item_plane_with(t, uv, light, 0, out);
+}
+/// `draw_item_plane` with an entity shader overlay (7: enchantment glint).
+pub fn draw_item_plane_with(
+    t: glam::Mat4,
+    uv: [f32; 4],
+    light: u32,
+    overlay: u32,
+    out: &mut Vec<Vertex>,
+) {
     let (u0, v0, u1, v1) = (uv[0], uv[1], uv[2], uv[3]);
     let south = 8.5 / 16.0;
     let north = 7.5 / 16.0;
@@ -995,7 +1114,7 @@ pub fn draw_item_plane(t: glam::Mat4, uv: [f32; 4], light: u32, out: &mut Vec<Ve
             out.push(Vertex {
                 pos: pos.to_array(),
                 uv,
-                layer: 0,
+                layer: overlay,
                 color: 0xFFFF_FFFF,
                 light,
             });

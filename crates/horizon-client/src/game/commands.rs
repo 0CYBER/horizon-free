@@ -485,6 +485,12 @@ impl Game<'_> {
                 let Some(Arg::GameMode(m)) = ctx.get("gamemode") else {
                     return Ok(0);
                 };
+                self.set_default_game_mode(match m {
+                    horizon_client::command::args::GameMode::Survival => 0,
+                    horizon_client::command::args::GameMode::Creative => 1,
+                    horizon_client::command::args::GameMode::Adventure => 2,
+                    horizon_client::command::args::GameMode::Spectator => 3,
+                });
                 self.feedback(Text::translate(
                     "commands.defaultgamemode.success",
                     &[Text::translate(&format!("gameMode.{}", m.name()), &[])],

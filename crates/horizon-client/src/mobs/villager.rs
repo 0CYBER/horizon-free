@@ -648,6 +648,8 @@ pub struct Ext {
     pub golem_until: i64,
     /// The `last_hurt_by_time` of the player's hit already counted.
     pub hurt_seen: i32,
+    /// A zombie villager's cure under way.
+    pub cure: Option<super::zombie_villager::Cure>,
 }
 pub fn ext(m: &Mob) -> Option<&Ext> {
     m.extra.villager.as_deref()
