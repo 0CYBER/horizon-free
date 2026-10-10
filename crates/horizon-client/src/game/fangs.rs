@@ -79,6 +79,7 @@ impl Game<'_> {
             let ally = matches!(
                 m.species(),
                 Species::Evoker
+                    | Species::Illusioner
                     | Species::Vex
                     | Species::Pillager
                     | Species::Vindicator

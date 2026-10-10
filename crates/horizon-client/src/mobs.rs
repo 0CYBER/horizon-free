@@ -27,6 +27,7 @@ pub mod guardian;
 pub mod happy_ghast;
 pub mod hostile;
 pub mod illager;
+pub mod illusioner;
 pub mod keyframes;
 pub mod leash;
 pub mod living;
@@ -491,6 +492,8 @@ pub struct Extra {
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
     pub effects: Vec<(&'static str, i32, i32)>,
+    /// An invisible illusioner's mirror images.
+    pub illusions: Option<illusioner::Illusions>,
     /// A villager's claimed bed head and meeting bell.
     pub bed: Option<[i32; 3]>,
     pub meeting: Option<[i32; 3]>,
@@ -890,6 +893,8 @@ pub struct MobWorld<'a> {
     pub biomes: &'a crate::biome::Biomes,
     /// The `mob_griefing` game rule.
     pub mob_griefing: bool,
+    /// `getCurrentDifficultyAt` near the player.
+    pub difficulty: spawning::LocalDifficulty,
 }
 impl Mob {
     pub fn new(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {

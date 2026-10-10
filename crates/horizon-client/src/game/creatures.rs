@@ -466,6 +466,11 @@ impl Game<'_> {
             block_tags: &self.res.items.block_tags,
             biomes: &self.res.biomes,
             mob_griefing: self.ui.rules.bool("mob_griefing"),
+            difficulty: self.local_difficulty(
+                self.player
+                    .as_ref()
+                    .map_or([0.0; 3], |p| [p.position.x, p.position.y, p.position.z]),
+            ),
         }
     }
     /// `ServerLevel.getCurrentDifficultyAt`.
