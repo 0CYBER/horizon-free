@@ -184,6 +184,8 @@ impl Game<'_> {
             mob: Some(m.id),
             name: m.custom_name.clone(),
         };
+        // setTradingPlayer: a wandering trader stands still while trading.
+        self.mobs[index].extra.flag2 = species == Species::WanderingTrader;
         self.open_merchant_state(state);
         Ok(true)
     }
@@ -197,6 +199,7 @@ impl Game<'_> {
         if state.progress() {
             m.extra.variant3 = state.level.clamp(1, 5) as u8;
         }
+        m.extra.flag2 = false;
         let trade = m.extra.trade.get_or_insert_default();
         trade.xp = state.xp;
         trade.offers = state.offers.clone();

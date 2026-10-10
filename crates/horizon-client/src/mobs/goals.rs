@@ -922,12 +922,25 @@ pub struct NearestTarget {
     found: Option<Who>,
     target_goal: TargetState,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct TargetState {
     unseen: i32,
     pub unseen_memory: i32,
     reach_cache: i32,
     reach_time: i32,
+    /// `TargetGoal.getFollowDistance` as a fraction of the follow range.
+    pub follow_scale: f64,
+}
+impl Default for TargetState {
+    fn default() -> Self {
+        Self {
+            unseen: 0,
+            unseen_memory: 0,
+            reach_cache: 0,
+            reach_time: 0,
+            follow_scale: 1.0,
+        }
+    }
 }
 impl NearestTarget {
     pub fn new(prey: Prey, must_see: bool) -> Self {
@@ -954,6 +967,11 @@ impl NearestTarget {
         self.interval = reduced(i);
         self
     }
+    /// Scale the follow distance (llamas hunt wolves within a quarter of it).
+    pub fn follow_scale(mut self, scale: f64) -> Self {
+        self.target_goal.follow_scale = scale;
+        self
+    }
     pub fn reach(mut self) -> Self {
         self.must_reach = true;
         self
@@ -972,7 +990,8 @@ pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &m
     if !t.alive || t.is_player && t.creative {
         return false;
     }
-    if m.distance_sqr(t.position) > m.attrs.follow_range * m.attrs.follow_range {
+    let follow = m.attrs.follow_range * st.follow_scale;
+    if m.distance_sqr(t.position) > follow * follow {
         return false;
     }
     if must_see {
@@ -1018,7 +1037,7 @@ impl Goal for NearestTarget {
         {
             return false;
         }
-        let range = m.attrs.follow_range;
+        let range = m.attrs.follow_range * self.target_goal.follow_scale;
         self.found = None;
         match &self.prey {
             Prey::Player => {
@@ -1429,20 +1448,32 @@ impl Goal for Breed {
         }
         let id = m.id;
         // Horses and donkeys breed together (AbstractHorse.canParent: tame).
-        let equine = matches!(species, Species::Horse | Species::Donkey);
+        // Sniffer.canMate: calm states only.
+        let sniffer = species == Species::Sniffer;
+        if sniffer && !super::sniffer::can_mate_state(m.extra.variant) {
+            return false;
+        }
+        let llama = super::llama::is_llama(species);
+        let equine = matches!(species, Species::Horse | Species::Donkey) || llama;
         if equine && !m.extra.tame {
+            return false;
+        }
+        // Llama.canParent: not ridden, and at full health.
+        if llama && (m.rider.is_some() || m.health < m.attrs.max_health) {
             return false;
         }
         self.partner =
             cx.w.nearby(m.position, 8.0, move |s| {
                 let same = s.species == species
-                    || equine && matches!(s.species, Species::Horse | Species::Donkey);
+                    || llama && super::llama::is_llama(s.species)
+                    || !llama && equine && matches!(s.species, Species::Horse | Species::Donkey);
                 s.id != id
                     && same
                     && s.in_love
                     && !s.baby
                     && (!tamable || s.tame)
                     && (!equine || s.tame)
+                    && (!sniffer || super::sniffer::can_mate_state(s.variant))
             })
             .map(|s| s.id)
             .next();

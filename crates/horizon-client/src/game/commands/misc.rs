@@ -9,6 +9,59 @@ fn millis(nanos: u64) -> String {
 }
 
 impl Game<'_> {
+    /// `/stopwatch` (StopwatchCommand).
+    pub(super) fn cmd_stopwatch(&mut self, id: &str, ctx: &Context) -> R<i32> {
+        let Some(Arg::Resource(name)) = ctx.get("id").cloned() else {
+            return Ok(0);
+        };
+        let arg = || Text::literal(name.clone());
+        let missing = || err("commands.stopwatch.does_not_exist", &[&name]);
+        let sw = &mut self.score.stopwatches;
+        match id {
+            "stopwatch.create" => {
+                if !sw.create(&name) {
+                    return Err(err("commands.stopwatch.already_exists", &[&name]));
+                }
+                self.feedback(Text::translate(
+                    "commands.stopwatch.create.success",
+                    &[arg()],
+                ));
+                Ok(1)
+            }
+            "stopwatch.query" => {
+                let scale = match ctx.get("scale") {
+                    Some(Arg::Double(v)) => *v,
+                    _ => 1.0,
+                };
+                let t = sw.elapsed_seconds(&name).ok_or_else(missing)?;
+                self.feedback(Text::translate(
+                    "commands.stopwatch.query",
+                    &[arg(), Text::literal(format!("{t:?}"))],
+                ));
+                Ok((t * scale) as i32)
+            }
+            "stopwatch.restart" => {
+                if !sw.restart(&name) {
+                    return Err(missing());
+                }
+                self.feedback(Text::translate(
+                    "commands.stopwatch.restart.success",
+                    &[arg()],
+                ));
+                Ok(1)
+            }
+            _ => {
+                if !sw.remove(&name) {
+                    return Err(missing());
+                }
+                self.feedback(Text::translate(
+                    "commands.stopwatch.remove.success",
+                    &[arg()],
+                ));
+                Ok(1)
+            }
+        }
+    }
     /// `/tick` (TickCommand) over the game clock.
     pub(super) fn cmd_tick(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let t = |key: &str, args: &[Text]| Text::translate(key, args);

@@ -77,6 +77,7 @@ pub mod snbt;
 pub mod sprint;
 pub mod sprites;
 pub mod stations;
+pub mod stopwatches;
 pub mod streaming;
 pub mod structure_blocks;
 pub mod subtitles;

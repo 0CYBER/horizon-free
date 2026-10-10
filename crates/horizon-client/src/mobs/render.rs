@@ -106,6 +106,17 @@ pub fn body(m: &Mob) -> (String, String) {
         return ("main".into(), m.kind.texture.to_string());
     }
     match m.species() {
+        S::Llama | S::TraderLlama => {
+            let name = if m.species() == S::Llama {
+                "llama"
+            } else {
+                "trader_llama"
+            };
+            (
+                baby_or(m, &format!("{name}#main"), &format!("{name}_baby#main")),
+                super::llama::texture(m),
+            )
+        }
         s if super::equine::is_equine(s) => {
             let name = super::equine::model_name(s);
             (
@@ -116,6 +127,22 @@ pub fn body(m: &Mob) -> (String, String) {
         S::Wolf => (
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
+        ),
+        S::HappyGhast => (
+            baby_or(m, "happy_ghast#main", "happy_ghast_baby#main"),
+            if baby {
+                "entity/ghast/happy_ghast_baby".into()
+            } else {
+                "entity/ghast/happy_ghast".into()
+            },
+        ),
+        S::Sniffer => (
+            baby_or(m, "sniffer#main", "sniffer_baby#main"),
+            if baby {
+                "entity/sniffer/snifflet".into()
+            } else {
+                "entity/sniffer/sniffer".into()
+            },
         ),
         S::Shulker => ("shulker#main".into(), super::shulker::texture(m)),
         S::Vex => ("vex#main".into(), super::vex::texture(m).into()),
@@ -301,6 +328,41 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 abgr(DYE[m.extra.color as usize & 15]),
                 false,
             );
+        }
+        // SimpleEquipmentLayer: the harness over the body.
+        S::HappyGhast if !m.is_baby() => {
+            if let Some(texture) = m
+                .extra
+                .head
+                .as_deref()
+                .and_then(super::happy_ghast::harness_texture)
+            {
+                push(&mut v, "happy_ghast_harness#main", &texture, white, false);
+            }
+        }
+        // BreezeWindLayer (the scroll is not reproduced: atlas sprites do
+        // not wrap) and BreezeEyesLayer.
+        S::Breeze => {
+            push(
+                &mut v,
+                "breeze#wind",
+                "entity/breeze/breeze_wind",
+                white,
+                false,
+            );
+            push(
+                &mut v,
+                "breeze#eyes",
+                "entity/breeze/breeze_eyes",
+                white,
+                true,
+            );
+        }
+        // LlamaDecorLayer: the carpet, or the trader's blanket.
+        S::Llama | S::TraderLlama => {
+            if let Some((model, texture)) = super::llama::decor(m) {
+                push(&mut v, &model, &texture, white, false);
+            }
         }
         // HorseMarkingLayer, the saddle and the horse armour.
         s if super::equine::is_equine(s) => {
@@ -760,6 +822,10 @@ pub fn render_with(
     extra: &[(&Part, [f32; 4], u32)],
     out: &mut Vec<Vertex>,
 ) {
+    // The invisibility effect hides the model (a drinking wandering trader).
+    if super::trader::is_invisible(m) {
+        return;
+    }
     let base = base_transform(m, alpha, camera);
     let overlay =
         u32::from(m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m)));

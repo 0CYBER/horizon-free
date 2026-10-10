@@ -17,6 +17,7 @@ fn seat(s: Species) -> f64 {
         Species::Pig => 0.86875,
         Species::Strider => 1.7,
         Species::Horse => 1.44375,
+        Species::Llama | Species::TraderLlama => 1.37,
         Species::Donkey => 1.1125,
         Species::Mule => 1.2125,
         _ => 1.31875,
@@ -30,6 +31,12 @@ pub(super) struct MountState {
     /// `jumpRidingScale` (0..1).
     pub(super) jump_scale: f32,
     was_jumping: bool,
+}
+impl MountState {
+    pub(super) fn reset_jump(&mut self) {
+        self.jump_ticks = 0;
+        self.jump_scale = 0.0;
+    }
 }
 impl Game<'_> {
     fn mount_index(&self) -> Option<usize> {
@@ -95,6 +102,12 @@ impl Game<'_> {
         let species = m.species();
         if matches!(species, Species::Pig | Species::Strider) {
             return self.interact_steerable(index, item);
+        }
+        if horizon_client::mobs::llama::is_llama(species) {
+            return self.interact_llama(index, item);
+        }
+        if species == Species::HappyGhast {
+            return self.interact_happy_ghast(index, item);
         }
         if !equine::is_equine(species) || !m.alive() || Some(m.id) == self.riding {
             return false;
@@ -289,6 +302,7 @@ impl Game<'_> {
             jump: if jump > 0.0 { jump } else { pending },
             steer,
             sprint: self.keys.contains(&winit::keyboard::KeyCode::ControlLeft),
+            jumping: keys.jump,
         });
         true
     }
@@ -315,6 +329,29 @@ impl Game<'_> {
                 m.position.z + f64::from(0.5 * scale * yaw.cos()),
             );
         }
+        if m.species() == Species::HappyGhast {
+            // The first passenger attachment (0, 4, 1.7) of the harnessed back.
+            let yaw = f64::from(m.yaw.to_radians());
+            at = Vec3::new(
+                m.position.x - 1.7 * yaw.sin(),
+                m.position.y + 4.0 - 0.6,
+                m.position.z + 1.7 * yaw.cos(),
+            );
+        }
+        if horizon_client::mobs::llama::is_llama(m.species()) {
+            // The passenger attachment (0, 1.37, -0.3), half of it for a baby.
+            let (y, z) = if m.is_baby() {
+                (0.81, -0.15)
+            } else {
+                (1.37, -0.3)
+            };
+            let yaw = f64::from(m.yaw.to_radians());
+            at = Vec3::new(
+                m.position.x - z * yaw.sin(),
+                m.position.y + y - 0.6,
+                m.position.z + z * yaw.cos(),
+            );
+        }
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
             p.position = at;
@@ -331,6 +368,11 @@ impl Game<'_> {
             return;
         };
         m.rider = None;
+        if m.species() == Species::HappyGhast {
+            let id = m.id;
+            self.dismount_happy_ghast(id);
+            return;
+        }
         let yaw = m.yaw.to_radians();
         let side = Vec3::new(f64::from(yaw.cos()), 0.0, f64::from(yaw.sin()));
         let w = f64::from(m.width()) / 2.0 + 0.4;

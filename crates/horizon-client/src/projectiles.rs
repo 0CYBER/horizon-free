@@ -25,6 +25,10 @@ pub enum ProjectileKind {
         power: i32,
     },
     LlamaSpit,
+    /// A player's `WindCharge` and a breeze's `BreezeWindCharge`: straight
+    /// flight that bursts on whatever it meets.
+    WindCharge,
+    BreezeWindCharge,
     /// `ShulkerBullet`: homing on `target` in axis-aligned steps.
     ShulkerBullet {
         target: Who,
@@ -487,6 +491,13 @@ impl Projectile {
                 );
             }
             ProjectileKind::Arrow { .. } => {}
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => {}
+            // LlamaSpit.tick: gone in water; drag and gravity follow the move.
+            ProjectileKind::LlamaSpit => {
+                if water {
+                    return (false, Hit::None);
+                }
+            }
             _ => {
                 // ThrowableProjectile: gravity, then inertia.
                 self.velocity.y -= self.gravity();
@@ -551,6 +562,32 @@ impl Projectile {
             }
             return (false, Hit::Block { pos, at, face });
         }
+        if self.kind == ProjectileKind::LlamaSpit {
+            // The 0.25 box touching anything but air discards the spit.
+            let h = 0.125;
+            let touches = [-h, h].iter().any(|dx| {
+                [-h, h].iter().any(|dy| {
+                    [-h, h].iter().any(|dz| {
+                        !w.empty([
+                            (from.x + dx).floor() as i32,
+                            (from.y + dy + h).floor() as i32,
+                            (from.z + dz).floor() as i32,
+                        ])
+                    })
+                })
+            });
+            if touches {
+                return (false, Hit::None);
+            }
+            self.position = to;
+            self.velocity = Vec3::new(
+                self.velocity.x * 0.99,
+                self.velocity.y * 0.99 - self.gravity(),
+                self.velocity.z * 0.99,
+            );
+            self.update_rotation();
+            return (self.position.y > -128.0 && self.age < 6000, Hit::None);
+        }
         self.position = to;
         if self.is_arrow() {
             // AbstractArrow.tick: inertia 0.99 (0.6 in water) after moving, then gravity.
@@ -599,6 +636,8 @@ impl Projectile {
             ProjectileKind::Potion { .. } => "item/splash_potion",
             ProjectileKind::LlamaSpit => "entity/llama/llama_spit",
             ProjectileKind::ShulkerBullet { .. } => "entity/shulker/spark",
+            // Drawn as `WindChargeModel` by the game.
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => return None,
             ProjectileKind::WitherSkull { dangerous: false } => "entity/wither/wither",
             ProjectileKind::WitherSkull { dangerous: true } => "entity/wither/wither_invulnerable",
             ProjectileKind::Arrow { .. } => return None,
@@ -639,6 +678,17 @@ mod tests {
         // ThrowableProjectile: gravity before inertia, then move.
         assert!((p.velocity.y - (-0.03 * 0.99)).abs() < 1e-9);
         assert!((p.position.x - 0.99).abs() < 1e-9);
+    }
+    #[test]
+    fn llama_spit_moves_first_then_drags_and_falls() {
+        let mut p = Projectile::new(ProjectileKind::LlamaSpit, Vec3::new(0.0, 100.0, 0.0), None);
+        p.velocity = Vec3::new(1.0, 0.0, 0.0);
+        let w = Empty(vec![]);
+        let (keep, _) = p.tick(&w);
+        assert!(keep);
+        assert!((p.position.x - 1.0).abs() < 1e-9);
+        assert!((p.velocity.x - 0.99).abs() < 1e-9);
+        assert!((p.velocity.y + 0.06).abs() < 1e-9);
     }
     #[test]
     fn arrow_applies_drag_then_gravity_after_moving() {

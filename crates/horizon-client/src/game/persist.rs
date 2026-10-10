@@ -352,6 +352,7 @@ impl Game<'_> {
         let id = self.mobs[i].id;
         let uuid = self.uuid_for(id);
         let mut tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
+        self.write_leash(&mut tag, i);
         let riders: Vec<usize> = (0..self.mobs.len())
             .filter(|&j| self.mobs[j].extra.mount == Some(id) && self.mobs[j].alive())
             .collect();
@@ -375,6 +376,18 @@ impl Game<'_> {
             self.persist.uuids.insert(id, u);
         }
         self.persist.raw.insert(id, tag);
+    }
+    /// The mob that was loaded or saved with a UUID.
+    pub(super) fn mob_by_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
+        self.persist
+            .uuids
+            .iter()
+            .find(|(id, u)| **u == uuid && self.mobs.iter().any(|m| m.id == **id))
+            .map(|(id, _)| *id)
+    }
+    /// A mob's UUID, made up for new ones.
+    pub(super) fn mob_uuid(&mut self, id: u32) -> [i32; 4] {
+        self.uuid_for(id)
     }
     pub(super) fn uuid_for(&mut self, id: u32) -> [i32; 4] {
         *self.persist.uuids.entry(id).or_insert_with(random_uuid)

@@ -83,6 +83,9 @@ pub enum Species {
     Wither,
     Camel,
     Allay,
+    Breeze,
+    Sniffer,
+    HappyGhast,
     Warden,
     Creaking,
 }
@@ -945,6 +948,48 @@ pub const ALL: &[Def] = &[
         Baby::Abs(0.95, 1.4, 1.38)
     ),
     def!(
+        HappyGhast,
+        "happy_ghast",
+        "happy_ghast#main",
+        "entity/ghast/happy_ghast",
+        A::HappyGhast,
+        [
+            "entity.happy_ghast.ambient",
+            "entity.happy_ghast.hurt",
+            "entity.happy_ghast.death"
+        ],
+        None,
+        Baby::Scale(0.2375, Some(0.46875))
+    ),
+    def!(
+        Sniffer,
+        "sniffer",
+        "sniffer#main",
+        "entity/sniffer/sniffer",
+        A::Sniffer,
+        [
+            "entity.sniffer.idle",
+            "entity.sniffer.hurt",
+            "entity.sniffer.death"
+        ],
+        Some("entity.sniffer.step"),
+        Baby::Scale(0.5, None)
+    ),
+    def!(
+        Breeze,
+        "breeze",
+        "breeze#main",
+        "entity/breeze/breeze",
+        A::Breeze,
+        [
+            "entity.breeze.idle_ground",
+            "entity.breeze.hurt",
+            "entity.breeze.death"
+        ],
+        None,
+        Baby::None
+    ),
+    def!(
         Wither,
         "wither",
         "wither#main",
@@ -1204,12 +1249,18 @@ impl Def {
             Species::Donkey => &["donkey_baby"],
             Species::Mule => &["mule_baby"],
             Species::Llama => &["llama_baby"],
-            Species::TraderLlama => &["trader_llama_baby", "llama"],
+            Species::TraderLlama => &["trader_llama_baby", "llama", "llama_baby"],
             Species::Goat => &["goat_baby"],
             Species::Panda => &["panda_baby"],
             Species::PolarBear => &["polar_bear_baby"],
             Species::Fox => &["fox_baby"],
             Species::Wolf => &["wolf_baby"],
+            Species::Sniffer => &["sniffer_baby"],
+            Species::HappyGhast => &[
+                "happy_ghast_baby",
+                "happy_ghast_harness",
+                "happy_ghast_ropes",
+            ],
             Species::Cat => &["cat_baby"],
             Species::Ocelot => &["ocelot_baby"],
             Species::Bee => &["bee_baby"],
@@ -1282,6 +1333,7 @@ impl Def {
                     | S::Parrot
                     | S::Bee
                     | S::Ghast
+                    | S::HappyGhast
                     | S::Blaze
                     | S::Phantom
                     | S::IronGolem
@@ -1293,7 +1345,7 @@ impl Def {
                     | S::Wither
                     | S::Allay
             ),
-            flying: matches!(s, S::Ghast | S::Phantom),
+            flying: matches!(s, S::Ghast | S::Phantom | S::HappyGhast),
             climber: matches!(s, S::Spider | S::CaveSpider),
             lava_walker: s == S::Strider,
             omnidirectional: matches!(s, S::Bat | S::Bee | S::Parrot),
@@ -1401,6 +1453,8 @@ impl Def {
             S::Horse | S::Donkey | S::Mule => "horse_food",
             S::Llama | S::TraderLlama => "llama_food",
             S::Goat => "goat_food",
+            S::Sniffer => "sniffer_food",
+            S::HappyGhast => "happy_ghast_food",
             S::Panda => "panda_food",
             S::Fox => "fox_food",
             S::Wolf => "wolf_food",
@@ -1435,6 +1489,7 @@ impl Def {
     pub fn air_speed(&self) -> f32 {
         match self.species {
             Species::Phantom => 0.2,
+            Species::HappyGhast => super::happy_ghast::AIR_SPEED,
             _ => 0.02,
         }
     }
@@ -1447,6 +1502,7 @@ impl Def {
     pub fn head_rot_speed(&self) -> f32 {
         match self.species {
             Species::Frog => 35.0,
+            Species::Breeze => 25.0,
             _ => 10.0,
         }
     }
@@ -1461,6 +1517,8 @@ impl Def {
         match self.species {
             Species::Dolphin | Species::Axolotl => 1.0,
             Species::Frog => 5.0,
+            Species::Breeze => 30.0,
+            Species::Sniffer => 50.0,
             Species::Goat => 15.0,
             Species::Armadillo => 32.0,
             _ => 75.0,

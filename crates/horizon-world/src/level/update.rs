@@ -1,6 +1,6 @@
 //! `Level.setBlock`, `LevelChunk.setBlockState` and the
 //! `CollectingNeighborUpdater` that orders neighbour and shape updates.
-use super::{LevelAccess, LevelEvent, Sim, flags, states::BlockId};
+use super::{LevelAccess, LevelEvent, Sim, classes::Class, flags, states::BlockId};
 use crate::{fluid::FluidState, registry::BlockStateId};
 use horizon_core::{
     geometry::Direction,
@@ -338,7 +338,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if self.b.is_air(state) {
             return false;
         }
-        self.level_event(2001, pos, state.0 as i32);
+        let is_fire = {
+            let data = self.b.data(state);
+            data.is(Class::BaseFire) || data.is(Class::Fire) || data.is(Class::SoulFire)
+        };
+        if !is_fire {
+            self.level_event(2001, pos, state.0 as i32);
+        }
         if drop {
             self.drop_resources(state, pos);
         }
