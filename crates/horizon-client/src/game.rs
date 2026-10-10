@@ -57,6 +57,7 @@ mod render_control;
 mod render_tick;
 mod scoreboard;
 mod screens;
+mod sculk;
 mod shield;
 mod sign_edit;
 mod station_control;
@@ -312,14 +313,17 @@ impl LevelAccess for GameLevel<'_> {
     fn block_entity_analog_signal(
         &self,
         pos: BlockPos,
-        _state: BlockStateId,
+        state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        if let Some(signal) = sculk::sensor_signal(self.world, self.behaviours, state, pos) {
+            return signal;
+        }
         if let Some((_, comparator)) = jukebox::jukebox_signals(self.world, self.items, pos) {
             return comparator;
         }
         if let Some(signal) = creaking::heart_signal(self.world, pos) {
-            return if self.registry.state(_state).is_some_and(|s| {
+            return if self.registry.state(state).is_some_and(|s| {
                 s.properties
                     .get("creaking_heart_state")
                     .is_some_and(|v| v == "uprooted")
@@ -541,6 +545,7 @@ struct Game<'a> {
     mobs: Vec<Mob>,
     arrows: Vec<Arrow>,
     creatures: creatures::Creatures,
+    sculk: sculk::SculkState,
     raiding: raids::Raiding,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
@@ -1266,6 +1271,12 @@ impl Game<'_> {
                         sounds.pitch * 0.8,
                     );
                 }
+                LevelEvent::LevelEvent {
+                    id: 3006,
+                    pos,
+                    data,
+                } => self.sculk_charge_event(pos, data),
+                LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
                 LevelEvent::LevelEvent { id, pos, .. } => {
                     let c = Some([
                         f64::from(pos.x) + 0.5,
@@ -1415,10 +1426,17 @@ impl Game<'_> {
                         },
                     );
                 }
+                LevelEvent::GameEvent { pos, event, state } => {
+                    self.sculk_level_event(pos, event, state)
+                }
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "shrieker_respond",
+                } => self.shrieker_block_event(pos, state),
                 LevelEvent::GrowTree { .. }
                 | LevelEvent::PlaceFeature { .. }
-                | LevelEvent::BlockEvent { .. }
-                | LevelEvent::GameEvent { .. } => {}
+                | LevelEvent::BlockEvent { .. } => {}
             }
         }
         Ok(())
@@ -1455,6 +1473,12 @@ impl Game<'_> {
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
+            self.post_block_game_event(
+                "minecraft:container_open",
+                [key.0, key.1, key.2],
+                Some(horizon_client::mobs::Who::Player),
+                None,
+            );
             let stat = match &*name {
                 "minecraft:chest" => "open_chest",
                 "minecraft:trapped_chest" => "trigger_trapped_chest",
@@ -1576,6 +1600,9 @@ impl Game<'_> {
         self.process_level_events()
     }
     fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.with_player_actor(|game| game.break_block_as_player(pos))
+    }
+    fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
@@ -1673,6 +1700,9 @@ impl Game<'_> {
         Ok(())
     }
     fn use_item(&mut self) -> Result<()> {
+        self.with_player_actor(|game| game.use_item_as_player())
+    }
+    fn use_item_as_player(&mut self) -> Result<()> {
         // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
         if self.spectator() {
             return Ok(());
@@ -1984,6 +2014,8 @@ impl Game<'_> {
         }
         if ticks >= duration {
             self.using = None;
+            // Consumable.onConsume.
+            self.post_entity_event("minecraft:eat", horizon_client::mobs::Who::Player);
             if let Some((nutrition, saturation)) = info.food
                 && let Some(p) = self.player.as_mut()
             {
@@ -2532,6 +2564,7 @@ impl Game<'_> {
         }
         if running {
             self.tick_block_entities()?;
+            self.tick_sculk()?;
             self.tick_brewing_stands()?;
         }
         if let Some(r) = &self.renderer {
@@ -3113,6 +3146,7 @@ impl Game<'_> {
                 | BlockEntity::Jukebox(_)
                 | BlockEntity::Beacon(_)
                 | BlockEntity::Lectern(_)
+                | BlockEntity::Sculk(_)
                 | BlockEntity::Banner(_)
                 | BlockEntity::CreakingHeart(_),
             ) => {}
@@ -3313,6 +3347,7 @@ impl Game<'_> {
                     | BlockEntity::Jukebox(_)
                     | BlockEntity::Beacon(_)
                     | BlockEntity::Lectern(_)
+                    | BlockEntity::Sculk(_)
                     | BlockEntity::Banner(_)
                     | BlockEntity::CreakingHeart(_),
                 ) => {}
@@ -3405,6 +3440,12 @@ impl Game<'_> {
         }
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
+            self.post_block_game_event(
+                "minecraft:container_close",
+                [key.0, key.1, key.2],
+                Some(horizon_client::mobs::Who::Player),
+                None,
+            );
             let name = self
                 .res
                 .facts
@@ -5778,6 +5819,7 @@ impl Game<'_> {
             on_ground,
         );
         self.creatures.projectiles.push(arrow);
+        self.player_projectile_shot();
         let pitch = 1.0 / (self.world.random.next_float() * 0.4 + 1.2) + power * 0.5;
         self.audio
             .play("minecraft:entity.arrow.shoot", Some(eye), 1.0, pitch);
@@ -6685,6 +6727,7 @@ impl Game<'_> {
         self.save_scoreboard();
         self.save_bossbars();
         self.save_schedule();
+        self.save_warden_tracker();
         self.sync_level();
         self.level.write(&self.world_root)?;
         self.save_world_state();
@@ -6796,7 +6839,11 @@ impl Game<'_> {
         }
         let celestial = if title {
             self.panorama_geometry()
-        } else if self.dim == Dim::Overworld {
+        } else if self.dim == Dim::Overworld
+            && self.potions.effects.get("darkness").is_none()
+            && self.potions.effects.get("blindness").is_none()
+        {
+            // Camera.doesMobEffectBlockSky: no sun, moon or stars.
             self.celestial_geometry(&sky)
         } else if self.dim == Dim::End {
             self.end_sky_geometry()
@@ -6875,6 +6922,7 @@ impl Game<'_> {
             screen: &screen,
             game_time: self.world.game_time as f32,
             ticks: self.ticks,
+            darkness: self.darkness_lighting(alpha as f32),
         };
         self.renderer.as_mut().ok_or("renderer")?.render(&frame)
     }
@@ -7725,6 +7773,7 @@ pub fn run() -> Result<()> {
         mobs: Vec::new(),
         arrows: Vec::new(),
         creatures: Default::default(),
+        sculk: Default::default(),
         raiding: Default::default(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),

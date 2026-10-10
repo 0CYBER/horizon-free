@@ -339,6 +339,15 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         "minecraft:wither" => {
             map.insert("Invul".into(), Tag::Int(m.extra.counter));
         }
+        "minecraft:warden" => {
+            if let Some(st) = &m.extra.warden {
+                map.insert("listener".into(), st.vibration.to_nbt());
+                map.insert(
+                    "anger".into(),
+                    Tag::compound([("suspects", Tag::List(Vec::new()))]),
+                );
+            }
+        }
         "minecraft:ravager" => {
             map.insert("AttackTick".into(), Tag::Int(m.extra.counter));
             map.insert("StunTick".into(), Tag::Int(m.extra.counter2));
@@ -619,6 +628,13 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     }
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;
+    }
+    if m.species() == crate::mobs::Species::Warden {
+        // The brain starts afresh: a minute before it digs back down.
+        crate::mobs::warden::finalize(&mut m, false, &mut Vec::new());
+        if let (Some(st), Some(listener)) = (m.extra.warden.as_mut(), tag.get("listener")) {
+            st.vibration = crate::sculk::Data::from_nbt(listener);
+        }
     }
     if m.species() == crate::mobs::Species::Ravager {
         m.extra.counter = number(tag.get("AttackTick")).unwrap_or(0) as i32;

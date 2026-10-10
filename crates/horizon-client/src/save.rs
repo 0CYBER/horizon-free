@@ -404,6 +404,7 @@ pub fn encode_block_entity(
                 entries.push(("Page", Tag::Int(l.page)));
             }
         }
+        BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
         BlockEntity::Crafter(c) => {
             entries.push(("Items", encode_items(&c.items)));
             entries.push((
@@ -521,6 +522,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
             };
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
+        BlockEntity::Sculk(s) => s.load(tag),
         BlockEntity::Crafter(c) => {
             for (slot, item) in decode_items(tag.get("Items"), 9).into_iter().enumerate() {
                 c.items[slot] = item;
