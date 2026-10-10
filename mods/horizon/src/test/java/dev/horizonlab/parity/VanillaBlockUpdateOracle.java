@@ -71,7 +71,7 @@ public final class VanillaBlockUpdateOracle {
             if (old == state) {
                 return null;
             }
-            if (state.isAir()) {
+            if (state == AIR) {
                 world.cells.remove(pos);
             } else {
                 world.cells.put(pos.immutable(), state);
@@ -123,7 +123,26 @@ public final class VanillaBlockUpdateOracle {
         }
         @Override public BlockState getBlockState(BlockPos p) { return cells.getOrDefault(p, AIR); }
         @Override public FluidState getFluidState(BlockPos p) { return getBlockState(p).getFluidState(); }
-        @Override public BlockEntity getBlockEntity(BlockPos p) { return null; }
+        // A real level always holds the block entity of an entity block; this
+        // one creates it on first use and replaces it when the block changes.
+        Map<BlockPos, BlockEntity> blockEntities;
+        @Override public BlockEntity getBlockEntity(BlockPos p) {
+            BlockState state = getBlockState(p);
+            if (!(state.getBlock() instanceof net.minecraft.world.level.block.EntityBlock entityBlock)) {
+                return null;
+            }
+            if (blockEntities == null) blockEntities = new HashMap<>();
+            BlockEntity be = blockEntities.get(p);
+            if (be == null || !be.getType().isValid(state)) {
+                be = entityBlock.newBlockEntity(p.immutable(), state);
+                if (be == null) return null;
+                be.setLevel(this);
+                blockEntities.put(p.immutable(), be);
+            } else {
+                be.setBlockState(state);
+            }
+            return be;
+        }
         @Override public LevelChunk getChunkAt(BlockPos p) { return chunk; }
         @Override public LevelChunk getChunk(int x, int z) { return chunk; }
         @Override public boolean isLoaded(BlockPos p) { return true; }
@@ -179,6 +198,26 @@ public final class VanillaBlockUpdateOracle {
         @Override public boolean isPositionEntityTicking(BlockPos p) { return true; }
         @Override public boolean shouldTickBlocksAt(BlockPos p) { return true; }
         @Override public boolean shouldTickBlocksAt(long p) { return true; }
+        // Allocated without a constructor, so the sound seed generator, attribute
+        // system and chunk source are missing. Sound seeds never touch the level
+        // RNG, the overworld keeps every attribute default and entity ids are not
+        // compared.
+        int nextEntityId;
+        net.minecraft.world.attribute.EnvironmentAttributeSystem attributes;
+        @Override public int getNextEntityId() { return ++nextEntityId; }
+        @Override public net.minecraft.world.attribute.EnvironmentAttributeSystem environmentAttributes() {
+            if (attributes == null) attributes = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().build();
+            return attributes;
+        }
+        @Override public void playSound(Entity except, double x, double y, double z, SoundEvent sound, SoundSource source, float volume, float pitch) {
+            playSeededSound(except, x, y, z, BuiltInRegistries.SOUND_EVENT.wrapAsHolder(sound), source, volume, pitch, 0L);
+        }
+        @Override public void playSound(Entity except, double x, double y, double z, net.minecraft.core.Holder<SoundEvent> sound, SoundSource source, float volume, float pitch) {
+            playSeededSound(except, x, y, z, sound, source, volume, pitch, 0L);
+        }
+        @Override public void playSound(Entity except, Entity src, SoundEvent sound, SoundSource source, float volume, float pitch) {
+            playSeededSound(except, src, BuiltInRegistries.SOUND_EVENT.wrapAsHolder(sound), source, volume, pitch, 0L);
+        }
     }
 
     static final class Loot extends net.minecraft.server.ReloadableServerRegistries.Holder {
@@ -292,7 +331,7 @@ public final class VanillaBlockUpdateOracle {
         for (var cell : f.getAsJsonArray("cells")) {
             var c = cell.getAsJsonArray();
             BlockState s = Block.stateById(c.get(3).getAsInt());
-            if (!s.isAir()) w.cells.put(new BlockPos(c.get(0).getAsInt(), c.get(1).getAsInt(), c.get(2).getAsInt()), s);
+            if (s != AIR) w.cells.put(new BlockPos(c.get(0).getAsInt(), c.get(1).getAsInt(), c.get(2).getAsInt()), s);
         }
         w.rng = new LegacyRandomSource(f.get("seed").getAsLong());
         w.time = f.has("time") ? f.get("time").getAsLong() : 0;

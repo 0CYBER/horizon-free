@@ -1,7 +1,7 @@
 //! `neighborChanged`, `onPlace`, `affectNeighborsAfterRemoval` and
 //! `updateIndirectNeighbourShapes` for the overriding vanilla classes.
 use super::{
-    LevelAccess, LevelEvent, Sim,
+    LevelAccess, Sim,
     classes::Class,
     states::BlockId,
     update::{below, rel},
@@ -29,6 +29,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::BigDripleaf => {
                     if self.has_neighbor_signal(pos) {
                         self.big_dripleaf_reset_tilt(pos, state);
+                    }
+                }
+                Class::Command => {
+                    // CommandBlock.setPoweredAndUpdate
+                    let signal = self.has_neighbor_signal(pos);
+                    if let Some((was_powered, automatic)) = self.level.set_command_block_powered(pos, signal)
+                        && signal
+                        && !was_powered
+                        && !automatic
+                        && !b.is_block(state, b.named.chain_command_block)
+                    {
+                        self.schedule_tick(pos, block, 1);
                     }
                 }
                 Class::CopperBulb => self.copper_bulb_check(pos, state),
@@ -64,6 +76,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.remove_block(pos, false);
                     }
                 }
+                Class::Shelf => self.shelf_neighbor_changed(pos, state),
                 Class::Sponge => self.sponge_try_absorb(pos),
                 Class::Tnt => self.tnt_check(pos),
                 Class::TrapDoor => self.trapdoor_neighbor_changed(pos, state),
@@ -174,6 +187,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Scaffolding => {
                     self.schedule_tick(pos, block, 1);
                 }
+                Class::Shelf => self.shelf_on_place(pos, state, old),
                 Class::SnifferEgg => {
                     let boosted = b.is_block(self.below_state(pos), b.named.moss_block);
                     if boosted {
@@ -263,7 +277,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 | Class::Jukebox
                 | Class::ShulkerBox
                 | Class::CopperGolemStatue => self.update_neighbour_for_output_signal(pos, block),
-                Class::Shelf => self.update_neighbour_for_output_signal(pos, block),
+                Class::Shelf => {
+                    self.update_neighbour_for_output_signal(pos, block);
+                    self.shelf_after_powering_down(pos, state);
+                }
                 Class::BasePressurePlate => {
                     if !moved && self.plate_signal_for_state(state) > 0 {
                         self.plate_update_neighbours(pos, block);
@@ -403,7 +420,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         // TntBlock.playerWillDestroy: unstable TNT primes unless instabuild.
         if !creative && data.is(Class::Tnt) && b.table.bool(state, p.unstable) {
-            self.emit(LevelEvent::PrimeTnt { pos });
+            self.prime_tnt(pos);
         }
         self.level_event(2001, pos, state.0 as i32);
         self.game_event(pos, "minecraft:block_destroy");
@@ -535,11 +552,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.neighbor_changed_at(pos, b.named.water);
         }
     }
-    fn big_dripleaf_reset_tilt(&mut self, pos: BlockPos, state: BlockStateId) {
+    /// `BigDripleafBlock.resetTilt`.
+    pub(crate) fn big_dripleaf_reset_tilt(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         let next = b.table.set_text(state, b.props.tilt, "none");
         self.set_block(pos, next, 2);
         if b.table.text(state, b.props.tilt) != "none" {
+            // setTilt: NONE causes a vibration when the tilt changes.
+            self.game_event(pos, "minecraft:block_change");
             let pitch = self.random().next_float() * 0.4 + 0.8;
             self.emit(super::LevelEvent::Sound {
                 pos,

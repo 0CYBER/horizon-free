@@ -604,6 +604,9 @@ impl Game<'_> {
         }
         let Some(slot) = slot else {
             self.dispenser_event(1001, key, 0);
+            if !dropper {
+                self.post_block_game_event("minecraft:block_activate", [pos.x, pos.y, pos.z], None, Some(state));
+            }
             return Ok(());
         };
         let Some(facing) = self

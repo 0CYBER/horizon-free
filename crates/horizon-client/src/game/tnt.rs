@@ -42,30 +42,34 @@ impl Game<'_> {
         self.post_block_game_event("minecraft:prime_fuse", [pos.x, pos.y, pos.z], who, None);
         let r = &mut self.world.random;
         let rot = r.next_double() * f64::from(std::f32::consts::TAU);
+        let fuse = if short {
+            // PrimedTnt.getRandomShortFuse
+            r.next_int_bound(20).unwrap_or(0) + 10
+        } else {
+            self.audio.play(
+                "minecraft:entity.tnt.primed",
+                Some([f64::from(pos.x) + 0.5, f64::from(pos.y), f64::from(pos.z) + 0.5]),
+                1.0,
+                1.0,
+            );
+            80
+        };
+        self.add_primed_tnt(pos, rot, fuse);
+    }
+    /// Adds primed TNT at the block's bottom centre, pushed along `rot`.
+    pub(super) fn add_primed_tnt(&mut self, pos: BlockPos, rot: f64, fuse: i32) {
         let position = Vec3::new(
             f64::from(pos.x) + 0.5,
             f64::from(pos.y),
             f64::from(pos.z) + 0.5,
         );
-        let mut tnt = PrimedTnt {
+        self.tnts.push(PrimedTnt {
             position,
             previous: position,
             velocity: Vec3::new(-rot.sin() * 0.02, f64::from(0.2f32), -rot.cos() * 0.02),
-            fuse: 80,
+            fuse,
             on_ground: false,
-        };
-        if short {
-            // PrimedTnt.getRandomShortFuse
-            tnt.fuse = r.next_int_bound((tnt.fuse / 4).max(1)).unwrap_or(0) + tnt.fuse / 8;
-        } else {
-            self.audio.play(
-                "minecraft:entity.tnt.primed",
-                Some([position.x, position.y, position.z]),
-                1.0,
-                1.0,
-            );
-        }
-        self.tnts.push(tnt);
+        });
     }
     /// `PrimedTnt.tick` for every primed TNT, in order; an expired fuse
     /// explodes immediately (later TNT in the list feel its knockback this

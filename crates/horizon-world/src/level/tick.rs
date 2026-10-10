@@ -434,46 +434,24 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     fn big_dripleaf_tick(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
-        if self.has_neighbor_signal(pos) {
-            let next = b.table.set_text(state, b.props.tilt, "none");
-            self.set_block(pos, next, 2);
-            if b.table.text(state, b.props.tilt) != "none" {
-                let pitch = self.random().next_float() * 0.4 + 0.8;
-                self.emit(LevelEvent::Sound {
-                    pos,
-                    sound: "minecraft:block.big_dripleaf.tilt_up".into(),
-                    volume: 1.0,
-                    pitch,
-                });
-            }
-            return;
-        }
         let (next, delay) = match b.table.text(state, b.props.tilt) {
-            "unstable" => ("partial", Some(10)),
-            "partial" => ("full", Some(100)),
-            "full" => ("none", None),
+            _ if self.has_neighbor_signal(pos) => return self.big_dripleaf_reset_tilt(pos, state),
+            "unstable" => ("partial", 10),
+            "partial" => ("full", 100),
+            "full" => return self.big_dripleaf_reset_tilt(pos, state),
             _ => return,
         };
-        let next_state = b.table.set_text(state, b.props.tilt, next);
-        self.set_block(pos, next_state, 2);
-        if next != "none" {
-            self.game_event(pos, "minecraft:block_change");
-        }
+        // setTiltAndScheduleTick: PARTIAL and FULL cause vibrations.
+        self.set_block(pos, b.table.set_text(state, b.props.tilt, next), 2);
+        self.game_event(pos, "minecraft:block_change");
         let pitch = self.random().next_float() * 0.4 + 0.8;
-        let sound = if next == "none" {
-            "minecraft:block.big_dripleaf.tilt_up"
-        } else {
-            "minecraft:block.big_dripleaf.tilt_down"
-        };
         self.emit(LevelEvent::Sound {
             pos,
-            sound: sound.into(),
+            sound: "minecraft:block.big_dripleaf.tilt_down".into(),
             volume: 1.0,
             pitch,
         });
-        if let Some(delay) = delay {
-            self.schedule_tick(pos, b.block(state), delay);
-        }
+        self.schedule_tick(pos, b.block(state), delay);
     }
     fn scaffolding_tick(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
@@ -619,7 +597,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.remove_block(pos, false);
             }
             if b.instance_of(old, Class::Tnt) {
-                self.emit(LevelEvent::PrimeTnt { pos });
+                self.prime_tnt(pos);
             }
         }
     }

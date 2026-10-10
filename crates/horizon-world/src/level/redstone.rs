@@ -1120,7 +1120,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `TntBlock.prime` then `removeBlock`.
     pub(crate) fn tnt_check(&mut self, pos: BlockPos) {
         if self.has_neighbor_signal(pos) {
-            self.emit(LevelEvent::PrimeTnt { pos });
+            self.prime_tnt(pos);
             self.remove_block(pos, false);
         }
     }
@@ -1154,16 +1154,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let signal = self.has_neighbor_signal(pos);
         if signal != b.table.bool(state, b.props.powered) {
             if signal {
-                self.emit(LevelEvent::Sound {
-                    pos,
-                    sound: "minecraft:block.bell.use".into(),
-                    volume: 2.0,
-                    pitch: 1.0,
-                });
-                self.game_event(pos, "minecraft:block_change");
+                self.bell_ring(pos, state, b.facing(state));
             }
             self.set_block_and_update(pos, b.table.set_bool(state, b.props.powered, signal));
         }
+    }
+    /// `BellBlock.attemptToRing`: `BellBlockEntity.onHit` queues block event 1
+    /// with the struck direction, then the sound and game event.
+    pub(crate) fn bell_ring(&mut self, pos: BlockPos, state: BlockStateId, direction: Direction) {
+        self.block_event(pos, self.b.block(state), 1, direction as i32);
+        self.emit(LevelEvent::Sound {
+            pos,
+            sound: "minecraft:block.bell.use".into(),
+            volume: 2.0,
+            pitch: 1.0,
+        });
+        self.game_event(pos, "minecraft:block_change");
     }
     pub(crate) fn crafter_neighbor_changed(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;

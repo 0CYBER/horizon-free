@@ -1514,7 +1514,7 @@ impl Game<'_> {
                     }
                     PlayerEffect::InteractLoot(_) | PlayerEffect::RespawnAnchor => {}
                 },
-                LevelEvent::PrimeTnt { pos } => self.spawn_primed_tnt(pos, false),
+                LevelEvent::PrimeTnt { pos, rot } => self.add_primed_tnt(pos, rot, 80),
                 LevelEvent::BlockEvent {
                     pos,
                     state,

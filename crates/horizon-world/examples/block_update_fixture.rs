@@ -32,6 +32,7 @@ struct Cells {
     raining: bool,
     thundering: bool,
     events: Vec<LevelEvent>,
+    command_blocks: HashMap<BlockPos, bool>,
 }
 impl LevelAccess for Cells {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
@@ -48,6 +49,10 @@ impl LevelAccess for Cells {
     }
     fn is_loaded(&self, _pos: BlockPos) -> bool {
         true
+    }
+    /// A fresh command block entity: unpowered and not automatic.
+    fn set_command_block_powered(&mut self, pos: BlockPos, powered: bool) -> Option<(bool, bool)> {
+        Some((self.command_blocks.insert(pos, powered).unwrap_or(false), false))
     }
     fn random(&mut self) -> &mut LegacyRandom {
         &mut self.random
@@ -161,6 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
             events: Vec::new(),
+            command_blocks: HashMap::new(),
         };
         let mut ticks = Ticks::new(0);
         for x in -3..=3 {
@@ -289,6 +295,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 LevelEvent::GameEvent { pos, event, .. } => {
                     let _ = writeln!(result, "G {} {}", p(*pos), event);
+                }
+                // Dispensing from the fixture's empty block entities, as the
+                // client does: the fail event, plus `block_activate` for a
+                // dispenser; a crafter without a recipe only fails.
+                LevelEvent::BlockEvent { kind: "dispense", pos, state } => {
+                    match behaviours.table.name(*state) {
+                        "minecraft:crafter" => {
+                            let _ = writeln!(result, "L 1050 {} 0", p(*pos));
+                        }
+                        "minecraft:dispenser" => {
+                            let _ = writeln!(result, "L 1001 {} 0", p(*pos));
+                            let _ = writeln!(result, "G {} minecraft:block_activate", p(*pos));
+                        }
+                        _ => {
+                            let _ = writeln!(result, "L 1001 {} 0", p(*pos));
+                        }
+                    }
                 }
                 LevelEvent::BlockEvent { kind, .. } => {
                     let _ = writeln!(result, "X {kind}");

@@ -111,11 +111,13 @@ mod hooks;
 mod interact;
 pub mod pistons;
 mod place;
+mod portal;
 mod query;
 mod rails;
 mod redstone;
 pub mod sculk;
 mod shapes;
+mod shelf;
 mod signals;
 mod speleothem;
 mod survive;
@@ -239,8 +241,10 @@ pub enum LevelEvent {
         state: BlockStateId,
         feature: Arc<str>,
     },
-    /// `TntBlock.prime`: the TNT block is removed; spawn primed TNT.
-    PrimeTnt { pos: BlockPos },
+    /// `TntBlock.prime`: spawn primed TNT pushed along `rot` (radians, drawn
+    /// from the level random by `new PrimedTnt`). The primed sound and game
+    /// event follow as their own events; the caller removes the block.
+    PrimeTnt { pos: BlockPos, rot: f64 },
     /// Block-entity or entity side effects the caller implements: `"dispense"`
     /// (dispenser/dropper/crafter scheduled tick), `"hatch"` (frogspawn
     /// hatched into tadpoles; the block is already destroyed).
@@ -330,6 +334,12 @@ pub trait LevelAccess {
         _direction: Direction,
     ) -> i32 {
         0
+    }
+    /// `CommandBlockEntity.setPowered` for the command block entity at `pos`:
+    /// stores `powered` and returns the previous flag and `isAutomatic`, or
+    /// None when there is no command block entity.
+    fn set_command_block_powered(&mut self, _pos: BlockPos, _powered: bool) -> Option<(bool, bool)> {
+        None
     }
     /// Weak/strong signal of a block-entity-driven source (trapped chest
     /// openers); other sources are evaluated by the library.

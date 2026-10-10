@@ -5,7 +5,7 @@ use crate::{fluid::FluidState, registry::BlockStateId};
 use horizon_core::{
     geometry::Direction,
     position::BlockPos,
-    random::LegacyRandom,
+    random::{LegacyRandom, RandomSource},
     ticks::{ScheduleResult, TickPriority},
 };
 
@@ -183,6 +183,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub fn emit(&mut self, event: LevelEvent) {
         self.level.emit(event);
     }
+    /// `TntBlock.prime` without a source: `new PrimedTnt` draws its push angle
+    /// from the level random, then the primed sound and `prime_fuse` event.
+    pub fn prime_tnt(&mut self, pos: BlockPos) {
+        let rot = self.random().next_double() * f64::from(std::f32::consts::TAU);
+        self.emit(LevelEvent::PrimeTnt { pos, rot });
+        self.sound(pos, &std::sync::Arc::from("minecraft:entity.tnt.primed"), 1.0, 1.0);
+        self.game_event(pos, "minecraft:prime_fuse");
+    }
     pub fn level_event(&mut self, id: i32, pos: BlockPos, data: i32) {
         self.level.emit(LevelEvent::LevelEvent { id, pos, data });
     }
@@ -338,11 +346,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if self.b.is_air(state) {
             return false;
         }
-        let is_fire = {
-            let data = self.b.data(state);
-            data.is(Class::BaseFire) || data.is(Class::Fire) || data.is(Class::SoulFire)
-        };
-        if !is_fire {
+        // Block.spawnDestroyParticles: fire spawns none, straw beds their own.
+        let data = self.b.data(state);
+        if data.is(Class::StrawBed) {
+            self.level_event(2014, pos, state.0 as i32);
+        } else if !(data.is(Class::BaseFire) || data.is(Class::Fire) || data.is(Class::SoulFire)) {
             self.level_event(2001, pos, state.0 as i32);
         }
         if drop {

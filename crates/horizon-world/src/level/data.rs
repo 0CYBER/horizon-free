@@ -376,6 +376,7 @@ named_blocks! {
     mangrove_roots = "mangrove_roots",
     big_dripleaf_fallback = "big_dripleaf",
     nether_portal = "nether_portal",
+    chain_command_block = "chain_command_block",
     frogspawn = "frogspawn",
     turtle_egg = "turtle_egg",
     sniffer_egg = "sniffer_egg",

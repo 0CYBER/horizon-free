@@ -349,13 +349,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         }
                     };
                     if proper {
-                        self.emit(LevelEvent::Sound {
-                            pos,
-                            sound: "minecraft:block.bell.use".into(),
-                            volume: 2.0,
-                            pitch: 1.0,
-                        });
-                        self.game_event(pos, "minecraft:block_change");
+                        self.bell_ring(pos, state, face);
                         Success
                     } else {
                         Pass
