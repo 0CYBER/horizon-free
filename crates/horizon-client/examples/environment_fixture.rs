@@ -22,14 +22,13 @@ fn main() -> horizon_client::Result<()> {
     for line in input.lines() {
         let f: Vec<&str> = line.split(' ').collect();
         let dimension = f[0];
-        let environment = match environments.entry(dimension.to_owned()) {
-            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => e.insert(Environment::load_dimension(
-                root,
-                dimension,
-                dimension == "overworld",
-            )?),
-        };
+        let environment =
+            match environments.entry(dimension.to_owned()) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => e.insert(
+                    Environment::load_dimension(root, dimension, dimension == "overworld")?,
+                ),
+            };
         let info = biomes.get(biomes.id(&format!("minecraft:{}", f[4])));
         let mut sky = environment.sample(f[1].parse()?, info.sky, info.fog);
         if dimension == "overworld" {
@@ -45,15 +44,24 @@ fn main() -> horizon_client::Result<()> {
         put("visual/fog_color", v3(sky.fog_color));
         put("visual/cloud_color", v4(sky.cloud_color));
         put("visual/sunrise_sunset_color", v4(sky.sunrise_color));
-        put("visual/sky_light_factor", format!("{:?}", sky.sky_light_factor));
+        put(
+            "visual/sky_light_factor",
+            format!("{:?}", sky.sky_light_factor),
+        );
         put("visual/sky_light_color", v3(sky.sky_light_color));
         put("visual/block_light_tint", v3(sky.block_light_tint));
         put("visual/ambient_light_color", v3(sky.ambient_light_color));
         put("visual/sun_angle", format!("{:?}", sky.sun_angle));
         put("visual/moon_angle", format!("{:?}", sky.moon_angle));
         put("visual/star_angle", format!("{:?}", sky.star_angle));
-        put("visual/star_brightness", format!("{:?}", sky.star_brightness));
-        put("gameplay/sky_light_level", format!("{:?}", sky.sky_light_level * 15.0));
+        put(
+            "visual/star_brightness",
+            format!("{:?}", sky.star_brightness),
+        );
+        put(
+            "gameplay/sky_light_level",
+            format!("{:?}", sky.sky_light_level * 15.0),
+        );
         put("visual/fog_start_distance", format!("{:?}", sky.fog_start));
         put("visual/fog_end_distance", format!("{:?}", sky.fog_end));
         out.push_str(&row);

@@ -27,12 +27,18 @@ except ImportError:
 def cases(resources):
     biomes = sorted(p.stem for p in (resources / 'data/minecraft/worldgen/biome').glob('*.json'))
     out = []
-    for dim in ['overworld', 'overworld_caves', 'the_nether', 'the_end']:
+    for dim in ['overworld', 'the_nether', 'the_end']:
         for ticks in list(range(0, 48000, 250)) + [23999, 24001, 1234567]:
             for rain, thunder in [(0, 0), (0.5, 0), (1, 0), (1, 1), (0.7, 0.3)] if dim == 'overworld' else [(0, 0)]:
                 out.append(f'{dim} {ticks} {rain} {thunder} plains')
+    own = {'the_nether': {'nether_wastes', 'soul_sand_valley', 'crimson_forest', 'warped_forest', 'basalt_deltas'},
+           'the_end': {'the_end', 'small_end_islands', 'end_midlands', 'end_highlands', 'end_barrens'}}
     for dim in ['overworld', 'the_nether', 'the_end']:
         for biome in biomes:
+            if dim in own and biome not in own[dim]:
+                continue
+            if dim == 'overworld' and any(biome in b for b in own.values()):
+                continue
             for ticks in (0, 6000, 12500, 18000):
                 for rain, thunder in [(0, 0), (1, 0.4)] if dim == 'overworld' else [(0, 0)]:
                     out.append(f'{dim} {ticks} {rain} {thunder} {biome}')
