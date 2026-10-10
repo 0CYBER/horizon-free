@@ -342,70 +342,80 @@ impl Game<'_> {
 
 impl Game<'_> {
     /// `quickMoveStack` of the open chest-like, hopper, dispenser or furnace
-    /// menu for a shift-click on `slot`; false when the menu has none.
+    /// menu for a shift-click on `slot`, run by the verified menu engine
+    /// (`horizon_client::menu`); false when the menu has none.
     pub(super) fn container_quick_move(&mut self, slot: usize) -> bool {
+        use horizon_client::menu::{Env, Input, Kind, Menu};
         let size = self.container_size();
-        let furnace = match self.container_kind() {
-            Some(BlockEntity::Chest(_)) => None,
-            Some(BlockEntity::Furnace(f)) => Some(f.kind),
+        let (kind, count) = match self.container_kind() {
+            Some(BlockEntity::Chest(_)) => {
+                let shulker = self.container.is_some_and(|k| {
+                    let id = self.world.block(k.0, k.1, k.2);
+                    is_shulker_box(&self.res.facts.get(id).name)
+                });
+                let kind = match size {
+                    5 => Kind::Hopper,
+                    9 => Kind::Dispenser,
+                    27 if shulker => Kind::Shulker,
+                    n => Kind::Chest((n / 9).clamp(1, 6)),
+                };
+                (kind, size)
+            }
+            Some(BlockEntity::Furnace(f)) => (
+                Kind::Furnace(
+                    match f.kind.recipe_type().trim_start_matches("minecraft:") {
+                        "blasting" => "blasting",
+                        "smoking" => "smoking",
+                        _ => "smelting",
+                    },
+                ),
+                3,
+            ),
             _ => return false,
         };
-        if slot >= 300 + size.max(3) {
+        // Menu index <-> game slot: container 300.., main inventory 9..36, hotbar 0..9.
+        let to_menu = |g: usize| match g {
+            300.. if g < 300 + count => Some(g - 300),
+            9..36 => Some(count + g - 9),
+            0..9 => Some(count + 27 + g),
+            _ => None,
+        };
+        let from_menu = |i: usize| match i {
+            _ if i < count => 300 + i,
+            _ if i < count + 27 => 9 + i - count,
+            _ => i - count - 27,
+        };
+        let Some(index) = to_menu(slot) else {
             return false;
-        }
-        let Some(mut stack) = self.slot_mut(slot).take() else {
-            return true;
         };
-        let player: Vec<usize> = (9..36).chain(0..9).collect();
-        let hotbar_or_main = |slot: usize| -> Vec<usize> {
-            if slot < 9 {
-                (9..36).collect()
-            } else {
-                (0..9).collect()
+        let mut menu = Menu::new(kind);
+        let total = menu.slot_count();
+        let before: Vec<Option<ItemStack>> = (0..total)
+            .map(|i| self.slot_mut(from_menu(i)).clone())
+            .collect();
+        let after: Vec<Option<ItemStack>> = {
+            let env = Env {
+                items: &self.res.items,
+                recipes: &self.res.recipes,
+                brewing: &self.res.stations.brewing,
+            };
+            for (i, stack) in before.iter().enumerate() {
+                menu.set_slot(&env, i, stack.clone());
             }
+            if menu.click(&env, index as i32, 0, Input::QuickMove).is_err() {
+                return true;
+            }
+            (0..total).map(|i| menu.slot(i).cloned()).collect()
         };
-        match furnace {
-            None => {
-                if slot >= 300 {
-                    self.move_to(&mut stack, &player, true);
-                } else {
-                    let targets: Vec<usize> = (300..300 + size).collect();
-                    self.move_to(&mut stack, &targets, false);
-                }
-            }
-            Some(kind) => {
-                // AbstractFurnaceMenu.quickMoveStack.
-                if slot >= 300 {
-                    self.move_to(&mut stack, &player, slot == 302);
-                } else {
-                    let smeltable = self.res.recipes.cook(kind.recipe_type(), &stack).is_some();
-                    let fuel = self
-                        .res
-                        .items
-                        .get(&stack.item)
-                        .is_some_and(|i| i.fuel.is_some());
-                    let moved = if smeltable {
-                        self.move_to(&mut stack, &[300], false)
-                    } else if fuel {
-                        self.move_to(&mut stack, &[301], false)
-                    } else {
-                        false
-                    };
-                    if !moved && !smeltable && !fuel {
-                        let other = hotbar_or_main(slot);
-                        self.move_to(&mut stack, &other, false);
-                    }
-                    if let Some(BlockEntity::Furnace(f)) = self
-                        .container
-                        .and_then(|k| self.world.block_entities.get_mut(&k))
-                    {
-                        f.cooking_timer = 0;
-                    }
-                }
-            }
+        for (i, stack) in after.into_iter().enumerate() {
+            *self.slot_mut(from_menu(i)) = stack;
         }
-        if stack.count > 0 {
-            *self.slot_mut(slot) = Some(stack);
+        if matches!(kind, Kind::Furnace(_))
+            && let Some(BlockEntity::Furnace(f)) = self
+                .container
+                .and_then(|k| self.world.block_entities.get_mut(&k))
+        {
+            f.cooking_timer = 0;
         }
         true
     }
