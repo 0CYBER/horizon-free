@@ -822,10 +822,33 @@ pub fn render_with(
     extra: &[(&Part, [f32; 4], u32)],
     out: &mut Vec<Vertex>,
 ) {
-    // The invisibility effect hides the model (a drinking wandering trader).
+    // The invisibility effect hides the model (a drinking wandering trader);
+    // an illusioner shows its four mirror images instead.
     if super::trader::is_invisible(m) {
+        if m.species() == Species::Illusioner {
+            let age = m.age as f32 + alpha;
+            for (i, off) in super::illusioner::offsets(m, alpha).iter().enumerate() {
+                let w = super::illusioner::wobble(i, age);
+                let shifted =
+                    camera - glam::DVec3::new(off[0] + w[0], off[1] + w[1], off[2] + w[2]);
+                render_visible(m, alpha, shifted, atlas, light, data, extra, out);
+            }
+        }
         return;
     }
+    render_visible(m, alpha, camera, atlas, light, data, extra, out);
+}
+#[allow(clippy::too_many_arguments)]
+fn render_visible(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    atlas: Atlas,
+    light: u32,
+    data: &MobData,
+    extra: &[(&Part, [f32; 4], u32)],
+    out: &mut Vec<Vertex>,
+) {
     let base = base_transform(m, alpha, camera);
     let overlay =
         u32::from(m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m)));

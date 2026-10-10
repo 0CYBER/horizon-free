@@ -20,7 +20,7 @@ pub fn set_source_volumes(volumes: [f32; 11]) {
 pub fn sound_source(event: &str) -> usize {
     let e = event.trim_start_matches("minecraft:");
     let index = |name: &str| SOUND_SOURCES.iter().position(|n| *n == name).unwrap_or(0);
-    const HOSTILE: [&str; 24] = [
+    const HOSTILE: [&str; 25] = [
         "zombie",
         "skeleton",
         "creeper",
@@ -39,6 +39,7 @@ pub fn sound_source(event: &str) -> usize {
         "pillager",
         "vindicator",
         "evoker",
+        "illusioner",
         "ravager",
         "guardian",
         "elder_guardian",
