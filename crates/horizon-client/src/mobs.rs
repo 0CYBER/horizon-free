@@ -18,6 +18,7 @@ pub mod control;
 pub mod creaking;
 pub mod cube;
 pub mod data;
+pub mod drops;
 pub mod enderman;
 pub mod equine;
 pub mod farm;
@@ -528,6 +529,9 @@ pub struct Extra {
     pub trap_time: i32,
     /// Enchantments on the equipment above.
     pub gear: Option<Box<gear::Gear>>,
+    /// `Mob.dropChances` by `EquipmentSlot` (`drops::SLOTS` order) when set
+    /// explicitly; None uses the defaults of `drops::drop_chance`.
+    pub drop_chances: Option<Box<[f32; 8]>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {

@@ -1,10 +1,13 @@
-//! Container loot: `LootTable.fill` for chest-style loot tables (pools,
+//! Loot tables: `LootTable.fill` for chest-style loot tables (pools,
 //! weighted entries, nested tables, item modifiers and conditions, the
-//! stack splitter and the slot shuffle) with vanilla's random draw order.
+//! stack splitter and the slot shuffle) and `LootTable.getRandomItems` for
+//! entity loot (the victim, its killer, the damage source and the last
+//! player to hurt it), with vanilla's random draw order.
 //!
 //! Items keep their id, count, damage, enchantments and potion. Exploration
 //! maps are kept as found (structure search is not run); conditions that
-//! need an entity, tool or damage source fail, as they do for containers.
+//! need an entity, tool or damage source fail when the context has none, as
+//! they do for containers.
 use horizon_core::random::{LegacyRandom, RandomSource};
 use serde_json::Value;
 use std::{
@@ -41,6 +44,10 @@ impl LootStack {
     pub fn is_empty(&self) -> bool {
         self.count <= 0 || self.item == "minecraft:air"
     }
+    /// `ItemStack.getCount`: 0 for an empty stack.
+    pub fn get_count(&self) -> i32 {
+        if self.is_empty() { 0 } else { self.count }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -59,6 +66,10 @@ struct Enchantment {
     weight: i32,
     min_cost: (i32, i32),
     max_cost: (i32, i32),
+    /// `slots`: the equipment slot groups the enchantment works in.
+    slots: Vec<String>,
+    /// `effects` (equipment_drops and others).
+    effects: Value,
 }
 impl Enchantment {
     fn min_cost(&self, level: i32) -> i32 {
@@ -79,6 +90,134 @@ pub struct LootData {
     enchantments: Vec<Enchantment>,
     /// Raw tag files by (registry, tag id).
     tags: HashMap<(String, String), Vec<Value>>,
+    /// Smelting recipes in recipe id order: (ingredient, result, result count).
+    smelting: Vec<(Value, String, i32)>,
+}
+
+/// An entity a loot context names (`this`, `attacker`, `direct_attacker`,
+/// `attacking_player`): the facts entity predicates read.
+#[derive(Clone, Debug, Default)]
+pub struct LootEntity {
+    /// Entity type id (`minecraft:zombie`).
+    pub kind: String,
+    /// A `LivingEntity` (has equipment and enchantment levels).
+    pub living: bool,
+    /// `Entity.isOnFire` (fire-immune entities never are).
+    pub on_fire: bool,
+    pub baby: bool,
+    /// The entity it rides (`getVehicle`).
+    pub vehicle: Option<Box<LootEntity>>,
+    /// `AbstractCubeMob.getSize`.
+    pub cube_size: Option<i32>,
+    /// A sheep's colour name and whether it is sheared.
+    pub sheep: Option<(String, bool)>,
+    /// A raider: whether it is a captain (wears the ominous banner).
+    pub captain: Option<bool>,
+    /// A frog's variant id (`minecraft:warm`).
+    pub frog_variant: Option<String>,
+    /// A charged creeper (`Creeper.isPowered`).
+    pub powered: bool,
+    /// Worn and held items by `EquipmentSlot` name (mainhand, offhand,
+    /// feet, legs, chest, head, body, saddle).
+    pub equipment: Vec<(String, LootStack)>,
+}
+impl LootEntity {
+    pub fn new(kind: &str) -> Self {
+        Self {
+            kind: kind.to_owned(),
+            living: true,
+            ..Self::default()
+        }
+    }
+    pub fn item(&self, slot: &str) -> Option<&LootStack> {
+        self.equipment
+            .iter()
+            .find(|(s, i)| s == slot && !i.is_empty())
+            .map(|(_, i)| i)
+    }
+}
+/// A `DamageSource`: its damage type and the entities behind it.
+#[derive(Clone, Debug, Default)]
+pub struct LootDamage {
+    /// Damage type id (`minecraft:player_attack`).
+    pub kind: String,
+    /// `getEntity`: the attacker (the shooter of a projectile).
+    pub source: Option<LootEntity>,
+    /// `getDirectEntity`: the projectile, or the attacker itself.
+    pub direct: Option<LootEntity>,
+}
+/// The parameters of `LivingEntity.dropFromLootTable`.
+#[derive(Clone, Debug, Default)]
+pub struct EntityLootParams {
+    pub this: LootEntity,
+    pub damage: Option<LootDamage>,
+    /// `LAST_DAMAGE_PLAYER`: set when a player killed the entity.
+    pub player: Option<LootEntity>,
+    /// The killing player's luck.
+    pub luck: f32,
+}
+/// `EquipmentSlot.VALUES` order.
+pub const EQUIPMENT_SLOTS: [&str; 8] = [
+    "mainhand", "offhand", "feet", "legs", "chest", "head", "body", "saddle",
+];
+/// `EquipmentSlotGroup.test`.
+fn slot_in_group(slot: &str, group: &str) -> bool {
+    match group {
+        "any" => true,
+        "hand" => slot == "mainhand" || slot == "offhand",
+        "armor" => matches!(slot, "feet" | "legs" | "chest" | "head" | "body"),
+        _ => slot == group,
+    }
+}
+/// `LevelBasedValue.calculate`.
+pub fn level_value(v: &Value, level: i32) -> f32 {
+    match v {
+        Value::Number(n) => n.as_f64().unwrap_or(0.) as f32,
+        Value::Object(_) => match v["type"].as_str().unwrap_or("") {
+            "minecraft:linear" => {
+                level_value(&v["base"], level)
+                    + level_value(&v["per_level_above_first"], level) * (level - 1) as f32
+            }
+            "minecraft:constant" => level_value(&v["value"], level),
+            "minecraft:clamped" => {
+                let value = level_value(&v["value"], level);
+                let min = v["min"].as_f64().unwrap_or(0.) as f32;
+                let max = v["max"].as_f64().unwrap_or(0.) as f32;
+                value.clamp(min, max)
+            }
+            "minecraft:fraction" => {
+                level_value(&v["numerator"], level) / level_value(&v["denominator"], level)
+            }
+            "minecraft:levels_squared" => {
+                (level * level) as f32 + v["added"].as_f64().unwrap_or(0.) as f32
+            }
+            "minecraft:lookup" => {
+                let values = v["values"].as_array().map_or(&[][..], Vec::as_slice);
+                match values.get((level - 1).max(0) as usize) {
+                    Some(x) if level >= 1 => x.as_f64().unwrap_or(0.) as f32,
+                    _ => level_value(&v["fallback"], level),
+                }
+            }
+            _ => 0.,
+        },
+        _ => 0.,
+    }
+}
+/// `MinMaxBounds.Ints.matches` (a number or `{min, max}`).
+fn int_bounds(v: &Value, value: i32) -> bool {
+    match v {
+        Value::Null => true,
+        Value::Number(n) => n.as_i64() == Some(i64::from(value)),
+        Value::Object(o) => {
+            o.get("min")
+                .and_then(Value::as_i64)
+                .is_none_or(|m| i64::from(value) >= m)
+                && o.get("max")
+                    .and_then(Value::as_i64)
+                    .is_none_or(|m| i64::from(value) <= m)
+        }
+        _ => false,
+    }
 }
 
 fn load_dir(dir: &Path, prefix: &str, out: &mut HashMap<String, Value>) -> io::Result<()> {
@@ -150,11 +289,25 @@ impl LootData {
                     weight: e["weight"].as_i64().unwrap_or(1) as i32,
                     min_cost: cost(&e["min_cost"]),
                     max_cost: cost(&e["max_cost"]),
+                    slots: e["slots"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect(),
+                    effects: e["effects"].clone(),
                 }
             })
             .collect();
         let mut tags = HashMap::new();
-        for registry in ["item", "enchantment", "instrument"] {
+        for registry in [
+            "item",
+            "enchantment",
+            "instrument",
+            "entity_type",
+            "damage_type",
+        ] {
             let mut raw = HashMap::new();
             load_dir(&data.join("tags").join(registry), "", &mut raw)?;
             for (name, value) in raw {
@@ -162,6 +315,20 @@ impl LootData {
                 tags.insert((registry.to_owned(), name), values);
             }
         }
+        let mut recipes = HashMap::new();
+        load_dir(&data.join("recipe"), "", &mut recipes)?;
+        let mut ids: Vec<&String> = recipes.keys().collect();
+        ids.sort();
+        let smelting = ids
+            .into_iter()
+            .map(|id| &recipes[id])
+            .filter(|r| r["type"] == "minecraft:smelting")
+            .filter_map(|r| {
+                let result = r["result"]["id"].as_str()?.to_owned();
+                let count = r["result"]["count"].as_i64().unwrap_or(1) as i32;
+                Some((r["ingredient"].clone(), result, count))
+            })
+            .collect();
         Ok(Self {
             tables,
             modifiers,
@@ -169,10 +336,81 @@ impl LootData {
             items,
             enchantments,
             tags,
+            smelting,
         })
     }
     pub fn has_table(&self, table: &str) -> bool {
         self.tables.contains_key(table)
+    }
+    /// The table's `random_sequence` (where `getRandomItems` draws from).
+    pub fn random_sequence(&self, table: &str) -> Option<&str> {
+        self.tables.get(table)?["random_sequence"].as_str()
+    }
+    pub fn max_stack(&self, item: &str) -> i32 {
+        self.facts(item).max_stack
+    }
+    pub fn max_damage(&self, item: &str) -> i32 {
+        self.facts(item).max_damage
+    }
+    /// Whether a registry tag (`entity_type`, `damage_type`, `item`...) holds `id`.
+    pub fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
+        self.tag(registry, tag).iter().any(|m| m == id)
+    }
+    /// `EnchantmentHelper.getEnchantmentLevel(enchantment, entity)`: the best
+    /// level on the items in the enchantment's slots.
+    pub fn enchantment_level(&self, enchantment: &str, entity: &LootEntity) -> i32 {
+        let Some(e) = self.enchantments.iter().find(|e| e.name == enchantment) else {
+            return 0;
+        };
+        if !entity.living {
+            return 0;
+        }
+        EQUIPMENT_SLOTS
+            .iter()
+            .filter(|slot| e.slots.iter().any(|g| slot_in_group(slot, g)))
+            .filter_map(|slot| entity.item(slot))
+            .map(|stack| item_level(stack, enchantment))
+            .max()
+            .unwrap_or(0)
+    }
+    /// Whether an item carries an enchantment with `prevent_equipment_drop`.
+    pub fn prevents_equipment_drop(&self, stack: &LootStack) -> bool {
+        stack.enchantments.iter().any(|(name, _)| {
+            self.enchantments.iter().any(|e| {
+                &e.name == name && !e.effects["minecraft:prevent_equipment_drop"].is_null()
+            })
+        })
+    }
+    /// `EnchantmentHelper.processEquipmentDropChance`: the victim's and the
+    /// attacker's `equipment_drops` effects (Looting) applied to `chance`.
+    pub fn equipment_drop_chance(&self, params: &EntityLootParams, chance: f32) -> f32 {
+        // Enchantment.damageContext: no luck and no killing player.
+        let damage_params = EntityLootParams {
+            this: params.this.clone(),
+            damage: params.damage.clone(),
+            player: None,
+            luck: 0.0,
+        };
+        let mut c = Context {
+            data: self,
+            random: LegacyRandom::new(0),
+            biome: None,
+            visited: Vec::new(),
+            luck: 0.0,
+            open_water: None,
+            entity: Some(&damage_params),
+        };
+        let mut chance = chance;
+        c.equipment_drops(&params.this, "victim", &mut chance);
+        if let Some(attacker) = params
+            .damage
+            .as_ref()
+            .and_then(|d| d.source.as_ref())
+            .filter(|a| a.living)
+        {
+            c.equipment_drops(attacker, "attacker", &mut chance);
+        }
+        chance
     }
     /// Tag members in tag order (nested tags expanded in place, duplicates
     /// dropped).
@@ -246,11 +484,53 @@ impl LootData {
             visited: Vec::new(),
             luck,
             open_water,
+            entity: None,
         };
         let mut items = Vec::new();
         c.table_raw(table, json, &mut |_, stack| items.push(stack));
         *random = c.random;
         items
+    }
+    /// LootTable.getRandomItems for an entity context: the generated stacks
+    /// after the stack splitter, in order. `random` is the table's random
+    /// sequence (or the level random) and is advanced.
+    pub fn roll_entity<R: RandomSource + Clone>(
+        &self,
+        table: &str,
+        random: &mut R,
+        params: &EntityLootParams,
+    ) -> Vec<LootStack> {
+        let Some(json) = self.tables.get(table) else {
+            return Vec::new();
+        };
+        let mut c = Context {
+            data: self,
+            random: random.clone(),
+            biome: None,
+            visited: Vec::new(),
+            luck: params.luck,
+            open_water: None,
+            entity: Some(params),
+        };
+        let mut items = Vec::new();
+        c.table_raw(table, json, &mut |c, stack| c.data.split(stack, &mut items));
+        *random = c.random;
+        items
+    }
+    /// LootTable.createStackSplitter (every item is enabled).
+    fn split(&self, stack: LootStack, items: &mut Vec<LootStack>) {
+        let max = self.facts(&stack.item).max_stack.max(1);
+        if stack.count < max {
+            items.push(stack);
+        } else {
+            let mut count = stack.count;
+            while count > 0 {
+                let mut copy = stack.clone();
+                copy.count = max.min(count);
+                count -= copy.count;
+                items.push(copy);
+            }
+        }
     }
     /// LootTable.fill into an empty container of `slots` slots with
     /// `RandomSource.create(seed)`; `biome` is the container's biome for
@@ -273,23 +553,10 @@ impl LootData {
             visited: Vec::new(),
             luck: 0.0,
             open_water: None,
+            entity: None,
         };
         let mut items = Vec::new();
-        c.table_raw(table, json, &mut |c, stack| {
-            // LootTable.createStackSplitter (every item is enabled).
-            let max = c.data.facts(&stack.item).max_stack.max(1);
-            if stack.count < max {
-                items.push(stack);
-            } else {
-                let mut count = stack.count;
-                while count > 0 {
-                    let mut copy = stack.clone();
-                    copy.count = max.min(count);
-                    count -= copy.count;
-                    items.push(copy);
-                }
-            }
-        });
+        c.table_raw(table, json, &mut |c, stack| c.data.split(stack, &mut items));
         let random = &mut c.random;
         let mut available: Vec<usize> = (0..slots).collect();
         shuffle(&mut available, random);
@@ -302,15 +569,23 @@ impl LootData {
     }
 }
 
+/// The level of one enchantment on a stack (its `enchantments` component).
+fn item_level(stack: &LootStack, enchantment: &str) -> i32 {
+    stack
+        .enchantments
+        .iter()
+        .find(|(n, _)| n == enchantment)
+        .map_or(0, |(_, l)| *l)
+}
 /// Util.shuffle.
-fn shuffle<T>(list: &mut [T], random: &mut LegacyRandom) {
+fn shuffle<T>(list: &mut [T], random: &mut impl RandomSource) {
     for i in (2..=list.len()).rev() {
         let j = random.next_int_bound(i as i32).unwrap_or(0) as usize;
         list.swap(i - 1, j);
     }
 }
 /// Mth.nextInt.
-fn next_int(random: &mut LegacyRandom, min: i32, max: i32) -> i32 {
+fn next_int(random: &mut impl RandomSource, min: i32, max: i32) -> i32 {
     if min >= max {
         min
     } else {
@@ -353,19 +628,136 @@ fn shuffle_and_split(result: &mut Vec<LootStack>, slots: usize, random: &mut Leg
     shuffle(result, random);
 }
 
-struct Context<'a> {
+struct Context<'a, R> {
     data: &'a LootData,
-    random: LegacyRandom,
+    random: R,
     biome: Option<&'a str>,
     visited: Vec<String>,
     /// LootContext.getLuck.
     luck: f32,
     /// A fishing hook's `is_open_water` for `entity_properties` (None: no entity).
     open_water: Option<bool>,
+    /// The entity, damage source and killer parameters.
+    entity: Option<&'a EntityLootParams>,
 }
-type Sink<'s> = dyn FnMut(&mut Context<'_>, LootStack) + 's;
+type Sink<'s, R> = dyn FnMut(&mut Context<'_, R>, LootStack) + 's;
 
-impl Context<'_> {
+impl<R: RandomSource> Context<'_, R> {
+    /// A `LootContext.EntityTarget` parameter.
+    fn target(&self, name: &str) -> Option<&LootEntity> {
+        let p = self.entity?;
+        match name {
+            "this" => Some(&p.this),
+            "attacker" => p.damage.as_ref()?.source.as_ref(),
+            "direct_attacker" => p.damage.as_ref()?.direct.as_ref(),
+            "attacking_player" => p.player.as_ref(),
+            _ => None,
+        }
+    }
+    /// The `ATTACKING_ENTITY` parameter when it is a living entity.
+    fn living_attacker(&self) -> Option<&LootEntity> {
+        self.target("attacker").filter(|a| a.living)
+    }
+    /// The `equipment_drops` effects on one entity's equipment
+    /// (`runIterationOnEquipment`), for the given `enchanted` target.
+    fn equipment_drops(&mut self, holder: &LootEntity, enchanted: &str, chance: &mut f32) {
+        let data = self.data;
+        for slot in EQUIPMENT_SLOTS {
+            let Some(stack) = holder.item(slot) else {
+                continue;
+            };
+            for (name, level) in &stack.enchantments {
+                let Some(e) = data.enchantments.iter().find(|e| &e.name == name) else {
+                    continue;
+                };
+                if !e.slots.iter().any(|g| slot_in_group(slot, g)) {
+                    continue;
+                }
+                for effect in e.effects["minecraft:equipment_drops"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    if effect["enchanted"].as_str() != Some(enchanted)
+                        || effect["affected"].as_str().unwrap_or("victim") != "victim"
+                    {
+                        continue;
+                    }
+                    if !effect["requirements"].is_null() && !self.condition(&effect["requirements"]) {
+                        continue;
+                    }
+                    let value = level_value(&effect["effect"]["value"], *level);
+                    *chance = match effect["effect"]["type"].as_str().unwrap_or("") {
+                        "minecraft:add" => *chance + value,
+                        "minecraft:multiply" => *chance * value,
+                        "minecraft:set" => value,
+                        _ => *chance,
+                    };
+                }
+            }
+        }
+    }
+    /// EntityPredicate.matches (false without an entity).
+    fn entity_matches(&self, p: &Value, e: Option<&LootEntity>) -> bool {
+        let Some(e) = e else { return false };
+        let Some(parts) = p.as_object() else {
+            return true;
+        };
+        let data = self.data;
+        parts.iter().all(|(key, v)| match key.as_str() {
+            "minecraft:entity_type" => match v.as_str() {
+                Some(s) => match s.strip_prefix('#') {
+                    Some(tag) => data.in_tag("entity_type", tag, &e.kind),
+                    None => s == e.kind,
+                },
+                None => v
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|x| x.as_str() == Some(&e.kind))),
+            },
+            "minecraft:flags" => v.as_object().into_iter().flatten().all(|(flag, want)| {
+                let want = want.as_bool().unwrap_or(false);
+                match flag.as_str() {
+                    "is_on_fire" => e.on_fire == want,
+                    // EntityFlagsPredicate: only living entities have an age.
+                    "is_baby" => !e.living || e.baby == want,
+                    "is_fall_flying" => !e.living || !want,
+                    _ => !want,
+                }
+            }),
+            "minecraft:equipment" => {
+                e.living
+                    && v.as_object().into_iter().flatten().all(|(slot, item)| {
+                        e.item(slot)
+                            .is_some_and(|stack| self.item_matches(item, stack))
+                    })
+            }
+            "minecraft:components" => v.as_object().into_iter().flatten().all(|(c, want)| {
+                match c.as_str() {
+                    "minecraft:sheep/color" => e
+                        .sheep
+                        .as_ref()
+                        .is_some_and(|(color, _)| want.as_str() == Some(color)),
+                    "minecraft:frog/variant" => {
+                        e.frog_variant.is_some() && want.as_str() == e.frog_variant.as_deref()
+                    }
+                    _ => false,
+                }
+            }),
+            "minecraft:type_specific/sheep" => e.sheep.as_ref().is_some_and(|(_, sheared)| {
+                v["sheared"].as_bool().is_none_or(|w| w == *sheared)
+            }),
+            "minecraft:type_specific/cube_mob" => {
+                e.cube_size.is_some_and(|size| int_bounds(&v["size"], size))
+            }
+            // RaiderPredicate: no raid is running here.
+            "minecraft:type_specific/raider" => e.captain.is_some_and(|captain| {
+                !v["has_raid"].as_bool().unwrap_or(false)
+                    && captain == v["is_captain"].as_bool().unwrap_or(false)
+            }),
+            "minecraft:vehicle" => self.entity_matches(v, e.vehicle.as_deref()),
+            _ => false,
+        })
+    }
     fn int(&mut self, v: &Value) -> i32 {
         match v {
             Value::Number(n) => n.as_i64().unwrap_or(0) as i32,
@@ -426,15 +818,61 @@ impl Context<'_> {
                     .into_iter()
                     .flatten()
                     .any(|t| self.condition(t)),
+                "minecraft:entity_properties" if self.entity.is_some() => {
+                    let target = self.target(c["entity"].as_str().unwrap_or("this"));
+                    c["predicate"].is_null() || self.entity_matches(&c["predicate"], target)
+                }
                 // FishingHookPredicate: the only entity property a hook has.
                 "minecraft:entity_properties" => {
-                    let fishing = &c["predicate"]["type_specific"];
-                    match (self.open_water, fishing["type"].as_str()) {
-                        (Some(open), Some("minecraft:fishing_hook")) => fishing["in_open_water"]
+                    let predicate = &c["predicate"];
+                    let fishing = &predicate["minecraft:type_specific/fishing_hook"];
+                    let only_hook = predicate.as_object().is_some_and(|o| o.len() == 1);
+                    match self.open_water {
+                        Some(open) if only_hook && fishing.is_object() => fishing["in_open_water"]
                             .as_bool()
                             .is_none_or(|want| want == open),
                         _ => false,
                     }
+                }
+                "minecraft:killed_by_player" => self.entity.is_some_and(|p| p.player.is_some()),
+                "minecraft:random_chance_with_enchanted_bonus" => {
+                    let level = self.living_attacker().map_or(0, |a| {
+                        data.enchantment_level(c["enchantment"].as_str().unwrap_or(""), a)
+                    });
+                    let chance = if level > 0 {
+                        level_value(&c["enchanted_chance"], level)
+                    } else {
+                        c["unenchanted_chance"].as_f64().unwrap_or(0.) as f32
+                    };
+                    self.random.next_float() < chance
+                }
+                // DamageSourcePredicate (false without a damage source).
+                "minecraft:damage_source_properties" => {
+                    let Some(damage) = self.entity.and_then(|p| p.damage.as_ref()) else {
+                        return false;
+                    };
+                    let p = &c["predicate"];
+                    let tags_ok = p["tags"].as_array().into_iter().flatten().all(|t| {
+                        let id = t["id"].as_str().unwrap_or("");
+                        let has = match id.strip_prefix('#') {
+                            Some(tag) => data.in_tag("damage_type", tag, &damage.kind),
+                            None => id == damage.kind,
+                        };
+                        has == t["expected"].as_bool().unwrap_or(false)
+                    });
+                    tags_ok
+                        && (p["direct_entity"].is_null()
+                            || self.entity_matches(&p["direct_entity"], damage.direct.as_ref()))
+                        && (p["source_entity"].is_null()
+                            || self.entity_matches(&p["source_entity"], damage.source.as_ref()))
+                        && p["is_direct"].as_bool().is_none_or(|want| {
+                            let direct = match (&damage.source, &damage.direct) {
+                                (Some(a), Some(b)) => a.kind == b.kind,
+                                (None, None) => true,
+                                _ => false,
+                            };
+                            direct == want
+                        })
                 }
                 "minecraft:random_chance" => {
                     let chance = self.float(&c["chance"]);
@@ -489,7 +927,7 @@ impl Context<'_> {
             }
             "minecraft:set_count" => {
                 let base = if f["add"].as_bool() == Some(true) {
-                    stack.count
+                    stack.get_count()
                 } else {
                     0
                 };
@@ -497,12 +935,14 @@ impl Context<'_> {
             }
             "minecraft:limit_count" => {
                 let limit = &f["limit"];
+                let mut count = stack.get_count();
                 if let Some(min) = limit["min"].as_i64() {
-                    stack.count = stack.count.max(min as i32);
+                    count = count.max(min as i32);
                 }
                 if let Some(max) = limit["max"].as_i64() {
-                    stack.count = stack.count.min(max as i32);
+                    count = count.min(max as i32);
                 }
+                stack.count = count;
             }
             "minecraft:set_damage" => {
                 let max = data.facts(&stack.item).max_damage;
@@ -611,18 +1051,73 @@ impl Context<'_> {
                 stack = self.modify(branch, stack);
             }
             "minecraft:discard" => stack.count = 0,
+            "minecraft:enchanted_count_increase" => {
+                if let Some(attacker) = self.living_attacker() {
+                    let level =
+                        data.enchantment_level(f["enchantment"].as_str().unwrap_or(""), attacker);
+                    if level != 0 {
+                        let addition = level as f32 * self.float(&f["count"]);
+                        // ItemStack.grow(Math.round(addition)).
+                        stack.count = stack.get_count() + (addition + 0.5).floor() as i32;
+                        let limit = f["limit"].as_i64().unwrap_or(0) as i32;
+                        if limit > 0 && !stack.is_empty() && stack.count > limit {
+                            stack.count = limit;
+                        }
+                    }
+                }
+            }
+            "minecraft:furnace_smelt" => {
+                if !stack.is_empty()
+                    && let Some((_, result, count)) = data
+                        .smelting
+                        .iter()
+                        .find(|(ingredient, _, _)| data.item_in(&stack.item, ingredient))
+                {
+                    let input = if f["use_input_count"].as_bool().unwrap_or(true) {
+                        stack.count
+                    } else {
+                        1
+                    };
+                    let mut smelted = LootStack::new(result);
+                    smelted.count = (input * count).min(data.facts(result).max_stack);
+                    stack = smelted;
+                }
+            }
             // Names, lore, components and other data without random draws.
             _ => {}
         }
         stack
     }
-    /// ItemPredicate subset used by filtered modifiers.
+    /// ItemPredicate subset used by filtered modifiers and equipment.
     fn item_matches(&self, p: &Value, stack: &LootStack) -> bool {
         if !p["items"].is_null() && !self.data.item_in(&stack.item, &p["items"]) {
             return false;
         }
+        if !int_bounds(&p["count"], stack.count) {
+            return false;
+        }
         if p["predicates"].get("minecraft:map_id").is_some() && !stack.map {
             return false;
+        }
+        // EnchantmentsPredicate: every entry must hold.
+        if let Some(list) = p["predicates"]["minecraft:enchantments"].as_array() {
+            let data = self.data;
+            let ok = list.iter().all(|e| {
+                let levels = &e["levels"];
+                match &e["enchantments"] {
+                    Value::Null => stack
+                        .enchantments
+                        .iter()
+                        .any(|(_, l)| int_bounds(levels, *l)),
+                    set => data.holder_set("enchantment", set).iter().any(|name| {
+                        let level = item_level(stack, name);
+                        level != 0 && int_bounds(levels, level)
+                    }),
+                }
+            });
+            if !ok {
+                return false;
+            }
         }
         true
     }
@@ -662,7 +1157,7 @@ impl Context<'_> {
         if available.is_empty() {
             return results;
         }
-        let pick = |random: &mut LegacyRandom, list: &[(usize, i32)]| -> Option<(usize, i32)> {
+        let pick = |random: &mut R, list: &[(usize, i32)]| -> Option<(usize, i32)> {
             let total: i32 = list.iter().map(|&(i, _)| data.enchantments[i].weight).sum();
             if total <= 0 {
                 return None;
@@ -702,7 +1197,7 @@ impl Context<'_> {
                 .contains(&ea.name)
     }
     /// LootTable.getRandomItemsRaw.
-    fn table_raw(&mut self, name: &str, table: &Value, sink: &mut Sink<'_>) {
+    fn table_raw(&mut self, name: &str, table: &Value, sink: &mut Sink<'_, R>) {
         if self.visited.iter().any(|v| v == name) {
             return;
         }
@@ -729,14 +1224,15 @@ impl Context<'_> {
         self.visited.pop();
     }
     /// LootPool.addRandomItem.
-    fn add_random_item(&mut self, pool: &Value, sink: &mut Sink<'_>) {
-        let mut valid: Vec<&Value> = Vec::new();
+    fn add_random_item(&mut self, pool: &Value, sink: &mut Sink<'_, R>) {
+        let mut valid: Vec<Choice<'_>> = Vec::new();
         for entry in pool["entries"].as_array().into_iter().flatten() {
             self.expand(entry, &mut valid);
         }
         // EntryBase.getWeight: max(floor(weight + quality * luck), 0).
         let luck = self.luck;
-        let weight = |e: &Value| {
+        let weight = |c: &Choice<'_>| {
+            let e = c.entry;
             let w = e["weight"].as_i64().unwrap_or(1) as f32
                 + e["quality"].as_i64().unwrap_or(0) as f32 * luck;
             w.floor().max(0.0) as i32
@@ -746,21 +1242,21 @@ impl Context<'_> {
             return;
         }
         let chosen = if valid.len() == 1 {
-            valid[0]
+            valid.swap_remove(0)
         } else {
             let mut index = self.random.next_int_bound(total).unwrap_or(0);
-            let Some(e) = valid.iter().find(|e| {
+            let Some(at) = valid.iter().position(|e| {
                 index -= weight(e);
                 index < 0
             }) else {
                 return;
             };
-            e
+            valid.swap_remove(at)
         };
-        self.create(chosen, sink);
+        self.create(&chosen, sink);
     }
     /// LootPoolEntryContainer.expand: the singleton entries that can run.
-    fn expand<'v>(&mut self, entry: &'v Value, out: &mut Vec<&'v Value>) -> bool {
+    fn expand<'v>(&mut self, entry: &'v Value, out: &mut Vec<Choice<'v>>) -> bool {
         if !entry["condition"].is_null() && !self.condition(&entry["condition"]) {
             return false;
         }
@@ -783,17 +1279,35 @@ impl Context<'_> {
             }
             "minecraft:item" | "minecraft:empty" | "minecraft:loot_table" => {
                 if entry["weight"].as_i64().unwrap_or(1) > 0 {
-                    out.push(entry);
+                    out.push(Choice { entry, item: None });
                 }
                 true
+            }
+            // TagEntry: one choice per item when expanded, else one for all.
+            "minecraft:tag" => {
+                if entry["expand"].as_bool().unwrap_or(false) {
+                    let items = self.data.holder_set("item", &entry["items"]);
+                    for item in items {
+                        if entry["weight"].as_i64().unwrap_or(1) > 0 {
+                            out.push(Choice { entry, item: Some(item) });
+                        }
+                    }
+                    true
+                } else {
+                    if entry["weight"].as_i64().unwrap_or(1) > 0 {
+                        out.push(Choice { entry, item: None });
+                    }
+                    true
+                }
             }
             _ => false,
         }
     }
     /// LootPoolEntry.createItemStack with the entry's modifier.
-    fn create(&mut self, entry: &Value, sink: &mut Sink<'_>) {
+    fn create(&mut self, choice: &Choice<'_>, sink: &mut Sink<'_, R>) {
+        let entry = choice.entry;
         let modifier = &entry["modifier"];
-        let mut out = |c: &mut Context<'_>, stack: LootStack| {
+        let mut out = |c: &mut Context<'_, R>, stack: LootStack| {
             let stack = c.modify(modifier, stack);
             sink(c, stack);
         };
@@ -802,6 +1316,14 @@ impl Context<'_> {
                 let stack = LootStack::new(entry["name"].as_str().unwrap_or("minecraft:air"));
                 out(self, stack);
             }
+            "minecraft:tag" => match &choice.item {
+                Some(item) => out(self, LootStack::new(item)),
+                None => {
+                    for item in self.data.holder_set("item", &entry["items"]) {
+                        out(self, LootStack::new(&item));
+                    }
+                }
+            },
             "minecraft:loot_table" => match &entry["value"] {
                 Value::String(name) => {
                     if let Some(table) = self.data.tables.get(name) {
@@ -814,6 +1336,11 @@ impl Context<'_> {
             _ => {}
         }
     }
+}
+/// A pool entry that can be chosen (an expanded tag entry names its item).
+struct Choice<'v> {
+    entry: &'v Value,
+    item: Option<String>,
 }
 fn enchant(stack: &mut LootStack, name: &str, level: i32) {
     match stack.enchantments.iter_mut().find(|(n, _)| n == name) {
