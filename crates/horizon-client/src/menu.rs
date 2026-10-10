@@ -278,6 +278,23 @@ impl Menu {
         self.containers[PLAYER][i].as_ref()
     }
 
+    pub fn set_player_item(&mut self, i: usize, stack: Option<ItemStack>) {
+        self.containers[PLAYER][i] = stack;
+    }
+
+    /// `Inventory.add`: the leftover stays in `stack`.
+    pub fn give(&mut self, env: &Env, stack: &mut ItemStack) -> bool {
+        self.inventory_add(env, stack)
+    }
+
+    /// `Inventory.contains(stack)`.
+    pub fn player_contains(&self, stack: &ItemStack) -> bool {
+        self.containers[PLAYER]
+            .iter()
+            .flatten()
+            .any(|have| have.same_item_same_components(stack))
+    }
+
     // ---- item helpers ----
 
     fn max_stack(env: &Env, stack: &ItemStack) -> u32 {

@@ -14,6 +14,7 @@ pub mod block_transform;
 pub mod blocks;
 pub mod bossbar;
 pub mod brewing;
+pub mod cauldron;
 pub mod chat;
 pub mod chunk;
 pub mod clock;
