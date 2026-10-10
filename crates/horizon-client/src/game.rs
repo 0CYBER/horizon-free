@@ -615,7 +615,8 @@ struct Game<'a> {
     /// Item being used (eaten): hotbar slot and ticks used.
     using: Option<(usize, u32)>,
     /// Camera.oldFovModifier / fovModifier.
-    fov_modifier: [f32; 2],
+    /// `Camera` (eye height and field-of-view easing, view placement).
+    view: horizon_client::camera::Camera,
     /// Hud.scopeScale (spyglass overlay size).
     scope_scale: f32,
     /// Duration of the last frame in ticks (GUI easing).
@@ -645,8 +646,8 @@ struct Game<'a> {
     /// Where the options screen returns: true = title, false = pause menu.
     options_from_title: bool,
     dragging: bool,
-    walk: (f32, f32),
-    bob: (f32, f32),
+    /// `ClientAvatarState`: walked distance and view bob.
+    avatar: horizon_client::camera::AvatarBob,
     flash: u32,
     /// Sleeping in a bed: (bed head position, ticks asleep).
     sleeping: Option<([i32; 3], u32)>,
@@ -2536,6 +2537,11 @@ impl Game<'_> {
             .and_then(|s| self.res.items.get(&s.item))
             .map(|i| i.use_speed);
         let grounded = player.ground.on_ground;
+        let before = (
+            grounded,
+            [player.velocity.x, player.velocity.y, player.velocity.z],
+            [player.position.x, player.position.y, player.position.z],
+        );
         if !riding {
             MotionWorld {
                 player,
@@ -2562,6 +2568,7 @@ impl Game<'_> {
         self.previous_eye = self.eye;
         self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
+        self.tick_avatar(before, riding);
         self.record_combat(&events);
         for event in events {
             match event {
@@ -2705,23 +2712,6 @@ impl Game<'_> {
             self.tick_blocks()?;
             self.tick_falling()?;
             self.tick_tnt()?;
-        }
-        if let Some(p) = &self.player {
-            // Player.aiStep bob and Entity.walkDist (0.6 per block).
-            let (dx, dz) = (
-                p.position.x - self.previous_position.x,
-                p.position.z - self.previous_position.z,
-            );
-            let speed = ((dx * dx + dz * dz).sqrt() as f32).min(0.1);
-            self.walk.0 = self.walk.1;
-            self.walk.1 += (dx * dx + dz * dz).sqrt() as f32 * 0.6;
-            self.bob.0 = self.bob.1;
-            let target = if p.ground.on_ground && !p.health.dead_or_dying() {
-                speed
-            } else {
-                0.0
-            };
-            self.bob.1 += (target - self.bob.1) * 0.4;
         }
         if running {
             self.tick_block_entities()?;
@@ -7387,16 +7377,8 @@ impl Game<'_> {
             return Ok(false);
         };
         let alpha = self.clock.fraction();
-        let (camera, underwater, view_yaw, view_pitch) = match &self.player {
-            Some(p) => {
-                let (a, b) = (self.previous_position, p.position);
-                let eye = self.previous_eye + alpha as f32 * (self.eye - self.previous_eye);
-                let c = glam::DVec3::new(
-                    a.x + (b.x - a.x) * alpha,
-                    a.y + (b.y - a.y) * alpha + f64::from(eye),
-                    a.z + (b.z - a.z) * alpha,
-                );
-                let (c, yaw, pitch) = self.camera_view(c);
+        let (camera, underwater, view_yaw, view_pitch) = match self.camera_view(alpha as f32) {
+            Some((c, yaw, pitch)) => {
                 let s =
                     self.world
                         .block(c.x.floor() as i32, c.y.floor() as i32, c.z.floor() as i32);
@@ -7534,13 +7516,11 @@ impl Game<'_> {
             } else {
                 self.fov_degrees(alpha as f32, camera.to_array())
             },
-            bob: (self.settings.view_bobbing && !title && self.player.is_some()).then(|| {
-                let a = alpha as f32;
-                (
-                    self.walk.0 + (self.walk.1 - self.walk.0) * a,
-                    self.bob.0 + (self.bob.1 - self.bob.0) * a,
-                )
-            }),
+            bob: if title {
+                glam::Mat4::IDENTITY
+            } else {
+                self.bob_matrix(alpha as f32)
+            },
             sky,
             distance: (self.streaming.radius * 16) as f32,
             underwater,
@@ -8523,7 +8503,7 @@ pub fn run() -> Result<()> {
         last_hurt_by_player: HashSet::new(),
         chest_open: HashMap::new(),
         using: None,
-        fov_modifier: [1.0, 1.0],
+        view: Default::default(),
         scope_scale: 0.5,
         frame_ticks: 0.0,
         title: None,
@@ -8544,8 +8524,7 @@ pub fn run() -> Result<()> {
         settings,
         options_from_title: false,
         dragging: false,
-        walk: (0.0, 0.0),
-        bob: (0.0, 0.0),
+        avatar: Default::default(),
         flash: 0,
         sleeping: None,
         dim: Dim::Overworld,
