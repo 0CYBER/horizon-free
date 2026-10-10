@@ -993,7 +993,9 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             schedule_fluid_ticks: field("scheduleFluidTicks")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            weather: match field("weatherState").and_then(Value::as_str) {
+            // `WeatheringCopper.getAge`: copper golem statues name the field
+            // `weatheringState`.
+            weather: match field("weatherState").or_else(|| field("weatheringState")).and_then(Value::as_str) {
                 Some("EXPOSED") => 1,
                 Some("WEATHERED") => 2,
                 Some("OXIDIZED") => 3,

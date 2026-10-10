@@ -50,6 +50,10 @@ impl LevelAccess for Cells {
     fn is_loaded(&self, _pos: BlockPos) -> bool {
         true
     }
+    /// A chest's fresh block entity: nobody has it open.
+    fn recheck_container_openers(&mut self, _pos: BlockPos) -> Option<(i32, i32)> {
+        Some((0, 0))
+    }
     /// A fresh command block entity: unpowered and not automatic.
     fn set_command_block_powered(&mut self, pos: BlockPos, powered: bool) -> Option<(bool, bool)> {
         Some((self.command_blocks.insert(pos, powered).unwrap_or(false), false))
@@ -313,6 +317,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                // DriedGhastBlock.spawnGhastling, as the client does it.
+                LevelEvent::BlockEvent { kind: "spawn_ghastling", .. } => {
+                    let _ = writeln!(result, "E minecraft:happy_ghast");
+                    let _ = writeln!(result, "S entity minecraft:entity.ghastling.spawn");
+                }
+                // A fresh shrieker has warning level 0 and so never responds,
+                // and no player is near enough for a portal to spawn a piglin.
+                LevelEvent::BlockEvent { kind: "shrieker_respond" | "portal_spawn", .. } => {}
                 LevelEvent::BlockEvent { kind, .. } => {
                     let _ = writeln!(result, "X {kind}");
                 }

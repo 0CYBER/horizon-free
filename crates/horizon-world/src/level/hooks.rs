@@ -193,6 +193,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     if boosted {
                         self.level_event(3009, pos, 0);
                     }
+                    self.game_event_state(pos, "minecraft:block_place", state);
                     let delay = if boosted { 12000 } else { 24000 } / 3;
                     let jitter = self.random().next_int_bound(300).unwrap_or(0);
                     self.schedule_tick(pos, block, delay + jitter);
@@ -538,11 +539,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         true
     }
     /// `FrostedIceBlock.melt` → `IceBlock.melt`.
-    pub(crate) fn frosted_ice_melt(&mut self, pos: BlockPos, _state: BlockStateId) {
-        self.ice_melt(pos);
+    pub(crate) fn frosted_ice_melt(&mut self, pos: BlockPos, state: BlockStateId) {
+        self.ice_melt(pos, state);
     }
     /// `IceBlock.melt`.
-    pub(crate) fn ice_melt(&mut self, pos: BlockPos) {
+    pub(crate) fn ice_melt(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         if self.level.dimension() == super::Dimension::Nether {
             self.remove_block(pos, false);
@@ -550,6 +551,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let water = b.default_of(b.named.water);
             self.set_block_and_update(pos, water);
             self.neighbor_changed_at(pos, b.named.water);
+            self.game_event_state(pos, "minecraft:block_destroy", state);
         }
     }
     /// `BigDripleafBlock.resetTilt`.

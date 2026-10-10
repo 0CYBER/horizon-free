@@ -177,6 +177,8 @@ pub struct GameRules {
     pub block_drops: bool,
     pub mob_griefing: bool,
     pub max_snow_accumulation_height: i32,
+    pub spawn_mobs: bool,
+    pub spawn_monsters: bool,
 }
 impl Default for GameRules {
     fn default() -> Self {
@@ -187,6 +189,8 @@ impl Default for GameRules {
             block_drops: true,
             mob_griefing: true,
             max_snow_accumulation_height: 1,
+            spawn_mobs: true,
+            spawn_monsters: true,
         }
     }
 }
@@ -247,7 +251,9 @@ pub enum LevelEvent {
     PrimeTnt { pos: BlockPos, rot: f64 },
     /// Block-entity or entity side effects the caller implements: `"dispense"`
     /// (dispenser/dropper/crafter scheduled tick), `"hatch"` (frogspawn
-    /// hatched into tadpoles; the block is already destroyed).
+    /// hatched into tadpoles; the block is already destroyed), `"portal_spawn"`
+    /// (a nether portal won its zombified piglin roll; the caller checks
+    /// `anyPlayerCloseEnoughForSpawning` and spawns below the portal).
     BlockEvent {
         pos: BlockPos,
         state: BlockStateId,
@@ -334,6 +340,13 @@ pub trait LevelAccess {
         _direction: Direction,
     ) -> i32 {
         0
+    }
+    /// `ContainerOpenersCounter.recheckOpenCount` for the chest or ender chest
+    /// block entity at `pos`: recounts its openers and returns the previous
+    /// and new counts (the caller plays open/close effects when they change),
+    /// or None when there is no such block entity.
+    fn recheck_container_openers(&mut self, _pos: BlockPos) -> Option<(i32, i32)> {
+        None
     }
     /// `CommandBlockEntity.setPowered` for the command block entity at `pos`:
     /// stores `powered` and returns the previous flag and `isAutomatic`, or

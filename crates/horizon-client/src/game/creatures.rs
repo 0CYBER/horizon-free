@@ -2672,3 +2672,35 @@ fn push_apart(mobs: &mut [Mob]) {
         }
     }
 }
+
+impl Game<'_> {
+    /// The rest of `NetherPortalBlock.randomTick` after a won roll: with a
+    /// player close enough for spawning, a zombified piglin spawns on the block
+    /// under the portal column when it is a valid spawn.
+    pub(super) fn portal_spawn(&mut self, pos: [i32; 3]) {
+        // ChunkMap.anyPlayerCloseEnoughForSpawning: a non-spectator within 128
+        // blocks of the chunk centre.
+        let centre = [f64::from((pos[0] >> 4) * 16 + 8), f64::from((pos[2] >> 4) * 16 + 8)];
+        let spectator = self.spectator();
+        let Some(close) = self.player.as_ref().filter(|_| !spectator).map(|p| {
+            let (dx, dz) = (p.position.x - centre[0], p.position.z - centre[1]);
+            dx * dx + dz * dz < 16384.0
+        }) else {
+            return;
+        };
+        if !close {
+            return;
+        }
+        let mut y = pos[1];
+        while &*self.res.facts.get(self.world.block(pos[0], y, pos[2])).name == "minecraft:nether_portal" {
+            y -= 1;
+        }
+        // isValidSpawn: a sturdy top face (portal frames emit no light).
+        let below = self.res.facts.get(self.world.block(pos[0], y, pos[2]));
+        if below.sturdy_full & (1 << 1) == 0 {
+            return;
+        }
+        let at = [f64::from(pos[0]) + 0.5, f64::from(y + 1), f64::from(pos[2]) + 0.5];
+        let _ = self.spawn_mob("minecraft:zombified_piglin", at, false);
+    }
+}

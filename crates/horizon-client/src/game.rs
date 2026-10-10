@@ -1554,6 +1554,11 @@ impl Game<'_> {
                 } => self.hatch_sniffer([pos.x, pos.y, pos.z]),
                 LevelEvent::BlockEvent {
                     pos,
+                    kind: "portal_spawn",
+                    ..
+                } => self.portal_spawn([pos.x, pos.y, pos.z]),
+                LevelEvent::BlockEvent {
+                    pos,
                     state,
                     kind: "spawn_ghastling",
                 } => self.spawn_ghastling([pos.x, pos.y, pos.z], state),

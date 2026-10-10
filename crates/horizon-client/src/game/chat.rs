@@ -547,6 +547,8 @@ impl Game<'_> {
             block_drops: r.bool("block_drops"),
             mob_griefing: r.bool("mob_griefing"),
             max_snow_accumulation_height: r.int("max_snow_accumulation_height"),
+            spawn_mobs: r.bool("spawn_mobs"),
+            spawn_monsters: r.bool("spawn_monsters"),
         }
     }
     /// Apply rules mirrored in other state (natural regeneration, difficulty).

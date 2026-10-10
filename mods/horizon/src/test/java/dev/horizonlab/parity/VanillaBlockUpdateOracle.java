@@ -198,6 +198,42 @@ public final class VanillaBlockUpdateOracle {
         @Override public boolean isPositionEntityTicking(BlockPos p) { return true; }
         @Override public boolean shouldTickBlocksAt(BlockPos p) { return true; }
         @Override public boolean shouldTickBlocksAt(long p) { return true; }
+        @Override public boolean canSpreadFireAround(BlockPos p) { return true; }
+        @Override public net.minecraft.world.Difficulty getDifficulty() { return net.minecraft.world.Difficulty.NORMAL; }
+        // 26.3 block scans read chunk sections; this level has none, so scan
+        // the same positions in the same order through getBlockState.
+        @Override public net.minecraft.world.level.blockscan.BlockMatcher findBlocksIn(BlockPos from, BlockPos to) {
+            return new Scan(this, boxOrder(from, to));
+        }
+        @Override public net.minecraft.world.level.blockscan.OrderedBlockMatcher findBlocksIn(Iterable<BlockPos> positions) {
+            return new Scan(this, positions);
+        }
+        /** BlockScanUtils.sectionBasedScan's order: sections by x, z, y, then y, z, x inside; then below and above the world. */
+        List<BlockPos> boxOrder(BlockPos from, BlockPos to) {
+            int minX = Math.min(from.getX(), to.getX()), minY = Math.min(from.getY(), to.getY()), minZ = Math.min(from.getZ(), to.getZ());
+            int maxX = Math.max(from.getX(), to.getX()), maxY = Math.max(from.getY(), to.getY()), maxZ = Math.max(from.getZ(), to.getZ());
+            List<BlockPos> out = new ArrayList<>();
+            for (int sx = minX >> 4; sx <= maxX >> 4; sx++) {
+                for (int sz = minZ >> 4; sz <= maxZ >> 4; sz++) {
+                    for (int sy = Math.max(getMinSectionY(), minY >> 4); sy <= Math.min(getMaxSectionY(), maxY >> 4); sy++) {
+                        for (int y = Math.max(sy << 4, minY); y <= Math.min((sy << 4) + 15, maxY); y++) {
+                            for (int z = Math.max(sz << 4, minZ); z <= Math.min((sz << 4) + 15, maxZ); z++) {
+                                for (int x = Math.max(sx << 4, minX); x <= Math.min((sx << 4) + 15, maxX); x++) {
+                                    out.add(new BlockPos(x, y, z));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (minY < getMinY()) {
+                for (BlockPos q : BlockPos.betweenClosed(minX, minY, minZ, maxX, getMinY() - 1, maxZ)) out.add(q.immutable());
+            }
+            if (maxY > getMaxY()) {
+                for (BlockPos q : BlockPos.betweenClosed(minX, getMaxY() + 1, minZ, maxX, maxY, maxZ)) out.add(q.immutable());
+            }
+            return out;
+        }
         // Allocated without a constructor, so the sound seed generator, attribute
         // system and chunk source are missing. Sound seeds never touch the level
         // RNG, the overworld keeps every attribute default and entity ids are not
@@ -205,10 +241,19 @@ public final class VanillaBlockUpdateOracle {
         int nextEntityId;
         net.minecraft.world.attribute.EnvironmentAttributeSystem attributes;
         @Override public int getNextEntityId() { return ++nextEntityId; }
+        // The overworld's dimension attributes and timelines on a clock at the
+        // fixture's day time (6000); biome and weather layers are not modelled.
         @Override public net.minecraft.world.attribute.EnvironmentAttributeSystem environmentAttributes() {
-            if (attributes == null) attributes = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().build();
+            if (attributes == null) {
+                var builder = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().addConstantLayer(OVERWORLD_TYPE.attributes());
+                OVERWORLD_TYPE.timelines().forEach(timeline -> builder.addTimelineLayer(timeline, clock -> DAY));
+                attributes = builder.build();
+            }
             return attributes;
         }
+        @Override public net.minecraft.world.level.dimension.DimensionType dimensionType() { return OVERWORLD_TYPE; }
+        @Override public net.minecraft.world.level.storage.ServerLevelData getLevelData() { return LEVEL_DATA; }
+        @Override public boolean anyPlayerCloseEnoughForSpawning(BlockPos p) { return false; }
         @Override public void playSound(Entity except, double x, double y, double z, SoundEvent sound, SoundSource source, float volume, float pitch) {
             playSeededSound(except, x, y, z, BuiltInRegistries.SOUND_EVENT.wrapAsHolder(sound), source, volume, pitch, 0L);
         }
@@ -218,6 +263,78 @@ public final class VanillaBlockUpdateOracle {
         @Override public void playSound(Entity except, Entity src, SoundEvent sound, SoundSource source, float volume, float pitch) {
             playSeededSound(except, src, BuiltInRegistries.SOUND_EVENT.wrapAsHolder(sound), source, volume, pitch, 0L);
         }
+    }
+
+    /** A block matcher over explicit positions; outside the build height every block reads as air. */
+    static final class Scan extends net.minecraft.world.level.blockscan.OrderedBlockMatcher {
+        final World world;
+        Iterable<BlockPos> positions;
+        Scan(World world, Iterable<BlockPos> positions) {
+            super(world, positions);
+            this.world = world;
+            this.positions = positions;
+        }
+        @Override public Scan filterPos(java.util.function.Predicate<? super BlockPos> predicate) {
+            positions = com.google.common.collect.Iterables.filter(positions, predicate::test);
+            return this;
+        }
+        @Override public Scan filterState(java.util.function.Predicate<BlockState> predicate) {
+            super.filterState(predicate);
+            return this;
+        }
+        boolean scan(java.util.function.Predicate<BlockState> predicate, net.minecraft.world.level.blockscan.BlockStateConsumer consumer) {
+            for (BlockPos p : positions) {
+                BlockState s = p.getY() >= world.getMinY() && p.getY() <= world.getMaxY() ? world.getBlockState(p) : AIR;
+                if (predicate.test(s) && consumer.apply(p, s).shouldAbort()) return true;
+            }
+            return false;
+        }
+        @Override public boolean atLeastMatched(int n) {
+            int[] count = {0};
+            return scan(statePredicate, (p, s) -> net.minecraft.util.Continuation.abortIf(++count[0] >= n));
+        }
+        @Override protected boolean anyMatched(java.util.function.Predicate<BlockState> predicate) {
+            return scan(predicate, (p, s) -> net.minecraft.util.Continuation.ABORT);
+        }
+        @Override public void forEach(java.util.function.BiConsumer<BlockPos, BlockState> consumer) {
+            scan(statePredicate, (p, s) -> { consumer.accept(p, s); return net.minecraft.util.Continuation.CONTINUE; });
+        }
+        @Override public boolean forEachUntil(net.minecraft.world.level.blockscan.BlockStateConsumer consumer) {
+            return scan(statePredicate, consumer);
+        }
+    }
+
+    static net.minecraft.world.level.dimension.DimensionType OVERWORLD_TYPE;
+    static final net.minecraft.world.clock.ClockInstance DAY = new net.minecraft.world.clock.ClockInstance() {
+        @Override public long totalTicks() { return 6000L; }
+        @Override public float partialTick() { return 0f; }
+        @Override public float rate() { return 1f; }
+        @Override public boolean isPaused() { return false; }
+    };
+    static final net.minecraft.world.level.storage.ServerLevelData LEVEL_DATA = (net.minecraft.world.level.storage.ServerLevelData) java.lang.reflect.Proxy.newProxyInstance(
+        VanillaBlockUpdateOracle.class.getClassLoader(), new Class<?>[] {net.minecraft.world.level.storage.ServerLevelData.class}, (proxy, method, values) -> {
+            Class<?> type = method.getReturnType();
+            if (type == long.class) return 0L;
+            if (type == int.class) return 0;
+            if (type == boolean.class) return false;
+            if (type == float.class) return 0f;
+            if (type == double.class) return 0d;
+            if (type == net.minecraft.world.Difficulty.class) return net.minecraft.world.Difficulty.NORMAL;
+            return null;
+        });
+
+    /** The overworld dimension type from the vanilla data pack (its infiniburn tag, attributes and timelines). */
+    static net.minecraft.world.level.dimension.DimensionType loadOverworld() {
+        var repo = net.minecraft.server.packs.repository.ServerPacksSource.createVanillaTrustedRepository();
+        repo.reload();
+        repo.setSelected(List.of("vanilla"));
+        var resources = new net.minecraft.server.packs.resources.MultiPackResourceManager(net.minecraft.server.packs.PackType.SERVER_DATA, repo.openAllSelected());
+        var layers = net.minecraft.server.RegistryLayer.createRegistryAccess();
+        var staticTags = net.minecraft.tags.TagLoader.loadTagsForExistingRegistries(resources, layers.getLayer(net.minecraft.server.RegistryLayer.STATIC));
+        var context = net.minecraft.tags.TagLoader.buildUpdatedLookups(layers.getAccessForLoading(net.minecraft.server.RegistryLayer.WORLD), staticTags);
+        var world = net.minecraft.resources.RegistryDataLoader.load(resources, context, net.minecraft.resources.RegistryDataLoader.WORLD_REGISTRIES, Runnable::run).join();
+        staticTags.forEach(net.minecraft.core.Registry.PendingTags::apply);
+        return world.lookupOrThrow(net.minecraft.core.registries.Registries.DIMENSION_TYPE).getOrThrow(net.minecraft.world.level.dimension.BuiltinDimensionTypes.OVERWORLD).value();
     }
 
     static final class Loot extends net.minecraft.server.ReloadableServerRegistries.Holder {
@@ -296,6 +413,7 @@ public final class VanillaBlockUpdateOracle {
         Path resources = Path.of(args[0]);
         VanillaHeightmapOracle.bindTags(JsonParser.parseString(Files.readString(resources.resolve("block-tags.json"))).getAsJsonObject());
         VanillaLevelShapeOracle.bindFluidTags(resources.resolve("data/minecraft/tags/fluid"));
+        OVERWORLD_TYPE = loadOverworld();
         var allocator = Class.forName("sun.misc.Unsafe");
         var field = allocator.getDeclaredField("theUnsafe");
         field.setAccessible(true);

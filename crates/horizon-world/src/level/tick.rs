@@ -95,6 +95,21 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         }
                     }
                 }
+                Class::Chest | Class::EnderChest => {
+                    // recheckOpen: openerCountChanged broadcasts the lid, a
+                    // trapped chest also updates its neighbours on a change,
+                    // and the recheck repeats while anyone has it open.
+                    if let Some((previous, count)) = self.level.recheck_container_openers(pos) {
+                        self.block_event(pos, block, 1, count);
+                        if previous != count && b.data(state).is(Class::TrappedChest) {
+                            self.update_neighbors_at(pos, block);
+                            self.update_neighbors_at(below(pos), block);
+                        }
+                        if count > 0 {
+                            self.schedule_tick(pos, block, 5);
+                        }
+                    }
+                }
                 Class::Dispenser | Class::Crafter => {
                     self.emit(LevelEvent::BlockEvent {
                         pos,
@@ -243,6 +258,24 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Farmland => self.farmland_random_tick(state, pos),
+                Class::NetherPortal => {
+                    // NetherPortalBlock.randomTick: only the overworld sets
+                    // NETHER_PORTAL_SPAWNS_PIGLINS.
+                    let rules = self.level.game_rules();
+                    let difficulty = self.level.difficulty();
+                    if rules.spawn_mobs
+                        && rules.spawn_monsters
+                        && difficulty != 0
+                        && self.level.dimension() == super::Dimension::Overworld
+                        && self.rand_int(2000) < difficulty
+                    {
+                        self.emit(LevelEvent::BlockEvent {
+                            pos,
+                            state,
+                            kind: "portal_spawn",
+                        });
+                    }
+                }
                 Class::GrowingPlantHead => {
                     if b.table.int(state, p.age) < 25
                         && self.random().next_double() < data.grow_probability
@@ -256,7 +289,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 Class::Ice => {
                     if self.level.block_light(pos) > 11 - i32::from(b.facts(state).dampening) {
-                        self.ice_melt(pos);
+                        self.ice_melt(pos, state);
                     }
                 }
                 Class::Leaves => {
@@ -655,7 +688,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.set_block(pos, b.table.set_int(state, b.props.age, age + 1), 2);
             false
         } else {
-            self.ice_melt(pos);
+            self.ice_melt(pos, state);
             true
         }
     }
