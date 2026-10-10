@@ -1,26 +1,110 @@
-//! Layout of vanilla's `Hud` decorations as draw calls (`GuiGraphicsExtractor`
-//! blits and text): the hotbar with its selection, off-hand slot, items and
+//! Layout of vanilla's `Hud` as draw calls (`GuiGraphicsExtractor` blits,
+//! fills and text): the hotbar with its selection, off-hand slot, items and
 //! attack indicator, the crosshair, armour, hearts, food, air bubbles, mount
-//! hearts and the experience bar and level. Computed without drawing so the
-//! parity fixture can compare them with the vanilla client.
+//! hearts, the experience and jump bars, status effect icons, camera
+//! overlays, titles and the action bar, the selected item name, boss bars,
+//! the scoreboard sidebar, chat and item decorations. Computed without
+//! drawing so the parity fixture can compare them with the vanilla client.
+use crate::{font::Font, text::Text};
 use horizon_core::random::{LegacyRandom, RandomSource};
+use std::borrow::Cow;
+
+/// A `Matrix3x2fStack` operation applied to a copy of the current pose.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PoseOp {
+    Translate(f32, f32),
+    Scale(f32, f32),
+}
+
+/// A JOML `Matrix3x2f` as `[m00, m01, m10, m11, m20, m21]`.
+pub type Pose = [f32; 6];
+pub const IDENTITY: Pose = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+/// Applies `op` like JOML's `translate` / `scale` (same float order).
+pub fn pose_apply(m: &mut Pose, op: PoseOp) {
+    match op {
+        PoseOp::Translate(x, y) => {
+            m[4] += m[0] * x + m[2] * y;
+            m[5] += m[1] * x + m[3] * y;
+        }
+        PoseOp::Scale(x, y) => {
+            m[0] *= x;
+            m[1] *= x;
+            m[2] *= y;
+            m[3] *= y;
+        }
+    }
+}
+
+/// The render pipeline of a texture blit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blend {
+    /// `GUI_TEXTURED`.
+    Textured,
+    /// `VIGNETTE`: `dst * (1 - src)`.
+    Vignette,
+    /// `GUI_NAUSEA_OVERLAY`: additive.
+    Nausea,
+}
+impl Blend {
+    pub fn pipeline(self) -> &'static str {
+        match self {
+            Blend::Textured => "pipeline/gui_textured",
+            Blend::Vignette => "pipeline/vignette",
+            Blend::Nausea => "pipeline/gui_nausea_overlay",
+        }
+    }
+}
 
 /// One `GuiGraphicsExtractor` call.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GuiDraw {
-    /// `blitSprite(sprite, x, y, w, h)`; `region` = (spriteW, spriteH, u, v)
-    /// for the partial overload.
+    /// `blitSprite(sprite, x, y, w, h, color)`; `region` = (spriteW,
+    /// spriteH, u, v) for the partial overload.
     Sprite {
-        sprite: &'static str,
+        sprite: Cow<'static, str>,
         x: i32,
         y: i32,
         w: i32,
         h: i32,
         region: Option<[i32; 4]>,
+        color: u32,
+    },
+    /// `blitSprite(pipeline, TextureAtlasSprite, ...)` with a block atlas
+    /// sprite (the nether portal overlay).
+    AtlasSprite {
+        sprite: Cow<'static, str>,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        color: u32,
+    },
+    /// `blit(pipeline, texture, x, y, u, v, w, h, srcW, srcH, texW, texH,
+    /// color)`; `texture` is the path under `textures/` without `.png`.
+    Blit {
+        texture: Cow<'static, str>,
+        blend: Blend,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        uv: [f32; 2],
+        src: [i32; 2],
+        tex: [i32; 2],
+        color: u32,
+    },
+    /// `fill(x0, y0, x1, y1, color)` with the corners sorted.
+    Fill {
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+        color: u32,
     },
     /// `text(font, text, x, y, argb, dropShadow)`.
     Text {
-        text: String,
+        text: Text,
         x: i32,
         y: i32,
         color: u32,
@@ -36,16 +120,129 @@ pub enum GuiDraw {
         scale: [f32; 2],
         pivot: [f32; 2],
     },
+    /// `pose().pushMatrix()` followed by `ops`.
+    Push(Vec<PoseOp>),
+    /// `pose().popMatrix()`.
+    Pop,
 }
+
+pub const WHITE: u32 = 0xFFFF_FFFF;
+
 fn sprite(sprite: &'static str, x: i32, y: i32, w: i32, h: i32) -> GuiDraw {
     GuiDraw::Sprite {
-        sprite,
+        sprite: Cow::Borrowed(sprite),
         x,
         y,
         w,
         h,
         region: None,
+        color: WHITE,
     }
+}
+fn region(sprite: &'static str, size: [i32; 2], uv: [i32; 2], at: [i32; 2], w: i32, h: i32) -> GuiDraw {
+    GuiDraw::Sprite {
+        sprite: Cow::Borrowed(sprite),
+        x: at[0],
+        y: at[1],
+        w,
+        h,
+        region: Some([size[0], size[1], uv[0], uv[1]]),
+        color: WHITE,
+    }
+}
+/// `graphics.fill`: the corners are sorted.
+pub fn fill(x0: i32, y0: i32, x1: i32, y1: i32, color: u32) -> GuiDraw {
+    GuiDraw::Fill {
+        x0: x0.min(x1),
+        y0: y0.min(y1),
+        x1: x0.max(x1),
+        y1: y0.max(y1),
+        color,
+    }
+}
+/// `graphics.text`: dropped when fully transparent.
+fn text(out: &mut Vec<GuiDraw>, text: Text, x: i32, y: i32, color: u32, shadow: bool) {
+    if color >> 24 != 0 {
+        out.push(GuiDraw::Text {
+            text,
+            x,
+            y,
+            color,
+            shadow,
+        });
+    }
+}
+/// `graphics.textWithBackdrop` under `background` = `Options.getBackgroundColor(0)`.
+fn text_with_backdrop(out: &mut Vec<GuiDraw>, t: Text, x: i32, y: i32, w: i32, color: u32, background: u32) {
+    if background != 0 {
+        out.push(fill(x - 2, y - 2, x + w + 2, y + 9 + 2, multiply(background, color)));
+    }
+    text(out, t, x, y, color, true);
+}
+
+/// `Options.getBackgroundColor(float)`: `chat_only` = `backgroundForChatOnly`.
+pub fn background_color(chat_only: bool, opacity: f64, default: f32) -> u32 {
+    let a = if chat_only { default } else { opacity as f32 };
+    color_from_float(a, 0.0, 0.0, 0.0)
+}
+
+/// `Mth.floor`.
+pub fn floor(x: f32) -> i32 {
+    let i = x as i32;
+    if x < i as f32 { i - 1 } else { i }
+}
+/// `ARGB.as8BitChannel`.
+pub fn as8(v: f32) -> u32 {
+    floor(v * 255.0) as u32
+}
+/// `ARGB.white(float)`.
+pub fn white(alpha: f32) -> u32 {
+    (as8(alpha) << 24) | 0xFF_FFFF
+}
+/// `ARGB.colorFromFloat`.
+pub fn color_from_float(a: f32, r: f32, g: f32, b: f32) -> u32 {
+    argb(as8(a), as8(r), as8(g), as8(b))
+}
+/// `ARGB.color(a, r, g, b)`.
+pub fn argb(a: u32, r: u32, g: u32, b: u32) -> u32 {
+    (a & 255) << 24 | (r & 255) << 16 | (g & 255) << 8 | (b & 255)
+}
+/// `ARGB.multiply`.
+pub fn multiply(l: u32, r: u32) -> u32 {
+    if l == WHITE {
+        return r;
+    }
+    if r == WHITE {
+        return l;
+    }
+    let c = |s: u32| ((l >> s) & 255) * ((r >> s) & 255) / 255;
+    argb(c(24), c(16), c(8), c(0))
+}
+/// `Mth.lerpDiscrete`.
+pub fn lerp_discrete(alpha: f32, p0: i32, p1: i32) -> i32 {
+    p0 + floor(alpha * (p1 - p0 - 1) as f32) + i32::from(alpha > 0.0)
+}
+/// `Mth.hsvToArgb`.
+pub fn hsv_to_argb(hue: f32, saturation: f32, value: f32, alpha: u32) -> u32 {
+    let h = (hue * 6.0) as i32 % 6;
+    let f = hue * 6.0 - h as f32;
+    let p = value * (1.0 - saturation);
+    let q = value * (1.0 - f * saturation);
+    let t = value * (1.0 - (1.0 - f) * saturation);
+    let (r, g, b) = match h {
+        0 => (value, t, p),
+        1 => (q, value, p),
+        2 => (p, value, t),
+        3 => (p, q, value),
+        4 => (t, p, value),
+        _ => (value, p, q),
+    };
+    let c = |v: f32| ((v * 255.0) as i32).clamp(0, 255) as u32;
+    argb(alpha, c(r), c(g), c(b))
+}
+/// `Font.width` of styled text.
+pub fn width(font: &Font, t: &Text) -> i32 {
+    font.width_text(t) as i32
 }
 
 /// `Hud.extractItemHotbar` inputs.
@@ -153,14 +350,14 @@ pub fn hotbar(w: i32, h: i32, i: &HotbarInputs) -> Vec<GuiDraw> {
             18,
             18,
         ));
-        out.push(GuiDraw::Sprite {
-            sprite: "hud/hotbar_attack_indicator_progress",
-            x,
-            y: y + 18 - progress,
-            w: 18,
-            h: progress,
-            region: Some([18, 18, 0, 18 - progress]),
-        });
+        out.push(region(
+            "hud/hotbar_attack_indicator_progress",
+            [18, 18],
+            [0, 18 - progress],
+            [x, y + 18 - progress],
+            18,
+            progress,
+        ));
     }
     out
 }
@@ -183,14 +380,14 @@ pub fn crosshair(w: i32, h: i32, attack: Option<f32>, full: bool) -> Vec<GuiDraw
                 16,
                 4,
             ));
-            out.push(GuiDraw::Sprite {
-                sprite: "hud/crosshair_attack_indicator_progress",
-                x,
-                y,
-                w: progress,
-                h: 4,
-                region: Some([16, 4, 0, 0]),
-            });
+            out.push(region(
+                "hud/crosshair_attack_indicator_progress",
+                [16, 4],
+                [0, 0],
+                [x, y],
+                progress,
+                4,
+            ));
         }
     }
     out
@@ -212,14 +409,14 @@ pub fn experience(
         let filled = (progress * 183.0) as i32;
         out.push(sprite("hud/experience_bar_background", left, top, 182, 5));
         if filled > 0 {
-            out.push(GuiDraw::Sprite {
-                sprite: "hud/experience_bar_progress",
-                x: left,
-                y: top,
-                w: filled,
-                h: 5,
-                region: Some([182, 5, 0, 0]),
-            });
+            out.push(region(
+                "hud/experience_bar_progress",
+                [182, 5],
+                [0, 0],
+                [left, top],
+                filled,
+                5,
+            ));
         }
     }
     if level > 0 {
@@ -227,21 +424,9 @@ pub fn experience(
         let x = (w - width(&text)) / 2;
         let y = h - 24 - 9 - 2;
         for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            out.push(GuiDraw::Text {
-                text: text.clone(),
-                x: x + dx,
-                y: y + dy,
-                color: 0xFF00_0000,
-                shadow: false,
-            });
+            self::text(&mut out, Text::literal(&text), x + dx, y + dy, 0xFF00_0000, false);
         }
-        out.push(GuiDraw::Text {
-            text,
-            x,
-            y,
-            color: 0xFF80_FF20,
-            shadow: false,
-        });
+        self::text(&mut out, Text::literal(text), x, y, 0xFF80_FF20, false);
     }
     out
 }
@@ -554,10 +739,14 @@ impl HealthHud {
     }
 }
 
-/// Draws the sprite and text calls with the HUD batch; items are left to the
-/// caller (they need the item renderer).
+/// Draws the calls with the HUD batch under their poses; items are left to
+/// the caller (they need the item renderer) and so are the vignette and
+/// nausea blits (their blending needs the screen-effect pipeline).
 pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, draws: &[GuiDraw]) {
+    let mut stack = vec![IDENTITY];
     for d in draws {
+        let start = batch.vertices.len();
+        let pose = *stack.last().unwrap_or(&IDENTITY);
         match d {
             GuiDraw::Sprite {
                 sprite,
@@ -566,6 +755,7 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                 w,
                 h,
                 region,
+                color,
             } => {
                 let Some(mut r) = atlas.sprites.get(&format!("gui/sprites/{sprite}")).copied()
                 else {
@@ -580,7 +770,58 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                     r.u0 = u0;
                     r.v0 = v0;
                 }
-                batch.rect_uv(*x as f32, *y as f32, *w as f32, *h as f32, r, u32::MAX);
+                batch.rect_uv(*x as f32, *y as f32, *w as f32, *h as f32, r, abgr(*color));
+            }
+            GuiDraw::AtlasSprite {
+                sprite,
+                x,
+                y,
+                w,
+                h,
+                color,
+            } => {
+                batch.sprite_scaled(atlas, sprite, *x as f32, *y as f32, *w as f32, *h as f32, abgr(*color));
+            }
+            GuiDraw::Blit {
+                texture,
+                blend: Blend::Textured,
+                x,
+                y,
+                w,
+                h,
+                uv,
+                src,
+                tex,
+                color,
+            } => {
+                let Some(mut r) = atlas.sprites.get(texture.as_ref()).copied() else {
+                    continue;
+                };
+                let (du, dv) = (r.u1 - r.u0, r.v1 - r.v0);
+                let u0 = r.u0 + du * uv[0] / tex[0] as f32;
+                let v0 = r.v0 + dv * uv[1] / tex[1] as f32;
+                r.u1 = r.u0 + du * (uv[0] + src[0] as f32) / tex[0] as f32;
+                r.v1 = r.v0 + dv * (uv[1] + src[1] as f32) / tex[1] as f32;
+                r.u0 = u0;
+                r.v0 = v0;
+                batch.rect_uv(*x as f32, *y as f32, *w as f32, *h as f32, r, abgr(*color));
+            }
+            GuiDraw::Blit { .. } | GuiDraw::Item { .. } => {}
+            GuiDraw::Fill {
+                x0,
+                y0,
+                x1,
+                y1,
+                color,
+            } => {
+                batch.fill(
+                    atlas,
+                    *x0 as f32,
+                    *y0 as f32,
+                    (x1 - x0) as f32,
+                    (y1 - y0) as f32,
+                    abgr(*color),
+                );
             }
             GuiDraw::Text {
                 text,
@@ -589,11 +830,35 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                 color,
                 shadow,
             } => {
-                let [a, r, g, b] = color.to_be_bytes();
-                let rgba = crate::hud::rgba(r, g, b, a);
-                batch.text(atlas, text, *x as f32, *y as f32, rgba, *shadow);
+                batch.text_styled(atlas, text, *x as f32, *y as f32, abgr(*color), *shadow);
             }
-            GuiDraw::Item { .. } => {}
+            GuiDraw::Push(ops) => {
+                let mut m = pose;
+                for op in ops {
+                    pose_apply(&mut m, *op);
+                }
+                stack.push(m);
+            }
+            GuiDraw::Pop => {
+                if stack.len() > 1 {
+                    stack.pop();
+                }
+            }
+        }
+        if pose != IDENTITY {
+            for v in &mut batch.vertices[start..] {
+                let [x, y] = v.pos;
+                v.pos = [
+                    pose[0] * x + pose[2] * y + pose[4],
+                    pose[1] * x + pose[3] * y + pose[5],
+                ];
+            }
         }
     }
+}
+
+/// An ARGB colour as the HUD batch's packed RGBA.
+pub fn abgr(color: u32) -> u32 {
+    let [a, r, g, b] = color.to_be_bytes();
+    crate::hud::rgba(r, g, b, a)
 }

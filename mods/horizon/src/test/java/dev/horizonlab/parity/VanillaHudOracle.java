@@ -56,6 +56,7 @@ public final class VanillaHudOracle {
     static Object unsafe;
     static Method allocate;
     static JsonObject c;
+    static Font FONT;
     static IdentityHashMap<ItemStack, Integer> slots = new IdentityHashMap<>();
 
     @SuppressWarnings("unchecked")
@@ -134,6 +135,16 @@ public final class VanillaHudOracle {
         @Override public int guiHeight() { return i("height", 0); }
         @Override public Matrix3x2fStack pose() { return stack; }
         @Override public void nextStratum() { }
+        /** Adds the pose when it is not the identity. */
+        JsonObject posed(JsonObject o, org.joml.Matrix3x2fc m) {
+            if (!m.equals(new Matrix3x2f())) {
+                var a = new JsonArray();
+                for (float v : new float[] {m.m00(), m.m01(), m.m10(), m.m11(), m.m20(), m.m21()}) a.add(v);
+                o.add("matrix", a);
+            }
+            draws.add(o);
+            return o;
+        }
         void sprite(Identifier id, int x, int y, int w, int h, int[] region, int color) {
             var o = new JsonObject();
             o.addProperty("type", "sprite");
@@ -145,20 +156,86 @@ public final class VanillaHudOracle {
                 o.add("region", r);
             }
             o.addProperty("color", color);
-            draws.add(o);
+            posed(o, stack);
         }
         @Override public void blitSprite(RenderPipeline p, Identifier id, int x, int y, int w, int h, int color) { sprite(id, x, y, w, h, null, color); }
         @Override public void blitSprite(RenderPipeline p, Identifier id, int sw, int sh, int u, int v, int x, int y, int w, int h, int color) {
             sprite(id, x, y, w, h, new int[] {sw, sh, u, v}, color);
         }
-        @Override public void text(Font font, FormattedCharSequence str, int x, int y, int color, boolean shadow) {
+        @Override public void blitSprite(RenderPipeline p, net.minecraft.client.renderer.texture.TextureAtlasSprite s, int x, int y, int w, int h, int color) {
+            var o = new JsonObject();
+            o.addProperty("type", "atlas");
+            o.addProperty("sprite", s.contents().name().getPath());
+            o.addProperty("x", x); o.addProperty("y", y); o.addProperty("w", w); o.addProperty("h", h);
+            o.addProperty("color", color);
+            posed(o, stack);
+        }
+        @Override public void blit(RenderPipeline p, Identifier texture, int x, int y, float u, float v, int w, int h, int srcW, int srcH, int texW, int texH, int color) {
+            var o = new JsonObject();
+            o.addProperty("type", "blit");
+            o.addProperty("texture", texture.getPath());
+            o.addProperty("pipeline", p.getLocation().getPath());
+            o.addProperty("x", x); o.addProperty("y", y); o.addProperty("w", w); o.addProperty("h", h);
+            var uv = new JsonArray(); uv.add(u); uv.add(v); o.add("uv", uv);
+            var src = new JsonArray(); src.add(srcW); src.add(srcH); o.add("src", src);
+            var tex = new JsonArray(); tex.add(texW); tex.add(texH); o.add("tex", tex);
+            o.addProperty("color", color);
+            posed(o, stack);
+        }
+        @Override public void fill(RenderPipeline p, int x0, int y0, int x1, int y1, int color) {
+            var o = new JsonObject();
+            o.addProperty("type", "fill");
+            o.addProperty("x0", Math.min(x0, x1)); o.addProperty("y0", Math.min(y0, y1));
+            o.addProperty("x1", Math.max(x0, x1)); o.addProperty("y1", Math.max(y0, y1));
+            o.addProperty("color", color);
+            posed(o, stack);
+        }
+        void text(FormattedCharSequence str, int x, int y, int color, boolean shadow, org.joml.Matrix3x2fc pose) {
             var o = new JsonObject();
             o.addProperty("type", "text");
             var sb = new StringBuilder();
-            str.accept((index, style, cp) -> { sb.appendCodePoint(cp); return true; });
+            var runs = new JsonArray();
+            boolean[] styled = {false};
+            str.accept((index, style, cp) -> {
+                sb.appendCodePoint(cp);
+                Integer rgb = style.getColor() == null ? null : style.getColor().getValue();
+                boolean bold = style.isBold(), italic = style.isItalic();
+                styled[0] |= rgb != null || bold || italic;
+                JsonArray last = runs.isEmpty() ? null : runs.get(runs.size() - 1).getAsJsonArray();
+                if (last != null && java.util.Objects.equals(last.get(1).isJsonNull() ? null : last.get(1).getAsInt(), rgb)
+                    && last.get(2).getAsBoolean() == bold && last.get(3).getAsBoolean() == italic) {
+                    last.set(0, new JsonPrimitive(last.get(0).getAsString() + new String(Character.toChars(cp))));
+                } else {
+                    var run = new JsonArray();
+                    run.add(new String(Character.toChars(cp)));
+                    if (rgb == null) run.add(JsonNull.INSTANCE); else run.add(rgb);
+                    run.add(bold); run.add(italic);
+                    runs.add(run);
+                }
+                return true;
+            });
             o.addProperty("text", sb.toString());
             o.addProperty("x", x); o.addProperty("y", y); o.addProperty("color", color); o.addProperty("shadow", shadow);
-            draws.add(o);
+            if (styled[0]) o.add("runs", runs);
+            posed(o, pose);
+        }
+        @Override public void text(Font font, FormattedCharSequence str, int x, int y, int color, boolean shadow) {
+            if (net.minecraft.util.ARGB.alpha(color) != 0) text(str, x, y, color, shadow, stack);
+        }
+        /** The chat's text collector: text at the parameters' pose and opacity. */
+        @Override public net.minecraft.client.gui.ActiveTextCollector textRenderer(GuiGraphicsExtractor.HoveredTextEffects effects, java.util.function.Consumer<net.minecraft.network.chat.Style> consumer) {
+            var self = this;
+            return new net.minecraft.client.gui.ActiveTextCollector() {
+                Parameters parameters = new Parameters(new Matrix3x2f(stack), 1.0F, null);
+                @Override public Parameters defaultParameters() { return parameters; }
+                @Override public void defaultParameters(Parameters p) { parameters = p; }
+                @Override public void accept(net.minecraft.client.gui.TextAlignment alignment, int anchorX, int y, Parameters p, FormattedCharSequence text) {
+                    int left = alignment.calculateLeft(anchorX, FONT, text);
+                    if (net.minecraft.util.ARGB.as8BitChannel(p.opacity()) != 0)
+                        self.text(text, left, y, net.minecraft.util.ARGB.white(p.opacity()), true, p.pose());
+                }
+                @Override public void acceptScrolling(net.minecraft.network.chat.Component m, int cx, int l, int r, int t, int b, Parameters p) { }
+            };
         }
         @Override public void item(LivingEntity owner, ItemStack stack, int x, int y, int seed) {
             var o = new JsonObject();
@@ -180,7 +257,7 @@ public final class VanillaHudOracle {
         unsafeField.setAccessible(true);
         unsafe = unsafeField.get(null);
         allocate = unsafe.getClass().getMethod("allocateInstance", Class.class);
-        Font font = ParityFont.create(ParityFont.resources());
+        Font font = FONT = ParityFont.create(ParityFont.resources());
         Method hotbar = Hud.class.getDeclaredMethod("extractItemHotbar", GuiGraphicsExtractor.class, DeltaTracker.class);
         Method health = Hud.class.getDeclaredMethod("extractPlayerHealth", GuiGraphicsExtractor.class);
         Method vehicle = Hud.class.getDeclaredMethod("extractVehicleHealth", GuiGraphicsExtractor.class);
