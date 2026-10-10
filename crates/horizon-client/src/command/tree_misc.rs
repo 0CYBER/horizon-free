@@ -151,6 +151,18 @@ pub fn register(d: &mut Dispatcher, root: usize) {
 fn item(d: &mut Dispatcher, root: usize) {
     let item = d.literal(root, "item");
     d.requires(item, GAMEMASTERS);
+    let modify = d.literal(item, "modify");
+    for provider in ["entity", "block"] {
+        let p = d.literal(modify, provider);
+        let target = if provider == "entity" {
+            d.argument(p, "target", ENTITIES)
+        } else {
+            d.argument(p, "targetPos", ArgType::BlockPos)
+        };
+        let slot = d.argument(target, "slot", ArgType::Slot);
+        let modifier = d.argument(slot, "modifier", ArgType::Id("item_modifiers"));
+        d.executes(modifier, "item.modify");
+    }
     for mode in ["replace", "fill", "override"] {
         let m = d.literal(item, mode);
         for provider in ["entity", "block"] {

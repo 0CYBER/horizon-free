@@ -536,6 +536,7 @@ impl Game<'_> {
             "setworldspawn" => self.cmd_setworldspawn(ctx),
             "clear" => self.cmd_clear(ctx),
             "item" => self.cmd_item(ctx),
+            "item.modify" => self.cmd_item_modify(ctx),
             "place" => self.cmd_place(ctx),
             "recipe.give" | "recipe.take" => self.cmd_recipe(id, ctx),
             "damage" => self.cmd_damage(ctx),
