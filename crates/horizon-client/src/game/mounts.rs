@@ -453,38 +453,21 @@ impl Game<'_> {
             _ => {}
         }
     }
-    /// `Gui.renderVehicleHealth` and the jump bar (`JumpableVehicleBarRenderer`).
-    pub(super) fn draw_mount_hud(&self, batch: &mut HudBatch, w: f32, h: f32) -> bool {
+    /// `Hud.extractVehicleHealth` and the jump bar that replaces the
+    /// experience bar on a saddled jumper. Returns the mount's heart count
+    /// (`getVehicleMaxHearts`) and whether the jump bar shows.
+    pub(super) fn draw_mount_hud(&self, batch: &mut HudBatch, w: i32, h: i32) -> (i32, bool) {
         let Some(i) = self.mount_index() else {
-            return false;
+            return (0, false);
         };
         let m = &self.mobs[i];
         let atlas = &self.res.atlas;
-        // Hearts in rows of ten, right-aligned where the food bar sits.
-        let max = (m.attrs.max_health + 0.5) as i32 / 2;
-        let health = m.health.ceil() as i32;
-        let right = w / 2.0 + 91.0;
-        let mut y = h - 39.0;
-        let mut drawn = 0;
-        while drawn < max {
-            let row = (max - drawn).min(10);
-            for k in 0..row {
-                let x = right - k as f32 * 8.0 - 9.0;
-                batch.sprite(atlas, "gui/sprites/hud/heart/vehicle_container", x, y);
-                let v = health - (drawn + k) * 2;
-                if v >= 2 {
-                    batch.sprite(atlas, "gui/sprites/hud/heart/vehicle_full", x, y);
-                } else if v == 1 {
-                    batch.sprite(atlas, "gui/sprites/hud/heart/vehicle_half", x, y);
-                }
-            }
-            drawn += row;
-            y -= 10.0;
-        }
-        // The jump bar replaces the experience bar on a saddled jumper.
+        let hearts = horizon_client::hud_layout::vehicle_max_hearts(m.attrs.max_health as f32);
+        let draws = horizon_client::hud_layout::vehicle_health(w, h, hearts, m.health as f32);
+        horizon_client::hud_layout::paint(batch, atlas, &draws);
         if m.extra.saddled {
-            let x = w / 2.0 - 91.0;
-            let y = h - 29.0;
+            let x = (w / 2 - 91) as f32;
+            let y = (h - 29) as f32;
             batch.sprite(atlas, "gui/sprites/hud/jump_bar_background", x, y);
             if self.mount.jump_ticks < 0 {
                 batch.sprite(atlas, "gui/sprites/hud/jump_bar_cooldown", x, y);
@@ -501,6 +484,6 @@ impl Game<'_> {
                 }
             }
         }
-        true
+        (hearts, m.extra.saddled)
     }
 }

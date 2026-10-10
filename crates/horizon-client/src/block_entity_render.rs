@@ -7,7 +7,10 @@
 //! the block plus `minecraft_mix_light` with the level's two diffuse lights.
 use crate::{hud::Rect, mesher::Vertex, world::World};
 use glam::{DVec3, Mat4, Quat, Vec3};
-use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_core::{
+    geometry::trig::Mth,
+    random::{LegacyRandom, RandomSource},
+};
 use horizon_world::registry::{BlockRegistry, BlockStateId};
 use serde_json::Value;
 use std::{collections::HashMap, f32::consts::PI, path::Path};
@@ -582,19 +585,19 @@ fn book_pose(openness: f32, flip1: f32, flip2: f32) -> impl Fn(&str, &mut [f32; 
         "right_lid" => p[4] = -openness,
         "left_pages" => {
             p[4] = openness;
-            p[0] = openness.sin();
+            p[0] = openness.msin();
         }
         "right_pages" => {
             p[4] = -openness;
-            p[0] = openness.sin();
+            p[0] = openness.msin();
         }
         "flip_page1" => {
             p[4] = openness - openness * 2.0 * flip1;
-            p[0] = openness.sin();
+            p[0] = openness.msin();
         }
         "flip_page2" => {
             p[4] = openness - openness * 2.0 * flip2;
-            p[0] = openness.sin();
+            p[0] = openness.msin();
         }
         _ => {}
     }
@@ -603,94 +606,163 @@ fn frac(x: f32) -> f32 {
     x - x.floor()
 }
 
+/// `StringSplitter.splitLines(...).get(0)` for plain text: the first line,
+/// wrapped at the last space that fits or mid-word when none does.
+fn first_line(line: &str, max_width: f32, advance: &dyn Fn(char) -> f32) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut width = 0.0;
+    let mut last_space = None;
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '\n' {
+            return chars[..i].iter().collect();
+        }
+        if c == ' ' {
+            last_space = Some(i);
+        }
+        width += advance(c);
+        if width > max_width {
+            let end = match last_space {
+                Some(s) if s > 0 => s,
+                _ => i.max(1),
+            };
+            return chars[..end].iter().collect();
+        }
+    }
+    line.to_owned()
+}
+
 /// `AbstractSignRenderer.submitSignText`: four centred lines, glowing text
 /// full-bright with an 8x outline in the dark colour.
-fn sign_text(
+fn sign_text_calls(
     scene: &Scene,
     data: &crate::signs::SignData,
     text: &crate::signs::SignText,
     m: Mat4,
     packed: u8,
     near: bool,
-    out: &mut Vec<Vertex>,
-) {
+) -> Vec<TextCall> {
     let line_height = data.line_height();
     let midpoint = (4.0 * line_height / 2.0).floor();
-    let dark = text.dark_color();
+    let dark = 0xFF00_0000 | text.dark_color();
     let (color, outline, light) = if text.glowing {
         let c = text.text_color();
-        (c, (c == 0 || near).then_some(dark), 240 | 240 << 8)
+        (
+            0xFF00_0000 | c,
+            if c == 0 || near { dark } else { 0 },
+            240 | 240 << 8,
+        )
     } else {
-        (dark, None, vertex_light(packed))
+        (dark, 0, vertex_light(packed))
     };
-    let width = |s: &str| {
-        s.chars()
-            .map(|c| (scene.glyph)(c).map_or(6.0, |g| g.1))
-            .sum::<f32>()
-    };
-    for (i, line) in text.lines.iter().enumerate() {
-        // Font.split(line, maxWidth).get(0): keep what fits.
-        let mut shown = String::new();
-        for ch in line.chars() {
-            shown.push(ch);
-            if width(&shown) > data.max_line_width() {
-                shown.pop();
-                break;
+    let advance = |c: char| (scene.glyph)(c).1;
+    let width = |s: &str| s.chars().map(advance).sum::<f32>().ceil();
+    text.lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let shown = first_line(line, data.max_line_width(), &advance);
+            TextCall {
+                matrix: m,
+                x: -((width(&shown) as i32) / 2) as f32,
+                y: i as f32 * line_height - midpoint,
+                text: shown,
+                color,
+                outline,
+                light,
             }
-        }
-        let x0 = -(width(&shown) as i32 / 2) as f32;
-        let y0 = i as f32 * line_height - midpoint;
-        let mut emit = |dx: f32, dy: f32, rgb: u32| {
-            let mut x = x0 + dx;
-            for ch in shown.chars() {
-                let Some((r, advance)) = (scene.glyph)(ch) else {
-                    x += 6.0;
-                    continue;
-                };
-                if ch != ' ' {
-                    let corners = [
-                        (x, y0 + dy + 8.0),
-                        (x + 8.0, y0 + dy + 8.0),
-                        (x + 8.0, y0 + dy),
-                        (x, y0 + dy),
-                    ];
-                    let uvs = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
-                    let c =
-                        0xFF00_0000 | (rgb & 255) << 16 | (rgb >> 8 & 255) << 8 | (rgb >> 16 & 255);
-                    for ((cx, cy), uv) in corners.into_iter().zip(uvs) {
-                        out.push(Vertex {
-                            pos: m.transform_point3(Vec3::new(cx, cy, 0.0)).to_array(),
-                            uv,
-                            layer: 0,
-                            color: c,
-                            light,
-                        });
-                    }
+        })
+        .collect()
+}
+
+/// Draws a text call with the font atlas: 8x8 glyph cells, the outline as
+/// eight one-pixel offsets under the text.
+fn draw_text(scene: &Scene, call: &TextCall, out: &mut Vec<Vertex>) {
+    let mut emit = |dx: f32, dy: f32, argb: u32| {
+        let mut x = call.x + dx;
+        let y0 = call.y + dy;
+        for ch in call.text.chars() {
+            let (cell, advance) = (scene.glyph)(ch);
+            if let Some(r) = cell {
+                let corners = [(x, y0 + 8.0), (x + 8.0, y0 + 8.0), (x + 8.0, y0), (x, y0)];
+                let uvs = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
+                let c =
+                    0xFF00_0000 | (argb & 255) << 16 | (argb >> 8 & 255) << 8 | (argb >> 16 & 255);
+                for ((cx, cy), uv) in corners.into_iter().zip(uvs) {
+                    out.push(Vertex {
+                        pos: call
+                            .matrix
+                            .transform_point3(Vec3::new(cx, cy, 0.0))
+                            .to_array(),
+                        uv,
+                        layer: 0,
+                        color: c,
+                        light: call.light,
+                    });
                 }
-                x += advance;
             }
-        };
-        if let Some(o) = outline {
-            for (dx, dy) in [
-                (-1.0, -1.0),
-                (0.0, -1.0),
-                (1.0, -1.0),
-                (-1.0, 0.0),
-                (1.0, 0.0),
-                (-1.0, 1.0),
-                (0.0, 1.0),
-                (1.0, 1.0),
-            ] {
-                emit(dx, dy, o);
-            }
+            x += advance;
         }
-        emit(0.0, 0.0, color);
+    };
+    if call.outline != 0 {
+        for (dx, dy) in [
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (-1.0, 0.0),
+            (1.0, 0.0),
+            (-1.0, 1.0),
+            (0.0, 1.0),
+            (1.0, 1.0),
+        ] {
+            emit(dx, dy, call.outline);
+        }
     }
+    emit(0.0, 0.0, call.color);
+}
+
+/// Block-entity fields the level ticks, at one position (vanilla's own field
+/// values; extraction to render state happens here as in each renderer).
+#[derive(Clone, Debug, Default)]
+pub struct BlockAnim {
+    /// `ShulkerBoxBlockEntity` progress and progressOld.
+    pub shulker: (f32, f32),
+    /// `BellBlockEntity.ticks` and the click direction while `shaking`.
+    pub bell_ticks: i32,
+    pub bell_shake: Option<&'static str>,
+    /// `ConduitBlockEntity` tickCount, isActive, isHunting and activeRotation.
+    pub conduit: (i32, bool, bool, f32),
+    /// `SkullBlockEntity` isAnimating and animationTickCount.
+    pub skull: (bool, i32),
+    /// `DecoratedPotBlockEntity` decorations as item ids: back, left, right, front.
+    pub sherds: [Option<String>; 4],
+    /// `DecoratedPotRenderState` wobble style (positive) and progress.
+    pub wobble: Option<(bool, f32)>,
+}
+
+/// One `submitText` call (`AbstractSignRenderer.submitSignText`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextCall {
+    pub matrix: Mat4,
+    pub x: f32,
+    pub y: f32,
+    pub text: String,
+    /// ARGB.
+    pub color: u32,
+    /// ARGB outline colour, 0 for none.
+    pub outline: u32,
+    /// Horizon packed light (sky*16 | block*16 << 8).
+    pub light: u32,
 }
 
 /// Inputs from the game for one frame of block-entity rendering.
 pub struct Scene<'a> {
     pub camera: DVec3,
+    /// `Camera.rotation` (conduit eyes face the camera).
+    pub orientation: Quat,
+    /// Ticked block-entity state at a position.
+    pub anim: &'a dyn Fn([i32; 3]) -> BlockAnim,
+    /// When set, sign text is recorded here as text calls instead of drawn.
+    pub texts: Option<&'a std::cell::RefCell<Vec<TextCall>>>,
     pub partial: f32,
     pub game_time: i64,
     pub world: &'a World,
@@ -702,8 +774,8 @@ pub struct Scene<'a> {
     pub sign: &'a dyn Fn([i32; 3]) -> Option<&'a crate::signs::SignData>,
     /// Banner layers at a position: pattern texture and RGB tint, bottom first.
     pub banner: &'a dyn Fn([i32; 3]) -> Vec<(String, u32)>,
-    /// Font glyph cell and advance.
-    pub glyph: &'a dyn Fn(char) -> Option<(Rect, f32)>,
+    /// Font glyph cell (none for blank glyphs such as the space) and advance.
+    pub glyph: &'a dyn Fn(char) -> (Option<Rect>, f32),
 }
 
 pub struct BlockEntityRenderer {
@@ -711,8 +783,10 @@ pub struct BlockEntityRenderer {
     kinds: Vec<Kind>,
     books: HashMap<[i32; 3], Book>,
     random: LegacyRandom,
+    /// Item id to its `PROVIDES_POTTERY_PATTERN` side texture (`Sheets.DECORATED_POT_MAPPER`).
+    pot_patterns: HashMap<String, String>,
 }
-const MODELS: [(&str, &str); 24] = [
+const MODELS: [(&str, &str); 27] = [
     ("chest", "minecraft:chest#main"),
     ("double_chest_left", "minecraft:double_chest_left#main"),
     ("double_chest_right", "minecraft:double_chest_right#main"),
@@ -734,6 +808,9 @@ const MODELS: [(&str, &str); 24] = [
     ("bell", "minecraft:bell#main"),
     ("book", "minecraft:book#main"),
     ("conduit_shell", "minecraft:conduit#shell"),
+    ("conduit_cage", "minecraft:conduit#cage"),
+    ("conduit_wind", "minecraft:conduit#wind"),
+    ("conduit_eye", "minecraft:conduit#eye"),
     ("decorated_pot_base", "minecraft:decorated_pot_base#main"),
     ("decorated_pot_sides", "minecraft:decorated_pot_sides#main"),
     ("copper_golem", "minecraft:copper_golem#main"),
@@ -757,7 +834,30 @@ impl BlockEntityRenderer {
             .iter()
             .filter_map(|(key, layer)| all.get(*layer).map(|v| (*key, ModelPart::parse(v))))
             .collect();
-        Ok(Self::new(models, registry))
+        let mut renderer = Self::new(models, registry);
+        // Sherd items: provides_pottery_pattern -> decorated_pot_pattern asset id.
+        if let Ok(bytes) = std::fs::read(root.join("items.json")) {
+            let items: Value = serde_json::from_slice(&bytes)?;
+            for (item, components) in items.as_object().into_iter().flatten() {
+                let Some(pattern) = components["minecraft:provides_pottery_pattern"].as_str()
+                else {
+                    continue;
+                };
+                let name = pattern.strip_prefix("minecraft:").unwrap_or(pattern);
+                let file = root.join(format!("data/minecraft/decorated_pot_pattern/{name}.json"));
+                let Ok(def) = std::fs::read(file) else {
+                    continue;
+                };
+                let def: Value = serde_json::from_slice(&def)?;
+                if let Some(asset) = def["asset_id"].as_str() {
+                    let asset = asset.strip_prefix("minecraft:").unwrap_or(asset);
+                    renderer
+                        .pot_patterns
+                        .insert(item.clone(), format!("entity/decorated_pot/{asset}"));
+                }
+            }
+        }
+        Ok(renderer)
     }
     fn new(models: HashMap<&'static str, ModelPart>, registry: &BlockRegistry) -> Self {
         let kinds = (0..registry.len() as u32)
@@ -773,6 +873,7 @@ impl BlockEntityRenderer {
             kinds,
             books: HashMap::new(),
             random: LegacyRandom::new(0x5EED_B00C),
+            pot_patterns: HashMap::new(),
         }
     }
     /// The standing banner's pole-and-bar and flag models (`BannerRenderer.submitSpecial`).
@@ -830,6 +931,41 @@ impl BlockEntityRenderer {
             let packed = scene.world.light(pos[0], pos[1], pos[2]);
             self.render_one(scene, *pos, kind, base, packed, lights, out);
         }
+    }
+    /// One block entity at `pos` drawn under `base` with the given packed light
+    /// (the parity fixture's entry point).
+    pub fn render_block(
+        &self,
+        scene: &Scene,
+        pos: [i32; 3],
+        state: u32,
+        base: Mat4,
+        packed: u8,
+        out: &mut Vec<Vertex>,
+    ) {
+        let kind = self.kind(state);
+        let lights = diffuse_lights(scene.nether);
+        self.render_one(scene, pos, kind, base, packed, lights, out);
+    }
+    /// Whether this block state has a block-entity renderer here.
+    pub fn renders(&self, state: u32) -> bool {
+        !matches!(self.kind(state), Kind::None)
+    }
+    /// Sets an enchanting table's book fields (`EnchantingTableBlockEntity`):
+    /// time, flip, oFlip, open, oOpen, rot, oRot.
+    pub fn set_book(&mut self, pos: [i32; 3], time: i32, fields: [f32; 6]) {
+        let [flip, o_flip, open, o_open, rot, o_rot] = fields;
+        let book = self.books.entry(pos).or_default();
+        *book = Book {
+            time,
+            flip,
+            o_flip,
+            open,
+            o_open,
+            rot,
+            o_rot,
+            ..*book
+        };
     }
     /// One block entity of `state` drawn under `base` (minecart contents).
     pub fn render_state(
@@ -913,7 +1049,11 @@ impl BlockEntityRenderer {
                     )
                     .distance_squared(scene.camera)
                         < 256.0;
-                    sign_text(scene, data, text, m, packed, near, out);
+                    let calls = sign_text_calls(scene, data, text, m, packed, near);
+                    match scene.texts {
+                        Some(sink) => sink.borrow_mut().extend(calls),
+                        None => calls.iter().for_each(|c| draw_text(scene, c, out)),
+                    }
                 }
             }
             Kind::Chest {
@@ -968,8 +1108,18 @@ impl BlockEntityRenderer {
                     * Mat4::from_quat(direction_rotation(facing))
                     * Mat4::from_scale(Vec3::new(1.0, -1.0, -1.0))
                     * Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0));
-                // ShulkerBoxModel.setupAnim(progress = 0): closed lid.
-                draw_part(model, "root", m, &none, paint, out);
+                // ShulkerBoxModel.setupAnim(getProgress(partial)): the lid rises and turns.
+                let (progress, old) = (scene.anim)(pos).shulker;
+                let progress = old + scene.partial * (progress - old);
+                let lid = move |name: &str, p: &mut [f32; 9]| {
+                    if name == "lid" {
+                        p[0] = 0.0;
+                        p[1] = 24.0 - progress * 0.5 * 16.0;
+                        p[2] = 0.0;
+                        p[4] = 270.0 * progress * (PI / 180.0);
+                    }
+                };
+                draw_part(model, "root", m, &lid, paint, out);
             }
             Kind::Banner { color, wall, angle } => {
                 let (main, flag) = if *wall {
@@ -995,7 +1145,7 @@ impl BlockEntityRenderer {
                     / 100.0;
                 let wave = move |name: &str, p: &mut [f32; 9]| {
                     if name == "flag" {
-                        p[3] = (-0.0125 + 0.01 * (2.0 * PI * phase).cos()) * PI;
+                        p[3] = (-0.0125 + 0.01 * (2.0 * PI * phase).mcos()) * PI;
                     }
                 };
                 if let Some(paint) = paint("entity/banner/banner_base", 0xFFFFFF, packed) {
@@ -1027,7 +1177,7 @@ impl BlockEntityRenderer {
                     SkullType::Creeper => ("creeper_head", "entity/creeper/creeper"),
                     SkullType::Dragon => ("dragon_skull", "entity/enderdragon/dragon"),
                     SkullType::Piglin => ("piglin_head", "entity/piglin/piglin"),
-                    SkullType::Player => ("player_head", "entity/player/wide/steve"),
+                    SkullType::Player => ("player_head", "entity/player/slim/steve"),
                 };
                 let (Some(model), Some(paint)) =
                     (self.models.get(model), paint(texture, 0xFFFFFF, packed))
@@ -1050,11 +1200,16 @@ impl BlockEntityRenderer {
                             * Mat4::from_scale(Vec3::new(-1.0, -1.0, 1.0))
                     }
                 };
-                // SkullModelBase.State with animationPos 0 (unpowered).
-                let anim = |name: &str, p: &mut [f32; 9]| match name {
-                    "jaw" => p[3] = (0.0f32.sin() + 1.0) * 0.2,
-                    "left_ear" => p[5] = -(1.0 + 2.5) * 0.2,
-                    "right_ear" => p[5] = (1.0 + 2.5) * 0.2,
+                // SkullBlockEntity.getAnimation: the dragon jaw and piglin ears
+                // (DragonHeadModel / PiglinHeadModel use double-precision Math).
+                let (animating, count) = (scene.anim)(pos).skull;
+                let t = count as f32 + if animating { scene.partial } else { 0.0 };
+                let anim = move |name: &str, p: &mut [f32; 9]| match name {
+                    "jaw" => p[3] = (f64::from(t * PI * 0.2).sin() + 1.0) as f32 * 0.2,
+                    "left_ear" => {
+                        p[5] = -((f64::from(t * PI * 0.2 * 1.2).cos() + 2.5) as f32) * 0.2;
+                    }
+                    "right_ear" => p[5] = (f64::from(t * PI * 0.2).cos() + 2.5) as f32 * 0.2,
                     _ => {}
                 };
                 draw_part(model, "root", m, &anim, paint, out);
@@ -1066,7 +1221,27 @@ impl BlockEntityRenderer {
                 ) else {
                     return;
                 };
-                draw_part(model, "root", base, &none, paint, out);
+                // BellModel.setupAnim(State(ticks + partial, shakeDirection)).
+                let a = (scene.anim)(pos);
+                let ticks = a.bell_ticks as f32 + scene.partial;
+                let (mut x_rot, mut z_rot) = (0.0, 0.0);
+                if let Some(dir) = a.bell_shake {
+                    let base_rot = (ticks / PI).msin() / (4.0 + ticks / 3.0);
+                    match dir {
+                        "north" => x_rot = -base_rot,
+                        "south" => x_rot = base_rot,
+                        "east" => z_rot = -base_rot,
+                        "west" => z_rot = base_rot,
+                        _ => {}
+                    }
+                }
+                let shake = move |name: &str, p: &mut [f32; 9]| {
+                    if name == "bell_body" {
+                        p[3] = x_rot;
+                        p[5] = z_rot;
+                    }
+                };
+                draw_part(model, "root", base, &shake, paint, out);
             }
             Kind::DecoratedPot { y_rot } => {
                 let (Some(base_model), Some(sides)) = (
@@ -1075,38 +1250,111 @@ impl BlockEntityRenderer {
                 ) else {
                     return;
                 };
-                let m = base
+                let a = (scene.anim)(pos);
+                let mut m = base
                     * around(
                         Mat4::from_rotation_y((180.0 - y_rot).to_radians()),
                         Vec3::splat(0.5),
                     );
+                // DecoratedPotRenderer.submit: the wobble tilts around the base centre.
+                let pivot = Vec3::new(0.5, 0.0, 0.5);
+                if let Some((positive, progress)) = a.wobble
+                    && (0.0..=1.0).contains(&progress)
+                {
+                    if positive {
+                        let delta = progress * (PI * 2.0);
+                        let tilt_x = -1.5 * (delta.mcos() + 0.5) * (delta / 2.0).msin();
+                        m *= around(Mat4::from_rotation_x(tilt_x * 0.015_625), pivot);
+                        let tilt_z = delta.msin();
+                        m *= around(Mat4::from_rotation_z(tilt_z * 0.015_625), pivot);
+                    } else {
+                        let turn = (-progress * 3.0 * PI).msin() * 0.125;
+                        let decay = 1.0 - progress;
+                        m *= around(Mat4::from_rotation_y(turn * decay), pivot);
+                    }
+                }
                 if let Some(paint) =
                     paint("entity/decorated_pot/decorated_pot_base", 0xFFFFFF, packed)
                 {
                     draw_part(base_model, "root", m, &none, paint, out);
                 }
-                if let Some(paint) =
-                    paint("entity/decorated_pot/decorated_pot_side", 0xFFFFFF, packed)
-                {
-                    draw_part(sides, "root", m, &none, paint, out);
+                // PotDecorations (back, left, right, front); items without a pattern use the blank side.
+                for (side, item) in ["back", "left", "right", "front"].iter().zip(&a.sherds) {
+                    let texture = item
+                        .as_ref()
+                        .and_then(|i| self.pot_patterns.get(i))
+                        .map_or("entity/decorated_pot/decorated_pot_side", String::as_str);
+                    if let (Some(part), Some(paint)) =
+                        (sides.child(side), paint(texture, 0xFFFFFF, packed))
+                    {
+                        draw_part(part, side, m, &none, paint, out);
+                    }
                 }
             }
             Kind::Conduit => {
-                // Inactive conduit (no frame scan yet): the shell at activeRotation 0.
-                let (Some(model), Some(paint)) = (
-                    self.models.get("conduit_shell"),
-                    paint("entity/conduit/base", 0xFFFFFF, packed),
-                ) else {
+                let (ticks, active, hunting, raw_rotation) = (scene.anim)(pos).conduit;
+                // ConduitRenderer.extractRenderState.
+                let rotation = (raw_rotation + if active { scene.partial } else { 0.0 }) * -0.0375;
+                let tex = |name: &str| paint(name, 0xFFFFFF, packed);
+                if !active {
+                    let (Some(model), Some(paint)) =
+                        (self.models.get("conduit_shell"), tex("entity/conduit/base"))
+                    else {
+                        return;
+                    };
+                    let m = base
+                        * Mat4::from_translation(Vec3::splat(0.5))
+                        * Mat4::from_rotation_y(rotation.to_radians());
+                    draw_part(model, "root", m, &none, paint, out);
                     return;
+                }
+                let anim_time = ticks as f32 + scene.partial;
+                let phase = ticks / 66 % 3;
+                let degrees = rotation * (180.0 / PI);
+                let hh = (anim_time * 0.1).msin() / 2.0 + 0.5;
+                let hh = hh * hh + hh;
+                let lift = Vec3::new(0.5, 0.3 + hh * 0.2, 0.5);
+                if let (Some(model), Some(paint)) =
+                    (self.models.get("conduit_cage"), tex("entity/conduit/cage"))
+                {
+                    let axis = Vec3::new(0.5, 1.0, 0.5).normalize();
+                    let m = base
+                        * Mat4::from_translation(lift)
+                        * Mat4::from_quat(Quat::from_axis_angle(axis, degrees * (PI / 180.0)));
+                    draw_part(model, "root", m, &none, paint, out);
+                }
+                let wind = if phase == 1 {
+                    "entity/conduit/wind_vertical"
+                } else {
+                    "entity/conduit/wind"
                 };
-                draw_part(
-                    model,
-                    "root",
-                    base * Mat4::from_translation(Vec3::splat(0.5)),
-                    &none,
-                    paint,
-                    out,
-                );
+                if let (Some(model), Some(paint)) = (self.models.get("conduit_wind"), tex(wind)) {
+                    let turn = match phase {
+                        1 => Mat4::from_rotation_x(PI / 2.0),
+                        2 => Mat4::from_rotation_z(PI / 2.0),
+                        _ => Mat4::IDENTITY,
+                    };
+                    let center = base * Mat4::from_translation(Vec3::splat(0.5));
+                    draw_part(model, "root", center * turn, &none, paint, out);
+                    let inner = center
+                        * Mat4::from_scale(Vec3::splat(0.875))
+                        * Mat4::from_quat(Quat::from_euler(glam::EulerRot::XYZ, PI, 0.0, PI));
+                    draw_part(model, "root", inner, &none, paint, out);
+                }
+                let eye = if hunting {
+                    "entity/conduit/open_eye"
+                } else {
+                    "entity/conduit/closed_eye"
+                };
+                if let (Some(model), Some(paint)) = (self.models.get("conduit_eye"), tex(eye)) {
+                    let m = base
+                        * Mat4::from_translation(lift)
+                        * Mat4::from_scale(Vec3::splat(0.5))
+                        * Mat4::from_quat(scene.orientation)
+                        * Mat4::from_quat(Quat::from_rotation_z(PI) * Quat::from_rotation_y(PI))
+                        * Mat4::from_scale(Vec3::splat(1.333_333_4));
+                    draw_part(model, "root", m, &none, paint, out);
+                }
             }
             Kind::EnchantingTable => {
                 let (Some(model), Some(paint)) = (
@@ -1123,12 +1371,13 @@ impl BlockEntityRenderer {
                 let y_rot = b.o_rot + wrap(b.rot - b.o_rot) * a;
                 let m = base
                     * Mat4::from_translation(Vec3::new(0.5, 0.75, 0.5))
-                    * Mat4::from_translation(Vec3::new(0.0, 0.1 + (time * 0.1).sin() * 0.01, 0.0))
+                    * Mat4::from_translation(Vec3::new(0.0, 0.1 + (time * 0.1).msin() * 0.01, 0.0))
                     * Mat4::from_rotation_y(-y_rot)
                     * Mat4::from_rotation_z(80f32.to_radians());
                 let ff1 = (frac(flip + 0.25) * 1.6 - 0.3).clamp(0.0, 1.0);
                 let ff2 = (frac(flip + 0.75) * 1.6 - 0.3).clamp(0.0, 1.0);
-                let openness = ((time * 0.02).sin() * 0.1 + 1.25) * open;
+                // BookModel.State.forAnimation.
+                let openness = ((time * 0.02).msin() * 0.1 + 1.25) * open;
                 draw_part(model, "root", m, &book_pose(openness, ff1, ff2), paint, out);
             }
             Kind::Lectern { y_rot } => {
@@ -1309,5 +1558,91 @@ mod tests {
         assert_eq!(out.len(), 4);
         assert_eq!(out[1].pos, [2.0, 0.0, 0.0]);
         assert_eq!(out[2].uv, [0.5, 0.5]);
+    }
+}
+
+/// `BeaconRenderer.submit`: for each beam section (ARGB colour, height) the
+/// rotating solid beam and its translucent glow, the last section 2048
+/// blocks tall. `origin` is the beacon block's corner relative to the camera,
+/// `time` the animation time (game time mod 40 plus partial tick) and `scale`
+/// the radius scale. The sprite's v range rides in the light bytes (the
+/// entity shader wraps v for layer 6).
+pub fn beacon_beam(
+    origin: Vec3,
+    sections: &[(u32, i32)],
+    time: f32,
+    scale: f32,
+    s: Rect,
+    out: &mut Vec<Vertex>,
+) {
+    let q = |v: f32| (v * 65535.0).round().clamp(0.0, 65535.0) as u32;
+    let wrap = q(s.v0) | q(s.v1 - s.v0) << 16;
+    let o = origin + Vec3::new(0.5, 0.0, 0.5);
+    let mut start = 0i32;
+    for (i, &(color, height)) in sections.iter().enumerate() {
+        let height = if i == sections.len() - 1 {
+            2048
+        } else {
+            height
+        };
+        let end = start + height;
+        let scroll = if height < 0 { time } else { -time };
+        let v_off = frac(scroll * 0.2 - (scroll * 0.1).floor());
+        let abgr =
+            |a: u32| a << 24 | (color & 255) << 16 | (color >> 8 & 255) << 8 | (color >> 16 & 255);
+        // Solid beam: radius 0.2 * scale, rotated with time.
+        let r = 0.2 * scale;
+        let rot = glam::Mat3::from_rotation_y((time * 2.25 - 45.0).to_radians());
+        let corners = [
+            rot * Vec3::new(0.0, 0.0, r),
+            rot * Vec3::new(r, 0.0, 0.0),
+            rot * Vec3::new(-r, 0.0, 0.0),
+            rot * Vec3::new(0.0, 0.0, -r),
+        ];
+        let v2 = -1.0 + v_off;
+        let v1 = height as f32 * (0.5 / r) + v2;
+        beam_part(out, o, start, end, corners, [v1, v2], abgr(255), s, wrap);
+        // Glow: radius 0.25 * scale, translucent.
+        let g = 0.25 * scale;
+        let corners = [
+            Vec3::new(-g, 0.0, -g),
+            Vec3::new(g, 0.0, -g),
+            Vec3::new(-g, 0.0, g),
+            Vec3::new(g, 0.0, g),
+        ];
+        let v1 = height as f32 + v2;
+        beam_part(out, o, start, end, corners, [v1, v2], abgr(32), s, wrap);
+        start = end;
+    }
+}
+/// `BeaconRenderer.renderPart`: four quads between the corners (wn, en, ws, es).
+#[allow(clippy::too_many_arguments)]
+fn beam_part(
+    out: &mut Vec<Vertex>,
+    o: Vec3,
+    start: i32,
+    end: i32,
+    [wn, en, ws, es]: [Vec3; 4],
+    [v1, v2]: [f32; 2],
+    color: u32,
+    s: Rect,
+    wrap: u32,
+) {
+    for (a, b) in [(wn, en), (es, ws), (en, es), (ws, wn)] {
+        let at = |c: Vec3, y: i32| o + c + Vec3::new(0.0, y as f32, 0.0);
+        for (p, uv) in [
+            (at(a, end), [s.u1, v1]),
+            (at(a, start), [s.u1, v2]),
+            (at(b, start), [s.u0, v2]),
+            (at(b, end), [s.u0, v1]),
+        ] {
+            out.push(Vertex {
+                pos: p.to_array(),
+                uv,
+                layer: 6,
+                color,
+                light: wrap,
+            });
+        }
     }
 }

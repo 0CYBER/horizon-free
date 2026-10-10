@@ -34,7 +34,6 @@ mod game_mode;
 mod ghasts;
 mod golems;
 mod growth;
-mod health_hud;
 mod jukebox;
 mod lan;
 mod lan_actions;
@@ -107,6 +106,7 @@ use horizon_client::{
     environment::Environment,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
+    hud_layout,
     items::{ItemStack, Items},
     keymapping::KeyState,
     light::LightTables,
@@ -585,7 +585,7 @@ struct Game<'a> {
     fps_frames: u64,
     fps_at: Instant,
     ticks: u64,
-    health_hud: health_hud::HealthHud,
+    health_hud: hud_layout::HealthHud,
     error: Option<String>,
     message: Option<(String, Instant)>,
     save: Arc<SaveDir>,
@@ -3108,49 +3108,39 @@ impl Game<'_> {
             return batch;
         }
         self.draw_spyglass(&mut batch);
-        {
-            let atlas = &self.res.atlas;
-            // Crosshair (first person only).
-            if self.camera_type.first_person() {
-                batch.sprite(
-                    atlas,
-                    "gui/sprites/hud/crosshair",
-                    (w - 15.0) / 2.0,
-                    (h - 15.0) / 2.0,
-                );
-            }
-        }
-        // Gui: spectators get the (closed) spectator menu instead of the
-        // hotbar and no player health.
+        // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
+        // extractVehicleHealth and the experience bar, laid out by hud_layout.
+        // Horizon has no attack cooldown yet: the strength is always full.
         let spectator = self.spectator();
+        let (wi, hi) = (w as i32, h as i32);
+        let indicator = self.settings.attack_indicator;
+        if self.camera_type.first_person() && !spectator {
+            let attack = (indicator == 1).then_some(1.0);
+            let draws = hud_layout::crosshair(wi, hi, attack, false);
+            hud_layout::paint(&mut batch, &self.res.atlas, &draws);
+        }
         if !spectator {
-            let atlas = &self.res.atlas;
-            batch.sprite(atlas, "gui/sprites/hud/hotbar", w / 2.0 - 91.0, h - 22.0);
-            batch.sprite(
-                atlas,
-                "gui/sprites/hud/hotbar_selection",
-                w / 2.0 - 91.0 - 1.0 + self.selected as f32 * 20.0,
-                h - 23.0,
-            );
-        }
-        // Hud.extractItemHotbar: the off hand left of the hotbar (right-handed).
-        if let Some(stack) = self.offhand.clone().filter(|_| !spectator) {
-            batch.sprite(
-                &self.res.atlas,
-                "gui/sprites/hud/hotbar_offhand_left",
-                w / 2.0 - 91.0 - 29.0,
-                h - 23.0,
-            );
-            self.draw_item(&mut batch, &stack, w / 2.0 - 91.0 - 26.0, h - 19.0);
-        }
-        for i in 0..9 {
-            if let Some(stack) = self.inventory[i].clone().filter(|_| !spectator) {
-                self.draw_item(
-                    &mut batch,
-                    &stack,
-                    w / 2.0 - 90.0 + i as f32 * 20.0 + 2.0,
-                    h - 19.0,
-                );
+            let inputs = hud_layout::HotbarInputs {
+                selected: self.selected as i32,
+                right_handed: !self.settings.main_hand_left,
+                offhand: self.offhand.is_some(),
+                slots: std::array::from_fn(|i| self.inventory[i].as_ref().map(|_| 0.0)),
+                offhand_pop: 0.0,
+                attack: (indicator == 2).then_some(1.0),
+            };
+            let draws = hud_layout::hotbar(wi, hi, &inputs);
+            hud_layout::paint(&mut batch, &self.res.atlas, &draws);
+            for d in &draws {
+                if let hud_layout::GuiDraw::Item { slot, x, y, .. } = *d {
+                    let stack = if slot == 40 {
+                        self.offhand.clone()
+                    } else {
+                        self.inventory[slot as usize].clone()
+                    };
+                    if let Some(stack) = stack {
+                        self.draw_item(&mut batch, &stack, x as f32, y as f32);
+                    }
+                }
             }
         }
         self.draw_effect_icons(&mut batch);
@@ -3160,57 +3150,49 @@ impl Game<'_> {
         self.draw_titles(&mut batch);
         self.draw_scoreboard(&mut batch);
         self.draw_subtitles(&mut batch);
-        // Gui.renderVehicleHealth / the jump bar while riding a mount.
-        let mounted = !self.creative && !spectator && self.draw_mount_hud(&mut batch, w, h);
-        let atlas = &self.res.atlas;
+        // The mount's hearts (and the jump bar that replaces the experience bar).
+        let (vehicle_hearts, jump_bar) = if spectator {
+            (0, false)
+        } else {
+            self.draw_mount_hud(&mut batch, wi, hi)
+        };
         if !self.creative
             && !spectator
             && let Some(p) = &mut self.player
         {
-            // Experience bar and hearts/food (Gui.renderPlayerHealth).
-            let saddled_mount = mounted
-                && self
-                    .riding
-                    .and_then(|id| self.mobs.iter().find(|m| m.id == id))
-                    .is_some_and(|m| m.extra.saddled);
-            if !saddled_mount {
-                batch.sprite(
-                    atlas,
-                    "gui/sprites/hud/experience_bar_background",
-                    w / 2.0 - 91.0,
-                    h - 29.0,
-                );
-                let filled = (self.experience.progress * 183.0).floor() / 182.0;
-                if filled > 0.0 {
-                    batch.sprite_part(
-                        atlas,
-                        "gui/sprites/hud/experience_bar_progress",
-                        w / 2.0 - 91.0,
-                        h - 29.0,
-                        filled.min(1.0),
-                    );
-                }
-            }
-            if self.experience.level > 0 {
-                // Gui.renderExperienceLevel: green text with a black outline.
-                let text = self.experience.level.to_string();
-                let tw = HudBatch::text_width(atlas, &text);
-                let (x, y) = ((w - tw) / 2.0, h - 31.0 - 4.0);
-                for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
-                    batch.text(atlas, &text, x + dx, y + dy, rgba(0, 0, 0, 255), false);
-                }
-                batch.text(atlas, &text, x, y, rgba(128, 255, 32, 255), false);
-            }
+            let atlas = &self.res.atlas;
+            let width = |s: &str| HudBatch::text_width(atlas, s) as i32;
+            let draws = hud_layout::experience(
+                wi,
+                hi,
+                self.experience.progress,
+                self.experience.level,
+                !jump_bar,
+                &width,
+            );
+            hud_layout::paint(&mut batch, atlas, &draws);
             let effects = &self.potions.effects;
             let kind = if effects.get("poison").is_some() {
-                health_hud::HeartKind::Poisoned
+                hud_layout::HeartKind::Poisoned
             } else if effects.get("wither").is_some() {
-                health_hud::HeartKind::Withered
+                hud_layout::HeartKind::Withered
             } else {
-                health_hud::HeartKind::Normal
+                hud_layout::HeartKind::Normal
             };
-            let inputs = health_hud::HealthInputs {
-                tick: self.ticks,
+            let eye = p.position.y + f64::from(p.dimensions.eye_height);
+            let under_water = self
+                .res
+                .facts
+                .get(self.world.block(
+                    p.position.x.floor() as i32,
+                    eye.floor() as i32,
+                    p.position.z.floor() as i32,
+                ))
+                .fluid
+                == horizon_client::blocks::Fluid::Water;
+            let inputs = hud_layout::HealthInputs {
+                tick: self.ticks as i32,
+                millis: self.started.elapsed().as_millis() as i64,
                 health: p.health.health(),
                 max_health: p.attribute("minecraft:max_health").unwrap_or(20.0) as f32,
                 absorption: p.health.absorption(),
@@ -3225,15 +3207,16 @@ impl Game<'_> {
                 hunger: effects.get("hunger").is_some(),
                 hardcore: self.level.hardcore,
                 damage_cooldown: p.health.hurt.cooldown > 0,
-                show_food: !mounted,
+                // Horizon does not track the player's air supply yet.
+                air: 300,
+                max_air: 300,
+                under_water,
+                vehicle_hearts,
             };
-            for (name, x, y) in
-                self.health_hud
-                    .layout(&inputs, w as i32, h as i32, std::time::Instant::now())
-            {
-                batch.sprite(atlas, &name, x as f32, y as f32);
-            }
+            let draws = self.health_hud.layout(&inputs, wi, hi);
+            hud_layout::paint(&mut batch, atlas, &draws);
         }
+        let atlas = &self.res.atlas;
         if self.debug {
             let p = self
                 .player
@@ -4483,8 +4466,23 @@ impl Game<'_> {
                     .unwrap_or((0.0, 0.0));
                 prev + (cur - prev) * alpha as f32
             };
+            let (view_yaw, view_pitch) =
+                if self.camera_type == perspective::CameraType::ThirdPersonFront {
+                    (self.yaw + 180.0, -self.pitch)
+                } else {
+                    (self.yaw, self.pitch)
+                };
             let scene = horizon_client::block_entity_render::Scene {
                 camera,
+                // Camera.setRotation.
+                orientation: glam::Quat::from_euler(
+                    glam::EulerRot::YXZ,
+                    std::f32::consts::PI - view_yaw.to_radians(),
+                    -view_pitch.to_radians(),
+                    0.0,
+                ),
+                anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
+                texts: None,
                 partial: alpha as f32,
                 game_time: self.world.game_time,
                 world: &self.world,
@@ -4496,7 +4494,7 @@ impl Game<'_> {
                     _ => None,
                 },
                 banner: &|p| self.banner_layers_at(p),
-                glyph: &|c| self.res.atlas.glyph(c),
+                glyph: &|c| self.res.atlas.glyph_cell(c),
             };
             self.res
                 .block_entity_render
@@ -8490,7 +8488,7 @@ pub fn run() -> Result<()> {
         screen: Screen::Playing,
         window: None,
         renderer: None,
-        health_hud: health_hud::HealthHud::default(),
+        health_hud: hud_layout::HealthHud::default(),
         started: now,
         previous: now,
         last_input: now,
