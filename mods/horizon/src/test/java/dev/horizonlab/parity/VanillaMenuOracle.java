@@ -103,6 +103,9 @@ public final class VanillaMenuOracle {
             if (!stack.isEmpty()) drops.add(ParityData.canon(stack));
             return null;
         }
+        @Override public void triggerRecipeCrafted(net.minecraft.world.item.crafting.RecipeHolder<?> recipe, java.util.List<ItemStack> items) { }
+        @Override public int awardRecipes(java.util.Collection<net.minecraft.world.item.crafting.RecipeHolder<?>> recipes) { return 0; }
+        @Override public void awardStat(net.minecraft.stats.Stat<?> stat, int count) { }
         @Override public void giveExperiencePoints(int amount) { drops.add("xp+" + amount); }
         @Override public void giveExperienceLevels(int amount) { drops.add("levels" + (amount >= 0 ? "+" : "") + amount); }
     }
@@ -167,7 +170,8 @@ public final class VanillaMenuOracle {
                     var inv = new Inventory(player, new EntityEquipment());
                     player.inv = inv;
                     AbstractContainerMenu menu = menu(f.get("menu").getAsString(), player, inv);
-                    set(player, Player.class, "inventoryMenu", menu);
+                    set(player, Player.class, "containerMenu", menu);
+                    if (menu instanceof InventoryMenu im) set(player, Player.class, "inventoryMenu", im);
                     var slotsJson = f.getAsJsonArray("slots");
                     for (int i = 0; i < menu.slots.size(); i++) menu.getSlot(i).set(ParityData.stack(slotsJson.get(i).getAsString()));
                     menu.setCarried(ParityData.stack(f.get("carried").getAsString()));

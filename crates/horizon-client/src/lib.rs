@@ -46,6 +46,7 @@ pub mod keybinds;
 pub mod landing;
 pub mod lang;
 pub mod light;
+pub mod menu;
 pub mod merchant;
 pub mod mesher;
 pub mod mobs;
