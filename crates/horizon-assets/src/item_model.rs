@@ -247,7 +247,9 @@ fn boolean(v: &Value) -> Result<bool> {
     v.as_bool().ok_or_else(|| err("expected boolean"))
 }
 fn string(v: &Value) -> Result<String> {
-    v.as_str().map(str::to_owned).ok_or_else(|| err("expected string"))
+    v.as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| err("expected string"))
 }
 fn list(v: &Value) -> Result<&Vec<Value>> {
     v.as_array().ok_or_else(|| err("expected list"))
@@ -367,8 +369,7 @@ impl ClientItem {
         let m = object(value)?;
         Ok(Self {
             model: ItemModelNode::decode(required(m, "model")?)?,
-            hand_animation_on_swap: get(m, "hand_animation_on_swap")
-                .map_or(Ok(true), boolean)?,
+            hand_animation_on_swap: get(m, "hand_animation_on_swap").map_or(Ok(true), boolean)?,
             oversized_in_gui: get(m, "oversized_in_gui").map_or(Ok(false), boolean)?,
             swap_animation_scale: get(m, "swap_animation_scale").map_or(Ok(1.0), float)?,
         })
@@ -615,7 +616,10 @@ pub enum ConditionProperty {
     Broken,
     Damaged,
     FishingRodCast,
-    HasComponent { component: String, ignore_default: bool },
+    HasComponent {
+        component: String,
+        ignore_default: bool,
+    },
     BundleHasSelectedItem,
     Selected,
     Carried,
@@ -683,7 +687,9 @@ impl SelectProperty {
             "minecraft:main_hand" => Self::MainHand,
             "minecraft:charge_type" => Self::ChargeType,
             "minecraft:trim_material" => Self::TrimMaterial,
-            "minecraft:block_state" => Self::BlockState(string(required(m, "block_state_property")?)?),
+            "minecraft:block_state" => {
+                Self::BlockState(string(required(m, "block_state_property")?)?)
+            }
             "minecraft:display_context" => Self::DisplayContext,
             "minecraft:local_time" => Self::LocalTime {
                 pattern: string(required(m, "pattern")?)?,
@@ -791,17 +797,23 @@ pub enum NumericProperty {
         state: Arc<NeedleState>,
     },
     Cooldown,
-    Count { normalize: bool },
+    Count {
+        normalize: bool,
+    },
     CrossbowPull,
     CustomModelData(i32),
-    Damage { normalize: bool },
+    Damage {
+        normalize: bool,
+    },
     Time {
         wobble: bool,
         source: TimeSource,
         state: Arc<NeedleState>,
     },
     UseCycle(f32),
-    UseDuration { remaining: bool },
+    UseDuration {
+        remaining: bool,
+    },
 }
 impl NumericProperty {
     fn decode(m: &Map<String, Value>) -> Result<Self> {
@@ -1018,7 +1030,11 @@ pub struct ItemModels {
 
 impl ItemModels {
     pub fn components(&self, stack: &StackView) -> Components {
-        let mut out = self.prototypes.get(&stack.item).cloned().unwrap_or_default();
+        let mut out = self
+            .prototypes
+            .get(&stack.item)
+            .cloned()
+            .unwrap_or_default();
         for (key, value) in &stack.patch {
             match value {
                 Some(v) => out.insert(key.clone(), v.clone()),
@@ -1028,12 +1044,7 @@ impl ItemModels {
         out
     }
     /// `ItemModelResolver.updateForTopItem`.
-    pub fn resolve(
-        &self,
-        stack: &StackView,
-        ctx: &Context,
-        env: &dyn ItemEnv,
-    ) -> ResolvedItem {
+    pub fn resolve(&self, stack: &StackView, ctx: &Context, env: &dyn ItemEnv) -> ResolvedItem {
         let mut out = ResolvedItem::default();
         if stack.count > 0 && stack.item != "minecraft:air" {
             self.append_layers(&mut out, stack, ctx, env);
@@ -1192,7 +1203,11 @@ impl Resolve<'_> {
                 on_false,
             } => {
                 let child = compose(parent, transformation);
-                let chosen = if self.condition(property) { on_true } else { on_false };
+                let chosen = if self.condition(property) {
+                    on_true
+                } else {
+                    on_false
+                };
                 self.node(out, chosen, &child);
             }
             ItemModelNode::Select {
@@ -1258,7 +1273,8 @@ impl Resolve<'_> {
             }
             ItemModelNode::BundleSelectedItem => {
                 if let Some(selected) = self.bundle_selected() {
-                    self.models.append_layers(out, &selected, self.ctx, self.env);
+                    self.models
+                        .append_layers(out, &selected, self.ctx, self.env);
                 }
             }
         }
@@ -1279,11 +1295,12 @@ impl Resolve<'_> {
     fn condition(&self, property: &ConditionProperty) -> bool {
         let owner = self.ctx.owner;
         match property {
-            ConditionProperty::CustomModelData(i) => self
-                .component("minecraft:custom_model_data")
-                .and_then(|d| custom_data_at(d, "flags", *i))
-                .and_then(|v| v.as_bool())
-                == Some(true),
+            ConditionProperty::CustomModelData(i) => {
+                self.component("minecraft:custom_model_data")
+                    .and_then(|d| custom_data_at(d, "flags", *i))
+                    .and_then(|v| v.as_bool())
+                    == Some(true)
+            }
             ConditionProperty::UsingItem => owner.is_some_and(|o| o.using_this_item),
             ConditionProperty::Broken => {
                 self.damageable() && self.damage_value() >= self.max_damage() - 1
@@ -1303,7 +1320,9 @@ impl Resolve<'_> {
                 }
             }
             ConditionProperty::BundleHasSelectedItem => self.bundle_selected().is_some(),
-            ConditionProperty::Selected => owner.is_some_and(|o| o.is_local_player && o.is_selected),
+            ConditionProperty::Selected => {
+                owner.is_some_and(|o| o.is_local_player && o.is_selected)
+            }
             ConditionProperty::Carried => owner.is_some_and(|o| o.is_local_player && o.is_carried),
             ConditionProperty::ExtendedView => {
                 self.ctx.display == DisplayContext::Gui && self.env.has_shift_down()
@@ -1322,9 +1341,8 @@ impl Resolve<'_> {
                 .component("minecraft:custom_model_data")
                 .and_then(|d| custom_data_at(d, "strings", *i))
                 .cloned(),
-            SelectProperty::MainHand => owner.map(|o| {
-                Value::String(if o.main_arm_left { "left" } else { "right" }.to_owned())
-            }),
+            SelectProperty::MainHand => owner
+                .map(|o| Value::String(if o.main_arm_left { "left" } else { "right" }.to_owned())),
             SelectProperty::ChargeType => {
                 let projectiles = self
                     .component("minecraft:charged_projectiles")
@@ -1333,7 +1351,9 @@ impl Resolve<'_> {
                     None => "none",
                     Some(p) if p.is_empty() => "none",
                     Some(p) => {
-                        if p.iter().any(|t| template_id(t) == Some("minecraft:firework_rocket")) {
+                        if p.iter()
+                            .any(|t| template_id(t) == Some("minecraft:firework_rocket"))
+                        {
                             "rocket"
                         } else {
                             "arrow"
@@ -1343,7 +1363,10 @@ impl Resolve<'_> {
                 Some(Value::String(kind.to_owned()))
             }
             SelectProperty::TrimMaterial => {
-                let material = self.component("minecraft:trim")?.get("material")?.as_str()?;
+                let material = self
+                    .component("minecraft:trim")?
+                    .get("material")?
+                    .as_str()?;
                 identifier(material).ok().map(Value::String)
             }
             SelectProperty::BlockState(name) => self
@@ -1366,17 +1389,18 @@ impl Resolve<'_> {
             SelectProperty::ContextEntityType => {
                 owner.map(|o| Value::String(o.entity_type.clone()))
             }
-            SelectProperty::ContextDimension => self
-                .ctx
-                .level
-                .map(|l| Value::String(l.dimension.clone())),
+            SelectProperty::ContextDimension => {
+                self.ctx.level.map(|l| Value::String(l.dimension.clone()))
+            }
             SelectProperty::Component(component) => self.component(component).cloned(),
         }
     }
     fn numeric(&self, property: &NumericProperty) -> f32 {
         let owner = self.ctx.owner;
         match property {
-            NumericProperty::BundleFullness => self.env.bundle_fullness(self.stack, self.components),
+            NumericProperty::BundleFullness => {
+                self.env.bundle_fullness(self.stack, self.components)
+            }
             NumericProperty::Compass {
                 wobble,
                 target,
@@ -1495,7 +1519,8 @@ impl Resolve<'_> {
                     c[2] - owner.position[2],
                 ];
                 // `distToCenterSqr(position) < 1.0E-5F`
-                !(d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < f64::from(1.0E-5_f32))
+                let dist = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                dist.is_nan() || dist >= f64::from(1.0E-5_f32)
             }
         });
         let mut wobblers = state.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -1538,9 +1563,7 @@ impl Resolve<'_> {
                 .and_then(|v| rgb(v).ok())
                 .map_or(opaque(*default), opaque),
             TintSource::Dye(default) => match self.component("minecraft:dyed_color") {
-                Some(v) => opaque(
-                    rgb(v.get("rgb").unwrap_or(v)).unwrap_or(0),
-                ),
+                Some(v) => opaque(rgb(v.get("rgb").unwrap_or(v)).unwrap_or(0)),
                 None => *default,
             },
             TintSource::Grass {
@@ -1612,7 +1635,9 @@ fn enchantments_present(v: &Value) -> bool {
     map.as_object().is_some_and(|m| !m.is_empty())
 }
 fn custom_data_at<'a>(data: &'a Value, list: &str, index: i32) -> Option<&'a Value> {
-    data.get(list)?.as_array()?.get(usize::try_from(index).ok()?)
+    data.get(list)?
+        .as_array()?
+        .get(usize::try_from(index).ok()?)
 }
 fn template_id(t: &Value) -> Option<&str> {
     t.get("id")?.as_str()
@@ -1629,7 +1654,9 @@ fn stack_from_template(template: &Value) -> Option<StackView> {
                     stack.patch.insert(identifier(removed).ok()?, None);
                 }
                 None => {
-                    stack.patch.insert(identifier(key).ok()?, Some(value.clone()));
+                    stack
+                        .patch
+                        .insert(identifier(key).ok()?, Some(value.clone()));
                 }
             }
         }
@@ -1658,7 +1685,11 @@ fn last_index_less_or_equal(entries: &[(f32, ItemModelNode)], needle: f32) -> Op
 fn binary_search(a: &[f32], key: f32) -> std::result::Result<usize, usize> {
     let (mut low, mut high) = (0i64, a.len() as i64 - 1);
     let bits = |v: f32| -> i32 {
-        if v.is_nan() { 0x7fc0_0000 } else { v.to_bits() as i32 }
+        if v.is_nan() {
+            0x7fc0_0000
+        } else {
+            v.to_bits() as i32
+        }
     };
     while low <= high {
         let mid = (low + high) >> 1;

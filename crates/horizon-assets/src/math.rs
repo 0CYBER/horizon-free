@@ -48,8 +48,8 @@ impl Mat4 {
     pub fn translate(&self, t: [f32; 3]) -> Self {
         let mut out = *self;
         for row in 0..4 {
-            out.0[3][row] =
-                self.0[0][row] * t[0] + (self.0[1][row] * t[1] + (self.0[2][row] * t[2] + self.0[3][row]));
+            out.0[3][row] = self.0[0][row] * t[0]
+                + (self.0[1][row] * t[1] + (self.0[2][row] * t[2] + self.0[3][row]));
         }
         out
     }

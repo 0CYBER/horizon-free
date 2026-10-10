@@ -31,7 +31,9 @@ impl SpriteLookup for Sprites {
             return hit.clone();
         }
         let mask = self.load(sprite);
-        self.cache.borrow_mut().insert(sprite.to_owned(), mask.clone());
+        self.cache
+            .borrow_mut()
+            .insert(sprite.to_owned(), mask.clone());
         mask
     }
 }
@@ -150,13 +152,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prototypes_path = &args[2];
     let mut output = BufWriter::new(File::create(&args[4])?);
 
-    let raw: BTreeMap<String, Components> =
-        serde_json::from_slice(&fs::read(prototypes_path)?)?;
+    let raw: BTreeMap<String, Components> = serde_json::from_slice(&fs::read(prototypes_path)?)?;
     let mut models = ItemModels {
         prototypes: raw,
         ..Default::default()
     };
-    writeln!(output, "{}", json!({"row":"components","names":DATA_COMPONENT_TYPES.to_vec()}))?;
+    writeln!(
+        output,
+        "{}",
+        json!({"row":"components","names":DATA_COMPONENT_TYPES.to_vec()})
+    )?;
     let items_dir = root.join("assets/minecraft/items");
     let mut files: Vec<_> = fs::read_dir(&items_dir)?.collect::<Result<_, _>>()?;
     files.sort_by_key(|f| f.file_name());

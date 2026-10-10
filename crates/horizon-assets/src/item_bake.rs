@@ -134,21 +134,22 @@ pub fn bake_item_model(
             let mask = if m.sprite == MISSING_SPRITE {
                 SpriteMask::opaque(16, 16)
             } else {
-                sprites.mask(&m.sprite).unwrap_or_else(|| SpriteMask::opaque(16, 16))
+                sprites
+                    .mask(&m.sprite)
+                    .unwrap_or_else(|| SpriteMask::opaque(16, 16))
             };
             quads.extend(extrude_layer(&mask, &m, layer as i32)?);
         }
         quads
     } else {
-        let mut quads = bake_block_model(
-            &model,
-            crate::bake::BlockModelTransform::new([0; 3], false),
-        )?;
+        let mut quads =
+            bake_block_model(&model, crate::bake::BlockModelTransform::new([0; 3], false))?;
         for q in &mut quads {
             q.material = material(&q.material);
         }
         // `QuadCollection.Builder.build`: unculled, then each culled direction.
-        let mut ordered: Vec<ModelQuad> = quads.iter().filter(|q| q.cull.is_none()).cloned().collect();
+        let mut ordered: Vec<ModelQuad> =
+            quads.iter().filter(|q| q.cull.is_none()).cloned().collect();
         for side in [
             Direction::North,
             Direction::South,

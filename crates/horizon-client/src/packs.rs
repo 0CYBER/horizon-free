@@ -374,11 +374,9 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
                         }
                     }
                 }
-            } else if vanilla.join(&child).is_dir()
-                && (touched.contains(&child) || !filters.is_empty())
+            } else if touched.contains(&child)
+                || (vanilla.join(&child).is_dir() && !filters.is_empty())
             {
-                mirror(&child, vanilla, out, touched, files, filters, zips)?;
-            } else if touched.contains(&child) {
                 mirror(&child, vanilla, out, touched, files, filters, zips)?;
             } else if filters.iter().any(|f| f.blocks(&child)) {
                 // Hidden by a pack's filter.
