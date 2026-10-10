@@ -734,6 +734,12 @@ impl Game<'_> {
         self.tick_player_effects();
         self.piglin_pickups();
         self.sulfur_cube_pickups();
+        // Hurt and death sounds of damage dealt outside the mob ticks.
+        let mut queued = Vec::new();
+        for m in &mut self.mobs {
+            queued.append(&mut m.outbox);
+        }
+        self.handle_mob_events(queued)?;
         Ok(())
     }
     /// LivingEntity.die / dropAllDeathLoot.
@@ -950,24 +956,18 @@ impl Game<'_> {
                     if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
                         let hit = t.damage(amount, source);
                         if hit {
-                            let (voice, center, dead) = (
-                                horizon_client::mobs::ai::voice_sounds(t),
-                                t.center(),
-                                !t.alive(),
-                            );
-                            killed = dead;
-                            let pitch = (self.world.random.next_float()
-                                - self.world.random.next_float())
-                                * 0.2
-                                + 1.0;
-                            let s = voice[if dead { 2 } else { 1 }];
-                            if !s.is_empty() {
-                                self.audio.play(
-                                    &format!("minecraft:{s}"),
-                                    Some(center),
-                                    1.0,
-                                    pitch,
-                                );
+                            killed = !t.alive();
+                            // The hurt or death sound the mob raised.
+                            let center = t.center();
+                            for event in std::mem::take(&mut t.outbox) {
+                                if let MobEvent::Sound(s, _, volume, pitch) = event {
+                                    self.audio.play(
+                                        &format!("minecraft:{s}"),
+                                        Some(center),
+                                        volume,
+                                        pitch,
+                                    );
+                                }
                             }
                         }
                     }

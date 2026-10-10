@@ -23,6 +23,62 @@ pub fn cos(angle: f64) -> f32 {
     sine_table()[((angle * SCALE + 16384.0) as i64 & 65535) as usize]
 }
 
+/// `Mth.atan2`: vanilla's table-driven arctangent.
+pub fn atan2(mut y: f64, mut x: f64) -> f64 {
+    static TABLES: OnceLock<(Vec<f64>, Vec<f64>)> = OnceLock::new();
+    let (asin, cos) = TABLES.get_or_init(|| {
+        (0..257)
+            .map(|i| {
+                let a = (f64::from(i) / 256.0).asin();
+                (a, a.cos())
+            })
+            .unzip()
+    });
+    let frac_bias = f64::from_bits(4_805_340_802_404_319_232);
+    let d2 = x * x + y * y;
+    if d2.is_nan() {
+        return f64::NAN;
+    }
+    let negative_y = y < 0.0;
+    if negative_y {
+        y = -y;
+    }
+    let negative_x = x < 0.0;
+    if negative_x {
+        x = -x;
+    }
+    let steep = y > x;
+    if steep {
+        std::mem::swap(&mut x, &mut y);
+    }
+    // Mth.fastInvSqrt
+    let half = 0.5 * d2;
+    let mut r = f64::from_bits((6_910_469_410_427_058_090i64 - (d2.to_bits() as i64 >> 1)) as u64);
+    r *= 1.5 - half * r * r;
+    x *= r;
+    y *= r;
+    let yp = frac_bias + y;
+    let index = yp.to_bits() as i32 as usize;
+    let s_phi = yp - frac_bias;
+    let sd = y * cos[index] - x * s_phi;
+    let mut theta = asin[index] + (6.0 + sd * sd) * sd * 0.166_666_666_666_666_66;
+    if steep {
+        theta = std::f64::consts::FRAC_PI_2 - theta;
+    }
+    if negative_x {
+        theta = std::f64::consts::PI - theta;
+    }
+    if negative_y {
+        theta = -theta;
+    }
+    theta
+}
+/// `(float)(Mth.atan2(y, x) * 180.0F / (float)Math.PI)`: the angle in degrees
+/// as the AI controls compute it.
+pub fn atan2_degrees(y: f64, x: f64) -> f32 {
+    (atan2(y, x) * 180.0 / f64::from(std::f32::consts::PI)) as f32
+}
+
 /// `Mth.sin` / `Mth.cos` on a float, as the models call them.
 pub trait Mth {
     fn msin(self) -> f32;

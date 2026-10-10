@@ -1,6 +1,12 @@
 //! Mob controls: `MoveControl` (with the flying and smooth-swimming
 //! variants), `LookControl`, `JumpControl` and `BodyRotationControl`.
 use super::{Mob, MobWorld, living::wrap};
+use horizon_core::geometry::trig;
+
+/// `2.5000003E-7F` widened: the squared distance controls treat as arrived.
+const ARRIVED: f64 = 2.500_000_3e-7_f32 as f64;
+/// `1.0E-5F` widened.
+const EPSILON: f64 = 1.0e-5_f32 as f64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Operation {
@@ -117,8 +123,8 @@ impl Mob {
         let (dx, dz) = (at[0] - self.position.x, at[2] - self.position.z);
         let dy = at[1] - self.eye_y();
         let sd = (dx * dx + dz * dz).sqrt();
-        let y_rot = (dz.atan2(dx).to_degrees() as f32) - 90.0;
-        let x_rot = -(dy.atan2(sd).to_degrees() as f32);
+        let y_rot = trig::atan2_degrees(dz, dx) - 90.0;
+        let x_rot = -trig::atan2_degrees(dy, sd);
         self.head_pitch = rotate_toward_max(self.head_pitch, x_rot, x_max);
         self.yaw = rotate_toward_max(self.yaw, y_rot, y_max);
     }
@@ -139,12 +145,12 @@ impl Mob {
                         wy - self.position.y,
                         wz - self.position.z,
                     );
-                    if xd * xd + yd * yd + zd * zd < 2.500_000_3e-7 {
+                    if xd * xd + yd * yd + zd * zd < ARRIVED {
                         self.ai.yya = 0.0;
                         self.ai.zza = 0.0;
                         return;
                     }
-                    let y_rot = (zd.atan2(xd).to_degrees() as f32) - 90.0;
+                    let y_rot = trig::atan2_degrees(zd, xd) - 90.0;
                     self.yaw = rotlerp(self.yaw, y_rot, 90.0);
                     let speed = (self.ai.mov.speed_modifier
                         * if self.on_ground {
@@ -154,8 +160,8 @@ impl Mob {
                         }) as f32;
                     self.set_speed(speed);
                     let sd = (xd * xd + zd * zd).sqrt();
-                    if yd.abs() > 1.0e-5 || sd.abs() > 1.0e-5 {
-                        let x_rot = -(yd.atan2(sd).to_degrees() as f32);
+                    if yd.abs() > EPSILON || sd.abs() > EPSILON {
+                        let x_rot = -trig::atan2_degrees(yd, sd);
                         self.head_pitch = rotlerp(self.head_pitch, x_rot, max_turn);
                         self.ai.yya = if yd > 0.0 { speed } else { -speed };
                     }
@@ -184,10 +190,10 @@ impl Mob {
                         wy - self.position.y,
                         wz - self.position.z,
                     );
-                    if xd * xd + yd * yd + zd * zd < 2.500_000_3e-7 {
+                    if xd * xd + yd * yd + zd * zd < ARRIVED {
                         self.ai.zza = 0.0;
                     } else {
-                        let y_rot = (zd.atan2(xd).to_degrees() as f32) - 90.0;
+                        let y_rot = trig::atan2_degrees(zd, xd) - 90.0;
                         self.yaw = rotlerp(self.yaw, y_rot, max_turn_y);
                         self.body_yaw = self.yaw;
                         self.head_yaw = self.yaw;
@@ -195,15 +201,13 @@ impl Mob {
                         if self.fluids.in_water {
                             self.ai.speed = speed * in_water;
                             let sd = (xd * xd + zd * zd).sqrt();
-                            if yd.abs() > 1.0e-5 || sd.abs() > 1.0e-5 {
-                                let x_rot = -(yd.atan2(sd).to_degrees() as f32);
+                            if yd.abs() > EPSILON || sd.abs() > EPSILON {
+                                let x_rot = -trig::atan2_degrees(yd, sd);
                                 let x_rot = wrap(x_rot).clamp(-max_turn_x, max_turn_x);
                                 self.head_pitch = rotate_towards(self.head_pitch, x_rot, 5.0);
                             }
-                            let (c, s) = (
-                                self.head_pitch.to_radians().cos(),
-                                self.head_pitch.to_radians().sin(),
-                            );
+                            let angle = f64::from(self.head_pitch * trig::DEG_TO_RAD);
+                            let (c, s) = (trig::cos(angle), trig::sin(angle));
                             self.ai.zza = c * speed;
                             self.ai.yya = -s * speed;
                         } else {
@@ -229,7 +233,7 @@ impl Mob {
     fn ground_move_tick(&mut self, w: &MobWorld, attr_speed: f64) {
         match self.ai.mov.operation {
             Operation::Strafe => {
-                let speed = (self.ai.mov.speed_modifier * attr_speed) as f32;
+                let speed = self.ai.mov.speed_modifier as f32 * attr_speed as f32;
                 let (mut xa, mut za) = (self.ai.mov.strafe_forwards, self.ai.mov.strafe_right);
                 let mut dist = (xa * xa + za * za).sqrt();
                 if dist < 1.0 {
@@ -238,7 +242,8 @@ impl Mob {
                 dist = speed / dist;
                 xa *= dist;
                 za *= dist;
-                let (s, c) = (self.yaw.to_radians().sin(), self.yaw.to_radians().cos());
+                let angle = f64::from(self.yaw * trig::DEG_TO_RAD);
+                let (s, c) = (trig::sin(angle), trig::cos(angle));
                 let dx = xa * c - za * s;
                 let dz = za * c + xa * s;
                 if !self.walkable(w, dx, dz) {
@@ -258,11 +263,11 @@ impl Mob {
                     wy - self.position.y,
                     wz - self.position.z,
                 );
-                if xd * xd + yd * yd + zd * zd < 2.500_000_3e-7 {
+                if xd * xd + yd * yd + zd * zd < ARRIVED {
                     self.ai.zza = 0.0;
                     return;
                 }
-                let y_rot = (zd.atan2(xd).to_degrees() as f32) - 90.0;
+                let y_rot = trig::atan2_degrees(zd, xd) - 90.0;
                 self.yaw = rotlerp(self.yaw, y_rot, 90.0);
                 self.set_speed((self.ai.mov.speed_modifier * attr_speed) as f32);
                 let (bx, by, bz) = (
@@ -359,9 +364,9 @@ impl Mob {
         );
         let sd = (xd * xd + zd * zd).sqrt();
         let x =
-            (yd.abs() > 1.0e-5 || sd.abs() > 1.0e-5).then(|| -(yd.atan2(sd).to_degrees() as f32));
-        let y = (zd.abs() > 1.0e-5 || xd.abs() > 1.0e-5)
-            .then(|| (zd.atan2(xd).to_degrees() as f32) - 90.0);
+            (yd.abs() > EPSILON || sd.abs() > EPSILON).then(|| -trig::atan2_degrees(yd, sd));
+        let y = (zd.abs() > EPSILON || xd.abs() > EPSILON)
+            .then(|| trig::atan2_degrees(zd, xd) - 90.0);
         (x, y)
     }
     /// JumpControl.tick.
@@ -374,7 +379,7 @@ impl Mob {
         let dx = self.position.x - self.previous.x;
         let dz = self.position.z - self.previous.z;
         let max = self.kind.max_head_y_rot;
-        if dx * dx + dz * dz > 2.500_000_3e-7 {
+        if dx * dx + dz * dz > ARRIVED {
             self.body_yaw = self.yaw;
             self.head_yaw = rotate_if_necessary(self.head_yaw, self.body_yaw, max);
             self.ai.body.last_stable_head = self.head_yaw;
