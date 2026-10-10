@@ -567,6 +567,139 @@ packet!(TeleportEntity {
     on_ground: bool => Bool,
 });
 
+packet!(BlockEvent { pos: [i32; 3] => Pos, b0: u8 => UByte, b1: u8 => UByte, block: i32 => VarInt });
+packet!(
+    /// ClientboundInitializeBorderPacket.
+    InitializeBorder {
+        center_x: f64 => Double,
+        center_z: f64 => Double,
+        old_size: f64 => Double,
+        new_size: f64 => Double,
+        lerp_time: i64 => VarLong,
+        absolute_max_size: i32 => VarInt,
+        warning_blocks: i32 => VarInt,
+        warning_time: i32 => VarInt,
+    }
+);
+packet!(TabList { header: Tag => Nbt, footer: Tag => Nbt });
+packet!(ServerData { motd: Tag => Nbt, icon: Option<Vec<u8>> => Opt<crate::buf::Bytes> });
+packet!(
+    /// ClientboundUpdateMobEffectPacket; flags: 1 ambient, 2 visible, 4 icon, 8 blend.
+    UpdateMobEffect { id: i32 => VarInt, effect: i32 => VarInt, amplifier: i32 => VarInt, duration: i32 => VarInt, flags: i8 => Byte }
+);
+packet!(RemoveMobEffect { id: i32 => VarInt, effect: i32 => VarInt });
+packet!(
+    /// ClientboundSwingAnimationPacket: hand (0 main, 1 off) and the swing
+    /// type (0 none, 1 whack, 2 stab) with its duration in ticks.
+    SwingAnimation { id: i32 => VarInt, hand: i32 => VarInt, kind: i32 => VarInt, duration: i32 => VarInt }
+);
+packet!(SoundEntity {
+    sound: (i32, Option<(String, Option<f32>)>) => SoundHolder,
+    source: i32 => VarInt,
+    id: i32 => VarInt,
+    volume: f32 => Float,
+    pitch: f32 => Float,
+    seed: i64 => Long,
+});
+/// One entry of ClientboundCommandsPacket: a literal or an argument node.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandNode {
+    /// 0 root, 1 literal, 2 argument.
+    pub kind: u8,
+    pub executable: bool,
+    pub restricted: bool,
+    pub children: Vec<i32>,
+    pub redirect: Option<i32>,
+    pub name: String,
+    /// Argument parser registry id and its raw property bytes.
+    pub parser: Option<(i32, Vec<u8>)>,
+    /// Custom suggestion provider (`minecraft:ask_server`).
+    pub suggestions: Option<String>,
+}
+/// The command tree: nodes and the index of the root.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Commands {
+    pub nodes: Vec<CommandNode>,
+    pub root: i32,
+}
+impl Codec<Commands> for Commands {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let n = r.count(r.remaining())?;
+        let mut nodes = Vec::with_capacity(n.min(4096));
+        for _ in 0..n {
+            let flags = r.u8()?;
+            let count = r.count(r.remaining())?;
+            let children = (0..count).map(|_| r.varint()).collect::<Result<_>>()?;
+            let redirect = if flags & 8 != 0 {
+                Some(r.varint()?)
+            } else {
+                None
+            };
+            let kind = flags & 3;
+            let (mut name, mut parser, mut suggestions) = (String::new(), None, None);
+            if kind >= 1 {
+                name = r.string(32767)?;
+            }
+            if kind == 2 {
+                // Properties are parser specific; only the property-less parsers
+                // can be skipped without a table, so keep the rest of the packet.
+                return Err(crate::Error::new("argument nodes are not decoded"));
+            }
+            let _ = (&mut parser, &mut suggestions);
+            nodes.push(CommandNode {
+                kind,
+                executable: flags & 4 != 0,
+                restricted: flags & 32 != 0,
+                children,
+                redirect,
+                name,
+                parser,
+                suggestions,
+            });
+        }
+        Ok(Self {
+            nodes,
+            root: r.varint()?,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        w.varint(v.nodes.len() as i32);
+        for n in &v.nodes {
+            let mut flags = n.kind & 3;
+            if n.executable {
+                flags |= 4;
+            }
+            if n.redirect.is_some() {
+                flags |= 8;
+            }
+            if n.suggestions.is_some() {
+                flags |= 16;
+            }
+            if n.restricted {
+                flags |= 32;
+            }
+            w.u8(flags);
+            w.varint(n.children.len() as i32);
+            n.children.iter().for_each(|c| w.varint(*c));
+            if let Some(r) = n.redirect {
+                w.varint(r);
+            }
+            if n.kind >= 1 {
+                w.string(&n.name);
+            }
+            if n.kind == 2 {
+                let (id, props) = n.parser.clone().unwrap_or((5, Vec::new()));
+                w.varint(id);
+                w.bytes(&props);
+                if let Some(s) = &n.suggestions {
+                    w.string(s);
+                }
+            }
+        }
+        w.varint(v.root);
+    }
+}
+
 packet_enum!(Clientbound, crate::ids::play::clientbound {
     BundleDelimiter(Empty) = BUNDLE_DELIMITER,
     AddEntity(AddEntity) = ADD_ENTITY,
@@ -574,11 +707,13 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     BlockChangedAck(BlockChangedAck) = BLOCK_CHANGED_ACK,
     BlockDestruction(BlockDestruction) = BLOCK_DESTRUCTION,
     BlockEntityData(BlockEntityData) = BLOCK_ENTITY_DATA,
+    BlockEvent(BlockEvent) = BLOCK_EVENT,
     BlockUpdate(BlockUpdate) = BLOCK_UPDATE,
     ChangeDifficulty(ChangeDifficulty) = CHANGE_DIFFICULTY,
     ChunkBatchFinished(ChunkBatchFinished) = CHUNK_BATCH_FINISHED,
     ChunkBatchStart(Empty) = CHUNK_BATCH_START,
     ClearTitles(Bool1) = CLEAR_TITLES,
+    Commands(Commands) = COMMANDS,
     ContainerClose(ContainerClose) = CONTAINER_CLOSE,
     ContainerSetContent(ContainerSetContent) = CONTAINER_SET_CONTENT,
     ContainerSetData(ContainerSetData) = CONTAINER_SET_DATA,
@@ -592,6 +727,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     GameEvent(GameEvent) = GAME_EVENT,
     HurtAnimation(HurtAnimation) = HURT_ANIMATION,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
+    InitializeBorder(InitializeBorder) = INITIALIZE_BORDER,
     LevelChunkWithLight(LevelChunkWithLight) = LEVEL_CHUNK_WITH_LIGHT,
     LevelEvent(LevelEvent) = LEVEL_EVENT,
     LightUpdate(LightUpdate) = LIGHT_UPDATE,
@@ -609,10 +745,12 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     PlayerPosition(PlayerPosition) = PLAYER_POSITION,
     PlayerRotation(PlayerRotation) = PLAYER_ROTATION,
     RemoveEntities(RemoveEntities) = REMOVE_ENTITIES,
+    RemoveMobEffect(RemoveMobEffect) = REMOVE_MOB_EFFECT,
     ResourcePackPush(ResourcePackPush) = RESOURCE_PACK_PUSH,
     Respawn(Respawn) = RESPAWN,
     RotateHead(RotateHead) = ROTATE_HEAD,
     SectionBlocksUpdate(SectionBlocksUpdate) = SECTION_BLOCKS_UPDATE,
+    ServerData(ServerData) = SERVER_DATA,
     SetActionBarText(Text) = SET_ACTION_BAR_TEXT,
     SetChunkCacheCenter(SetChunkCacheCenter) = SET_CHUNK_CACHE_CENTER,
     SetChunkCacheRadius(Distance) = SET_CHUNK_CACHE_RADIUS,
@@ -631,10 +769,14 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetTitleText(Text) = SET_TITLE_TEXT,
     SetTitlesAnimation(TitlesAnimation) = SET_TITLES_ANIMATION,
     Sound(Sound) = SOUND,
+    SoundEntity(SoundEntity) = SOUND_ENTITY,
     StartConfiguration(Empty) = START_CONFIGURATION,
+    SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,
+    TabList(TabList) = TAB_LIST,
     TakeItemEntity(TakeItemEntity) = TAKE_ITEM_ENTITY,
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
+    UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
 });
 packet!(

@@ -170,7 +170,7 @@ impl BlockEntity {
                 lit_remaining: 0,
                 lit_total: 0,
                 cooking_timer: 0,
-                cooking_total: 200,
+                cooking_total: 0,
                 speed: 1.0,
             }));
         }
