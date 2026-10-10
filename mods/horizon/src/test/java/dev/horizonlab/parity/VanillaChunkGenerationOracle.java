@@ -82,7 +82,12 @@ public final class VanillaChunkGenerationOracle {
         static StructureManager structures;
         static BiomeResolver resolver;
         static ServerChunkCache cache;
+        static net.minecraft.server.MinecraftServer server;
         static ResourceKey<Level> key;
+        @Override
+        public net.minecraft.server.MinecraftServer getServer() {
+            return server;
+        }
         static int minY, height;
         static Map<Long, ProtoChunk> chunks;
         static net.minecraft.world.level.lighting.LevelLightEngine light;
@@ -252,6 +257,10 @@ public final class VanillaChunkGenerationOracle {
         OracleLevel.type = dimensionType;
         OracleLevel.resolver = biomeSource.createUncachedResolver(randomState);
         OracleLevel.cache = (ServerChunkCache) allocate.invoke(unsafe, OracleCache.class);
+        OracleLevel.server = (net.minecraft.server.MinecraftServer) allocate.invoke(unsafe, net.minecraft.server.dedicated.DedicatedServer.class);
+        var templateField = net.minecraft.server.MinecraftServer.class.getDeclaredField("structureTemplateManager");
+        templateField.setAccessible(true);
+        templateField.set(OracleLevel.server, templates);
         OracleLevel.key = levelKey;
         OracleLevel.minY = height.getMinY();
         OracleLevel.height = height.getHeight();
