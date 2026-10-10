@@ -32,6 +32,7 @@ mod functions;
 mod game_mode;
 mod golems;
 mod growth;
+mod health_hud;
 mod jukebox;
 mod lightning;
 mod loom;
@@ -525,6 +526,7 @@ struct Game<'a> {
     fps_frames: u64,
     fps_at: Instant,
     ticks: u64,
+    health_hud: health_hud::HealthHud,
     error: Option<String>,
     message: Option<(String, Instant)>,
     save: Arc<SaveDir>,
@@ -2928,7 +2930,7 @@ impl Game<'_> {
         let atlas = &self.res.atlas;
         if !self.creative
             && !spectator
-            && let Some(p) = &self.player
+            && let Some(p) = &mut self.player
         {
             // Experience bar and hearts/food (Gui.renderPlayerHealth).
             let saddled_mount = mounted
@@ -2964,33 +2966,37 @@ impl Game<'_> {
                 }
                 batch.text(atlas, &text, x, y, rgba(128, 255, 32, 255), false);
             }
-            let health = p.health.health().ceil() as i32;
-            let top = h - 39.0;
-            for i in 0..10 {
-                let x = w / 2.0 - 91.0 + i as f32 * 8.0;
-                let y = if health <= 4 {
-                    top + ((self.ticks + i as u64 * 7) % 3) as f32 - 1.0
-                } else {
-                    top
-                };
-                batch.sprite(atlas, "gui/sprites/hud/heart/container", x, y);
-                let v = health - i * 2;
-                if v >= 2 {
-                    batch.sprite(atlas, "gui/sprites/hud/heart/full", x, y);
-                } else if v == 1 {
-                    batch.sprite(atlas, "gui/sprites/hud/heart/half", x, y);
-                }
-            }
-            let food = p.health.food.food;
-            for i in (0..10).filter(|_| !mounted) {
-                let x = w / 2.0 + 91.0 - i as f32 * 8.0 - 9.0;
-                batch.sprite(atlas, "gui/sprites/hud/food_empty", x, top);
-                let v = food - i * 2;
-                if v >= 2 {
-                    batch.sprite(atlas, "gui/sprites/hud/food_full", x, top);
-                } else if v == 1 {
-                    batch.sprite(atlas, "gui/sprites/hud/food_half", x, top);
-                }
+            let effects = &self.potions.effects;
+            let kind = if effects.get("poison").is_some() {
+                health_hud::HeartKind::Poisoned
+            } else if effects.get("wither").is_some() {
+                health_hud::HeartKind::Withered
+            } else {
+                health_hud::HeartKind::Normal
+            };
+            let inputs = health_hud::HealthInputs {
+                tick: self.ticks,
+                health: p.health.health(),
+                max_health: p.attribute("minecraft:max_health").unwrap_or(20.0) as f32,
+                absorption: p.health.absorption(),
+                armor: p
+                    .attribute("minecraft:armor")
+                    .or_else(|_| p.attribute("armor"))
+                    .unwrap_or(0.0) as i32,
+                food: p.health.food.food,
+                saturation: p.health.food.saturation,
+                kind,
+                regeneration: effects.get("regeneration").is_some(),
+                hunger: effects.get("hunger").is_some(),
+                hardcore: self.level.hardcore,
+                damage_cooldown: p.health.hurt.cooldown > 0,
+                show_food: !mounted,
+            };
+            for (name, x, y) in
+                self.health_hud
+                    .layout(&inputs, w as i32, h as i32, std::time::Instant::now())
+            {
+                batch.sprite(atlas, &name, x as f32, y as f32);
             }
         }
         if self.debug {
@@ -4220,10 +4226,13 @@ impl Game<'_> {
             return 11;
         }
         if self.dim == Dim::End {
-            let sky = self.res.end_environment.sample(self.world.day_time, 0, 0);
+            let sky = self
+                .res
+                .end_environment
+                .sample(self.world.day_time, None, None);
             return (15.0 - 15.0 * sky.sky_light_level).round() as i32;
         }
-        let mut sky = self.res.environment.sample(self.world.day_time, 0, 0);
+        let mut sky = self.res.environment.sample(self.world.day_time, None, None);
         let (rain, thunder) = self.world.weather.levels(1.0);
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
         // Level.updateSkyBrightness: darkening from the sky light level.
@@ -6923,6 +6932,8 @@ impl Game<'_> {
             game_time: self.world.game_time as f32,
             ticks: self.ticks,
             darkness: self.darkness_lighting(alpha as f32),
+            night_vision: self.night_vision_intensity(),
+            block_flicker: self.res.fog.state.block_light_flicker,
         };
         self.renderer.as_mut().ok_or("renderer")?.render(&frame)
     }
@@ -7749,6 +7760,7 @@ pub fn run() -> Result<()> {
         screen: Screen::Playing,
         window: None,
         renderer: None,
+        health_hud: health_hud::HealthHud::default(),
         started: now,
         previous: now,
         frames: 0,
