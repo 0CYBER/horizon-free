@@ -3527,6 +3527,69 @@ impl Game<'_> {
         self.close_ender_chest();
         self.close_cart_container();
     }
+    /// `quickMoveStack` of the player inventory or crafting table menu for a
+    /// shift-click, run by the verified menu engine (`horizon_client::menu`).
+    fn inventory_quick_move(&mut self, slot: usize) -> bool {
+        use horizon_client::menu::{Env, Input, Kind, Menu};
+        let table = self.craft_size == 3;
+        let cells = self.craft_size * self.craft_size;
+        // Game slot <-> menu index.
+        let main = if table { 10 } else { 9 };
+        let to_menu = |g: usize| match g {
+            100..109 if g - 100 < cells => Some(1 + g - 100),
+            500..504 if !table => Some(5 + g - 500),
+            9..36 => Some(main + g - 9),
+            0..9 => Some(main + 27 + g),
+            _ => None,
+        };
+        let Some(index) = to_menu(slot) else {
+            return false;
+        };
+        let total = main + 36 + usize::from(!table);
+        let mut game_slots: Vec<Option<usize>> = vec![None; total];
+        for g in (100..109).chain(500..504).chain(0..36) {
+            if let Some(i) = to_menu(g) {
+                game_slots[i] = Some(g);
+            }
+        }
+        let mut menu = Menu::new(if table {
+            Kind::Crafting
+        } else {
+            Kind::Inventory
+        });
+        let before: Vec<Option<ItemStack>> = game_slots
+            .iter()
+            .map(|g| g.and_then(|g| self.slot_mut(g).clone()))
+            .collect();
+        let offhand = self.offhand.clone();
+        let after: Vec<Option<ItemStack>> = {
+            let env = Env {
+                items: &self.res.items,
+                recipes: &self.res.recipes,
+                brewing: &self.res.stations.brewing,
+            };
+            for (i, stack) in before.iter().enumerate() {
+                menu.set_slot(&env, i, stack.clone());
+            }
+            if !table {
+                menu.set_slot(&env, 45, offhand);
+            }
+            if menu.click(&env, index as i32, 0, Input::QuickMove).is_err() {
+                return true;
+            }
+            (0..total).map(|i| menu.slot(i).cloned()).collect()
+        };
+        for (i, g) in game_slots.iter().enumerate() {
+            if let Some(g) = g {
+                *self.slot_mut(*g) = after[i].clone();
+            }
+        }
+        if !table {
+            self.offhand = after[45].clone();
+        }
+        self.apply_equipment();
+        true
+    }
     fn click_inventory(&mut self, right: bool) {
         if self.mount_click(right) {
             return;
@@ -3653,68 +3716,10 @@ impl Game<'_> {
             }
             return;
         }
-        if shift && (500..504).contains(&slot) {
-            // InventoryMenu.quickMoveStack: armour back to the main
-            // inventory, then the hotbar.
-            if let Some(stack) = self.armor[slot - 500].take() {
-                if let Some(i) = (9..36).chain(0..9).find(|&i| self.inventory[i].is_none()) {
-                    self.inventory[i] = Some(stack);
-                } else {
-                    self.armor[slot - 500] = Some(stack);
-                }
-                self.apply_equipment();
-            }
-            return;
-        }
-        if shift && slot < 36 {
-            // InventoryMenu.quickMoveStack: armour into its empty slot, an
-            // off-hand item into an empty off hand.
-            let equip = self.inventory[slot]
-                .as_ref()
-                .and_then(|s| self.res.items.get(&s.item))
-                .and_then(|i| i.equip_slot.clone());
-            let armor = ["head", "chest", "legs", "feet"]
-                .iter()
-                .position(|s| equip.as_deref() == Some(*s));
-            if let Some(a) = armor
-                && self.armor[a].is_none()
-            {
-                self.armor[a] = self.inventory[slot].take();
-                self.apply_equipment();
-                return;
-            }
-            if equip.as_deref() == Some("offhand") && self.offhand.is_none() {
-                self.offhand = self.inventory[slot].take();
-                return;
-            }
-            // Quick move between hotbar and main inventory.
-            if let Some(stack) = self.inventory[slot].take() {
-                let range = if slot < 9 { 9..36 } else { 0..9 };
-                let mut stack = stack;
-                for i in range.clone() {
-                    if let Some(s) = &mut self.inventory[i]
-                        && s.same_item_same_components(&stack)
-                    {
-                        let moved = max(&self.res.items, s)
-                            .saturating_sub(s.count)
-                            .min(stack.count);
-                        s.count += moved;
-                        stack.count -= moved;
-                    }
-                }
-                if stack.count > 0
-                    && let Some(i) = range.clone().find(|&i| self.inventory[i].is_none())
-                {
-                    self.inventory[i] = Some(stack);
-                    stack = ItemStack {
-                        count: 0,
-                        ..self.inventory[i].clone().unwrap()
-                    };
-                }
-                if stack.count > 0 {
-                    self.inventory[slot] = Some(stack);
-                }
-            }
+        if shift
+            && (slot < 36 || (500..504).contains(&slot) || (100..109).contains(&slot))
+            && self.inventory_quick_move(slot)
+        {
             return;
         }
         if (500..504).contains(&slot) {
