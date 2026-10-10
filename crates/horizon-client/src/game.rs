@@ -3552,6 +3552,10 @@ impl Game<'_> {
         button: i32,
         input: horizon_client::menu::Input,
     ) -> bool {
+        self.menu_ops(&[(slot, button, input)])
+    }
+    /// Several clicks on one menu instance (a quick craft drag is three).
+    fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
         use horizon_client::menu::{Env, Kind, Menu};
         #[derive(Clone, Copy)]
         struct Map {
@@ -3568,7 +3572,7 @@ impl Game<'_> {
                     (true, false) => 9,
                 }
             }
-            fn to_menu(&self, g: usize) -> Option<usize> {
+            fn to_menu(self, g: usize) -> Option<usize> {
                 let main = self.main();
                 if self.plain {
                     match g {
@@ -3589,7 +3593,7 @@ impl Game<'_> {
                     }
                 }
             }
-            fn to_game(&self, i: usize) -> Option<usize> {
+            fn to_game(self, i: usize) -> Option<usize> {
                 let main = self.main();
                 if self.plain {
                     match i {
@@ -3664,18 +3668,22 @@ impl Game<'_> {
         } else {
             return false;
         };
-        let menu_slot = match slot {
-            Some(g) => {
-                if g == 200 && input != horizon_client::menu::Input::QuickMove {
-                    return false;
+        let mut clicks = Vec::new();
+        for &(slot, button, input) in ops {
+            let menu_slot = match slot {
+                Some(g) => {
+                    if g == 200 && input != horizon_client::menu::Input::QuickMove {
+                        return false;
+                    }
+                    match map.to_menu(g) {
+                        Some(i) => i as i32,
+                        None => return false,
+                    }
                 }
-                match map.to_menu(g) {
-                    Some(i) => i as i32,
-                    None => return false,
-                }
-            }
-            None => -999,
-        };
+                None => -999,
+            };
+            clicks.push((menu_slot, button, input));
+        }
         let mut menu = Menu::new(kind);
         let total = menu.slot_count();
         let before: Vec<Option<ItemStack>> = (0..total)
@@ -3694,8 +3702,10 @@ impl Game<'_> {
                 menu.set_slot(&env, i, stack.clone());
             }
             menu.carried = carried;
-            if menu.click(&env, menu_slot, button, input).is_err() {
-                return true;
+            for (menu_slot, button, input) in clicks {
+                if menu.click(&env, menu_slot, button, input).is_err() {
+                    return true;
+                }
             }
             (
                 (0..total).map(|i| menu.slot(i).cloned()).collect(),
@@ -3825,11 +3835,17 @@ impl Game<'_> {
             }
         } else {
             let mask = |header: i32| header | (ty << 2);
-            self.menu_click(None, mask(0), Input::QuickCraft);
-            for slot in slots {
-                self.menu_click(Some(slot), mask(1), Input::QuickCraft);
+            let mut ops = vec![(None, mask(0), Input::QuickCraft)];
+            ops.extend(
+                slots
+                    .into_iter()
+                    .map(|slot| (Some(slot), mask(1), Input::QuickCraft)),
+            );
+            ops.push((None, mask(2), Input::QuickCraft));
+            if !self.menu_ops(&ops) {
+                // Not a menu the engine models: the drag is a plain click.
+                self.click_inventory(ty == 1);
             }
-            self.menu_click(None, mask(2), Input::QuickCraft);
         }
         if let Some(key) = self.container {
             self.container_changed(key);
