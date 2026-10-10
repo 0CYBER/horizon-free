@@ -312,6 +312,239 @@ impl Game<'_> {
             extra,
         }))
     }
+    /// One item modifier (a typed object, a list or a datapack reference)
+    /// applied to a stack; `None` when the stack ends up empty.
+    fn apply_item_modifier(
+        &self,
+        m: &serde_json::Value,
+        stack: Option<ItemStack>,
+        rng: &mut horizon_core::random::LegacyRandom,
+        this: Option<&horizon_client::advancements::EntityView>,
+        origin: [f64; 3],
+        depth: u32,
+    ) -> Option<ItemStack> {
+        use horizon_core::random::RandomSource;
+        use serde_json::Value;
+        if depth > 16 {
+            return stack;
+        }
+        let int = |v: &Value, rng: &mut horizon_core::random::LegacyRandom| -> i32 {
+            if let Some(n) = v.as_f64() {
+                return n as i32;
+            }
+            let min = v["min"].as_f64().unwrap_or(0.) as i32;
+            let max = v["max"].as_f64().unwrap_or(0.) as i32;
+            match v["type"].as_str().unwrap_or("minecraft:constant") {
+                "minecraft:uniform" | "uniform" => rng
+                    .next_int_between_inclusive(min, max.max(min))
+                    .unwrap_or(min),
+                _ => v["value"].as_f64().unwrap_or(0.) as i32,
+            }
+        };
+        match m {
+            Value::Array(list) => list.iter().fold(stack, |s, f| {
+                self.apply_item_modifier(f, s, rng, this, origin, depth + 1)
+            }),
+            Value::String(id) => match self.fns.store.item_modifiers.get(id) {
+                Some(f) => self.apply_item_modifier(f, stack, rng, this, origin, depth + 1),
+                None => stack,
+            },
+            Value::Object(_) => {
+                let mut stack = stack?;
+                if !m["conditions"].is_null()
+                    && !self.conditions_hold(&m["conditions"], this, origin)
+                {
+                    return Some(stack);
+                }
+                match m["function"].as_str().unwrap_or("") {
+                    "minecraft:sequence" => {
+                        return m["functions"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .fold(Some(stack), |s, f| {
+                                self.apply_item_modifier(f, s, rng, this, origin, depth + 1)
+                            });
+                    }
+                    "minecraft:set_count" => {
+                        let n = int(&m["count"], rng);
+                        let base = if m["add"].as_bool() == Some(true) {
+                            stack.count as i32
+                        } else {
+                            0
+                        };
+                        let max = self.res.items.get(&stack.item).map_or(64, |i| i.max_stack);
+                        stack.count = (base + n).clamp(0, max as i32) as u32;
+                    }
+                    "minecraft:limit_count" => {
+                        let min = m["limit"]["min"].as_i64().or(m["limit"].as_i64());
+                        let max = m["limit"]["max"].as_i64().or(m["limit"].as_i64());
+                        if let Some(min) = min {
+                            stack.count = stack.count.max(min as u32);
+                        }
+                        if let Some(max) = max {
+                            stack.count = stack.count.min(max as u32);
+                        }
+                    }
+                    "minecraft:set_damage" => {
+                        let max = self.res.items.get(&stack.item).map_or(0, |i| i.max_damage);
+                        if max > 0 {
+                            let f = match m["damage"].as_f64() {
+                                Some(f) => f as f32,
+                                None => {
+                                    let lo = m["damage"]["min"].as_f64().unwrap_or(0.) as f32;
+                                    let hi = m["damage"]["max"].as_f64().unwrap_or(0.) as f32;
+                                    lo + rng.next_float() * (hi - lo)
+                                }
+                            };
+                            let base = if m["add"].as_bool() == Some(true) {
+                                1. - stack.damage as f32 / max as f32
+                            } else {
+                                0.
+                            };
+                            let frac = (base + f).clamp(0., 1.);
+                            stack.damage = ((1. - frac) * max as f32).floor() as u32;
+                        }
+                    }
+                    "minecraft:set_name" => {
+                        let t = horizon_client::packs::component(&m["name"]);
+                        stack.extra.get_or_insert_with(Default::default).custom_name =
+                            Some(t.plain());
+                    }
+                    "minecraft:set_enchantments" => {
+                        let add = m["add"].as_bool() == Some(true);
+                        let d = stack.extra.get_or_insert_with(Default::default);
+                        let target = if &*stack.item == "minecraft:enchanted_book" {
+                            &mut d.stored_enchantments
+                        } else {
+                            &mut d.enchantments
+                        };
+                        for (id, level) in m["enchantments"].as_object().into_iter().flatten() {
+                            let n = int(level, rng).clamp(0, 255) as u32;
+                            let id: std::sync::Arc<str> = if id.contains(':') {
+                                id.as_str().into()
+                            } else {
+                                format!("minecraft:{id}").into()
+                            };
+                            match target.iter_mut().find(|(e, _)| *e == id) {
+                                Some(e) => e.1 = if add { e.1 + n } else { n },
+                                None => target.push((id, n)),
+                            }
+                            target.retain(|(_, l)| *l > 0);
+                        }
+                    }
+                    "minecraft:set_potion" => {
+                        if let Some(p) = m["id"].as_str() {
+                            stack.extra.get_or_insert_with(Default::default).potion =
+                                Some(p.into());
+                        }
+                    }
+                    _ => {}
+                }
+                (stack.count > 0).then_some(stack)
+            }
+            _ => stack,
+        }
+    }
+    /// `/item modify (entity|block) <target> <slot> <modifier>`.
+    pub(super) fn cmd_item_modify(&mut self, ctx: &Context) -> R<i32> {
+        self.ensure_datapacks();
+        let targets = self.owner_of(ctx, "target", true)?;
+        let Some(Arg::Str(slot_name)) = ctx.get("slot").cloned() else {
+            return Ok(0);
+        };
+        let Some(Arg::Str(id)) = ctx.get("modifier").cloned() else {
+            return Ok(0);
+        };
+        let id = if id.contains(':') {
+            id
+        } else {
+            format!("minecraft:{id}")
+        };
+        let Some(modifier) = self.fns.store.item_modifiers.get(&id).cloned() else {
+            return Err(err("argument.item_modifier.unknown", &[&id]));
+        };
+        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let view = source.entity.map(|t| self.entity_view_of(t));
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as i64);
+        let mut rng = horizon_core::random::LegacyRandom::new(seed);
+        let mut tracker = Tracker::default();
+        let mut selected = 0;
+        for o in &targets {
+            let slots = self.slots_named(o, &slot_name);
+            if slots.is_empty() {
+                if let Owner::Block(p) = o
+                    && !self.world.block_entities.contains_key(&(p[0], p[1], p[2]))
+                {
+                    return Err(err(
+                        "commands.item.target.not_a_container",
+                        &[&p[0], &p[1], &p[2]],
+                    ));
+                }
+                continue;
+            }
+            let mut changed = 0;
+            for slot in &slots {
+                // SlotSelector.NON_EMPTY_SLOTS
+                let Some(current) = self.slot_get(slot) else {
+                    continue;
+                };
+                selected += 1;
+                let new = self.apply_item_modifier(
+                    &modifier,
+                    Some(current.clone()),
+                    &mut rng,
+                    view.as_ref(),
+                    source.pos,
+                    0,
+                );
+                if new.as_ref() != Some(&current) && self.slot_set(slot, new) {
+                    changed += 1;
+                }
+            }
+            let h = self.owner_holder(o);
+            tracker.track(&h, changed);
+        }
+        if selected == 0 {
+            return Err(err("commands.item.target.no_such_slot", &[&slot_name]));
+        }
+        let pos = match targets.first() {
+            Some(Owner::Block(p)) => Some(*p),
+            _ => None,
+        };
+        let (message, total) = tracker.message(
+            false,
+            Some(err("commands.item.target.failed", &[])),
+            |h, count| {
+                let n = Text::literal(count.to_string());
+                match pos {
+                    Some(p) => Text::translate(
+                        "commands.item.block.modify.success",
+                        &[
+                            n,
+                            Text::literal(p[0].to_string()),
+                            Text::literal(p[1].to_string()),
+                            Text::literal(p[2].to_string()),
+                        ],
+                    ),
+                    None => Text::translate(
+                        "commands.item.entity.modify.success.single",
+                        &[n, h.text.clone()],
+                    ),
+                }
+            },
+            |c, _| {
+                Text::translate(
+                    "commands.item.entity.modify.success.multiple",
+                    &[Text::literal(c.to_string())],
+                )
+            },
+        )?;
+        self.feedback(message);
+        Ok(total)
+    }
     /// `/item replace|fill|override <target> <slots> (with <item> [count] | from <source> <slots>)`.
     pub(super) fn cmd_item(&mut self, ctx: &Context) -> R<i32> {
         let mode = ctx

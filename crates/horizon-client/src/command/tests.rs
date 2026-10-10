@@ -222,6 +222,14 @@ fn data_and_tag_commands_parse() {
     assert_eq!(id, "data.get");
     assert_eq!(args, ["target", "path", "scale"]);
     assert_eq!(run("data get block ~ ~ ~ Items[0]").unwrap().0, "data.get");
+    assert_eq!(
+        run("item modify entity @s weapon.mainhand a:b").unwrap().0,
+        "item.modify"
+    );
+    assert_eq!(
+        run("item modify block 1 2 3 container.0 a:b").unwrap().0,
+        "item.modify"
+    );
     assert_eq!(run("data get storage my:store").unwrap().0, "data.get");
     assert_eq!(run("data merge storage a:b {x:1}").unwrap().0, "data.merge");
     assert_eq!(
