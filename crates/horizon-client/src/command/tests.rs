@@ -215,3 +215,262 @@ fn local_coordinates_follow_view() {
     ]);
     assert_eq!(w.position([10.0, 64.0, 3.0], [0.0, 0.0]), [11.0, 5.0, 3.0]);
 }
+
+#[test]
+fn data_and_tag_commands_parse() {
+    let (id, args) = run("data get entity @s Pos 2.5").unwrap();
+    assert_eq!(id, "data.get");
+    assert_eq!(args, ["target", "path", "scale"]);
+    assert_eq!(run("data get block ~ ~ ~ Items[0]").unwrap().0, "data.get");
+    assert_eq!(run("data get storage my:store").unwrap().0, "data.get");
+    assert_eq!(run("data merge storage a:b {x:1}").unwrap().0, "data.merge");
+    assert_eq!(
+        run("data remove entity @s foo.bar[1]").unwrap().0,
+        "data.remove"
+    );
+    let (id, args) = run("data modify storage a:b x.y insert 2 from entity @s Pos[0]").unwrap();
+    assert_eq!(id, "data.modify");
+    assert_eq!(
+        args,
+        ["target", "targetPath", "index", "source", "sourcePath"]
+    );
+    assert_eq!(
+        run("data modify block 1 2 3 Text1 set string storage a:b x 1 3")
+            .unwrap()
+            .0,
+        "data.modify"
+    );
+    assert_eq!(
+        run("data modify storage a:b l append value [1,2]")
+            .unwrap()
+            .0,
+        "data.modify"
+    );
+    assert!(run("data modify storage a:b l explode value 1").is_err());
+    assert!(run("data get storage a:b {broken").is_err());
+    assert!(run("data merge storage a:b 5").is_err());
+    assert_eq!(run("tag @e[tag=!x] add foo").unwrap().0, "tag.add");
+    assert_eq!(run("tag @s list").unwrap().0, "tag.list");
+    // Selector options added for scoreboards and NBT.
+    assert!(run("kill @e[scores={a=1..},team=red,nbt={x:1b},tag=t]").is_ok());
+    assert!(run("kill @e[scores={a=1..]").is_err());
+}
+
+#[test]
+fn smoke_commands_parse() {
+    for line in [
+        "tag @s list",
+        "random value 1..6",
+        "team list",
+        "data get storage a:b",
+        "scoreboard objectives list",
+        "function test:a",
+        "execute store result score #r t run function test:a",
+        "schedule function test:a 20t",
+        "datapack list",
+        "bossbar list",
+        "item replace entity @s hotbar.0 with minecraft:stone 3",
+    ] {
+        assert!(run(line).is_ok(), "{line}: {:?}", run(line).err());
+    }
+}
+
+#[test]
+fn execute_tree_covers_vanilla_forms() {
+    for line in [
+        "execute as @a at @s run say hi",
+        "execute store result score @s x run data get entity @s Health",
+        "execute store success bossbar minecraft:b value run say hi",
+        "execute store result storage a:b out int 1.5 run time query gametime",
+        "execute store result entity @s Air short 1 run say hi",
+        "execute if score @s a = @s b run say hi",
+        "execute unless score @s a matches ..5 run say hi",
+        "execute if block ~ ~ ~ minecraft:stone",
+        "execute if blocks 0 0 0 1 1 1 5 5 5 masked run say hi",
+        "execute if biome ~ ~ ~ minecraft:plains",
+        "execute if loaded ~ ~ ~",
+        "execute if dimension minecraft:overworld",
+        "execute if data entity @s Inventory[0]",
+        "execute unless data storage a:b x run say hi",
+        "execute if predicate a:b",
+        "execute if function a:b run say hi",
+        "execute if items entity @s hotbar.* minecraft:stone",
+        "execute if slots block 0 0 0 container.*",
+        "execute positioned over world_surface run say hi",
+        "execute summon minecraft:pig run say hi",
+        "execute on vehicle run say hi",
+        "execute on passengers as @s run say hi",
+        "execute rotated as @s facing entity @s eyes align xyz anchored feet in minecraft:overworld run say hi",
+    ] {
+        assert!(run(line).is_ok(), "{line}: {:?}", run(line).err());
+    }
+    assert!(run("execute positioned over nothing run say hi").is_err());
+    assert!(run("execute on nobody run say hi").is_err());
+    assert!(run("execute store result score @s").is_err());
+}
+
+#[test]
+fn function_and_misc_trees() {
+    assert_eq!(run("function a:b").unwrap().0, "function");
+    assert_eq!(run("function #a:tag {x:1}").unwrap().0, "function");
+    assert_eq!(
+        run("function a:b with storage c:d path.x").unwrap().0,
+        "function"
+    );
+    assert_eq!(run("return 5").unwrap().0, "return.value");
+    assert_eq!(run("return fail").unwrap().0, "return.fail");
+    assert_eq!(run("return run say hi").unwrap().0, "say");
+    assert_eq!(
+        run("schedule function a:b 5s append").unwrap().0,
+        "schedule.function"
+    );
+    assert_eq!(run("schedule clear a:b").unwrap().0, "schedule.clear");
+    assert_eq!(run("random roll 1..20").unwrap().0, "random.roll");
+    assert_eq!(
+        run("random reset * 5 true false").unwrap().0,
+        "random.reset"
+    );
+    assert_eq!(run("teammsg hi there").unwrap().0, "teammsg");
+    assert_eq!(run("tm hi").unwrap().0, "teammsg");
+    assert_eq!(
+        run("bossbar set a:b color pink").unwrap().0,
+        "bossbar.set.color"
+    );
+    assert_eq!(
+        run("bossbar set a:b players @a").unwrap().0,
+        "bossbar.set.players"
+    );
+    assert_eq!(run("bossbar get a:b max").unwrap().0, "bossbar.get");
+    assert_eq!(
+        run("item fill block 1 2 3 container.* with minecraft:stone 5")
+            .unwrap()
+            .0,
+        "item"
+    );
+    assert_eq!(
+        run("item replace entity @s armor.head from block 0 0 0 container.3")
+            .unwrap()
+            .0,
+        "item"
+    );
+    assert_eq!(run("tick rate 40").unwrap().0, "tick.rate");
+    assert_eq!(run("tick step 1s").unwrap().0, "tick.step");
+    assert_eq!(run("reload").unwrap().0, "reload");
+    assert_eq!(
+        run("datapack enable \"file/x\" after \"file/y\"")
+            .unwrap()
+            .0,
+        "datapack.enable"
+    );
+    assert!(run("bossbar set a:b value -1").is_err());
+    assert!(run("item replace entity @s nowhere.0 with minecraft:stone").is_err());
+}
+
+#[test]
+fn world_command_trees() {
+    for (line, id) in [
+        ("recipe give @s *", "recipe.give"),
+        ("recipe take @a minecraft:stick", "recipe.take"),
+        ("damage @e[limit=1] 5", "damage"),
+        (
+            "damage @s 3.5 minecraft:magic by @e[limit=1] from @s",
+            "damage",
+        ),
+        ("damage @s 3 minecraft:fall at ~ ~ ~", "damage"),
+        ("rotate @s 90 0", "rotate"),
+        ("rotate @s facing entity @e[limit=1] eyes", "rotate"),
+        ("rotate @s facing 0 64 0", "rotate"),
+        ("swing", "swing"),
+        ("swing @e offhand whack 10", "swing"),
+        ("playsound minecraft:entity.cow.ambient", "playsound"),
+        (
+            "playsound minecraft:block.stone.break block @s ~ ~ ~ 1 1 0.5",
+            "playsound",
+        ),
+        ("stopsound @s", "stopsound"),
+        ("stopsound @s * minecraft:ambient.cave", "stopsound"),
+        ("stopsound @s music minecraft:music.game", "stopsound"),
+        ("particle minecraft:smoke", "particle"),
+        (
+            "particle minecraft:dust 1 0 0 2 ~ ~ ~ 0.1 0.1 0.1 0 10 force @a",
+            "particle",
+        ),
+        ("particle minecraft:block minecraft:stone ~ ~ ~", "particle"),
+        ("attribute @s minecraft:max_health get 2", "attribute.get"),
+        (
+            "attribute @s minecraft:max_health base set 40",
+            "attribute.base.set",
+        ),
+        (
+            "attribute @s minecraft:scale modifier add a:b 1.5 add_multiplied_base",
+            "attribute.modifier.add",
+        ),
+        (
+            "attribute @s minecraft:scale modifier remove a:b",
+            "attribute.modifier.remove",
+        ),
+        (
+            "attribute @s minecraft:scale modifier value get a:b 2",
+            "attribute.modifier.get",
+        ),
+        ("ride @s mount @e[limit=1]", "ride.mount"),
+        ("ride @s dismount", "ride.dismount"),
+        ("spreadplayers 0 0 5 20 false @a", "spreadplayers"),
+        ("spreadplayers ~ ~ 5 20 under 100 true @e", "spreadplayers"),
+        ("forceload add 0 0 100 100", "forceload.add"),
+        ("forceload remove all", "forceload.remove.all"),
+        ("forceload query", "forceload.query"),
+        ("forceload query ~ ~", "forceload.query"),
+        (
+            "fillbiome 0 0 0 10 10 10 minecraft:plains replace minecraft:desert",
+            "fillbiome",
+        ),
+        ("worldborder set 100 5s", "worldborder.set"),
+        ("worldborder add -10", "worldborder.add"),
+        ("worldborder center 5 5", "worldborder.center"),
+        ("worldborder damage amount 1", "worldborder.damage.amount"),
+        ("worldborder warning time 10s", "worldborder.warning.time"),
+        ("worldborder get", "worldborder.get"),
+        (
+            "loot give @s loot minecraft:chests/simple_dungeon",
+            "loot.loot",
+        ),
+        ("loot spawn ~ ~ ~ kill @e[limit=1]", "loot.kill"),
+        ("loot insert 0 0 0 mine 1 2 3 mainhand", "loot.mine"),
+        (
+            "loot replace entity @s hotbar.0 3 fish minecraft:gameplay/fishing 0 0 0",
+            "loot.fish",
+        ),
+        (
+            "loot replace block 1 2 3 container.5 loot minecraft:chests/x",
+            "loot.loot",
+        ),
+    ] {
+        assert_eq!(
+            run(line).unwrap_or_else(|e| panic!("{line}: {e:?}")).0,
+            id,
+            "{line}"
+        );
+    }
+    assert!(run("playsound minecraft:x invalid_source").is_err());
+    assert!(run("particle minecraft:not_a_particle").is_err());
+    assert!(run("damage @s -1").is_err());
+    assert!(run("spreadplayers 0 0 5 0 false @a").is_err());
+    assert!(run("worldborder warning distance -1").is_err());
+}
+
+#[test]
+fn place_template_tree() {
+    for line in [
+        "place template minecraft:igloo/top",
+        "place template minecraft:igloo/top ~ ~ ~",
+        "place template minecraft:igloo/top 1 2 3 clockwise_90 left_right 0.5 12 strict",
+    ] {
+        assert_eq!(
+            run(line).unwrap_or_else(|e| panic!("{line}: {e:?}")).0,
+            "place"
+        );
+    }
+    assert!(run("place template minecraft:x ~ ~ ~ sideways").is_err());
+    assert!(run("place template minecraft:x ~ ~ ~ none none 2").is_err());
+}

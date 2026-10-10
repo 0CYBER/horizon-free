@@ -91,6 +91,101 @@ impl Game<'_> {
     pub(super) fn build_registries(&mut self) {
         let reg = &mut self.ui.registries;
         reg.permission = 4;
+        {
+            let dir = |sub: &str| -> Vec<String> {
+                let root = self.options.resources.join("data/minecraft").join(sub);
+                let mut out = Vec::new();
+                let mut stack = vec![root.clone()];
+                while let Some(d) = stack.pop() {
+                    let Ok(entries) = std::fs::read_dir(&d) else {
+                        continue;
+                    };
+                    for e in entries.flatten() {
+                        let p = e.path();
+                        if p.is_dir() {
+                            stack.push(p);
+                        } else if p.extension().and_then(|x| x.to_str()) == Some("json")
+                            && let Ok(rel) = p.strip_prefix(&root)
+                        {
+                            out.push(format!(
+                                "minecraft:{}",
+                                rel.with_extension("").to_string_lossy().replace('\\', "/")
+                            ));
+                        }
+                    }
+                }
+                out.sort();
+                out
+            };
+            self.ui.registries.recipes = dir("recipe");
+            self.ui.registries.damage_types = dir("damage_type");
+            self.ui.registries.loot_tables = dir("loot_table");
+            self.ui.registries.templates = {
+                let root = self.options.resources.join("worldgen/structure/minecraft");
+                let mut out = Vec::new();
+                let mut stack = vec![root.clone()];
+                while let Some(d) = stack.pop() {
+                    let Ok(entries) = std::fs::read_dir(&d) else {
+                        continue;
+                    };
+                    for e in entries.flatten() {
+                        let p = e.path();
+                        if p.is_dir() {
+                            stack.push(p);
+                        } else if p.extension().and_then(|x| x.to_str()) == Some("nbt")
+                            && let Ok(rel) = p.strip_prefix(&root)
+                        {
+                            out.push(format!(
+                                "minecraft:{}",
+                                rel.with_extension("").to_string_lossy().replace('\\', "/")
+                            ));
+                        }
+                    }
+                }
+                out.sort();
+                out
+            };
+        }
+        self.ui.registries.sounds = self.audio.event_names();
+        self.ui.registries.attributes = [
+            "armor",
+            "armor_toughness",
+            "attack_damage",
+            "attack_knockback",
+            "attack_speed",
+            "block_break_speed",
+            "block_interaction_range",
+            "burning_time",
+            "camera_distance",
+            "explosion_knockback_resistance",
+            "entity_interaction_range",
+            "fall_damage_multiplier",
+            "flying_speed",
+            "follow_range",
+            "gravity",
+            "jump_strength",
+            "knockback_resistance",
+            "luck",
+            "max_absorption",
+            "max_health",
+            "mining_efficiency",
+            "movement_efficiency",
+            "movement_speed",
+            "oxygen_bonus",
+            "safe_fall_distance",
+            "scale",
+            "sneaking_speed",
+            "spawn_reinforcements",
+            "step_height",
+            "submerged_mining_speed",
+            "sweeping_damage_ratio",
+            "tempt_range",
+            "water_movement_efficiency",
+        ]
+        .iter()
+        .map(|a| format!("minecraft:{a}"))
+        .collect();
+        let reg = &mut self.ui.registries;
         let mut items: Vec<String> = self.res.items.order.iter().map(|s| s.to_string()).collect();
         items.sort();
         reg.items = items;

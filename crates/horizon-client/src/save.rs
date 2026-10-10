@@ -352,7 +352,11 @@ fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
         _ => e.id().to_owned(),
     }
 }
-fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, block: &str) -> Tag {
+pub fn encode_block_entity(
+    p: (i32, i32, i32),
+    e: &crate::containers::BlockEntity,
+    block: &str,
+) -> Tag {
     use crate::containers::BlockEntity;
     let mut entries = vec![
         ("id", string(&block_entity_id(e, block))),
@@ -403,6 +407,29 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
                 entries.push(("Page", Tag::Int(l.page)));
             }
         }
+        BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
+        BlockEntity::Crafter(c) => {
+            entries.push(("Items", encode_items(&c.items)));
+            entries.push((
+                "disabled_slots",
+                Tag::IntArray(
+                    (0..9)
+                        .filter(|&i| c.disabled[i])
+                        .map(|i| i as i32)
+                        .collect(),
+                ),
+            ));
+            entries.push(("triggered", Tag::Int(i32::from(c.triggered))));
+            entries.push(("crafting_ticks_remaining", Tag::Int(c.crafting_ticks)));
+        }
+        BlockEntity::Banner(b) => {
+            if !b.layers.is_empty() {
+                entries.push(("patterns", crate::banner::layers_to_nbt(&b.layers)));
+            }
+            if let Some(name) = &b.name {
+                entries.push(("CustomName", string(name)));
+            }
+        }
         BlockEntity::CreakingHeart(h) => {
             if let Some((_, uuid)) = h.creaking {
                 entries.push(("creaking", uuid_tag(uuid)));
@@ -422,7 +449,7 @@ fn merge_block_entity(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
     }
     merged
 }
-fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
+pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
@@ -453,6 +480,15 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             page: int("Page").unwrap_or(0),
         };
         return Some((pos, BlockEntity::Lectern(lectern)));
+    }
+    if id == "minecraft:banner" {
+        return Some((
+            pos,
+            BlockEntity::Banner(crate::containers::Banner {
+                layers: crate::banner::layers_from_nbt(tag.get("patterns")),
+                name: text(tag.get("CustomName")),
+            }),
+        ));
     }
     if id == "minecraft:beacon" {
         let beacon = crate::containers::Beacon {
@@ -500,9 +536,25 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             };
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
+        BlockEntity::Sculk(s) => s.load(tag),
+        BlockEntity::Crafter(c) => {
+            for (slot, item) in decode_items(tag.get("Items"), 9).into_iter().enumerate() {
+                c.items[slot] = item;
+            }
+            if let Some(Tag::IntArray(slots)) = tag.get("disabled_slots") {
+                for &slot in slots {
+                    if (0..9).contains(&slot) && c.items[slot as usize].is_none() {
+                        c.disabled[slot as usize] = true;
+                    }
+                }
+            }
+            c.triggered = int("triggered").unwrap_or(0) != 0;
+            c.crafting_ticks = int("crafting_ticks_remaining").unwrap_or(0);
+        }
         BlockEntity::Jukebox(_)
         | BlockEntity::Beacon(_)
         | BlockEntity::Lectern(_)
+        | BlockEntity::Banner(_)
         | BlockEntity::CreakingHeart(_) => {}
     }
     Some((pos, entity))
@@ -1246,7 +1298,7 @@ fn write_saved_data(world: &Path, name: &str, data: Tag) -> Result<()> {
         Tag::compound([("data", data), ("DataVersion", Tag::Int(DATA_VERSION))]),
     )
 }
-fn uuid_text(u: [i32; 4]) -> String {
+pub fn uuid_text(u: [i32; 4]) -> String {
     let hex: String = u.iter().map(|v| format!("{:08x}", *v as u32)).collect();
     format!(
         "{}-{}-{}-{}-{}",
@@ -1257,7 +1309,7 @@ fn uuid_text(u: [i32; 4]) -> String {
         &hex[20..32]
     )
 }
-fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
+pub fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
     let hex: String = s.chars().filter(|c| *c != '-').collect();
     if hex.len() != 32 {
         return None;
@@ -1419,6 +1471,8 @@ pub struct Level {
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
     pub ender_items: Vec<Option<crate::items::ItemStack>>,
+    /// The `recipeBook` compound: open/filter settings and unlocked recipes.
+    pub recipe_book: crate::recipe_book::Settings,
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
@@ -1631,6 +1685,7 @@ impl Level {
         }
         self.inventory = inventory;
         self.ender_items = decode_items(p.get("EnderItems"), 27);
+        self.recipe_book = crate::recipe_book::Settings::read(p.get("recipeBook"));
         self.inventory_components = inventory_components;
         self.xp_seed = n("XpSeed").unwrap_or(0) as i32;
         self.active_effects = match p.get("active_effects") {
@@ -1652,11 +1707,18 @@ impl Level {
         };
     }
     /// The player compound: the loaded one with Horizon's state written over it.
-    fn player_tag(&self) -> Tag {
+    pub fn player_tag(&self) -> Tag {
         let mut p = compound_or_empty(self.player_extra.clone());
         // Keys rewritten from scratch.
         if let Tag::Compound(map) = &mut p {
-            for key in ["Inventory", "EnderItems", "equipment", "Pos", "respawn"] {
+            for key in [
+                "Inventory",
+                "EnderItems",
+                "equipment",
+                "Pos",
+                "respawn",
+                "recipeBook",
+            ] {
                 map.remove(&JavaString::from(key));
             }
         }
@@ -1751,6 +1813,7 @@ impl Level {
             ("playerGameType", Tag::Int(self.mode())),
             ("Inventory", Tag::List(inventory)),
             ("EnderItems", encode_items(&self.ender_items)),
+            ("recipeBook", self.recipe_book.write()),
             ("abilities", abilities),
             (
                 "Dimension",
@@ -2104,6 +2167,48 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn crafter_block_entity_round_trips() {
+        let mut crafter = crate::containers::Crafter::default();
+        crafter.items[2] = Some(crate::items::ItemStack::new("minecraft:stick", 5));
+        crafter.disabled[4] = true;
+        crafter.triggered = true;
+        crafter.crafting_ticks = 3;
+        let tag = encode_block_entity(
+            (7, 8, 9),
+            &crate::containers::BlockEntity::Crafter(crafter),
+            "minecraft:crafter",
+        );
+        let (pos, back) = decode_block_entity(&tag).expect("crafter");
+        assert_eq!(pos, (7, 8, 9));
+        let crate::containers::BlockEntity::Crafter(back) = back else {
+            panic!("not a crafter");
+        };
+        assert_eq!(back.items[2].as_ref().map(|s| s.count), Some(5));
+        assert!(back.disabled[4] && !back.disabled[3]);
+        assert!(back.triggered);
+        assert_eq!(back.crafting_ticks, 3);
+        assert_eq!(back.redstone_signal(), 2);
+    }
+    #[test]
+    fn banner_block_entity_round_trips() {
+        let banner = crate::containers::Banner {
+            layers: vec![crate::banner::BannerLayer::new("minecraft:creeper", "lime")],
+            name: Some("Flag".into()),
+        };
+        let tag = encode_block_entity(
+            (1, 2, 3),
+            &crate::containers::BlockEntity::Banner(banner.clone()),
+            "minecraft:red_banner",
+        );
+        let (pos, back) = decode_block_entity(&tag).expect("banner");
+        assert_eq!(pos, (1, 2, 3));
+        let crate::containers::BlockEntity::Banner(back) = back else {
+            panic!("not a banner");
+        };
+        assert_eq!(back.layers, banner.layers);
+        assert_eq!(back.name, banner.name);
+    }
     use super::*;
 
     #[test]

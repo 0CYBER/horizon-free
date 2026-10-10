@@ -114,6 +114,7 @@ mod place;
 mod query;
 mod rails;
 mod redstone;
+pub mod sculk;
 mod shapes;
 mod signals;
 mod speleothem;
@@ -252,8 +253,13 @@ pub enum LevelEvent {
         state: BlockStateId,
         effect: PlayerEffect,
     },
-    /// `Level.gameEvent` (vibration system), by vanilla identifier.
-    GameEvent { pos: BlockPos, event: &'static str },
+    /// `Level.gameEvent` (vibration system), by vanilla identifier, with the
+    /// affected block state when the event carries one.
+    GameEvent {
+        pos: BlockPos,
+        event: &'static str,
+        state: Option<BlockStateId>,
+    },
 }
 
 /// The world as seen by block behaviour. Implemented by the game and tests.
