@@ -24,6 +24,10 @@ import net.minecraft.world.attribute.*;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.BubbleColumnBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.phys.Vec3;
 
@@ -59,6 +63,7 @@ public final class VanillaAmbientOracle {
 
     public static final class Lvl extends ClientLevel {
         int mode;
+        final Map<BlockPos, Boolean> columns = new HashMap<>();
 
         Lvl() {
             super(null, null, null, null, 0, 0, null, false, 0L, 0);
@@ -67,6 +72,17 @@ public final class VanillaAmbientOracle {
         @Override
         public int getBrightness(final LightLayer layer, final BlockPos pos) {
             return light(mode, pos.getX(), pos.getY(), pos.getZ())[layer == LightLayer.SKY ? 0 : 1];
+        }
+
+        @Override
+        public BlockState getBlockState(final BlockPos pos) {
+            Boolean drag = columns.get(pos);
+            return drag == null ? Blocks.AIR.defaultBlockState() : Blocks.BUBBLE_COLUMN.defaultBlockState().setValue(BubbleColumnBlock.DRAG_DOWN, drag);
+        }
+
+        @Override
+        public boolean hasChunksAt(final int x0, final int y0, final int z0, final int x1, final int y1, final int z1) {
+            return true;
         }
     }
 
@@ -79,6 +95,11 @@ public final class VanillaAmbientOracle {
             case 2 -> new int[]{0, (h >>> 4) & 15};
             default -> new int[]{(h & 3) == 0 ? (h >>> 8) & 15 : 0, (h >>> 12) & 15};
         };
+    }
+
+    /** The player's box (EntityDimensions.makeBoundingBox, width 0.6F). */
+    static AABB box(Vec3 at, float height) {
+        return new AABB(at.x - 0.3F, at.y, at.z - 0.3F, at.x + 0.3F, at.y + height, at.z + 0.3F);
     }
 
     static float f(String hex) {
@@ -141,6 +162,7 @@ public final class VanillaAmbientOracle {
         Actor actor = null;
         UnderwaterAmbientSoundHandler underwater = null;
         BiomeAmbientSoundsHandler biome = null;
+        BubbleColumnAmbientSoundHandler bubble = null;
         try (var out = new PrintWriter(Files.newBufferedWriter(Path.of(args[2])))) {
             for (String line : Files.readAllLines(Path.of(args[1]))) {
                 out.println(line);
@@ -156,8 +178,11 @@ public final class VanillaAmbientOracle {
                         actor = VanillaSoundRig.make(Actor.class);
                         VanillaSoundRig.set(actor, Entity.class, "level", level);
                         VanillaSoundRig.set(actor, Entity.class, "position", Vec3.ZERO);
+                        VanillaSoundRig.set(actor, Entity.class, "bb", box(Vec3.ZERO, 1.8F));
+                        VanillaSoundRig.set(level, Lvl.class, "columns", new HashMap<BlockPos, Boolean>());
                         VanillaSoundRig.set(actor, LocalPlayer.class, "minecraft", mc);
                         underwater = new UnderwaterAmbientSoundHandler(actor, rig.manager);
+                        bubble = new BubbleColumnAmbientSoundHandler(actor);
                         biome = new BiomeAmbientSoundsHandler(actor, rig.manager);
                     }
                     case "sounds" -> {
@@ -175,6 +200,13 @@ public final class VanillaAmbientOracle {
                         actor.spectator = a[6].equals("1");
                         VanillaSoundRig.set(actor, Entity.class, "removalReason", a[7].equals("1") ? Entity.RemovalReason.DISCARDED : null);
                         level.mode = Integer.parseInt(a[8]);
+                        var at = new Vec3(d(a[1]), d(a[2]), d(a[3]));
+                        VanillaSoundRig.set(actor, Entity.class, "bb", box(at, f(a[9])));
+                        level.columns.clear();
+                        for (int i = 10; i < a.length; i++) {
+                            String[] c = a[i].split(",");
+                            level.columns.put(new BlockPos(Integer.parseInt(c[0]), Integer.parseInt(c[1]), Integer.parseInt(c[2])), c[3].equals("1"));
+                        }
                     }
                     case "volume" -> {
                         rig.volume(SoundSource.values()[Integer.parseInt(a[1])], f(a[2]));
@@ -183,6 +215,7 @@ public final class VanillaAmbientOracle {
                     case "tick" -> {
                         update.invoke(actor);
                         underwater.tick();
+                        bubble.tick();
                         biome.tick();
                         rig.manager.tick(false);
                     }

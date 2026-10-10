@@ -3,7 +3,7 @@
 //! `minecraft:audio/ambient_sounds` attribute, `UnderwaterAmbientSoundHandler`
 //! and `LocalPlayer.updateIsUnderwater` (enter/exit sounds and the
 //! `UnderLiquidAmbientSoundInstance` loop), played through the sound engine.
-use crate::sound_engine::{AMBIENT, InstanceId, SoundEngine, SoundInstance, Sounds};
+use crate::sound_engine::{AMBIENT, InstanceId, PLAYERS, SoundEngine, SoundInstance, Sounds};
 use horizon_core::random::{LegacyRandom, RandomSource};
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path};
@@ -94,6 +94,51 @@ pub struct AmbientContext<'a> {
     pub spectator: bool,
     /// `Level.getBrightness` (sky, block) at a block.
     pub light: &'a dyn Fn([i32; 3]) -> (u8, u8),
+    /// The bubble column in the player's box (its `drag` property), from
+    /// `bubble_column_in`.
+    pub bubble_column: Option<bool>,
+}
+/// `BubbleColumnAmbientSoundHandler`'s lookup: the first bubble column
+/// (x fastest, then y, then z) in the player's bounding box inflated by
+/// (0, -0.4F, 0) and deflated by 1.0E-6, as `drag_down`. `state` gives the
+/// bubble column at a block (None for anything else).
+pub fn bubble_column_in(bb: [f64; 6], state: impl Fn([i32; 3]) -> Option<bool>) -> Option<bool> {
+    // AABB keeps min <= max on every construction.
+    let make = |a: [f64; 6]| {
+        [
+            a[0].min(a[3]),
+            a[1].min(a[4]),
+            a[2].min(a[5]),
+            a[0].max(a[3]),
+            a[1].max(a[4]),
+            a[2].max(a[5]),
+        ]
+    };
+    let inflate = |b: [f64; 6], x: f64, y: f64, z: f64| {
+        make([b[0] - x, b[1] - y, b[2] - z, b[3] + x, b[4] + y, b[5] + z])
+    };
+    let b = inflate(make(bb), 0.0, f64::from(-0.4f32), 0.0);
+    let b = inflate(b, -1.0E-6, -1.0E-6, -1.0E-6);
+    let (x0, y0, z0) = (
+        b[0].floor() as i32,
+        b[1].floor() as i32,
+        b[2].floor() as i32,
+    );
+    let (x1, y1, z1) = (
+        b[3].floor() as i32,
+        b[4].floor() as i32,
+        b[5].floor() as i32,
+    );
+    for z in z0..=z1 {
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if let Some(drag) = state([x, y, z]) {
+                    return Some(drag);
+                }
+            }
+        }
+    }
+    None
 }
 /// The local player's ambient sound handlers.
 pub struct Ambience {
@@ -107,6 +152,9 @@ pub struct Ambience {
     underwater_delay: i32,
     /// `LocalPlayer.wasUnderwater`.
     was_underwater: bool,
+    /// `BubbleColumnAmbientSoundHandler.wasInBubbleColumn` / `firstTick`.
+    was_in_bubble_column: bool,
+    first_tick: bool,
 }
 impl Default for Ambience {
     fn default() -> Self {
@@ -122,6 +170,8 @@ impl Ambience {
             moodiness: 0.0,
             underwater_delay: 0,
             was_underwater: false,
+            was_in_bubble_column: false,
+            first_tick: true,
         }
     }
     /// `LocalPlayer.isUnderWater`.
@@ -145,11 +195,13 @@ impl Ambience {
         self.moodiness = 0.0;
         self.underwater_delay = 0;
         self.was_underwater = false;
+        self.was_in_bubble_column = false;
+        self.first_tick = true;
     }
-    /// `ClientLevel.playLocalSound(x, y, z, sound, AMBIENT, 1, 1, false)`.
-    fn play_local(&mut self, event: &str, at: [f64; 3], sounds: &mut impl Sounds) {
+    /// `ClientLevel.playLocalSound(x, y, z, sound, source, 1, 1, false)`.
+    fn play_local(&mut self, event: &str, source: usize, at: [f64; 3], sounds: &mut impl Sounds) {
         let seed = self.random.next_long();
-        let instance = SoundInstance::at(event, AMBIENT, 1.0, 1.0, LegacyRandom::new(seed), at);
+        let instance = SoundInstance::at(event, source, 1.0, 1.0, LegacyRandom::new(seed), at);
         sounds.play_instance(instance, false);
     }
     /// `LocalPlayer.updateIsUnderwater`, then the `ambientSoundHandlers`
@@ -159,7 +211,12 @@ impl Ambience {
         self.was_underwater = ctx.underwater;
         if !ctx.spectator {
             if !old && ctx.underwater {
-                self.play_local("minecraft:ambient.underwater.enter", ctx.position, sounds);
+                self.play_local(
+                    "minecraft:ambient.underwater.enter",
+                    AMBIENT,
+                    ctx.position,
+                    sounds,
+                );
                 let instance = SoundInstance::under_liquid_loop(
                     "minecraft:ambient.underwater.loop",
                     SoundEngine::unseeded(),
@@ -167,11 +224,35 @@ impl Ambience {
                 sounds.play_instance(instance, false);
             }
             if old && !ctx.underwater {
-                self.play_local("minecraft:ambient.underwater.exit", ctx.position, sounds);
+                self.play_local(
+                    "minecraft:ambient.underwater.exit",
+                    AMBIENT,
+                    ctx.position,
+                    sounds,
+                );
             }
         }
         self.tick_underwater(sounds);
+        self.tick_bubble_column(ctx, sounds);
         self.tick_biome(ctx, sounds);
+    }
+    /// `BubbleColumnAmbientSoundHandler.tick`: entering a column plays its
+    /// inside sound (`LocalPlayer.playSound`, on PLAYERS).
+    fn tick_bubble_column(&mut self, ctx: &AmbientContext, sounds: &mut impl Sounds) {
+        if let Some(drag_down) = ctx.bubble_column {
+            if !self.was_in_bubble_column && !self.first_tick && !ctx.spectator {
+                let event = if drag_down {
+                    "minecraft:block.bubble_column.whirlpool_inside"
+                } else {
+                    "minecraft:block.bubble_column.upwards_inside"
+                };
+                self.play_local(event, PLAYERS, ctx.position, sounds);
+            }
+            self.was_in_bubble_column = true;
+        } else {
+            self.was_in_bubble_column = false;
+        }
+        self.first_tick = false;
     }
     /// `UnderwaterAmbientSoundHandler.tick`.
     fn tick_underwater(&mut self, sounds: &mut impl Sounds) {
@@ -317,6 +398,7 @@ mod tests {
             underwater,
             spectator: false,
             light,
+            bubble_column: None,
         }
     }
 

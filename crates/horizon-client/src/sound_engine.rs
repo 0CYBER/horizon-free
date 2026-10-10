@@ -17,6 +17,7 @@ use std::collections::HashMap;
 pub const MASTER: usize = 0;
 pub const MUSIC: usize = 1;
 pub const RECORDS: usize = 2;
+pub const PLAYERS: usize = 7;
 pub const AMBIENT: usize = 8;
 pub const UI: usize = 10;
 /// The pool sizes `Library.init` derives from OpenAL Soft's default 255 mono

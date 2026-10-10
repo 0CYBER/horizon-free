@@ -3,7 +3,8 @@
 
 The oracle runs the real `LocalPlayer.updateIsUnderwater` (enter/exit sounds
 seeded from the level random, the `UnderLiquidAmbientSoundInstance`),
-`UnderwaterAmbientSoundHandler` and `BiomeAmbientSoundsHandler` over the real
+`UnderwaterAmbientSoundHandler`, `BubbleColumnAmbientSoundHandler` and
+`BiomeAmbientSoundsHandler` over the real
 `SoundEngine` (see VanillaSoundRig), then `SoundManager.tick`, once per client
 tick. The `AMBIENT_SOUNDS` value (loops, moods and additions from the biomes
 and dimensions of the data pack plus faster custom moods), the player's
@@ -56,8 +57,9 @@ class Script:
         mood = '-' if value['mood'] is None else '{},{},{},{}'.format(value['mood'][0], value['mood'][1], value['mood'][2], dbits(value['mood'][3]))
         self.add('sounds', value['loop'] or '-', mood, *[f'{s},{dbits(c)}' for s, c in value['additions']])
 
-    def player(self, at=(0.5, 64.0, 0.5), eye=1.62, water=0, spectator=0, removed=0, mode=0):
-        self.add('player', *map(dbits, at), h.bits(eye), water, spectator, removed, mode)
+    def player(self, at=(0.5, 64.0, 0.5), eye=1.62, water=0, spectator=0, removed=0, mode=0, height=1.8, columns=()):
+        self.add('player', *map(dbits, at), h.bits(eye), water, spectator, removed, mode, h.bits(height),
+                 *[f'{x},{y},{z},{d}' for x, y, z, d in columns])
 
     def tick(self, n=1):
         for _ in range(n):
@@ -119,6 +121,25 @@ def scripted(s, values):
     s.tick(50)
     s.sounds(by_loop[0])
     s.tick(50)
+    # Bubble columns: entering, staying, the first tick, spectators, small boxes.
+    s.add('start', 5)
+    column = [(0, 64, 0, 1), (0, 65, 0, 1)]
+    s.player((0.5, 64.0, 0.5), water=1, columns=column)
+    s.tick(3)
+    s.player((3.5, 64.0, 0.5), water=1, columns=column)
+    s.tick(2)
+    s.player((0.5, 64.0, 0.5), water=1, columns=column)
+    s.tick(2)
+    s.player((0.5, 64.0, 0.5), water=1, columns=[(0, 64, 0, 0), (1, 64, 0, 1)])
+    s.tick(2)
+    s.player((3.5, 64.0, 0.5))
+    s.tick(2)
+    s.player((0.9, 64.5, 0.5), water=1, height=0.6, columns=[(1, 64, 0, 0), (0, 64, 0, 1)])
+    s.tick(2)
+    s.player((3.5, 64.0, 0.5))
+    s.tick(1)
+    s.player((0.5, 63.7, 0.5), spectator=1, columns=column)
+    s.tick(2)
 
 
 def fuzz(s, rng, values, steps):
@@ -132,7 +153,12 @@ def fuzz(s, rng, values, steps):
             s.sounds(v)
         elif op < 0.12:
             at = (rng.uniform(-3e4, 3e4) if rng.random() < 0.2 else rng.uniform(-200, 200), rng.uniform(-64, 320), rng.uniform(-200, 200))
-            s.player(at, rng.choice([1.62, 1.27, 0.4, 0.2]), int(rng.random() < 0.4), int(rng.random() < 0.05), int(rng.random() < 0.03), rng.randrange(4))
+            columns = []
+            if rng.random() < 0.3:
+                bx, by, bz = int(at[0] // 1), int(at[1] // 1), int(at[2] // 1)
+                columns = [(bx + rng.randrange(-1, 2), by + rng.randrange(-1, 3), bz + rng.randrange(-1, 2), rng.randrange(2)) for _ in range(rng.randrange(1, 4))]
+            s.player(at, rng.choice([1.62, 1.27, 0.4, 0.2]), int(rng.random() < 0.4), int(rng.random() < 0.05), int(rng.random() < 0.03), rng.randrange(4),
+                     rng.choice([1.8, 1.5, 0.6]), columns)
         elif op < 0.13:
             s.add('volume', rng.choice([0, 8]), h.bits(rng.choice([0.0, 1.0, 0.5])))
         else:
@@ -160,7 +186,7 @@ def main():
         scope='Real LocalPlayer.updateIsUnderwater, UnderwaterAmbientSoundHandler and BiomeAmbientSoundsHandler (loop cross-fades, additions, '
               'cave mood sampling, moodiness and the mood sound position) with UnderLiquidAmbientSoundInstance/UnderLiquidSubSound/LoopSoundInstance '
               'ticking in the real SoundEngine: every level random draw, handler state, playing instance and notification per tick. The '
-              'AMBIENT_SOUNDS value, eyes-in-water state and brightness are inputs. BubbleColumnAmbientSoundHandler is not compared.')
+              'AMBIENT_SOUNDS value, eyes-in-water state and brightness are inputs. BubbleColumnAmbientSoundHandler runs on a scripted block world.')
     print(f'{matched:,} ambient lines match the pinned client ({len(lines):,} steps): {report}', flush=True)
 
 

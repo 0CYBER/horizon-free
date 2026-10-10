@@ -101,6 +101,31 @@ impl Game<'_> {
             let l = world.light(b[0], b[1], b[2]);
             (l >> 4, l & 15)
         };
+        let (half, height) = (
+            f64::from(p.dimensions.width / 2.0),
+            f64::from(p.dimensions.height),
+        );
+        let registry = &self.res.assets.registry;
+        let facts = &self.res.facts;
+        let bubble_column = horizon_client::ambience::bubble_column_in(
+            [
+                feet[0] - half,
+                feet[1],
+                feet[2] - half,
+                feet[0] + half,
+                feet[1] + height,
+                feet[2] + half,
+            ],
+            |b| {
+                let state = world.block(b[0], b[1], b[2]);
+                (&*facts.get(state).name == "minecraft:bubble_column").then(|| {
+                    registry
+                        .state(state)
+                        .and_then(|s| s.properties.get("drag"))
+                        .is_some_and(|d| d == "true")
+                })
+            },
+        );
         let ctx = horizon_client::ambience::AmbientContext {
             sounds: &sounds,
             position: feet,
@@ -108,6 +133,7 @@ impl Game<'_> {
             underwater,
             spectator: self.spectator(),
             light: &light,
+            bubble_column,
         };
         self.ambience.tick(&ctx, &mut self.audio);
     }

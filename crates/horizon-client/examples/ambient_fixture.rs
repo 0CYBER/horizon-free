@@ -4,7 +4,7 @@
 #[path = "audio_common/mod.rs"]
 mod common;
 use common::{Fake, d, f, flush};
-use horizon_client::ambience::{Ambience, AmbientContext, AmbientSounds, Mood};
+use horizon_client::ambience::{Ambience, AmbientContext, AmbientSounds, Mood, bubble_column_in};
 use horizon_client::sound_engine::{Bound, SoundEngine, TickContext, Ticking};
 use horizon_client::sound_events::{SoundRegistry, normalize};
 use horizon_core::random::RandomSource;
@@ -56,6 +56,8 @@ fn main() {
     let mut current = AmbientSounds::default();
     let (mut position, mut eye, mut eye_in_water, mut spectator, mut removed, mut mode) =
         ([0.0f64; 3], 0.0f32, false, false, false, 0);
+    let mut height = 1.8f32;
+    let mut columns: Vec<([i32; 3], bool)> = Vec::new();
     let input = std::fs::read_to_string(&args[2]).expect("input");
     let mut out = std::io::BufWriter::new(std::fs::File::create(&args[3]).expect("output"));
     for line in input.lines() {
@@ -72,6 +74,8 @@ fn main() {
                 current = AmbientSounds::default();
                 (position, eye, eye_in_water, spectator, removed, mode) =
                     ([0.0; 3], 0.0, false, false, false, 0);
+                height = 1.8;
+                columns.clear();
             }
             "sounds" => current = sounds(&a),
             "player" => {
@@ -81,6 +85,15 @@ fn main() {
                 spectator = a[6] == "1";
                 removed = a[7] == "1";
                 mode = a[8].parse().expect("mode");
+                height = f(a[9]);
+                columns = a[10..]
+                    .iter()
+                    .map(|c| {
+                        let p: Vec<&str> = c.split(',').collect();
+                        let n = |i: usize| p[i].parse::<i32>().expect("column");
+                        ([n(0), n(1), n(2)], p[3] == "1")
+                    })
+                    .collect();
             }
             "volume" => {
                 let source: usize = a[1].parse().expect("source");
@@ -96,6 +109,17 @@ fn main() {
                     underwater: eye_in_water,
                     spectator,
                     light: &light,
+                    bubble_column: bubble_column_in(
+                        [
+                            position[0] - f64::from(0.3f32),
+                            position[1],
+                            position[2] - f64::from(0.3f32),
+                            position[0] + f64::from(0.3f32),
+                            position[1] + f64::from(height),
+                            position[2] + f64::from(0.3f32),
+                        ],
+                        |b| columns.iter().find(|c| c.0 == b).map(|c| c.1),
+                    ),
                 };
                 ambience.tick(
                     &ctx,
