@@ -125,15 +125,15 @@ use horizon_client::{
 };
 use horizon_core::{
     biome::{BiomeZoom, obfuscate_seed},
-    geometry::Direction,
+    geometry::{Aabb, Direction},
     position::BlockPos,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_world::{
     block_collision::BlockCollisionRegistry,
     level::{
-        Behaviours, Dimension as LevelDimension, Landing, LevelAccess, LevelEvent, PlaceContext,
-        PlaceOutcome, PlayerContext, PlayerEffect, Ticks, flags as level_flags,
+        Behaviours, Dimension as LevelDimension, EntityQuery, Landing, LevelAccess, LevelEvent,
+        PlaceContext, PlaceOutcome, PlayerContext, PlayerEffect, Ticks, flags as level_flags,
     },
     registry::BlockStateId,
 };
@@ -319,6 +319,8 @@ struct GameLevel<'w> {
     raining: bool,
     thundering: bool,
     player_box: Option<([f64; 3], [f64; 3])>,
+    /// Minecart boxes (detector rails).
+    cart_boxes: Vec<([f64; 3], [f64; 3])>,
     biomes: &'w Biomes,
     seed: i64,
     behaviours: &'w Behaviours,
@@ -450,6 +452,22 @@ impl LevelAccess for GameLevel<'_> {
             && y + 1.0 > lo[1] + 1e-7
             && z < hi[2] - 1e-7
             && z + 1.0 > lo[2] + 1e-7)
+    }
+    /// Entities that trigger pressure plates, tripwires and detector rails:
+    /// the player (a mob) and the minecarts.
+    fn count_entities(&self, area: Aabb, query: EntityQuery) -> usize {
+        let hit = |(lo, hi): &([f64; 3], [f64; 3])| {
+            area.intersects(Aabb::new(
+                Vec3::new(lo[0], lo[1], lo[2]),
+                Vec3::new(hi[0], hi[1], hi[2]),
+            ))
+        };
+        let carts = || self.cart_boxes.iter().filter(|b| hit(b)).count();
+        match query {
+            EntityQuery::Minecart => carts(),
+            EntityQuery::Mobs => self.player_box.iter().filter(|b| hit(b)).count(),
+            EntityQuery::Everything => self.player_box.iter().filter(|b| hit(b)).count() + carts(),
+        }
     }
     fn emit(&mut self, event: LevelEvent) {
         self.events.push(event);
@@ -1226,6 +1244,17 @@ impl Game<'_> {
                 ],
             )
         });
+        let cart_boxes = self
+            .carts
+            .iter()
+            .map(|c| {
+                let p = c.position;
+                (
+                    [p.x - 0.49, p.y, p.z - 0.49],
+                    [p.x + 0.49, p.y + 0.7, p.z + 0.49],
+                )
+            })
+            .collect();
         let dimension = match self.dim {
             Dim::Overworld => LevelDimension::Overworld,
             Dim::Nether => LevelDimension::Nether,
@@ -1233,6 +1262,7 @@ impl Game<'_> {
         };
         let rules = self.level_rules();
         let mut level = GameLevel {
+            cart_boxes,
             world: &mut self.world,
             facts: &self.res.facts,
             events: &mut self.level_events,
@@ -1301,7 +1331,41 @@ impl Game<'_> {
                 .collect();
             ticking.push((x, z, sections));
         }
+        // Entity.checkInsideBlocks for the plates, tripwires and detector rails
+        // under the player and the minecarts.
+        let mut inside = Vec::new();
+        let boxes = self
+            .player
+            .iter()
+            .filter(|_| !self.spectator())
+            .map(|p| {
+                let w = f64::from(p.dimensions.width) / 2.0;
+                let h = f64::from(p.dimensions.height);
+                (
+                    [p.position.x - w, p.position.y, p.position.z - w],
+                    [p.position.x + w, p.position.y + h, p.position.z + w],
+                )
+            })
+            .chain(self.carts.iter().map(|c| {
+                let p = c.position;
+                (
+                    [p.x - 0.49, p.y, p.z - 0.49],
+                    [p.x + 0.49, p.y + 0.7, p.z + 0.49],
+                )
+            }));
+        for (lo, hi) in boxes {
+            for x in (lo[0] + 1e-7).floor() as i32..=(hi[0] - 1e-7).floor() as i32 {
+                for y in (lo[1] + 1e-7).floor() as i32..=(hi[1] - 1e-7).floor() as i32 {
+                    for z in (lo[2] + 1e-7).floor() as i32..=(hi[2] - 1e-7).floor() as i32 {
+                        inside.push(BlockPos::new(x, y, z));
+                    }
+                }
+            }
+        }
         self.with_level(|b, level, ticks| {
+            for pos in inside {
+                b.entity_inside(level, ticks, pos);
+            }
             b.tick_scheduled(level, ticks);
             for (x, z, sections) in ticking {
                 b.tick_chunk_random(
