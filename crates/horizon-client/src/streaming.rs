@@ -361,6 +361,9 @@ impl Streaming {
                     world
                         .block_entities
                         .extend(std::mem::take(&mut chunk.block_entities));
+                    world
+                        .block_names
+                        .extend(std::mem::take(&mut chunk.block_names));
                     let entities = std::mem::take(&mut chunk.entities);
                     if !entities.is_empty() {
                         world.loaded_entities.push(((chunk.x, chunk.z), entities));

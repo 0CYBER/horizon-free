@@ -746,6 +746,7 @@ impl Game<'_> {
             batch.rect_uv(ox, oy, 176.0, height, r, u32::MAX);
         }
         let grey = horizon_client::hud::rgba(64, 64, 64, 255);
+        let title = &self.container_title(title.to_owned());
         let title_x = if screen == Screen::Hopper {
             8.0
         } else {

@@ -729,7 +729,12 @@ pub fn encode_with(
         .iter()
         .map(|(p, e)| {
             let block = block_name(p);
-            let current = encode_block_entity(*p, e, &block);
+            let mut current = encode_block_entity(*p, e, &block);
+            if let Some((_, name)) = chunk.block_names.iter().find(|(q, _)| q == p)
+                && let Tag::Compound(map) = &mut current
+            {
+                map.insert("CustomName".into(), string(name));
+            }
             let source = extras
                 .and_then(|x| x.block_entity_sources.iter().find(|(q, _)| q == p))
                 .map(|(_, tag)| tag)
@@ -965,6 +970,9 @@ pub fn decode_with(
         for e in entities {
             match decode_block_entity(e) {
                 Some(be) => {
+                    if let Some(name) = text(e.get("CustomName")) {
+                        chunk.block_names.push((be.0, name));
+                    }
                     extras.block_entity_sources.push((be.0, e.clone()));
                     chunk.block_entities.push(be);
                 }

@@ -777,8 +777,8 @@ impl Game<'_> {
             }
             // Saddles, horse armour and chests always drop.
             let mut gear: Vec<&str> = Vec::new();
-            if m.extra.saddled {
-                gear.push("minecraft:saddle");
+            if let Some(saddle) = m.saddle_item() {
+                self.spawn_item(saddle, pos, [0.0, 0.2, 0.0], 10);
             }
             // WitherBoss.dropCustomDeathLoot.
             if m.species() == Species::Wither {

@@ -452,6 +452,9 @@ pub struct Extra {
     /// `Mob.canPickUpLoot` (also lets dispensers equip it).
     pub pick_up_loot: bool,
     pub saddled: bool,
+    /// The saddle's components (name, enchantments...) when it is not a bare
+    /// one; `saddled` stays the gameplay flag.
+    pub saddle_stack: Option<crate::items::ItemStack>,
     pub chested: bool,
     /// The chest contents of a donkey or mule (15 slots).
     pub items: Vec<Option<crate::items::ItemStack>>,
@@ -1220,5 +1223,24 @@ pub fn render_model(
         for c in &part.children {
             visit(c, m, pose_for, uv, light, overlay, out);
         }
+    }
+}
+
+impl Mob {
+    /// The saddle worn, with its components.
+    pub fn saddle_item(&self) -> Option<crate::items::ItemStack> {
+        self.extra.saddled.then(|| {
+            self.extra
+                .saddle_stack
+                .clone()
+                .unwrap_or_else(|| crate::items::ItemStack::new("minecraft:saddle", 1))
+        })
+    }
+    /// Wear (or take off) a saddle stack, keeping its components.
+    pub fn set_saddle(&mut self, saddle: Option<crate::items::ItemStack>) {
+        self.extra.saddled = saddle.is_some();
+        self.extra.saddle_stack = saddle
+            .map(|s| crate::items::ItemStack { count: 1, ..s })
+            .filter(|s| s.damage != 0 || s.extra.is_some());
     }
 }
