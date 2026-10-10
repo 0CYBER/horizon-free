@@ -34,9 +34,12 @@ class Vanilla:
 
     def compile(self, *oracles):
         sources = [PARITY / (name + '.java') for name in oracles]
-        subprocess.run(['javac', '--release', str(self.lock['minecraft']['java_major']), '-proc:none',
-                        '-sourcepath', str(lab.ROOT / 'mods/horizon/src/test/java'), '-nowarn',
-                        '-cp', self.deps, '-d', str(self.classes), *map(str, sources)], check=True)
+        done = subprocess.run(['javac', '--release', str(self.lock['minecraft']['java_major']), '-proc:none',
+                               '-sourcepath', str(lab.ROOT / 'mods/horizon/src/test/java'), '-nowarn', '-Xmaxerrs', '30',
+                               '-cp', self.deps, '-d', str(self.classes), *map(str, sources)], capture_output=True, text=True)
+        if done.returncode:
+            print(done.stderr.replace(str(lab.ROOT) + '/', ''))
+            raise SystemExit('javac failed')
 
     def run(self, oracle, *args, heap='2G'):
         subprocess.run(['java', f'-Xmx{heap}', '-cp', str(self.classes) + os.pathsep + self.deps,
