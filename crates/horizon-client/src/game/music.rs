@@ -1,7 +1,11 @@
 //! `Minecraft.getSituationalMusic` and `getMusicVolume` for the music manager,
 //! the local player's ambient sound handlers and the sound engine tick.
 use super::Game;
-use horizon_client::{blocks::Fluid, music::Music, sound_engine::TickContext};
+use horizon_client::{
+    blocks::Fluid,
+    music::{BackgroundMusic, Music, Situation},
+    sound_engine::TickContext,
+};
 
 impl Game<'_> {
     /// `Minecraft.tick` -> `MusicManager.tick`, once per client tick.
@@ -32,26 +36,35 @@ impl Game<'_> {
     }
     /// `getSituationalMusic` and `getMusicVolume`.
     fn situational_music(&self) -> (Option<Music>, f32) {
-        // Title screen: no player, Musics.MENU at full volume.
-        if self.title.is_some() {
-            return (Some(Music::menu()), 1.0);
-        }
-        let Some(eye) = self.eye_position() else {
-            return (Some(Music::menu()), 1.0);
+        let empty = BackgroundMusic::default();
+        // The title screen has no player (and no level for the camera probe).
+        let eye = if self.title.is_some() {
+            None
+        } else {
+            self.eye_position()
         };
-        let biome = self.biome_at(eye);
-        let dimension = self.dim.id();
-        let tables = &self.res.music;
-        let volume = tables.volume(dimension, biome);
-        // Minecraft.getSituationalMusic: the boss overlay's music in the End.
-        if self.dim == super::Dim::End && self.boss_music() {
-            return (Some(Music::end_boss()), volume);
-        }
-        let music = tables
-            .background(dimension, biome)
-            .select(self.creative, self.ambience.was_underwater())
-            .cloned();
-        (music, volume)
+        let (background, probe_volume) = match eye {
+            Some(eye) => {
+                let (dimension, biome) = (self.dim.id(), self.biome_at(eye));
+                let tables = &self.res.music;
+                (
+                    tables.background(dimension, biome),
+                    tables.volume(dimension, biome),
+                )
+            }
+            None => (empty, 1.0),
+        };
+        let situation = Situation {
+            screen_music: None,
+            in_world: eye.is_some(),
+            in_end: self.dim == super::Dim::End,
+            boss_music: self.boss_music(),
+            background: &background,
+            probe_volume,
+            creative: self.creative,
+            underwater: self.ambience.was_underwater(),
+        };
+        (situation.music(), situation.volume())
     }
     /// `BiomeManager.getNoiseBiomeAtPosition`: the quart cell holding a position.
     fn biome_at(&self, p: [f64; 3]) -> &str {

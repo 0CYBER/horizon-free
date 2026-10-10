@@ -107,6 +107,51 @@ impl Layer {
         }
     }
 }
+/// What `Minecraft.getSituationalMusic` and `getMusicVolume` read.
+#[derive(Clone, Debug)]
+pub struct Situation<'a> {
+    /// `Screen.getBackgroundMusic` of the open screen.
+    pub screen_music: Option<Music>,
+    /// `Minecraft.player != null`.
+    pub in_world: bool,
+    /// The player's level is the End.
+    pub in_end: bool,
+    /// `BossHealthOverlay.shouldPlayMusic`: a boss bar asks for music.
+    pub boss_music: bool,
+    /// `BACKGROUND_MUSIC` at the camera.
+    pub background: &'a BackgroundMusic,
+    /// `MUSIC_VOLUME` at the camera (1 without a level).
+    pub probe_volume: f32,
+    /// `abilities.instabuild && abilities.mayfly`.
+    pub creative: bool,
+    /// `LocalPlayer.isUnderWater`.
+    pub underwater: bool,
+}
+impl Situation<'_> {
+    /// `Minecraft.getSituationalMusic`.
+    pub fn music(&self) -> Option<Music> {
+        if let Some(music) = &self.screen_music {
+            return Some(music.clone());
+        }
+        if !self.in_world {
+            return Some(Music::menu());
+        }
+        if self.in_end && self.boss_music {
+            return Some(Music::end_boss());
+        }
+        self.background
+            .select(self.creative, self.underwater)
+            .cloned()
+    }
+    /// `Minecraft.getMusicVolume`.
+    pub fn volume(&self) -> f32 {
+        if self.screen_music.is_some() {
+            1.0
+        } else {
+            self.probe_volume
+        }
+    }
+}
 /// Music attributes by dimension type and biome.
 #[derive(Clone, Debug, Default)]
 pub struct MusicTables {
