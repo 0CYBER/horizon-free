@@ -41,6 +41,7 @@ pub struct Registries {
     pub bossbars: Vec<String>,
     pub predicates: Vec<String>,
     pub schedules: Vec<String>,
+    pub stopwatches: Vec<String>,
     pub recipes: Vec<String>,
     pub sounds: Vec<String>,
     pub damage_types: Vec<String>,
@@ -156,6 +157,7 @@ pub enum ArgType {
     TeamColor,
     /// RangeArgument.Ints (`1`, `1..`, `..5`, `1..5`).
     IntRange,
+    FloatRange,
     /// NbtPathArgument (kept as text).
     NbtPath,
     /// NbtTagArgument: any SNBT value (kept as text).
@@ -426,6 +428,7 @@ pub enum Arg {
     Anchor(bool),
     ScoreHolder(ScoreHolderArg),
     IntRange(IntRange),
+    DoubleRange(DoubleRange),
 }
 
 fn is_id_char(c: char) -> bool {
@@ -1750,6 +1753,7 @@ impl ArgType {
                 Arg::Str(name.to_owned())
             }
             ArgType::IntRange => Arg::IntRange(range_int(reader)?),
+            ArgType::FloatRange => Arg::DoubleRange(range_double(reader)?),
             ArgType::Name(_) => Arg::Str(reader.read_string()?),
             ArgType::Vec2 | ArgType::ColumnPos => {
                 let block = matches!(self, ArgType::ColumnPos);
@@ -1923,6 +1927,7 @@ impl ArgType {
                     "storages" => reg.storages.clone(),
                     "bossbars" => reg.bossbars.clone(),
                     "schedules" => reg.schedules.clone(),
+                    "stopwatches" => reg.stopwatches.clone(),
                     "recipes" => reg.recipes.clone(),
                     "sounds" => reg.sounds.clone(),
                     "damage_types" => reg.damage_types.clone(),

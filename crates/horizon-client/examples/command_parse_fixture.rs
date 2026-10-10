@@ -64,6 +64,7 @@ fn parser_id(ty: &ArgType) -> String {
         ArgType::Operation => "minecraft:operation".into(),
         ArgType::TeamColor => "minecraft:team_color".into(),
         ArgType::IntRange => "minecraft:int_range".into(),
+        ArgType::FloatRange => "minecraft:float_range".into(),
         ArgType::NbtPath => "minecraft:nbt_path".into(),
         ArgType::NbtTag => "minecraft:nbt_tag".into(),
         ArgType::Vec2 => "minecraft:vec2".into(),

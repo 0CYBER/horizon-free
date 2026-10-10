@@ -546,6 +546,7 @@ impl Game<'_> {
             id if id.starts_with("worldborder.") => self.cmd_worldborder(id, ctx),
             id if id.starts_with("loot.") => self.cmd_loot(id, ctx),
             "teammsg" => self.cmd_teammsg(ctx),
+            id if id.starts_with("stopwatch.") => self.cmd_stopwatch(id, ctx),
             id if id.starts_with("tick.") => self.cmd_tick(id, ctx),
             id if id.starts_with("random.") => self.cmd_random(id, ctx),
             "function" => self.cmd_function(ctx),
