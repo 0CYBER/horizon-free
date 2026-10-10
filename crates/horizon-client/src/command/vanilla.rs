@@ -31,6 +31,11 @@ pub const ENTITY: ArgType = ArgType::Entity {
 pub const DIFFICULTIES: [&str; 4] = ["peaceful", "easy", "normal", "hard"];
 
 pub fn build() -> Dispatcher {
+    build_with(true)
+}
+/// The tree Commands registers; `dev` adds the commands vanilla only
+/// registers in development builds (raid, warden_spawn_tracker).
+pub fn build_with(dev: bool) -> Dispatcher {
     let mut d = Dispatcher::new();
     let root = 0;
 
@@ -111,27 +116,29 @@ pub fn build() -> Dispatcher {
         d.executes(dur, "weather");
     }
 
-    // raid start <omenlvl> | stop | check | sound <type> | spawnleader | setomen <level> | glow
-    let raid = d.literal(root, "raid");
-    d.requires(raid, 3);
-    let start = d.literal(raid, "start");
-    let level = d.argument(start, "omenlvl", integer(0));
-    d.executes(level, "raid.start");
-    for (name, id) in [
-        ("stop", "raid.stop"),
-        ("check", "raid.check"),
-        ("spawnleader", "raid.spawnleader"),
-        ("glow", "raid.glow"),
-    ] {
-        let n = d.literal(raid, name);
-        d.executes(n, id);
+    if dev {
+        // raid start <omenlvl> | stop | check | sound <type> | spawnleader | setomen <level> | glow
+        let raid = d.literal(root, "raid");
+        d.requires(raid, 3);
+        let start = d.literal(raid, "start");
+        let level = d.argument(start, "omenlvl", integer(0));
+        d.executes(level, "raid.start");
+        for (name, id) in [
+            ("stop", "raid.stop"),
+            ("check", "raid.check"),
+            ("spawnleader", "raid.spawnleader"),
+            ("glow", "raid.glow"),
+        ] {
+            let n = d.literal(raid, name);
+            d.executes(n, id);
+        }
+        let sound = d.literal(raid, "sound");
+        let kind = d.argument(sound, "type", ArgType::Greedy);
+        d.executes(kind, "raid.sound");
+        let setomen = d.literal(raid, "setomen");
+        let level = d.argument(setomen, "level", integer(0));
+        d.executes(level, "raid.setomen");
     }
-    let sound = d.literal(raid, "sound");
-    let kind = d.argument(sound, "type", ArgType::Greedy);
-    d.executes(kind, "raid.sound");
-    let setomen = d.literal(raid, "setomen");
-    let level = d.argument(setomen, "level", integer(0));
-    d.executes(level, "raid.setomen");
 
     // kill [<targets>]
     let kill = d.literal(root, "kill");
@@ -183,6 +190,7 @@ pub fn build() -> Dispatcher {
     let summon = d.literal(root, "summon");
     d.requires(summon, GAMEMASTERS);
     let e = d.argument(summon, "entity", ArgType::Resource(Resource::EntityType));
+    d.suggests(e, super::Suggests::SummonableEntities);
     d.executes(e, "summon");
     let pos = d.argument(e, "pos", ArgType::Vec3 { center: true });
     d.executes(pos, "summon");
@@ -266,15 +274,18 @@ pub fn build() -> Dispatcher {
 
     // difficulty [<difficulty>]
     let diff = d.literal(root, "difficulty");
+    d.requires(diff, GAMEMASTERS);
     d.executes(diff, "difficulty");
     for name in DIFFICULTIES {
         let l = d.literal(diff, name);
-        d.requires(l, GAMEMASTERS);
         d.executes(l, "difficulty");
     }
 
+    // seed and version: everyone in the integrated server.
     let seed = d.literal(root, "seed");
     d.executes(seed, "seed");
+    let version = d.literal(root, "version");
+    d.executes(version, "version");
 
     // spawnpoint [<targets>] [<pos>] [<rotation>]
     let sp = d.literal(root, "spawnpoint");
@@ -311,20 +322,25 @@ pub fn build() -> Dispatcher {
     let locate = d.literal(root, "locate");
     d.requires(locate, GAMEMASTERS);
     let s = d.literal(locate, "structure");
-    let a = d.argument(s, "structure", ArgType::Resource(Resource::Structure));
+    let a = d.argument(s, "structure", ArgType::ResOrTagKey("minecraft:worldgen/structure"));
     d.executes(a, "locate.structure");
     let b = d.literal(locate, "biome");
-    let a = d.argument(b, "biome", ArgType::Resource(Resource::Biome));
+    let a = d.argument(b, "biome", ArgType::ResOrTag("minecraft:worldgen/biome"));
     d.executes(a, "locate.biome");
+    let p = d.literal(locate, "poi");
+    let a = d.argument(p, "poi", ArgType::ResOrTag("minecraft:point_of_interest_type"));
+    d.executes(a, "locate.poi");
 
-    // warden_spawn_tracker (clear | set <warning_level>)
-    let tracker = d.literal(root, "warden_spawn_tracker");
-    d.requires(tracker, GAMEMASTERS);
-    let clear = d.literal(tracker, "clear");
-    d.executes(clear, "warden_spawn_tracker.clear");
-    let set = d.literal(tracker, "set");
-    let level = d.argument(set, "warning_level", ArgType::Integer { min: 0, max: 4 });
-    d.executes(level, "warden_spawn_tracker.set");
+    if dev {
+        // warden_spawn_tracker (clear | set <warning_level>)
+        let tracker = d.literal(root, "warden_spawn_tracker");
+        d.requires(tracker, GAMEMASTERS);
+        let clear = d.literal(tracker, "clear");
+        d.executes(clear, "warden_spawn_tracker.clear");
+        let set = d.literal(tracker, "set");
+        let level = d.argument(set, "warning_level", ArgType::Integer { min: 0, max: 4 });
+        d.executes(level, "warden_spawn_tracker.set");
+    }
 
     // say / me / msg / list
     let say = d.literal(root, "say");
@@ -378,6 +394,7 @@ pub fn build() -> Dispatcher {
     super::tree_execute::register(&mut d, root);
     super::tree_misc::register(&mut d, root);
     super::tree_world::register(&mut d, root);
+    super::tree_extra::register(&mut d, root);
     d
 }
 
@@ -391,10 +408,11 @@ fn advancement(d: &mut Dispatcher, root: usize) {
         let t = d.argument(a, "targets", PLAYERS);
         for mode in ["only", "from", "until", "through"] {
             let m = d.literal(t, mode);
-            let id = d.argument(m, "advancement", ArgType::Id("advancements"));
+            let id = d.argument(m, "advancement", ArgType::ResKey("minecraft:advancement"));
             d.executes(id, "advancement");
             if mode == "only" {
                 let c = d.argument(id, "criterion", ArgType::Greedy);
+                d.suggests(c, super::Suggests::AdvancementCriteria);
                 d.executes(c, "advancement");
             }
         }
@@ -409,6 +427,7 @@ fn clock_nodes(d: &mut Dispatcher, node: usize) {
     let t = d.argument(set, "time", ArgType::Time { min: 0 });
     d.executes(t, "time.set");
     let marker = d.argument(set, "timemarker", ArgType::Id("time_markers"));
+    d.suggests(marker, super::Suggests::TimeMarkers);
     d.executes(marker, "time.set.marker");
     let add = d.literal(node, "add");
     let t = d.argument(add, "time", ArgType::Time { min: i32::MIN });
@@ -482,6 +501,11 @@ pub fn game_modes() -> [&'static str; 4] {
 pub fn dispatcher() -> &'static Dispatcher {
     static TREE: std::sync::OnceLock<Dispatcher> = std::sync::OnceLock::new();
     TREE.get_or_init(build)
+}
+/// The tree of a release integrated server (no development commands).
+pub fn release_dispatcher() -> &'static Dispatcher {
+    static TREE: std::sync::OnceLock<Dispatcher> = std::sync::OnceLock::new();
+    TREE.get_or_init(|| build_with(false))
 }
 #[allow(unused)]
 const _: (u8, u8) = (ALL, GAMEMASTERS);

@@ -7,11 +7,12 @@ use super::{
     vanilla::{ENTITIES, GAMEMASTERS},
 };
 
+/// HeightmapTypeArgument: the types kept after world generation.
 pub const HEIGHTMAPS: &[&str] = &[
     "world_surface",
+    "ocean_floor",
     "motion_blocking",
     "motion_blocking_no_leaves",
-    "ocean_floor",
 ];
 pub const RELATIONS: [&str; 8] = [
     "owner",
@@ -47,7 +48,7 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     let t = d.argument(as_, "targets", ENTITIES);
     d.redirect(t, ex);
     let over = d.literal(positioned, "over");
-    let hm = d.argument(over, "heightmap", ArgType::Enum(HEIGHTMAPS));
+    let hm = d.argument(over, "heightmap", ArgType::StrEnum(HEIGHTMAPS, "argument.enum.invalid"));
     d.redirect(hm, ex);
     let rotated = d.literal(ex, "rotated");
     let rot = d.argument(rotated, "rot", ArgType::Rotation);
@@ -73,6 +74,7 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     d.redirect(dim, ex);
     let summon = d.literal(ex, "summon");
     let e = d.argument(summon, "entity", ArgType::Resource(Resource::EntityType));
+    d.suggests(e, super::Suggests::SummonableEntities);
     d.redirect(e, ex);
     let on = d.literal(ex, "on");
     for r in RELATIONS {
@@ -139,7 +141,7 @@ fn conditionals(d: &mut Dispatcher, m: usize, ex: usize) {
 
     let biome = d.literal(m, "biome");
     let pos = d.argument(biome, "pos", ArgType::BlockPos);
-    let b = d.argument(pos, "biome", ArgType::Resource(Resource::Biome));
+    let b = d.argument(pos, "biome", ArgType::ResOrTag("minecraft:worldgen/biome"));
     conditional(d, b, ex);
 
     let loaded = d.literal(m, "loaded");
@@ -177,7 +179,7 @@ fn conditionals(d: &mut Dispatcher, m: usize, ex: usize) {
     conditional(d, targets, ex);
 
     let predicate = d.literal(m, "predicate");
-    let p = d.argument(predicate, "predicate", ArgType::Id("predicates"));
+    let p = d.argument(predicate, "predicate", ArgType::ResourceOrId("minecraft:predicate"));
     conditional(d, p, ex);
 
     let stopwatch = d.literal(m, "stopwatch");
@@ -187,7 +189,9 @@ fn conditionals(d: &mut Dispatcher, m: usize, ex: usize) {
 
     let function = d.literal(m, "function");
     let name = d.argument(function, "name", ArgType::Function);
-    conditional(d, name, ex);
+    d.suggests(name, super::Suggests::Functions);
+    // ExecuteIfFunctionCustomModifier: a fork only (not a test command).
+    d.redirect(name, ex);
 
     let data = d.literal(m, "data");
     for provider in ["entity", "block", "storage"] {
@@ -225,7 +229,7 @@ fn conditionals(d: &mut Dispatcher, m: usize, ex: usize) {
             } else {
                 d.argument(p, "sourcePos", ArgType::BlockPos)
             };
-            let slots = d.argument(a, "slots", ArgType::Slots);
+            let slots = d.argument(a, "slots", ArgType::SlotSource);
             if kind == "items" {
                 let item = d.argument(slots, "item_predicate", ArgType::ItemPredicate);
                 conditional(d, item, ex);

@@ -4,7 +4,7 @@
 //! `/fillbiome`, `/worldborder`.
 use super::{
     Dispatcher,
-    args::{ArgType, Resource, integer},
+    args::{ArgType, integer},
     vanilla::{ENTITIES, ENTITY, GAMEMASTERS, PLAYERS},
 };
 use crate::settings::SOUND_SOURCES;
@@ -55,6 +55,23 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     // place template <template> [<pos> [<rotation> [<mirror> [<integrity> [<seed> [strict]]]]]]
     let place = d.literal(root, "place");
     d.requires(place, GAMEMASTERS);
+    let feature = d.literal(place, "feature");
+    let f = d.argument(feature, "feature", ArgType::ResourceOrId("minecraft:worldgen/feature"));
+    d.executes(f, "place.feature");
+    let pos = d.argument(f, "pos", ArgType::BlockPos);
+    d.executes(pos, "place.feature");
+    let jigsaw = d.literal(place, "jigsaw");
+    let pool = d.argument(jigsaw, "pool", ArgType::ResKey("minecraft:worldgen/template_pool"));
+    let target = d.argument(pool, "target", ArgType::Id("none"));
+    let depth = d.argument(target, "max_depth", ArgType::Integer { min: 1, max: 20 });
+    d.executes(depth, "place.jigsaw");
+    let position = d.argument(depth, "position", ArgType::BlockPos);
+    d.executes(position, "place.jigsaw");
+    let structure = d.literal(place, "structure");
+    let st = d.argument(structure, "structure", ArgType::ResKey("minecraft:worldgen/structure"));
+    d.executes(st, "place.structure");
+    let pos = d.argument(st, "pos", ArgType::BlockPos);
+    d.executes(pos, "place.structure");
     let template = d.literal(place, "template");
     let id = d.argument(template, "template", ArgType::Id("templates"));
     d.executes(id, "place");
@@ -63,13 +80,16 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     let rotation = d.argument(
         pos,
         "rotation",
-        ArgType::Enum(&["none", "clockwise_90", "180", "counterclockwise_90"]),
+        ArgType::StrEnum(
+            &["none", "clockwise_90", "180", "counterclockwise_90"],
+            "argument.enum.invalid",
+        ),
     );
     d.executes(rotation, "place");
     let mirror = d.argument(
         rotation,
         "mirror",
-        ArgType::Enum(&["none", "left_right", "front_back"]),
+        ArgType::StrEnum(&["none", "left_right", "front_back"], "argument.enum.invalid"),
     );
     d.executes(mirror, "place");
     let integrity = d.argument(mirror, "integrity", ArgType::Float { min: 0.0, max: 1.0 });
@@ -91,7 +111,7 @@ fn recipe(d: &mut Dispatcher, root: usize) {
     for (word, id) in [("give", "recipe.give"), ("take", "recipe.take")] {
         let w = d.literal(recipe, word);
         let t = d.argument(w, "targets", PLAYERS);
-        let r = d.argument(t, "recipe", ArgType::Id("recipes"));
+        let r = d.argument(t, "recipe", ArgType::ResKey("minecraft:recipe"));
         d.executes(r, id);
         let all = d.literal(t, "*");
         d.executes(all, id);
@@ -104,7 +124,7 @@ fn damage(d: &mut Dispatcher, root: usize) {
     let target = d.argument(damage, "target", ENTITY);
     let amount = d.argument(target, "amount", float(0.0));
     d.executes(amount, "damage");
-    let ty = d.argument(amount, "damageType", ArgType::Id("damage_types"));
+    let ty = d.argument(amount, "damageType", ArgType::Res("minecraft:damage_type"));
     d.executes(ty, "damage");
     let at = d.literal(ty, "at");
     let loc = d.argument(at, "location", ArgType::Vec3 { center: true });
@@ -140,7 +160,7 @@ fn rotate_swing(d: &mut Dispatcher, root: usize) {
     for hand in ["mainhand", "offhand"] {
         let h = d.literal(targets, hand);
         d.executes(h, "swing");
-        let animation = d.argument(h, "animation", ArgType::Enum(&["none", "whack", "stab"]));
+        let animation = d.argument(h, "animation", ArgType::StrEnum(&["none", "whack", "stab"], "argument.swing_animation.invalid"));
         d.executes(animation, "swing");
         let duration = d.argument(animation, "duration", ArgType::Time { min: 1 });
         d.executes(duration, "swing");
@@ -203,7 +223,7 @@ fn attribute(d: &mut Dispatcher, root: usize) {
     let attribute = d.literal(root, "attribute");
     d.requires(attribute, GAMEMASTERS);
     let target = d.argument(attribute, "target", ENTITY);
-    let attr = d.argument(target, "attribute", ArgType::Id("attributes"));
+    let attr = d.argument(target, "attribute", ArgType::Res("minecraft:attribute"));
     let get = d.literal(attr, "get");
     d.executes(get, "attribute.get");
     let scale = d.argument(get, "scale", double());
@@ -262,10 +282,10 @@ fn fillbiome(d: &mut Dispatcher, root: usize) {
     d.requires(f, GAMEMASTERS);
     let from = d.argument(f, "from", ArgType::BlockPos);
     let to = d.argument(from, "to", ArgType::BlockPos);
-    let biome = d.argument(to, "biome", ArgType::Resource(Resource::Biome));
+    let biome = d.argument(to, "biome", ArgType::Res("minecraft:worldgen/biome"));
     d.executes(biome, "fillbiome");
     let replace = d.literal(biome, "replace");
-    let filter = d.argument(replace, "filter", ArgType::Resource(Resource::Biome));
+    let filter = d.argument(replace, "filter", ArgType::ResOrTag("minecraft:worldgen/biome"));
     d.executes(filter, "fillbiome");
 }
 
@@ -273,8 +293,8 @@ fn worldborder(d: &mut Dispatcher, root: usize) {
     let w = d.literal(root, "worldborder");
     d.requires(w, GAMEMASTERS);
     let dist = || ArgType::Double {
-        min: -5.999_997e7,
-        max: 5.999_997e7,
+        min: -5.999_996_8e7,
+        max: 5.999_996_8e7,
     };
     for word in ["add", "set"] {
         let l = d.literal(w, word);
@@ -337,17 +357,17 @@ fn loot(d: &mut Dispatcher, root: usize) {
     // Sources.
     for t in targets {
         let fish = d.literal(t, "fish");
-        let table = d.argument(fish, "loot_table", ArgType::Id("loot_tables"));
+        let table = d.argument(fish, "loot_table", ArgType::ResourceOrId("minecraft:loot_table"));
         let pos = d.argument(table, "pos", ArgType::BlockPos);
         d.executes(pos, "loot.fish");
         for hand in ["mainhand", "offhand"] {
             let h = d.literal(pos, hand);
             d.executes(h, "loot.fish");
         }
-        let tool = d.argument(pos, "tool", ArgType::ItemPredicate);
+        let tool = d.argument(pos, "tool", ArgType::Item);
         d.executes(tool, "loot.fish");
         let l = d.literal(t, "loot");
-        let lt = d.argument(l, "loot_table", ArgType::Id("loot_tables"));
+        let lt = d.argument(l, "loot_table", ArgType::ResourceOrId("minecraft:loot_table"));
         d.executes(lt, "loot.loot");
         let kill = d.literal(t, "kill");
         let target = d.argument(kill, "target", ENTITY);
@@ -359,7 +379,7 @@ fn loot(d: &mut Dispatcher, root: usize) {
             let h = d.literal(pos, hand);
             d.executes(h, "loot.mine");
         }
-        let tool = d.argument(pos, "tool", ArgType::ItemPredicate);
+        let tool = d.argument(pos, "tool", ArgType::Item);
         d.executes(tool, "loot.mine");
     }
 }

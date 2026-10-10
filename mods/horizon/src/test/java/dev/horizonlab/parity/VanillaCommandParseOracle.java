@@ -75,7 +75,10 @@ public final class VanillaCommandParseOracle {
         final RegistryAccess access;
         final HolderLookup.Provider lookup;
         Src(MinecraftServer server, PermissionSet perms, RegistryAccess access, HolderLookup.Provider lookup) {
-            super(CommandSource.NULL, Vec3.ZERO, Vec2.ZERO, null, perms, Component.literal("Player"), server);
+            this(server, null, perms, access, lookup);
+        }
+        Src(MinecraftServer server, net.minecraft.server.level.ServerLevel level, PermissionSet perms, RegistryAccess access, HolderLookup.Provider lookup) {
+            super(CommandSource.NULL, Vec3.ZERO, Vec2.ZERO, level, perms, Component.literal("Player"), server);
             this.access = access;
             this.lookup = lookup;
         }
@@ -122,6 +125,10 @@ public final class VanillaCommandParseOracle {
         var dims = RegistryDataLoader.load(resources, java.util.stream.Stream.concat(context.stream(), world.listRegistries()).toList(), RegistryDataLoader.DIMENSION_REGISTRIES, Runnable::run).join();
         var worldLayers = layers.replaceFrom(RegistryLayer.WORLD, world, dims);
         var loaded = ReloadableServerRegistries.reload(worldLayers, staticTags, resources, Runnable::run).join();
+        // The data pack managers (advancements, functions, recipes) a running server holds.
+        var managers = net.minecraft.server.ReloadableServerResources.loadResources(
+            resources, worldLayers, staticTags, FeatureFlags.VANILLA_SET, Commands.CommandSelection.INTEGRATED,
+            LevelBasedPermissionSet.GAMEMASTER, Runnable::run, Runnable::run).join();
         HolderLookup.Provider lookup = loaded.lookupWithUpdatedTags();
         var components = BuiltInRegistries.DATA_COMPONENT_INITIALIZERS.build(lookup);
         staticTags.forEach(Registry.PendingTags::apply);
@@ -129,7 +136,7 @@ public final class VanillaCommandParseOracle {
         RegistryAccess access = loaded.layers().compositeAccess();
 
         if (args[0].equals("registries")) {
-            exportRegistries(out, access, lookup);
+            exportRegistries(out, access, lookup, repo, resources, managers);
             return;
         }
         FeatureFlagSet features = FeatureFlags.VANILLA_SET;
@@ -142,6 +149,35 @@ public final class VanillaCommandParseOracle {
             return;
         }
         MinecraftServer server = (MinecraftServer) unsafe.allocateInstance(DedicatedServer.class);
+        // The minimal state of a freshly created world that suggestion providers read:
+        // empty command storage, stopwatches, boss bars, random sequences and
+        // scheduled functions, the world clocks, the vanilla data pack (repository,
+        // advancements, functions, structure templates) and an overworld level.
+        put(server, MinecraftServer.class, "registries", loaded.layers());
+        Class<?> reloadable = Class.forName("net.minecraft.server.MinecraftServer$ReloadableResources");
+        var reloadableCtor = reloadable.getDeclaredConstructor(net.minecraft.server.packs.resources.CloseableResourceManager.class, net.minecraft.server.ReloadableServerResources.class);
+        reloadableCtor.setAccessible(true);
+        put(server, MinecraftServer.class, "resources", reloadableCtor.newInstance(resources, managers));
+        put(server, MinecraftServer.class, "functionManager", new net.minecraft.server.ServerFunctionManager(server, managers.getFunctionLibrary()));
+        put(server, MinecraftServer.class, "packRepository", repo);
+        put(server, MinecraftServer.class, "commandStorage", new net.minecraft.world.level.storage.CommandStorage(null));
+        var stopwatchesCtor = net.minecraft.world.Stopwatches.class.getDeclaredConstructor();
+        stopwatchesCtor.setAccessible(true);
+        put(server, MinecraftServer.class, "stopwatches", stopwatchesCtor.newInstance());
+        put(server, MinecraftServer.class, "customBossEvents", new net.minecraft.server.bossevents.CustomBossEvents());
+        put(server, MinecraftServer.class, "randomSequences", new net.minecraft.world.RandomSequences());
+        put(server, MinecraftServer.class, "scheduledEvents", new net.minecraft.world.level.timers.TimerQueue<MinecraftServer>());
+        var clocks = net.minecraft.world.clock.ServerClockManager.TYPE.constructor().get();
+        clocks.init(server);
+        put(server, MinecraftServer.class, "clockManager", clocks);
+        var templates = (net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager) unsafe.allocateInstance(
+            net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager.class);
+        put(templates, net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager.class, "sources", List.of(templateSource(lookup, resources)));
+        put(server, MinecraftServer.class, "structureTemplateManager", templates);
+        var level = (net.minecraft.server.level.ServerLevel) unsafe.allocateInstance(net.minecraft.server.level.ServerLevel.class);
+        put(level, Level.class, "dimensionTypeRegistration",
+            access.lookupOrThrow(Registries.DIMENSION_TYPE).getOrThrow(net.minecraft.world.level.dimension.BuiltinDimensionTypes.OVERWORLD));
+        put(level, net.minecraft.server.level.ServerLevel.class, "server", server);
         PlayerList playerList = (PlayerList) unsafe.allocateInstance(net.minecraft.server.dedicated.DedicatedPlayerList.class);
         put(playerList, PlayerList.class, "players", new ArrayList<>());
         put(server, MinecraftServer.class, "playerList", playerList);
@@ -155,7 +191,7 @@ public final class VanillaCommandParseOracle {
         for (String tracked : TRACKED)
             scoreboard.getOrCreatePlayerScore(net.minecraft.world.scores.ScoreHolder.forNameOnly(tracked), scoreboard.getObjective("kills"));
         PermissionSet perms = LevelBasedPermissionSet.forLevel(PermissionLevel.byId(Integer.parseInt(args[3])));
-        Src source = new Src(server, perms, access, lookup);
+        Src source = new Src(server, level, perms, access, lookup);
 
         List<String> lines = Files.readAllLines(Path.of(args[2]), StandardCharsets.UTF_8);
         java.io.BufferedWriter sb = Files.newBufferedWriter(out.resolve("vanilla.jsonl"));
@@ -226,8 +262,72 @@ public final class VanillaCommandParseOracle {
         sb.close();
     }
 
-    static void exportRegistries(Path out, RegistryAccess access, HolderLookup.Provider lookup) throws Exception {
+    static net.minecraft.world.level.levelgen.structure.templatesystem.loader.ResourceManagerTemplateSource templateSource(HolderLookup.Provider lookup, MultiPackResourceManager resources) {
+        return new net.minecraft.world.level.levelgen.structure.templatesystem.loader.ResourceManagerTemplateSource(
+            net.minecraft.util.datafix.DataFixers.getDataFixer(), lookup.lookupOrThrow(Registries.BLOCK), resources,
+            new net.minecraft.resources.FileToIdConverter("structure", ".nbt"));
+    }
+
+    static void exportRegistries(Path out, RegistryAccess access, HolderLookup.Provider lookup, net.minecraft.server.packs.repository.PackRepository repo, MultiPackResourceManager resources, net.minecraft.server.ReloadableServerResources managers) throws Exception {
         JsonObject o = new JsonObject();
+        Set<String> learnable = new TreeSet<>();
+        lookup.lookupOrThrow(Registries.RECIPE).listElements().filter(h -> !h.value().isSpecial()).forEach(h -> learnable.add(h.key().identifier().toString()));
+        JsonArray learnableArr = new JsonArray();
+        learnable.forEach(learnableArr::add);
+        o.add("learnable_recipes", learnableArr);
+        JsonObject criteria = new JsonObject();
+        managers.getAdvancements().getAllAdvancements().stream()
+            .sorted(java.util.Comparator.comparing(a -> a.id().toString()))
+            .forEach(a -> {
+                JsonArray names = new JsonArray();
+                new TreeSet<>(a.value().criteria().keySet()).forEach(names::add);
+                criteria.add(a.id().toString(), names);
+            });
+        o.add("advancement_criteria", criteria);
+        JsonArray blockEntities = new JsonArray();
+        for (Block block : BuiltInRegistries.BLOCK) {
+            if (FeatureFlags.VANILLA_SET.isSubsetOf(block.requiredFeatures()) && block.defaultBlockState().hasBlockEntity())
+                blockEntities.add(BuiltInRegistries.BLOCK.getKey(block).toString());
+        }
+        o.add("block_entities", blockEntities);
+        Set<String> persistent = new TreeSet<>();
+        for (var entry : BuiltInRegistries.DATA_COMPONENT_TYPE.entrySet())
+            if (!entry.getValue().isTransient()) persistent.add(entry.getKey().identifier().toString());
+        JsonArray persistentArr = new JsonArray();
+        persistent.forEach(persistentArr::add);
+        o.add("persistent_components", persistentArr);
+        JsonObject blockTagMembers = new JsonObject();
+        lookup.lookupOrThrow(Registries.BLOCK).listTags().sorted(java.util.Comparator.comparing(t -> t.key().location().toString())).forEach(tag -> {
+            JsonArray members = new JsonArray();
+            tag.forEach(holder -> members.add(holder.unwrapKey().orElseThrow().identifier().toString()));
+            blockTagMembers.add(tag.key().location().toString(), members);
+        });
+        o.add("block_tag_members", blockTagMembers);
+        JsonArray selected = new JsonArray();
+        repo.getSelectedIds().forEach(selected::add);
+        o.add("datapacks_selected", selected);
+        JsonArray available = new JsonArray();
+        repo.getAvailableIds().forEach(available::add);
+        o.add("datapacks_available", available);
+        JsonArray enableable = new JsonArray();
+        repo.getAvailablePacks().stream().filter(p -> p.getRequestedFeatures().isSubsetOf(FeatureFlags.VANILLA_SET))
+            .forEach(p -> enableable.add(p.getId()));
+        o.add("datapacks_enableable", enableable);
+        // ServerClockManager.commandTimeMarkersForClock, from the timelines' markers.
+        java.util.Map<String, Set<String>> markers = new java.util.TreeMap<>();
+        access.lookupOrThrow(Registries.WORLD_CLOCK).listElementIds().forEach(k -> markers.put(k.identifier().toString(), new TreeSet<>()));
+        access.lookupOrThrow(Registries.TIMELINE).listElements().forEach(t -> t.value().registerTimeMarkers((key, marker) -> {
+            if (marker.showInCommands())
+                markers.computeIfAbsent(marker.clock().unwrapKey().orElseThrow().identifier().toString(), x -> new TreeSet<>()).add(key.identifier().toString());
+        }));
+        JsonObject markerObj = new JsonObject();
+        markers.forEach((clock, ids) -> { JsonArray a = new JsonArray(); ids.forEach(a::add); markerObj.add(clock, a); });
+        o.add("clock_time_markers", markerObj);
+        Set<String> templates = new TreeSet<>();
+        templateSource(lookup, resources).list().forEach(id -> templates.add(id.toString()));
+        JsonArray templateArr = new JsonArray();
+        templates.forEach(templateArr::add);
+        o.add("templates", templateArr);
         JsonArray items = new JsonArray();
         for (var item : BuiltInRegistries.ITEM) {
             if (FeatureFlags.VANILLA_SET.isSubsetOf(item.requiredFeatures()))

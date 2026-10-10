@@ -4,8 +4,16 @@
 //! usage text and the vanilla error messages. Argument types live in
 //! [`args`]; the vanilla command tree in [`vanilla`].
 pub mod args;
+pub mod block;
+pub mod codec;
+pub mod component;
+pub mod item;
+pub mod packrat;
+pub mod selector;
+pub mod snbt;
 pub mod tree_data;
 pub mod tree_execute;
+pub mod tree_extra;
 pub mod tree_misc;
 pub mod tree_scoreboard;
 pub mod tree_world;
@@ -23,6 +31,9 @@ pub struct CommandError {
     pub cursor: usize,
     /// BuiltInExceptions.literalIncorrect (summarised specially by the chat UI).
     pub literal_incorrect: bool,
+    /// The translation key of the exception type, when known (the
+    /// exception "type" vanilla code compares against).
+    pub key: String,
 }
 impl CommandError {
     pub fn new(message: Text) -> Self {
@@ -31,10 +42,13 @@ impl CommandError {
             input: None,
             cursor: 0,
             literal_incorrect: false,
+            key: String::new(),
         }
     }
     pub fn tr(key: &str, args: &[&dyn std::fmt::Display]) -> Self {
-        Self::new(Text::tr(key, args))
+        let mut e = Self::new(Text::tr(key, args));
+        e.key = key.to_owned();
+        e
     }
     pub fn at(message: Text, reader: &Reader) -> Self {
         Self {
@@ -42,10 +56,13 @@ impl CommandError {
             input: Some(reader.string.to_owned()),
             cursor: reader.cursor,
             literal_incorrect: false,
+            key: String::new(),
         }
     }
     pub fn tr_at(key: &str, args: &[&dyn std::fmt::Display], reader: &Reader) -> Self {
-        Self::at(Text::tr(key, args), reader)
+        let mut e = Self::at(Text::tr(key, args), reader);
+        e.key = key.to_owned();
+        e
     }
     /// CommandSyntaxException.getContext: up to ten characters before the
     /// cursor followed by "<--[HERE]".
@@ -266,6 +283,30 @@ pub struct Node {
     pub redirect: Option<usize>,
     /// Required permission level (0 everyone, 2 game masters, 4 owners).
     pub permission: u8,
+    /// A custom suggestion provider (`.suggests(...)`), used instead of the
+    /// argument type's own suggestions.
+    pub suggests: Option<Suggests>,
+}
+/// The custom SuggestionProviders vanilla command nodes use.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Suggests {
+    /// FunctionCommand.SUGGEST_FUNCTION: `#tags` and functions.
+    Functions,
+    /// A fixed list (SharedSuggestionProvider.suggest).
+    Fixed(&'static [&'static str]),
+    /// No candidates (providers over state an empty world lacks).
+    Nothing,
+    /// AdvancementCommands: the criteria of the parsed `advancement`.
+    AdvancementCriteria,
+    /// SuggestionProviders.SUMMONABLE_ENTITIES (with the type names as tooltips).
+    SummonableEntities,
+    /// TimeCommand.suggestTimeMarkers for the parsed `clock` (or the overworld clock).
+    TimeMarkers,
+    /// TriggerCommand.suggestObjectives: the source's enabled trigger objectives.
+    Triggers,
+    /// ScoreboardCommand.suggestTriggers: trigger objectives some of the
+    /// parsed `targets` have no score in, or a locked one.
+    EnableTriggers,
 }
 impl Node {
     pub fn name(&self) -> &str {
@@ -412,6 +453,8 @@ pub struct Suggestion {
     pub range: Range,
     pub text: String,
     pub tooltip: Option<String>,
+    /// IntegerSuggestion: sorted numerically against other integers.
+    pub int_value: Option<i32>,
 }
 impl Suggestion {
     /// Suggestion.apply.
@@ -447,8 +490,18 @@ impl<'a> SuggestionsBuilder<'a> {
                 range: (self.start, self.input.len()),
                 text,
                 tooltip: None,
+                int_value: None,
             });
         }
+    }
+    /// SuggestionsBuilder.suggest(int).
+    pub fn suggest_int(&mut self, value: i32) {
+        self.out.push(Suggestion {
+            range: (self.start, self.input.len()),
+            text: value.to_string(),
+            tooltip: None,
+            int_value: Some(value),
+        });
     }
     pub fn suggest_tooltip(&mut self, text: impl Into<String>, tooltip: impl Into<String>) {
         let text = text.into();
@@ -457,20 +510,70 @@ impl<'a> SuggestionsBuilder<'a> {
                 range: (self.start, self.input.len()),
                 text,
                 tooltip: Some(tooltip.into()),
+                int_value: None,
             });
         }
     }
     pub fn offset(&self, start: usize) -> SuggestionsBuilder<'a> {
         SuggestionsBuilder::new(self.input, start)
     }
-    /// SharedSuggestionProvider.suggest: candidates starting with the remaining text.
+    /// SuggestionsBuilder.add: keep another builder's suggestions (with their own ranges).
+    pub fn add(&mut self, other: SuggestionsBuilder) {
+        self.out.extend(other.out);
+    }
+    /// SharedSuggestionProvider.suggest: candidates matching the remaining
+    /// text at the start or after a `.`, `_` or `/`.
     pub fn suggest_matching<'b>(&mut self, candidates: impl IntoIterator<Item = &'b str>) {
         let lower = self.remaining_lower();
         for c in candidates {
-            if c.to_lowercase().starts_with(&lower) {
+            if args::matches_sub_str(&lower, &c.to_lowercase()) {
                 self.suggest(c);
             }
         }
+    }
+    /// The same with a tooltip per candidate.
+    pub fn suggest_matching_tooltip<'b>(
+        &mut self,
+        candidates: impl IntoIterator<Item = (&'b str, String)>,
+    ) {
+        let lower = self.remaining_lower();
+        for (c, tip) in candidates {
+            if args::matches_sub_str(&lower, &c.to_lowercase()) {
+                self.suggest_tooltip(c, tip);
+            }
+        }
+    }
+}
+/// String.compareToIgnoreCase.
+pub fn compare_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
+    let fold = |c: char| -> char {
+        let u = c.to_uppercase().next().unwrap_or(c);
+        u.to_lowercase().next().unwrap_or(u)
+    };
+    let mut x = a.chars();
+    let mut y = b.chars();
+    loop {
+        match (x.next(), y.next()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(c1), Some(c2)) => {
+                if c1 != c2 {
+                    let (l1, l2) = (fold(c1), fold(c2));
+                    if l1 != l2 {
+                        return l1.cmp(&l2);
+                    }
+                }
+            }
+        }
+    }
+}
+/// Suggestion.compareToIgnoreCase (IntegerSuggestion compares numerically).
+fn compare_suggestions(a: &Suggestion, b: &Suggestion) -> std::cmp::Ordering {
+    match (a.int_value, b.int_value) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => a.text.cmp(&b.text),
+        _ => compare_ignore_case(&a.text, &b.text),
     }
 }
 /// Suggestions.create: merged, expanded to a common range and sorted case-insensitively.
@@ -481,6 +584,8 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
     let start = list.iter().map(|s| s.range.0).min().unwrap_or(0);
     let end = list.iter().map(|s| s.range.1).max().unwrap_or(0);
     let mut out: Vec<Suggestion> = Vec::new();
+    let mut seen: std::collections::HashSet<(String, Option<String>)> =
+        std::collections::HashSet::new();
     for s in list {
         // Suggestion.expand: pad the text with the input around it.
         let text = format!(
@@ -493,13 +598,93 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
             range: (start, end),
             text,
             tooltip: s.tooltip,
+            int_value: if s.range == (start, end) {
+                s.int_value
+            } else {
+                None
+            },
         };
-        if !out.iter().any(|o| o.text == expanded.text) {
+        if seen.insert((expanded.text.clone(), expanded.tooltip.clone())) {
             out.push(expanded);
         }
     }
-    out.sort_by_key(|a| a.text.to_lowercase());
-    ((start, end), out)
+    let ints = out.iter().filter(|s| s.int_value.is_some()).count();
+    if ints == 0 || ints == out.len() {
+        out.sort_by(compare_suggestions);
+        return ((start, end), out);
+    }
+    // A stable insertion sort (the comparator mixes numeric and text order).
+    let mut sorted: Vec<Suggestion> = Vec::with_capacity(out.len());
+    for s in out {
+        let pos = sorted.partition_point(|x| compare_suggestions(x, &s) != std::cmp::Ordering::Greater);
+        sorted.insert(pos, s);
+    }
+    ((start, end), sorted)
+}
+
+impl Suggests {
+    /// The provider's candidates; `context` is the whole parse context
+    /// (CommandContextBuilder.build), whose arguments some providers read.
+    pub fn suggest(&self, builder: &mut SuggestionsBuilder, reg: &Registries, context: &Context) {
+        match self {
+            Suggests::AdvancementCriteria => {
+                if let Some(Arg::Resource(id)) = context.get("advancement")
+                    && let Some(criteria) = reg.advancement_criteria.get(id)
+                {
+                    builder.suggest_matching(criteria.iter().map(String::as_str));
+                }
+            }
+            Suggests::Functions => {
+                args::suggest_resources(builder, &reg.function_tags, "#");
+                args::suggest_resources(builder, &reg.functions, "");
+            }
+            Suggests::Fixed(values) => builder.suggest_matching(values.iter().copied()),
+            Suggests::SummonableEntities => {
+                let contents = builder.remaining_lower();
+                for id in &reg.summonable {
+                    if args::resource_matches(&contents, id) {
+                        let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
+                        let name = crate::lang::get(&format!("entity.{ns}.{}", path.replace('/', ".")));
+                        builder.suggest_tooltip(id.clone(), name);
+                    }
+                }
+            }
+            Suggests::TimeMarkers => {
+                let clock = match context.get("clock") {
+                    Some(Arg::Resource(id)) => id.clone(),
+                    _ => "minecraft:overworld".to_owned(),
+                };
+                match reg.clock_time_markers.get(&clock) {
+                    Some(markers) => args::suggest_resources(builder, markers, ""),
+                    None if clock == "minecraft:overworld" => {
+                        args::suggest_resources(builder, &reg.time_markers, "")
+                    }
+                    None => {}
+                }
+            }
+            Suggests::EnableTriggers => {
+                // getNamesWithDefaultWildcard: `*` means every tracked holder.
+                let targets: Vec<String> = match context.get("targets") {
+                    Some(Arg::ScoreHolder(args::ScoreHolderArg::Name(n))) => vec![n.clone()],
+                    Some(Arg::ScoreHolder(args::ScoreHolderArg::Wildcard)) => reg.tracked.clone(),
+                    _ => reg.players.clone(),
+                };
+                let available: Vec<&str> = reg
+                    .trigger_scores
+                    .iter()
+                    .filter(|(_, scores)| {
+                        targets.iter().any(|t| scores.get(t).is_none_or(|locked| *locked))
+                    })
+                    .map(|(o, _)| o.as_str())
+                    .collect();
+                builder.suggest_matching(available);
+            }
+            Suggests::Triggers => {
+                builder.suggest_matching(reg.trigger_objectives.iter().map(String::as_str))
+            }
+            Suggests::Nothing => {}
+        }
+    }
 }
 
 /// The command tree (CommandDispatcher). Node 0 is the root.
@@ -521,6 +706,7 @@ impl Dispatcher {
                 command: None,
                 redirect: None,
                 permission: 0,
+                suggests: None,
             }],
         }
     }
@@ -545,6 +731,7 @@ impl Dispatcher {
             command: None,
             redirect: None,
             permission,
+            suggests: None,
         });
         let id = self.nodes.len() - 1;
         self.nodes[parent].children.push(id);
@@ -568,6 +755,10 @@ impl Dispatcher {
     }
     pub fn redirect(&mut self, node: usize, target: usize) -> usize {
         self.nodes[node].redirect = Some(target);
+        node
+    }
+    pub fn suggests(&mut self, node: usize, provider: Suggests) -> usize {
+        self.nodes[node].suggests = Some(provider);
         node
     }
     pub fn requires(&mut self, node: usize, level: u8) -> usize {
@@ -745,10 +936,8 @@ impl Dispatcher {
         let start = start.min(cursor);
         let truncated = &parse.input[..cursor.min(parse.input.len())];
         let mut all = Vec::new();
+        // Brigadier lists every child, whatever its requirement.
         for &child in &self.nodes[parent].children {
-            if self.nodes[child].permission > reg.permission {
-                continue;
-            }
             let mut builder = SuggestionsBuilder::new(truncated, start);
             match &self.nodes[child].kind {
                 NodeKind::Literal(l) => {
@@ -756,7 +945,10 @@ impl Dispatcher {
                         builder.suggest(l.clone());
                     }
                 }
-                NodeKind::Argument { ty, name } => ty.suggest(&mut builder, reg, context, name),
+                NodeKind::Argument { ty, name } => match &self.nodes[child].suggests {
+                    Some(provider) => provider.suggest(&mut builder, reg, &parse.context),
+                    None => ty.suggest(&mut builder, reg, context, name),
+                },
                 NodeKind::Root => {}
             }
             all.extend(builder.out);

@@ -29,7 +29,45 @@ fn providers(
     then(d, a);
 }
 
+/// LootContextSources.addContextSources: `default`, `block <computePos>`
+/// and `entity <computeTarget>`, each completed by `then`.
+pub fn context_sources(
+    d: &mut Dispatcher,
+    node: usize,
+    then: &mut dyn FnMut(&mut Dispatcher, usize),
+) {
+    let default = d.literal(node, "default");
+    then(d, default);
+    let block = d.literal(node, "block");
+    let pos = d.argument(block, "computePos", ArgType::BlockPos);
+    then(d, pos);
+    let entity = d.literal(node, "entity");
+    let target = d.argument(entity, "computeTarget", ENTITY);
+    then(d, target);
+}
+
 pub fn register(d: &mut Dispatcher, root: usize) {
+    // compute (default | block <pos> | entity <target>) (float <provider> [<scale>] | integer <provider>)
+    let compute = d.literal(root, "compute");
+    d.requires(compute, GAMEMASTERS);
+    context_sources(d, compute, &mut |d, node| {
+        let f = d.literal(node, "float");
+        let p = d.argument(f, "provider", ArgType::ResourceOrId("minecraft:context_float_provider"));
+        d.executes(p, "compute");
+        let scale = d.argument(
+            p,
+            "scale",
+            ArgType::Float {
+                min: f32::MIN,
+                max: f32::MAX,
+            },
+        );
+        d.executes(scale, "compute");
+        let i = d.literal(node, "integer");
+        let p = d.argument(i, "provider", ArgType::ResourceOrId("minecraft:context_int_provider"));
+        d.executes(p, "compute");
+    });
+
     let data = d.literal(root, "data");
     d.requires(data, GAMEMASTERS);
 
@@ -96,6 +134,17 @@ pub fn register(d: &mut Dispatcher, root: usize) {
                 d.executes(start, "data.modify");
                 let end = d.argument(start, "end", int());
                 d.executes(end, "data.modify");
+            });
+            let compute = d.literal(op, "compute");
+            context_sources(d, compute, &mut |d, node| {
+                for (kind, registry) in [
+                    ("float", "minecraft:context_float_provider"),
+                    ("integer", "minecraft:context_int_provider"),
+                ] {
+                    let k = d.literal(node, kind);
+                    let p = d.argument(k, "provider", ArgType::ResourceOrId(registry));
+                    d.executes(p, "data.modify");
+                }
             });
             let value = d.literal(op, "value");
             let v = d.argument(value, "value", ArgType::NbtTag);

@@ -6,7 +6,7 @@
 //!
 //! usage: command_parse_fixture RESOURCES REGISTRIES.json CORPUS PERMISSION OUTPUT
 use horizon_client::{
-    command::{ArgType, Dispatcher, NodeKind, Registries, vanilla},
+    command::{ArgType, Dispatcher, NodeKind, Registries, args::RegistryIds, vanilla},
     lang,
 };
 use serde_json::{Value, json};
@@ -46,8 +46,23 @@ fn parser_id(ty: &ArgType) -> String {
         ArgType::ItemPredicate => "minecraft:item_predicate".into(),
         ArgType::BlockState => "minecraft:block_state".into(),
         ArgType::BlockPredicate => "minecraft:block_predicate".into(),
-        ArgType::Resource(r) => format!("resource:{r:?}"),
-        ArgType::Id(n) | ArgType::Name(n) => format!("id:{n}"),
+        ArgType::Resource(_) => "minecraft:resource".into(),
+        ArgType::Id(_) => "minecraft:resource_location".into(),
+        ArgType::Res(_) => "minecraft:resource".into(),
+        ArgType::ResKey(_) => "minecraft:resource_key".into(),
+        ArgType::ResOrTag(_) => "minecraft:resource_or_tag".into(),
+        ArgType::ResOrTagKey(_) => "minecraft:resource_or_tag_key".into(),
+        ArgType::StrEnum(values, _) => match values.first().copied() {
+            Some("world_surface") => "minecraft:heightmap".into(),
+            Some("none") if values.len() == 3 && values[1] == "left_right" => "minecraft:template_mirror".into(),
+            Some("none") if values.len() == 3 => "minecraft:swing_animation".into(),
+            _ => "minecraft:template_rotation".into(),
+        },
+        ArgType::HexColor => "minecraft:hex_color".into(),
+        ArgType::Uuid => "minecraft:uuid".into(),
+        ArgType::GameProfile => "minecraft:game_profile".into(),
+        ArgType::Style => "minecraft:style".into(),
+        ArgType::Name(_) => "brigadier:string".into(),
         ArgType::Time { .. } => "minecraft:time".into(),
         ArgType::GameMode => "minecraft:gamemode".into(),
         ArgType::Message => "minecraft:message".into(),
@@ -74,6 +89,16 @@ fn parser_id(ty: &ArgType) -> String {
         ArgType::Function => "minecraft:function".into(),
         ArgType::Slots => "minecraft:slots".into(),
         ArgType::Slot => "minecraft:item_slot".into(),
+        ArgType::SlotSource => "minecraft:slot_source".into(),
+        ArgType::ResourceOrId(r) => match *r {
+            "minecraft:loot_table" => "minecraft:loot_table".into(),
+            "minecraft:item_modifier" => "minecraft:loot_modifier".into(),
+            "minecraft:predicate" => "minecraft:loot_predicate".into(),
+            "minecraft:context_int_provider" => "minecraft:context_int_provider".into(),
+            "minecraft:context_float_provider" => "minecraft:context_float_provider".into(),
+            "minecraft:dialog" => "minecraft:dialog".into(),
+            _ => "minecraft:feature".into(),
+        },
     }
 }
 
@@ -106,7 +131,7 @@ fn tree(d: &Dispatcher, node: usize) -> Value {
 fn main() -> horizon_client::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("tree") {
-        let d = vanilla::dispatcher();
+        let d = vanilla::release_dispatcher();
         let mut v = tree(d, 0);
         v["type"] = json!("root");
         fs::write(&args[2], v.to_string())?;
@@ -152,7 +177,40 @@ fn main() -> horizon_client::Result<()> {
     reg.teams = strings(&r["teams"]);
     reg.objectives = strings(&r["objectives"]);
     reg.tracked = strings(&r["tracked"]);
-    let dispatcher = vanilla::dispatcher();
+    for (name, entry) in r["by_registry"].as_object().into_iter().flatten() {
+        reg.by_registry.insert(
+            name.clone(),
+            RegistryIds {
+                ids: strings(&entry["ids"]),
+                tags: strings(&entry["tags"]),
+            },
+        );
+    }
+    reg.block_entities = strings(&r["block_entities"]).into_iter().collect();
+    for (tag, members) in r["block_tag_members"].as_object().into_iter().flatten() {
+        reg.block_tag_members.insert(tag.clone(), strings(members));
+    }
+    reg.templates = strings(&r["templates"]);
+    reg.persistent_components = strings(&r["persistent_components"]);
+    reg.learnable_recipes = strings(&r["learnable_recipes"]);
+    for (clock, markers) in r["clock_time_markers"].as_object().into_iter().flatten() {
+        reg.clock_time_markers.insert(clock.clone(), strings(markers));
+    }
+    for (id, criteria) in r["advancement_criteria"].as_object().into_iter().flatten() {
+        reg.advancement_criteria.insert(id.clone(), strings(criteria));
+    }
+    reg.datapacks_enabled = strings(&r["datapacks_selected"]);
+    let enabled = reg.datapacks_enabled.clone();
+    reg.datapacks_disabled = strings(&r["datapacks_enableable"])
+        .into_iter()
+        .filter(|p| !enabled.contains(p))
+        .collect();
+    reg.advancements = reg.ids("minecraft:advancement").to_vec();
+    reg.recipes = reg.ids("minecraft:recipe").to_vec();
+    reg.loot_tables = reg.ids("minecraft:loot_table").to_vec();
+    reg.predicates = reg.ids("minecraft:predicate").to_vec();
+    reg.item_modifiers = reg.ids("minecraft:item_modifier").to_vec();
+    let dispatcher = vanilla::release_dispatcher();
     let mut out = String::new();
     for input in fs::read_to_string(&args[3])?.lines() {
         let parse = dispatcher.parse(input, &reg);
@@ -173,7 +231,8 @@ fn main() -> horizon_client::Result<()> {
             Err(e) => json!({
                 "ok": false,
                 "error": e.message.plain(),
-                "cursor": utf16(input, if e.input.is_some() { e.cursor } else { parse.cursor }),
+                // CommandSyntaxException.getCursor is -1 without context.
+                "cursor": if e.input.is_some() { utf16(input, e.cursor) as i64 } else { -1 },
             }),
         };
         let (range, list) = dispatcher.suggestions(&parse, input.len(), &reg);

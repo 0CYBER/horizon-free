@@ -10,6 +10,7 @@ use horizon_client::{
 };
 use horizon_core::random::RandomSource;
 use horizon_world::attribute_map::ValueKind;
+use horizon_world::nbt::Tag;
 
 fn num(n: impl std::fmt::Display) -> Text {
     Text::literal(n.to_string())
@@ -386,18 +387,79 @@ impl Game<'_> {
         let Some(Arg::Str(spec)) = ctx.get("name").cloned() else {
             return Ok(0);
         };
-        let mut words = spec.split(' ');
-        let name = words.next().unwrap_or("");
+        // ParticleArgument: `id` then optional SNBT options (`dust{color:[1,0,0],scale:2}`).
+        let (name, options_text) = match spec.find('{') {
+            Some(i) => (&spec[..i], &spec[i..]),
+            None => (spec.as_str(), ""),
+        };
         let ty = ParticleType::from_name(name).ok_or_else(|| err("particle.notFound", &[&name]))?;
-        let rest: Vec<&str> = words.collect();
-        let float = |i: usize, d: f32| rest.get(i).and_then(|w| w.parse::<f32>().ok()).unwrap_or(d);
+        let opts = match horizon_client::command::snbt::parse_fully(options_text) {
+            Ok(Tag::Compound(c)) if !options_text.is_empty() => Some(c),
+            _ => None,
+        };
+        let field = |key: &str| opts.as_ref().and_then(|c| c.get(&key.into()).cloned());
+        let number = |t: &Tag| -> Option<f32> {
+            Some(match t {
+                Tag::Byte(v) => f32::from(*v),
+                Tag::Short(v) => f32::from(*v),
+                Tag::Int(v) => *v as f32,
+                Tag::Long(v) => *v as f32,
+                Tag::Float(v) => f32::from_bits(*v),
+                Tag::Double(v) => f64::from_bits(*v) as f32,
+                _ => return None,
+            })
+        };
+        let string = |t: &Tag| match t {
+            Tag::String(s) => Some(s.to_string_lossy()),
+            _ => None,
+        };
+        // ExtraCodecs.RGB_COLOR_CODEC: an int or a list of three floats.
+        let rgb = match field("color") {
+            Some(Tag::List(l)) if l.len() >= 3 => [
+                number(&l[0]).unwrap_or(1.0),
+                number(&l[1]).unwrap_or(0.0),
+                number(&l[2]).unwrap_or(0.0),
+            ],
+            Some(Tag::Int(v)) => [
+                ((v >> 16) & 255) as f32 / 255.0,
+                ((v >> 8) & 255) as f32 / 255.0,
+                (v & 255) as f32 / 255.0,
+            ],
+            _ => [1.0, 0.0, 0.0],
+        };
         let options = match ty {
             ParticleType::Dust => ParticleOptions::dust(
-                [float(0, 1.0), float(1, 0.0), float(2, 0.0)],
-                float(3, 1.0).clamp(0.01, 4.0),
+                rgb,
+                field("scale")
+                    .as_ref()
+                    .and_then(number)
+                    .unwrap_or(1.0)
+                    .clamp(0.01, 4.0),
             ),
             ParticleType::Block | ParticleType::FallingDust | ParticleType::DustPillar => {
-                let mut reader = horizon_client::command::Reader::new(rest.join(" ").leak());
+                // BlockParticleOption: a block id, or {Name, Properties}.
+                let text = match field("block_state") {
+                    Some(Tag::String(s)) => s.to_string_lossy(),
+                    Some(Tag::Compound(c)) => {
+                        let name = c.get(&"Name".into()).and_then(string).unwrap_or_default();
+                        let props: Vec<String> = match c.get(&"Properties".into()) {
+                            Some(Tag::Compound(p)) => p
+                                .iter()
+                                .filter_map(|(k, v)| {
+                                    string(v).map(|v| format!("{}={v}", k.to_string_lossy()))
+                                })
+                                .collect(),
+                            _ => Vec::new(),
+                        };
+                        if props.is_empty() {
+                            name
+                        } else {
+                            format!("{name}[{}]", props.join(","))
+                        }
+                    }
+                    _ => String::new(),
+                };
+                let mut reader = horizon_client::command::Reader::new(&text);
                 let block = horizon_client::command::args::ArgType::BlockState
                     .parse(&mut reader, &self.ui.registries);
                 match block {

@@ -27,6 +27,34 @@ fn reg() -> Registries {
     r.players = vec!["Player".into()];
     r.dimensions = vec!["minecraft:overworld".into()];
     r.time_markers = vec!["minecraft:day".into(), "minecraft:noon".into()];
+    // The registry elements the commands below name (vanilla checks them while parsing).
+    let mut registry = |name: &str, ids: &[&str]| {
+        r.by_registry.insert(
+            name.into(),
+            RegistryIds {
+                ids: ids.iter().map(|s| (*s).to_owned()).collect(),
+                tags: Vec::new(),
+            },
+        );
+    };
+    registry("minecraft:worldgen/biome", &["minecraft:desert", "minecraft:plains"]);
+    registry("minecraft:damage_type", &["minecraft:fall", "minecraft:magic"]);
+    registry("minecraft:attribute", &["minecraft:max_health", "minecraft:scale"]);
+    registry("minecraft:item_modifier", &["a:b"]);
+    registry("minecraft:predicate", &["a:b"]);
+    registry(
+        "minecraft:loot_table",
+        &[
+            "minecraft:chests/simple_dungeon",
+            "minecraft:chests/x",
+            "minecraft:gameplay/fishing",
+        ],
+    );
+    registry(
+        "minecraft:entity_type",
+        &["minecraft:pig", "minecraft:player", "minecraft:zombie"],
+    );
+    registry("minecraft:item", &["minecraft:diamond", "minecraft:diamond_sword", "minecraft:stone"]);
     r
 }
 fn run(input: &str) -> CmdResult<(String, Vec<String>)> {
@@ -127,7 +155,8 @@ fn vanilla_error_messages() {
     assert_eq!(e.message.plain(), "command.unknown.command");
     let e = run("gamemode creatve").unwrap_err();
     assert_eq!(e.message.plain(), "argument.gamemode.invalid");
-    assert_eq!(e.cursor, 9);
+    // GameModeArgument reports the error after the word.
+    assert_eq!(e.cursor, 16);
     let e = run("give @s minecraft:dirt").unwrap_err();
     assert_eq!(e.message.plain(), "argument.item.id.invalid");
     let e = run("give @s diamond 0").unwrap_err();
@@ -161,7 +190,11 @@ fn suggestions_like_vanilla() {
     assert!(suggestions("kill @e[type=").contains(&"minecraft:zombie".to_owned()));
     assert_eq!(suggestions("kill @e[type=pig"), [",", "]"]);
     assert_eq!(suggestions("setblock 0 0 0 oak_stairs[fa"), ["facing="]);
-    assert_eq!(suggestions("setblock 0 0 0 oak_stairs[facing=n"), ["north"]);
+    // BlockStateParser suggests every value of the property, unfiltered.
+    assert_eq!(
+        suggestions("setblock 0 0 0 oak_stairs[facing=n"),
+        ["north", "south"]
+    );
     assert_eq!(
         suggestions("tp "),
         [
@@ -400,10 +433,10 @@ fn world_command_trees() {
         ("stopsound @s music minecraft:music.game", "stopsound"),
         ("particle minecraft:smoke", "particle"),
         (
-            "particle minecraft:dust 1 0 0 2 ~ ~ ~ 0.1 0.1 0.1 0 10 force @a",
+            "particle minecraft:dust{color:[1.0,0.0,0.0],scale:2.0} ~ ~ ~ 0.1 0.1 0.1 0 10 force @a",
             "particle",
         ),
-        ("particle minecraft:block minecraft:stone ~ ~ ~", "particle"),
+        ("particle minecraft:block{block_state:\"minecraft:stone\"} ~ ~ ~", "particle"),
         ("attribute @s minecraft:max_health get 2", "attribute.get"),
         (
             "attribute @s minecraft:max_health base set 40",

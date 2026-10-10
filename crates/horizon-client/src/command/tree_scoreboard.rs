@@ -15,7 +15,7 @@ fn number_formats(d: &mut Dispatcher, top: usize, id: &'static str) {
     let contents = d.argument(fixed, "contents", ArgType::Component);
     d.executes(contents, id);
     let styled = d.literal(top, "styled");
-    let style = d.argument(styled, "style", ArgType::Component);
+    let style = d.argument(styled, "style", ArgType::Style);
     d.executes(style, id);
 }
 
@@ -26,6 +26,7 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     // trigger <objective> [add|set <value>]
     let trigger = d.literal(root, "trigger");
     let objective = d.argument(trigger, "objective", ArgType::Objective);
+    d.suggests(objective, super::Suggests::Triggers);
     d.executes(objective, "trigger");
     for mode in ["add", "set"] {
         let m = d.literal(objective, mode);
@@ -114,6 +115,7 @@ fn scoreboard(d: &mut Dispatcher, root: usize) {
     let enable = d.literal(players, "enable");
     let t = d.argument(enable, "targets", HOLDERS);
     let o = d.argument(t, "objective", ArgType::Objective);
+    d.suggests(o, super::Suggests::EnableTriggers);
     d.executes(o, "scoreboard.players.enable");
     let display = d.literal(players, "display");
     let name = d.literal(display, "name");

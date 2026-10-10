@@ -38,6 +38,7 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     d.requires(schedule, GAMEMASTERS);
     let f = d.literal(schedule, "function");
     let name = d.argument(f, "function", ArgType::Function);
+    d.suggests(name, super::Suggests::Functions);
     let time = d.argument(name, "time", ArgType::Time { min: 0 });
     d.executes(time, "schedule.function");
     for mode in ["append", "replace"] {
@@ -92,17 +93,20 @@ pub fn register(d: &mut Dispatcher, root: usize) {
             max: 10000.0,
         },
     );
+    d.suggests(r, super::Suggests::Fixed(&["20"]));
     d.executes(r, "tick.rate");
     let step = d.literal(tick, "step");
     d.executes(step, "tick.step");
     let stop = d.literal(step, "stop");
     d.executes(stop, "tick.step.stop");
     let t = d.argument(step, "time", ArgType::Time { min: 1 });
+    d.suggests(t, super::Suggests::Fixed(&["1t", "1s"]));
     d.executes(t, "tick.step");
     let sprint = d.literal(tick, "sprint");
     let stop = d.literal(sprint, "stop");
     d.executes(stop, "tick.sprint.stop");
     let t = d.argument(sprint, "time", ArgType::Time { min: 1 });
+    d.suggests(t, super::Suggests::Fixed(&["60s", "1d", "3d"]));
     d.executes(t, "tick.sprint");
     let unfreeze = d.literal(tick, "unfreeze");
     d.executes(unfreeze, "tick.unfreeze");
@@ -142,6 +146,11 @@ pub fn register(d: &mut Dispatcher, root: usize) {
         let other = d.argument(l, "existing", ArgType::Name("datapacks_enabled"));
         d.executes(other, "datapack.enable");
     }
+    let create = d.literal(datapack, "create");
+    d.requires(create, 4);
+    let id = d.argument(create, "id", ArgType::Str);
+    let description = d.argument(id, "description", ArgType::Component);
+    d.executes(description, "datapack.create");
     let disable = d.literal(datapack, "disable");
     let name = d.argument(disable, "name", ArgType::Name("datapacks_enabled"));
     d.executes(name, "datapack.disable");
@@ -159,8 +168,8 @@ fn item(d: &mut Dispatcher, root: usize) {
         } else {
             d.argument(p, "targetPos", ArgType::BlockPos)
         };
-        let slot = d.argument(target, "slot", ArgType::Slot);
-        let modifier = d.argument(slot, "modifier", ArgType::Id("item_modifiers"));
+        let slot = d.argument(target, "slot", ArgType::SlotSource);
+        let modifier = d.argument(slot, "modifier", ArgType::ResourceOrId("minecraft:item_modifier"));
         d.executes(modifier, "item.modify");
     }
     for mode in ["replace", "fill", "override"] {
@@ -172,7 +181,7 @@ fn item(d: &mut Dispatcher, root: usize) {
             } else {
                 d.argument(p, "targetPos", ArgType::BlockPos)
             };
-            let slots = d.argument(target, "slots", ArgType::Slots);
+            let slots = d.argument(target, "slots", ArgType::SlotSource);
             let with = d.literal(slots, "with");
             let it = d.argument(with, "item", ArgType::Item);
             d.executes(it, "item");
@@ -186,8 +195,14 @@ fn item(d: &mut Dispatcher, root: usize) {
                 } else {
                     d.argument(s, "sourcePos", ArgType::BlockPos)
                 };
-                let source_slots = d.argument(source, "sourceSlots", ArgType::Slots);
+                let source_slots = d.argument(source, "sourceSlots", ArgType::SlotSource);
                 d.executes(source_slots, "item");
+                let modifier = d.argument(
+                    source_slots,
+                    "modifier",
+                    ArgType::ResourceOrId("minecraft:item_modifier"),
+                );
+                d.executes(modifier, "item");
             }
         }
     }
@@ -245,6 +260,7 @@ fn function(d: &mut Dispatcher, root: usize) {
     let f = d.literal(root, "function");
     d.requires(f, GAMEMASTERS);
     let name = d.argument(f, "name", ArgType::Function);
+    d.suggests(name, super::Suggests::Functions);
     d.executes(name, "function");
     let args = d.argument(name, "arguments", ArgType::Nbt);
     d.executes(args, "function");

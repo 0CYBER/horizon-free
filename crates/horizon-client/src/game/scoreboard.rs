@@ -99,6 +99,22 @@ impl Game<'_> {
         let board = &self.score.board;
         let reg = &mut self.ui.registries;
         reg.objectives = board.objectives.iter().map(|o| o.name.clone()).collect();
+        // Trigger objectives: the locks `/trigger` and `scoreboard players enable` complete from.
+        reg.trigger_scores.clear();
+        for o in board.objectives.iter().filter(|o| o.criteria == "trigger") {
+            let locks = board
+                .scores
+                .iter()
+                .filter_map(|(holder, s)| s.get(&o.name).map(|s| (holder.clone(), s.locked)))
+                .collect();
+            reg.trigger_scores.insert(o.name.clone(), locks);
+        }
+        reg.trigger_objectives = reg
+            .trigger_scores
+            .iter()
+            .filter(|(_, locks)| locks.get(PLAYER_NAME) == Some(&false))
+            .map(|(o, _)| o.clone())
+            .collect();
         reg.teams = board.teams.iter().map(|t| t.name.clone()).collect();
         reg.tracked = board.tracked();
         reg.storages = self.score.storage.keys();
