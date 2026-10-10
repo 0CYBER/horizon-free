@@ -41,7 +41,7 @@ pub fn iteration_order(keys: &[i64]) -> Vec<usize> {
             table[pos] = Some(index);
         }
         size += 1;
-        if size - 1 >= max_fill(n) {
+        if size > max_fill(n) {
             let new_n = array_size(size + 1);
             let mut grown: Vec<Option<usize>> = vec![None; new_n];
             for slot in table.iter().rev().flatten() {
