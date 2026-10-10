@@ -924,6 +924,168 @@ fn dripstone_fills_cauldrons() {
 }
 
 #[test]
+fn sculk_sensor_phases_and_signal() {
+    let mut w = world!();
+    w.floor(0, 6, "stone");
+    let pos = BlockPos::new(0, 1, 0);
+    let sensor = w.id("sculk_sensor", &[]);
+    w.set(pos, sensor);
+    assert!(w.b().sculk_sensor_can_activate(w.get(pos)));
+    w.f.behaviours
+        .sculk_sensor_activate(&mut w.level, &mut w.ticks, pos, 11);
+    assert_eq!(w.prop(pos, "sculk_sensor_phase"), "active");
+    assert_eq!(w.prop(pos, "power"), "11");
+    // The sensor powers the block below it from the top.
+    let below = BlockPos::new(0, 0, 0);
+    assert_eq!(
+        w.f.behaviours
+            .best_neighbor_signal(&mut w.level, &mut w.ticks, below),
+        11,
+        "the block under an active sensor receives its power"
+    );
+    for _ in 0..29 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "sculk_sensor_phase"), "active");
+    w.tick();
+    assert_eq!(w.prop(pos, "sculk_sensor_phase"), "cooldown");
+    assert_eq!(w.prop(pos, "power"), "0");
+    for _ in 0..10 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "sculk_sensor_phase"), "inactive");
+}
+
+#[test]
+fn calibrated_sensor_is_active_for_ten_ticks() {
+    let mut w = world!();
+    w.floor(0, 6, "stone");
+    let pos = BlockPos::new(0, 1, 0);
+    let sensor = w.id("calibrated_sculk_sensor", &[("facing", "north")]);
+    w.set(pos, sensor);
+    w.f.behaviours
+        .sculk_sensor_activate(&mut w.level, &mut w.ticks, pos, 4);
+    for _ in 0..9 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "sculk_sensor_phase"), "active");
+    w.tick();
+    assert_eq!(w.prop(pos, "sculk_sensor_phase"), "cooldown");
+    // The block behind (south) feeds the calibration signal.
+    let source = w.id("redstone_block", &[]);
+    w.set(BlockPos::new(0, 1, 1), source);
+    assert_eq!(
+        w.f.behaviours
+            .calibrated_back_signal(&mut w.level, &mut w.ticks, pos),
+        15
+    );
+}
+
+#[test]
+fn sculk_charge_spreads_veins_and_sculk() {
+    let mut w = world!();
+    w.floor(0, 12, "stone");
+    w.floor(-1, 12, "stone");
+    let origin = BlockPos::new(0, 1, 0);
+    let catalyst = w.id("sculk_catalyst", &[]);
+    w.put(origin, catalyst);
+    let mut spreader = sculk::SculkSpreader::default();
+    spreader.add_cursors(BlockPos::new(2, 1, 0), 40);
+    assert_eq!(spreader.cursors.len(), 1);
+    for _ in 0..80 {
+        w.f.behaviours.sculk_update_cursors(
+            &mut w.level,
+            &mut w.ticks,
+            &mut spreader,
+            origin,
+            true,
+        );
+    }
+    let sculk = w.id("sculk", &[]);
+    let found = (-12..=12)
+        .flat_map(|x| (-12..=12).map(move |z| BlockPos::new(x, 0, z)))
+        .filter(|p| w.get(*p) == sculk)
+        .count();
+    assert!(found > 0, "the charge turned stone into sculk");
+    assert!(
+        w.level
+            .events
+            .iter()
+            .any(|e| matches!(e, LevelEvent::LevelEvent { id: 3006, .. })),
+        "charge particles are reported"
+    );
+}
+
+#[test]
+fn shrieker_responds_when_the_shriek_ends() {
+    let mut w = world!();
+    w.floor(0, 6, "stone");
+    let pos = BlockPos::new(0, 1, 0);
+    let shrieker = w.id("sculk_shrieker", &[("can_summon", "true")]);
+    w.set(pos, shrieker);
+    w.f.behaviours
+        .sculk_shrieker_shriek(&mut w.level, &mut w.ticks, pos);
+    assert_eq!(w.prop(pos, "shrieking"), "true");
+    for _ in 0..89 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "shrieking"), "true");
+    w.tick();
+    assert_eq!(w.prop(pos, "shrieking"), "false");
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::BlockEvent {
+            kind: "shrieker_respond",
+            ..
+        }
+    )));
+}
+
+#[test]
+fn catalyst_bloom_lasts_eight_ticks() {
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let catalyst = w.id("sculk_catalyst", &[]);
+    w.set(pos, catalyst);
+    w.f.behaviours
+        .sculk_catalyst_bloom(&mut w.level, &mut w.ticks, pos);
+    assert_eq!(w.prop(pos, "bloom"), "true");
+    for _ in 0..7 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "bloom"), "true");
+    w.tick();
+    assert_eq!(w.prop(pos, "bloom"), "false");
+}
+
+#[test]
+fn placing_and_breaking_report_the_affected_state() {
+    let mut w = world!();
+    w.floor(0, 4, "stone");
+    let wool = w.id("white_wool", &[]);
+    let placed = w.place(
+        "white_wool",
+        BlockPos::new(0, 0, 0),
+        Direction::Up,
+        0.0,
+        0.0,
+        0.0,
+    );
+    assert!(matches!(placed, PlaceOutcome::Placed { .. }));
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::GameEvent { event: "minecraft:block_place", state: Some(s), .. } if *s == wool
+    )));
+    w.level.events.clear();
+    w.f.behaviours
+        .destroy_block(&mut w.level, &mut w.ticks, BlockPos::new(0, 1, 0), false);
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::GameEvent { event: "minecraft:block_destroy", state: Some(s), .. } if *s == wool
+    )));
+}
+
+#[test]
 fn dispenser_buckets_pick_up_and_empty() {
     let mut w = world!();
     let at = BlockPos::new(0, 10, 0);

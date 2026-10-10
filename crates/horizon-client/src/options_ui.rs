@@ -63,6 +63,8 @@ pub enum Opt {
     AutoSuggestions,
     ReducedDebugInfo,
     HighContrast,
+    ShowSubtitles,
+    NotificationDisplayTime,
     ForceUnicode,
     JapaneseGlyphs,
 }
@@ -147,6 +149,8 @@ impl Opt {
             Opt::AutoSuggestions => "options.autoSuggestCommands",
             Opt::ReducedDebugInfo => "options.reducedDebugInfo",
             Opt::HighContrast => "options.accessibility.high_contrast",
+            Opt::ShowSubtitles => "options.showSubtitles",
+            Opt::NotificationDisplayTime => "options.notifications.display_time",
             Opt::ForceUnicode => "options.forceUnicodeFont",
             Opt::JapaneseGlyphs => "options.japaneseGlyphVariants",
         }
@@ -175,6 +179,7 @@ impl Opt {
             Opt::WeatherRadius => unit(s.weather_radius as f32, 3.0, 10.0),
             Opt::ChunkFade => unit(s.chunk_fade, 0.0, 2.0),
             Opt::MenuBlur => unit(s.menu_blur as f32, 0.0, 10.0),
+            Opt::NotificationDisplayTime => unit(s.notification_display_time, 0.5, 10.0),
             Opt::ChatOpacity => Kind::Slider(s.chat_opacity),
             Opt::TextBackgroundOpacity => Kind::Slider(s.text_background_opacity),
             Opt::ChatScale => Kind::Slider(s.chat_scale),
@@ -294,6 +299,13 @@ impl Opt {
                 chat_px(c, (s.chat_height_unfocused * 160.0 + 20.0).floor())
             }
             Opt::ChatLineSpacing => percent(c, s.chat_line_spacing),
+            Opt::NotificationDisplayTime => generic(
+                c,
+                Text::tr(
+                    "options.multiplier",
+                    &[&format!("{:.1}", s.notification_display_time)],
+                ),
+            ),
             _ => generic(c, self.value_text(s)),
         }
     }
@@ -356,6 +368,7 @@ impl Opt {
             Opt::AutoSuggestions => on_off(s.auto_suggestions),
             Opt::ReducedDebugInfo => on_off(s.reduced_debug_info),
             Opt::HighContrast => on_off(s.high_contrast),
+            Opt::ShowSubtitles => on_off(s.show_subtitles),
             Opt::ForceUnicode => on_off(s.force_unicode),
             Opt::JapaneseGlyphs => on_off(s.japanese_glyphs),
             _ => Text::empty(),
@@ -383,6 +396,7 @@ impl Opt {
             Opt::WeatherRadius => s.weather_radius = step(3.0, 10.0) as i32,
             Opt::ChunkFade => s.chunk_fade = step(0.0, 40.0) / 20.0,
             Opt::MenuBlur => s.menu_blur = step(0.0, 10.0) as i32,
+            Opt::NotificationDisplayTime => s.notification_display_time = step(5.0, 100.0) / 10.0,
             Opt::ChatOpacity => s.chat_opacity = v,
             Opt::TextBackgroundOpacity => s.text_background_opacity = v,
             Opt::ChatScale => s.chat_scale = v,
@@ -460,6 +474,7 @@ impl Opt {
             Opt::AutoSuggestions => s.auto_suggestions = !s.auto_suggestions,
             Opt::ReducedDebugInfo => s.reduced_debug_info = !s.reduced_debug_info,
             Opt::HighContrast => s.high_contrast = !s.high_contrast,
+            Opt::ShowSubtitles => s.show_subtitles = !s.show_subtitles,
             Opt::ForceUnicode => s.force_unicode = !s.force_unicode,
             Opt::JapaneseGlyphs => s.japanese_glyphs = !s.japanese_glyphs,
             _ => {}
@@ -763,6 +778,7 @@ impl OptionsUi {
                 let mut rows = vec![Row::Big(Opt::Volume(0))];
                 let others: Vec<Opt> = (1..SOUND_SOURCES.len()).map(Opt::Volume).collect();
                 rows.extend(pairs(&others));
+                rows.extend(pairs(&[Opt::ShowSubtitles]));
                 rows
             }
             Page::Controls => {
@@ -810,11 +826,13 @@ impl OptionsUi {
                 Opt::ReducedDebugInfo,
             ]),
             Page::Accessibility => pairs(&[
+                Opt::ShowSubtitles,
                 Opt::HighContrast,
                 Opt::MenuBlur,
                 Opt::TextBackgroundOpacity,
                 Opt::ChatOpacity,
                 Opt::ChatLineSpacing,
+                Opt::NotificationDisplayTime,
                 Opt::ViewBobbing,
                 Opt::ToggleCrouch,
                 Opt::ToggleSprint,

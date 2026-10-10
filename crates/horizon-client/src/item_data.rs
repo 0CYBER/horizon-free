@@ -35,6 +35,10 @@ pub struct StackData {
     pub writable_pages: Vec<String>,
     /// `minecraft:written_book_content`.
     pub written: Option<WrittenBook>,
+    /// `minecraft:banner_patterns` (banners and shields).
+    pub banner_patterns: Vec<crate::banner::BannerLayer>,
+    /// `minecraft:base_color` (a shield's dye).
+    pub base_color: Option<Arc<str>>,
     /// The raid captain's banner: `minecraft:banner_patterns` with the
     /// ominous layers, its item name, rarity and hidden tooltip.
     pub ominous_banner: bool,
@@ -283,6 +287,15 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
         if let Some(id) = d.map_id {
             entries.push(("minecraft:map_id", Tag::Int(id)));
         }
+        if !d.banner_patterns.is_empty() {
+            entries.push((
+                "minecraft:banner_patterns",
+                crate::banner::layers_to_nbt(&d.banner_patterns),
+            ));
+        }
+        if let Some(color) = &d.base_color {
+            entries.push(("minecraft:base_color", Tag::String((&**color).into())));
+        }
         // Filterable values are saved as {raw: ..}.
         let raw = |t: Tag| Tag::compound([("raw", t)]);
         if !d.writable_pages.is_empty() {
@@ -420,6 +433,11 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         custom_name: c.get("minecraft:custom_name").and_then(read_text),
         potion,
         map_id: c.get("minecraft:map_id").and_then(int).map(|v| v as i32),
+        banner_patterns: crate::banner::layers_from_nbt(c.get("minecraft:banner_patterns")),
+        base_color: c
+            .get("minecraft:base_color")
+            .and_then(string)
+            .map(|s| Arc::from(s.as_str())),
         writable_pages: match c
             .get("minecraft:writable_book_content")
             .and_then(|b| b.get("pages"))
@@ -555,6 +573,21 @@ mod tests {
         assert_eq!(back.enchantment_level("minecraft:unbreaking"), 2);
         assert_eq!(back.repair_cost(), 3);
         assert_eq!(back.custom_name(), Some("Blade"));
+    }
+
+    #[test]
+    fn banner_layers_and_shield_base_round_trip() {
+        let mut stack = ItemStack::new("minecraft:shield", 1);
+        stack.data_mut().base_color = Some(Arc::from("red"));
+        stack.data_mut().banner_patterns = vec![
+            crate::banner::BannerLayer::new("minecraft:flower", "black"),
+            crate::banner::BannerLayer::new("minecraft:border", "white"),
+        ];
+        let tag = encode_components(&stack).expect("components");
+        let (_, extra) = decode_components(Some(&tag));
+        let extra = extra.expect("data");
+        assert_eq!(extra.base_color.as_deref(), Some("red"));
+        assert_eq!(extra.banner_patterns, stack.data().unwrap().banner_patterns);
     }
 
     #[test]

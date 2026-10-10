@@ -493,6 +493,10 @@ impl Items {
         }
         false
     }
+    /// Whether a loot table (`minecraft:blocks/stone`, ...) exists.
+    pub fn has_loot_table(&self, id: &str) -> bool {
+        self.loot.contains_key(id)
+    }
     /// Evaluate the block's loot table for a player break without explosions.
     pub fn block_drops(
         &self,

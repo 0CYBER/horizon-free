@@ -194,7 +194,11 @@ impl Enchantments {
                     || k.starts_with("potion.")
                     || k.starts_with("container.")
                     || k.starts_with("merchant.")
-                    || k.starts_with("entity.minecraft.villager")
+                    || k.starts_with("entity.minecraft.")
+                    || k.starts_with("gui.recipebook.")
+                    || k.starts_with("gui.togglable_slot")
+                    || k.starts_with("block.minecraft.banner.")
+                    || k.starts_with("recipe.toast.")
             })
             .collect();
         let mut list = Vec::new();
