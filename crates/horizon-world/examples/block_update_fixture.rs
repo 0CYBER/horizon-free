@@ -152,7 +152,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             time: case.get("time").and_then(|v| v.as_i64()).unwrap_or(0),
             sky: light.map_or(15, |l| l[0].as_i64().unwrap() as i32),
             block: light.map_or(0, |l| l[1].as_i64().unwrap() as i32),
-            raining: case.get("raining").and_then(|v| v.as_bool()).unwrap_or(false),
+            raining: case
+                .get("raining")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             thundering: case
                 .get("thundering")
                 .and_then(|v| v.as_bool())
