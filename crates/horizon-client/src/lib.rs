@@ -83,6 +83,8 @@ pub mod settings;
 pub mod shadows;
 pub mod signs;
 pub mod snbt;
+pub mod sound_engine;
+pub mod sound_events;
 pub mod sprint;
 pub mod sprites;
 pub mod stations;
