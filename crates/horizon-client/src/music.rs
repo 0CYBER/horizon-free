@@ -36,6 +36,22 @@ impl Music {
     pub fn end_boss() -> Self {
         Self::new("minecraft:music.dragon", 0, 0, true)
     }
+    /// `Musics.CREATIVE`.
+    pub fn creative() -> Self {
+        Self::new("minecraft:music.creative", 12000, 24000, false)
+    }
+    /// `Musics.END`.
+    pub fn end() -> Self {
+        Self::new("minecraft:music.end", 6000, 24000, true)
+    }
+    /// `Musics.UNDER_WATER`.
+    pub fn under_water() -> Self {
+        Self::new("minecraft:music.under_water", 12000, 24000, false)
+    }
+    /// `Musics.GAME`.
+    pub fn game() -> Self {
+        Self::new("minecraft:music.game", 12000, 24000, false)
+    }
     /// `Music.CODEC`.
     fn parse(v: &Value) -> Option<Self> {
         let sound = v["sound"].as_str()?;
