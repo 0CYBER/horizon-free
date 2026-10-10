@@ -143,15 +143,63 @@ pub trait LimiterClock {
     fn park(&mut self, nanos: i64);
     /// `Thread.onSpinWait`.
     fn spin(&mut self);
+    /// `Thread.interrupted`: an interrupted limiter skips that sleep.
+    fn interrupted(&mut self) -> bool {
+        false
+    }
+}
+
+/// The real clock: `System.nanoTime` from a fixed origin, sleeping for
+/// `LockSupport.parkNanos` and a CPU spin hint for `Thread.onSpinWait`.
+#[derive(Clone, Copy, Debug)]
+pub struct SystemClock {
+    origin: std::time::Instant,
+}
+impl Default for SystemClock {
+    fn default() -> Self {
+        Self {
+            origin: std::time::Instant::now(),
+        }
+    }
+}
+impl LimiterClock for SystemClock {
+    fn nanos(&mut self) -> i64 {
+        i64::try_from(self.origin.elapsed().as_nanos()).unwrap_or(i64::MAX)
+    }
+    fn park(&mut self, nanos: i64) {
+        std::thread::sleep(std::time::Duration::from_nanos(nanos.max(0) as u64));
+    }
+    fn spin(&mut self) {
+        std::hint::spin_loop();
+    }
+}
+
+/// `Minecraft.runTick`'s frame-limiter step: only limits below 260
+/// (the "unlimited" setting) pace frames.
+pub fn end_frame(limiter: &mut FramerateLimiter, framerate_limit: i32, clock: &mut impl LimiterClock) {
+    if framerate_limit < 260 {
+        limiter.limit_display_fps(framerate_limit, clock);
+    }
 }
 
 impl FramerateLimiter {
     pub fn new(now_ns: i64) -> Self {
+        Self::with_state(now_ns, 0, 0)
+    }
+    /// The limiter's static state: `lastFrameTime`, `averageOvershootNs`
+    /// and `lastFramerateLimit`.
+    pub fn with_state(last_frame_time: i64, average_overshoot_ns: i64, last_framerate_limit: i32) -> Self {
         Self {
-            last_frame_time: now_ns,
-            average_overshoot_ns: 0,
-            last_framerate_limit: 0,
+            last_frame_time,
+            average_overshoot_ns,
+            last_framerate_limit,
         }
+    }
+    pub fn average_overshoot_ns(&self) -> i64 {
+        self.average_overshoot_ns
+    }
+    pub fn last_framerate_limit(&self) -> i32 {
+        self.last_framerate_limit
     }
     pub fn limit_display_fps(&mut self, framerate_limit: i32, clock: &mut impl LimiterClock) {
         let target_time_per_frame = 1_000_000_000 / i64::from(framerate_limit);
@@ -168,13 +216,16 @@ impl FramerateLimiter {
             if remaining > self.average_overshoot_ns + 500_000 {
                 let sleep_start = clock.nanos();
                 let expected = remaining - self.average_overshoot_ns - 500_000;
-                clock.park(expected);
-                let duration = clock.nanos() - sleep_start;
-                let overshoot = duration - expected;
-                if overshoot > 0 && overshoot < 25_000_000 {
-                    self.average_overshoot_ns =
-                        (0.1 * overshoot as f64 + 0.9 * self.average_overshoot_ns as f64) as i64;
-                    self.average_overshoot_ns = self.average_overshoot_ns.min(2_000_000);
+                if !clock.interrupted() {
+                    clock.park(expected);
+                    let duration = clock.nanos() - sleep_start;
+                    let overshoot = duration - expected;
+                    if overshoot > 0 && overshoot < 25_000_000 {
+                        self.average_overshoot_ns = (0.1 * overshoot as f64
+                            + 0.9 * self.average_overshoot_ns as f64)
+                            as i64;
+                        self.average_overshoot_ns = self.average_overshoot_ns.min(2_000_000);
+                    }
                 }
             } else {
                 clock.spin();

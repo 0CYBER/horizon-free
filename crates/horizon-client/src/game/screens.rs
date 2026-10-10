@@ -213,9 +213,12 @@ impl Game<'_> {
         match hit {
             Some(0) if self.remote.is_some() => {
                 self.ui.death_text = None;
+                self.toggles.respawn();
                 self.remote_respawn();
             }
             Some(0) => {
+                // LocalPlayer.respawn: KeyMapping.resetToggleKeys.
+                self.toggles.respawn();
                 self.respawn_out_of_end()?;
                 self.player = None;
                 self.screen = Screen::Playing;

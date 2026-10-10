@@ -108,7 +108,7 @@ use horizon_client::{
     hud::{HudAtlas, HudBatch, rgba},
     hud_layout,
     items::{ItemStack, Items},
-    keymapping::KeyState,
+    keymapping::KeyAction,
     light::LightTables,
     mesher::{MeshTables, Vertex},
     mobs::{Mob, MobType, MobTypes},
@@ -567,7 +567,7 @@ struct Game<'a> {
     /// `Options.smoothCamera` (cinematic camera), not persisted.
     smooth_camera: bool,
     /// Sneak, sprint, attack and use as ToggleKeyMappings.
-    toggles: [KeyState; 4],
+    toggles: horizon_client::keymapping::ToggleKeys,
     /// A world screen with the pointer captured was open last frame.
     was_playing: bool,
     /// Minecraft.pause: a single-player screen that pauses the game is open.
@@ -615,7 +615,11 @@ struct Game<'a> {
     /// Item being used (eaten): hotbar slot and ticks used.
     using: Option<(usize, u32)>,
     /// Camera.oldFovModifier / fovModifier.
-    fov_modifier: [f32; 2],
+    /// `Camera` (eye height and field-of-view easing, view placement).
+    view: horizon_client::camera::Camera,
+    /// `FramerateLimiter` and its clock.
+    limiter: horizon_client::window::FramerateLimiter,
+    frame_clock: horizon_client::window::SystemClock,
     /// Hud.scopeScale (spyglass overlay size).
     scope_scale: f32,
     /// Duration of the last frame in ticks (GUI easing).
@@ -645,8 +649,8 @@ struct Game<'a> {
     /// Where the options screen returns: true = title, false = pause menu.
     options_from_title: bool,
     dragging: bool,
-    walk: (f32, f32),
-    bob: (f32, f32),
+    /// `ClientAvatarState`: walked distance and view bob.
+    avatar: horizon_client::camera::AvatarBob,
     flash: u32,
     /// Sleeping in a bed: (bed head position, ticks asleep).
     sleeping: Option<([i32; 3], u32)>,
@@ -2513,6 +2517,8 @@ impl Game<'_> {
         player.yaw = self.yaw;
         let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
         player.may_fly = self.creative || spectator;
+        // LocalPlayer.sendPosition: autoJumpEnabled follows the option.
+        player.auto_jump_enabled = self.settings.auto_jump;
         player.invulnerable = self.creative || spectator;
         player.spectator = spectator;
         player.pitch = self.pitch;
@@ -2536,6 +2542,11 @@ impl Game<'_> {
             .and_then(|s| self.res.items.get(&s.item))
             .map(|i| i.use_speed);
         let grounded = player.ground.on_ground;
+        let before = (
+            grounded,
+            [player.velocity.x, player.velocity.y, player.velocity.z],
+            [player.position.x, player.position.y, player.position.z],
+        );
         if !riding {
             MotionWorld {
                 player,
@@ -2562,6 +2573,7 @@ impl Game<'_> {
         self.previous_eye = self.eye;
         self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
+        self.tick_avatar(before, riding);
         self.record_combat(&events);
         for event in events {
             match event {
@@ -2706,23 +2718,6 @@ impl Game<'_> {
             self.tick_falling()?;
             self.tick_tnt()?;
         }
-        if let Some(p) = &self.player {
-            // Player.aiStep bob and Entity.walkDist (0.6 per block).
-            let (dx, dz) = (
-                p.position.x - self.previous_position.x,
-                p.position.z - self.previous_position.z,
-            );
-            let speed = ((dx * dx + dz * dz).sqrt() as f32).min(0.1);
-            self.walk.0 = self.walk.1;
-            self.walk.1 += (dx * dx + dz * dz).sqrt() as f32 * 0.6;
-            self.bob.0 = self.bob.1;
-            let target = if p.ground.on_ground && !p.health.dead_or_dying() {
-                speed
-            } else {
-                0.0
-            };
-            self.bob.1 += (target - self.bob.1) * 0.4;
-        }
         if running {
             self.tick_block_entities()?;
             self.tick_sculk()?;
@@ -2750,7 +2745,7 @@ impl Game<'_> {
     /// Keep the held-key state of toggled sneak and sprint in step with their mapping.
     fn sync_toggle(&mut self, slot: usize) {
         let key = [KeyCode::ShiftLeft, KeyCode::ControlLeft][slot];
-        if self.toggles[slot].is_down {
+        if self.toggles.is_down(slot) {
             self.keys.insert(key);
         } else {
             self.keys.remove(&key);
@@ -2770,20 +2765,15 @@ impl Game<'_> {
             self.settings.toggle_attack,
             self.settings.toggle_use,
         ];
-        for (slot, option) in options.into_iter().enumerate() {
-            if playing {
-                if self.toggles[slot].should_restore_state_on_screen_closed(option) {
-                    self.toggles[slot].set_down(true, option);
-                }
-            } else {
-                self.toggles[slot].release(option);
-            }
-            match slot {
-                0 | 1 => self.sync_toggle(slot),
-                2 => self.left = self.toggles[2].is_down,
-                _ => self.right = self.toggles[3].is_down,
-            }
+        if playing {
+            self.toggles.screen_closed(options);
+        } else {
+            self.toggles.screen_opened(options);
         }
+        self.sync_toggle(0);
+        self.sync_toggle(1);
+        self.left = self.toggles.is_down(2);
+        self.right = self.toggles.is_down(3);
     }
     /// `MouseHandler.handleAccumulatedMovement` and `Entity.turn`, once per frame.
     fn apply_mouse_look(&mut self) {
@@ -7385,16 +7375,8 @@ impl Game<'_> {
             return Ok(false);
         };
         let alpha = self.clock.fraction();
-        let (camera, underwater, view_yaw, view_pitch) = match &self.player {
-            Some(p) => {
-                let (a, b) = (self.previous_position, p.position);
-                let eye = self.previous_eye + alpha as f32 * (self.eye - self.previous_eye);
-                let c = glam::DVec3::new(
-                    a.x + (b.x - a.x) * alpha,
-                    a.y + (b.y - a.y) * alpha + f64::from(eye),
-                    a.z + (b.z - a.z) * alpha,
-                );
-                let (c, yaw, pitch) = self.camera_view(c);
+        let (camera, underwater, view_yaw, view_pitch) = match self.camera_view(alpha as f32) {
+            Some((c, yaw, pitch)) => {
                 let s =
                     self.world
                         .block(c.x.floor() as i32, c.y.floor() as i32, c.z.floor() as i32);
@@ -7532,13 +7514,11 @@ impl Game<'_> {
             } else {
                 self.fov_degrees(alpha as f32, camera.to_array())
             },
-            bob: (self.settings.view_bobbing && !title && self.player.is_some()).then(|| {
-                let a = alpha as f32;
-                (
-                    self.walk.0 + (self.walk.1 - self.walk.0) * a,
-                    self.bob.0 + (self.bob.1 - self.bob.0) * a,
-                )
-            }),
+            bob: if title {
+                glam::Mat4::IDENTITY
+            } else {
+                self.bob_matrix(alpha as f32)
+            },
             sky,
             distance: (self.streaming.radius * 16) as f32,
             underwater,
@@ -7694,15 +7674,16 @@ impl Game<'_> {
                 if pressed && self.attack() {
                     return Ok(());
                 }
-                self.toggles[2].set_down(pressed, self.settings.toggle_attack);
-                self.left = self.toggles[2].is_down;
+                self.toggles
+                    .button(2, pressed, false, self.settings.toggle_attack);
+                self.left = self.toggles.is_down(2);
                 if pressed {
                     self.destroy_delay = 0;
                 }
             }
             MouseButton::Right => {
-                self.toggles[3].set_down(pressed, self.settings.toggle_use);
-                self.right = self.toggles[3].is_down;
+                self.toggles.button(3, pressed, false, self.settings.toggle_use);
+                self.right = self.toggles.is_down(3);
                 if pressed {
                     self.use_item()?;
                     self.use_delay = 4;
@@ -8154,18 +8135,23 @@ impl ApplicationHandler for Game<'_> {
                         }
                         None => return Ok(()),
                     };
-                    // Sneak and sprint are ToggleKeyMappings: a press flips them when toggling.
+                    // Sneak and sprint are ToggleKeyMappings: a press (or a key
+                    // repeat) flips them when toggling; only releases reach them
+                    // behind a screen (KeyboardHandler.keyPress).
                     let toggle = match key {
                         KeyCode::ShiftLeft => Some((0, self.settings.toggle_crouch)),
                         KeyCode::ControlLeft => Some((1, self.settings.toggle_sprint)),
                         _ => None,
                     };
                     if let Some((slot, option)) = toggle {
-                        if !event.repeat {
-                            self.toggles[slot]
-                                .set_down(event.state == ElementState::Pressed, option);
-                            self.sync_toggle(slot);
-                        }
+                        let action = match (event.state, event.repeat) {
+                            (ElementState::Released, _) => KeyAction::Release,
+                            (_, false) => KeyAction::Press,
+                            (_, true) => KeyAction::Repeat,
+                        };
+                        let screen_open = self.screen != Screen::Playing || self.title.is_some();
+                        self.toggles.key(slot, action, screen_open, option);
+                        self.sync_toggle(slot);
                         if event.state != ElementState::Pressed {
                             return Ok(());
                         }
@@ -8214,6 +8200,7 @@ impl ApplicationHandler for Game<'_> {
                     }
                     self.apply_mouse_look();
                     let rendered = self.render()?;
+                    self.limit_frame();
                     self.pause = self.pauses_game();
                     self.clock.end_frame(self.pause);
                     let finished = self
@@ -8277,10 +8264,6 @@ impl ApplicationHandler for Game<'_> {
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
             event_loop.exit();
-            return;
-        }
-        if let Some(due) = self.next_frame_due() {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(due));
             return;
         }
         if let Some(w) = &self.window {
@@ -8476,12 +8459,7 @@ pub fn run() -> Result<()> {
         focused: true,
         mouse: MouseLook::default(),
         smooth_camera: false,
-        toggles: [
-            KeyState::toggle(true, true),
-            KeyState::toggle(true, true),
-            KeyState::toggle(true, false),
-            KeyState::toggle(false, false),
-        ],
+        toggles: Default::default(),
         was_playing: false,
         pause: false,
         debug: false,
@@ -8521,7 +8499,9 @@ pub fn run() -> Result<()> {
         last_hurt_by_player: HashSet::new(),
         chest_open: HashMap::new(),
         using: None,
-        fov_modifier: [1.0, 1.0],
+        view: Default::default(),
+        limiter: horizon_client::window::FramerateLimiter::new(0),
+        frame_clock: Default::default(),
         scope_scale: 0.5,
         frame_ticks: 0.0,
         title: None,
@@ -8542,8 +8522,7 @@ pub fn run() -> Result<()> {
         settings,
         options_from_title: false,
         dragging: false,
-        walk: (0.0, 0.0),
-        bob: (0.0, 0.0),
+        avatar: Default::default(),
         flash: 0,
         sleeping: None,
         dim: Dim::Overworld,
