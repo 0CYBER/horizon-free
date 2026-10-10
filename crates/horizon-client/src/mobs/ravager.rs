@@ -25,6 +25,7 @@ pub fn register(m: &mut Mob) {
         Species::Pillager,
         Species::Vindicator,
         Species::Evoker,
+        Species::Illusioner,
         Species::Witch,
         Species::Ravager,
     ];
@@ -180,7 +181,7 @@ fn roar(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         let illager = matches!(
             s.species,
-            Species::Pillager | Species::Vindicator | Species::Evoker
+            Species::Pillager | Species::Vindicator | Species::Evoker | Species::Illusioner
         );
         if !illager {
             events.push(MobEvent::AttackMob {

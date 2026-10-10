@@ -216,6 +216,7 @@ pub fn light_chunk(
     let mut block = vec![0u8; W * W * h];
     let mut queue = VecDeque::new();
     let mut sky_queue = VecDeque::new();
+    let mut ids = Box::new([0u16; 4096]);
     for (dz, row) in region.iter().enumerate() {
         for (dx, chunk) in row.iter().enumerate() {
             let Some(chunk) = chunk else { continue };
@@ -223,8 +224,8 @@ pub fn light_chunk(
                 if section.is_uniform(0) {
                     continue;
                 }
-                for i in 0..4096 {
-                    let id = section.get(i);
+                section.unpack(&mut ids);
+                for (i, &id) in ids.iter().enumerate() {
                     let (lx, lz, ly) = (i & 15, (i >> 4) & 15, i >> 8);
                     let p = at(dx * 16 + lx, si * 16 + ly, dz * 16 + lz);
                     states[p] = id;

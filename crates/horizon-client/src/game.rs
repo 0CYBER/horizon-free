@@ -105,11 +105,13 @@ use horizon_client::{
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
     items::{ItemStack, Items},
+    keymapping::KeyState,
     light::LightTables,
     mesher::{MeshTables, Vertex},
     mobs::{Mob, MobType, MobTypes},
     models,
     motion::{MotionEvent, MotionResources, MotionWorld, PlayerMotion},
+    mouse::{LookOptions, MouseLook, Rotation},
     particles::Particle,
     save::{Level, Persistent, SaveDir},
     settings::Settings,
@@ -120,11 +122,12 @@ use horizon_client::{
     vanillagen::VanillaTerrain,
     world::World,
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_core::{
+    biome::{BiomeZoom, obfuscate_seed},
     geometry::{Aabb, Direction},
     position::BlockPos,
 };
+use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_world::{
     block_collision::BlockCollisionRegistry,
     level::{
@@ -483,6 +486,7 @@ pub struct Resources {
     facts: BlockFacts,
     items: Items,
     recipes: Recipes,
+    transformers: horizon_client::block_transform::Transformers,
     biomes: Arc<Biomes>,
     environment: Environment,
     atlas: HudAtlas,
@@ -532,6 +536,10 @@ struct Game<'a> {
     carried: Option<ItemStack>,
     craft_grid: Vec<Option<ItemStack>>,
     craft_size: usize,
+    /// A quick craft drag over inventory slots: (button, game slots so far).
+    inv_drag: Option<(i32, Vec<usize>)>,
+    /// The last inventory click, for the double click that gathers a stack.
+    last_inv_click: Option<(std::time::Instant, usize, bool)>,
     /// Open container block entity, if any.
     container: Option<(i32, i32, i32)>,
     /// Open workstation menu (enchanting table, anvil, ...).
@@ -551,12 +559,24 @@ struct Game<'a> {
     cursor: (f32, f32),
     captured: bool,
     focused: bool,
+    /// MouseHandler's accumulated look and wheel state.
+    mouse: MouseLook,
+    /// `Options.smoothCamera` (cinematic camera), not persisted.
+    smooth_camera: bool,
+    /// Sneak, sprint, attack and use as ToggleKeyMappings.
+    toggles: [KeyState; 4],
+    /// A world screen with the pointer captured was open last frame.
+    was_playing: bool,
+    /// Minecraft.pause: a single-player screen that pauses the game is open.
+    pause: bool,
     debug: bool,
     screen: Screen,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     started: Instant,
     previous: Instant,
+    /// FramerateLimitTracker.latestInputTime.
+    last_input: Instant,
     frames: u64,
     fps: f32,
     fps_frames: u64,
@@ -677,6 +697,8 @@ struct Game<'a> {
     pending_shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
     /// Layers of broken banners waiting for their dropped item.
     pending_banner: HashMap<[i32; 3], horizon_client::containers::Banner>,
+    /// Custom names of broken containers, for the dropped item (`copy_components`).
+    pending_names: HashMap<[i32; 3], (String, String)>,
     /// The recipe book of the open screen (game/recipe_book.rs).
     recipe_ui: recipe_book::RecipeUi,
     /// The horse inventory (game/mount_menu.rs).
@@ -1079,6 +1101,7 @@ impl Game<'_> {
     /// Block.popResource
     fn pop_resource(&mut self, pos: [i32; 3], mut stack: ItemStack) {
         self.attach_shulker_contents(pos, &mut stack);
+        self.attach_container_name(pos, &mut stack);
         self.attach_banner_layers(pos, &mut stack);
         let r = &mut self.world.random;
         let mut offset = || f64::from(r.next_float()) * 0.5 - 0.25;
@@ -1096,9 +1119,9 @@ impl Game<'_> {
     }
     /// Player.drop: thrown from the eyes along the view direction.
     fn drop_held(&mut self, all: bool) {
-        let Some(eye) = self.eye_position() else {
+        if self.eye_position().is_none() {
             return;
-        };
+        }
         let Some(stack) = self.inventory[self.selected].as_mut() else {
             return;
         };
@@ -1107,13 +1130,20 @@ impl Game<'_> {
             count,
             ..stack.clone()
         };
-        // Player.drop: the drop statistics.
-        self.stats.add("dropped", &thrown.item, count as i32);
-        self.stats.custom("drop", 1);
         stack.count -= count;
         if stack.count == 0 {
             self.inventory[self.selected] = None;
         }
+        self.player_drop(thrown);
+    }
+    /// `Player.drop`: the statistics and a thrown item entity in front of the player.
+    fn player_drop(&mut self, thrown: ItemStack) {
+        let Some(eye) = self.eye_position() else {
+            return;
+        };
+        // Player.drop: the drop statistics.
+        self.stats.add("dropped", &thrown.item, thrown.count as i32);
+        self.stats.custom("drop", 1);
         let (yaw, pitch) = (
             f64::from(self.yaw).to_radians(),
             f64::from(self.pitch).to_radians(),
@@ -1995,6 +2025,7 @@ impl Game<'_> {
                 .block_entities
                 .insert((target[0], target[1], target[2]), entity);
             self.fill_placed_box(target, &stack);
+            self.name_placed_container(target, &stack);
             self.fill_placed_banner(target, &stack);
             if sign {
                 self.open_sign_editor((target[0], target[1], target[2]), true);
@@ -2694,16 +2725,92 @@ impl Game<'_> {
             });
             self.res.block_entity_render.tick(r.block_entities(), eye);
         }
-        self.tick_particles();
+        if running {
+            self.tick_particles();
+        }
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
             self.use_item()?;
             self.use_delay = 4;
         }
         Ok(())
     }
+    /// Keep the held-key state of toggled sneak and sprint in step with their mapping.
+    fn sync_toggle(&mut self, slot: usize) {
+        let key = [KeyCode::ShiftLeft, KeyCode::ControlLeft][slot];
+        if self.toggles[slot].is_down {
+            self.keys.insert(key);
+        } else {
+            self.keys.remove(&key);
+        }
+    }
+    /// `KeyMapping.releaseAll` when a screen opens and
+    /// `restoreToggleStatesOnScreenClosed` when it closes.
+    fn track_toggle_screens(&mut self) {
+        let playing = self.screen == Screen::Playing && self.title.is_none();
+        if playing == self.was_playing {
+            return;
+        }
+        self.was_playing = playing;
+        let options = [
+            self.settings.toggle_crouch,
+            self.settings.toggle_sprint,
+            self.settings.toggle_attack,
+            self.settings.toggle_use,
+        ];
+        for (slot, option) in options.into_iter().enumerate() {
+            if playing {
+                if self.toggles[slot].should_restore_state_on_screen_closed(option) {
+                    self.toggles[slot].set_down(true, option);
+                }
+            } else {
+                self.toggles[slot].release(option);
+            }
+            match slot {
+                0 | 1 => self.sync_toggle(slot),
+                2 => self.left = self.toggles[2].is_down,
+                _ => self.right = self.toggles[3].is_down,
+            }
+        }
+    }
+    /// `MouseHandler.handleAccumulatedMovement` and `Entity.turn`, once per frame.
+    fn apply_mouse_look(&mut self) {
+        let look = LookOptions {
+            sensitivity: f64::from(self.settings.sensitivity),
+            smooth_camera: self.smooth_camera,
+            scoping: self.scoping(),
+            invert_x: self.settings.invert_x,
+            invert_y: self.settings.invert_y,
+        };
+        let time = self.started.elapsed().as_secs_f64();
+        let grabbed = self.captured && self.screen == Screen::Playing && self.player.is_some();
+        if let Some((xo, yo)) =
+            self.mouse
+                .handle_accumulated_movement(time, self.focused, grabbed, look)
+        {
+            let mut rotation = Rotation {
+                x_rot: self.pitch,
+                y_rot: self.yaw,
+                x_rot_o: self.pitch,
+                y_rot_o: self.yaw,
+            };
+            rotation.turn(xo, yo);
+            self.yaw = rotation.y_rot;
+            self.pitch = rotation.x_rot;
+        }
+    }
+    /// `Minecraft.pause`: a single-player game with a pausing screen open.
+    fn pauses_game(&self) -> bool {
+        self.remote.is_none()
+            && self.title.is_none()
+            && (matches!(
+                self.screen,
+                Screen::Paused | Screen::Options | Screen::Stats | Screen::Advancements
+            ) || self.book.is_some())
+    }
     fn capture(&mut self, capture: bool) {
         let Some(window) = &self.window else { return };
         if capture {
+            self.mouse.set_ignore_first_move();
             self.captured = window
                 .set_cursor_grab(CursorGrabMode::Locked)
                 .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
@@ -3370,9 +3477,17 @@ impl Game<'_> {
         }
     }
     fn craft_result(&self) -> Option<ItemStack> {
+        self.craft_recipe().map(|(_, result)| result)
+    }
+    /// The recipe id and result of the crafting grid.
+    fn craft_recipe(&self) -> Option<(String, ItemStack)> {
         let n = self.craft_size;
         let grid: Vec<Option<ItemStack>> = (0..n * n).map(|i| self.craft_grid[i].clone()).collect();
-        self.res.recipes.craft(&grid, n)
+        let scale = |id: i32| self.maps.data.get(&id).map(|m| m.scale);
+        self.res
+            .recipes
+            .find_with(&grid, n, &scale)
+            .map(|(name, result)| (name.to_owned(), result))
     }
     fn draw_inventory(&mut self, batch: &mut HudBatch) {
         if self.draw_station(batch) {
@@ -3426,6 +3541,7 @@ impl Game<'_> {
                         }
                     };
                     part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
+                    let title = &self.container_title(title.to_owned());
                     let tw = HudBatch::text_width(atlas, title);
                     batch.text(atlas, title, ox + (176.0 - tw) / 2.0, oy + 6.0, grey, false);
                     batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
@@ -3598,6 +3714,319 @@ impl Game<'_> {
         self.close_ender_chest();
         self.close_cart_container();
     }
+    /// `quickMoveStack` of the open plain menu for a shift-click.
+    fn inventory_quick_move(&mut self, slot: usize) -> bool {
+        self.menu_click(Some(slot), 0, horizon_client::menu::Input::QuickMove)
+    }
+    /// `AbstractContainerMenu.clicked` on the open inventory, crafting table,
+    /// chest, hopper, dispenser or furnace menu, run by the verified menu
+    /// engine (`horizon_client::menu`). `slot` None is outside the window.
+    /// False when the open screen is not one the engine models.
+    fn menu_click(
+        &mut self,
+        slot: Option<usize>,
+        button: i32,
+        input: horizon_client::menu::Input,
+    ) -> bool {
+        self.menu_ops(&[(slot, button, input)])
+    }
+    /// Several clicks on one menu instance (a quick craft drag is three).
+    fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
+        use horizon_client::menu::{Env, Kind, Menu};
+        #[derive(Clone, Copy)]
+        struct Map {
+            container: usize,
+            table: bool,
+            cells: usize,
+            plain: bool,
+        }
+        impl Map {
+            fn main(&self) -> usize {
+                match (self.plain, self.table) {
+                    (false, _) => self.container,
+                    (true, true) => 10,
+                    (true, false) => 9,
+                }
+            }
+            fn to_menu(self, g: usize) -> Option<usize> {
+                let main = self.main();
+                if self.plain {
+                    match g {
+                        200 => Some(0),
+                        100..109 if g - 100 < self.cells => Some(1 + g - 100),
+                        500..504 if !self.table => Some(5 + g - 500),
+                        504 if !self.table => Some(45),
+                        9..36 => Some(main + g - 9),
+                        0..9 => Some(main + 27 + g),
+                        _ => None,
+                    }
+                } else {
+                    match g {
+                        300.. if g < 300 + self.container => Some(g - 300),
+                        9..36 => Some(main + g - 9),
+                        0..9 => Some(main + 27 + g),
+                        _ => None,
+                    }
+                }
+            }
+            fn to_game(self, i: usize) -> Option<usize> {
+                let main = self.main();
+                if self.plain {
+                    match i {
+                        0 => None,
+                        1..=9 if i - 1 < self.cells => Some(100 + i - 1),
+                        5..9 if !self.table => Some(500 + i - 5),
+                        45 if !self.table => Some(504),
+                        _ if i >= main && i < main + 27 => Some(9 + i - main),
+                        _ if i >= main + 27 && i < main + 36 => Some(i - main - 27),
+                        _ => None,
+                    }
+                } else if i < self.container {
+                    Some(300 + i)
+                } else if i < self.container + 27 {
+                    Some(9 + i - self.container)
+                } else {
+                    Some(i - self.container - 27)
+                }
+            }
+        }
+        let (kind, map) = if self.container.is_some() {
+            let size = self.container_size();
+            let (kind, count) = match self.container_kind() {
+                Some(BlockEntity::Chest(_)) => {
+                    let shulker = self.container.is_some_and(|k| {
+                        let id = self.world.block(k.0, k.1, k.2);
+                        storage::is_shulker_box(&self.res.facts.get(id).name)
+                    });
+                    let kind = match size {
+                        5 => Kind::Hopper,
+                        9 => Kind::Dispenser,
+                        27 if shulker => Kind::Shulker,
+                        n => Kind::Chest((n / 9).clamp(1, 6)),
+                    };
+                    (kind, size)
+                }
+                Some(BlockEntity::Furnace(f)) => (
+                    Kind::Furnace(
+                        match f.kind.recipe_type().trim_start_matches("minecraft:") {
+                            "blasting" => "blasting",
+                            "smoking" => "smoking",
+                            _ => "smelting",
+                        },
+                    ),
+                    3,
+                ),
+                _ => return false,
+            };
+            let map = Map {
+                container: count,
+                table: false,
+                cells: 0,
+                plain: false,
+            };
+            (kind, map)
+        } else if self.station.is_none() && !self.mount_active() && self.remote.is_none() {
+            let table = self.craft_size == 3;
+            let map = Map {
+                container: 0,
+                table,
+                cells: self.craft_size * self.craft_size,
+                plain: true,
+            };
+            (
+                if table {
+                    Kind::Crafting
+                } else {
+                    Kind::Inventory
+                },
+                map,
+            )
+        } else {
+            return false;
+        };
+        let mut clicks = Vec::new();
+        for &(slot, button, input) in ops {
+            let menu_slot = match slot {
+                Some(g) => {
+                    if g == 200 && input != horizon_client::menu::Input::QuickMove {
+                        return false;
+                    }
+                    match map.to_menu(g) {
+                        Some(i) => i as i32,
+                        None => return false,
+                    }
+                }
+                None => -999,
+            };
+            clicks.push((menu_slot, button, input));
+        }
+        let mut menu = Menu::new(kind);
+        let total = menu.slot_count();
+        let before: Vec<Option<ItemStack>> = (0..total)
+            .map(|i| map.to_game(i).and_then(|g| self.slot_mut(g).clone()))
+            .collect();
+        let carried = self.carried.clone();
+        let creative = self.creative;
+        let (after, carried, dropped): (Vec<Option<ItemStack>>, Option<ItemStack>, Vec<ItemStack>) = {
+            let env = Env {
+                items: &self.res.items,
+                recipes: &self.res.recipes,
+                brewing: &self.res.stations.brewing,
+            };
+            menu.creative = creative;
+            for (i, stack) in before.iter().enumerate() {
+                menu.set_slot(&env, i, stack.clone());
+            }
+            menu.carried = carried;
+            for (menu_slot, button, input) in clicks {
+                if menu.click(&env, menu_slot, button, input).is_err() {
+                    return true;
+                }
+            }
+            (
+                (0..total).map(|i| menu.slot(i).cloned()).collect(),
+                menu.carried.take(),
+                std::mem::take(&mut menu.dropped),
+            )
+        };
+        for (i, stack) in after.into_iter().enumerate() {
+            if let Some(g) = map.to_game(i) {
+                *self.slot_mut(g) = stack;
+            }
+        }
+        self.carried = carried;
+        for stack in dropped {
+            self.player_drop(stack);
+        }
+        if matches!(kind, Kind::Furnace(_))
+            && let Some(BlockEntity::Furnace(f)) = self
+                .container
+                .and_then(|k| self.world.block_entities.get_mut(&k))
+        {
+            f.cooking_timer = 0;
+        }
+        self.apply_equipment();
+        true
+    }
+    /// Number keys, F and Q over a slot of the open menu: SWAP with a hotbar
+    /// slot or the off hand, THROW one or the whole stack.
+    fn inventory_hotkey(&mut self, key: KeyCode) -> bool {
+        use horizon_client::menu::Input;
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return false;
+        };
+        let batch = HudBatch::new(size);
+        let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
+            return false;
+        };
+        let digit = [
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit5,
+            KeyCode::Digit6,
+            KeyCode::Digit7,
+            KeyCode::Digit8,
+            KeyCode::Digit9,
+        ]
+        .iter()
+        .position(|k| *k == key);
+        let done = match (digit, key) {
+            (Some(n), _) => self.menu_click(Some(slot), n as i32, Input::Swap),
+            (None, KeyCode::KeyF) => self.menu_click(Some(slot), 40, Input::Swap),
+            (None, KeyCode::KeyQ) => {
+                let all = self.keys.contains(&KeyCode::ControlLeft);
+                self.menu_click(Some(slot), i32::from(all), Input::Throw)
+            }
+            _ => false,
+        };
+        if done && let Some(key) = self.container {
+            self.container_changed(key);
+        }
+        done
+    }
+    /// The plain inventory mouse press: starts a quick craft drag when a
+    /// stack is held, gathers on a double click, else the normal click.
+    fn inventory_press(&mut self, right: bool) {
+        use horizon_client::menu::Input;
+        let slot = self.renderer.as_ref().and_then(|r| {
+            let batch = HudBatch::new([r.config.width, r.config.height]);
+            self.slot_at(&batch, self.cursor.0, self.cursor.1)
+        });
+        let shift =
+            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        if let Some(slot) = slot
+            && !shift
+            && slot != 200
+        {
+            let now = std::time::Instant::now();
+            let double = !right
+                && self.carried.is_some()
+                && self.last_inv_click.is_some_and(|(at, last, was_right)| {
+                    last == slot && !was_right && now.duration_since(at).as_millis() < 250
+                });
+            self.last_inv_click = Some((now, slot, right));
+            if double && self.menu_click(Some(slot), 0, Input::PickupAll) {
+                self.last_inv_click = None;
+                return;
+            }
+            if self.carried.is_some() {
+                self.inv_drag = Some((i32::from(right), vec![slot]));
+                return;
+            }
+        }
+        self.click_inventory(right);
+    }
+    /// Mouse movement while a quick craft drag is running.
+    fn inventory_drag_move(&mut self) {
+        let Some((_, slots)) = self.inv_drag.as_ref() else {
+            return;
+        };
+        let Some(r) = self.renderer.as_ref() else {
+            return;
+        };
+        let batch = HudBatch::new([r.config.width, r.config.height]);
+        if let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1)
+            && slot != 200
+            && !slots.contains(&slot)
+            && let Some((_, slots)) = self.inv_drag.as_mut()
+        {
+            slots.push(slot);
+        }
+    }
+    /// Mouse release: finishes a quick craft drag (one slot is a plain click).
+    fn inventory_release(&mut self) {
+        use horizon_client::menu::Input;
+        let Some((ty, slots)) = self.inv_drag.take() else {
+            return;
+        };
+        if slots.len() == 1 {
+            if !self.menu_click(Some(slots[0]), ty, Input::Pickup) {
+                self.click_inventory(ty == 1);
+            }
+        } else {
+            let mask = |header: i32| header | (ty << 2);
+            let mut ops = vec![(None, mask(0), Input::QuickCraft)];
+            ops.extend(
+                slots
+                    .into_iter()
+                    .map(|slot| (Some(slot), mask(1), Input::QuickCraft)),
+            );
+            ops.push((None, mask(2), Input::QuickCraft));
+            if !self.menu_ops(&ops) {
+                // Not a menu the engine models: the drag is a plain click.
+                self.click_inventory(ty == 1);
+            }
+        }
+        if let Some(key) = self.container {
+            self.container_changed(key);
+        }
+    }
     fn click_inventory(&mut self, right: bool) {
         if self.mount_click(right) {
             return;
@@ -3676,13 +4105,13 @@ impl Game<'_> {
         if slot == 200 {
             // ResultSlot: take the crafted stack and consume one of each ingredient.
             let mut crafted = 0;
-            while let Some(result) = self.craft_result() {
+            while let Some((recipe, result)) = self.craft_recipe() {
                 let made = (result.item.clone(), result.count);
                 let cells = self.craft_size * self.craft_size;
                 let remainders = self.res.recipes.remainders(
-                    &self.res.items,
+                    &recipe,
                     &self.craft_grid[..cells],
-                    &result,
+                    self.craft_size,
                 );
                 if shift {
                     if self.give(result).is_some() {
@@ -3724,68 +4153,10 @@ impl Game<'_> {
             }
             return;
         }
-        if shift && (500..504).contains(&slot) {
-            // InventoryMenu.quickMoveStack: armour back to the main
-            // inventory, then the hotbar.
-            if let Some(stack) = self.armor[slot - 500].take() {
-                if let Some(i) = (9..36).chain(0..9).find(|&i| self.inventory[i].is_none()) {
-                    self.inventory[i] = Some(stack);
-                } else {
-                    self.armor[slot - 500] = Some(stack);
-                }
-                self.apply_equipment();
-            }
-            return;
-        }
-        if shift && slot < 36 {
-            // InventoryMenu.quickMoveStack: armour into its empty slot, an
-            // off-hand item into an empty off hand.
-            let equip = self.inventory[slot]
-                .as_ref()
-                .and_then(|s| self.res.items.get(&s.item))
-                .and_then(|i| i.equip_slot.clone());
-            let armor = ["head", "chest", "legs", "feet"]
-                .iter()
-                .position(|s| equip.as_deref() == Some(*s));
-            if let Some(a) = armor
-                && self.armor[a].is_none()
-            {
-                self.armor[a] = self.inventory[slot].take();
-                self.apply_equipment();
-                return;
-            }
-            if equip.as_deref() == Some("offhand") && self.offhand.is_none() {
-                self.offhand = self.inventory[slot].take();
-                return;
-            }
-            // Quick move between hotbar and main inventory.
-            if let Some(stack) = self.inventory[slot].take() {
-                let range = if slot < 9 { 9..36 } else { 0..9 };
-                let mut stack = stack;
-                for i in range.clone() {
-                    if let Some(s) = &mut self.inventory[i]
-                        && s.same_item_same_components(&stack)
-                    {
-                        let moved = max(&self.res.items, s)
-                            .saturating_sub(s.count)
-                            .min(stack.count);
-                        s.count += moved;
-                        stack.count -= moved;
-                    }
-                }
-                if stack.count > 0
-                    && let Some(i) = range.clone().find(|&i| self.inventory[i].is_none())
-                {
-                    self.inventory[i] = Some(stack);
-                    stack = ItemStack {
-                        count: 0,
-                        ..self.inventory[i].clone().unwrap()
-                    };
-                }
-                if stack.count > 0 {
-                    self.inventory[slot] = Some(stack);
-                }
-            }
+        if shift
+            && (slot < 36 || (500..504).contains(&slot) || (100..109).contains(&slot))
+            && self.inventory_quick_move(slot)
+        {
             return;
         }
         if (500..504).contains(&slot) {
@@ -4602,6 +4973,13 @@ impl Game<'_> {
             .filter(|(p, _)| p.0 >> 4 == c.x && p.2 >> 4 == c.z)
             .map(|(p, e)| (*p, e.clone()))
             .collect();
+        c.block_names = self
+            .world
+            .block_names
+            .iter()
+            .filter(|(p, _)| p.0 >> 4 == c.x && p.2 >> 4 == c.z)
+            .map(|(p, n)| (*p, n.clone()))
+            .collect();
         self.attach_save_data(&mut c);
         Arc::new(c)
     }
@@ -5002,6 +5380,10 @@ impl Game<'_> {
             )
         };
         streaming.radius = self.settings.render_distance;
+        streaming.biome_blend = self.settings.biome_blend;
+        streaming.smooth_lighting = self.settings.smooth_lighting;
+        streaming.cutout_leaves = self.settings.cutout_leaves;
+        streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
         streaming.sky_light = dim != Dim::Nether;
         streaming.nether_shading = dim == Dim::Nether;
         Ok((streaming, save))
@@ -5522,6 +5904,160 @@ impl Game<'_> {
         }
         None
     }
+    /// `CauldronInteractions` for the held item aimed at a cauldron.
+    fn use_on_cauldron(&mut self, pos: [i32; 3]) -> Result<bool> {
+        use horizon_client::cauldron::{self, Outcome};
+        struct Hand<'g, 'a>(&'g mut Game<'a>);
+        impl cauldron::Player for Hand<'_, '_> {
+            fn creative(&self) -> bool {
+                self.0.creative
+            }
+            fn hand(&mut self) -> &mut Option<ItemStack> {
+                let selected = self.0.selected;
+                &mut self.0.inventory[selected]
+            }
+            fn add(&mut self, stack: &mut ItemStack) -> bool {
+                let before = stack.count;
+                match self.0.give(stack.clone()) {
+                    None => stack.count = 0,
+                    Some(rest) => stack.count = rest.count,
+                }
+                stack.count < before
+            }
+            fn contains(&self, stack: &ItemStack) -> bool {
+                self.0
+                    .inventory
+                    .iter()
+                    .flatten()
+                    .any(|have| have.same_item_same_components(stack))
+            }
+            fn drop_stack(&mut self, stack: ItemStack) {
+                if let Some(eye) = self.0.eye_position() {
+                    self.0.spawn_item(stack, eye, [0.0, 0.1, 0.0], 40);
+                }
+            }
+        }
+        let registry = self.res.assets.registry;
+        let id = self.world.block(pos[0], pos[1], pos[2]);
+        let Some(state) = registry
+            .state(id)
+            .filter(|s| s.name.ends_with("cauldron"))
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        let Some(held) = self.inventory[self.selected].as_ref() else {
+            return Ok(false);
+        };
+        let removes_dye = cauldron::removes_dye(&self.res.items, &held.item);
+        let above = self.world.block(pos[0], pos[1] + 1, pos[2]);
+        let under_water = registry
+            .state(above)
+            .is_some_and(|s| s.name == "minecraft:water");
+        let result = cauldron::interact(&state, under_water, removes_dye, &mut Hand(self));
+        if result.outcome == Outcome::Pass {
+            return Ok(false);
+        }
+        if let Some(block) = result.block
+            && let Ok(new) = registry.resolve(&block)
+        {
+            self.level_set(pos, new)?;
+        }
+        if let Some(sound) = result.sound {
+            self.audio.play(
+                sound,
+                Some([
+                    f64::from(pos[0]) + 0.5,
+                    f64::from(pos[1]) + 0.5,
+                    f64::from(pos[2]) + 0.5,
+                ]),
+                1.0,
+                1.0,
+            );
+        }
+        Ok(true)
+    }
+    /// `BlockTransformer.transformBlock` for a held axe, hoe or shovel.
+    fn use_block_transformer(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        face: [i32; 3],
+    ) -> Result<bool> {
+        use horizon_client::block_transform::Around;
+        struct Column<'w> {
+            world: &'w World,
+            registry: &'w horizon_world::registry::BlockRegistry,
+            pos: [i32; 3],
+        }
+        impl Around for Column<'_> {
+            fn state(&self, o: [i32; 3]) -> horizon_world::chunk::BlockState {
+                let id =
+                    self.world
+                        .block(self.pos[0] + o[0], self.pos[1] + o[1], self.pos[2] + o[2]);
+                self.registry.state(id).cloned().unwrap_or_else(|| {
+                    horizon_world::chunk::BlockState {
+                        name: "minecraft:air".into(),
+                        properties: Default::default(),
+                    }
+                })
+            }
+        }
+        let Some(id) = self
+            .res
+            .items
+            .get(&stack.item)
+            .and_then(|i| i.block_transformer.clone())
+        else {
+            return Ok(false);
+        };
+        let face_name = match face {
+            [0, -1, 0] => "down",
+            [0, 1, 0] => "up",
+            [0, 0, -1] => "north",
+            [0, 0, 1] => "south",
+            [-1, 0, 0] => "west",
+            _ => "east",
+        };
+        let registry = self.res.assets.registry;
+        let (state, sound, loot, damage) = {
+            let around = Column {
+                world: &self.world,
+                registry,
+                pos,
+            };
+            let Some((_, t, state)) =
+                self.res
+                    .transformers
+                    .apply(&self.res.items, registry, &id, face_name, &around)
+            else {
+                return Ok(false);
+            };
+            (state, t.sound.clone(), t.loot.clone(), t.damage)
+        };
+        let Ok(new) = registry.resolve(&state) else {
+            return Ok(false);
+        };
+        self.level_set(pos, new)?;
+        if loot.as_deref() == Some("minecraft:till/rooted_dirt") {
+            self.pop_resource(
+                [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]],
+                ItemStack::new("minecraft:hanging_roots", 1),
+            );
+        }
+        self.audio.play(
+            &sound,
+            Some([
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]) + 0.5,
+                f64::from(pos[2]) + 0.5,
+            ]),
+            1.0,
+            1.0,
+        );
+        self.damage_held(damage);
+        Ok(true)
+    }
     fn set_state_named(&mut self, pos: [i32; 3], name: &str, keep: &[&str]) -> Result<bool> {
         let registry = &self.res.assets.registry;
         let old = self.world.block(pos[0], pos[1], pos[2]);
@@ -5578,6 +6114,11 @@ impl Game<'_> {
                 f64::from(p[2]) + 0.5,
             ]
         };
+        if let Some(hit) = self.pick()
+            && self.use_on_cauldron(hit.pos)?
+        {
+            return Ok(true);
+        }
         if item == "bucket" {
             let Some(hit) = self.pick_fluid() else {
                 return Ok(false);
@@ -5617,17 +6158,6 @@ impl Game<'_> {
             return Ok(false);
         };
         let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        let name = self
-            .res
-            .facts
-            .get(clicked)
-            .name
-            .trim_start_matches("minecraft:")
-            .to_owned();
-        let above_air =
-            self.res
-                .facts
-                .is_air(self.world.block(hit.pos[0], hit.pos[1] + 1, hit.pos[2]));
         if item == "water_bucket" || item == "lava_bucket" {
             let target = if self.res.facts.get(clicked).replaceable {
                 hit.pos
@@ -5664,60 +6194,25 @@ impl Game<'_> {
             }
             return Ok(true);
         }
-        if item.ends_with("_hoe") && hit.face != [0, -1, 0] && above_air {
-            // HoeItem.TILLABLES
-            let result = match name.as_str() {
-                "grass_block" | "dirt_path" | "dirt" => Some("minecraft:farmland"),
-                "coarse_dirt" | "rooted_dirt" => Some("minecraft:dirt"),
-                _ => None,
-            };
-            if let Some(result) = result {
-                self.set_state_named(hit.pos, result, &[])?;
-                if name == "rooted_dirt" {
-                    self.pop_resource(
-                        [hit.pos[0], hit.pos[1] - 1, hit.pos[2]],
-                        ItemStack {
-                            item: Arc::from("minecraft:hanging_roots"),
-                            count: 1,
-                            damage: 0,
-                            extra: None,
-                        },
-                    );
-                }
-                self.audio
-                    .play("minecraft:item.hoe.till", Some(at(hit.pos)), 1.0, 1.0);
-                self.damage_held(1);
-                return Ok(true);
-            }
-        }
-        if item.ends_with("_shovel")
-            && hit.face != [0, -1, 0]
-            && above_air
-            && matches!(
-                name.as_str(),
-                "grass_block" | "dirt" | "podzol" | "coarse_dirt" | "mycelium" | "rooted_dirt"
-            )
-        {
-            // ShovelItem.FLATTENABLES
-            self.set_state_named(hit.pos, "minecraft:dirt_path", &[])?;
-            self.audio
-                .play("minecraft:item.shovel.flatten", Some(at(hit.pos)), 1.0, 1.0);
-            self.damage_held(1);
+        if self.use_block_transformer(stack, hit.pos, hit.face)? {
             return Ok(true);
         }
-        if item.ends_with("_axe") && !name.starts_with("stripped_") {
-            // AxeItem.STRIPPABLES
-            let strippable = name.ends_with("_log")
-                || name.ends_with("_wood")
-                || name.ends_with("_stem")
-                || name.ends_with("_hyphae")
-                || name == "bamboo_block";
-            let stripped = format!("minecraft:stripped_{name}");
-            if strippable && self.res.assets.registry.default_state(&stripped).is_some() {
-                self.set_state_named(hit.pos, &stripped, &["axis"])?;
-                self.audio
-                    .play("minecraft:item.axe.strip", Some(at(hit.pos)), 1.0, 1.0);
-                self.damage_held(1);
+        if item == "honeycomb" {
+            let registry = self.res.assets.registry;
+            let old = registry.state(clicked).cloned();
+            if let Some(waxed) = old.and_then(|old| self.res.transformers.waxed(registry, &old))
+                && let Ok(state) = registry.resolve(&waxed)
+            {
+                self.level_set(hit.pos, state)?;
+                self.audio.play(
+                    "minecraft:item.honeycomb.wax_on",
+                    Some(at(hit.pos)),
+                    1.0,
+                    1.0,
+                );
+                if !self.creative {
+                    self.consume_held();
+                }
                 return Ok(true);
             }
         }
@@ -6261,6 +6756,9 @@ impl Game<'_> {
     }
     fn apply_settings(&mut self) {
         self.streaming.radius = self.settings.render_distance;
+        self.streaming.biome_blend = self.settings.biome_blend;
+        self.streaming.smooth_lighting = self.settings.smooth_lighting;
+        self.streaming.cutout_leaves = self.settings.cutout_leaves;
         self.audio.master = self.settings.master_volume;
         horizon_client::hud::GUI_SCALE.store(
             self.settings.gui_scale,
@@ -7078,6 +7576,18 @@ impl Game<'_> {
                 Screen::WorldOptions => self.close_world_options(),
                 Screen::Chat => self.close_chat(),
             },
+            KeyCode::Digit1
+            | KeyCode::Digit2
+            | KeyCode::Digit3
+            | KeyCode::Digit4
+            | KeyCode::Digit5
+            | KeyCode::Digit6
+            | KeyCode::Digit7
+            | KeyCode::Digit8
+            | KeyCode::Digit9
+            | KeyCode::KeyF
+            | KeyCode::KeyQ
+                if self.screen == Screen::Inventory && self.inventory_hotkey(key) => {}
             KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
             // key.advancements.
@@ -7162,13 +7672,15 @@ impl Game<'_> {
                 if pressed && self.attack() {
                     return Ok(());
                 }
-                self.left = pressed;
+                self.toggles[2].set_down(pressed, self.settings.toggle_attack);
+                self.left = self.toggles[2].is_down;
                 if pressed {
                     self.destroy_delay = 0;
                 }
             }
             MouseButton::Right => {
-                self.right = pressed;
+                self.toggles[3].set_down(pressed, self.settings.toggle_use);
+                self.right = self.toggles[3].is_down;
                 if pressed {
                     self.use_item()?;
                     self.use_delay = 4;
@@ -7213,6 +7725,9 @@ impl Game<'_> {
         for c in &unloaded {
             self.world
                 .block_entities
+                .retain(|p, _| !(p.0 >> 4 == c.x && p.2 >> 4 == c.z));
+            self.world
+                .block_names
                 .retain(|p, _| !(p.0 >> 4 == c.x && p.2 >> 4 == c.z));
         }
         if !modified.is_empty()
@@ -7278,6 +7793,15 @@ impl ApplicationHandler for Game<'_> {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
             return;
         }
+        if matches!(
+            event,
+            WindowEvent::KeyboardInput { .. }
+                | WindowEvent::MouseInput { .. }
+                | WindowEvent::MouseWheel { .. }
+                | WindowEvent::CursorMoved { .. }
+        ) {
+            self.last_input = Instant::now();
+        }
         let result: Result<()> = (|| {
             match event {
                 WindowEvent::CloseRequested => {
@@ -7322,6 +7846,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                         if self.screen == Screen::Inventory {
                             self.loom_drag();
+                            self.inventory_drag_move();
                         }
                         if self.dragging && self.screen == Screen::Options {
                             let _ = b;
@@ -7330,10 +7855,33 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
-                    let d = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y,
-                        MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                    let (raw_x, raw_y) = match delta {
+                        MouseScrollDelta::LineDelta(x, y) => (f64::from(x), f64::from(y)),
+                        MouseScrollDelta::PixelDelta(p) => (p.x / 30.0, p.y / 30.0),
                     };
+                    // MouseHandler.onScroll: discrete scrolling and the wheel sensitivity.
+                    let discrete = self.settings.discrete_scroll;
+                    let wheel_sensitivity = f64::from(self.settings.mouse_wheel_sensitivity);
+                    let scaled = |v: f64| {
+                        (if discrete {
+                            horizon_client::mouse::java_signum(v)
+                        } else {
+                            v
+                        }) * wheel_sensitivity
+                    };
+                    let d = scaled(raw_y) as f32;
+                    if self.screen == Screen::Playing
+                        && self.player.is_some()
+                        && let Some((wheel, _)) =
+                            self.mouse
+                                .on_scroll(raw_x, raw_y, discrete, wheel_sensitivity)
+                    {
+                        self.selected = horizon_client::mouse::ScrollWheelHandler::next_selection(
+                            f64::from(wheel),
+                            self.selected as i32,
+                            9,
+                        ) as usize;
+                    }
                     if self.screen == Screen::Chat && d != 0.0 {
                         self.chat_scroll(d);
                     }
@@ -7356,15 +7904,7 @@ impl ApplicationHandler for Game<'_> {
                         self.stats_scroll(d);
                     }
                     if self.screen == Screen::Advancements {
-                        let x = match delta {
-                            MouseScrollDelta::LineDelta(x, _) => x,
-                            MouseScrollDelta::PixelDelta(p) => p.x as f32,
-                        };
-                        self.advancements_scroll(x, d);
-                    }
-                    if self.screen == Screen::Playing && d != 0.0 {
-                        self.selected =
-                            (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
+                        self.advancements_scroll(scaled(raw_x) as f32, d);
                     }
                 }
                 WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
@@ -7449,12 +7989,15 @@ impl ApplicationHandler for Game<'_> {
                             }
                         }
                         Screen::Inventory if pressed => {
-                            self.click_inventory(button == MouseButton::Right);
+                            self.inventory_press(button == MouseButton::Right);
                             if let Some(key) = self.container {
                                 self.container_changed(key);
                             }
                         }
-                        Screen::Inventory => self.loom_release(),
+                        Screen::Inventory => {
+                            self.inventory_release();
+                            self.loom_release();
+                        }
                         Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
@@ -7569,6 +8112,15 @@ impl ApplicationHandler for Game<'_> {
                     let PhysicalKey::Code(key) = event.physical_key else {
                         return Ok(());
                     };
+                    // key.smoothCamera toggles the cinematic camera.
+                    if self.screen == Screen::Playing
+                        && event.state == ElementState::Pressed
+                        && !event.repeat
+                        && horizon_client::keybinds::key_name(key)
+                            .is_some_and(|n| self.settings.keys.get("key.smoothCamera") == n)
+                    {
+                        self.smooth_camera = !self.smooth_camera;
+                    }
                     // Key binds: act as the default key of the bound mapping.
                     let key = match self.settings.keys.translate(key) {
                         Some(Ok(k)) => k,
@@ -7580,11 +8132,27 @@ impl ApplicationHandler for Game<'_> {
                         }
                         None => return Ok(()),
                     };
-                    if event.state != ElementState::Pressed {
+                    // Sneak and sprint are ToggleKeyMappings: a press flips them when toggling.
+                    let toggle = match key {
+                        KeyCode::ShiftLeft => Some((0, self.settings.toggle_crouch)),
+                        KeyCode::ControlLeft => Some((1, self.settings.toggle_sprint)),
+                        _ => None,
+                    };
+                    if let Some((slot, option)) = toggle {
+                        if !event.repeat {
+                            self.toggles[slot]
+                                .set_down(event.state == ElementState::Pressed, option);
+                            self.sync_toggle(slot);
+                        }
+                        if event.state != ElementState::Pressed {
+                            return Ok(());
+                        }
+                    } else if event.state != ElementState::Pressed {
                         self.keys.remove(&key);
                         return Ok(());
+                    } else {
+                        self.keys.insert(key);
                     }
-                    self.keys.insert(key);
                     if event.repeat {
                         return Ok(());
                     }
@@ -7607,18 +8175,25 @@ impl ApplicationHandler for Game<'_> {
                         self.update_world();
                         self.spawn_player()?;
                     }
+                    self.track_toggle_screens();
                     let steps = self.clock.advance(elapsed);
                     for _ in 0..steps {
                         let started = Instant::now();
-                        if self.title.is_none() {
+                        if self.title.is_none() && !self.pause {
                             self.tick()?;
                             self.tick_ambience();
                             self.tick_fov();
                         }
                         self.tick_music();
                         self.clock.record(started.elapsed());
+                        if let Some(report) = self.clock.take_sprint_report() {
+                            self.sprint_report(&report);
+                        }
                     }
+                    self.apply_mouse_look();
                     let rendered = self.render()?;
+                    self.pause = self.pauses_game();
+                    self.clock.end_frame(self.pause);
                     let finished = self
                         .renderer
                         .as_mut()
@@ -7670,12 +8245,9 @@ impl ApplicationHandler for Game<'_> {
             && self.screen == Screen::Playing
             && let DeviceEvent::MouseMotion { delta: (x, y) } = event
         {
-            // MouseHandler.turnPlayer at default sensitivity 0.5: 0.15 degrees per count.
-            let s = f64::from(self.settings.sensitivity) * 0.6 + 0.2;
-            // Scoping drops MouseHandler's 8x factor.
-            let f = s * s * s * if self.scoping() { 1.0 } else { 8.0 };
-            self.yaw += (x * f * 0.15) as f32;
-            self.pitch = (self.pitch + (y * f * 0.15) as f32).clamp(-90.0, 90.0);
+            // MouseHandler.onMove with the pointer grabbed; applied once per frame.
+            self.mouse.on_move(0.0, 0.0, x, y, true, true);
+            self.last_input = Instant::now();
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -7714,6 +8286,7 @@ pub fn run() -> Result<()> {
     let items = Items::load(&root, assets.registry, &facts)?;
     eprintln!("load items: {:.2}s", started.elapsed().as_secs_f32());
     let recipes = Recipes::load(&root, &items)?;
+    let transformers = horizon_client::block_transform::Transformers::load(&root, assets.registry)?;
     let biomes = Arc::new(Biomes::load(&root)?);
     let environment = Environment::load(&root)?;
     eprintln!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
@@ -7785,6 +8358,7 @@ pub fn run() -> Result<()> {
         facts,
         items,
         recipes,
+        transformers,
         biomes,
         environment,
         atlas,
@@ -7857,6 +8431,8 @@ pub fn run() -> Result<()> {
         carried: None,
         craft_grid: vec![None; 9],
         craft_size: 2,
+        inv_drag: None,
+        last_inv_click: None,
         container: None,
         station: None,
         potions: Default::default(),
@@ -7876,12 +8452,23 @@ pub fn run() -> Result<()> {
         cursor: (0.0, 0.0),
         captured: false,
         focused: true,
+        mouse: MouseLook::default(),
+        smooth_camera: false,
+        toggles: [
+            KeyState::toggle(true, true),
+            KeyState::toggle(true, true),
+            KeyState::toggle(true, false),
+            KeyState::toggle(false, false),
+        ],
+        was_playing: false,
+        pause: false,
         debug: false,
         screen: Screen::Playing,
         window: None,
         renderer: None,
         started: now,
         previous: now,
+        last_input: now,
         frames: 0,
         fps: 0.0,
         fps_frames: 0,
@@ -7976,6 +8563,7 @@ pub fn run() -> Result<()> {
         ender_open: None,
         pending_shulker: HashMap::new(),
         pending_banner: HashMap::new(),
+        pending_names: HashMap::new(),
         recipe_ui: Default::default(),
         mount_menu: Default::default(),
         hook: None,

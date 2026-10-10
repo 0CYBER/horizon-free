@@ -2,10 +2,10 @@
 //! aquifers, surface rules, carvers and placed features) to chunk streaming.
 use crate::{
     biome::Biomes,
-    chunk::{Chunk, HEIGHT, MIN_Y},
+    chunk::{BIOME_STRATEGY, Chunk, HEIGHT, MIN_Y, SECTIONS, Section},
     streaming::{ChunkGenerator, Proto},
 };
-use horizon_core::position::ChunkPos;
+use horizon_core::{paletted::PalettedContainer, position::ChunkPos};
 use horizon_world::{
     registry::BlockRegistry,
     worldgen::generator::{GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk},
@@ -177,14 +177,26 @@ impl ChunkGenerator for VanillaTerrain {
             chunk.terrain.min_y().max(MIN_Y),
             (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
         );
-        for y in lo..hi {
-            for z in 0..16 {
-                for x in 0..16 {
-                    let id = chunk.block(bx + x, y, bz + z).0 as u16;
-                    if id != 0 {
-                        out.set(x, y, z, id);
+        let mut values = Box::new([0u16; 4096]);
+        for si in 0..SECTIONS as i32 {
+            let base = MIN_Y + si * 16;
+            if base + 16 <= lo || base >= hi {
+                continue;
+            }
+            values.fill(0);
+            let mut any = false;
+            for y in base.max(lo)..(base + 16).min(hi) {
+                for z in 0..16 {
+                    for x in 0..16 {
+                        let id = chunk.block(bx + x, y, bz + z).0 as u16;
+                        values[((y & 15) << 8 | z << 4 | x) as usize] = id;
+                        any |= id != 0;
                     }
                 }
+            }
+            if any {
+                Arc::make_mut(&mut out.sections[si as usize]).blocks =
+                    Section::from_blocks(&values);
             }
         }
         let base_section = chunk.terrain.min_y() >> 4;
@@ -199,19 +211,17 @@ impl ChunkGenerator for VanillaTerrain {
                 }
             }
         }
-        let mut biomes = vec![0u16; 16 * (HEIGHT as usize / 4)];
-        for qy in 0..HEIGHT / 4 {
-            for qz in 0..4 {
-                for qx in 0..4 {
-                    let y = (MIN_Y + qy * 4).clamp(lo, hi - 1);
-                    let id = chunk.biome_id_at(bx + qx * 4, y, bz + qz * 4);
-                    let index = id.0 as usize;
-                    biomes[(qy * 16 + qz * 4 + qx) as usize] =
-                        self.biome_map.get(index).copied().unwrap_or(0);
-                }
+        for si in 0..SECTIONS as i32 {
+            let mut cells = [0u32; 64];
+            for (j, cell) in cells.iter_mut().enumerate() {
+                let (qx, qz, qy) = (j as i32 & 3, (j as i32 >> 2) & 3, si * 4 + (j as i32 >> 4));
+                let y = (MIN_Y + qy * 4).clamp(lo, hi - 1);
+                let id = chunk.biome_id_at(bx + qx * 4, y, bz + qz * 4);
+                *cell = u32::from(self.biome_map.get(id.0 as usize).copied().unwrap_or(0));
             }
+            Arc::make_mut(&mut out.sections[si as usize]).biomes =
+                PalettedContainer::from_values(BIOME_STRATEGY, &cells);
         }
-        out.biomes = Arc::new(biomes);
         out.block_entities = crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
         out.structure_refs = chunk
             .structures()

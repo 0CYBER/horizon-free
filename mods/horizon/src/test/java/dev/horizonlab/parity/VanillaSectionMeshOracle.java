@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import net.minecraft.client.color.block.BlockColors;
 import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.block.*;
@@ -29,6 +30,14 @@ import net.minecraft.world.level.CardinalLighting;
 import net.minecraft.world.level.ColorResolver;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.DryFoliageColor;
+import net.minecraft.world.level.FoliageColor;
+import net.minecraft.world.level.GrassColor;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.BiomeManager;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.util.ARGB;
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -100,6 +109,12 @@ public final class VanillaSectionMeshOracle {
             return (T) value;
         }
     }
+    private static int[] colormap(String name) throws IOException {
+        try (var input = VanillaSectionMeshOracle.class.getResourceAsStream("/assets/minecraft/textures/colormap/" + name + ".png");
+             var image = NativeImage.read(input)) {
+            return image.makePixelArray();
+        }
+    }
     private static String resource(String path) throws IOException {
         try (var input = VanillaSectionMeshOracle.class.getResourceAsStream(path)) {
             return input == null ? null : new String(input.readAllBytes(), StandardCharsets.UTF_8);
@@ -139,12 +154,47 @@ public final class VanillaSectionMeshOracle {
             return baked.computeIfAbsent(state, s -> Objects.requireNonNull(roots.get(s), () -> "no model for " + s).bake(s, baker));
         }
     }
+    /** ClientLevel.calculateBlockTint over a BiomeManager with a fixed noise-biome map:
+     * quart cells listed in the scene, a default elsewhere in the 3x3 chunk region and
+     * plains outside it (chunks that are not loaded). */
+    private static final class TintBiomes {
+        final BiomeManager manager; final int radius;
+        final Map<Long, Holder<Biome>> cells = new HashMap<>();
+        final Holder<Biome> dflt, plains;
+        TintBiomes(JsonObject o, HolderLookup.RegistryLookup<Biome> lookup) {
+            radius = o.get("radius").getAsInt();
+            Function<String, Holder<Biome>> named = name -> lookup.getOrThrow(ResourceKey.create(Registries.BIOME, Identifier.parse(name)));
+            plains = named.apply("minecraft:plains");
+            dflt = named.apply(o.get("default").getAsString());
+            for (var item : o.getAsJsonArray("cells")) {
+                var c = item.getAsJsonArray();
+                cells.put(BlockPos.asLong(c.get(0).getAsInt(), c.get(1).getAsInt(), c.get(2).getAsInt()), named.apply(c.get(3).getAsString()));
+            }
+            manager = new BiomeManager((qx, qy, qz) -> {
+                if (qx < -4 || qx >= 8 || qz < -4 || qz >= 8) return plains;
+                return cells.getOrDefault(BlockPos.asLong(qx, Math.max(-16, Math.min(79, qy)), qz), dflt);
+            }, o.get("seed").getAsLong());
+        }
+        int tint(BlockPos pos, ColorResolver resolver) {
+            if (radius == 0) return resolver.getColor(manager.getBiome(pos).value(), pos.getX(), pos.getZ());
+            int count = (radius * 2 + 1) * (radius * 2 + 1);
+            int red = 0, green = 0, blue = 0;
+            var cursor = new Cursor3D(pos.getX() - radius, pos.getY(), pos.getZ() - radius, pos.getX() + radius, pos.getY(), pos.getZ() + radius);
+            var next = new BlockPos.MutableBlockPos();
+            while (cursor.advance()) {
+                next.set(cursor.nextX(), cursor.nextY(), cursor.nextZ());
+                int color = resolver.getColor(manager.getBiome(next).value(), next.getX(), next.getZ());
+                red += ARGB.red(color); green += ARGB.green(color); blue += ARGB.blue(color);
+            }
+            return ARGB.color(red / count, green / count, blue / count);
+        }
+    }
     private static long key(int x, int y, int z) { return BlockPos.asLong(x, y, z); }
     /** A fixed region: listed blocks over air, listed light over a default. */
     private static final class Scene implements BlockAndTintGetter {
         final Map<Long, BlockState> blocks = new HashMap<>();
         final Map<Long, int[]> light = new HashMap<>();
-        int[] defaultLight; boolean nether; int grass, foliage, dry, water;
+        int[] defaultLight; boolean nether; int grass, foliage, dry, water; TintBiomes biomes;
         public CardinalLighting cardinalLighting() { return nether ? CardinalLighting.NETHER : CardinalLighting.DEFAULT; }
         public LevelLightEngine getLightEngine() { return LevelLightEngine.EMPTY; }
         public int getBrightness(LightLayer layer, BlockPos pos) {
@@ -152,6 +202,7 @@ public final class VanillaSectionMeshOracle {
             return layer == LightLayer.SKY ? value[0] : value[1];
         }
         public int getBlockTint(BlockPos pos, ColorResolver resolver) {
+            if (biomes != null) return biomes.tint(pos, resolver);
             int rgb = resolver == BiomeColors.GRASS_COLOR_RESOLVER ? grass : resolver == BiomeColors.FOLIAGE_COLOR_RESOLVER ? foliage
                 : resolver == BiomeColors.DRY_FOLIAGE_COLOR_RESOLVER ? dry : resolver == BiomeColors.WATER_COLOR_RESOLVER ? water : -1;
             if (rgb == -1) throw new AssertionError("unexpected colour resolver");
@@ -165,7 +216,7 @@ public final class VanillaSectionMeshOracle {
     }
     private static final class Recorder {
         final List<Object> quads = new ArrayList<>();
-        List<Object> pending; BlockPos block; String kind, layer, sprite;
+        List<Object> pending; boolean forceSolid; BlockPos block; String kind, layer, sprite;
         void vertex(float x, float y, float z, int color, float u, float v, int light) {
             if (pending == null) pending = new ArrayList<>();
             pending.add(new Object[]{x, y, z, u, v, color, light});
@@ -176,7 +227,7 @@ public final class VanillaSectionMeshOracle {
         }
     }
     private static String layer(ChunkSectionLayer layer) { return layer.name().toLowerCase(Locale.ROOT); }
-    private static Object scene(JsonObject row, Models models, FluidStateModelSet fluids) {
+    private static Object scene(JsonObject row, Models models, FluidStateModelSet fluids, HolderLookup.RegistryLookup<Biome> biomeLookup) {
         var scene = new Scene();
         var light = row.getAsJsonArray("light");
         scene.defaultLight = new int[]{light.get(0).getAsInt(), light.get(1).getAsInt()};
@@ -184,6 +235,7 @@ public final class VanillaSectionMeshOracle {
         var colors = row.getAsJsonObject("colors");
         scene.grass = colors.get("grass").getAsInt(); scene.foliage = colors.get("foliage").getAsInt();
         scene.dry = colors.get("dry_foliage").getAsInt(); scene.water = colors.get("water").getAsInt();
+        if (row.has("biomes")) scene.biomes = new TintBiomes(row.getAsJsonObject("biomes"), biomeLookup);
         for (var item : row.getAsJsonArray("blocks")) {
             var b = item.getAsJsonArray();
             scene.blocks.put(key(b.get(0).getAsInt(), b.get(1).getAsInt(), b.get(2).getAsInt()), Block.stateById(b.get(3).getAsInt()));
@@ -194,10 +246,13 @@ public final class VanillaSectionMeshOracle {
         }
         var recorder = new Recorder();
         BlockModelLighter.enableCaching();
-        var renderer = new ModelBlockRenderer(true, true, BlockColors.createDefault());
+        boolean smooth = !row.has("smooth") || row.get("smooth").getAsBoolean();
+        boolean cutoutLeaves = !row.has("cutout_leaves") || row.get("cutout_leaves").getAsBoolean();
+        LeavesBlock.setCutoutLeaves(cutoutLeaves);
+        var renderer = new ModelBlockRenderer(smooth, true, BlockColors.createDefault());
         var fluidRenderer = new FluidRenderer(fluids);
         BlockQuadOutput output = (x, y, z, quad, instance) -> {
-            recorder.kind = "model"; recorder.layer = layer(quad.materialInfo().layer());
+            recorder.kind = "model"; recorder.layer = recorder.forceSolid ? "solid" : layer(quad.materialInfo().layer());
             recorder.sprite = quad.materialInfo().sprite().contents().name().toString();
             int emission = quad.materialInfo().lightEmission();
             int slot = Arrays.asList(FLUID_SPRITES).indexOf(recorder.sprite);
@@ -233,9 +288,8 @@ public final class VanillaSectionMeshOracle {
                 }, state, fluid);
             }
             if (state.getRenderShape() == RenderShape.MODEL) {
-                renderer.tesselateBlock(ModelBlockRenderer.forceOpaque(true, state) ? (x, y, z, quad, instance) -> {
-                    throw new AssertionError("cutout leaves are enabled");
-                } : output, SectionPos.sectionRelative(pos.getX()), SectionPos.sectionRelative(pos.getY()), SectionPos.sectionRelative(pos.getZ()),
+                recorder.forceSolid = ModelBlockRenderer.forceOpaque(cutoutLeaves, state);
+                renderer.tesselateBlock(output, SectionPos.sectionRelative(pos.getX()), SectionPos.sectionRelative(pos.getY()), SectionPos.sectionRelative(pos.getZ()),
                     scene, pos, state, models.get(state), state.getSeed(pos));
             }
         }
@@ -244,6 +298,7 @@ public final class VanillaSectionMeshOracle {
         return map("name", row.get("name").getAsString(), "quads", recorder.quads);
     }
     private static BlockColors COLORS;
+    private static HolderLookup.RegistryLookup<Biome> biomeLookup;
     /** Per-state facts the Rust mesher derives from prepared resources. */
     private static Object facts(BlockState state, int id) {
         var level = EmptyBlockGetter.INSTANCE;
@@ -266,6 +321,7 @@ public final class VanillaSectionMeshOracle {
         net.minecraft.server.Bootstrap.bootStrap();
         VanillaHeightmapOracle.bindTags(JsonParser.parseString(Files.readString(Path.of(args[2]).resolve("block-tags.json"))).getAsJsonObject());
         LeavesBlock.setCutoutLeaves(true);
+        GrassColor.init(colormap("grass")); FoliageColor.init(colormap("foliage")); DryFoliageColor.init(colormap("dry_foliage"));
         COLORS = BlockColors.createDefault();
         if (args[0].equals("facts")) {
             try (var output = Files.newBufferedWriter(Path.of(args[1]))) {
@@ -288,10 +344,11 @@ public final class VanillaSectionMeshOracle {
         var atlas = new SpriteLoader.Preparations(16, 16, 0, missing, Map.of(), CompletableFuture.completedFuture(null));
         var materials = new Materials(atlas);
         var models = new Models(blocks, materials);
+        biomeLookup = net.minecraft.data.registries.VanillaRegistries.createWorldLookup().lookupOrThrow(Registries.BIOME);
         var fluidModels = FluidStateModelSet.bake(materials);
         var fluids = new FluidStateModelSet(fluidModels, fluidModels.values().iterator().next());
         try (var output = Files.newBufferedWriter(Path.of(args[1]))) {
-            for (var row : rows) { output.write(JSON.toJson(scene(row, models, fluids))); output.newLine(); }
+            for (var row : rows) { output.write(JSON.toJson(scene(row, models, fluids, biomeLookup))); output.newLine(); }
         }
     }
 }

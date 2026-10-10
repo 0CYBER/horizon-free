@@ -397,6 +397,7 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
             m.extra.main_hand = Some("minecraft:golden_axe".into());
             m.extra.pick_up_loot = true;
         }
+        S::Illusioner => super::illusioner::finalize(m),
         S::Vindicator => m.extra.main_hand = Some("minecraft:iron_axe".into()),
         S::Villager => {
             m.extra.variant = villager_type(biome);

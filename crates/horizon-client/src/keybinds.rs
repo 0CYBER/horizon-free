@@ -43,6 +43,7 @@ pub const MAPPINGS: &[(&str, &str, &str)] = &[
     ("key.advancements", "key.keyboard.l", "misc"),
     ("key.quickActions", "key.keyboard.g", "misc"),
     ("key.debug.overlay", "key.keyboard.f3", "debug"),
+    ("key.debug.modifier", "key.keyboard.f3", "debug"),
     ("key.hotbar.1", "key.keyboard.1", "inventory"),
     ("key.hotbar.2", "key.keyboard.2", "inventory"),
     ("key.hotbar.3", "key.keyboard.3", "inventory"),
@@ -52,7 +53,32 @@ pub const MAPPINGS: &[(&str, &str, &str)] = &[
     ("key.hotbar.7", "key.keyboard.7", "inventory"),
     ("key.hotbar.8", "key.keyboard.8", "inventory"),
     ("key.hotbar.9", "key.keyboard.9", "inventory"),
+    ("key.debug.reloadChunk", "key.keyboard.a", "debug"),
+    ("key.debug.showHitboxes", "key.keyboard.b", "debug"),
+    ("key.debug.clearChat", "key.keyboard.d", "debug"),
+    ("key.debug.crash", "key.keyboard.c", "debug"),
+    ("key.debug.showChunkBorders", "key.keyboard.g", "debug"),
+    ("key.debug.showAdvancedTooltips", "key.keyboard.h", "debug"),
+    ("key.debug.copyRecreateCommand", "key.keyboard.i", "debug"),
+    ("key.debug.spectate", "key.keyboard.n", "debug"),
+    ("key.debug.switchGameMode", "key.keyboard.f4", "debug"),
+    ("key.debug.debugOptions", "key.keyboard.f6", "debug"),
+    ("key.debug.focusPause", "key.keyboard.p", "debug"),
+    ("key.debug.dumpDynamicTextures", "key.keyboard.s", "debug"),
+    ("key.debug.reloadResourcePacks", "key.keyboard.t", "debug"),
+    ("key.debug.profiling", "key.keyboard.l", "debug"),
+    ("key.debug.copyLocation", "key.keyboard.c", "debug"),
+    ("key.debug.dumpVersion", "key.keyboard.v", "debug"),
+    ("key.debug.profilingChart", "key.keyboard.1", "debug"),
+    ("key.debug.fpsCharts", "key.keyboard.2", "debug"),
+    ("key.debug.networkCharts", "key.keyboard.3", "debug"),
+    ("key.debug.lightmapTexture", "key.keyboard.4", "debug"),
+    ("key.debug.improvedTransparency", "key.keyboard.x", "debug"),
 ];
+/// Mappings Options builds as `ToggleKeyMapping` (hold or toggle by option).
+pub fn is_toggle(name: &str) -> bool {
+    matches!(name, "key.sneak" | "key.sprint" | "key.use" | "key.attack")
+}
 /// KeyMapping.Category sort order.
 pub const CATEGORIES: [&str; 8] = [
     "movement",

@@ -44,6 +44,18 @@ pub struct StackData {
     pub ominous_banner: bool,
     /// `minecraft:ominous_bottle_amplifier` (None: the item's default, 0).
     pub ominous_amplifier: Option<u8>,
+    /// `minecraft:dyed_color` (leather armour, wolf armour, ... as RGB).
+    pub dyed_color: Option<i32>,
+    /// `minecraft:firework_explosion` (a firework star).
+    pub firework_explosion: Option<crate::particles::FireworkExplosion>,
+    /// `minecraft:pot_decorations`: back, left, right, front sherds.
+    pub pot_decorations: Option<Box<[Option<ItemStack>; 4]>>,
+    /// `minecraft:bundle_contents`.
+    pub bundle_contents: Vec<ItemStack>,
+    /// `minecraft:suspicious_stew_effects`: (effect id, duration).
+    pub stew_effects: Vec<(Arc<str>, i32)>,
+    /// `minecraft:map_post_processing`: 0 lock, 1 scale.
+    pub map_post_processing: Option<u8>,
 }
 /// `Raid.getBannerComponentPatch`: the ominous banner's pattern layers.
 pub const OMINOUS_LAYERS: [(&str, &str); 8] = [
@@ -243,6 +255,151 @@ fn read_text(t: &Tag) -> Option<String> {
     }
 }
 
+/// A `FireworkExplosion` as vanilla's codec writes it (defaults omitted).
+fn explosion_tag(e: &crate::particles::FireworkExplosion) -> Tag {
+    let colors = |c: &[u32]| Tag::List(c.iter().map(|c| Tag::Int(*c as i32)).collect());
+    let mut fields = vec![("shape", Tag::String(e.shape.name().into()))];
+    if !e.colors.is_empty() {
+        fields.push(("colors", colors(&e.colors)));
+    }
+    if !e.fade.is_empty() {
+        fields.push(("fade_colors", colors(&e.fade)));
+    }
+    if e.trail {
+        fields.push(("has_trail", Tag::Byte(1)));
+    }
+    if e.twinkle {
+        fields.push(("has_twinkle", Tag::Byte(1)));
+    }
+    Tag::compound(fields)
+}
+fn explosion_from(e: &Tag) -> crate::particles::FireworkExplosion {
+    let ints = |t: Option<&Tag>| match t {
+        Some(Tag::IntArray(v)) => v.iter().map(|c| *c as u32).collect(),
+        Some(Tag::List(v)) => v.iter().filter_map(int).map(|c| c as u32).collect(),
+        _ => Vec::new(),
+    };
+    crate::particles::FireworkExplosion {
+        shape: crate::particles::FireworkShape::from_name(
+            e.get("shape")
+                .and_then(string)
+                .as_deref()
+                .map_or("small_ball", |s| s.strip_prefix("minecraft:").unwrap_or(s)),
+        ),
+        colors: ints(e.get("colors")),
+        fade: ints(e.get("fade_colors")),
+        trail: e.get("has_trail").and_then(int).unwrap_or(0) != 0,
+        twinkle: e.get("has_twinkle").and_then(int).unwrap_or(0) != 0,
+    }
+}
+/// An `ItemStackTemplate`: `{id, count?, components?}`.
+fn template_tag(stack: &ItemStack) -> Tag {
+    let mut entries = vec![("id", Tag::String((&*stack.item).into()))];
+    if stack.count != 1 {
+        entries.push(("count", Tag::Int(stack.count as i32)));
+    }
+    if let Some(components) = encode_components(stack) {
+        entries.push(("components", components));
+    }
+    Tag::compound(entries)
+}
+/// The pot prototype's decorations: a brick on every side.
+pub fn all_bricks(sides: &[Option<ItemStack>; 4]) -> bool {
+    sides.iter().all(|s| {
+        s.as_ref()
+            .is_some_and(|s| &*s.item == "minecraft:brick" && s.count == 1 && s.extra.is_none())
+    })
+}
+fn template_from(tag: &Tag) -> Option<ItemStack> {
+    match tag {
+        Tag::String(id) => Some(ItemStack::new(&id.to_string_lossy(), 1)),
+        _ => {
+            let id = tag.get("id").and_then(string)?;
+            let (damage, extra) = decode_components(tag.get("components"));
+            Some(ItemStack {
+                item: Arc::from(id.as_str()),
+                count: tag.get("count").and_then(int).unwrap_or(1).max(1) as u32,
+                damage,
+                extra,
+            })
+        }
+    }
+}
+/// Sorted-key, type-annotated text of a tag (the differential harnesses
+/// print the same form from the vanilla side).
+pub fn canon_tag(tag: &Tag) -> String {
+    fn list(out: &mut String, prefix: &str, items: impl Iterator<Item = String>) {
+        out.push_str(prefix);
+        out.push_str(&items.collect::<Vec<_>>().join(","));
+        out.push(']');
+    }
+    fn go(tag: &Tag, out: &mut String) {
+        use std::fmt::Write as _;
+        match tag {
+            Tag::End => {}
+            Tag::Byte(v) => write!(out, "{v}b").unwrap(),
+            Tag::Short(v) => write!(out, "{v}s").unwrap(),
+            Tag::Int(v) => write!(out, "{v}").unwrap(),
+            Tag::Long(v) => write!(out, "{v}L").unwrap(),
+            Tag::Float(v) => write!(out, "{}f", f32::from_bits(*v)).unwrap(),
+            Tag::Double(v) => write!(out, "{}d", f64::from_bits(*v)).unwrap(),
+            Tag::String(s) => write!(
+                out,
+                "\"{}\"",
+                s.to_string_lossy()
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+            )
+            .unwrap(),
+            Tag::ByteArray(v) => list(out, "[B;", v.iter().map(|b| (*b as i8).to_string())),
+            Tag::IntArray(v) => list(out, "[I;", v.iter().map(i32::to_string)),
+            Tag::LongArray(v) => list(out, "[L;", v.iter().map(i64::to_string)),
+            Tag::List(items) => {
+                out.push('[');
+                for (i, t) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    go(t, out);
+                }
+                out.push(']');
+            }
+            Tag::Compound(map) => {
+                let mut keys: Vec<(String, &Tag)> =
+                    map.iter().map(|(k, v)| (k.to_string_lossy(), v)).collect();
+                keys.sort_by(|a, b| a.0.cmp(&b.0));
+                out.push('{');
+                for (i, (k, v)) in keys.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&k);
+                    out.push(':');
+                    go(v, out);
+                }
+                out.push('}');
+            }
+        }
+    }
+    let mut out = String::new();
+    go(tag, &mut out);
+    out
+}
+/// `canon_tag` of a stack as `ItemStack.CODEC` writes it; "-" for none.
+pub fn canon_stack(stack: Option<&ItemStack>) -> String {
+    stack.map_or_else(
+        || "-".to_owned(),
+        |s| canon_tag(&crate::save::item_to_nbt(s)),
+    )
+}
+/// The stack of an SNBT `ItemStack.CODEC` compound; None for "-".
+pub fn parse_stack(snbt: &str) -> Result<Option<ItemStack>, String> {
+    if snbt == "-" {
+        return Ok(None);
+    }
+    let (tag, _) = horizon_world::nbt::parse_snbt(snbt)?;
+    Ok(crate::save::item_from_nbt(&tag))
+}
 /// The `components` compound for a stack, or None when every component is default.
 pub fn encode_components(stack: &ItemStack) -> Option<Tag> {
     components_tag(stack.damage, stack.data())
@@ -317,40 +474,73 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
                 .collect();
             entries.push((
                 "minecraft:written_book_content",
-                Tag::compound([
-                    ("title", raw(Tag::String(w.title.as_str().into()))),
-                    ("author", Tag::String(w.author.as_str().into())),
-                    ("generation", Tag::Int(i32::from(w.generation))),
-                    ("pages", Tag::List(pages)),
-                    ("resolved", Tag::Byte(1)),
-                ]),
+                Tag::compound({
+                    let mut fields = vec![
+                        ("title", raw(Tag::String(w.title.as_str().into()))),
+                        ("author", Tag::String(w.author.as_str().into())),
+                        ("pages", Tag::List(pages)),
+                    ];
+                    if w.generation != 0 {
+                        fields.push(("generation", Tag::Int(i32::from(w.generation))));
+                    }
+                    fields
+                }),
             ));
         }
         if let Some((flight, explosions)) = &d.fireworks {
-            let list = explosions
-                .iter()
-                .map(|e| {
-                    Tag::compound([
-                        ("shape", Tag::String(e.shape.name().into())),
-                        (
-                            "colors",
-                            Tag::IntArray(e.colors.iter().map(|c| *c as i32).collect()),
-                        ),
-                        (
-                            "fade_colors",
-                            Tag::IntArray(e.fade.iter().map(|c| *c as i32).collect()),
-                        ),
-                        ("has_trail", Tag::Byte(i8::from(e.trail))),
-                        ("has_twinkle", Tag::Byte(i8::from(e.twinkle))),
-                    ])
-                })
-                .collect();
+            let mut fields = Vec::new();
+            if *flight != 0 {
+                fields.push(("flight_duration", Tag::Byte(*flight as i8)));
+            }
+            if !explosions.is_empty() {
+                fields.push((
+                    "explosions",
+                    Tag::List(explosions.iter().map(explosion_tag).collect()),
+                ));
+            }
+            entries.push(("minecraft:fireworks", Tag::compound(fields)));
+        }
+        if let Some(e) = &d.firework_explosion {
+            entries.push(("minecraft:firework_explosion", explosion_tag(e)));
+        }
+        if let Some(color) = d.dyed_color {
+            entries.push(("minecraft:dyed_color", Tag::Int(color)));
+        }
+        if let Some(sides) = &d.pot_decorations {
+            let mut sherds = Vec::new();
+            for (name, side) in ["back", "left", "right", "front"].iter().zip(sides.iter()) {
+                if let Some(stack) = side {
+                    sherds.push((*name, template_tag(stack)));
+                }
+            }
+            entries.push(("minecraft:pot_decorations", Tag::compound(sherds)));
+        }
+        if !d.bundle_contents.is_empty() {
             entries.push((
-                "minecraft:fireworks",
-                Tag::compound([
-                    ("flight_duration", Tag::Byte(*flight as i8)),
-                    ("explosions", Tag::List(list)),
-                ]),
+                "minecraft:bundle_contents",
+                Tag::List(d.bundle_contents.iter().map(template_tag).collect()),
+            ));
+        }
+        if !d.stew_effects.is_empty() {
+            entries.push((
+                "minecraft:suspicious_stew_effects",
+                Tag::List(
+                    d.stew_effects
+                        .iter()
+                        .map(|(id, duration)| {
+                            Tag::compound([
+                                ("id", Tag::String((&**id).into())),
+                                ("duration", Tag::Int(*duration)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ));
+        }
+        if let Some(mode) = d.map_post_processing {
+            entries.push((
+                "minecraft:map_post_processing",
+                Tag::String(if mode == 0 { "lock" } else { "scale" }.into()),
             ));
         }
         if !d.charged.is_empty() {
@@ -399,7 +589,7 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
                 .map(|(slot, stack)| {
                     Tag::compound([
                         ("slot", Tag::Int(i32::from(*slot))),
-                        ("item", crate::save::item_to_nbt(stack)),
+                        ("item", template_tag(stack)),
                     ])
                 })
                 .collect();
@@ -456,36 +646,54 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                     _ => Vec::new(),
                 },
             }),
-        fireworks: c.get("minecraft:fireworks").map(|f| {
-            let flight = f
-                .get("flight_duration")
-                .and_then(int)
-                .unwrap_or(0)
-                .clamp(0, 255) as u8;
-            let ints = |t: Option<&Tag>| match t {
-                Some(Tag::IntArray(v)) => v.iter().map(|c| *c as u32).collect(),
-                _ => Vec::new(),
-            };
-            let explosions = match f.get("explosions") {
-                Some(Tag::List(list)) => list
-                    .iter()
-                    .map(|e| crate::particles::FireworkExplosion {
-                        shape: crate::particles::FireworkShape::from_name(
-                            e.get("shape")
-                                .and_then(string)
-                                .as_deref()
-                                .unwrap_or("small_ball"),
-                        ),
-                        colors: ints(e.get("colors")),
-                        fade: ints(e.get("fade_colors")),
-                        trail: e.get("has_trail").and_then(int).unwrap_or(0) != 0,
-                        twinkle: e.get("has_twinkle").and_then(int).unwrap_or(0) != 0,
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            (flight, explosions)
-        }),
+        fireworks: c
+            .get("minecraft:fireworks")
+            .map(|f| {
+                let flight = f
+                    .get("flight_duration")
+                    .and_then(int)
+                    .unwrap_or(0)
+                    .clamp(0, 255) as u8;
+                let explosions = match f.get("explosions") {
+                    Some(Tag::List(list)) => list.iter().map(explosion_from).collect(),
+                    _ => Vec::new(),
+                };
+                (flight, explosions)
+            })
+            .filter(|(flight, explosions)| !(*flight == 1 && explosions.is_empty())),
+        firework_explosion: c.get("minecraft:firework_explosion").map(explosion_from),
+        dyed_color: c
+            .get("minecraft:dyed_color")
+            .and_then(int)
+            .map(|v| v as i32),
+        pot_decorations: c
+            .get("minecraft:pot_decorations")
+            .map(|p| {
+                let side = |name: &str| p.get(name).and_then(template_from);
+                Box::new([side("back"), side("left"), side("right"), side("front")])
+            })
+            .filter(|sides| !all_bricks(sides)),
+        bundle_contents: match c.get("minecraft:bundle_contents") {
+            Some(Tag::List(list)) => list.iter().filter_map(template_from).collect(),
+            _ => Vec::new(),
+        },
+        stew_effects: match c.get("minecraft:suspicious_stew_effects") {
+            Some(Tag::List(list)) => list
+                .iter()
+                .filter_map(|e| {
+                    Some((
+                        Arc::from(e.get("id").and_then(string)?.as_str()),
+                        e.get("duration").and_then(int).unwrap_or(160) as i32,
+                    ))
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+        map_post_processing: match c.get("minecraft:map_post_processing") {
+            Some(Tag::String(s)) => Some(u8::from(s.to_string_lossy() != "lock")),
+            Some(t) => int(t).map(|v| v.clamp(0, 1) as u8),
+            None => None,
+        },
         charged: match c.get("minecraft:charged_projectiles") {
             Some(Tag::List(list)) => list.iter().filter_map(crate::save::item_from_nbt).collect(),
             _ => Vec::new(),
@@ -496,17 +704,21 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                 .filter_map(|e| {
                     Some((
                         e.get("slot").and_then(int)?.clamp(0, 255) as u8,
-                        crate::save::item_from_nbt(e.get("item")?)?,
+                        template_from(e.get("item")?)?,
                     ))
                 })
                 .collect(),
             _ => Vec::new(),
         },
-        ominous_banner: matches!(
-            c.get("minecraft:banner_patterns"),
-            Some(Tag::List(layers)) if layers.first().is_some_and(|l|
-                l.get("pattern").and_then(string).as_deref() == Some("minecraft:rhombus"))
-        ),
+        ominous_banner: c
+            .get("minecraft:item_name")
+            .and_then(|n| n.get("translate"))
+            .and_then(string)
+            .as_deref()
+            == Some("block.minecraft.ominous_banner")
+            && matches!(
+                c.get("minecraft:banner_patterns"),
+                Some(Tag::List(layers)) if layers.len() == OMINOUS_LAYERS.len()),
         ominous_amplifier: c
             .get("minecraft:ominous_bottle_amplifier")
             .and_then(int)

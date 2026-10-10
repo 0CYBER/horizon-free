@@ -8,6 +8,7 @@ pub mod chunks;
 pub mod conn;
 pub mod containers;
 pub mod data;
+pub mod discovery;
 pub mod entity;
 pub mod guest;
 pub mod hub;
@@ -111,6 +112,8 @@ pub struct Lan {
     events: Receiver<NetEvent>,
     pub port: u16,
     listener: Option<JoinHandle<()>>,
+    /// The multicast announcement (LanServerPinger); absent when the socket failed.
+    _pinger: Option<discovery::Pinger>,
 }
 impl Lan {
     /// Listen on `port` (0 picks a free one).
@@ -123,6 +126,7 @@ impl Lan {
         let listener = TcpListener::bind(("0.0.0.0", port))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
+        let _pinger = discovery::Pinger::start(motd.clone(), port).ok();
         let (tx, events) = channel();
         let shared = Arc::new(Shared {
             sync,
@@ -142,6 +146,7 @@ impl Lan {
             events,
             port,
             listener: Some(listener),
+            _pinger,
         })
     }
     /// Everything the connection threads reported since the last call.
@@ -160,6 +165,7 @@ impl Lan {
         if let Some(t) = self.listener.take() {
             let _ = t.join();
         }
+        self._pinger = None;
     }
 }
 impl Drop for Lan {

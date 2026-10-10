@@ -6,6 +6,7 @@ use horizon_client::{
     hud::HudBatch,
     lang,
     options_ui::{Event, Page},
+    window::{FrameContext, InactivityFpsLimit, framerate_limit},
 };
 use winit::{event::MouseButton, keyboard::KeyCode, window::Fullscreen};
 
@@ -177,16 +178,33 @@ impl Game<'_> {
     }
     /// Frame limiter for the Max Framerate option: when the next frame is due.
     pub(super) fn next_frame_due(&self) -> Option<std::time::Instant> {
-        let fps = self.settings.max_fps;
-        if fps >= 260 || self.options.frames.is_some() {
+        if self.options.frames.is_some() {
             return None;
         }
-        // Menus without a world run at 60 fps like vanilla's title screen.
-        let fps = if self.title.is_some() {
-            fps.min(60)
-        } else {
-            fps
+        // FramerateLimitTracker.getFramerateLimit: the option, throttled when
+        // minimised, idle, or in a menu without a world.
+        let context = FrameContext {
+            inactivity: if self.settings.inactivity_fps_limit == "minimized" {
+                InactivityFpsLimit::Minimized
+            } else {
+                InactivityFpsLimit::Afk
+            },
+            iconified: self
+                .window
+                .as_ref()
+                .is_some_and(|w| w.is_minimized().unwrap_or(false)),
+            focused: self.focused,
+            exclusive_fullscreen: false,
+            now_ms: self.started.elapsed().as_millis() as i64,
+            latest_input_ms: self.last_input.duration_since(self.started).as_millis() as i64,
+            has_level: self.title.is_none(),
+            has_screen: self.title.is_some() || self.screen != super::Screen::Playing,
+            has_overlay: false,
         };
+        let fps = framerate_limit(self.settings.max_fps as i32, context);
+        if fps >= 260 {
+            return None;
+        }
         let due = self.previous + std::time::Duration::from_secs_f64(1.0 / f64::from(fps));
         (due > std::time::Instant::now()).then_some(due)
     }

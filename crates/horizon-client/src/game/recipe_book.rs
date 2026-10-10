@@ -68,6 +68,9 @@ pub(super) struct RecipeUi {
     overlay: Option<Overlay>,
     view: View,
     view_key: u64,
+    /// Squeeze animations of new recipes: ticks left per button index and tab.
+    button_anim: Vec<(usize, f32)>,
+    tab_anim: Vec<(Tab, f32)>,
 }
 
 impl RecipeUi {
@@ -179,6 +182,11 @@ impl Game<'_> {
             return;
         }
         self.ensure_book();
+        for id in recipes {
+            if !self.level.recipe_book.to_be_displayed.contains(id) {
+                self.level.recipe_book.to_be_displayed.push(id.clone());
+            }
+        }
         let icon = self
             .recipe_ui
             .book
@@ -291,6 +299,71 @@ impl Game<'_> {
         if self.recipe_ui.page >= pages.max(1) {
             self.recipe_ui.page = 0;
         }
+        self.start_new_recipe_animations(book_type);
+    }
+    /// `RecipeBookTabButton.startAnimation` and `RecipeButton.init`: tabs
+    /// holding a recipe still to be displayed squeeze, and the buttons of the
+    /// shown page squeeze once and clear their recipes' highlight.
+    fn start_new_recipe_animations(&mut self, book_type: BookType) {
+        if self.level.recipe_book.to_be_displayed.is_empty() {
+            return;
+        }
+        let Some(book) = self.recipe_ui.book.take() else {
+            return;
+        };
+        let unlocked = self.unlocked_recipes();
+        let filtering = self.book_filtering(book_type);
+        let (gw, gh) = self.book_grid();
+        let available = self.book_available(book_type);
+        let shown = |e: &Entry| {
+            (book_type != BookType::Crafting || e.fits(gw, gh))
+                && (!filtering || available.can_craft(&e.requirements()))
+        };
+        let new = |level: &Self, e: &Entry| level.level.recipe_book.to_be_displayed.contains(&e.id);
+        let mut tabs = Vec::new();
+        for tab in self.recipe_ui.view.tabs.clone() {
+            if tab == Tab::Search {
+                continue;
+            }
+            let hit = book
+                .collections(&unlocked, book_type, tab)
+                .iter()
+                .flat_map(|c| c.entries.iter())
+                .any(|&i| shown(&book.entries[i]) && new(self, &book.entries[i]));
+            if hit {
+                tabs.push((tab, 15.0));
+            }
+        }
+        self.recipe_ui.tab_anim = tabs;
+        let first = self.recipe_ui.page * 20;
+        let mut buttons = Vec::new();
+        let mut cleared = Vec::new();
+        for (n, button) in self
+            .recipe_ui
+            .view
+            .buttons
+            .iter()
+            .skip(first)
+            .take(20)
+            .enumerate()
+        {
+            let ids: Vec<&String> = button
+                .entries
+                .iter()
+                .map(|e| &book.entries[e.0].id)
+                .filter(|id| self.level.recipe_book.to_be_displayed.contains(*id))
+                .collect();
+            if !ids.is_empty() {
+                buttons.push((first + n, 15.0));
+                cleared.extend(ids.into_iter().cloned());
+            }
+        }
+        self.level
+            .recipe_book
+            .to_be_displayed
+            .retain(|id| !cleared.contains(id));
+        self.recipe_ui.button_anim = buttons;
+        self.recipe_ui.book = Some(book);
     }
     fn build_view(&mut self, ui: &RecipeUi, book_type: BookType) -> View {
         let Some(book) = ui.book.as_ref() else {
@@ -329,9 +402,8 @@ impl Game<'_> {
                 continue;
             }
             if !query.is_empty()
-                && !c.entries.iter().any(|&i| {
-                    let e = &book.entries[i];
-                    book.matches_search(e, &query, &self.res.names.item(&e.result.item))
+                && !book.collection_matches(&c.entries, &query, &|stack| {
+                    self.stack_tooltip(stack).into_iter().map(|l| l.0).collect()
                 })
             {
                 continue;
@@ -972,26 +1044,30 @@ impl Game<'_> {
             .tab
             .filter(|t| tabs.contains(t))
             .unwrap_or(Tab::Search);
-        let mut tab_icons = Vec::new();
+        let frame = self.frame_ticks;
         for (n, tab) in tabs.iter().enumerate() {
             let (x, y) = self.tab_pos(xo, yo, n);
             let selected = *tab == current;
             let name = if selected { "tab_selected" } else { "tab" };
             let sx = if selected { x - 2.0 } else { x };
+            let start = batch.vertices.len();
             batch.sprite(&self.res.atlas, &sprite(name), sx, y);
             let (a, b) = tab.icons();
             let shift = if selected { -2.0 } else { 0.0 };
             match b {
                 Some(b) => {
-                    tab_icons.push((a, x + 3.0 + shift, y + 5.0));
-                    tab_icons.push((b, x + 14.0 + shift, y + 5.0));
+                    self.draw_item(batch, &ItemStack::new(a, 1), x + 3.0 + shift, y + 5.0);
+                    self.draw_item(batch, &ItemStack::new(b, 1), x + 14.0 + shift, y + 5.0);
                 }
-                None => tab_icons.push((a, x + 9.0 + shift, y + 5.0)),
+                None => self.draw_item(batch, &ItemStack::new(a, 1), x + 9.0 + shift, y + 5.0),
+            }
+            if let Some(entry) = self.recipe_ui.tab_anim.iter_mut().find(|e| e.0 == *tab) {
+                let squeeze = 1.0 + 0.1 * (entry.1 / 15.0 * std::f32::consts::PI).sin();
+                batch.scale_since(start, x + 8.0, y + 12.0, 1.0, squeeze);
+                entry.1 -= frame;
             }
         }
-        for (item, x, y) in tab_icons {
-            self.draw_item(batch, &ItemStack::new(item, 1), x, y);
-        }
+        self.recipe_ui.tab_anim.retain(|e| e.1 > 0.0);
         // Craftable filter.
         let filtering = self.book_filtering(book_type);
         let hover = inside(cursor, xo + 110.0, yo + 12.0, 26.0, 16.0);
@@ -1019,6 +1095,7 @@ impl Game<'_> {
                 break;
             };
             let (x, y) = Self::button_pos(xo, yo, n);
+            let anim_start = batch.vertices.len();
             let many = button.entries.len() > 1;
             let name = match (button.craftable(), many) {
                 (true, true) => "slot_many_craftable",
@@ -1048,6 +1125,16 @@ impl Game<'_> {
                 offset -= 1.0;
             }
             self.draw_item_plain(batch, &stack, x + offset, y + offset);
+            if let Some(entry) = self
+                .recipe_ui
+                .button_anim
+                .iter_mut()
+                .find(|e| e.0 == first + n)
+            {
+                let squeeze = 1.0 + 0.1 * (entry.1 / 15.0 * std::f32::consts::PI).sin();
+                batch.scale_since(anim_start, x + 8.0, y + 12.0, squeeze, squeeze);
+                entry.1 -= self.frame_ticks;
+            }
             if inside(cursor, x, y, 25.0, 25.0) && !overlay_open {
                 let mut lines = self.stack_tooltip(&stack);
                 if many {
@@ -1059,6 +1146,7 @@ impl Game<'_> {
                 tooltip = Some(lines);
             }
         }
+        self.recipe_ui.button_anim.retain(|e| e.1 > 0.0);
         // Page arrows and number.
         if pages > 1 {
             let page_text = self

@@ -57,6 +57,7 @@ pub fn is_raider(s: Species) -> bool {
         Species::Pillager
             | Species::Vindicator
             | Species::Evoker
+            | Species::Illusioner
             | Species::Witch
             | Species::Ravager
     )

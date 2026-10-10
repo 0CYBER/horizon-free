@@ -1,13 +1,28 @@
 //! Crafting and cooking recipes from the pinned data pack: shaped patterns
-//! (placed anywhere in the grid, optionally mirrored as in
-//! `ShapedRecipePattern.matches`), shapeless ingredient sets, and furnace-type
-//! cooking lookups.
+//! (`ShapedRecipePattern.matches`), shapeless recipes (a bipartite match of
+//! ingredients to stacks, as `StackedContents.canCraft`), the special and
+//! transmuting crafting recipes (`CustomRecipe` and friends), and
+//! furnace-type cooking lookups.
 use crate::{
     Result,
+    item_data::StackData,
     items::{ItemStack, Items},
+    particles::{FireworkExplosion, FireworkShape},
 };
+use horizon_world::nbt::Tag;
 use serde_json::Value;
-use std::{collections::HashSet, fs, path::Path, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+    sync::Arc,
+};
+
+/// `DyeColor.getFireworkColor` in dye order (white to black).
+const FIREWORK_COLORS: [u32; 16] = [
+    15_790_320, 15_435_844, 12_801_229, 6_719_955, 14_602_026, 4_312_372, 14_188_952, 4_408_131,
+    11_250_603, 2_651_799, 8_073_150, 2_437_522, 5_320_730, 3_887_386, 11_743_532, 1_973_019,
+];
 
 /// A set of accepted items (expanded from an item, list or tag).
 #[derive(Clone, Debug)]
@@ -41,22 +56,124 @@ impl Ingredient {
         self.0.contains(&*stack.item)
     }
 }
+/// A recipe result: `ItemStackTemplate` (`id`, `count`, `components`), with the
+/// id optional for the transmuting recipes that keep the input's item.
+#[derive(Clone, Debug)]
+pub struct Template {
+    pub item: Option<Arc<str>>,
+    pub count: u32,
+    pub damage: u32,
+    pub extra: Option<Box<StackData>>,
+}
+impl Template {
+    fn parse(v: &Value) -> Option<Self> {
+        let (damage, extra) = match v.get("components") {
+            Some(c) => crate::item_data::decode_components(Some(&json_tag(c))),
+            None => (0, None),
+        };
+        Some(Self {
+            item: v["id"].as_str().map(Arc::from),
+            count: v["count"].as_u64().unwrap_or(1) as u32,
+            damage,
+            extra,
+        })
+    }
+    /// `ItemStackTemplate.create`.
+    pub fn create(&self) -> ItemStack {
+        ItemStack {
+            item: self
+                .item
+                .clone()
+                .unwrap_or_else(|| Arc::from("minecraft:air")),
+            count: self.count,
+            damage: self.damage,
+            extra: self.extra.clone(),
+        }
+    }
+    /// `TransmuteRecipe.createWithOriginalComponents`: the input's component
+    /// patch on the result item, then the template's own components over it.
+    fn over(&self, input: &ItemStack, extra_count: u32) -> ItemStack {
+        let mut out = ItemStack {
+            item: self.item.clone().unwrap_or_else(|| input.item.clone()),
+            count: self.count + extra_count,
+            damage: input.damage,
+            extra: input.extra.clone(),
+        };
+        if self.damage > 0 {
+            out.damage = self.damage;
+        }
+        if let Some(over) = &self.extra {
+            overlay(out.data_mut(), over);
+        }
+        out.tidy();
+        out
+    }
+}
+/// `DataComponentPatch` application: every component the overlay sets wins.
+fn overlay(dst: &mut StackData, src: &StackData) {
+    let none = StackData::default();
+    macro_rules! field {
+        ($($f:ident),*) => {$(
+            if src.$f != none.$f {
+                dst.$f = src.$f.clone();
+            }
+        )*};
+    }
+    field!(
+        enchantments,
+        stored_enchantments,
+        repair_cost,
+        custom_name,
+        potion,
+        trim,
+        container,
+        charged,
+        fireworks,
+        map_id,
+        writable_pages,
+        written,
+        banner_patterns,
+        base_color,
+        ominous_banner,
+        ominous_amplifier,
+        dyed_color,
+        firework_explosion,
+        pot_decorations,
+        bundle_contents,
+        stew_effects,
+        map_post_processing
+    );
+}
+/// A JSON recipe value as the NBT a component codec reads.
+fn json_tag(v: &Value) -> Tag {
+    match v {
+        Value::Null => Tag::End,
+        Value::Bool(b) => Tag::Byte(i8::from(*b)),
+        Value::Number(n) => match n.as_i64() {
+            Some(i) => i32::try_from(i).map_or(Tag::Long(i), Tag::Int),
+            None => Tag::Double(n.as_f64().unwrap_or(0.0).to_bits()),
+        },
+        Value::String(s) => Tag::String(s.as_str().into()),
+        Value::Array(a) => Tag::List(a.iter().map(json_tag).collect()),
+        Value::Object(o) => Tag::compound(o.iter().map(|(k, v)| (k.as_str(), json_tag(v)))),
+    }
+}
 #[derive(Clone, Debug)]
 pub enum Recipe {
     Shaped {
         width: usize,
         height: usize,
         cells: Vec<Option<Ingredient>>,
-        result: ItemStack,
+        result: Template,
     },
     Shapeless {
         ingredients: Vec<Ingredient>,
-        result: ItemStack,
+        result: Template,
     },
-    /// `BannerDuplicateRecipe` and `ShieldDecorationRecipe`.
+    /// The recipes with code of their own.
     Special(Special),
 }
-/// The banner-copying custom recipes.
+/// The custom and transmuting crafting recipes.
 #[derive(Clone, Debug)]
 pub enum Special {
     /// A patterned banner and a blank one of the same colour copy the patterns.
@@ -67,70 +184,540 @@ pub enum Special {
         target: Ingredient,
         result: String,
     },
+    /// `TransmuteRecipe`: one input, 1..8 materials; shulker box and bundle
+    /// dyeing, map cloning.
+    Transmute {
+        input: Ingredient,
+        material: Ingredient,
+        min: usize,
+        max: usize,
+        add_count: bool,
+        result: Template,
+    },
+    /// `DyeRecipe`: dyed armour.
+    Dye {
+        target: Ingredient,
+        dye: Ingredient,
+        result: Template,
+    },
+    /// `ImbueRecipe`: tipped arrows.
+    Imbue {
+        source: Ingredient,
+        material: Ingredient,
+        result: Template,
+    },
+    /// `BookCloningRecipe`.
+    BookCloning {
+        source: Ingredient,
+        material: Ingredient,
+        min: i32,
+        max: i32,
+        result: Template,
+    },
+    /// `FireworkRocketRecipe`.
+    FireworkRocket {
+        shell: Ingredient,
+        fuel: Ingredient,
+        star: Ingredient,
+        result: Template,
+    },
+    /// `FireworkStarRecipe`.
+    FireworkStar {
+        dye: Ingredient,
+        fuel: Ingredient,
+        trail: Ingredient,
+        twinkle: Ingredient,
+        shapes: Vec<(FireworkShape, Ingredient)>,
+        result: Template,
+    },
+    /// `FireworkStarFadeRecipe`.
+    FireworkStarFade {
+        dye: Ingredient,
+        target: Ingredient,
+        result: Template,
+    },
+    /// `MapExtendingRecipe`: a map ringed by paper, when its scale is under 4.
+    MapExtending {
+        map: Ingredient,
+        material: Ingredient,
+        result: Template,
+    },
+    /// `DecoratedPotRecipe`: four sherds or bricks.
+    DecoratedPot {
+        back: Ingredient,
+        left: Ingredient,
+        right: Ingredient,
+        front: Ingredient,
+        result: Template,
+    },
+    /// `RepairItemRecipe`: two damaged items of one kind.
+    RepairItem,
 }
 impl Special {
-    /// `matches` + `assemble` over the non-empty stacks of the grid.
-    fn assemble(&self, stacks: &[&ItemStack]) -> Option<ItemStack> {
-        use crate::banner;
-        if stacks.len() != 2 {
-            return None;
-        }
+    /// The recipe-book displays of a learnable (non-custom) crafting recipe:
+    /// its layout and result.
+    pub fn book_displays(&self) -> Vec<(crate::recipe_book::Display, ItemStack)> {
+        use crate::recipe_book::Display;
         match self {
-            Self::BannerDuplicate {
-                banner: ing,
+            Self::Transmute {
+                input,
+                material,
+                min,
+                max,
+                add_count,
+                result,
+            } => (*min..=*max)
+                .map(|n| {
+                    let mut ingredients = vec![input.clone()];
+                    ingredients.extend(std::iter::repeat_n(material.clone(), n));
+                    let mut made = result.create();
+                    if result.item.is_none() {
+                        // The result keeps the input's item: show the first one.
+                        if let Some(first) = input.0.iter().min() {
+                            made.item = Arc::from(first.as_str());
+                        }
+                    }
+                    if *add_count {
+                        made.count += n as u32;
+                    }
+                    (Display::Shapeless(ingredients), made)
+                })
+                .collect(),
+            Self::Dye {
+                target,
+                dye,
+                result,
+            } => vec![(
+                Display::Shapeless(vec![target.clone(), dye.clone()]),
+                result.create(),
+            )],
+            Self::Imbue {
+                source,
+                material,
                 result,
             } => {
-                let color = banner::banner_color(&stacks[0].item)?;
-                let mut source = None;
-                let mut target = false;
-                for s in stacks {
-                    if !ing.test(s) || banner::banner_color(&s.item)? != color {
-                        return None;
+                let cells = (0..9)
+                    .map(|i| Some(if i == 4 { source } else { material }.clone()))
+                    .collect();
+                vec![(
+                    Display::Shaped {
+                        width: 3,
+                        height: 3,
+                        cells,
+                    },
+                    result.create(),
+                )]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+/// `CraftingInput`: the occupied bounding box of the grid.
+pub struct Input<'a> {
+    pub width: usize,
+    pub height: usize,
+    /// Position of the box in the grid.
+    pub left: usize,
+    pub top: usize,
+    cells: Vec<Option<&'a ItemStack>>,
+}
+impl<'a> Input<'a> {
+    /// `CraftingInput.ofPositioned`; None for an empty grid.
+    pub fn of(grid: &'a [Option<ItemStack>], size: usize) -> Option<Self> {
+        let occupied: Vec<(usize, usize)> = (0..size * size)
+            .filter(|&i| grid.get(i).is_some_and(|c| c.is_some()))
+            .map(|i| (i % size, i / size))
+            .collect();
+        let (x0, x1) = (
+            occupied.iter().map(|p| p.0).min()?,
+            occupied.iter().map(|p| p.0).max()?,
+        );
+        let (y0, y1) = (
+            occupied.iter().map(|p| p.1).min()?,
+            occupied.iter().map(|p| p.1).max()?,
+        );
+        let (width, height) = (x1 - x0 + 1, y1 - y0 + 1);
+        let cells = (0..width * height)
+            .map(|i| grid[(y0 + i / width) * size + x0 + i % width].as_ref())
+            .collect();
+        Some(Self {
+            width,
+            height,
+            left: x0,
+            top: y0,
+            cells,
+        })
+    }
+    pub fn get(&self, x: usize, y: usize) -> Option<&'a ItemStack> {
+        self.cells.get(y * self.width + x).copied().flatten()
+    }
+    /// The non-empty stacks in slot order.
+    pub fn stacks(&self) -> Vec<&'a ItemStack> {
+        self.cells.iter().flatten().copied().collect()
+    }
+    pub fn count(&self) -> usize {
+        self.cells.iter().flatten().count()
+    }
+}
+/// What recipes need to know about an item.
+#[derive(Clone, Debug, Default)]
+struct Facts {
+    /// Index into the dye colours when the item has the `dye` component.
+    dye: Option<usize>,
+    max_damage: u32,
+    max_stack: u32,
+    remainder: Option<Arc<str>>,
+}
+/// The tables recipes consult.
+pub struct Context<'a> {
+    recipes: &'a Recipes,
+    /// A filled map's scale, when its data is known.
+    pub map_scale: &'a dyn Fn(i32) -> Option<u8>,
+}
+impl Context<'_> {
+    fn facts(&self, stack: &ItemStack) -> Option<&Facts> {
+        self.recipes.facts.get(&stack.item)
+    }
+    /// `itemStack.has(DataComponents.DYE)`.
+    fn dye(&self, stack: &ItemStack) -> Option<usize> {
+        self.facts(stack).and_then(|f| f.dye)
+    }
+    fn max_stack(&self, item: &str) -> u32 {
+        self.recipes.facts.get(item).map_or(64, |f| f.max_stack)
+    }
+}
+impl Special {
+    /// `Recipe.matches`.
+    fn matches(&self, ctx: &Context, input: &Input) -> bool {
+        use crate::banner;
+        let stacks = input.stacks();
+        match self {
+            Self::BannerDuplicate { banner: ing, .. } => {
+                if stacks.len() != 2 {
+                    return false;
+                }
+                let mut color = None;
+                let (mut target, mut source) = (false, false);
+                for s in &stacks {
+                    let Some(this) = banner::banner_color(&s.item).filter(|_| ing.test(s)) else {
+                        return false;
+                    };
+                    match color {
+                        None => color = Some(this),
+                        Some(c) if c != this => return false,
+                        _ => {}
                     }
                     let layers = banner::layers(s).len();
                     if layers > banner::MAX_LAYERS {
-                        return None;
+                        return false;
                     }
-                    if layers > 0 {
-                        if source.is_some() {
-                            return None;
-                        }
-                        source = Some(*s);
-                    } else {
-                        if target {
-                            return None;
-                        }
-                        target = true;
+                    let seen = if layers > 0 { &mut source } else { &mut target };
+                    if *seen {
+                        return false;
                     }
+                    *seen = true;
                 }
-                let source = source.filter(|_| target)?;
-                // TransmuteRecipe.createWithOriginalComponents: the source's components.
-                Some(ItemStack {
-                    item: Arc::from(result.as_str()),
-                    count: 1,
-                    ..(*source).clone()
-                })
+                source && target
             }
             Self::ShieldDecoration {
                 banner: ing,
                 target: tgt,
-                result,
+                ..
             } => {
-                let (mut patterned, mut clear) = (None, None);
-                for s in stacks {
+                if stacks.len() != 2 {
+                    return false;
+                }
+                let (mut patterned, mut clear) = (false, false);
+                for s in &stacks {
                     if ing.test(s) && banner::banner_color(&s.item).is_some() {
-                        if patterned.is_some() {
-                            return None;
+                        if patterned {
+                            return false;
                         }
-                        patterned = Some(*s);
+                        patterned = true;
                     } else {
-                        if !tgt.test(s) || clear.is_some() || !banner::layers(s).is_empty() {
-                            return None;
+                        if !tgt.test(s) || clear || !banner::layers(s).is_empty() {
+                            return false;
                         }
-                        clear = Some(*s);
+                        clear = true;
                     }
                 }
-                let (banner_stack, shield) = (patterned?, clear?);
+                patterned && clear
+            }
+            Self::Transmute {
+                input: base,
+                material,
+                min,
+                max,
+                add_count,
+                result,
+            } => {
+                let n = stacks.len();
+                if n < min + 1 || n > max + 1 {
+                    return false;
+                }
+                let mut found: Option<&ItemStack> = None;
+                let mut materials = 0;
+                for s in &stacks {
+                    if base.test(s) {
+                        if found.is_some() {
+                            return false;
+                        }
+                        found = Some(s);
+                    } else {
+                        if !material.test(s) {
+                            return false;
+                        }
+                        materials += 1;
+                        if materials > *max {
+                            return false;
+                        }
+                    }
+                }
+                let Some(found) = found else {
+                    return false;
+                };
+                if materials < *min || materials > *max {
+                    return false;
+                }
+                let count = if *add_count {
+                    materials as u32 + result.count
+                } else {
+                    result.count
+                };
+                if count != 1 {
+                    return true;
+                }
+                let made = result.over(found, 0);
+                made.count <= ctx.max_stack(&made.item) && !made.same_item_same_components(found)
+            }
+            Self::Dye { target, dye, .. } => {
+                if stacks.len() < 2 {
+                    return false;
+                }
+                let (mut has_target, mut has_dyes) = (false, false);
+                for s in &stacks {
+                    if target.test(s) {
+                        if has_target {
+                            return false;
+                        }
+                        has_target = true;
+                    } else {
+                        if !dye.test(s) || ctx.dye(s).is_none() {
+                            return false;
+                        }
+                        has_dyes = true;
+                    }
+                }
+                has_dyes && has_target
+            }
+            Self::Imbue {
+                source, material, ..
+            } => {
+                if input.width != 3 || input.height != 3 || stacks.len() != 9 {
+                    return false;
+                }
+                (0..3).all(|y| {
+                    (0..3).all(|x| {
+                        let ing = if x == 1 && y == 1 { source } else { material };
+                        input.get(x, y).is_some_and(|s| ing.test(s))
+                    })
+                })
+            }
+            Self::BookCloning {
+                source,
+                material,
+                min,
+                max,
+                ..
+            } => {
+                if stacks.len() < 2 {
+                    return false;
+                }
+                let (mut has_material, mut has_source) = (false, false);
+                for s in &stacks {
+                    if source.test(s) {
+                        let Some(book) = s.data().and_then(|d| d.written.as_ref()) else {
+                            return false;
+                        };
+                        let generation = i32::from(book.generation);
+                        if generation < *min || generation > *max || has_source {
+                            return false;
+                        }
+                        has_source = true;
+                    } else {
+                        if !material.test(s) {
+                            return false;
+                        }
+                        has_material = true;
+                    }
+                }
+                has_source && has_material
+            }
+            Self::FireworkRocket {
+                shell, fuel, star, ..
+            } => {
+                if stacks.len() < 2 {
+                    return false;
+                }
+                let mut has_shell = false;
+                let mut fuels = 0;
+                for s in &stacks {
+                    if shell.test(s) {
+                        if has_shell {
+                            return false;
+                        }
+                        has_shell = true;
+                    } else if fuel.test(s) {
+                        fuels += 1;
+                        if fuels > 3 {
+                            return false;
+                        }
+                    } else if !star.test(s) {
+                        return false;
+                    }
+                }
+                has_shell && fuels >= 1
+            }
+            Self::FireworkStar {
+                dye,
+                fuel,
+                trail,
+                twinkle,
+                shapes,
+                ..
+            } => {
+                if stacks.len() < 2 {
+                    return false;
+                }
+                let (mut has_fuel, mut has_dye, mut has_shape) = (false, false, false);
+                let (mut has_trail, mut has_twinkle) = (false, false);
+                for s in &stacks {
+                    if twinkle.test(s) {
+                        if has_twinkle {
+                            return false;
+                        }
+                        has_twinkle = true;
+                    } else if trail.test(s) {
+                        if has_trail {
+                            return false;
+                        }
+                        has_trail = true;
+                    } else if fuel.test(s) {
+                        if has_fuel {
+                            return false;
+                        }
+                        has_fuel = true;
+                    } else if dye.test(s) && ctx.dye(s).is_some() {
+                        has_dye = true;
+                    } else {
+                        if !shapes.iter().any(|(_, ing)| ing.test(s)) || has_shape {
+                            return false;
+                        }
+                        has_shape = true;
+                    }
+                }
+                has_fuel && has_dye
+            }
+            Self::FireworkStarFade { dye, target, .. } => {
+                if stacks.len() < 2 {
+                    return false;
+                }
+                let (mut has_dye, mut has_target) = (false, false);
+                for s in &stacks {
+                    if dye.test(s) && ctx.dye(s).is_some() {
+                        has_dye = true;
+                    } else {
+                        if !target.test(s) || has_target {
+                            return false;
+                        }
+                        has_target = true;
+                    }
+                }
+                has_target && has_dye
+            }
+            Self::MapExtending { map, material, .. } => {
+                if input.width != 3 || input.height != 3 || stacks.len() != 9 {
+                    return false;
+                }
+                let ring = (0..3).all(|y| {
+                    (0..3).all(|x| {
+                        let ing = if x == 1 && y == 1 { map } else { material };
+                        input.get(x, y).is_some_and(|s| ing.test(s))
+                    })
+                });
+                if !ring {
+                    return false;
+                }
+                stacks
+                    .iter()
+                    .find_map(|s| s.data().and_then(|d| d.map_id))
+                    .and_then(|id| (ctx.map_scale)(id))
+                    .is_some_and(|scale| scale < 4)
+            }
+            Self::DecoratedPot {
+                back,
+                left,
+                right,
+                front,
+                ..
+            } => {
+                input.width == 3
+                    && input.height == 3
+                    && stacks.len() == 4
+                    && input.get(1, 0).is_some_and(|s| back.test(s))
+                    && input.get(0, 1).is_some_and(|s| left.test(s))
+                    && input.get(2, 1).is_some_and(|s| right.test(s))
+                    && input.get(1, 2).is_some_and(|s| front.test(s))
+            }
+            Self::RepairItem => Self::repair_pair(ctx, &stacks).is_some(),
+        }
+    }
+    /// `RepairItemRecipe.getItemsToCombine`.
+    fn repair_pair<'a>(
+        ctx: &Context,
+        stacks: &[&'a ItemStack],
+    ) -> Option<(&'a ItemStack, &'a ItemStack)> {
+        let [first, second] = stacks else {
+            return None;
+        };
+        let durable = |s: &ItemStack| ctx.facts(s).is_some_and(|f| f.max_damage > 0);
+        (second.item == first.item
+            && first.count == 1
+            && second.count == 1
+            && durable(first)
+            && durable(second))
+        .then_some((*first, *second))
+    }
+    /// `Recipe.assemble`; None is the empty stack.
+    fn assemble(&self, ctx: &Context, input: &Input) -> Option<ItemStack> {
+        use crate::banner;
+        let stacks = input.stacks();
+        let made = match self {
+            Self::BannerDuplicate { result, .. } => {
+                let source = stacks
+                    .iter()
+                    .find(|s| (1..=banner::MAX_LAYERS).contains(&banner::layers(s).len()))?;
+                // TransmuteRecipe.createWithOriginalComponents: the source's components.
+                ItemStack {
+                    item: Arc::from(result.as_str()),
+                    count: 1,
+                    ..(**source).clone()
+                }
+            }
+            Self::ShieldDecoration {
+                banner: ing,
+                target,
+                result,
+            } => {
+                let (mut banner_stack, mut shield) = (None, None);
+                for s in &stacks {
+                    if ing.test(s) && banner::banner_color(&s.item).is_some() {
+                        banner_stack = Some(*s);
+                    } else if target.test(s) {
+                        shield = Some(*s);
+                    }
+                }
+                let (banner_stack, shield) = (banner_stack?, shield?);
                 let mut out = ItemStack {
                     item: Arc::from(result.as_str()),
                     count: 1,
@@ -139,10 +726,257 @@ impl Special {
                 let data = out.data_mut();
                 data.banner_patterns = banner::layers(banner_stack).to_vec();
                 data.base_color = banner::banner_color(&banner_stack.item).map(Arc::from);
-                Some(out)
+                out
             }
-        }
+            Self::Transmute {
+                input: base,
+                material,
+                add_count,
+                result,
+                ..
+            } => {
+                if *add_count {
+                    let mut materials = 0;
+                    let mut found = None;
+                    for s in &stacks {
+                        if base.test(s) {
+                            found = Some(*s);
+                        } else if material.test(s) {
+                            materials += 1;
+                        }
+                    }
+                    result.over(found?, materials)
+                } else {
+                    let s = stacks.iter().find(|s| base.test(s))?;
+                    result.over(s, 0)
+                }
+            }
+            Self::Dye {
+                target,
+                dye,
+                result,
+            } => {
+                let mut dyes = Vec::new();
+                let mut target_stack: Option<&ItemStack> = None;
+                for s in &stacks {
+                    if target.test(s) {
+                        if target_stack.is_some() {
+                            return None;
+                        }
+                        target_stack = Some(s);
+                    } else {
+                        if !dye.test(s) {
+                            return None;
+                        }
+                        // getOrDefault(DYE, WHITE)
+                        dyes.push(ctx.dye(s).unwrap_or(0));
+                    }
+                }
+                let target_stack = target_stack?;
+                if dyes.is_empty() {
+                    return None;
+                }
+                let current = target_stack.data().and_then(|d| d.dyed_color);
+                let mut out = result.over(target_stack, 0);
+                out.data_mut().dyed_color = Some(apply_dyes(current, &dyes));
+                out
+            }
+            Self::Imbue { result, .. } => {
+                let source = input.get(1, 1)?;
+                let mut out = result.create();
+                out.data_mut().potion = source.data().and_then(|d| d.potion.clone());
+                out
+            }
+            Self::BookCloning {
+                source,
+                material,
+                result,
+                ..
+            } => {
+                let mut copies = 0u32;
+                let mut book: Option<&ItemStack> = None;
+                for s in &stacks {
+                    if source.test(s) && s.data().is_some_and(|d| d.written.is_some()) {
+                        if book.is_some() {
+                            return None;
+                        }
+                        book = Some(s);
+                    } else {
+                        if !material.test(s) {
+                            return None;
+                        }
+                        copies += 1;
+                    }
+                }
+                let book = book?;
+                // count - 1 can be -1 when no material was seen; matches() ensures one.
+                let mut out = result.over(book, copies.saturating_sub(1));
+                if let Some(w) = out.data_mut().written.as_mut() {
+                    w.generation += 1;
+                }
+                out
+            }
+            Self::FireworkRocket {
+                fuel, star, result, ..
+            } => {
+                let mut explosions = Vec::new();
+                let mut fuels = 0u8;
+                for s in &stacks {
+                    if fuel.test(s) {
+                        fuels += 1;
+                    } else if star.test(s)
+                        && let Some(e) = s.data().and_then(|d| d.firework_explosion.clone())
+                    {
+                        explosions.push(e);
+                    }
+                }
+                let mut out = result.create();
+                // A rocket's prototype is one flight and no explosions.
+                if fuels != 1 || !explosions.is_empty() {
+                    out.data_mut().fireworks = Some((fuels, explosions));
+                }
+                out
+            }
+            Self::FireworkStar {
+                dye,
+                trail,
+                twinkle,
+                shapes,
+                result,
+                ..
+            } => {
+                let mut shape = FireworkShape::SmallBall;
+                let (mut has_twinkle, mut has_trail) = (false, false);
+                let mut colors = Vec::new();
+                for s in &stacks {
+                    if let Some((found, _)) = shapes.iter().find(|(_, ing)| ing.test(s)) {
+                        shape = *found;
+                    } else if twinkle.test(s) {
+                        has_twinkle = true;
+                    } else if trail.test(s) {
+                        has_trail = true;
+                    } else if dye.test(s) {
+                        colors.push(FIREWORK_COLORS[ctx.dye(s).unwrap_or(0)]);
+                    }
+                }
+                let mut out = result.create();
+                out.data_mut().firework_explosion = Some(FireworkExplosion {
+                    shape,
+                    colors,
+                    fade: Vec::new(),
+                    trail: has_trail,
+                    twinkle: has_twinkle,
+                });
+                out
+            }
+            Self::FireworkStarFade {
+                dye,
+                target,
+                result,
+            } => {
+                let mut colors = Vec::new();
+                let mut target_stack = None;
+                for s in &stacks {
+                    if dye.test(s) {
+                        colors.push(FIREWORK_COLORS[ctx.dye(s).unwrap_or(0)]);
+                    } else if target.test(s) {
+                        target_stack = Some(*s);
+                    }
+                }
+                let target_stack = target_stack?;
+                if colors.is_empty() {
+                    return None;
+                }
+                let mut out = result.over(target_stack, 0);
+                let explosion = out
+                    .data_mut()
+                    .firework_explosion
+                    .get_or_insert_with(FireworkExplosion::default);
+                explosion.fade = colors;
+                out
+            }
+            Self::MapExtending { result, .. } => {
+                let map = stacks
+                    .iter()
+                    .find(|s| s.data().is_some_and(|d| d.map_id.is_some()))?;
+                let mut out = result.over(map, 0);
+                out.data_mut().map_post_processing = Some(1);
+                out
+            }
+            Self::DecoratedPot { result, .. } => {
+                let side = |x, y| {
+                    input.get(x, y).map(|s| ItemStack {
+                        count: 1,
+                        ..s.clone()
+                    })
+                };
+                let mut out = result.create();
+                let sides = [side(1, 0), side(0, 1), side(2, 1), side(1, 2)];
+                if !crate::item_data::all_bricks(&sides) {
+                    out.data_mut().pot_decorations = Some(Box::new(sides));
+                }
+                out
+            }
+            Self::RepairItem => {
+                let (first, second) = Self::repair_pair(ctx, &stacks)?;
+                let max = |s: &ItemStack| ctx.facts(s).map_or(0, |f| f.max_damage) as i64;
+                let durability = max(first).max(max(second));
+                let remaining = (max(first) - i64::from(first.damage))
+                    + (max(second) - i64::from(second.damage))
+                    + durability * 5 / 100;
+                let mut out = ItemStack::new(&first.item, 1);
+                out.damage = (durability - remaining).max(0) as u32;
+                // Only the curses of both survive, at the higher level.
+                let (a, b) = (
+                    first.crafting_enchantments(),
+                    second.crafting_enchantments(),
+                );
+                let mut curses: Vec<(Arc<str>, u32)> = Vec::new();
+                for (id, level) in a.iter().chain(b.iter()) {
+                    if !ctx.recipes.curses.contains(&**id) {
+                        continue;
+                    }
+                    match curses.iter_mut().find(|(c, _)| c == id) {
+                        Some((_, l)) => *l = (*l).max(*level),
+                        None => curses.push((id.clone(), *level)),
+                    }
+                }
+                out.set_crafting_enchantments(curses);
+                out
+            }
+        };
+        let mut made = made;
+        made.tidy();
+        // ItemStackTemplate.validate: oversized stacks become empty.
+        (made.count > 0 && made.count <= ctx.max_stack(&made.item)).then_some(made)
     }
+}
+/// `DyedItemColor.applyDyes` over dye indexes.
+fn apply_dyes(current: Option<i32>, dyes: &[usize]) -> i32 {
+    let (mut r, mut g, mut b, mut intensity, mut n) = (0i32, 0i32, 0i32, 0i32, 0i32);
+    let mut add = |rgb: u32| {
+        let (red, green, blue) = (
+            (rgb >> 16 & 255) as i32,
+            (rgb >> 8 & 255) as i32,
+            (rgb & 255) as i32,
+        );
+        intensity += red.max(green.max(blue));
+        r += red;
+        g += green;
+        b += blue;
+        n += 1;
+    };
+    if let Some(c) = current {
+        add(c as u32);
+    }
+    for d in dyes {
+        add(crate::block_entity_render::DYES[*d].1);
+    }
+    let (red, green, blue) = (r / n, g / n, b / n);
+    let average = intensity as f32 / n as f32;
+    let result = red.max(green.max(blue)) as f32;
+    let scale = |c: i32| (c as f32 * average / result) as i32;
+    scale(red) << 16 | scale(green) << 8 | scale(blue)
 }
 #[derive(Clone, Debug)]
 pub struct Cooking {
@@ -161,21 +995,84 @@ pub struct Recipes {
     pub crafting: Vec<(String, Recipe)>,
     pub cooking: Vec<Cooking>,
     /// `category` and `group` of each crafting recipe, by file name.
-    pub meta: std::collections::HashMap<String, (String, String)>,
+    pub meta: HashMap<String, (String, String)>,
+    facts: HashMap<Arc<str>, Facts>,
+    /// The `#minecraft:curse` enchantments.
+    curses: HashSet<String>,
 }
-fn result(v: &Value) -> Option<ItemStack> {
-    Some(ItemStack {
-        item: Arc::from(v["id"].as_str()?),
-        count: v["count"].as_u64().unwrap_or(1) as u32,
-        damage: 0,
-        extra: None,
+/// `MinMaxBounds.Ints` as (min, max) with the given defaults.
+fn bounds(v: Option<&Value>, default: (i64, i64), open: (i64, i64)) -> (i64, i64) {
+    match v {
+        Some(Value::Number(n)) => {
+            let n = n.as_i64().unwrap_or(default.0);
+            (n, n)
+        }
+        Some(o @ Value::Object(_)) => (
+            o["min"].as_i64().unwrap_or(open.0),
+            o["max"].as_i64().unwrap_or(open.1),
+        ),
+        _ => default,
+    }
+}
+/// `Util.isSymmetrical` is not needed: both orientations are tried.
+/// `ShapedRecipePattern.shrink`: the pattern without empty border rows and columns.
+fn shrink(pattern: &[Vec<char>]) -> Vec<Vec<char>> {
+    let rows: Vec<&Vec<char>> = pattern
+        .iter()
+        .skip_while(|r| r.iter().all(|c| *c == ' '))
+        .collect();
+    let mut rows: Vec<Vec<char>> = rows.into_iter().cloned().collect();
+    while rows.last().is_some_and(|r| r.iter().all(|c| *c == ' ')) {
+        rows.pop();
+    }
+    let left = rows
+        .iter()
+        .filter_map(|r| r.iter().position(|c| *c != ' '))
+        .min();
+    let right = rows
+        .iter()
+        .filter_map(|r| r.iter().rposition(|c| *c != ' '))
+        .max();
+    match (left, right) {
+        (Some(l), Some(r)) => rows.iter().map(|row| row[l..=r].to_vec()).collect(),
+        _ => Vec::new(),
+    }
+}
+/// A perfect matching of the ingredients to distinct stacks (`StackedContents.canCraft`).
+fn matches_all(ingredients: &[Ingredient], stacks: &[&ItemStack]) -> bool {
+    fn augment(
+        i: usize,
+        ingredients: &[Ingredient],
+        stacks: &[&ItemStack],
+        owner: &mut [Option<usize>],
+        seen: &mut [bool],
+    ) -> bool {
+        for s in 0..stacks.len() {
+            if seen[s] || !ingredients[i].test(stacks[s]) {
+                continue;
+            }
+            seen[s] = true;
+            if owner[s].is_none_or(|o| augment(o, ingredients, stacks, owner, seen)) {
+                owner[s] = Some(i);
+                return true;
+            }
+        }
+        false
+    }
+    if ingredients.len() != stacks.len() {
+        return false;
+    }
+    let mut owner = vec![None; stacks.len()];
+    (0..ingredients.len()).all(|i| {
+        let mut seen = vec![false; stacks.len()];
+        augment(i, ingredients, stacks, &mut owner, &mut seen)
     })
 }
 impl Recipes {
     pub fn load(root: &Path, items: &Items) -> Result<Self> {
         let mut crafting = Vec::new();
         let mut cooking = Vec::new();
-        let mut meta = std::collections::HashMap::new();
+        let mut meta = HashMap::new();
         let mut files: Vec<_> = fs::read_dir(root.join("data/minecraft/recipe"))?
             .flatten()
             .map(|e| e.path())
@@ -191,7 +1088,10 @@ impl Recipes {
             let v: Value = serde_json::from_slice(&fs::read(&path)?)?;
             let text = |k: &str| v[k].as_str().unwrap_or("").to_owned();
             meta.insert(name.clone(), (text("category"), text("group")));
-            match v["type"].as_str().unwrap_or("") {
+            let ing = |k: &str| Ingredient::parse(&v[k], items);
+            let result = || Template::parse(&v["result"]);
+            let special = |recipe: Option<Special>| recipe.map(Recipe::Special);
+            let parsed: Option<Recipe> = match v["type"].as_str().unwrap_or("") {
                 "minecraft:crafting_shaped" => {
                     let pattern: Vec<Vec<char>> = v["pattern"]
                         .as_array()
@@ -199,14 +1099,14 @@ impl Recipes {
                         .flatten()
                         .filter_map(|r| r.as_str().map(|s| s.chars().collect()))
                         .collect();
+                    let pattern = shrink(&pattern);
                     let height = pattern.len();
-                    let width = pattern.iter().map(Vec::len).max().unwrap_or(0);
+                    let width = pattern.first().map_or(0, Vec::len);
                     let mut cells = Vec::with_capacity(width * height);
-                    let mut ok = true;
+                    let mut ok = height > 0;
                     for row in &pattern {
-                        for x in 0..width {
-                            let c = row.get(x).copied().unwrap_or(' ');
-                            if c == ' ' {
+                        for c in row {
+                            if *c == ' ' {
                                 cells.push(None);
                             } else {
                                 match Ingredient::parse(&v["key"][c.to_string()], items) {
@@ -216,16 +1116,14 @@ impl Recipes {
                             }
                         }
                     }
-                    if let (true, Some(result)) = (ok, result(&v["result"])) {
-                        crafting.push((
-                            name,
-                            Recipe::Shaped {
-                                width,
-                                height,
-                                cells,
-                                result,
-                            },
-                        ));
+                    match (ok, result()) {
+                        (true, Some(result)) => Some(Recipe::Shaped {
+                            width,
+                            height,
+                            cells,
+                            result,
+                        }),
+                        _ => None,
                     }
                 }
                 "minecraft:crafting_shapeless" => {
@@ -235,73 +1133,168 @@ impl Recipes {
                         .flatten()
                         .map(|i| Ingredient::parse(i, items))
                         .collect();
-                    if let (Some(ingredients), Some(result)) = (ingredients, result(&v["result"])) {
-                        crafting.push((
-                            name,
-                            Recipe::Shapeless {
-                                ingredients,
-                                result,
-                            },
-                        ));
+                    match (ingredients, result()) {
+                        (Some(ingredients), Some(result)) => Some(Recipe::Shapeless {
+                            ingredients,
+                            result,
+                        }),
+                        _ => None,
                     }
                 }
-                "minecraft:crafting_special_bannerduplicate" => {
-                    if let (Some(banner), Some(id)) = (
-                        Ingredient::parse(&v["banner"], items),
-                        v["result"]["id"].as_str(),
-                    ) {
-                        crafting.push((
-                            name,
-                            Recipe::Special(Special::BannerDuplicate {
-                                banner,
-                                result: id.to_owned(),
-                            }),
+                "minecraft:crafting_special_bannerduplicate" => special(
+                    ing("banner")
+                        .zip(v["result"]["id"].as_str())
+                        .map(|(banner, id)| Special::BannerDuplicate {
+                            banner,
+                            result: id.to_owned(),
+                        }),
+                ),
+                "minecraft:crafting_special_shielddecoration" => special(
+                    ing("banner")
+                        .zip(ing("target"))
+                        .zip(v["result"]["id"].as_str())
+                        .map(|((banner, target), id)| Special::ShieldDecoration {
+                            banner,
+                            target,
+                            result: id.to_owned(),
+                        }),
+                ),
+                "minecraft:crafting_transmute" => special((|| {
+                    let (min, max) = bounds(v.get("material_count"), (1, 1), (1, 8));
+                    Some(Special::Transmute {
+                        input: ing("input")?,
+                        material: ing("material")?,
+                        min: min.clamp(1, 8) as usize,
+                        max: max.clamp(1, 8) as usize,
+                        add_count: v["add_material_count_to_result"].as_bool().unwrap_or(false),
+                        result: result()?,
+                    })
+                })()),
+                "minecraft:crafting_dye" => special((|| {
+                    Some(Special::Dye {
+                        target: ing("target")?,
+                        dye: ing("dye")?,
+                        result: result()?,
+                    })
+                })()),
+                "minecraft:crafting_imbue" => special((|| {
+                    Some(Special::Imbue {
+                        source: ing("source")?,
+                        material: ing("material")?,
+                        result: result()?,
+                    })
+                })()),
+                "minecraft:crafting_special_bookcloning" => special((|| {
+                    let (min, max) = bounds(v.get("allowed_generations"), (0, 1), (0, 2));
+                    Some(Special::BookCloning {
+                        source: ing("source")?,
+                        material: ing("material")?,
+                        min: min as i32,
+                        max: max as i32,
+                        result: result()?,
+                    })
+                })()),
+                "minecraft:crafting_special_firework_rocket" => special((|| {
+                    Some(Special::FireworkRocket {
+                        shell: ing("shell")?,
+                        fuel: ing("fuel")?,
+                        star: ing("star")?,
+                        result: result()?,
+                    })
+                })()),
+                "minecraft:crafting_special_firework_star" => special((|| {
+                    let mut shapes = Vec::new();
+                    for (shape, value) in v["shapes"].as_object()? {
+                        shapes.push((
+                            FireworkShape::from_name(shape),
+                            Ingredient::parse(value, items)?,
                         ));
                     }
-                }
-                "minecraft:crafting_special_shielddecoration" => {
-                    if let (Some(banner), Some(target), Some(id)) = (
-                        Ingredient::parse(&v["banner"], items),
-                        Ingredient::parse(&v["target"], items),
-                        v["result"]["id"].as_str(),
-                    ) {
-                        crafting.push((
-                            name,
-                            Recipe::Special(Special::ShieldDecoration {
-                                banner,
-                                target,
-                                result: id.to_owned(),
-                            }),
-                        ));
-                    }
-                }
+                    Some(Special::FireworkStar {
+                        dye: ing("dye")?,
+                        fuel: ing("fuel")?,
+                        trail: ing("trail")?,
+                        twinkle: ing("twinkle")?,
+                        shapes,
+                        result: result()?,
+                    })
+                })()),
+                "minecraft:crafting_special_firework_star_fade" => special((|| {
+                    Some(Special::FireworkStarFade {
+                        dye: ing("dye")?,
+                        target: ing("target")?,
+                        result: result()?,
+                    })
+                })()),
+                "minecraft:crafting_special_mapextending" => special((|| {
+                    Some(Special::MapExtending {
+                        map: ing("map")?,
+                        material: ing("material")?,
+                        result: result()?,
+                    })
+                })()),
+                "minecraft:crafting_decorated_pot" => special((|| {
+                    Some(Special::DecoratedPot {
+                        back: ing("back")?,
+                        left: ing("left")?,
+                        right: ing("right")?,
+                        front: ing("front")?,
+                        result: result()?,
+                    })
+                })()),
+                "minecraft:crafting_special_repairitem" => special(Some(Special::RepairItem)),
                 kind @ ("minecraft:smelting"
                 | "minecraft:blasting"
                 | "minecraft:smoking"
                 | "minecraft:campfire_cooking") => {
-                    if let (Some(ingredient), Some(result)) = (
-                        Ingredient::parse(&v["ingredient"], items),
-                        result(&v["result"]),
-                    ) {
+                    if let (Some(ingredient), Some(result)) = (ing("ingredient"), result()) {
                         cooking.push(Cooking {
-                            id: name,
+                            id: name.clone(),
                             category: text("category"),
                             group: text("group"),
                             kind: kind.to_owned(),
                             ingredient,
-                            result,
+                            result: result.create(),
                             experience: v["experience"].as_f64().unwrap_or(0.0) as f32,
                             time: v["cookingtime"].as_u64().unwrap_or(200) as u32,
                         });
                     }
+                    None
                 }
-                _ => {}
+                _ => None,
+            };
+            if let Some(recipe) = parsed {
+                crafting.push((name, recipe));
             }
         }
+        let facts = items
+            .items
+            .iter()
+            .map(|(id, info)| {
+                (
+                    id.clone(),
+                    Facts {
+                        dye: info.dye.as_deref().and_then(|d| {
+                            crate::block_entity_render::DYES
+                                .iter()
+                                .position(|(name, _)| *name == d)
+                        }),
+                        max_damage: info.max_damage,
+                        max_stack: info.max_stack,
+                        remainder: info.crafting_remainder.as_deref().map(Arc::from),
+                    },
+                )
+            })
+            .collect();
+        let curses = crate::items::load_tags(root, "enchantment")?
+            .remove("minecraft:curse")
+            .unwrap_or_default();
         Ok(Self {
             crafting,
             cooking,
             meta,
+            facts,
+            curses,
         })
     }
     /// Match a `size`x`size` grid (row-major) against the crafting recipes.
@@ -310,31 +1303,28 @@ impl Recipes {
     }
     /// `craft` with the matched recipe's id (the file name without namespace).
     pub fn find(&self, grid: &[Option<ItemStack>], size: usize) -> Option<(&str, ItemStack)> {
-        // Trim to the occupied bounding box.
-        let occupied: Vec<(usize, usize)> = (0..size * size)
-            .filter(|&i| grid[i].is_some())
-            .map(|i| (i % size, i / size))
-            .collect();
-        if occupied.is_empty() {
-            return None;
-        }
-        let (x0, x1) = (
-            occupied.iter().map(|p| p.0).min()?,
-            occupied.iter().map(|p| p.0).max()?,
-        );
-        let (y0, y1) = (
-            occupied.iter().map(|p| p.1).min()?,
-            occupied.iter().map(|p| p.1).max()?,
-        );
-        let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
-        let cell = |x: usize, y: usize| grid[(y0 + y) * size + x0 + x].as_ref();
+        self.find_with(grid, size, &|_| None)
+    }
+    /// `RecipeManager.getRecipeFor(CRAFTING, ...)` with a lookup for the scale
+    /// of a filled map (map extending reads the map's saved data).
+    pub fn find_with(
+        &self,
+        grid: &[Option<ItemStack>],
+        size: usize,
+        map_scale: &dyn Fn(i32) -> Option<u8>,
+    ) -> Option<(&str, ItemStack)> {
+        let input = Input::of(grid, size)?;
+        let ctx = Context {
+            recipes: self,
+            map_scale,
+        };
         for (name, recipe) in &self.crafting {
-            match recipe {
+            let result = match recipe {
                 Recipe::Special(special) => {
-                    let stacks: Vec<&ItemStack> = grid.iter().flatten().collect();
-                    if let Some(result) = special.assemble(&stacks) {
-                        return Some((name, result));
+                    if !special.matches(&ctx, &input) {
+                        continue;
                     }
+                    special.assemble(&ctx, &input)
                 }
                 Recipe::Shaped {
                     width,
@@ -342,14 +1332,17 @@ impl Recipes {
                     cells,
                     result,
                 } => {
-                    if *width != w || *height != h {
+                    if *width != input.width
+                        || *height != input.height
+                        || cells.iter().flatten().count() != input.count()
+                    {
                         continue;
                     }
                     let matches = |mirror: bool| {
-                        (0..h).all(|y| {
-                            (0..w).all(|x| {
-                                let rx = if mirror { w - 1 - x } else { x };
-                                match (&cells[y * w + rx], cell(x, y)) {
+                        (0..*height).all(|y| {
+                            (0..*width).all(|x| {
+                                let rx = if mirror { width - 1 - x } else { x };
+                                match (&cells[y * width + rx], input.get(x, y)) {
                                     (None, None) => true,
                                     (Some(i), Some(s)) => i.test(s),
                                     _ => false,
@@ -357,60 +1350,76 @@ impl Recipes {
                             })
                         })
                     };
-                    if matches(false) || matches(true) {
-                        return Some((name, result.clone()));
+                    if !(matches(false) || matches(true)) {
+                        continue;
                     }
+                    Some(result.create())
                 }
                 Recipe::Shapeless {
                     ingredients,
                     result,
                 } => {
-                    let stacks: Vec<&ItemStack> = grid.iter().flatten().collect();
-                    if stacks.len() != ingredients.len() {
+                    if !matches_all(ingredients, &input.stacks()) {
                         continue;
                     }
-                    // Greedy bipartite matching is sufficient for vanilla's ingredient sets.
-                    let mut used = vec![false; stacks.len()];
-                    let ok = ingredients.iter().all(|ingredient| {
-                        if let Some(i) =
-                            (0..stacks.len()).find(|&i| !used[i] && ingredient.test(stacks[i]))
-                        {
-                            used[i] = true;
-                            true
-                        } else {
-                            false
-                        }
-                    });
-                    if ok {
-                        return Some((name, result.clone()));
-                    }
+                    Some(result.create())
                 }
-            }
+            };
+            return result.map(|r| (name.as_str(), r));
         }
         None
     }
-    /// `Recipe.getRemainingItems` per grid cell: an item's crafting remainder
-    /// (buckets, bottles), and the patterned banner a duplicate keeps.
+    /// `Recipe.getRemainingItems` placed on the `size`x`size` grid: an item's
+    /// crafting remainder (buckets, bottles), the patterned banner a duplicate
+    /// keeps and the written book a clone keeps.
     pub fn remainders(
         &self,
-        items: &Items,
+        recipe: &str,
         grid: &[Option<ItemStack>],
-        result: &ItemStack,
+        size: usize,
     ) -> Vec<Option<ItemStack>> {
-        grid.iter()
-            .map(|cell| {
-                let s = cell.as_ref()?;
-                if let Some(rem) = items.get(&s.item).and_then(|i| i.remainder.as_deref()) {
-                    return Some(ItemStack::new(rem, 1));
+        let mut out = vec![None; size * size];
+        let Some(input) = Input::of(grid, size) else {
+            return out;
+        };
+        let kind = self
+            .crafting
+            .iter()
+            .find(|(n, _)| n == recipe)
+            .map(|(_, r)| r);
+        for (i, cell) in input.cells.iter().enumerate() {
+            let Some(s) = cell else { continue };
+            let at = (input.top + i / input.width) * size + input.left + i % input.width;
+            let rest = self
+                .facts
+                .get(&s.item)
+                .and_then(|f| f.remainder.as_deref())
+                .map(|r| ItemStack::new(r, 1));
+            if rest.is_some() {
+                out[at] = rest;
+                continue;
+            }
+            let copy = ItemStack {
+                count: 1,
+                ..(*s).clone()
+            };
+            match kind {
+                Some(Recipe::Special(Special::BannerDuplicate { .. }))
+                    if !crate::banner::layers(s).is_empty() =>
+                {
+                    out[at] = Some(copy);
                 }
-                (result.item.ends_with("_banner") && !crate::banner::layers(s).is_empty()).then(
-                    || ItemStack {
-                        count: 1,
-                        ..s.clone()
-                    },
-                )
-            })
-            .collect()
+                // BookCloningRecipe stops at the first copied book.
+                Some(Recipe::Special(Special::BookCloning { .. }))
+                    if s.data().is_some_and(|d| d.written.is_some()) =>
+                {
+                    out[at] = Some(copy);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        out
     }
     pub fn cook(&self, kind: &str, input: &ItemStack) -> Option<&Cooking> {
         self.cooking
@@ -432,6 +1441,26 @@ mod tests {
         s.data_mut().banner_patterns = vec![BannerLayer::new("minecraft:cross", "red")];
         s
     }
+    fn run(special: &Special, cells: &[ItemStack]) -> Option<ItemStack> {
+        let recipes = Recipes {
+            crafting: Vec::new(),
+            cooking: Vec::new(),
+            meta: HashMap::new(),
+            facts: HashMap::new(),
+            curses: HashSet::new(),
+        };
+        let ctx = Context {
+            recipes: &recipes,
+            map_scale: &|_| None,
+        };
+        let mut grid: Vec<Option<ItemStack>> = cells.iter().cloned().map(Some).collect();
+        grid.resize(9, None);
+        let input = Input::of(&grid, 3)?;
+        special
+            .matches(&ctx, &input)
+            .then(|| special.assemble(&ctx, &input))
+            .flatten()
+    }
     #[test]
     fn banner_duplicate_copies_the_patterns_of_the_same_colour() {
         let recipe = Special::BannerDuplicate {
@@ -440,14 +1469,14 @@ mod tests {
         };
         let source = patterned("minecraft:white_banner");
         let blank = ItemStack::new("minecraft:white_banner", 1);
-        let out = recipe.assemble(&[&source, &blank]).expect("copy");
+        let out = run(&recipe, &[source.clone(), blank.clone()]).expect("copy");
         assert_eq!(out.data().unwrap().banner_patterns.len(), 1);
         // Two blanks, or two patterned banners, do not match.
-        assert!(recipe.assemble(&[&blank, &blank]).is_none());
-        assert!(recipe.assemble(&[&source, &source]).is_none());
+        assert!(run(&recipe, &[blank.clone(), blank.clone()]).is_none());
+        assert!(run(&recipe, &[source.clone(), source.clone()]).is_none());
         // Another colour is not in the recipe's ingredient.
         let other = ItemStack::new("minecraft:red_banner", 1);
-        assert!(recipe.assemble(&[&source, &other]).is_none());
+        assert!(run(&recipe, &[source, other]).is_none());
     }
     #[test]
     fn shield_decoration_needs_a_bare_shield() {
@@ -458,11 +1487,26 @@ mod tests {
         };
         let banner = patterned("minecraft:red_banner");
         let shield = ItemStack::new("minecraft:shield", 1);
-        let out = recipe.assemble(&[&banner, &shield]).expect("decorated");
+        let out = run(&recipe, &[banner.clone(), shield]).expect("decorated");
         let data = out.data().unwrap();
         assert_eq!(data.base_color.as_deref(), Some("red"));
         assert_eq!(data.banner_patterns.len(), 1);
         // A shield that already has patterns cannot be decorated again.
-        assert!(recipe.assemble(&[&banner, &out]).is_none());
+        assert!(run(&recipe, &[banner, out]).is_none());
+    }
+    #[test]
+    fn shapeless_matching_assigns_each_stack_one_ingredient() {
+        let any = ingredient(&["a", "b"]);
+        let only_a = ingredient(&["a"]);
+        let (a, b) = (ItemStack::new("a", 1), ItemStack::new("b", 1));
+        // Greedy matching would give `a` to the first ingredient and fail.
+        assert!(matches_all(&[any.clone(), only_a.clone()], &[&a, &b]));
+        assert!(!matches_all(&[only_a.clone(), only_a], &[&a, &b]));
+        assert!(!matches_all(&[any], &[&a, &b]));
+    }
+    #[test]
+    fn dyes_blend_like_dyed_item_color() {
+        // One red dye on an undyed item gives the dye's own colour.
+        assert_eq!(apply_dyes(None, &[14]), 0xB02E26);
     }
 }
