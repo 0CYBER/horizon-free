@@ -1,11 +1,7 @@
 //! `Minecraft.getSituationalMusic` and `getMusicVolume` for the music manager,
 //! the local player's ambient sound handlers and the sound engine tick.
 use super::Game;
-use horizon_client::{
-    blocks::Fluid,
-    music::Music,
-    sound_engine::TickContext,
-};
+use horizon_client::{blocks::Fluid, music::Music, sound_engine::TickContext};
 
 impl Game<'_> {
     /// `Minecraft.tick` -> `MusicManager.tick`, once per client tick.
@@ -59,12 +55,18 @@ impl Game<'_> {
     }
     /// `BiomeManager.getNoiseBiomeAtPosition`: the quart cell holding a position.
     fn biome_at(&self, p: [f64; 3]) -> &str {
-        let (x, y, z) = (p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32);
+        let (x, y, z) = (
+            p[0].floor() as i32,
+            p[1].floor() as i32,
+            p[2].floor() as i32,
+        );
         self.world
             .chunks
             .get(&(x >> 4, z >> 4))
             .map_or("minecraft:plains", |c| {
-                self.res.biomes.list[c.biome(x, y, z) as usize].name.as_str()
+                self.res.biomes.list[c.biome(x, y, z) as usize]
+                    .name
+                    .as_str()
             })
     }
     /// `isEyeInFluid(WATER)`: the eye inside the water of its block column.
