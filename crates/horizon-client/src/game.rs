@@ -1318,15 +1318,19 @@ impl Game<'_> {
         );
         let simulation = self.settings.render_distance.min(8);
         let mut ticking = Vec::new();
+        let facts = &self.res.facts;
         for (&(x, z), chunk) in &self.world.chunks {
             if (x - pcx).abs() > simulation || (z - pcz).abs() > simulation || !chunk.lit {
                 continue;
             }
+            // LevelChunkSection.isRandomlyTicking: a randomly ticking block or
+            // fluid state (lava reports both through LiquidBlock). The palette
+            // stands in for vanilla's exact counts.
             let sections: Vec<i32> = chunk
                 .sections
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| !s.is_uniform(0))
+                .filter(|(_, s)| s.blocks.maybe_has(|id| facts.get(BlockStateId(id)).random_ticks))
                 .map(|(i, _)| MIN_Y + i as i32 * 16)
                 .collect();
             ticking.push((x, z, sections));

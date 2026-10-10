@@ -145,9 +145,9 @@ containers, weather-driven blocks. The library code lives in
   - Features placed from block behaviour draw from a copy of the level
     random. Their `next_world_*` draws and any draws in neighbour updates
     during placement do not reach the real stream.
-  - Client sections that hold any non-air block get random ticks, not only
-    sections with randomly ticking states. This advances the
-    `getBlockRandomPos` generator more often than vanilla does.
+  - The client picks randomly ticking sections from their palettes, so a
+    section whose palette still lists a ticking state no block uses any more
+    gets random ticks that vanilla's exact counts would skip.
 - **Explosion details.** Exposure uses full-collision blocks only.
   `getEntities` order is approximate. Experience orbs, falling blocks and
   arrows are not pushed.
