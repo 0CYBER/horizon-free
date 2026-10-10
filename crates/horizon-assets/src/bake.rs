@@ -213,6 +213,40 @@ fn bake_elements(
     }
     Ok(output)
 }
+/// `FaceBakery.bakeQuad` for a quad with explicit corners and unit-atlas UVs
+/// (`uv` in 0..16 texels), as `ItemModelGenerator` builds its layers.
+pub fn bake_flat_face(
+    from: [f32; 3],
+    to: [f32; 3],
+    uv: [f32; 4],
+    direction: Direction,
+    material: Material,
+    tint_index: i32,
+) -> Result<ModelQuad> {
+    let element = Element {
+        from,
+        to,
+        faces: Default::default(),
+        rotation: None,
+        shade_direction_override: None,
+        light_emission: 0,
+    };
+    let face = Face {
+        cull: None,
+        tint_index,
+        texture: String::new(),
+        uv: Some(uv),
+        rotation: 0,
+    };
+    bake_face(
+        &element,
+        &face,
+        direction,
+        None,
+        material,
+        BlockModelTransform::new([0; 3], false),
+    )
+}
 fn bake_face(
     element: &Element,
     face: &Face,
