@@ -472,12 +472,8 @@ impl Game<'_> {
         }
         for e in events {
             if let horizon_world::level::LevelEvent::LevelEvent { id, pos, data } = e {
-                self.lan_events.push((
-                    *id as i32,
-                    [pos.x, pos.y, pos.z],
-                    *data as i32,
-                    self.lan_acting,
-                ));
+                self.lan_events
+                    .push((*id, [pos.x, pos.y, pos.z], *data, self.lan_acting));
             }
         }
     }
