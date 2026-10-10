@@ -54,8 +54,11 @@ def run_harness(name, oracle, example, inputs_text, extra_sources=(), java_args=
     input_hash = lab.digest(inputs, 'sha256')
 
     def run(command, log, env=None):
-        with (build / (log + '.log')).open('w') as out:
-            subprocess.run(list(map(str, command)), cwd=lab.ROOT, check=True, timeout=timeout, stdout=out, stderr=subprocess.STDOUT, env=env)
+        with (build / (log + ".log")).open("w") as out:
+            try:
+                subprocess.run(list(map(str, command)), cwd=lab.ROOT, check=True, timeout=timeout, stdout=out, stderr=subprocess.STDOUT, env=env)
+            except subprocess.CalledProcessError:
+                raise SystemExit(f"{log} failed: see {build / (log + '.log')}") from None
 
     classes = build / 'classes'
     classes.mkdir(exist_ok=True)
