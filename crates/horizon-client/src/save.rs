@@ -349,7 +349,11 @@ fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
         _ => e.id().to_owned(),
     }
 }
-fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, block: &str) -> Tag {
+pub fn encode_block_entity(
+    p: (i32, i32, i32),
+    e: &crate::containers::BlockEntity,
+    block: &str,
+) -> Tag {
     use crate::containers::BlockEntity;
     let mut entries = vec![
         ("id", string(&block_entity_id(e, block))),
@@ -400,6 +404,7 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
                 entries.push(("Page", Tag::Int(l.page)));
             }
         }
+        BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
         BlockEntity::Crafter(c) => {
             entries.push(("Items", encode_items(&c.items)));
             entries.push((
@@ -430,7 +435,7 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
     }
     Tag::compound(entries)
 }
-fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
+pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
@@ -517,6 +522,7 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             };
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
+        BlockEntity::Sculk(s) => s.load(tag),
         BlockEntity::Crafter(c) => {
             for (slot, item) in decode_items(tag.get("Items"), 9).into_iter().enumerate() {
                 c.items[slot] = item;
@@ -1267,7 +1273,7 @@ fn write_saved_data(world: &Path, name: &str, data: Tag) -> Result<()> {
         Tag::compound([("data", data), ("DataVersion", Tag::Int(DATA_VERSION))]),
     )
 }
-fn uuid_text(u: [i32; 4]) -> String {
+pub fn uuid_text(u: [i32; 4]) -> String {
     let hex: String = u.iter().map(|v| format!("{:08x}", *v as u32)).collect();
     format!(
         "{}-{}-{}-{}-{}",
@@ -1278,7 +1284,7 @@ fn uuid_text(u: [i32; 4]) -> String {
         &hex[20..32]
     )
 }
-fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
+pub fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
     let hex: String = s.chars().filter(|c| *c != '-').collect();
     if hex.len() != 32 {
         return None;
@@ -1676,7 +1682,7 @@ impl Level {
         };
     }
     /// The player compound: the loaded one with Horizon's state written over it.
-    fn player_tag(&self) -> Tag {
+    pub fn player_tag(&self) -> Tag {
         let mut p = compound_or_empty(self.player_extra.clone());
         // Keys rewritten from scratch.
         if let Tag::Compound(map) = &mut p {

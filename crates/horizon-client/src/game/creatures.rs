@@ -293,6 +293,7 @@ impl Game<'_> {
                     "on_ground": m.on_ground,
                     "variant": m.extra.variant,
                     "color": m.extra.color,
+                    "warden": horizon_client::mobs::warden::describe(m),
                     "villager": horizon_client::mobs::villager::ext(m).map(|e| serde_json::json!({
                         "food_level": e.food_level,
                         "inventory": e.inventory.iter().map(|s| format!("{}x{}", s.count, s.item)).collect::<Vec<_>>(),
@@ -694,12 +695,25 @@ impl Game<'_> {
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
         let by_player = self.last_hurt_by_player.remove(&m.id) || m.ai.last_hurt_by_player > 0;
+        // LivingEntity.die: the death is heard, and a sculk catalyst nearby
+        // takes the experience.
+        self.sculk_mob_died(m);
+        let consumed =
+            self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |game| {
+                if by_player {
+                    experience_reward(m, &mut game.world.random)
+                } else {
+                    0
+                }
+            });
         if by_player {
             self.stats.add("killed", &m.kind.id, 1);
             self.stats.custom("mob_kills", 1);
+            self.score_player_killed(super::commands::Target::Mob(m.id));
             let view = self.mob_entity(m);
             self.trigger_entity("minecraft:player_killed_entity", "entity", &view);
         }
+        self.score_entity_removed(m.id);
         self.raider_died(m, by_player);
         self.villager_murdered(m, by_player);
         let held = self.held().cloned();
@@ -783,7 +797,7 @@ impl Game<'_> {
                 }
             }
         }
-        if by_player {
+        if by_player && !consumed {
             let xp = experience_reward(m, &mut self.world.random);
             if xp > 0 {
                 self.spawn_orbs(pos, xp);
@@ -926,7 +940,11 @@ impl Game<'_> {
                         m.ai.target = Some(target);
                     }
                 }
-                MobEvent::Projectile(p) => self.creatures.projectiles.push(p),
+                MobEvent::Projectile(p) => {
+                    let (owner, at) = (p.owner, [p.position.x, p.position.y, p.position.z]);
+                    self.creatures.projectiles.push(p);
+                    self.projectile_event("minecraft:projectile_shoot", owner, at);
+                }
                 MobEvent::Spawn(mut m) => {
                     self.next_entity += 1;
                     m.id = self.next_entity;
@@ -1033,6 +1051,11 @@ impl Game<'_> {
                     }
                 },
                 MobEvent::Breed { parent, partner } => self.breed(parent, partner),
+                MobEvent::Vibration { from, to, ticks } => {
+                    self.mob_vibration_particle(from, to, ticks)
+                }
+                MobEvent::DigParticles { at } => self.warden_dig_particles(at),
+                MobEvent::Darkness { at, radius } => self.apply_darkness(at, radius),
                 MobEvent::CreakingHurt {
                     home,
                     by_player,
@@ -1437,6 +1460,8 @@ impl Game<'_> {
             return Ok(());
         }
         let atp = [at.x, at.y, at.z];
+        // Projectile.onHit: the landing is heard.
+        self.projectile_event("minecraft:projectile_land", p.owner, atp);
         let source_kind = match p.kind {
             ProjectileKind::Arrow { .. } => DamageKind::Arrow,
             ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => {
@@ -2166,6 +2191,7 @@ impl Game<'_> {
             on_ground,
         );
         self.creatures.projectiles.push(proj);
+        self.player_projectile_shot();
         let sound = match kind {
             ProjectileKind::Snowball => "minecraft:entity.snowball.throw",
             ProjectileKind::Egg => "minecraft:entity.egg.throw",

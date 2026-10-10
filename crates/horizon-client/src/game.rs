@@ -9,6 +9,7 @@ mod beacon;
 mod blockctl;
 mod boats;
 mod books;
+mod bossbars;
 mod cartography;
 mod chat;
 mod combat;
@@ -27,6 +28,7 @@ mod fireworks;
 mod fishing;
 mod fov;
 mod frames;
+mod functions;
 mod game_mode;
 mod golems;
 mod growth;
@@ -53,7 +55,9 @@ mod recipe_book;
 mod remote;
 mod render_control;
 mod render_tick;
+mod scoreboard;
 mod screens;
+mod sculk;
 mod shield;
 mod sign_edit;
 mod station_control;
@@ -62,6 +66,7 @@ mod stats;
 mod stats_screen;
 mod storage;
 mod structures;
+mod subtitle_hud;
 mod titles;
 mod tnt;
 mod totem;
@@ -308,14 +313,17 @@ impl LevelAccess for GameLevel<'_> {
     fn block_entity_analog_signal(
         &self,
         pos: BlockPos,
-        _state: BlockStateId,
+        state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        if let Some(signal) = sculk::sensor_signal(self.world, self.behaviours, state, pos) {
+            return signal;
+        }
         if let Some((_, comparator)) = jukebox::jukebox_signals(self.world, self.items, pos) {
             return comparator;
         }
         if let Some(signal) = creaking::heart_signal(self.world, pos) {
-            return if self.registry.state(_state).is_some_and(|s| {
+            return if self.registry.state(state).is_some_and(|s| {
                 s.properties
                     .get("creaking_heart_state")
                     .is_some_and(|v| v == "uprooted")
@@ -537,6 +545,7 @@ struct Game<'a> {
     mobs: Vec<Mob>,
     arrows: Vec<Arrow>,
     creatures: creatures::Creatures,
+    sculk: sculk::SculkState,
     raiding: raids::Raiding,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
@@ -657,6 +666,13 @@ struct Game<'a> {
     combat: combat::CombatTracker,
     mount: mounts::MountState,
     stats: stats::Stats,
+    score: scoreboard::ScoreState,
+    fns: functions::FnState,
+    bosses: bossbars::BossState,
+    exec: commands::execute::ExecState,
+    rand_sequences: horizon_client::random_sequences::RandomSequences,
+    border: horizon_client::worldborder::WorldBorder,
+    subtitles: subtitle_hud::SubtitleState,
     adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
@@ -1258,6 +1274,12 @@ impl Game<'_> {
                         sounds.pitch * 0.8,
                     );
                 }
+                LevelEvent::LevelEvent {
+                    id: 3006,
+                    pos,
+                    data,
+                } => self.sculk_charge_event(pos, data),
+                LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
                 LevelEvent::LevelEvent { id, pos, .. } => {
                     let c = Some([
                         f64::from(pos.x) + 0.5,
@@ -1407,10 +1429,17 @@ impl Game<'_> {
                         },
                     );
                 }
+                LevelEvent::GameEvent { pos, event, state } => {
+                    self.sculk_level_event(pos, event, state)
+                }
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "shrieker_respond",
+                } => self.shrieker_block_event(pos, state),
                 LevelEvent::GrowTree { .. }
                 | LevelEvent::PlaceFeature { .. }
-                | LevelEvent::BlockEvent { .. }
-                | LevelEvent::GameEvent { .. } => {}
+                | LevelEvent::BlockEvent { .. } => {}
             }
         }
         Ok(())
@@ -1447,6 +1476,12 @@ impl Game<'_> {
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
+            self.post_block_game_event(
+                "minecraft:container_open",
+                [key.0, key.1, key.2],
+                Some(horizon_client::mobs::Who::Player),
+                None,
+            );
             let stat = match &*name {
                 "minecraft:chest" => "open_chest",
                 "minecraft:trapped_chest" => "trigger_trapped_chest",
@@ -1568,6 +1603,9 @@ impl Game<'_> {
         self.process_level_events()
     }
     fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.with_player_actor(|game| game.break_block_as_player(pos))
+    }
+    fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
@@ -1665,6 +1703,9 @@ impl Game<'_> {
         Ok(())
     }
     fn use_item(&mut self) -> Result<()> {
+        self.with_player_actor(|game| game.use_item_as_player())
+    }
+    fn use_item_as_player(&mut self) -> Result<()> {
         // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
         if self.spectator() {
             return Ok(());
@@ -1977,6 +2018,8 @@ impl Game<'_> {
         }
         if ticks >= duration {
             self.using = None;
+            // Consumable.onConsume.
+            self.post_entity_event("minecraft:eat", horizon_client::mobs::Who::Player);
             if let Some((nutrition, saturation)) = info.food
                 && let Some(p) = self.player.as_mut()
             {
@@ -2251,15 +2294,21 @@ impl Game<'_> {
             return self.tick_remote();
         }
         self.ticks += 1;
-        self.world.game_time += 1;
-        if self.ui.rules.bool("advance_weather") {
-            self.world.weather.tick(&mut self.world.random);
+        // `/tick freeze` stops the world but not the player.
+        let running = self.clock.world_runs();
+        if running {
+            self.world.game_time += 1;
+            if self.ui.rules.bool("advance_weather") {
+                self.world.weather.tick(&mut self.world.random);
+            }
+            self.tick_weather_effects();
         }
-        self.tick_weather_effects();
         if self.ticks.is_multiple_of(6000) {
             self.save_game()?;
         }
-        self.advance_clock();
+        if running {
+            self.advance_clock();
+        }
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
@@ -2429,6 +2478,7 @@ impl Game<'_> {
             self.death_message();
             // ServerPlayer.die: deaths, and the time-since counters restart.
             self.stats.custom("deaths", 1);
+            self.score_player_died();
             if let Some(kind) = killer {
                 self.stats.add("killed_by", &kind, 1);
                 let view = horizon_client::advancements::EntityView {
@@ -2464,31 +2514,41 @@ impl Game<'_> {
         self.tick_burning();
         self.tick_using();
         self.titles.tick();
-        self.tick_paintings();
-        self.tick_item_frames();
-        self.tick_armor_stands();
-        self.tick_boats();
-        self.tick_carts();
-        self.tick_thunder();
-        self.tick_lecterns();
-        self.tick_maps();
-        self.tick_bolts();
-        self.tick_fishing();
-        self.tick_tridents();
-        self.tick_rockets();
+        if running {
+            self.tick_paintings();
+            self.tick_item_frames();
+            self.tick_armor_stands();
+            self.tick_boats();
+            self.tick_carts();
+            self.tick_thunder();
+            self.tick_lecterns();
+            self.tick_maps();
+            self.tick_bolts();
+            self.tick_fishing();
+            self.tick_tridents();
+            self.tick_rockets();
+        }
         self.tick_mining()?;
-        self.tick_items();
+        if running {
+            self.tick_items();
+        }
         self.spawn_loaded_entities();
-        self.tick_mobs()?;
-        self.tick_experience();
+        if running {
+            self.tick_mobs()?;
+            self.tick_experience();
+        }
         self.tick_hand();
         self.tick_sleep();
         self.tick_portal()?;
-        self.tick_end()?;
+        if running {
+            self.tick_end()?;
+        }
         self.postprocess_chunks()?;
-        self.tick_blocks()?;
-        self.tick_falling()?;
-        self.tick_tnt()?;
+        if running {
+            self.tick_blocks()?;
+            self.tick_falling()?;
+            self.tick_tnt()?;
+        }
         if let Some(p) = &self.player {
             // Player.aiStep bob and Entity.walkDist (0.6 per block).
             let (dx, dz) = (
@@ -2506,8 +2566,11 @@ impl Game<'_> {
             };
             self.bob.1 += (target - self.bob.1) * 0.4;
         }
-        self.tick_block_entities()?;
-        self.tick_brewing_stands()?;
+        if running {
+            self.tick_block_entities()?;
+            self.tick_sculk()?;
+            self.tick_brewing_stands()?;
+        }
         if let Some(r) = &self.renderer {
             let eye = self.player.as_ref().map(|p| {
                 [
@@ -2860,7 +2923,10 @@ impl Game<'_> {
         self.draw_effect_icons(&mut batch);
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
         self.draw_boss_bar(&mut batch);
+        self.draw_custom_bossbars(&mut batch, 12.0 + 19.0 * self.builtin_bar_count() as f32);
         self.draw_titles(&mut batch);
+        self.draw_scoreboard(&mut batch);
+        self.draw_subtitles(&mut batch);
         // Gui.renderVehicleHealth / the jump bar while riding a mount.
         let mounted = !self.creative && !spectator && self.draw_mount_hud(&mut batch, w, h);
         let atlas = &self.res.atlas;
@@ -3084,6 +3150,7 @@ impl Game<'_> {
                 | BlockEntity::Jukebox(_)
                 | BlockEntity::Beacon(_)
                 | BlockEntity::Lectern(_)
+                | BlockEntity::Sculk(_)
                 | BlockEntity::Banner(_)
                 | BlockEntity::CreakingHeart(_),
             ) => {}
@@ -3293,6 +3360,7 @@ impl Game<'_> {
                     | BlockEntity::Jukebox(_)
                     | BlockEntity::Beacon(_)
                     | BlockEntity::Lectern(_)
+                    | BlockEntity::Sculk(_)
                     | BlockEntity::Banner(_)
                     | BlockEntity::CreakingHeart(_),
                 ) => {}
@@ -3385,6 +3453,12 @@ impl Game<'_> {
         }
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
+            self.post_block_game_event(
+                "minecraft:container_close",
+                [key.0, key.1, key.2],
+                Some(horizon_client::mobs::Who::Player),
+                None,
+            );
             let name = self
                 .res
                 .facts
@@ -4435,6 +4509,11 @@ impl Game<'_> {
         self.tick_creatures()?;
         self.position_rider();
         self.tick_stats();
+        self.tick_scoreboard();
+        self.load_bossbars();
+        self.tick_functions();
+        self.tick_worldborder();
+        self.tick_subtitles();
         self.spawn_phantoms();
         self.tick_advancements();
         self.tick_player_model();
@@ -4633,6 +4712,11 @@ impl Game<'_> {
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         horizon_client::save::migrate_legacy(&save_root)?;
         self.persist = Default::default();
+        self.score = Default::default();
+        self.fns = Default::default();
+        self.bosses = Default::default();
+        self.rand_sequences = Default::default();
+        self.border = Default::default();
         let level = Level::read(&save_root).unwrap_or_else(|| Level {
             name: name.unwrap_or(folder).to_owned(),
             // WorldOptions.randomSeed when no seed was given.
@@ -5755,6 +5839,7 @@ impl Game<'_> {
             on_ground,
         );
         self.creatures.projectiles.push(arrow);
+        self.player_projectile_shot();
         let pitch = 1.0 / (self.world.random.next_float() * 0.4 + 1.2) + power * 0.5;
         self.audio
             .play("minecraft:entity.arrow.shoot", Some(eye), 1.0, pitch);
@@ -6561,24 +6646,8 @@ impl Game<'_> {
             self.carried = None;
         }
     }
-    fn save_game(&mut self) -> Result<()> {
-        if self.remote.is_some() {
-            return Ok(());
-        }
-        let keys: Vec<_> = self.world.modified.drain().collect();
-        let chunks: Vec<_> = keys
-            .iter()
-            .filter_map(|k| self.world.chunks.get(k))
-            .map(|c| self.with_entities(c))
-            .collect();
-        self.save
-            .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
-        self.save_entities()?;
-        self.save_maps();
-        self.save_raids();
-        self.save_fight();
-        self.save_stats();
-        self.save_advancements();
+    /// Copy the live player and world state into the `Level` that gets saved.
+    pub(super) fn sync_level(&mut self) {
         self.level.selected_slot = self.selected as i32;
         let mode = self.mode_id();
         let level = &mut self.level;
@@ -6656,7 +6725,31 @@ impl Game<'_> {
                 )
             })
             .collect();
-        level.write(&self.world_root)?;
+    }
+    fn save_game(&mut self) -> Result<()> {
+        if self.remote.is_some() {
+            return Ok(());
+        }
+        let keys: Vec<_> = self.world.modified.drain().collect();
+        let chunks: Vec<_> = keys
+            .iter()
+            .filter_map(|k| self.world.chunks.get(k))
+            .map(|c| self.with_entities(c))
+            .collect();
+        self.save
+            .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
+        self.save_entities()?;
+        self.save_maps();
+        self.save_raids();
+        self.save_fight();
+        self.save_stats();
+        self.save_advancements();
+        self.save_scoreboard();
+        self.save_bossbars();
+        self.save_schedule();
+        self.save_warden_tracker();
+        self.sync_level();
+        self.level.write(&self.world_root)?;
         self.save_world_state();
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())
@@ -6766,7 +6859,11 @@ impl Game<'_> {
         }
         let celestial = if title {
             self.panorama_geometry()
-        } else if self.dim == Dim::Overworld {
+        } else if self.dim == Dim::Overworld
+            && self.potions.effects.get("darkness").is_none()
+            && self.potions.effects.get("blindness").is_none()
+        {
+            // Camera.doesMobEffectBlockSky: no sun, moon or stars.
             self.celestial_geometry(&sky)
         } else if self.dim == Dim::End {
             self.end_sky_geometry()
@@ -6845,6 +6942,7 @@ impl Game<'_> {
             screen: &screen,
             game_time: self.world.game_time as f32,
             ticks: self.ticks,
+            darkness: self.darkness_lighting(alpha as f32),
         };
         self.renderer.as_mut().ok_or("renderer")?.render(&frame)
     }
@@ -7403,12 +7501,14 @@ impl ApplicationHandler for Game<'_> {
                     }
                     let steps = self.clock.advance(elapsed);
                     for _ in 0..steps {
+                        let started = Instant::now();
                         if self.title.is_none() {
                             self.tick()?;
                             self.tick_ambience();
                             self.tick_fov();
                         }
                         self.tick_music();
+                        self.clock.record(started.elapsed());
                     }
                     let rendered = self.render()?;
                     let finished = self
@@ -7696,6 +7796,7 @@ pub fn run() -> Result<()> {
         mobs: Vec::new(),
         arrows: Vec::new(),
         creatures: Default::default(),
+        sculk: Default::default(),
         raiding: Default::default(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
@@ -7787,6 +7888,13 @@ pub fn run() -> Result<()> {
         combat: Default::default(),
         mount: Default::default(),
         stats: Default::default(),
+        score: Default::default(),
+        fns: Default::default(),
+        bosses: Default::default(),
+        exec: Default::default(),
+        rand_sequences: Default::default(),
+        border: Default::default(),
+        subtitles: Default::default(),
         adv: Default::default(),
         stats_ui: Default::default(),
         adv_ui: Default::default(),

@@ -121,6 +121,17 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let Tag::Compound(map) = &mut tag else {
         return tag;
     };
+    for (key, on) in [
+        ("NoAI", m.no_ai),
+        ("Silent", m.silent),
+        ("Invulnerable", m.invulnerable_flag),
+    ] {
+        if on {
+            map.insert(key.into(), Tag::Byte(1));
+        } else {
+            map.remove(&horizon_world::nbt::JavaString::from(key));
+        }
+    }
     for (key, value) in [
         ("AbsorptionAmount", Tag::Float(0)),
         ("FallFlying", Tag::Byte(0)),
@@ -322,6 +333,15 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         "minecraft:wither" => {
             map.insert("Invul".into(), Tag::Int(m.extra.counter));
         }
+        "minecraft:warden" => {
+            if let Some(st) = &m.extra.warden {
+                map.insert("listener".into(), st.vibration.to_nbt());
+                map.insert(
+                    "anger".into(),
+                    Tag::compound([("suspects", Tag::List(Vec::new()))]),
+                );
+            }
+        }
         "minecraft:ravager" => {
             map.insert("AttackTick".into(), Tag::Int(m.extra.counter));
             map.insert("StunTick".into(), Tag::Int(m.extra.counter2));
@@ -477,6 +497,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.age_locked = flag(tag, "AgeLocked");
     }
     m.name_visible = flag(tag, "CustomNameVisible");
+    m.no_ai = flag(tag, "NoAI");
+    m.silent = flag(tag, "Silent");
+    m.invulnerable_flag = flag(tag, "Invulnerable");
+    m.no_gravity = m.no_gravity || flag(tag, "NoGravity");
     if m.species() == crate::mobs::Species::Creeper {
         m.extra.charged = flag(tag, "powered");
     }
@@ -608,6 +632,13 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     }
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;
+    }
+    if m.species() == crate::mobs::Species::Warden {
+        // The brain starts afresh: a minute before it digs back down.
+        crate::mobs::warden::finalize(&mut m, false, &mut Vec::new());
+        if let (Some(st), Some(listener)) = (m.extra.warden.as_mut(), tag.get("listener")) {
+            st.vibration = crate::sculk::Data::from_nbt(listener);
+        }
     }
     if m.species() == crate::mobs::Species::Ravager {
         m.extra.counter = number(tag.get("AttackTick")).unwrap_or(0) as i32;

@@ -4,6 +4,11 @@
 //! usage text and the vanilla error messages. Argument types live in
 //! [`args`]; the vanilla command tree in [`vanilla`].
 pub mod args;
+pub mod tree_data;
+pub mod tree_execute;
+pub mod tree_misc;
+pub mod tree_scoreboard;
+pub mod tree_world;
 pub mod vanilla;
 
 use crate::text::Text;

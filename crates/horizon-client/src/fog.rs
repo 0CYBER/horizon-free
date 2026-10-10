@@ -185,6 +185,8 @@ pub struct FogInputs<'a> {
     pub skybox: bool,
     /// Blindness: (remaining duration ticks, infinite).
     pub blindness: Option<(i32, bool)>,
+    /// The darkness effect's blend factor, while the effect is on.
+    pub darkness: Option<f32>,
 }
 
 /// `FogRenderer.setupFog` + `computeFogColor`.
@@ -239,6 +241,9 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
         } else {
             1.0
         };
+    } else if let Some(blend) = input.darkness {
+        // DarknessFogEnvironment.getModifiedDarkness.
+        darkness = darkness.max(blend);
     }
     if darkness > 0.0 && !matches!(input.fog_type, FogType::Lava | FogType::PowderSnow) {
         let brightness = (1.0 - darkness) * (1.0 - darkness);
@@ -282,6 +287,15 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
             fog.environmental_end = distance;
             fog.sky_end = distance * 0.8;
             fog.cloud_end = distance * 0.8;
+        }
+        _ if input.darkness.is_some() => {
+            // DarknessFogEnvironment.setupFog: closing in to 15 blocks.
+            let blend = input.darkness.unwrap_or(0.0);
+            let distance = rd + (15.0 - rd) * blend;
+            fog.environmental_start = distance * 0.75;
+            fog.environmental_end = distance;
+            fog.sky_end = distance;
+            fog.cloud_end = distance;
         }
         FogType::Water => {
             fog.environmental_start = -8.0;
@@ -345,6 +359,7 @@ mod tests {
             thunder: 0.0,
             skybox: true,
             blindness: None,
+            darkness: None,
         }
     }
     #[test]

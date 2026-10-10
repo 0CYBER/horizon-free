@@ -58,6 +58,8 @@ pub enum BlockEntity {
     Beacon(Box<Beacon>),
     /// `LecternBlockEntity`: the book and the open page.
     Lectern(Lectern),
+    /// Sculk sensors, shriekers and catalysts (`crate::sculk`).
+    Sculk(Box<crate::sculk::SculkEntity>),
     /// `CreakingHeartBlockEntity`: its protector and the hurt emitter.
     CreakingHeart(Box<CreakingHeart>),
     /// `BannerBlockEntity`: the pattern layers.
@@ -178,6 +180,9 @@ impl BlockEntity {
         if name == "minecraft:lectern" {
             return Some(Self::Lectern(Lectern::default()));
         }
+        if let Some(sculk) = crate::sculk::SculkEntity::for_block(name) {
+            return Some(Self::Sculk(Box::new(sculk)));
+        }
         if name == "minecraft:crafter" {
             return Some(Self::Crafter(Crafter::default()));
         }
@@ -236,6 +241,7 @@ impl BlockEntity {
             Self::Jukebox(_) => "minecraft:jukebox",
             Self::Beacon(_) => "minecraft:beacon",
             Self::Lectern(_) => "minecraft:lectern",
+            Self::Sculk(s) => s.id(),
             Self::Banner(_) => "minecraft:banner",
             Self::Crafter(_) => "minecraft:crafter",
             Self::CreakingHeart(_) => "minecraft:creaking_heart",
@@ -250,6 +256,7 @@ impl BlockEntity {
             Self::Jukebox(j) => j.record.iter().cloned().collect(),
             Self::Beacon(_) | Self::CreakingHeart(_) => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
+            Self::Sculk(_) => Vec::new(),
             Self::Banner(_) => Vec::new(),
             Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
         }
@@ -263,6 +270,7 @@ impl BlockEntity {
             | Self::Jukebox(_)
             | Self::Beacon(_)
             | Self::Lectern(_)
+            | Self::Sculk(_)
             | Self::Banner(_) => &[],
             Self::Crafter(c) => &c.items,
             Self::CreakingHeart(_) => &[],
@@ -277,6 +285,7 @@ impl BlockEntity {
             | Self::Jukebox(_)
             | Self::Beacon(_)
             | Self::Lectern(_)
+            | Self::Sculk(_)
             | Self::Banner(_) => &mut [],
             Self::Crafter(c) => &mut c.items,
             Self::CreakingHeart(_) => &mut [],
