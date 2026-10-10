@@ -58,7 +58,13 @@ impl Game<'_> {
                 && !below.ends_with("lightning_rod");
             if trap {
                 let at = [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])];
-                let _ = self.spawn_mob("minecraft:skeleton_horse", at, false);
+                // ServerLevel.tickChunk: a trap horse waits for a player.
+                if let Some(id) = self.spawn_mob("minecraft:skeleton_horse", at, false)
+                    && let Some(h) = self.mobs.iter_mut().find(|m| m.id == id)
+                {
+                    h.extra.trap = true;
+                    h.extra.age = 0;
+                }
             }
             let at = [
                 f64::from(pos[0]) + 0.5,

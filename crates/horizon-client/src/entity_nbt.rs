@@ -285,26 +285,16 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 map.remove(&"home_pos".into());
             }
         }
+        "minecraft:zombie_villager" => {
+            map.insert("VillagerData".into(), villager_data(m));
+            map.insert("VillagerDataFinalized".into(), Tag::Byte(1));
+            let xp = m.extra.trade.as_deref().map_or(0, |t| t.xp);
+            map.insert("Xp".into(), Tag::Int(xp));
+            put_offers(map, m);
+            crate::mobs::zombie_villager::write_nbt(m, map);
+        }
         "minecraft:villager" => {
-            use crate::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
-            let data = Tag::compound([
-                (
-                    "type",
-                    string(&format!(
-                        "minecraft:{}",
-                        VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()]
-                    )),
-                ),
-                (
-                    "profession",
-                    string(&format!(
-                        "minecraft:{}",
-                        PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()]
-                    )),
-                ),
-                ("level", Tag::Int(i32::from(m.extra.variant3.max(1)))),
-            ]);
-            map.insert("VillagerData".into(), data);
+            map.insert("VillagerData".into(), villager_data(m));
             let t = m.extra.trade.as_deref().cloned().unwrap_or_default();
             map.insert("Xp".into(), Tag::Int(t.xp));
             map.insert("LastRestock".into(), Tag::Long(t.last_restock));
@@ -413,20 +403,33 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         _ => {}
     }
     crate::mobs::raider::write_nbt(m, map);
+    crate::mobs::riders::write_nbt(m, map);
     // LivingEntity equipment: what the mob holds now.
     if !crate::mobs::equine::is_equine(m.species()) {
         let mut equipment = match map.get(&"equipment".into()) {
             Some(Tag::Compound(c)) => c.clone(),
             _ => horizon_world::nbt::Compound::new(),
         };
-        for (slot, item) in [
+        for (index, (slot, item)) in [
             ("mainhand", &m.extra.main_hand),
             ("offhand", &m.extra.off_hand),
             ("head", &m.extra.head),
             ("chest", &m.extra.chest),
             ("legs", &m.extra.legs),
             ("feet", &m.extra.feet),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            // Enchanted gear is saved with its `minecraft:enchantments`.
+            if let (Some(id), Some(g)) = (item, crate::mobs::gear::gear(m))
+                && !g.slots[index].is_empty()
+            {
+                let mut stack = crate::items::ItemStack::new(id, 1);
+                stack.data_mut().enchantments = g.slots[index].clone();
+                equipment.insert(slot.into(), crate::save::item_to_nbt(&stack));
+                continue;
+            }
             match item {
                 Some(id) => {
                     let keep = matches!(
@@ -512,6 +515,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.chest = slot("chest");
             m.extra.legs = slot("legs");
             m.extra.feet = slot("feet");
+        }
+        // Their enchantments.
+        for (index, key) in crate::mobs::gear::KEYS.iter().enumerate() {
+            if let Some(stack) = eq.get(key).and_then(crate::save::item_from_nbt) {
+                crate::mobs::gear::set(&mut m, index, stack.enchantments().to_vec());
+            }
         }
     }
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
@@ -620,6 +629,14 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     ) {
         read_villager(&mut m, tag);
     }
+    if m.species() == crate::mobs::Species::ZombieVillager {
+        read_villager(&mut m, tag);
+        let xp = number(tag.get("Xp")).unwrap_or(0) as i32;
+        if xp != 0 {
+            m.extra.trade.get_or_insert_with(Default::default).xp = xp;
+        }
+        crate::mobs::zombie_villager::read_nbt(&mut m, tag);
+    }
     if m.species() == crate::mobs::Species::Allay {
         if let Some(Tag::List(inv)) = tag.get("Inventory")
             && let Some(first) = inv.first()
@@ -693,6 +710,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.flag2 = flag(tag, "wasOnGround");
     }
     crate::mobs::raider::read_nbt(&mut m, tag);
+    crate::mobs::riders::read_nbt(&mut m, tag);
     // A mob saved mid-death finishes dying; one saved dead is dropped.
     if m.health <= 0.0 && m.death_time == 0 {
         return None;
@@ -1086,6 +1104,27 @@ pub fn boat_from_nbt(tag: &Tag) -> Option<(Vec3, Vec3, f32)> {
     Some((position(tag)?, motion(tag), rotation(tag)[0]))
 }
 
+/// `VillagerData`: type, profession and level.
+fn villager_data(m: &Mob) -> Tag {
+    use crate::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
+    Tag::compound([
+        (
+            "type",
+            string(&format!(
+                "minecraft:{}",
+                VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()]
+            )),
+        ),
+        (
+            "profession",
+            string(&format!(
+                "minecraft:{}",
+                PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()]
+            )),
+        ),
+        ("level", Tag::Int(i32::from(m.extra.variant3.max(1)))),
+    ])
+}
 /// `AbstractVillager` "Offers" (`MerchantOffers.CODEC`).
 fn put_offers(map: &mut Compound, m: &Mob) {
     let Some(t) = &m.extra.trade else { return };

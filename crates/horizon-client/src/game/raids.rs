@@ -424,13 +424,7 @@ impl Game<'_> {
             if let Some(kind) = sp.rider
                 && let Some(rider) = self.spawn_raider(kind, pos, raid_id, wave, false, odds)
             {
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == rider) {
-                    raider::state_mut(m).vehicle = Some(id);
-                    m.extra.passenger = true;
-                }
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                    raider::state_mut(m).rider = true;
-                }
+                self.mount_mob(rider, id);
             }
         }
     }
@@ -462,33 +456,7 @@ impl Game<'_> {
         s.ticks_outside_raid = 0;
         s.active_raid = true;
         m.on_ground = true;
-        // applyRaidBuffs: Quick Charge crossbows and Sharpness axes.
-        let enchant = m.random.next_float() <= odds;
-        match kind {
-            RaiderType::Pillager if enchant => {
-                raider::state_mut(m).enchant = if wave > raid::num_groups(2) {
-                    2
-                } else if wave > raid::num_groups(1) {
-                    1
-                } else {
-                    0
-                };
-            }
-            RaiderType::Vindicator => {
-                let level = if !enchant {
-                    0
-                } else if wave > raid::num_groups(2) {
-                    2
-                } else {
-                    1
-                };
-                raider::state_mut(m).enchant = level;
-                if level > 0 {
-                    m.attrs.attack_damage += 1.0 + 0.5 * f32::from(level - 1);
-                }
-            }
-            _ => {}
-        }
+        self.apply_raid_buffs(id, kind, wave, odds);
         Some(id)
     }
 
@@ -515,7 +483,7 @@ impl Game<'_> {
             if let (Some(id), true) = (s.raid_id, s.patrol_leader) {
                 leaders.insert((id, s.wave));
             }
-            if let Some(v) = s.vehicle {
+            if let Some(v) = m.extra.mount {
                 ridden.insert(v);
             }
             positions.push((m.id, m.position, s.active_raid));
@@ -731,59 +699,6 @@ impl Game<'_> {
             .iter()
             .map(|(id, (_, v))| (*id, v.clone()))
             .collect()
-    }
-    /// A raider riding a ravager sits on its back (`Entity.positionRider`
-    /// with the ravager's passenger attachment and a 0.6 riding offset).
-    pub(super) fn sync_riders(&mut self) {
-        let vehicles: HashMap<u32, (Vec3, Vec3, f32, f32, bool)> = self
-            .mobs
-            .iter()
-            .filter(|m| m.species() == Species::Ravager)
-            .map(|m| {
-                (
-                    m.id,
-                    (
-                        m.position,
-                        m.previous,
-                        m.body_yaw,
-                        m.previous_body_yaw,
-                        m.alive(),
-                    ),
-                )
-            })
-            .collect();
-        for m in &mut self.mobs {
-            let Some(v) = raider::state(m).and_then(|s| s.vehicle) else {
-                continue;
-            };
-            match vehicles.get(&v) {
-                Some(&(pos, prev, yaw, prev_yaw, true)) => {
-                    let place = |p: Vec3, yaw: f32| {
-                        let a = f64::from(yaw).to_radians();
-                        // The attachment's z offset of -0.0625, rotated.
-                        Vec3::new(
-                            p.x + a.sin() * -0.0625,
-                            p.y + 2.2625 - 0.6,
-                            p.z - a.cos() * -0.0625,
-                        )
-                    };
-                    m.position = place(pos, yaw);
-                    m.previous = place(prev, prev_yaw);
-                    m.velocity = Vec3::ZERO;
-                    m.fall_distance = 0.0;
-                    m.on_ground = false;
-                    m.body_yaw = yaw;
-                    m.previous_body_yaw = prev_yaw;
-                    m.extra.passenger = true;
-                    // Raiders on a ravager never walk off on their own.
-                    m.ai.nav.stop();
-                }
-                _ => {
-                    raider::state_mut(m).vehicle = None;
-                    m.extra.passenger = false;
-                }
-            }
-        }
     }
     /// `Raider.die`: the killing player becomes a hero of the village.
     pub(super) fn raider_died(&mut self, m: &Mob, by_player: bool) {

@@ -41,7 +41,7 @@ struct Out {
     // Overlay 6 (beacon beams): the light bytes carry the sprite's v range.
     out.wrap = vec2(f32(light.x | (light.y << 8u)), f32(light.z | (light.w << 8u))) / 65535.0;
     // Hurt overlay (OverlayTexture red tint).
-    if overlay == 1u { c = vec4(mix(c.rgb, vec3(1.0, 0.0, 0.0), 0.3), c.a); }
+    if overlay == 1u || overlay == 8u { c = vec4(mix(c.rgb, vec3(1.0, 0.0, 0.0), 0.3), c.a); }
     out.color = c;
     // Overlay 5: OverlayTexture white flash (primed TNT), applied after texturing.
     out.flash = select(0.0, 0.75, overlay == 5u);
@@ -67,6 +67,17 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     }
     if color.a < 0.1 { discard; }
     color = vec4(mix(color.rgb, vec3(1.0), in.flash), color.a);
+    if in.overlay == 7u || in.overlay == 8u {
+        // Enchantment glint (overlay 7, 8 with the hurt tint): the purple
+        // enchanted_glint sheen drifting diagonally over the item's shape.
+        let px = in.uv * vec2<f32>(textureDimensions(atlas));
+        let t = globals.misc.y * 0.05;
+        let band = sin((px.x + px.y) * 0.9 - t * 6.0) * 0.5 + 0.5;
+        let band2 = sin((px.x - px.y) * 0.6 + t * 4.0) * 0.5 + 0.5;
+        let shimmer = pow(band * 0.6 + band2 * 0.4, 2.0);
+        let glint = vec3(0.50, 0.25, 0.80) * (0.25 + 0.75 * shimmer);
+        color = vec4(min(color.rgb + glint * 0.6, vec3(1.0)), color.a);
+    }
     let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
                 linear_fog(in.cylindrical, globals.fog.z, globals.fog.w));
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);

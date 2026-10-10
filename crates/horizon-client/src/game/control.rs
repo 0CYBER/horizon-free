@@ -79,11 +79,15 @@ impl Game<'_> {
         if let Some(value) = self.block_command(&words)? {
             return Ok(Some(value));
         }
+        if let Some(value) = self.lan_control(&words)? {
+            return Ok(Some(value));
+        }
         match words[0] {
             "help" => Ok(Some(json!({ "commands": HELP
                 .iter()
                 .chain(super::station_control::HELP)
                 .chain(super::blockctl::HELP)
+                .chain(super::lan::HELP)
                 .chain(super::render_control::HELP)
                 .chain(super::sculk::HELP)
                 .collect::<Vec<_>>() }))),
@@ -461,6 +465,7 @@ impl Game<'_> {
             Screen::Chat => "chat",
             Screen::Stats => "stats",
             Screen::Advancements => "advancements",
+            Screen::WorldOptions => "world-options",
         }
     }
 

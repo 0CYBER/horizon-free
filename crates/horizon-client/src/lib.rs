@@ -44,6 +44,7 @@ pub mod input;
 pub mod item_data;
 pub mod items;
 pub mod keybinds;
+pub mod lan;
 pub mod landing;
 pub mod lang;
 pub mod light;

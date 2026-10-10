@@ -386,7 +386,7 @@ pub fn crossbow_goal(speed: f64, radius: f64) -> impl Goal {
 }
 /// `CrossbowItem.getChargeDuration` (25 ticks, 5 fewer per level of Quick Charge).
 pub fn charge_ticks(m: &Mob) -> i32 {
-    25 - 5 * i32::from(super::raider::state(m).map_or(0, |s| s.enchant))
+    25 - 5 * super::gear::level(m, super::gear::MAIN, "minecraft:quick_charge") as i32
 }
 fn holding_crossbow(m: &Mob) -> bool {
     m.extra.main_hand.as_deref() == Some("minecraft:crossbow")
@@ -521,6 +521,7 @@ fn shoot_crossbow(m: &mut Mob, who: Who, cx: &mut Cx) {
         start,
         Some(Who::Mob(m.id)),
     );
+    p.bonus = super::gear::arrow_bonus(m);
     // rangedAttackUncertainty at normal difficulty: 14 - 2 * 4.
     p.shoot(&mut m.random, [dx, dy, dz], 1.6, 6.0);
     cx.events.push(MobEvent::Projectile(p));
