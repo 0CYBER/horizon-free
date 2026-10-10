@@ -376,9 +376,7 @@ impl Items {
                         .map(str::to_owned),
                     jukebox_song: c["minecraft:jukebox_playable"].as_str().map(str::to_owned),
                     dye: c["minecraft:dye"].as_str().map(str::to_owned),
-                    block_transformer: c["minecraft:block_transformer"]
-                        .as_str()
-                        .map(str::to_owned),
+                    block_transformer: c["minecraft:block_transformer"].as_str().map(str::to_owned),
                     crafting_remainder: CRAFT_REMAINDERS
                         .iter()
                         .find(|(item, _)| *item == name)

@@ -5508,16 +5508,15 @@ impl Game<'_> {
         }
         impl Around for Column<'_> {
             fn state(&self, o: [i32; 3]) -> horizon_world::chunk::BlockState {
-                let id = self
-                    .world
-                    .block(self.pos[0] + o[0], self.pos[1] + o[1], self.pos[2] + o[2]);
-                self.registry
-                    .state(id)
-                    .cloned()
-                    .unwrap_or_else(|| horizon_world::chunk::BlockState {
+                let id =
+                    self.world
+                        .block(self.pos[0] + o[0], self.pos[1] + o[1], self.pos[2] + o[2]);
+                self.registry.state(id).cloned().unwrap_or_else(|| {
+                    horizon_world::chunk::BlockState {
                         name: "minecraft:air".into(),
                         properties: Default::default(),
-                    })
+                    }
+                })
             }
         }
         let Some(id) = self
@@ -5543,13 +5542,11 @@ impl Game<'_> {
                 registry,
                 pos,
             };
-            let Some((_, t, state)) = self.res.transformers.apply(
-                &self.res.items,
-                registry,
-                &id,
-                face_name,
-                &around,
-            ) else {
+            let Some((_, t, state)) =
+                self.res
+                    .transformers
+                    .apply(&self.res.items, registry, &id, face_name, &around)
+            else {
                 return Ok(false);
             };
             (state, t.sound.clone(), t.loot.clone(), t.damage)
@@ -5723,8 +5720,12 @@ impl Game<'_> {
                 && let Ok(state) = registry.resolve(&waxed)
             {
                 self.level_set(hit.pos, state)?;
-                self.audio
-                    .play("minecraft:item.honeycomb.wax_on", Some(at(hit.pos)), 1.0, 1.0);
+                self.audio.play(
+                    "minecraft:item.honeycomb.wax_on",
+                    Some(at(hit.pos)),
+                    1.0,
+                    1.0,
+                );
                 if !self.creative {
                     self.consume_held();
                 }
@@ -7719,8 +7720,7 @@ pub fn run() -> Result<()> {
     let items = Items::load(&root, assets.registry, &facts)?;
     eprintln!("load items: {:.2}s", started.elapsed().as_secs_f32());
     let recipes = Recipes::load(&root, &items)?;
-    let transformers =
-        horizon_client::block_transform::Transformers::load(&root, assets.registry)?;
+    let transformers = horizon_client::block_transform::Transformers::load(&root, assets.registry)?;
     let biomes = Arc::new(Biomes::load(&root)?);
     let environment = Environment::load(&root)?;
     eprintln!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());

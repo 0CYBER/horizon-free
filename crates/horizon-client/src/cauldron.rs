@@ -89,12 +89,17 @@ fn filled(player: &mut dyn Player, new: ItemStack, limit_creative: bool) {
 
 /// `LayeredCauldronBlock.lowerFillLevel`.
 fn lowered(cauldron: &BlockState) -> BlockState {
-    let level: u8 = cauldron.properties.get("level").and_then(|l| l.parse().ok()).unwrap_or(1);
+    let level: u8 = cauldron
+        .properties
+        .get("level")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(1);
     if level <= 1 {
         state("minecraft:cauldron", None)
     } else {
         let mut next = cauldron.clone();
-        next.properties.insert("level".into(), (level - 1).to_string());
+        next.properties
+            .insert("level".into(), (level - 1).to_string());
         next
     }
 }
@@ -108,8 +113,22 @@ fn changed(block: BlockState, sound: Option<&'static str>) -> Interaction {
 }
 
 const COLORS: [&str; 16] = [
-    "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray", "cyan",
-    "purple", "blue", "brown", "green", "red", "black",
+    "white",
+    "orange",
+    "magenta",
+    "light_blue",
+    "yellow",
+    "lime",
+    "pink",
+    "gray",
+    "light_gray",
+    "cyan",
+    "purple",
+    "blue",
+    "brown",
+    "green",
+    "red",
+    "black",
 ];
 
 /// The cauldron interaction of the held item (`useItemOn`); the hand stack is
@@ -131,7 +150,11 @@ pub fn interact(
         "minecraft:powder_snow_cauldron" => "powder_snow",
         _ => return pass(),
     };
-    let level: u8 = cauldron.properties.get("level").and_then(|l| l.parse().ok()).unwrap_or(0);
+    let level: u8 = cauldron
+        .properties
+        .get("level")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(0);
     let item = &*held.item;
     let water_potion = held.data().and_then(|d| d.potion.as_deref()) == Some("minecraft:water");
     // Dispatcher.get: tags first, then the item map.

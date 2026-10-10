@@ -60,12 +60,19 @@ fn predicate(value: &Value) -> Option<Predicate> {
     Some(match value["type"].as_str()? {
         "minecraft:matching_blocks" => Predicate::Blocks(match &value["blocks"] {
             Value::String(s) => vec![s.clone()],
-            Value::Array(a) => a.iter().filter_map(|b| b.as_str().map(str::to_owned)).collect(),
+            Value::Array(a) => a
+                .iter()
+                .filter_map(|b| b.as_str().map(str::to_owned))
+                .collect(),
             _ => return None,
         }),
         "minecraft:matching_block_tag" => {
             let o = value["offset"].as_array();
-            let at = |i: usize| o.and_then(|o| o.get(i)).and_then(Value::as_i64).unwrap_or(0) as i32;
+            let at = |i: usize| {
+                o.and_then(|o| o.get(i))
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0) as i32
+            };
             Predicate::Tag {
                 tag: value["tag"].as_str()?.to_owned(),
                 offset: [at(0), at(1), at(2)],
@@ -94,7 +101,10 @@ fn provider(value: &Value, registry: &BlockRegistry) -> Option<Provider> {
         Some("minecraft:rule_based") => {
             let mut rules = Vec::new();
             for rule in value["rules"].as_array()? {
-                rules.push((predicate(&rule["if_true"])?, provider(&rule["then"], registry)?));
+                rules.push((
+                    predicate(&rule["if_true"])?,
+                    provider(&rule["then"], registry)?,
+                ));
             }
             Some(Provider::Rules(rules))
         }

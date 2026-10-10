@@ -53,7 +53,10 @@ impl Around for Column {
 
 fn main() -> horizon_client::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let root = Path::new(args.get(1).ok_or("usage: block_transform_fixture RESOURCES INPUT OUTPUT")?);
+    let root = Path::new(
+        args.get(1)
+            .ok_or("usage: block_transform_fixture RESOURCES INPUT OUTPUT")?,
+    );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
     let items = Items::catalog(root)?;
     let assets = Assets::load(root)?;

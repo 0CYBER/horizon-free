@@ -72,7 +72,10 @@ fn describe(state: &BlockState) -> String {
 
 fn main() -> horizon_client::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let root = Path::new(args.get(1).ok_or("usage: cauldron_fixture RESOURCES INPUT OUTPUT")?);
+    let root = Path::new(
+        args.get(1)
+            .ok_or("usage: cauldron_fixture RESOURCES INPUT OUTPUT")?,
+    );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
     let items = Items::catalog(root)?;
     let recipes = Recipes::load(root, &items)?;
@@ -129,7 +132,11 @@ fn main() -> horizon_client::Result<()> {
                     .map(|s| format!("{i}={}", canon_stack(Some(s))))
             })
             .collect();
-        out += &format!("{kind}\t{}\t{}\n", stand.events.join(";"), inventory.join(" "));
+        out += &format!(
+            "{kind}\t{}\t{}\n",
+            stand.events.join(";"),
+            inventory.join(" ")
+        );
     }
     fs::write(args.get(3).ok_or("missing OUTPUT")?, out)?;
     Ok(())
