@@ -358,6 +358,7 @@ impl Game<'_> {
                 }
                 match m["function"].as_str().unwrap_or("") {
                     "minecraft:sequence" => {
+                        #[allow(clippy::manual_try_fold)]
                         return m["functions"]
                             .as_array()
                             .into_iter()
