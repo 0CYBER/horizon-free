@@ -1162,7 +1162,8 @@ impl Mob {
     pub fn voice(&mut self, event: &'static str, events: &mut Vec<MobEvent>) {
         let pitch = (self.random.next_float() - self.random.next_float()) * 0.2
             + if self.is_baby() { 1.5 } else { 1.0 };
-        let at = [self.position.x, self.eye_y(), self.position.z];
+        // Entity.playSound: at the entity's feet.
+        let at = [self.position.x, self.position.y, self.position.z];
         events.push(MobEvent::Sound(event, at, ai::sound_volume(self), pitch));
     }
 }

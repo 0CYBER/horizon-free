@@ -19,6 +19,10 @@ pub enum BucketContent {
     Fluid(FluidKind),
     /// `SolidBucketItem`: the block placed into an empty space (powder snow).
     Powder,
+    /// `MobBucketItem` holding water: its empty sound posts no `FLUID_PLACE`.
+    MobWater,
+    /// `MobBucketItem` without a fluid (the sulfur cube bucket): only the sound.
+    Nothing,
 }
 
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
@@ -58,14 +62,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 if self.is_in_valid_bounds(pos) && b.is_air(self.state(pos)) {
                     let snow = b.table.default_state(b.named.powder_snow);
                     self.set_block_and_update(pos, snow);
+                    // SolidBucketItem.emptyContents: one FLUID_PLACE, then the place sound.
                     self.game_event(pos, "minecraft:fluid_place");
-                    self.empty_sound(pos, sound);
+                    let sound: Arc<str> = sound.into();
+                    self.sound(pos, &sound, 1.0, 1.0);
                     return true;
                 }
                 return false;
             }
+            BucketContent::Nothing => {
+                let sound: Arc<str> = sound.into();
+                self.sound(pos, &sound, 1.0, 1.0);
+                return true;
+            }
+            BucketContent::MobWater => FluidKind::Water,
             BucketContent::Fluid(fluid) => fluid,
         };
+        let mob = content == BucketContent::MobWater;
         let state = self.state(pos);
         // canBeReplaced(fluid): replaceable or not solid (portals refuse).
         let may_replace = !b.instance_of(state, Class::EndPortal)
@@ -91,7 +104,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         if liquid_container && water {
             self.place_liquid(pos, state, FluidState::new(FluidKind::Water, 8, false));
-            self.empty_sound(pos, sound);
+            self.empty_sound(pos, sound, mob);
             return true;
         }
         if may_replace && !b.instance_of(state, Class::Liquid) {
@@ -112,13 +125,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         {
             return false;
         }
-        self.empty_sound(pos, sound);
+        self.empty_sound(pos, sound, mob);
         true
     }
-    fn empty_sound(&mut self, pos: BlockPos, sound: &str) {
+    /// `playEmptySound`: `MobBucketItem` overrides it without the game event.
+    fn empty_sound(&mut self, pos: BlockPos, sound: &str, mob: bool) {
         let sound: Arc<str> = sound.into();
         self.sound(pos, &sound, 1.0, 1.0);
-        self.game_event(pos, "minecraft:fluid_place");
+        if !mob {
+            self.game_event(pos, "minecraft:fluid_place");
+        }
     }
 }
 

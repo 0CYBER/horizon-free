@@ -30,6 +30,8 @@ public final class ParityData {
     public static RegistryAccess access;
     public static RegistryOps<Tag> ops;
     public static ServerLevel level;
+    /** The loot tables of the vanilla data pack. */
+    public static ReloadableServerRegistries.Holder loot;
 
     public static void init() throws Exception {
         SharedConstants.tryDetectVersion();
@@ -44,6 +46,7 @@ public final class ParityData {
         RegistryAccess.Frozen world = RegistryDataLoader.load(resources, context, RegistryDataLoader.WORLD_REGISTRIES, Runnable::run).join();
         var worldLayers = layers.replaceFrom(RegistryLayer.WORLD, world);
         var loaded = ReloadableServerRegistries.reload(worldLayers, staticTags, resources, Runnable::run).join();
+        loot = new ReloadableServerRegistries.Holder(loaded.lookupWithUpdatedTags());
         lookup = loaded.lookupWithUpdatedTags();
         var components = BuiltInRegistries.DATA_COMPONENT_INITIALIZERS.build(lookup);
         staticTags.forEach(Registry.PendingTags::apply);

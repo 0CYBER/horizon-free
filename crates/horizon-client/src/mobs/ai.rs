@@ -414,6 +414,10 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     // Entity.baseTick ends with Leashable.tickLeash.
     super::leash::tick(m, w, events);
 }
+/// `Mob.playAmbientSound` on demand: a spawn egg or a mob bucket just placed `m`.
+pub fn ambient_sound(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    play_ambient(m, w, events);
+}
 fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let sound = match m.species() {
         // Warden.getAmbientSound: by anger, silent while roaring or digging.

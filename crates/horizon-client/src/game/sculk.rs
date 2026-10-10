@@ -437,6 +437,9 @@ impl Game<'_> {
 
     /// `Level.gameEvent`: tell the listeners within reach.
     pub(super) fn post_game_event(&mut self, event: &'static str, pos: [f64; 3], ctx: Context) {
+        super::dispense_fixture::record(|| {
+            format!("G {},{},{} {event}", pos[0].floor() as i32, pos[1].floor() as i32, pos[2].floor() as i32)
+        });
         if self.remote.is_some() || !self.sculk.tables.built {
             return;
         }

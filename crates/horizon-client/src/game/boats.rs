@@ -95,6 +95,16 @@ impl Boat {
     }
 }
 /// Item id -> (boat entity id, wood).
+impl Boat {
+    /// The vanilla entity type id (`oak_boat`, `bamboo_raft`).
+    pub(super) fn entity_type(&self) -> String {
+        if &*self.wood == "bamboo" {
+            "minecraft:bamboo_raft".to_owned()
+        } else {
+            format!("minecraft:{}_boat", self.wood)
+        }
+    }
+}
 pub(super) fn boat_wood(item: &str) -> Option<&str> {
     let name = item.strip_prefix("minecraft:")?;
     name.strip_suffix("_boat")
