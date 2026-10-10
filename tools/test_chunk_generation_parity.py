@@ -153,6 +153,11 @@ def nbt_matches(vanilla, rust, default):
             elif value != default.get(key):
                 return False
         return all(key in vanilla or key in ('x', 'y', 'z') for key in rust)
+    if isinstance(vanilla, list) and isinstance(rust, list):
+        return len(vanilla) == len(rust) and all(nbt_matches(a, b, None) for a, b in zip(vanilla, rust))
+    if isinstance(vanilla, tuple) and isinstance(rust, tuple) and vanilla[0] in 'bsil' and rust[0] in 'bsil':
+        # Structure templates keep their stored integer width; vanilla re-saves block entities with its own.
+        return vanilla[1] == rust[1]
     return vanilla == rust
 
 
@@ -165,6 +170,9 @@ def entity_matches(vanilla, rust):
 def state_names():
     facts = json.loads((RESOURCES / 'facts.json').read_text())
     return [s[3].removeprefix('Block{').replace('}', '', 1) for s in facts['states']]
+
+
+AIR = '0'
 
 
 def compare(vanilla, rust, names, label, limit=6, quiet=False):
@@ -181,10 +189,17 @@ def compare(vanilla, rust, names, label, limit=6, quiet=False):
             ra, rb = a['y'][y], b['y'].get(y)
             if ra == rb:
                 continue
-            for i, (u, v) in enumerate(zip(ra.split(' '), (rb or '').split(' '))):
+            if rb is None:
+                # Above the noise height (Nether roof, End sky) Horizon keeps no section; vanilla's is all air.
+                if set(ra.split(' ')) != {AIR}:
+                    block_diffs.append((pos[0] * 16, y, pos[1] * 16, 'non-air section', 'section missing'))
+                continue
+            for i, (u, v) in enumerate(zip(ra.split(' '), rb.split(' '))):
                 if u != v:
                     block_diffs.append((pos[0] * 16 + i % 16, y, pos[1] * 16 + i // 16, names[int(u)], names[int(v)]))
         for q in sorted(a['q']):
+            if q not in b['q']:
+                continue  # biomes of sections Horizon does not generate (above the noise height)
             if a['q'][q] != b['q'].get(q):
                 for i, (u, v) in enumerate(zip(a['q'][q].split(' '), b['q'].get(q, '').split(' '))):
                     if u != v:
