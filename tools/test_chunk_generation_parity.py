@@ -154,7 +154,7 @@ def nbt_matches(vanilla, rust, default):
                     return False
             elif value != default.get(key):
                 return False
-        return all(key in vanilla or key in ('x', 'y', 'z') or nbt_matches(default.get(key), rust[key], None) for key in rust)
+        return all(key in vanilla or key in ('x', 'y', 'z') or nbt_matches(default.get(key), rust[key], None) or (key, rust[key]) == VAULT_REWARD for key in rust)
     if isinstance(vanilla, list) and isinstance(rust, list):
         return len(vanilla) == len(rust) and all(nbt_matches(a, b, None) for a, b in zip(vanilla, rust))
     if isinstance(vanilla, tuple) and isinstance(rust, tuple) and vanilla[0] in 'bsil' and rust[0] in 'bsil':
@@ -178,6 +178,8 @@ def state_names():
 
 
 AIR = '0'
+# A vault's config omits its default reward table when saved by vanilla; templates spell it out.
+VAULT_REWARD = ('loot_table', ('str', 'minecraft:chests/trial_chambers/reward'))
 
 
 def compare(vanilla, rust, names, label, limit=6, quiet=False):

@@ -560,8 +560,17 @@ impl FeatureWorld for World<'_> {
         {
             return Ok(false);
         }
+        let old = self.region.block(position)?;
         self.region.set_block_worldgen(position, state)?;
-        self.block_entities.retain(|(p, _)| *p != position);
+        // ProtoChunk keeps a block entity that already exists when the same kind
+        // of block is set again (a chest turning waterlogged); other changes drop it.
+        let registry = self.decoration.bindings.registry();
+        let same_block = old == state
+            || registry.state(old).map(|s| s.name.as_str())
+                == registry.state(state).map(|s| s.name.as_str());
+        if !same_block {
+            self.block_entities.retain(|(p, _)| *p != position);
+        }
         // WorldGenRegion.setBlock: BlockState.getPostProcessPos unless UPDATE_KNOWN_SHAPE.
         if flags & 16 == 0 {
             let [x, y, z] = position;
