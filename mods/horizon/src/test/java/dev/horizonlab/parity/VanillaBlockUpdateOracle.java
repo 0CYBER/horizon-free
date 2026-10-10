@@ -461,7 +461,8 @@ public final class VanillaBlockUpdateOracle {
         w.raining = f.has("raining") && f.get("raining").getAsBoolean();
         w.thundering = f.has("thundering") && f.get("thundering").getAsBoolean();
         set(Level.class, w, "random", w.rng);
-        set(Level.class, w, "neighborUpdater", new net.minecraft.world.level.redstone.CollectingNeighborUpdater(w, 512));
+        // A server level chains up to max-chained-neighbor-updates (1,000,000 by default).
+        set(Level.class, w, "neighborUpdater", new net.minecraft.world.level.redstone.CollectingNeighborUpdater(w, 1000000));
         w.server = make(Server.class);
         w.server.loot = make(Loot.class);
         w.server.loot.world = w;
