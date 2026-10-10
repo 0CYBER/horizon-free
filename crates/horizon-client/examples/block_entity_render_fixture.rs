@@ -3,7 +3,7 @@
 //! through `BlockEntityRenderer` at the block origin and writes the quads
 //! (texture, sprite-local UVs, baked colour, light) and sign text calls.
 #![forbid(unsafe_code)]
-use glam::{DVec3, Mat4, Quat};
+use glam::{DVec3, Mat4, Quat, Vec3};
 use horizon_client::{
     assets::Assets,
     banner::{self, Banners},
@@ -125,6 +125,50 @@ fn main() -> Result<()> {
     {
         let case: Value = serde_json::from_str(line)?;
         let block = case["block"].as_str().unwrap_or_default();
+        if block == "minecraft:beacon" {
+            // BeaconRenderer: the beam sections from the case, as Horizon's beacon keeps them.
+            let int = |v: &Value| v.as_i64().unwrap_or(0);
+            let pos = [
+                int(&case["pos"][0]),
+                int(&case["pos"][1]),
+                int(&case["pos"][2]),
+            ];
+            let partial = case["partial"].as_f64().unwrap_or(0.0) as f32;
+            let time = int(&case["gameTime"]).rem_euclid(40) as f32 + partial;
+            let cam = &case["camera"];
+            let dx = cam[0].as_f64().unwrap_or(0.0) - (pos[0] as f64 + 0.5);
+            let dz = cam[2].as_f64().unwrap_or(0.0) - (pos[2] as f64 + 0.5);
+            let scale = ((dx * dx + dz * dz).sqrt() as f32 / 96.0).max(1.0);
+            let sections: Vec<(u32, i32)> = case["beam"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|s| (int(&s[0]) as u32 & 0xFF_FFFF, int(&s[1]) as i32))
+                .collect();
+            let texture = "entity/beacon/beacon_beam";
+            let rect = sprites.get(texture).copied().ok_or("no beam sprite")?;
+            let mut verts = Vec::new();
+            horizon_client::block_entity_render::beacon_beam(
+                Vec3::ZERO,
+                &sections,
+                time,
+                scale,
+                rect,
+                &mut verts,
+            );
+            let quads: Vec<Value> = verts
+                .chunks(4)
+                .map(|q| {
+                    let v: Vec<Value> = q
+                        .iter()
+                        .map(|v| json!([v.pos[0], v.pos[1], v.pos[2], v.uv[0] - rect.u0, v.uv[1]]))
+                        .collect();
+                    json!({"texture": texture, "v": v, "color": q[0].color, "light": q[0].light, "custom": true})
+                })
+                .collect();
+            writeln!(out, "{}", json!({"quads": quads, "texts": []}))?;
+            continue;
+        }
         let Some(state) = find_state(registry, block) else {
             writeln!(out, "{}", json!({"skip": "unknown block state"}))?;
             continue;

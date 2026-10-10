@@ -329,6 +329,16 @@ public final class VanillaBlockEntityRenderOracle {
                 var cam = c.getAsJsonArray("camera");
                 var cameraPos = new Vec3(cam.get(0).getAsDouble(), cam.get(1).getAsDouble(), cam.get(2).getAsDouble());
                 var rs = (BlockEntityRenderState) renderer.createRenderState();
+                if (rs instanceof BeaconRenderState beacon) {
+                    // BeaconRenderer.extract reads Minecraft.getInstance().player (scoping); its level-free part:
+                    BlockEntityRenderState.extractBase(be, rs, null);
+                    beacon.animationTime = Math.floorMod(c.get("gameTime").getAsLong(), 40) + partial;
+                    var sections = new ArrayList<BeaconRenderState.Section>();
+                    for (var e : c.getAsJsonArray("beam")) sections.add(new BeaconRenderState.Section(e.getAsJsonArray().get(0).getAsInt(), e.getAsJsonArray().get(1).getAsInt()));
+                    beacon.sections = sections;
+                    float distance = (float) cameraPos.subtract(Vec3.atCenterOf(pos)).horizontalDistance();
+                    beacon.beamRadiusScale = Math.max(1.0F, distance / 96.0F);
+                } else
                 if (rs instanceof SignRenderState sign) {
                     // AbstractSignRenderer.extractRenderState reads Minecraft.getInstance(); its level-free part:
                     var signBe = (SignBlockEntity) be;

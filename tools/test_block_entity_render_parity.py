@@ -115,7 +115,11 @@ def cases():
     for prefix in ['', 'exposed_', 'weathered_', 'oxidized_', 'waxed_']:
         for pose in ['standing', 'running', 'sitting', 'star']:
             add(f'minecraft:{prefix}copper_golem_statue[facing={rng.choice(HORIZONTAL)},copper_golem_pose={pose}]')
-    for block in ['end_portal', 'end_gateway', 'beacon', 'campfire[facing=north]', 'spawner',
+    for _ in range(8):
+        add('minecraft:beacon', gameTime=rng.randint(0, 10 ** 6),
+            camera=[rng.uniform(-300, 300), 70.0, rng.uniform(-300, 300)],
+            beam=[[0xFF000000 | rng.randint(0, 0xFFFFFF), rng.randint(1, 30)] for _ in range(rng.randint(1, 3))])
+    for block in ['end_portal', 'end_gateway', 'campfire[facing=north]', 'spawner',
                   'trial_spawner', 'vault', 'suspicious_sand', 'oak_shelf[facing=east]']:
         add('minecraft:' + block)
     return out
@@ -144,18 +148,20 @@ def mix(normal):
 def vanilla_quads(submits):
     quads, other = [], []
     for s in submits:
-        if s['type'] != 'submitModel':
+        custom = s['type'] == 'submitCustomGeometry'
+        if s['type'] != 'submitModel' and not custom:
             other.append(s)
             continue
         verts = s['vertices']
         for i in range(0, len(verts), 4):
             q = verts[i:i + 4]
             tint = q[0][3] & 0xFFFFFFFF
-            b = mix(q[0][8:11])
+            # Custom geometry (beacon beams) is unlit; models get the entity shader's mix light.
+            b = 1.0 if custom else mix(q[0][8:11])
             ch = lambda shift: int(((tint >> shift) & 255) * b)
             quads.append({'texture': s['texture'], 'v': [v[:3] + v[4:6] for v in q],
                           'rgb': [ch(16), ch(8), ch(0)], 'alpha': tint >> 24, 'light': q[0][7],
-                          'overlay': q[0][6], 'type': s['renderType']})
+                          'overlay': q[0][6], 'type': s['renderType'], 'custom': custom})
     return quads, other
 
 
@@ -210,6 +216,13 @@ def compare_case(v, r, tol):
         if bad:
             problems.append(f'{a["texture"]} vertices {a["v"]} != {b["v"]}')
             break
+        if a['custom']:
+            # Horizon packs the beam sprite's v range into the light bytes (its shader wraps v).
+            got = b['color']
+            if [got & 255, (got >> 8) & 255, (got >> 16) & 255, got >> 24] != a['rgb'] + [a['alpha']]:
+                problems.append(f'{a["texture"]} colour {a["rgb"]}/{a["alpha"]} != {got:#x}')
+                break
+            continue
         if a['overlay'] != NO_OVERLAY:
             problems.append(f'overlay {a["overlay"]}')
         got = b['color']

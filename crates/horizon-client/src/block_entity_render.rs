@@ -1560,3 +1560,89 @@ mod tests {
         assert_eq!(out[2].uv, [0.5, 0.5]);
     }
 }
+
+/// `BeaconRenderer.submit`: for each beam section (ARGB colour, height) the
+/// rotating solid beam and its translucent glow, the last section 2048
+/// blocks tall. `origin` is the beacon block's corner relative to the camera,
+/// `time` the animation time (game time mod 40 plus partial tick) and `scale`
+/// the radius scale. The sprite's v range rides in the light bytes (the
+/// entity shader wraps v for layer 6).
+pub fn beacon_beam(
+    origin: Vec3,
+    sections: &[(u32, i32)],
+    time: f32,
+    scale: f32,
+    s: Rect,
+    out: &mut Vec<Vertex>,
+) {
+    let q = |v: f32| (v * 65535.0).round().clamp(0.0, 65535.0) as u32;
+    let wrap = q(s.v0) | q(s.v1 - s.v0) << 16;
+    let o = origin + Vec3::new(0.5, 0.0, 0.5);
+    let mut start = 0i32;
+    for (i, &(color, height)) in sections.iter().enumerate() {
+        let height = if i == sections.len() - 1 {
+            2048
+        } else {
+            height
+        };
+        let end = start + height;
+        let scroll = if height < 0 { time } else { -time };
+        let v_off = frac(scroll * 0.2 - (scroll * 0.1).floor());
+        let abgr =
+            |a: u32| a << 24 | (color & 255) << 16 | (color >> 8 & 255) << 8 | (color >> 16 & 255);
+        // Solid beam: radius 0.2 * scale, rotated with time.
+        let r = 0.2 * scale;
+        let rot = glam::Mat3::from_rotation_y((time * 2.25 - 45.0).to_radians());
+        let corners = [
+            rot * Vec3::new(0.0, 0.0, r),
+            rot * Vec3::new(r, 0.0, 0.0),
+            rot * Vec3::new(-r, 0.0, 0.0),
+            rot * Vec3::new(0.0, 0.0, -r),
+        ];
+        let v2 = -1.0 + v_off;
+        let v1 = height as f32 * (0.5 / r) + v2;
+        beam_part(out, o, start, end, corners, [v1, v2], abgr(255), s, wrap);
+        // Glow: radius 0.25 * scale, translucent.
+        let g = 0.25 * scale;
+        let corners = [
+            Vec3::new(-g, 0.0, -g),
+            Vec3::new(g, 0.0, -g),
+            Vec3::new(-g, 0.0, g),
+            Vec3::new(g, 0.0, g),
+        ];
+        let v1 = height as f32 + v2;
+        beam_part(out, o, start, end, corners, [v1, v2], abgr(32), s, wrap);
+        start = end;
+    }
+}
+/// `BeaconRenderer.renderPart`: four quads between the corners (wn, en, ws, es).
+#[allow(clippy::too_many_arguments)]
+fn beam_part(
+    out: &mut Vec<Vertex>,
+    o: Vec3,
+    start: i32,
+    end: i32,
+    [wn, en, ws, es]: [Vec3; 4],
+    [v1, v2]: [f32; 2],
+    color: u32,
+    s: Rect,
+    wrap: u32,
+) {
+    for (a, b) in [(wn, en), (es, ws), (en, es), (ws, wn)] {
+        let at = |c: Vec3, y: i32| o + c + Vec3::new(0.0, y as f32, 0.0);
+        for (p, uv) in [
+            (at(a, end), [s.u1, v1]),
+            (at(a, start), [s.u1, v2]),
+            (at(b, start), [s.u0, v2]),
+            (at(b, end), [s.u0, v1]),
+        ] {
+            out.push(Vertex {
+                pos: p.to_array(),
+                uv,
+                layer: 6,
+                color,
+                light: wrap,
+            });
+        }
+    }
+}
