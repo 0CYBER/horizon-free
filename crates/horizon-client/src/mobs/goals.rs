@@ -745,7 +745,7 @@ impl MeleeAttack {
             path_target: [0.0; 3],
             recalc: 0,
             until_attack: 0,
-            last_check: i64::MIN / 2,
+            last_check: 0,
             raise_arm: 0,
             interval: 20,
         }
@@ -928,8 +928,6 @@ pub struct NearestTarget {
 pub struct TargetState {
     unseen: i32,
     pub unseen_memory: i32,
-    reach_cache: i32,
-    reach_time: i32,
     /// `TargetGoal.getFollowDistance` as a fraction of the follow range.
     pub follow_scale: f64,
 }
@@ -938,8 +936,6 @@ impl Default for TargetState {
         Self {
             unseen: 0,
             unseen_memory: 0,
-            reach_cache: 0,
-            reach_time: 0,
             follow_scale: 1.0,
         }
     }
@@ -1008,23 +1004,6 @@ pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &m
     }
     true
 }
-/// TargetGoal.canAttack's reach check.
-fn can_reach(st: &mut TargetState, m: &mut Mob, cx: &mut Cx, at: Vec3) -> bool {
-    st.reach_time -= 1;
-    if st.reach_time <= 0 {
-        st.reach_cache = 0;
-    }
-    if st.reach_cache == 0 {
-        st.reach_time = reduced(10 + m.random.next_int_bound(5).unwrap_or(0));
-        let path = m.create_path_to_entity(cx.w, [at.x, at.y, at.z], 0);
-        let ok = path.and_then(|p| p.end()).is_some_and(|e| {
-            let (xx, zz) = (e.x - at.x.floor() as i32, e.z - at.z.floor() as i32);
-            f64::from(xx * xx + zz * zz) <= 2.25
-        });
-        st.reach_cache = if ok { 1 } else { 2 };
-    }
-    st.reach_cache == 1
-}
 impl Goal for NearestTarget {
     goal_clone!();
     fn flags(&self) -> u8 {
@@ -1041,21 +1020,17 @@ impl Goal for NearestTarget {
         }
         let range = m.attrs.follow_range * self.target_goal.follow_scale;
         self.found = None;
+        // NearestAttackableTargetGoal.findTarget: TargetingConditions.forCombat()
+        // always checks the line of sight; mustSee and mustReach only matter
+        // to TargetGoal.canContinueToUse and canAttack.
         match &self.prey {
             Prey::Player => {
-                if m.can_target_player(cx.w, range, self.must_see) {
-                    let at =
-                        cx.w.player
-                            .as_ref()
-                            .map(|p| p.position)
-                            .unwrap_or(Vec3::ZERO);
-                    if !self.must_reach || can_reach(&mut self.target_goal, m, cx, at) {
-                        self.found = Some(Who::Player);
-                    }
+                if m.can_target_player(cx.w, range, true) {
+                    self.found = Some(Who::Player);
                 }
             }
             prey => {
-                let pos = m.position;
+                let pos = Vec3::new(m.position.x, m.eye_y(), m.position.z);
                 let id = m.id;
                 let candidates: Vec<(u32, Vec3)> =
                     cx.w.nearby(pos, range, move |s| {
@@ -1072,10 +1047,7 @@ impl Goal for NearestTarget {
                     if m.distance_sqr(cpos) > range * range {
                         continue;
                     }
-                    if self.must_see && !m.sees(cx.w, Who::Mob(cid)) {
-                        continue;
-                    }
-                    if self.must_reach && !can_reach(&mut self.target_goal, m, cx, cpos) {
+                    if !m.sees(cx.w, Who::Mob(cid)) {
                         continue;
                     }
                     self.found = Some(Who::Mob(cid));
@@ -1090,8 +1062,6 @@ impl Goal for NearestTarget {
     }
     fn start(&mut self, m: &mut Mob, _: &mut Cx) {
         m.ai.target = self.found;
-        self.target_goal.reach_cache = 0;
-        self.target_goal.reach_time = 0;
         self.target_goal.unseen = 0;
     }
     fn stop(&mut self, m: &mut Mob, _: &mut Cx) {

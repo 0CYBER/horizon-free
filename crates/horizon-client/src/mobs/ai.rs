@@ -268,6 +268,11 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
     if m.removed {
         return false;
     }
+    // ServerLevel.tick checks despawning before ticking the entity.
+    if !check_despawn(m, w) {
+        m.removed = true;
+        return false;
+    }
     m.previous = m.position;
     m.previous_yaw = m.yaw;
     m.previous_body_yaw = m.body_yaw;
@@ -304,13 +309,6 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
     m.update_walk_animation();
     m.anim.end_tick(m.ai.swinging);
     tick_swing(m);
-    if !m.alive() {
-        return true;
-    }
-    if !check_despawn(m, w) {
-        m.removed = true;
-        return false;
-    }
     m.position.y > -128.0
 }
 /// LivingEntity.updateSwingTime (6-tick swing duration).
@@ -683,42 +681,39 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         _ => {}
     }
 }
-/// Mob.checkDespawn (players are the only despawn reference).
+/// Mob.checkDespawn, before the tick (players are the only despawn
+/// reference). Returns false when the mob is discarded.
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
-    let creature = m.kind.category == "creature";
-    // Warden.removeWhenFarAway is false; a jockey's chicken despawns like a monster.
-    if m.persistent
-        || m.species() == Species::Warden
-        || creature && m.kind.flags.animal && !m.extra.jockey
-    {
-        m.ai.no_action_time = 0;
-        return true;
-    }
     let Some(p) = &w.player else { return true };
     let d = m.distance_sqr(p.position);
-    // Patrols and raiders (`removeWhenFarAway`, `requiresCustomPersistence`).
-    if super::raider::keeps_alive(m, d)
-        || super::zombie_villager::keeps_alive(m)
-        || super::riders::keeps_alive(m)
-        // requiresCustomPersistence: a tame nautilus, a sulfur cube holding a
-        // block or let out of a bucket.
+    // requiresCustomPersistence: raiders in a raid, a tame nautilus, a sulfur
+    // cube holding a block or let out of a bucket.
+    let persistent = m.persistent
         || super::nautilus::is_nautilus(m.species()) && m.extra.tame
         || m.species() == Species::SulfurCube
-            && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0)
-    {
-        return true;
-    }
+            && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0);
+    // removeWhenFarAway: animals, wardens, patrols and raiders, zombie
+    // villagers being cured and ridden mobs stay.
+    let creature = m.kind.category == "creature";
+    let removable = !(m.species() == Species::Warden
+        || creature && m.kind.flags.animal && !m.extra.jockey
+        || super::raider::keeps_alive(m, d)
+        || super::zombie_villager::keeps_alive(m)
+        || super::riders::keeps_alive(m));
+    // MobCategory.getDespawnDistance / getNoDespawnDistance
     let despawn = if m.kind.category == "water_ambient" {
         64.0
     } else {
         128.0
     };
-    if d > despawn * despawn {
+    if !persistent && d > despawn * despawn && removable {
         return false;
     }
-    if m.ai.no_action_time > 600
+    if !persistent
+        && m.ai.no_action_time > 600
         && m.random.next_int_bound(800).unwrap_or(1) == 0
         && d > 32.0 * 32.0
+        && removable
     {
         return false;
     }

@@ -308,7 +308,7 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
         d(lk.wanted[1]),
         d(lk.wanted[2])
     );
-    let _ = writeln!(
+    let _ = write!(
         out,
         "\tin {},{},{},{}",
         f(m.ai.xxa),
@@ -316,6 +316,7 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
         f(m.ai.speed),
         u8::from(m.ai.jumping)
     );
+    let _ = writeln!(out, "\trng {:x}", m.random.state());
 }
 
 fn main() -> horizon_client::Result<()> {
@@ -404,6 +405,7 @@ fn main() -> horizon_client::Result<()> {
             world.chunks.insert(k, Arc::new(c));
         }
         world.day_time = s.time;
+        world.game_time = 1000;
         let mut mobs: Vec<Mob> = Vec::new();
         for (i, spec) in s.mobs.iter().enumerate() {
             let kind = types
@@ -457,6 +459,9 @@ fn main() -> horizon_client::Result<()> {
             }
         });
         let mut scratch = LegacyRandom::new(0);
+        for (i, m) in mobs.iter().enumerate() {
+            print(&mut out, 0, i, m);
+        }
         for t in 1..=s.ticks {
             world.game_time += 1;
             let snapshot: Vec<Seen> = mobs.iter().filter(|m| !m.removed).map(seen).collect();

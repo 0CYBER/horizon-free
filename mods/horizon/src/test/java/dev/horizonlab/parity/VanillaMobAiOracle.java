@@ -107,6 +107,32 @@ public final class VanillaMobAiOracle {
     static PrintWriter out;
     static final List<String> SOUNDS = new ArrayList<>();
 
+    /** Draws of a traced mob random: the caller frames of each draw (AI_TRACE=scenario:from-to). */
+    static final class TracingRandom extends net.minecraft.world.level.levelgen.LegacyRandomSource {
+        static int tick;
+        static boolean on;
+        final List<String> log;
+        final int who;
+        TracingRandom(long seed, List<String> log, int who) { super(seed); this.log = log; this.who = who; }
+        @Override
+        public int next(int bits) {
+            int v = super.next(bits);
+            if (on) {
+                StringBuilder sb = new StringBuilder(tick + " trace " + who + " " + bits + "=" + Integer.toHexString(v) + ":");
+                int n = 0;
+                for (StackTraceElement e : new Throwable().getStackTrace()) {
+                    String c = e.getClassName();
+                    if (c.contains("RandomSource") || c.contains("TracingRandom") || c.contains("Mth")) continue;
+                    sb.append(' ').append(c.substring(c.lastIndexOf('.') + 1)).append('.').append(e.getMethodName()).append(':').append(e.getLineNumber());
+                    if (++n == 7) break;
+                }
+                log.add(sb.toString());
+            }
+            return v;
+        }
+    }
+    static final List<String> TRACE = new ArrayList<>();
+
     static final class MobSpec {
         String type;
         double x, y, z;
@@ -187,6 +213,12 @@ public final class VanillaMobAiOracle {
         PackRepository packs = ServerPacksSource.createPackRepository(access);
         MinecraftServer.spin(thread -> Server.create(thread, access, packs));
     }
+
+    static String traceSpec() { String v = System.getenv("AI_TRACE"); return v == null ? "" : v; }
+    // Every mob random is traced unless AI_TRACE=0.
+    static boolean tracing(Scenario s) { return !traceSpec().equals("0"); }
+    static int traceFrom() { return 0; }
+    static int traceTo() { return Integer.MAX_VALUE; }
 
     static String d(double v) { return Long.toHexString(Double.doubleToRawLongBits(v)); }
     static String f(float v) { return Integer.toHexString(Float.floatToRawIntBits(v)); }
@@ -376,6 +408,8 @@ public final class VanillaMobAiOracle {
             out.println("== " + s.name);
             var clock = level.registryAccess().lookupOrThrow(Registries.WORLD_CLOCK).getOrThrow(WorldClocks.OVERWORLD);
             this.clockManager().setTotalTicks(clock, s.time);
+            // Every scenario starts at game time 1000.
+            this.getWorldData().overworldData().setGameTime(1000L);
             // isRaining/isThundering read the rain and thunder levels only.
             level.setRainLevel(s.rain ? 1.0F : 0.0F);
             level.setThunderLevel(s.thunder ? 1.0F : 0.0F);
@@ -398,6 +432,7 @@ public final class VanillaMobAiOracle {
             for (MobSpec spec : s.mobs) {
                 EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(net.minecraft.resources.Identifier.parse(spec.type));
                 Mob mob = (Mob) type.create(level, EntitySpawnReason.COMMAND);
+                if (tracing(s)) field(Entity.class, "random").set(mob, new TracingRandom(0L, TRACE, mobs.size()));
                 mob.setId(id++);
                 mob.snapTo(spec.x, spec.y, spec.z, spec.yaw, 0.0F);
                 mob.setYHeadRot(spec.yaw);
@@ -424,6 +459,7 @@ public final class VanillaMobAiOracle {
             Method tickTime = method(ServerLevel.class, "tickTime");
             Object manager = get(level, "entityManager");
             Method managerTick = method(manager.getClass(), "tick");
+            for (int i = 0; i < mobs.size(); i++) print(0, i, mobs.get(i));
             for (int t = 1; t <= s.ticks; t++) {
                 level.environmentAttributes().invalidateTickCache();
                 level.updateSkyBrightness();
@@ -435,6 +471,8 @@ public final class VanillaMobAiOracle {
                     player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
                     player.setDeltaMovement(Vec3.ZERO);
                 }
+                TracingRandom.tick = t;
+                TracingRandom.on = tracing(s) && t >= traceFrom() && t <= traceTo();
                 SOUNDS.clear();
                 for (Mob mob : mobs) {
                     if (mob.isRemoved()) continue;
@@ -445,6 +483,8 @@ public final class VanillaMobAiOracle {
                 managerTick.invoke(manager);
                 for (int i = 0; i < mobs.size(); i++) print(t, i, mobs.get(i));
                 for (String sound : SOUNDS) out.println(t + " sound " + sound);
+                for (String line : TRACE) out.println(line);
+                TRACE.clear();
             }
             for (Mob mob : mobs) mob.discard();
             managerTick.invoke(manager);
@@ -518,6 +558,7 @@ public final class VanillaMobAiOracle {
                 .append(d((double) get(lc, "wantedY"))).append(',').append(d((double) get(lc, "wantedZ")));
             sb.append("\tin ").append(f(m.xxa)).append(',').append(f(m.zza)).append(',').append(f(m.getSpeed())).append(',')
                 .append(field(LivingEntity.class, "jumping").getBoolean(m) ? 1 : 0);
+            sb.append("\trng ").append(Long.toHexString(((java.util.concurrent.atomic.AtomicLong) field(net.minecraft.world.level.levelgen.LegacyRandomSource.class, "seed").get(m.getRandom())).get()));
             Brain<?> brain = m.getBrain();
             if (!brain.getActiveActivities().isEmpty() && !((Map<?, ?>) get(brain, "sensors")).isEmpty()) {
                 List<String> acts = new ArrayList<>();

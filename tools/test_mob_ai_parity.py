@@ -116,6 +116,9 @@ def parse(path):
         if parts[1] == 'sound':
             cur['sounds'].setdefault(t, []).append(parts[2])
             continue
+        if parts[1] == 'trace':
+            cur.setdefault('trace', {}).setdefault(t, []).append(parts[2])
+            continue
         mob = int(parts[1])
         row = {}
         if len(parts) > 2:
@@ -140,6 +143,22 @@ def decode(value):
     for word in value.split(' '):
         out.append(','.join(one(p) if all(c in '0123456789abcdef' for c in p) and len(p) >= 5 else p for p in word.split(',')))
     return ' '.join(out)
+
+
+MULT, MASK = 0x5DEECE66D, (1 << 48) - 1
+
+
+def draws(before, after, limit=20000):
+    """How many LegacyRandomSource steps lead from one state to the next."""
+    try:
+        s, goal = int(before, 16), int(after, 16)
+    except (TypeError, ValueError):
+        return '?'
+    for n in range(limit):
+        if s == goal:
+            return n
+        s = (s * MULT + 11) & MASK
+    return f'>{limit}'
 
 
 def compare(vanilla, rust, fields=None):
@@ -169,11 +188,18 @@ def compare(vanilla, rust, fields=None):
                     diffs = []
                     for k in (a or {}):
                         if b is None or a.get(k) != b.get(k):
-                            diffs.append(f'{k}: vanilla {decode(a.get(k, "?"))} | horizon {decode((b or {}).get(k, "?"))}')
+                            show = (lambda x: x) if k == 'rng' else decode
+                            diffs.append(f'{k}: vanilla {show(a.get(k, "?"))} | horizon {show((b or {}).get(k, "?"))}')
                     for k in (b or {}):
                         if a is None or k not in a:
                             diffs.append(f'{k}: vanilla ? | horizon {decode(b[k])}')
-                    report.append(f'{name} mob {mob}: first divergence at tick {t} of {len(ticks)}')
+                    prev_v = v['ticks'].get(t - 1, {}).get(mob, {}).get('rng')
+                    prev_r = r['ticks'].get(t - 1, {}).get(mob, {}).get('rng')
+                    report.append(f'{name} mob {mob}: first divergence at tick {t} of {len(ticks)} '
+                                  f'(random draws this tick: vanilla {draws(prev_v, (a or {}).get("rng"))}, '
+                                  f'horizon {draws(prev_r, (b or {}).get("rng"))})')
+                    for line in [x for x in v.get('trace', {}).get(t, []) if x.split(' ', 1)[0] == str(mob)][:40]:
+                        report.append('      vanilla ' + line)
                     report.extend('    ' + d for d in diffs[:12])
             if first is not None:
                 clean = False
