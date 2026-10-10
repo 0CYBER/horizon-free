@@ -780,7 +780,7 @@ impl Scoreboard {
 
     // saved data
     pub fn pack(&self) -> Tag {
-        let objectives = self
+        let objectives: Vec<Tag> = self
             .objectives
             .iter()
             .map(|o| {
@@ -824,7 +824,7 @@ impl Scoreboard {
             .iter()
             .map(|(k, v)| (k.as_str(), Tag::String(v.as_str().into())))
             .collect::<Vec<_>>();
-        let teams = self
+        let teams: Vec<Tag> = self
             .teams
             .iter()
             .map(|t| {
@@ -866,12 +866,21 @@ impl Scoreboard {
                 Tag::compound(c)
             })
             .collect();
-        Tag::compound([
-            ("Objectives", Tag::List(objectives)),
-            ("PlayerScores", Tag::List(scores)),
-            ("DisplaySlots", Tag::compound(slots)),
-            ("Teams", Tag::List(teams)),
-        ])
+        // The codec leaves out empty parts.
+        let mut entries: Vec<(&str, Tag)> = Vec::new();
+        if !objectives.is_empty() {
+            entries.push(("Objectives", Tag::List(objectives)));
+        }
+        if !scores.is_empty() {
+            entries.push(("PlayerScores", Tag::List(scores)));
+        }
+        if !slots.is_empty() {
+            entries.push(("DisplaySlots", Tag::compound(slots)));
+        }
+        if !teams.is_empty() {
+            entries.push(("Teams", Tag::List(teams)));
+        }
+        Tag::compound(entries)
     }
     pub fn unpack(data: &Tag) -> Self {
         let mut sb = Scoreboard::default();

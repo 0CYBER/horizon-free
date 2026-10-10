@@ -111,6 +111,27 @@ impl SessionLock {
         Ok(Self(file))
     }
 }
+/// Refuse a world last saved by an older game version: chunks are only read
+/// at the current DataVersion, and the DataFixerUpper chain is not ported.
+/// `tools/upgrade_world.py` runs vanilla's own upgrader (`--forceUpgrade`).
+pub fn check_data_version(world: &Path) -> Result<()> {
+    let Some(root) = read_dat(&world.join("level.dat")) else {
+        return Ok(());
+    };
+    let version = root
+        .get("Data")
+        .and_then(|d| number(d.get("DataVersion")))
+        .unwrap_or(i64::from(DATA_VERSION));
+    if version < i64::from(DATA_VERSION) {
+        return Err(format!(
+            "{} was saved with DataVersion {version} (this game is {DATA_VERSION}); \
+             upgrade it first with tools/upgrade_world.py",
+            world.display()
+        )
+        .into());
+    }
+    Ok(())
+}
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
 pub fn migrate_legacy(world: &Path) -> Result<()> {
@@ -2158,6 +2179,17 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn old_data_version_is_refused() {
+        let dir = std::env::temp_dir().join(format!("horizon-dv-{}", std::process::id()));
+        let level =
+            |v: i32| Tag::compound([("Data", Tag::compound([("DataVersion", Tag::Int(v))]))]);
+        super::write_dat(&dir.join("level.dat"), level(3955)).unwrap();
+        assert!(super::check_data_version(&dir).is_err());
+        super::write_dat(&dir.join("level.dat"), level(super::DATA_VERSION)).unwrap();
+        assert!(super::check_data_version(&dir).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[test]
     fn session_lock_is_exclusive() {
         let dir = std::env::temp_dir().join(format!("horizon-lock-{}", std::process::id()));

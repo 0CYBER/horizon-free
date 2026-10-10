@@ -348,10 +348,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         "minecraft:warden" => {
             if let Some(st) = &m.extra.warden {
                 map.insert("listener".into(), st.vibration.to_nbt());
-                map.insert(
-                    "anger".into(),
-                    Tag::compound([("suspects", Tag::List(Vec::new()))]),
-                );
+                map.insert("anger".into(), Tag::compound(Vec::<(&str, Tag)>::new()));
             }
         }
         "minecraft:ravager" => {
@@ -535,6 +532,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 crate::mobs::gear::set(&mut m, index, stack.enchantments().to_vec());
             }
         }
+    } else {
+        // Registration hands out default weapons (finalizeSpawn does in
+        // vanilla); a loaded mob holds only what its file lists.
+        m.extra.main_hand = None;
     }
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
     m.persistent = flag(tag, "PersistenceRequired");

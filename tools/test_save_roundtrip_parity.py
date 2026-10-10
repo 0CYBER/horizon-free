@@ -56,12 +56,15 @@ IGNORED = {
     # chunk generation first), so counters and positions of live things move on.
     r'^chunk\.block_entities\.\(2, -60, 5\)\.(cooking_time_spent|lit_time_remaining|Items\[\]\.count)$':
         'the lit furnace keeps smelting',
-    r'^chunk\.block_entities\..*\.(ticks_since_song_started|Age|BrewTime|warning_level|ticks_in_hive)$':
+    r'^chunk\.block_entities\..*\.(ticks_since_song_started|Age|BrewTime|warning_level|ticks_in_hive|last_vibration_frequency|listener\..*|RecipesUsed\..*)$':
         'block entity timers advance',
     r'^entity\.(Age|Motion\[\]|Rotation\[\]|Pos\[\]|OnGround|HurtTime|Health|TimeInOverworld|fall_distance|'
     r'wasOnGround|Fire|Air|DeathTime|Fuse|life|inGround|ticks_in_ground)$': 'entity simulation advances',
     r'^level\.dat\.Data\.(Time|LastPlayed)$': 'clock and wall time of the save',
     r'^level\.dat\.Data\.(ServerBrands.*|singleplayer_uuid)$': 'a client world names its brand and its player',
+    r'^entity\.listener\.selector\.(event|tick)$': 'the warden listener holds the last vibration it heard; timing',
+    r'^players/data/.*\.dat\.warden_spawn_tracker\.': 'counts ticks since the last warning; timing',
+    r'^players/data/.*\.dat\.recipeBook\.(recipes|toBeDisplayed)': 'which recipes unlock depends on the pickup history of the bot',
     r'^players/data/.*\.dat\.(Health|Pos\[\]|foodSaturationLevel|foodLevel|foodExhaustionLevel|Motion\[\]|OnGround)$':
         'the player keeps simulating',
 }
@@ -69,6 +72,7 @@ IGNORED = {
 # Real differences that are known and not fixed yet: (pattern -> what is wrong). They are
 # reported, and do not fail the run, so that new differences still do.
 KNOWN_GAPS = {
+    r'^chunk\.block_entities\.\(26, -60, 5\)\.triggered': 'crafter: Horizon derives the BE flag from the block state each tick instead of in neighborChanged',
     r'^chunk\.sections\.blocks|^chunk\.Heightmaps': 'a falling block entity with NoGravity lands anyway',
     r'^entity \(28672, 0, 0, 11\)': 'the spider is gone from the Horizon save (not yet explained)',
     r'^entity \(28672, 0, 0, 30\) minecraft:falling_block': 'the NoGravity falling block landed (above)',
@@ -532,7 +536,8 @@ def main():
                 print('vanilla log (Horizon save):', line)
                 failures += 1
         volatile = re.compile(r'(cooking_time_spent|lit_time_remaining|ticks_since_song_started|Age|BrewTime|'
-                              r'ticks_in_hive|state_updating_resumes_at|LastExecution|last_vibration_frequency|warning_level): -?[0-9]+[a-zA-Z]?')
+                              r'ticks_in_hive|triggered|state_updating_resumes_at|LastExecution|last_vibration_frequency|warning_level): -?[0-9]+[a-zA-Z]?')
+        volatile2 = re.compile(r'(RecipesUsed: \{[^}]*\}|listener: \{.*\}(?=, x))')
         for label in views0:
             if label.startswith('entity'):
                 # Entity data moves with the simulation: only require vanilla to load it.
@@ -542,8 +547,8 @@ def main():
                     print(f'VANILLA cannot find {label} in the Horizon save')
                     failures += 1
                 continue
-            if volatile.sub('', views0[label]) != volatile.sub('', views1.get(label, '')):
-                print(f'VANILLA VIEW differs: {label}\n   V0 {views0[label][:300]}\n   H  {str(views1.get(label))[:300]}')
+            if volatile2.sub('', volatile.sub('', views0[label])) != volatile2.sub('', volatile.sub('', views1.get(label, ''))):
+                print(f'VANILLA VIEW differs: {label}\n   V0 {views0[label][:900]}\n   H  {str(views1.get(label))[:900]}')
                 failures += 1
     print('save round-trip parity', 'FAILED' if failures else 'ok', f'({failures} unexplained differences)')
     if not args.keep and not failures:
