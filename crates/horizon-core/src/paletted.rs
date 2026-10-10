@@ -693,15 +693,20 @@ mod tests {
                 assert_eq!(c.get(i), v);
             }
             let packed = c.pack();
-            let loaded = PalettedContainer::from_packed(strategy, packed.palette.clone(), packed.data.as_deref())
-                .unwrap();
+            let loaded = PalettedContainer::from_packed(
+                strategy,
+                packed.palette.clone(),
+                packed.data.as_deref(),
+            )
+            .unwrap();
             assert_eq!(loaded, c);
             assert_eq!(loaded.pack(), packed);
             let again = PalettedContainer::from_values(strategy, &plain);
             assert_eq!(again, c);
             assert_eq!(again.pack(), packed);
             let (bits, palette, words) = c.to_wire();
-            let wire = PalettedContainer::from_wire(strategy, bits, palette, words.to_vec()).unwrap();
+            let wire =
+                PalettedContainer::from_wire(strategy, bits, palette, words.to_vec()).unwrap();
             assert_eq!(wire, c);
         }
     }

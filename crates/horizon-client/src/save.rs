@@ -863,11 +863,14 @@ pub fn decode_with(
                 .collect();
             let target = Arc::make_mut(&mut chunk.sections[si as usize]);
             let data = match states.get("data") {
-                Some(Tag::LongArray(data)) => Some(data.iter().map(|&w| w as u64).collect::<Vec<_>>()),
+                Some(Tag::LongArray(data)) => {
+                    Some(data.iter().map(|&w| w as u64).collect::<Vec<_>>())
+                }
                 _ => None,
             };
             let palette: Vec<u32> = ids.iter().map(|&id| u32::from(id)).collect();
-            if let Ok(blocks) = PalettedContainer::from_packed(BLOCK_STRATEGY, palette, data.as_deref())
+            if let Ok(blocks) =
+                PalettedContainer::from_packed(BLOCK_STRATEGY, palette, data.as_deref())
             {
                 target.blocks = blocks;
             }
@@ -883,7 +886,9 @@ pub fn decode_with(
                 })
                 .collect();
             let data = match b.get("data") {
-                Some(Tag::LongArray(data)) => Some(data.iter().map(|&w| w as u64).collect::<Vec<_>>()),
+                Some(Tag::LongArray(data)) => {
+                    Some(data.iter().map(|&w| w as u64).collect::<Vec<_>>())
+                }
                 _ => None,
             };
             let palette: Vec<u32> = ids.iter().map(|&id| u32::from(id)).collect();

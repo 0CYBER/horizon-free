@@ -195,7 +195,8 @@ impl ChunkGenerator for VanillaTerrain {
                 }
             }
             if any {
-                Arc::make_mut(&mut out.sections[si as usize]).blocks = Section::from_blocks(&values);
+                Arc::make_mut(&mut out.sections[si as usize]).blocks =
+                    Section::from_blocks(&values);
             }
         }
         let base_section = chunk.terrain.min_y() >> 4;

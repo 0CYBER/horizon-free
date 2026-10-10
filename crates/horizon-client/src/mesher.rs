@@ -397,14 +397,13 @@ impl Padded {
                     let chunk = region[((z + 16) >> 4) as usize][((x + 16) >> 4) as usize];
                     let i = pi(x, y, z);
                     if let Some(c) = chunk {
-                        blocks[i] = if (0..16).contains(&x)
-                            && (0..16).contains(&y)
-                            && (0..16).contains(&z)
-                        {
-                            own[(y << 8 | z << 4 | x) as usize]
-                        } else {
-                            c.get(x & 15, wy, z & 15)
-                        };
+                        blocks[i] =
+                            if (0..16).contains(&x) && (0..16).contains(&y) && (0..16).contains(&z)
+                            {
+                                own[(y << 8 | z << 4 | x) as usize]
+                            } else {
+                                c.get(x & 15, wy, z & 15)
+                            };
                         light[i] = c.light(x & 15, wy, z & 15);
                     } else {
                         light[i] = 0xF0;

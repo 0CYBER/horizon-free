@@ -33,7 +33,11 @@ fn main() -> Result<()> {
     let assets = Assets::load(&root)?;
     let facts = BlockFacts::load(&root, assets.registry)?;
     let biomes = Biomes::load(&root)?;
-    let tables = MeshTables::new(&assets, &facts, models::load_visibility(&root, assets.registry)?)?;
+    let tables = MeshTables::new(
+        &assets,
+        &facts,
+        models::load_visibility(&root, assets.registry)?,
+    )?;
     let light = LightTables::load(&root, assets.registry, &facts)?;
     let terrain = VanillaTerrain::new(&root.join("worldgen"), assets.registry, &biomes, seed)?;
     let mut worker = terrain.worker();
@@ -51,7 +55,9 @@ fn main() -> Result<()> {
         for x in 1..=inner {
             let mut region: [Proto; 9] = std::array::from_fn(|k| {
                 let (dx, dz) = (k as i32 % 3 - 1, k as i32 / 3 - 1);
-                protos[((z + dz) * outer + x + dx) as usize].take().expect("proto")
+                protos[((z + dz) * outer + x + dx) as usize]
+                    .take()
+                    .expect("proto")
             });
             terrain.decorate(&mut worker, &mut region);
             for (k, p) in region.into_iter().enumerate() {
@@ -73,7 +79,10 @@ fn main() -> Result<()> {
         }
     }
     let finish = started.elapsed().as_secs_f64();
-    println!("finish (proto -> resident chunk): {:.1} ms per chunk", finish * 1e3 / chunks.len() as f64);
+    println!(
+        "finish (proto -> resident chunk): {:.1} ms per chunk",
+        finish * 1e3 / chunks.len() as f64
+    );
 
     let chunks: Vec<Arc<Chunk>> = chunks.into_iter().map(Arc::new).collect();
     let at = |x: i32, z: i32| chunks[((z - 1) * inner + x - 1) as usize].clone();
@@ -90,7 +99,10 @@ fn main() -> Result<()> {
             lit.push(((x, z), light_chunk(&borrowed, &light, true)));
         }
     }
-    println!("light: {:.2} ms per column", started.elapsed().as_secs_f64() * 1e3 / lit.len() as f64);
+    println!(
+        "light: {:.2} ms per column",
+        started.elapsed().as_secs_f64() * 1e3 / lit.len() as f64
+    );
     let mut chunks: Vec<Chunk> = chunks.iter().map(|c| (**c).clone()).collect();
     for ((x, z), sections) in lit {
         chunks[((z - 1) * inner + x - 1) as usize].sections = sections;
@@ -149,7 +161,11 @@ fn main() -> Result<()> {
         }
         best = best.min(started.elapsed().as_secs_f64() / f64::from(jobs));
     }
-    println!("mesh: {:.1} us per section ({} quads total)", best * 1e6, quads);
+    println!(
+        "mesh: {:.1} us per section ({} quads total)",
+        best * 1e6,
+        quads
+    );
 
     // Random lookups, as collision and entity queries do.
     let mut state = 0x9E37_79B9_7F4A_7C15u64;

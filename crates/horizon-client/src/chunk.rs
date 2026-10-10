@@ -1,8 +1,8 @@
 //! Resident client chunk storage. Sections are reference-counted so worker
 //! threads can mesh and light immutable snapshots while the game thread edits
 //! (copy-on-write through `Arc::make_mut`).
-use horizon_world::registry::BlockStateId;
 use horizon_core::paletted::{PalettedContainer, Strategy};
+use horizon_world::registry::BlockStateId;
 use std::sync::Arc;
 
 pub const MIN_Y: i32 = -64;
@@ -80,10 +80,10 @@ impl Section {
     /// block uses any more.
     pub fn compact(&mut self) {
         for container in [&mut self.blocks, &mut self.biomes] {
-            if container.bits() != 0 {
-                if let Some(v) = container.uniform() {
-                    *container = PalettedContainer::new(container.strategy(), v);
-                }
+            if container.bits() != 0
+                && let Some(v) = container.uniform()
+            {
+                *container = PalettedContainer::new(container.strategy(), v);
             }
         }
         if let Light::Full(a) = &self.light
@@ -183,8 +183,9 @@ impl Chunk {
     /// Sets the biome of one quart cell (`qy` counts from the column's bottom).
     pub fn set_biome_cell(&mut self, qx: i32, qy: i32, qz: i32, biome: u16) {
         let section = Arc::make_mut(&mut self.sections[(qy >> 2) as usize]);
-        section
-            .biomes
-            .set(((qy & 3) << 4 | (qz & 3) << 2 | (qx & 3)) as usize, u32::from(biome));
+        section.biomes.set(
+            ((qy & 3) << 4 | (qz & 3) << 2 | (qx & 3)) as usize,
+            u32::from(biome),
+        );
     }
 }

@@ -106,13 +106,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let reread = read(strategy, &write(&c));
         let packed = c.pack();
         let storage = packed.data.as_ref().map_or(BASIS, |data| {
-            data.iter()
-                .flat_map(|w| w.to_le_bytes())
-                .fold(BASIS, |h, b| fnv(h, b))
+            data.iter().flat_map(|w| w.to_le_bytes()).fold(BASIS, fnv)
         });
         let palette: Vec<String> = packed.palette.iter().map(u32::to_string).collect();
-        let loaded =
-            PalettedContainer::from_packed(strategy, packed.palette.clone(), packed.data.as_deref())?;
+        let loaded = PalettedContainer::from_packed(
+            strategy,
+            packed.palette.clone(),
+            packed.data.as_deref(),
+        )?;
         writeln!(
             out,
             "{} {} cp={} bits={} final={} values={} read={}/{} packed={}/{}/{} loaded={}/{}",
