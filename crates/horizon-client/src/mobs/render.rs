@@ -915,7 +915,6 @@ fn render_visible(
     for (part, uv, color) in extra {
         draw(part, base, &poses, *uv, *color, light, overlay, out);
     }
-    held_items(m, &model, base, &poses, atlas, light, out);
     let mut all_layers = layers(m);
     // WardenRenderer: the translucent emissive layers fade with the animations.
     if m.species() == Species::Warden {
@@ -1013,57 +1012,6 @@ pub fn part_matrix(
         .iter()
         .find_map(|c| part_matrix(c, m, poses, name, x_offset))
 }
-/// ItemModel thirdperson_righthand display transform by item model parent.
-fn item_display(item: &str) -> ([f32; 3], [f32; 3], [f32; 3]) {
-    let name = item.trim_start_matches("minecraft:");
-    if name == "bow" {
-        ([-80.0, 260.0, -40.0], [-1.0, -2.0, 2.5], [0.9; 3])
-    } else if name == "crossbow" {
-        ([-90.0, 0.0, -60.0], [2.0, 0.1, -3.0], [0.9; 3])
-    } else if name == "fishing_rod"
-        || name == "carrot_on_a_stick"
-        || name == "warped_fungus_on_a_stick"
-    {
-        ([0.0, 90.0, 55.0], [0.0, 4.0, 2.5], [0.85; 3])
-    } else if [
-        "_sword",
-        "_axe",
-        "_pickaxe",
-        "_shovel",
-        "_hoe",
-        "trident",
-        "mace",
-        "stick",
-        "bone",
-        "blaze_rod",
-    ]
-    .iter()
-    .any(|t| name.ends_with(t))
-    {
-        ([0.0, -90.0, 55.0], [0.0, 4.0, 0.5], [0.85; 3])
-    } else {
-        ([0.0, 0.0, 0.0], [0.0, 3.0, 1.0], [0.55; 3])
-    }
-}
-/// The sprite drawn for a held item (bow pull frames while charging).
-fn item_sprite(m: &Mob, item: &str) -> String {
-    let name = item.trim_start_matches("minecraft:");
-    if name == "bow" && m.extra.using_item > 0 {
-        let pull = m.extra.using_item as f32 * 0.05;
-        let frame = if pull >= 0.9 {
-            2
-        } else if pull >= 0.65 {
-            1
-        } else {
-            0
-        };
-        return format!("item/bow_pulling_{frame}");
-    }
-    if name == "crossbow" && m.extra.flag2 {
-        return "item/crossbow_arrow".into();
-    }
-    format!("item/{name}")
-}
 /// The hand of a mob in model space, up to the item's own transform
 /// (`ItemInHandLayer.submitArmWithItem`).
 fn hand_base(
@@ -1122,10 +1070,10 @@ pub fn part_transform(
     anim::setup(m, &s, &mut poses, &data.animations);
     part_matrix(&model, base, &poses, part, 0.0)
 }
-/// Where a mob holds a block item (`block/block` thirdperson display: turned
-/// 75 and 45 degrees, at 0.375 scale), as the hand transform for `left`, or
-/// `None` when the mob shows no held items.
-pub fn held_block_transform(
+/// The pose a mob's held item is submitted under (`ItemInHandLayer`:
+/// `translateToHand`, then the hand offset; the item model adds its own
+/// display transform), or `None` when the mob shows no held items.
+pub fn held_item_transform(
     m: &Mob,
     alpha: f32,
     camera: glam::DVec3,
@@ -1145,106 +1093,5 @@ pub fn held_block_transform(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
-    let mut t = hand_base(m, &model, base, &poses, left)?;
-    let ry = if left { -45.0f32 } else { 45.0 };
-    t *= glam::Mat4::from_translation(glam::Vec3::new(0.0, 2.5, 0.0) / 16.0);
-    t *= glam::Mat4::from_quat(glam::Quat::from_euler(
-        glam::EulerRot::XYZ,
-        75.0f32.to_radians(),
-        ry.to_radians(),
-        0.0,
-    ));
-    t *= glam::Mat4::from_scale(glam::Vec3::splat(0.375));
-    t *= glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
-    Some(t)
-}
-/// ItemInHandLayer: items in the mob's hands.
-fn held_items(
-    m: &Mob,
-    model: &Part,
-    base: glam::Mat4,
-    poses: &Poses,
-    atlas: Atlas,
-    light: u32,
-    out: &mut Vec<Vertex>,
-) {
-    if !super::illager::shows_item(m) {
-        return;
-    }
-    for (item, left) in [(&m.extra.main_hand, false), (&m.extra.off_hand, true)] {
-        let Some(item) = item else { continue };
-        let Some(mut t) = hand_base(m, model, base, poses, left) else {
-            continue;
-        };
-        let Some(uv) = atlas(&item_sprite(m, item)) else {
-            continue;
-        };
-        // ItemTransform.apply (mirrored for the left hand).
-        let (rot, tr, sc) = item_display(item);
-        let (ry, rz, tx) = if left {
-            (-rot[1], -rot[2], -tr[0])
-        } else {
-            (rot[1], rot[2], tr[0])
-        };
-        t *= glam::Mat4::from_translation(glam::Vec3::new(tx, tr[1], tr[2]) / 16.0);
-        t *= glam::Mat4::from_quat(glam::Quat::from_euler(
-            glam::EulerRot::XYZ,
-            rot[0].to_radians(),
-            ry.to_radians(),
-            rz.to_radians(),
-        ));
-        t *= glam::Mat4::from_scale(glam::Vec3::from(sc));
-        t *= glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
-        let glint = super::gear::enchanted(
-            m,
-            if left {
-                super::gear::OFF
-            } else {
-                super::gear::MAIN
-            },
-        );
-        draw_item_plane_with(t, uv, light, if glint { 7 } else { 0 }, out);
-    }
-}
-/// A generated item model: the sprite on two faces 1/16 apart.
-pub fn draw_item_plane(t: glam::Mat4, uv: [f32; 4], light: u32, out: &mut Vec<Vertex>) {
-    draw_item_plane_with(t, uv, light, 0, out);
-}
-/// `draw_item_plane` with an entity shader overlay (7: enchantment glint).
-pub fn draw_item_plane_with(
-    t: glam::Mat4,
-    uv: [f32; 4],
-    light: u32,
-    overlay: u32,
-    out: &mut Vec<Vertex>,
-) {
-    let (u0, v0, u1, v1) = (uv[0], uv[1], uv[2], uv[3]);
-    let south = 8.5 / 16.0;
-    let north = 7.5 / 16.0;
-    let quads = [
-        [
-            ([0.0, 0.0, south], [u0, v1]),
-            ([1.0, 0.0, south], [u1, v1]),
-            ([1.0, 1.0, south], [u1, v0]),
-            ([0.0, 1.0, south], [u0, v0]),
-        ],
-        [
-            ([1.0, 0.0, north], [u1, v1]),
-            ([0.0, 0.0, north], [u0, v1]),
-            ([0.0, 1.0, north], [u0, v0]),
-            ([1.0, 1.0, north], [u1, v0]),
-        ],
-    ];
-    for q in quads {
-        for (p, uv) in q {
-            let pos = t.transform_point3(glam::Vec3::from(p));
-            out.push(Vertex {
-                pos: pos.to_array(),
-                uv,
-                layer: overlay,
-                color: 0xFFFF_FFFF,
-                light,
-            });
-        }
-    }
+    hand_base(m, &model, base, &poses, left)
 }

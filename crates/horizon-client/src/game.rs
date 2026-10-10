@@ -35,6 +35,7 @@ mod ghasts;
 mod golems;
 mod growth;
 mod health_hud;
+mod item_draw;
 mod jukebox;
 mod lan;
 mod lan_actions;
@@ -290,16 +291,6 @@ enum Screen {
     /// WorldOptionsScreen (game/lan_screen.rs).
     WorldOptions,
 }
-#[derive(Clone)]
-enum Icon {
-    Flat(String),
-    Cube {
-        top: String,
-        left: String,
-        right: String,
-        tint: u32,
-    },
-}
 struct Mining {
     pos: [i32; 3],
     progress: f32,
@@ -493,7 +484,6 @@ pub struct Resources {
     biomes: Arc<Biomes>,
     environment: Environment,
     atlas: HudAtlas,
-    icons: HashMap<String, Option<Icon>>,
     layer_names: HashMap<u32, String>,
     mob_types: HashMap<String, Arc<MobType>>,
     mob_data: horizon_client::mobs::MobData,
@@ -514,8 +504,8 @@ pub struct Resources {
     threads: usize,
     player_arm: Option<horizon_client::mobs::Part>,
     player_type: Option<Arc<horizon_client::mobs::MobType>>,
-    /// firstperson_righthand display transforms per item: (rotation, translation, scale).
-    displays: HashMap<String, Option<([f32; 3], [f32; 3], [f32; 3])>>,
+    /// Item definitions, baked item models and special renderers.
+    item_renderer: Arc<horizon_client::item_render::ItemRenderer>,
     /// Enchantments, workstation recipes and brewing (game/stations.rs).
     stations: horizon_client::stations::StationData,
 }
@@ -978,37 +968,6 @@ impl Game<'_> {
             }
         }
         Some(stack)
-    }
-    /// The block's particle texture (approximated by its first model face) and tint.
-    /// The `particle` texture of a block's first blockstate model (for models without faces).
-    fn model_particle(&self, block: &str) -> Option<String> {
-        let root = &self.options.resources;
-        let read = |path: String| -> Option<serde_json::Value> {
-            serde_json::from_slice(&std::fs::read(root.join(path)).ok()?).ok()
-        };
-        let states = read(format!("assets/minecraft/blockstates/{block}.json"))?;
-        let mut model = states["variants"]
-            .as_object()?
-            .values()
-            .next()
-            .and_then(|v| v["model"].as_str().or_else(|| v[0]["model"].as_str()))?
-            .to_owned();
-        for _ in 0..8 {
-            let m = read(format!(
-                "assets/minecraft/models/{}.json",
-                model.trim_start_matches("minecraft:")
-            ))?;
-            if let Some(p) = m["textures"]["particle"].as_str() {
-                let p = if let Some(alias) = p.strip_prefix('#') {
-                    m["textures"][alias].as_str()?
-                } else {
-                    p
-                };
-                return Some(p.trim_start_matches("minecraft:").to_owned());
-            }
-            model = m["parent"].as_str()?.to_owned();
-        }
-        None
     }
     fn particle_sprite(&self, state: BlockStateId) -> Option<(String, u32)> {
         let models = self
@@ -2150,7 +2109,15 @@ impl Game<'_> {
                 0.5 + 0.5 * self.world.random.next_int_bound(2).unwrap_or(0) as f32,
                 pitch,
             );
-            if let Some(Icon::Flat(sprite)) = self.icon(&stack.item) {
+            // `ItemParticleOption`: the particle material of a random layer of
+            // the stack resolved for the ground (`BreakingItemParticle`).
+            let state = self.resolve_item(
+                &stack,
+                horizon_assets::item_model::DisplayContext::Ground,
+                None,
+                0,
+            );
+            if let Some(sprite) = state.pick_particle(&mut self.world.random) {
                 let (yaw, pitch) = (
                     f64::from(self.yaw).to_radians(),
                     f64::from(self.pitch).to_radians(),
@@ -2834,231 +2801,11 @@ impl Game<'_> {
         }
         window.set_cursor_visible(!self.captured);
     }
-    fn icon(&mut self, item: &str) -> Option<Icon> {
-        if let Some(icon) = self.res.icons.get(item) {
-            return icon.clone();
-        }
-        let icon = self.resolve_icon(item);
-        self.res.icons.insert(item.to_owned(), icon.clone());
-        icon
-    }
-    fn resolve_icon(&self, item: &str) -> Option<Icon> {
-        let root = &self.options.resources;
-        let name = item.trim_start_matches("minecraft:");
-        let info = self.res.items.get(item);
-        let model_name = info.map_or(name.to_owned(), |i| {
-            i.model.trim_start_matches("minecraft:").to_owned()
-        });
-        let def: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(root.join(format!("assets/minecraft/items/{model_name}.json"))).ok()?,
-        )
-        .ok()?;
-        // Find the first plain model reference in the item model definition.
-        fn first_model(v: &serde_json::Value) -> Option<String> {
-            match v {
-                serde_json::Value::Object(o) => {
-                    if o.get("type").and_then(|t| t.as_str()) == Some("minecraft:model") {
-                        return o.get("model").and_then(|m| m.as_str()).map(str::to_owned);
-                    }
-                    // A display_context select: the inventory shows the `gui` case.
-                    if o.get("property").and_then(|t| t.as_str())
-                        == Some("minecraft:display_context")
-                        && let Some(case) =
-                            o.get("cases").and_then(|c| c.as_array()).and_then(|cases| {
-                                cases.iter().find(|c| match &c["when"] {
-                                    serde_json::Value::String(w) => w == "gui",
-                                    serde_json::Value::Array(ws) => ws.iter().any(|w| w == "gui"),
-                                    _ => false,
-                                })
-                            })
-                    {
-                        return first_model(&case["model"]);
-                    }
-                    for key in [
-                        "model", "fallback", "on_false", "on_true", "cases", "entries", "tints",
-                    ] {
-                        if let Some(m) = o.get(key).and_then(first_model) {
-                            return Some(m);
-                        }
-                    }
-                    o.values().find_map(first_model)
-                }
-                serde_json::Value::Array(a) => a.iter().find_map(first_model),
-                _ => None,
-            }
-        }
-        let Some(model) = first_model(&def["model"]) else {
-            // Special item models (chests, beds, banners...): show the block's particle texture.
-            let block = self
-                .res
-                .assets
-                .registry
-                .default_state(item)
-                .or_else(|| info.and_then(|i| i.block))?;
-            let (sprite, tint) = self
-                .particle_sprite(block)
-                .or_else(|| self.model_particle(name).map(|s| (s, 0xFFFFFF)))?;
-            return Some(Icon::Cube {
-                top: sprite.clone(),
-                left: sprite.clone(),
-                right: sprite,
-                tint,
-            });
-        };
-        let path = model.trim_start_matches("minecraft:").to_owned();
-        let mut current = path.clone();
-        let mut textures = serde_json::Map::new();
-        for _ in 0..16 {
-            let text =
-                std::fs::read(root.join(format!("assets/minecraft/models/{current}.json"))).ok()?;
-            let m: serde_json::Value = serde_json::from_slice(&text).ok()?;
-            if let Some(t) = m["textures"].as_object() {
-                for (k, v) in t {
-                    textures.entry(k.clone()).or_insert(v.clone());
-                }
-            }
-            match m["parent"].as_str() {
-                Some(p)
-                    if p.ends_with("item/generated")
-                        || p.ends_with("item/handheld")
-                        || p.contains("handheld") =>
-                {
-                    let layer = textures.get("layer0")?.as_str()?;
-                    return Some(Icon::Flat(
-                        layer.trim_start_matches("minecraft:").to_owned(),
-                    ));
-                }
-                Some(p) => current = p.trim_start_matches("minecraft:").to_owned(),
-                None => break,
-            }
-        }
-        if path.starts_with("block/") {
-            let block = self
-                .res
-                .assets
-                .registry
-                .default_state(&format!("minecraft:{name}"))
-                .or_else(|| info.and_then(|i| i.block))?;
-            let models = self
-                .res
-                .assets
-                .model_catalog
-                .collect(block, horizon_core::position::BlockPos::new(0, 0, 0))
-                .ok()?;
-            let mut faces: HashMap<usize, (u32, i32)> = HashMap::new();
-            for (_, m) in &models {
-                for f in &m.faces {
-                    faces
-                        .entry(f.quad.facing as usize)
-                        .or_insert((f.layer, f.quad.tint_index));
-                }
-            }
-            use horizon_assets::model::Direction as D;
-            let get = |d: D| {
-                faces
-                    .get(&(d as usize))
-                    .and_then(|(l, _)| self.res.layer_names.get(l))
-                    .cloned()
-            };
-            let top = get(D::Up)?;
-            let tinted = faces.get(&(D::Up as usize)).is_some_and(|(_, t)| *t >= 0);
-            let tint = if tinted {
-                if name.contains("leaves") || name == "vine" {
-                    0x48B518
-                } else {
-                    0x91BD59
-                }
-            } else {
-                0xFFFFFF
-            };
-            return Some(Icon::Cube {
-                left: get(D::South).unwrap_or(top.clone()),
-                right: get(D::East).unwrap_or(top.clone()),
-                top,
-                tint,
-            });
-        }
-        textures
-            .get("layer0")
-            .or_else(|| textures.get("all"))
-            .or_else(|| textures.get("texture"))
-            .and_then(|t| t.as_str())
-            .map(|t| Icon::Flat(t.trim_start_matches("minecraft:").to_owned()))
-    }
     fn draw_item(&mut self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
-        // Special-model items: the shield and banners draw their own 3D icon.
-        let banner = if &*stack.item == "minecraft:shield" {
-            let passes = shield::shield_passes(&self.res.stations.banners, stack);
-            shield::draw_shield_icon(batch, &self.res.atlas, x, y, &passes);
-            true
-        } else {
-            self.draw_banner_icon(batch, stack, x, y)
-        };
-        let icon = if banner { None } else { self.icon(&stack.item) };
+        // `GuiGraphics.renderItem`: the resolved item model (tints, foil and
+        // special renderers included), then the decorations.
+        self.draw_item_model(batch, stack, x, y);
         let atlas = &self.res.atlas;
-        match icon {
-            None if banner => {}
-            Some(Icon::Flat(name)) => batch.sprite_scaled(atlas, &name, x, y, 16.0, 16.0, u32::MAX),
-            Some(Icon::Cube {
-                top,
-                left,
-                right,
-                tint,
-            }) => {
-                let color = |b: f32| {
-                    let c = |s: u32| (((tint >> s) & 255) as f32 * b) as u8;
-                    rgba(c(16), c(8), c(0), 255)
-                };
-                let (cx, top_y) = (x + 8.0, y + 1.0);
-                let quad = |batch: &mut HudBatch, name: &str, p: [[f32; 2]; 4], c: u32| {
-                    if let Some(r) = atlas.sprites.get(name).copied() {
-                        batch.quad(
-                            p,
-                            [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]],
-                            c,
-                        );
-                    }
-                };
-                let (w, h) = (7.0, 3.6);
-                quad(
-                    batch,
-                    &top,
-                    [
-                        [cx, top_y],
-                        [cx + w, top_y + h],
-                        [cx, top_y + 2.0 * h],
-                        [cx - w, top_y + h],
-                    ],
-                    color(1.0),
-                );
-                let side = 8.0;
-                quad(
-                    batch,
-                    &left,
-                    [
-                        [cx - w, top_y + h],
-                        [cx, top_y + 2.0 * h],
-                        [cx, top_y + 2.0 * h + side],
-                        [cx - w, top_y + h + side],
-                    ],
-                    color(0.8),
-                );
-                quad(
-                    batch,
-                    &right,
-                    [
-                        [cx, top_y + 2.0 * h],
-                        [cx + w, top_y + h],
-                        [cx + w, top_y + h + side],
-                        [cx, top_y + 2.0 * h + side],
-                    ],
-                    color(0.6),
-                );
-            }
-            None => batch.fill(atlas, x + 2.0, y + 2.0, 12.0, 12.0, rgba(200, 0, 200, 255)),
-        }
-        self.draw_potion_layers(batch, stack, x, y);
-        self.draw_glint(batch, stack, x, y);
         if stack.count > 1 {
             let text = stack.count.to_string();
             let w = HudBatch::text_width(atlas, &text);
@@ -4234,147 +3981,8 @@ impl Game<'_> {
     /// ItemEntityRenderer: items bob and spin; blocks render as small cubes.
     fn entity_geometry(&mut self, camera: glam::DVec3, alpha: f64) -> Vec<Vertex> {
         let mut out = Vec::new();
-        let items = self.dropped.clone();
-        for item in &items {
-            let p = item.previous;
-            let q = item.position;
-            let pos = glam::DVec3::new(
-                p.x + (q.x - p.x) * alpha,
-                p.y + (q.y - p.y) * alpha,
-                p.z + (q.z - p.z) * alpha,
-            ) - camera;
-            if pos.length_squared() > 64.0 * 64.0 {
-                continue;
-            }
-            let age = item.age as f32 + alpha as f32;
-            let bob = (age / 10.0 + item.bob_offset).sin() * 0.1 + 0.1;
-            let spin = age / 20.0 + item.bob_offset;
-            let light = self.world.light(
-                q.x.floor() as i32,
-                (q.y + 0.1).floor() as i32,
-                q.z.floor() as i32,
-            );
-            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-            let center = pos.as_vec3() + glam::Vec3::new(0.0, bob + 0.125, 0.0);
-            let rot = glam::Mat3::from_rotation_y(spin);
-            let icon = self.icon(&item.stack.item);
-            let atlas = &self.res.atlas;
-            let mut quad = |corners: [glam::Vec3; 4], name: &str, shade: f32, tint: u32| {
-                let Some(r) = atlas.sprites.get(name).copied() else {
-                    return;
-                };
-                let uv = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
-                let c = |sft: u32| (((tint >> sft) & 255) as f32 * shade) as u32;
-                let color = 0xFF00_0000 | c(0) << 16 | c(8) << 8 | c(16);
-                for (corner, uv) in corners.iter().zip(uv) {
-                    let v = center + rot * *corner;
-                    out.push(Vertex {
-                        pos: v.to_array(),
-                        uv,
-                        layer: 0,
-                        color,
-                        light: packed,
-                    });
-                }
-            };
-            let copies = match item.stack.count {
-                0..=1 => 1,
-                2..=16 => 2,
-                17..=32 => 3,
-                _ => 4,
-            };
-            for k in 0..copies {
-                let o = glam::Vec3::new(k as f32 * 0.03, k as f32 * 0.03, k as f32 * 0.05);
-                match &icon {
-                    Some(Icon::Cube {
-                        top,
-                        left,
-                        right,
-                        tint,
-                    }) => {
-                        let h = 0.125;
-                        let v = |x: f32, y: f32, z: f32| glam::Vec3::new(x * h, y * h, z * h) + o;
-                        quad(
-                            [
-                                v(-1., 1., 1.),
-                                v(1., 1., 1.),
-                                v(1., 1., -1.),
-                                v(-1., 1., -1.),
-                            ],
-                            top,
-                            1.0,
-                            *tint,
-                        );
-                        quad(
-                            [
-                                v(-1., -1., -1.),
-                                v(1., -1., -1.),
-                                v(1., -1., 1.),
-                                v(-1., -1., 1.),
-                            ],
-                            top,
-                            0.5,
-                            *tint,
-                        );
-                        quad(
-                            [
-                                v(-1., -1., 1.),
-                                v(1., -1., 1.),
-                                v(1., 1., 1.),
-                                v(-1., 1., 1.),
-                            ],
-                            left,
-                            0.8,
-                            0xFFFFFF,
-                        );
-                        quad(
-                            [
-                                v(1., -1., -1.),
-                                v(-1., -1., -1.),
-                                v(-1., 1., -1.),
-                                v(1., 1., -1.),
-                            ],
-                            left,
-                            0.8,
-                            0xFFFFFF,
-                        );
-                        quad(
-                            [
-                                v(1., -1., 1.),
-                                v(1., -1., -1.),
-                                v(1., 1., -1.),
-                                v(1., 1., 1.),
-                            ],
-                            right,
-                            0.6,
-                            0xFFFFFF,
-                        );
-                        quad(
-                            [
-                                v(-1., -1., -1.),
-                                v(-1., -1., 1.),
-                                v(-1., 1., 1.),
-                                v(-1., 1., -1.),
-                            ],
-                            right,
-                            0.6,
-                            0xFFFFFF,
-                        );
-                    }
-                    Some(Icon::Flat(name)) => {
-                        let h = 0.25;
-                        let v = |x: f32, y: f32| glam::Vec3::new(x * h, y * h + 0.125, 0.0) + o;
-                        quad(
-                            [v(-1., -1.), v(1., -1.), v(1., 1.), v(-1., 1.)],
-                            name,
-                            1.0,
-                            0xFFFFFF,
-                        );
-                    }
-                    None => {}
-                }
-            }
-        }
+        // `ItemEntityRenderer`.
+        self.dropped_item_geometry(camera, alpha, &mut out);
         // Mobs and their projectiles.
         self.mob_geometry(camera, alpha, &mut out);
         self.player_model_geometry(camera, alpha, &mut out);
@@ -6507,67 +6115,6 @@ impl Game<'_> {
             self.hand_item = held;
         }
     }
-    fn display_transform(&mut self, item: &str) -> Option<([f32; 3], [f32; 3], [f32; 3])> {
-        if let Some(d) = self.res.displays.get(item) {
-            return *d;
-        }
-        let root = &self.options.resources;
-        let name = item.trim_start_matches("minecraft:");
-        let model_name = self.res.items.get(item).map_or(name.to_owned(), |i| {
-            i.model.trim_start_matches("minecraft:").to_owned()
-        });
-        let mut found = None;
-        let def: Option<serde_json::Value> =
-            std::fs::read(root.join(format!("assets/minecraft/items/{model_name}.json")))
-                .ok()
-                .and_then(|b| serde_json::from_slice(&b).ok());
-        let mut current = def.and_then(|d| {
-            fn first(v: &serde_json::Value) -> Option<String> {
-                match v {
-                    serde_json::Value::Object(o) => {
-                        if o.get("type").and_then(|t| t.as_str()) == Some("minecraft:model") {
-                            return o.get("model").and_then(|m| m.as_str()).map(str::to_owned);
-                        }
-                        o.values().find_map(first)
-                    }
-                    serde_json::Value::Array(a) => a.iter().find_map(first),
-                    _ => None,
-                }
-            }
-            first(&d["model"])
-        });
-        if item.ends_with("_banner") {
-            // The banner item model is a special renderer over this base model.
-            current = Some("minecraft:item/template_banner".to_owned());
-        }
-        for _ in 0..16 {
-            let Some(m) = current.take() else { break };
-            let path = m.trim_start_matches("minecraft:").to_owned();
-            let Some(model) =
-                std::fs::read(root.join(format!("assets/minecraft/models/{path}.json")))
-                    .ok()
-                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            else {
-                break;
-            };
-            let d = &model["display"]["firstperson_righthand"];
-            if d.is_object() {
-                let v = |k: &str, default: f32| -> [f32; 3] {
-                    let a = d[k].as_array();
-                    std::array::from_fn(|i| {
-                        a.and_then(|a| a.get(i))
-                            .and_then(|x| x.as_f64())
-                            .map_or(default, |x| x as f32)
-                    })
-                };
-                found = Some((v("rotation", 0.0), v("translation", 0.0), v("scale", 1.0)));
-                break;
-            }
-            current = model["parent"].as_str().map(str::to_owned);
-        }
-        self.res.displays.insert(item.to_owned(), found);
-        found
-    }
     /// FirstPersonHandsAndItemsRenderer: the right arm or held item in view
     /// space, converted to camera-relative world space.
     fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
@@ -6663,115 +6210,39 @@ impl Game<'_> {
                 );
             }
             Some(stack) => {
-                let display = self
-                    .display_transform(&stack.item)
-                    .unwrap_or(([0.0; 3], [0.0; 3], [1.0; 3]));
-                let icon = self.icon(&stack.item);
                 // applyItemArmTransform + swingArm (applyItemArmAttackTransform)
                 let x = -0.4 * (sqrt_attack * std::f32::consts::PI).sin();
                 let y = 0.2 * (sqrt_attack * std::f32::consts::TAU).sin();
                 let z = -0.2 * (attack * std::f32::consts::PI).sin();
                 let y_swing_rot = (attack * attack * std::f32::consts::PI).sin();
                 let xz_swing_rot = (sqrt_attack * std::f32::consts::PI).sin();
-                let (rot, trans, scale) = display;
                 let m = to_world
-                    * glam::Mat4::from_translation(glam::Vec3::new(0.56, -0.52 + inverse_height * -0.6, -0.72))
+                    * glam::Mat4::from_translation(glam::Vec3::new(
+                        0.56,
+                        -0.52 + inverse_height * -0.6,
+                        -0.72,
+                    ))
                     * glam::Mat4::from_translation(glam::Vec3::new(x, y, z))
                     * glam::Mat4::from_rotation_y(deg(45.0 + y_swing_rot * -20.0))
                     * glam::Mat4::from_rotation_z(deg(xz_swing_rot * -20.0))
                     * glam::Mat4::from_rotation_x(deg(xz_swing_rot * -80.0))
-                    * glam::Mat4::from_rotation_y(deg(-45.0))
-                    // ItemTransform.apply: translation is in sixteenths, rotation XYZ, then scale.
-                    * glam::Mat4::from_translation(glam::Vec3::from(trans) / 16.0)
-                    * glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::XYZ, deg(rot[0]), deg(rot[1]), deg(rot[2])))
-                    * glam::Mat4::from_scale(glam::Vec3::from(scale))
-                    * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
-                if self.held_banner_geometry(m, &stack, packed, &mut out) {
-                    return out;
-                }
-                let atlas = &self.res.atlas;
-                let quad = |corners: [glam::Vec3; 4],
-                            name: &str,
-                            shade: f32,
-                            tint: u32,
-                            out: &mut Vec<Vertex>| {
-                    let Some(r) = atlas.sprites.get(name).copied() else {
-                        return;
-                    };
-                    let uv = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
-                    let c = |sft: u32| (((tint >> sft) & 255) as f32 * shade) as u32;
-                    let color = 0xFF00_0000 | c(0) << 16 | c(8) << 8 | c(16);
-                    for (p, uv) in corners.iter().zip(uv) {
-                        out.push(Vertex {
-                            pos: m.transform_point3(*p).to_array(),
-                            uv,
-                            layer: 0,
-                            color,
-                            light: packed,
-                        });
-                    }
-                };
-                let v = glam::Vec3::new;
-                match icon {
-                    Some(Icon::Cube {
-                        top,
-                        left,
-                        right,
-                        tint,
-                    }) => {
-                        quad(
-                            [v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)],
-                            &top,
-                            1.0,
-                            tint,
-                            &mut out,
-                        );
-                        quad(
-                            [v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)],
-                            &left,
-                            0.8,
-                            0xFFFFFF,
-                            &mut out,
-                        );
-                        quad(
-                            [v(1., 0., 0.), v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.)],
-                            &left,
-                            0.8,
-                            0xFFFFFF,
-                            &mut out,
-                        );
-                        quad(
-                            [v(1., 0., 1.), v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.)],
-                            &right,
-                            0.6,
-                            0xFFFFFF,
-                            &mut out,
-                        );
-                        quad(
-                            [v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)],
-                            &right,
-                            0.6,
-                            0xFFFFFF,
-                            &mut out,
-                        );
-                    }
-                    Some(Icon::Flat(name)) => {
-                        // Generated item models are a sprite on the z = 8/16 plane.
-                        quad(
-                            [
-                                v(0., 0., 0.5),
-                                v(1., 0., 0.5),
-                                v(1., 1., 0.5),
-                                v(0., 1., 0.5),
-                            ],
-                            &name,
-                            1.0,
-                            0xFFFFFF,
-                            &mut out,
-                        );
-                    }
-                    None => {}
-                }
+                    * glam::Mat4::from_rotation_y(deg(-45.0));
+                // `ItemInHandRenderer.renderItem`: the player as owner, seeded by
+                // its id plus the display context ordinal.
+                let owner = self.player_owner(Some(&stack));
+                let context = horizon_assets::item_model::DisplayContext::FirstPersonRightHand;
+                let state = self.resolve_item(&stack, context, Some(&owner), 4);
+                let light = self.world.light(
+                    eye[0].floor() as i32,
+                    eye[1].floor() as i32,
+                    eye[2].floor() as i32,
+                );
+                self.submit_item_world(
+                    &state,
+                    m,
+                    horizon_client::block_entity_render::vertex_light(light),
+                    &mut out,
+                );
             }
         }
         out
@@ -8386,7 +7857,7 @@ pub fn run() -> Result<()> {
         biomes,
         environment,
         atlas,
-        icons: HashMap::new(),
+        item_renderer: Arc::new(horizon_client::item_render::ItemRenderer::load(&root)?),
         layer_names,
         providers: Providers::load(&root),
         block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
@@ -8424,7 +7895,6 @@ pub fn run() -> Result<()> {
         player_type: perspective::player_type(&root),
         player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
             .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
-        displays: HashMap::new(),
     };
     let inventory = vec![None; 36];
     let now = Instant::now();

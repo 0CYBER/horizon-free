@@ -718,7 +718,6 @@ impl Game<'_> {
         self.mobs.append(&mut mobs);
         self.sync_riders();
         self.tick_skeleton_traps();
-        self.cache_mob_icons();
         self.tick_apparition();
         self.villager_reputation_tick();
         self.villager_pickups();
