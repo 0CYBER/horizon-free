@@ -1487,8 +1487,9 @@ impl ArgType {
             }
             ArgType::Entity { single, players } => {
                 let s = parse_selector(reader, reg)?;
+                // Vanilla rewinds to the very start of the input for these.
                 if s.limit > 1 && *single {
-                    reader.cursor = start;
+                    reader.cursor = 0;
                     let key = if *players {
                         "argument.player.toomany"
                     } else {
@@ -1497,7 +1498,7 @@ impl ArgType {
                     return Err(CommandError::tr_at(key, &[], reader));
                 }
                 if s.include_entities && *players && !s.is_self() {
-                    reader.cursor = start;
+                    reader.cursor = 0;
                     return Err(CommandError::tr_at("argument.player.entities", &[], reader));
                 }
                 Arg::Entity(s)
