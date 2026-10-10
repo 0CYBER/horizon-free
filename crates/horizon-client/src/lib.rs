@@ -9,6 +9,7 @@ pub mod attribute_updates;
 pub mod audio;
 pub mod banner;
 pub mod biome;
+pub mod block_entity_anim;
 pub mod block_entity_nbt;
 pub mod block_entity_render;
 pub mod block_transform;
