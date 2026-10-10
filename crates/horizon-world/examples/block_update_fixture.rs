@@ -272,6 +272,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 LevelEvent::DropResources { state, .. } => {
                     let name = behaviours.table.name(*state);
                     let short = name.strip_prefix("minecraft:").unwrap_or(name);
+                    // `Blocks.wallVariant` reuses the standing block's loot table.
+                    let short = short.replacen("_wall_", "_", 1);
+                    let short = short.strip_prefix("wall_").unwrap_or(&short);
+                    let short = short.replacen("wall_", "", 1);
                     let _ = writeln!(result, "D minecraft:blocks/{short}");
                 }
                 LevelEvent::FallingBlock { .. } => {
@@ -296,6 +300,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = writeln!(result, "X player");
                 }
             }
+        }
+        for e in &ticks.block_events {
+            let _ = writeln!(
+                result,
+                "B {} {} {} {}",
+                p(e.pos),
+                behaviours.table.info(e.block).name,
+                e.param_a,
+                e.param_b
+            );
         }
         let _ = writeln!(result, "rng {}", level.random.next_long());
         out.write_all(result.as_bytes())?;
