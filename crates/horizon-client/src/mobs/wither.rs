@@ -13,6 +13,7 @@ use super::{
     nav::NavKind,
 };
 use crate::projectiles::{Projectile, ProjectileKind};
+use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
 
 // Wither state: `counter` the invulnerable ticks, `counter2` the block
@@ -102,9 +103,9 @@ fn head_pos(m: &Mob, i: usize) -> [f64; 3] {
     }
     let a = (m.body_yaw + 180.0 * (i as f32 - 1.0)).to_radians();
     [
-        m.position.x + f64::from(a.cos()) * 1.3,
+        m.position.x + f64::from(a.mcos()) * 1.3,
         m.position.y + 2.2,
-        m.position.z + f64::from(a.sin()) * 1.3,
+        m.position.z + f64::from(a.msin()) * 1.3,
     ]
 }
 /// `performRangedAttack`: a skull from a head toward a point.
@@ -348,13 +349,13 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         p.yrot(head, (y - body).to_radians());
         p.xrot(head, x.to_radians());
     }
-    let anim = (s.age * 0.1).cos();
+    let anim = (s.age * 0.1).mcos();
     let rib = (0.065 + 0.05 * anim) * std::f32::consts::PI;
     p.xrot("ribcage", rib);
     let tail = p.get("tail");
     tail[0] = -2.0;
-    tail[1] = 6.9 + rib.cos() * 10.0;
-    tail[2] = -0.5 + rib.sin() * 10.0;
+    tail[1] = 6.9 + rib.mcos() * 10.0;
+    tail[2] = -0.5 + rib.msin() * 10.0;
     p.xrot("tail", (0.265 + 0.1 * anim) * std::f32::consts::PI);
     p.yrot("center_head", s.y_rot.to_radians());
     p.xrot("center_head", s.x_rot.to_radians());

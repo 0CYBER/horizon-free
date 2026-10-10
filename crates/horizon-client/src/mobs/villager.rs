@@ -13,6 +13,7 @@ use super::{
     },
 };
 use crate::items::ItemStack;
+use horizon_core::geometry::trig::Mth;
 use horizon_core::random::RandomSource;
 use std::{collections::HashMap, f32::consts::PI};
 
@@ -603,16 +604,16 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     p.yrot("head", if awake { s.y_rot.to_radians() } else { 0.0 });
     p.xrot("head", if awake { s.x_rot.to_radians() } else { 0.0 });
     if m.extra.ints[0] > 0 {
-        p.zrot("head", 0.3 * (0.45 * s.age).sin());
+        p.zrot("head", 0.3 * (0.45 * s.age).msin());
         p.xrot("head", 0.4);
     } else {
         p.zrot("head", 0.0);
     }
-    let leg = (s.pos * 0.6662).cos() * 1.4 * s.speed * 0.5;
+    let leg = (s.pos * 0.6662).mcos() * 1.4 * s.speed * 0.5;
     p.xrot("right_leg", leg);
     p.xrot(
         "left_leg",
-        (s.pos * 0.6662 + PI).cos() * 1.4 * s.speed * 0.5,
+        (s.pos * 0.6662 + PI).mcos() * 1.4 * s.speed * 0.5,
     );
     p.yrot("right_leg", 0.0);
     p.yrot("left_leg", 0.0);

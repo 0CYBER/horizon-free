@@ -9,6 +9,7 @@ pub mod ai;
 pub mod allay;
 pub mod anim;
 pub mod aquatic;
+pub mod body_anim;
 pub mod camel;
 pub mod control;
 pub mod creaking;

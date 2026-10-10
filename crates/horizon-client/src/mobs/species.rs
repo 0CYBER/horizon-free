@@ -1221,6 +1221,9 @@ impl Def {
             Species::Hoglin => &["hoglin_baby"],
             Species::Zoglin => &["zoglin_baby"],
             Species::Strider => &["strider_baby"],
+            Species::Camel => &["camel_baby"],
+            Species::ZombieHorse => &["zombie_horse_baby"],
+            Species::SkeletonHorse => &["skeleton_horse_baby"],
             _ => &[],
         };
         v.extend_from_slice(extra);
