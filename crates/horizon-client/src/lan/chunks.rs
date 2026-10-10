@@ -2,7 +2,7 @@
 //! (sections with their paletted containers, block entities and the sky and
 //! block DataLayers) and the section block-change batches.
 use crate::{
-    chunk::{Blocks, Chunk, Light, MIN_Y, SECTIONS, Section},
+    chunk::{Chunk, Light, MIN_Y, SECTIONS, Section},
     containers::BlockEntity,
 };
 use horizon_protocol::{
@@ -154,12 +154,7 @@ impl ChunkEncoder {
             .is_none_or(|f| f & NON_AIR == 0)
     }
 
-    fn section(
-        &self,
-        section: &Section,
-        chunk: &Chunk,
-        index: usize,
-    ) -> (horizon_protocol::chunk::Section, bool) {
+    fn section(&self, section: &Section) -> (horizon_protocol::chunk::Section, bool) {
         let mut values = Vec::with_capacity(BLOCKS);
         let (mut non_empty, mut fluids, mut entities) = (0i16, 0i16, false);
         let mut count = |state: u16, n: i16| {
@@ -172,21 +167,15 @@ impl ChunkEncoder {
             }
             f & ENTITY != 0
         };
-        match &section.blocks {
-            Blocks::Uniform(v) => {
-                entities |= count(*v, BLOCKS as i16);
-                values.resize(BLOCKS, i32::from(*v));
-            }
-            Blocks::Full(a) => {
-                for &v in a.iter() {
-                    entities |= count(v, 1);
-                    values.push(i32::from(v));
-                }
-            }
+        let mut unpacked = [0u16; BLOCKS];
+        section.unpack(&mut unpacked);
+        for &v in &unpacked {
+            entities |= count(v, 1);
+            values.push(i32::from(v));
         }
         let biome_values: Vec<i32> = (0..BIOMES)
             .map(|j| {
-                let internal = chunk.biomes.get(index * BIOMES + j).copied().unwrap_or(0);
+                let internal = section.biomes.get(j) as u16;
                 self.biome_ids
                     .get(usize::from(internal))
                     .copied()
@@ -213,7 +202,7 @@ impl ChunkEncoder {
         let mut sections = Vec::with_capacity(SECTIONS);
         let mut entity_infos = Vec::new();
         for (i, s) in chunk.sections.iter().enumerate() {
-            let (encoded, has_entities) = self.section(s, chunk, i);
+            let (encoded, has_entities) = self.section(s);
             if has_entities {
                 for y in 0..16 {
                     for z in 0..16 {

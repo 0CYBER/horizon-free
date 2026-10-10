@@ -48,7 +48,7 @@ fn is_zombie(s: &Seen) -> bool {
 pub fn is_illager(s: &Seen) -> bool {
     matches!(
         s.species,
-        Species::Pillager | Species::Vindicator | Species::Evoker
+        Species::Pillager | Species::Vindicator | Species::Evoker | Species::Illusioner
     )
 }
 pub fn register(m: &mut Mob) {

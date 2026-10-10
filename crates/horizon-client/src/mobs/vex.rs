@@ -33,6 +33,7 @@ pub fn register(m: &mut Mob) {
         Species::Pillager,
         Species::Vindicator,
         Species::Evoker,
+        Species::Illusioner,
         Species::Witch,
         Species::Vex,
     ];

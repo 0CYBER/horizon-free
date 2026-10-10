@@ -64,6 +64,7 @@ pub fn register(m: &mut Mob) {
         Species::Pillager,
         Species::Vindicator,
         Species::Evoker,
+        Species::Illusioner,
         Species::Ravager,
         Species::Zoglin,
     ];
@@ -1218,7 +1219,7 @@ fn hostile_range(s: Species) -> f64 {
         | Species::Vex
         | Species::Zombie
         | Species::ZombieVillager => 8.0,
-        Species::Evoker | Species::Ravager => 12.0,
+        Species::Evoker | Species::Illusioner | Species::Ravager => 12.0,
         Species::Pillager => 15.0,
         Species::Vindicator | Species::Zoglin => 10.0,
         _ => 0.0,

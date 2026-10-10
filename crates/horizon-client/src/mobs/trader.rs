@@ -44,6 +44,7 @@ pub fn register(m: &mut Mob) {
     for (species, distance) in [
         (Species::Zombie, 8.0),
         (Species::Evoker, 12.0),
+        (Species::Illusioner, 12.0),
         (Species::Vindicator, 8.0),
         (Species::Vex, 8.0),
         (Species::Pillager, 15.0),

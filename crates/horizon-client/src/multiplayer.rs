@@ -3,6 +3,7 @@
 //! Disconnected screen. Entries are pinged in the background like
 //! ServerStatusPinger to show the MOTD, player count and latency.
 use crate::hud::{HudAtlas, HudBatch, rgba};
+use crate::lan::discovery::Scanner;
 use horizon_protocol::servers::{self, ServerEntry};
 use std::{
     collections::HashMap,
@@ -31,6 +32,8 @@ pub enum Screen {
         servers: Vec<ServerEntry>,
         selected: Option<usize>,
         pings: Pings,
+        /// Worlds announced on the local network, listed after the servers.
+        lan: Scanner,
     },
     /// Add (index None) or edit a server entry.
     Edit {
@@ -92,6 +95,18 @@ fn ping_all(servers: &[ServerEntry], pings: &Pings) {
     }
 }
 
+/// The address of list row `index`: the saved servers, then the LAN games.
+fn entry_address(servers: &[ServerEntry], lan: &Scanner, index: usize) -> Option<String> {
+    match servers.get(index) {
+        Some(s) => Some(s.ip.clone()),
+        None => lan
+            .games()
+            .into_iter()
+            .nth(index - servers.len())
+            .map(|g| g.address),
+    }
+}
+
 impl Screen {
     pub fn list(saves: &Path) -> Self {
         let servers = servers::load(&servers_file(saves));
@@ -101,6 +116,7 @@ impl Screen {
             servers,
             selected: None,
             pings,
+            lan: Scanner::start(),
         }
     }
     pub fn buttons(&self, w: f32, h: f32) -> Vec<ButtonSpec> {
@@ -256,6 +272,7 @@ impl Screen {
                 servers,
                 selected,
                 pings,
+                lan,
             } => {
                 centered(batch, "Play Multiplayer", 8.0, u32::MAX);
                 batch.fill(atlas, 0.0, 32.0, w, h - 32.0 - 64.0, rgba(0, 0, 0, 100));
@@ -318,6 +335,42 @@ impl Screen {
                             false,
                         );
                     }
+                }
+                for (k, game) in lan.games().iter().enumerate() {
+                    let i = servers.len() + k;
+                    let y = 36.0 + i as f32 * 36.0;
+                    if y + 36.0 > h - 64.0 {
+                        break;
+                    }
+                    let x = w / 2.0 - 152.0;
+                    if *selected == Some(i) {
+                        batch.fill(
+                            atlas,
+                            x - 2.0,
+                            y - 2.0,
+                            306.0,
+                            36.0,
+                            rgba(128, 128, 128, 255),
+                        );
+                        batch.fill(atlas, x - 1.0, y - 1.0, 304.0, 34.0, rgba(0, 0, 0, 255));
+                    }
+                    batch.text(atlas, "LAN World", x + 35.0, y + 1.0, u32::MAX, false);
+                    batch.text(
+                        atlas,
+                        &game.motd,
+                        x + 35.0,
+                        y + 12.0,
+                        rgba(128, 128, 128, 255),
+                        false,
+                    );
+                    batch.text(
+                        atlas,
+                        &game.address,
+                        x + 35.0,
+                        y + 22.0,
+                        rgba(96, 96, 96, 255),
+                        false,
+                    );
                 }
                 if servers.is_empty() {
                     centered(
@@ -392,12 +445,15 @@ impl Screen {
         match (&mut *self, id) {
             (
                 Self::List {
-                    servers, selected, ..
+                    servers,
+                    selected,
+                    lan,
+                    ..
                 },
                 Some(40),
             ) => {
-                if let Some(s) = selected.and_then(|i| servers.get(i)) {
-                    return Outcome::Connect(s.ip.clone());
+                if let Some(address) = selected.and_then(|i| entry_address(servers, lan, i)) {
+                    return Outcome::Connect(address);
                 }
             }
             (Self::List { .. }, Some(41)) => {
@@ -446,21 +502,22 @@ impl Screen {
             (Self::List { .. }, Some(46)) => return Outcome::Back,
             (
                 Self::List {
-                    servers, selected, ..
+                    servers,
+                    selected,
+                    lan,
+                    ..
                 },
                 None,
             ) => {
                 let index = ((y - 36.0) / 36.0).floor();
-                if y >= 36.0
-                    && y < h - 64.0
-                    && (x - w / 2.0).abs() < 154.0
-                    && (index as usize) < servers.len()
-                {
+                if y >= 36.0 && y < h - 64.0 && (x - w / 2.0).abs() < 154.0 {
                     let index = index as usize;
-                    if *selected == Some(index) {
-                        return Outcome::Connect(servers[index].ip.clone());
+                    if let Some(address) = entry_address(servers, lan, index) {
+                        if *selected == Some(index) {
+                            return Outcome::Connect(address);
+                        }
+                        *selected = Some(index);
                     }
-                    *selected = Some(index);
                 }
             }
             (

@@ -11,6 +11,14 @@ impl Game<'_> {
     /// Block-entity contents on removal: shulker boxes keep theirs for the
     /// dropped box (`copy_components`), other containers spill them.
     pub(super) fn release_contents(&mut self, pos: [i32; 3], entity: BlockEntity, block: &str) {
+        if let Some(name) = self
+            .world
+            .block_names
+            .remove(&(pos[0], pos[1], pos[2]))
+            .filter(|_| !matches!(entity, BlockEntity::Banner(_)))
+        {
+            self.pending_names.insert(pos, (block.to_owned(), name));
+        }
         if let BlockEntity::Banner(banner) = entity {
             self.pending_banner.insert(pos, banner);
             return;
@@ -40,6 +48,38 @@ impl Game<'_> {
         {
             stack.data_mut().container = contents;
         }
+    }
+    /// The custom name a broken container drops with (`copy_components`).
+    pub(super) fn attach_container_name(&mut self, pos: [i32; 3], stack: &mut ItemStack) {
+        if self
+            .pending_names
+            .get(&pos)
+            .is_some_and(|(item, _)| **item == *stack.item)
+            && let Some((_, name)) = self.pending_names.remove(&pos)
+        {
+            stack.data_mut().custom_name = Some(name);
+        }
+    }
+    /// A placed container takes the item's custom name.
+    pub(super) fn name_placed_container(&mut self, pos: [i32; 3], stack: &ItemStack) {
+        let key = (pos[0], pos[1], pos[2]);
+        if let Some(name) = stack.custom_name()
+            && !matches!(
+                self.world.block_entities.get(&key),
+                Some(BlockEntity::Banner(_) | BlockEntity::Sign(_))
+            )
+        {
+            self.world.block_names.insert(key, name.to_owned());
+        }
+    }
+    /// The custom name of the open container, or its default title
+    /// (a double chest is named by whichever half has a name).
+    pub(super) fn container_title(&self, default: String) -> String {
+        self.container_parts()
+            .iter()
+            .find_map(|(key, _)| self.world.block_names.get(key))
+            .cloned()
+            .unwrap_or(default)
     }
     /// A placed shulker box takes the item's contents.
     pub(super) fn fill_placed_box(&mut self, pos: [i32; 3], stack: &ItemStack) {
@@ -234,7 +274,7 @@ impl Game<'_> {
             _ if rows > 3 => ("container.chestDouble", "Large Chest"),
             _ => ("container.chest", "Chest"),
         };
-        self.translate(key, fallback)
+        self.container_title(self.translate(key, fallback))
     }
     /// `ContainerScreen` / `ShulkerBoxScreen`: the background with its
     /// container rows, the title and the inventory label.
@@ -302,72 +342,10 @@ impl Game<'_> {
 
 impl Game<'_> {
     /// `quickMoveStack` of the open chest-like, hopper, dispenser or furnace
-    /// menu for a shift-click on `slot`; false when the menu has none.
+    /// menu for a shift-click on `slot`, run by the verified menu engine
+    /// (`horizon_client::menu`); false when the menu has none.
     pub(super) fn container_quick_move(&mut self, slot: usize) -> bool {
-        let size = self.container_size();
-        let furnace = match self.container_kind() {
-            Some(BlockEntity::Chest(_)) => None,
-            Some(BlockEntity::Furnace(f)) => Some(f.kind),
-            _ => return false,
-        };
-        if slot >= 300 + size.max(3) {
-            return false;
-        }
-        let Some(mut stack) = self.slot_mut(slot).take() else {
-            return true;
-        };
-        let player: Vec<usize> = (9..36).chain(0..9).collect();
-        let hotbar_or_main = |slot: usize| -> Vec<usize> {
-            if slot < 9 {
-                (9..36).collect()
-            } else {
-                (0..9).collect()
-            }
-        };
-        match furnace {
-            None => {
-                if slot >= 300 {
-                    self.move_to(&mut stack, &player, true);
-                } else {
-                    let targets: Vec<usize> = (300..300 + size).collect();
-                    self.move_to(&mut stack, &targets, false);
-                }
-            }
-            Some(kind) => {
-                // AbstractFurnaceMenu.quickMoveStack.
-                if slot >= 300 {
-                    self.move_to(&mut stack, &player, slot == 302);
-                } else {
-                    let smeltable = self.res.recipes.cook(kind.recipe_type(), &stack).is_some();
-                    let fuel = self
-                        .res
-                        .items
-                        .get(&stack.item)
-                        .is_some_and(|i| i.fuel.is_some());
-                    let moved = if smeltable {
-                        self.move_to(&mut stack, &[300], false)
-                    } else if fuel {
-                        self.move_to(&mut stack, &[301], false)
-                    } else {
-                        false
-                    };
-                    if !moved && !smeltable && !fuel {
-                        let other = hotbar_or_main(slot);
-                        self.move_to(&mut stack, &other, false);
-                    }
-                    if let Some(BlockEntity::Furnace(f)) = self
-                        .container
-                        .and_then(|k| self.world.block_entities.get_mut(&k))
-                    {
-                        f.cooking_timer = 0;
-                    }
-                }
-            }
-        }
-        if stack.count > 0 {
-            *self.slot_mut(slot) = Some(stack);
-        }
-        true
+        self.menu_click(Some(slot), 0, horizon_client::menu::Input::QuickMove)
     }
 }
 
