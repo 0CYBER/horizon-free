@@ -29,6 +29,28 @@ pub struct Registries {
     /// Game rule name -> integer-valued.
     pub game_rules: Vec<(String, bool)>,
     pub players: Vec<String>,
+    /// Scoreboard objective names, team names and tracked score holders.
+    pub objectives: Vec<String>,
+    pub teams: Vec<String>,
+    pub tracked: Vec<String>,
+    /// Loaded datapack functions (`ns:path`) and function tags (`ns:path`).
+    pub functions: Vec<String>,
+    /// `/data ... storage` ids.
+    pub storages: Vec<String>,
+    /// Boss bar ids and datapack predicate ids.
+    pub bossbars: Vec<String>,
+    pub predicates: Vec<String>,
+    pub schedules: Vec<String>,
+    pub recipes: Vec<String>,
+    pub sounds: Vec<String>,
+    pub damage_types: Vec<String>,
+    pub attributes: Vec<String>,
+    pub loot_tables: Vec<String>,
+    pub templates: Vec<String>,
+    pub random_sequences: Vec<String>,
+    pub datapacks_enabled: Vec<String>,
+    pub datapacks_disabled: Vec<String>,
+    pub function_tags: Vec<String>,
     /// The block the source is looking at (relevant coordinates).
     pub target_block: Option<[i32; 3]>,
 }
@@ -116,7 +138,93 @@ pub enum ArgType {
     Component,
     /// CompoundTagArgument (kept as SNBT text).
     Nbt,
+    /// ScoreHolderArgument.
+    ScoreHolder {
+        multiple: bool,
+    },
+    /// ObjectiveArgument (checked when the command runs).
+    Objective,
+    /// TeamArgument (checked when the command runs).
+    Team,
+    /// ObjectiveCriteriaArgument.
+    Criteria,
+    /// ScoreboardSlotArgument.
+    ScoreboardSlot,
+    /// OperationArgument.
+    Operation,
+    /// TeamColorArgument.
+    TeamColor,
+    /// RangeArgument.Ints (`1`, `1..`, `..5`, `1..5`).
+    IntRange,
+    /// NbtPathArgument (kept as text).
+    NbtPath,
+    /// NbtTagArgument: any SNBT value (kept as text).
+    NbtTag,
+    /// Vec2Argument: `x z` with `~` relative parts.
+    Vec2,
+    /// ColumnPosArgument: block `x z`.
+    ColumnPos,
+    /// ParticleArgument: a particle id and its options (kept as text).
+    Particle,
+    /// One of a fixed set of words.
+    Enum(&'static [&'static str]),
+    /// A (possibly quoted) name suggested from a registry list.
+    Name(&'static str),
+    /// FunctionArgument: `ns:path`, or `#ns:path` for a function tag.
+    Function,
+    /// SlotsArgument: a slot name or a wildcard group (`container.*`).
+    Slots,
+    /// SlotArgument: one slot (`container.5`, `weapon.mainhand`).
+    Slot,
 }
+
+/// Every slot name a command can address (`SlotRanges`), without wildcards.
+pub fn slot_names() -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    let mut range = |prefix: &str, n: usize| {
+        for i in 0..n {
+            v.push(format!("{prefix}.{i}"));
+        }
+    };
+    range("container", 54);
+    range("hotbar", 9);
+    range("inventory", 27);
+    range("enderchest", 27);
+    range("villager", 8);
+    range("horse", 15);
+    range("player.crafting", 4);
+    for name in [
+        "weapon",
+        "weapon.mainhand",
+        "weapon.offhand",
+        "armor.head",
+        "armor.chest",
+        "armor.legs",
+        "armor.feet",
+        "armor.body",
+        "saddle",
+        "horse.saddle",
+        "horse.chest",
+        "player.cursor",
+        "contents",
+    ] {
+        v.push(name.to_owned());
+    }
+    v
+}
+/// The wildcard groups of `slot_names` (`container.*`, `armor.*`, ...).
+pub const SLOT_GROUPS: [&str; 10] = [
+    "container.*",
+    "hotbar.*",
+    "inventory.*",
+    "enderchest.*",
+    "villager.*",
+    "horse.*",
+    "player.crafting.*",
+    "armor.*",
+    "weapon.*",
+    "player.*",
+];
 pub fn integer(min: i32) -> ArgType {
     ArgType::Integer { min, max: i32::MAX }
 }
@@ -227,6 +335,29 @@ pub struct Selector {
     pub y_rotation: Option<DoubleRange>,
     pub pos: [Option<f64>; 3],
     pub delta: [Option<f64>; 3],
+    /// `scores={objective=range,...}`.
+    pub scores: Vec<(String, IntRange)>,
+    /// `team=` (an empty name matches entities without a team).
+    pub teams: Vec<(String, bool)>,
+    /// `nbt=` compounds (SNBT text).
+    pub nbt: Vec<(String, bool)>,
+    /// `advancements={id=true|{criterion=true}}`.
+    pub advancements: Vec<(String, AdvCondition)>,
+    /// `predicate=` ids.
+    pub predicates: Vec<(String, bool)>,
+}
+/// An `advancements=` entry: all done or not, or per-criterion states.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AdvCondition {
+    Done(bool),
+    Criteria(Vec<(String, bool)>),
+}
+/// A `ScoreHolderArgument` value.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ScoreHolderArg {
+    Wildcard,
+    Name(String),
+    Selector(Selector),
 }
 impl Selector {
     pub fn is_self(&self) -> bool {
@@ -293,6 +424,8 @@ pub enum Arg {
     GameMode(GameMode),
     /// `eyes` (true) or `feet`.
     Anchor(bool),
+    ScoreHolder(ScoreHolderArg),
+    IntRange(IntRange),
 }
 
 fn is_id_char(c: char) -> bool {
@@ -563,6 +696,7 @@ fn suggest_coordinates(builder: &mut SuggestionsBuilder, reg: &Registries) {
     }
 }
 
+pub const OPERATIONS: [&str; 9] = ["=", "+=", "-=", "*=", "/=", "%=", "<", ">", "><"];
 const SELECTORS: [(&str, &str); 6] = [
     ("@a", "argument.entity.selector.allPlayers"),
     ("@e", "argument.entity.selector.allEntities"),
@@ -571,7 +705,7 @@ const SELECTORS: [(&str, &str); 6] = [
     ("@r", "argument.entity.selector.randomPlayer"),
     ("@s", "argument.entity.selector.self"),
 ];
-const OPTIONS: [&str; 16] = [
+const OPTIONS: [&str; 21] = [
     "name",
     "distance",
     "level",
@@ -588,7 +722,22 @@ const OPTIONS: [&str; 16] = [
     "gamemode",
     "tag",
     "type",
+    "scores",
+    "team",
+    "nbt",
+    "advancements",
+    "predicate",
 ];
+/// StringReader.expect.
+fn expect_symbol(reader: &mut Reader, c: char) -> CmdResult<()> {
+    reader.skip_whitespace();
+    if reader.can_read() && reader.peek() == c {
+        reader.skip();
+        Ok(())
+    } else {
+        Err(CommandError::tr_at("parsing.expected", &[&c], reader))
+    }
+}
 fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> {
     let start = reader.cursor;
     if !(reader.can_read() && reader.peek() == '@') {
@@ -790,6 +939,81 @@ fn parse_selector(reader: &mut Reader, reg: &Registries) -> CmdResult<Selector> 
                     let neg = negated(reader);
                     let v = reader.read_unquoted_string().to_owned();
                     s.tags.push((v, neg));
+                }
+                "team" => {
+                    let neg = negated(reader);
+                    let v = reader.read_unquoted_string().to_owned();
+                    s.teams.push((v, neg));
+                }
+                "nbt" => {
+                    let neg = negated(reader);
+                    if !reader.can_read() || reader.peek() != '{' {
+                        return Err(CommandError::tr_at(
+                            "argument.nbt.expected.compound",
+                            &[],
+                            reader,
+                        ));
+                    }
+                    s.nbt.push((read_braced(reader, '{', '}')?, neg));
+                }
+                "predicate" => {
+                    let neg = negated(reader);
+                    s.predicates.push((read_id(reader)?, neg));
+                }
+                "scores" => {
+                    expect_symbol(reader, '{')?;
+                    reader.skip_whitespace();
+                    while reader.can_read() && reader.peek() != '}' {
+                        reader.skip_whitespace();
+                        let name = reader.read_unquoted_string().to_owned();
+                        expect_symbol(reader, '=')?;
+                        let range = range_int(reader)?;
+                        s.scores.push((name, range));
+                        reader.skip_whitespace();
+                        if reader.can_read() && reader.peek() == ',' {
+                            reader.skip();
+                        }
+                        reader.skip_whitespace();
+                    }
+                    expect_symbol(reader, '}')?;
+                }
+                "advancements" => {
+                    expect_symbol(reader, '{')?;
+                    reader.skip_whitespace();
+                    while reader.can_read() && reader.peek() != '}' {
+                        reader.skip_whitespace();
+                        let id = read_id(reader)?;
+                        expect_symbol(reader, '=')?;
+                        reader.skip_whitespace();
+                        if reader.can_read() && reader.peek() == '{' {
+                            reader.skip();
+                            reader.skip_whitespace();
+                            let mut criteria = Vec::new();
+                            while reader.can_read() && reader.peek() != '}' {
+                                reader.skip_whitespace();
+                                let c = reader.read_unquoted_string().to_owned();
+                                expect_symbol(reader, '=')?;
+                                criteria.push((c, reader.read_boolean()?));
+                                reader.skip_whitespace();
+                                if reader.can_read() && reader.peek() == ',' {
+                                    reader.skip();
+                                }
+                                reader.skip_whitespace();
+                            }
+                            expect_symbol(reader, '}')?;
+                            s.advancements.push((id, AdvCondition::Criteria(criteria)));
+                        } else {
+                            s.advancements
+                                .push((id, AdvCondition::Done(reader.read_boolean()?)));
+                        }
+                        reader.skip_whitespace();
+                        if reader.can_read() && reader.peek() == ',' {
+                            reader.skip();
+                        }
+                        reader.skip_whitespace();
+                    }
+                    expect_symbol(reader, '}')?;
+                    s.include_entities = false;
                 }
                 "type" => {
                     let neg = negated(reader);
@@ -1410,7 +1634,11 @@ impl ArgType {
                         reader,
                     ));
                 }
-                Arg::Str(read_braced(reader, '{', '}')?)
+                let text = read_braced(reader, '{', '}')?;
+                if let Err(e) = horizon_world::nbt::parse_snbt(&text) {
+                    return Err(CommandError::at(crate::text::Text::literal(e), reader));
+                }
+                Arg::Str(text)
             }
             ArgType::Component => {
                 let (value, used) =
@@ -1435,6 +1663,205 @@ impl ArgType {
                     axes.push(c);
                 }
                 Arg::Str(axes)
+            }
+            ArgType::ScoreHolder { multiple } => {
+                if reader.can_read() && reader.peek() == '@' {
+                    let sel = parse_selector(reader, reg)?;
+                    if !*multiple && sel.limit > 1 {
+                        reader.cursor = start;
+                        return Err(CommandError::tr_at("argument.entity.toomany", &[], reader));
+                    }
+                    Arg::ScoreHolder(ScoreHolderArg::Selector(sel))
+                } else {
+                    while reader.can_read() && reader.peek() != ' ' {
+                        reader.skip();
+                    }
+                    let text = &reader.string[start..reader.cursor];
+                    if text == "*" {
+                        Arg::ScoreHolder(ScoreHolderArg::Wildcard)
+                    } else {
+                        Arg::ScoreHolder(ScoreHolderArg::Name(text.to_owned()))
+                    }
+                }
+            }
+            ArgType::Objective | ArgType::Team => {
+                Arg::Str(reader.read_unquoted_string().to_owned())
+            }
+            ArgType::Criteria => {
+                while reader.can_read() && reader.peek() != ' ' {
+                    reader.skip();
+                }
+                let id = &reader.string[start..reader.cursor];
+                if !crate::scoreboard::criteria_exists(id, reg) {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at(
+                        "argument.criteria.invalid",
+                        &[&id],
+                        reader,
+                    ));
+                }
+                Arg::Str(id.to_owned())
+            }
+            ArgType::ScoreboardSlot => {
+                let name = reader.read_unquoted_string();
+                if !crate::scoreboard::display_slot_valid(name) {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at(
+                        "argument.scoreboardDisplaySlot.invalid",
+                        &[&name],
+                        reader,
+                    ));
+                }
+                Arg::Str(name.to_owned())
+            }
+            ArgType::Operation => {
+                if !reader.can_read() {
+                    return Err(CommandError::tr_at(
+                        "arguments.operation.invalid",
+                        &[],
+                        reader,
+                    ));
+                }
+                while reader.can_read() && reader.peek() != ' ' {
+                    reader.skip();
+                }
+                let op = &reader.string[start..reader.cursor];
+                if !OPERATIONS.contains(&op) {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at(
+                        "arguments.operation.invalid",
+                        &[],
+                        reader,
+                    ));
+                }
+                Arg::Str(op.to_owned())
+            }
+            ArgType::TeamColor => {
+                let name = reader.read_unquoted_string();
+                if crate::scoreboard::team_color_rgb(name).is_none() {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at(
+                        "argument.color.invalid",
+                        &[&name],
+                        reader,
+                    ));
+                }
+                Arg::Str(name.to_owned())
+            }
+            ArgType::IntRange => Arg::IntRange(range_int(reader)?),
+            ArgType::Name(_) => Arg::Str(reader.read_string()?),
+            ArgType::Vec2 | ArgType::ColumnPos => {
+                let block = matches!(self, ArgType::ColumnPos);
+                let one = |reader: &mut Reader| {
+                    if block {
+                        parse_coord_int(reader)
+                    } else {
+                        parse_coord_double(reader, false)
+                    }
+                };
+                let x = one(reader)?;
+                if !reader.can_read() || reader.peek() != ' ' {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at(
+                        "argument.pos2d.incomplete",
+                        &[],
+                        reader,
+                    ));
+                }
+                reader.skip();
+                let z = one(reader)?;
+                Arg::Coords(Coordinates::World([
+                    x,
+                    Coord {
+                        relative: true,
+                        value: 0.0,
+                    },
+                    z,
+                ]))
+            }
+            ArgType::Particle => {
+                let id = read_id(reader)?;
+                let name = id.trim_start_matches("minecraft:").to_owned();
+                if crate::particles::ParticleType::from_name(&id).is_none() {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at("particle.notFound", &[&id], reader));
+                }
+                let floats = |reader: &mut Reader, n: usize| -> CmdResult<()> {
+                    for _ in 0..n {
+                        reader.expect(' ')?;
+                        reader.read_float()?;
+                    }
+                    Ok(())
+                };
+                match name.as_str() {
+                    "dust" => floats(reader, 4)?,
+                    "dust_color_transition" => floats(reader, 7)?,
+                    "entity_effect" | "tinted_leaves" | "flash" => floats(reader, 4)?,
+                    "sculk_charge" => floats(reader, 1)?,
+                    "shriek" => {
+                        reader.expect(' ')?;
+                        reader.read_int()?;
+                    }
+                    "block" | "block_marker" | "falling_dust" | "dust_pillar" | "block_crumble" => {
+                        reader.expect(' ')?;
+                        parse_block(reader, reg, false)?;
+                    }
+                    "item" => {
+                        reader.expect(' ')?;
+                        parse_item(reader, reg, false)?;
+                    }
+                    _ => {}
+                }
+                Arg::Str(reader.string[start..reader.cursor].to_owned())
+            }
+            ArgType::Enum(words) => {
+                let word = reader.read_unquoted_string();
+                if !words.contains(&word) {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at("command.unknown.argument", &[], reader));
+                }
+                Arg::Str(word.to_owned())
+            }
+            ArgType::Function => {
+                let tag = reader.can_read() && reader.peek() == '#';
+                if tag {
+                    reader.skip();
+                }
+                let id = read_id(reader)?;
+                Arg::Resource(if tag { format!("#{id}") } else { id })
+            }
+            ArgType::Slots | ArgType::Slot => {
+                let mut end = reader.cursor;
+                while reader.can_read() && reader.peek() != ' ' {
+                    reader.skip();
+                    end = reader.cursor;
+                }
+                let word = &reader.string[start..end];
+                let known = slot_names().iter().any(|n| n == word)
+                    || (matches!(self, ArgType::Slots) && SLOT_GROUPS.contains(&word));
+                if !known {
+                    reader.cursor = start;
+                    return Err(CommandError::tr_at("slot.unknown", &[&word], reader));
+                }
+                Arg::Str(word.to_owned())
+            }
+            ArgType::NbtPath => {
+                let (path, used) = crate::nbt_path::NbtPath::parse_prefix(reader.remaining())
+                    .map_err(|e| {
+                        reader.cursor += e.cursor.min(reader.remaining().len());
+                        let args: Vec<&dyn std::fmt::Display> =
+                            e.args.iter().map(|a| a as &dyn std::fmt::Display).collect();
+                        CommandError::tr_at(e.key, &args, reader)
+                    })?;
+                reader.cursor += used;
+                Arg::Str(path.as_str().to_owned())
+            }
+            ArgType::NbtTag => {
+                let (_, used) = horizon_world::nbt::parse_snbt(reader.remaining())
+                    .map_err(|e| CommandError::at(crate::text::Text::literal(e), reader))?;
+                let text = reader.remaining()[..used].to_owned();
+                reader.cursor += used;
+                Arg::Str(text)
             }
             ArgType::Anchor => {
                 let name = reader.read_unquoted_string();
@@ -1492,6 +1919,17 @@ impl ArgType {
             }
             ArgType::Id(list) => {
                 let values = match *list {
+                    "storages" => reg.storages.clone(),
+                    "bossbars" => reg.bossbars.clone(),
+                    "schedules" => reg.schedules.clone(),
+                    "recipes" => reg.recipes.clone(),
+                    "sounds" => reg.sounds.clone(),
+                    "damage_types" => reg.damage_types.clone(),
+                    "attributes" => reg.attributes.clone(),
+                    "loot_tables" => reg.loot_tables.clone(),
+                    "templates" => reg.templates.clone(),
+                    "random_sequences" => reg.random_sequences.clone(),
+                    "predicates" => reg.predicates.clone(),
                     "time_markers" => reg.time_markers.clone(),
                     "advancements" => reg.advancements.clone(),
                     _ => Vec::new(),
@@ -1511,6 +1949,79 @@ impl ArgType {
                 }
             }
             ArgType::GameMode => builder.suggest_matching(GameMode::ALL.map(GameMode::name)),
+            ArgType::ScoreHolder { .. } => {
+                suggest_selector(builder, reg);
+                let names: Vec<String> = reg
+                    .players
+                    .iter()
+                    .chain(reg.tracked.iter())
+                    .cloned()
+                    .collect();
+                builder.suggest_matching(names.iter().map(String::as_str));
+            }
+            ArgType::Objective => {
+                builder.suggest_matching(reg.objectives.iter().map(String::as_str))
+            }
+            ArgType::Team => builder.suggest_matching(reg.teams.iter().map(String::as_str)),
+            ArgType::Criteria => {
+                let mut ids: Vec<String> = crate::scoreboard::CUSTOM_CRITERIA
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect();
+                for c in crate::scoreboard::team_colors() {
+                    ids.push(format!("teamkill.{c}"));
+                    ids.push(format!("killedByTeam.{c}"));
+                }
+                let stat = |ty: &str, key: &str| crate::scoreboard::stat_criteria(ty, key);
+                ids.extend(reg.blocks.keys().map(|b| stat("mined", b)));
+                for ty in ["crafted", "used", "broken", "picked_up", "dropped"] {
+                    ids.extend(reg.items.iter().map(|i| stat(ty, i)));
+                }
+                for ty in ["killed", "killed_by"] {
+                    ids.extend(reg.entity_types.iter().map(|e| stat(ty, e)));
+                }
+                ids.extend(
+                    crate::scoreboard::CUSTOM_STATS
+                        .iter()
+                        .map(|c| stat("custom", &format!("minecraft:{c}"))),
+                );
+                builder.suggest_matching(ids.iter().map(String::as_str));
+            }
+            ArgType::ScoreboardSlot => {
+                let slots = crate::scoreboard::display_slots();
+                builder.suggest_matching(slots.iter().map(String::as_str));
+            }
+            ArgType::Operation => builder.suggest_matching(OPERATIONS),
+            ArgType::Enum(words) => builder.suggest_matching(words.iter().copied()),
+            ArgType::Particle => {
+                let names: Vec<String> = crate::particles::ParticleType::ALL
+                    .iter()
+                    .map(|t| format!("minecraft:{}", t.name()))
+                    .collect();
+                suggest_resources(builder, &names, "");
+            }
+            ArgType::Vec2 | ArgType::ColumnPos => builder.suggest_matching(["~", "~ ~"]),
+            ArgType::Name(list) => {
+                let names = match *list {
+                    "datapacks_enabled" => reg.datapacks_enabled.clone(),
+                    _ => reg.datapacks_disabled.clone(),
+                };
+                builder.suggest_matching(names.iter().map(String::as_str));
+            }
+            ArgType::Function => {
+                let functions = reg.functions.clone();
+                suggest_resources(builder, &functions, "");
+                let tags = reg.function_tags.clone();
+                suggest_resources(builder, &tags, "#");
+            }
+            ArgType::Slots | ArgType::Slot => {
+                let mut names = slot_names();
+                if matches!(self, ArgType::Slots) {
+                    names.extend(SLOT_GROUPS.iter().map(|s| (*s).to_owned()));
+                }
+                builder.suggest_matching(names.iter().map(String::as_str));
+            }
+            ArgType::TeamColor => builder.suggest_matching(crate::scoreboard::team_colors()),
             ArgType::Anchor => builder.suggest_matching(["eyes", "feet"]),
             ArgType::Swizzle | ArgType::Component => {}
             ArgType::Message => {
