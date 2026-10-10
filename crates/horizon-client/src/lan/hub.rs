@@ -146,6 +146,11 @@ impl Hub {
         self.guests.iter_mut().find(|g| g.conn == conn)
     }
 
+    /// The network id of a name in a built-in or synchronized registry.
+    pub fn registry_id(&self, registry: &str, name: &str) -> Option<i32> {
+        self.sync.id(registry, name)
+    }
+
     pub fn item_id(&mut self, item: &Arc<str>) -> i32 {
         if let Some(id) = self.item_ids.get(item) {
             return *id;
@@ -864,7 +869,6 @@ impl Hub {
             data: 0,
             meta,
             equipment,
-            send_velocity: false,
         }
     }
 
@@ -950,20 +954,26 @@ impl Hub {
             if !self.guests[gi].placed {
                 continue;
             }
-            let range = f64::from(self.guests[gi].view_distance * 16).min(128.0);
+            let view = self.guests[gi].view_distance;
             let me = self.guests[gi].entity_id;
             let origin = self.guests[gi].position;
+            // TrackedEntity.updatePlayer: within the type's range (capped by the
+            // view distance) horizontally, in a chunk the client has.
+            let visible = |g: &Guest, e: &EntityState| {
+                let range = super::entity::visible_range(&e.kind, view);
+                let (dx, dz) = (origin[0] - e.position[0], origin[2] - e.position[2]);
+                let chunk = (
+                    (e.position[0].floor() as i32) >> 4,
+                    (e.position[2].floor() as i32) >> 4,
+                );
+                dx * dx + dz * dz <= range * range && g.sent_chunks.contains(&chunk)
+            };
             // Forget what disappeared or left range.
             let mut removed = Vec::new();
             for id in self.guests[gi].tracker.ids() {
                 match by_id.get(&id) {
-                    None => removed.push(id),
-                    Some(&ei) => {
-                        let e = &all[ei];
-                        if !in_range(origin, e.position, range + 8.0) {
-                            removed.push(id);
-                        }
-                    }
+                    Some(&ei) if visible(&self.guests[gi], &all[ei]) => {}
+                    _ => removed.push(id),
                 }
             }
             if !removed.is_empty() {
@@ -979,12 +989,12 @@ impl Hub {
                 if self.guests[gi].tracker.is_tracking(e.id) {
                     let packets = self.guests[gi].tracker.update(e);
                     self.guests[gi].send_all(&packets);
-                } else if in_range(origin, e.position, range) {
+                } else if visible(&self.guests[gi], e) {
                     let Some(kind) = self.entity_type(&e.kind) else {
                         continue;
                     };
-                    let packets = self.guests[gi].tracker.spawn(e, kind);
                     // Players need their list entry first; guests got it at join.
+                    let packets = self.guests[gi].tracker.spawn(e, kind);
                     self.guests[gi].send_all(&packets);
                 }
             }
@@ -1205,11 +1215,6 @@ impl Hub {
             let _ = g.sender.tx.send(super::Out::Disconnect(reason.clone()));
         }
     }
-}
-
-fn in_range(a: [f64; 3], b: [f64; 3], range: f64) -> bool {
-    let (dx, dz) = (a[0] - b[0], a[2] - b[2]);
-    dx * dx + dz * dz <= range * range && (a[1] - b[1]).abs() <= 400.0
 }
 
 /// The commands guests may type when the host allows them.

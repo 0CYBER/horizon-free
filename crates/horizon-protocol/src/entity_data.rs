@@ -26,6 +26,8 @@ pub enum Value {
     OptUuid(Option<u128>),
     /// Any VarInt-valued serializer (direction, block state, pose, variants ...).
     Id(i32),
+    /// Several VarInts (VillagerData).
+    Ids(Vec<i32>),
 }
 /// Serializer ids in EntityDataSerializers registration order.
 pub mod serializer {
@@ -45,12 +47,34 @@ pub mod serializer {
     pub const OPTIONAL_LIVING_ENTITY_REFERENCE: i32 = 13;
     pub const BLOCK_STATE: i32 = 14;
     pub const OPTIONAL_BLOCK_STATE: i32 = 15;
+    pub const PARTICLE: i32 = 16;
+    pub const PARTICLES: i32 = 17;
+    pub const VILLAGER_DATA: i32 = 18;
     pub const OPTIONAL_UNSIGNED_INT: i32 = 19;
     pub const POSE: i32 = 20;
-    pub const VECTOR3: i32 = 40;
-    pub const QUATERNION: i32 = 41;
-    pub const HUMANOID_ARM: i32 = 43;
-    pub const DYE_COLOR: i32 = 44;
+    pub const CAT_VARIANT: i32 = 21;
+    pub const CAT_SOUND_VARIANT: i32 = 22;
+    pub const COW_VARIANT: i32 = 23;
+    pub const COW_SOUND_VARIANT: i32 = 24;
+    pub const WOLF_VARIANT: i32 = 25;
+    pub const WOLF_SOUND_VARIANT: i32 = 26;
+    pub const FROG_VARIANT: i32 = 27;
+    pub const PIG_VARIANT: i32 = 28;
+    pub const PIG_SOUND_VARIANT: i32 = 29;
+    pub const CHICKEN_VARIANT: i32 = 30;
+    pub const CHICKEN_SOUND_VARIANT: i32 = 31;
+    pub const ZOMBIE_NAUTILUS_VARIANT: i32 = 32;
+    pub const OPTIONAL_GLOBAL_POS: i32 = 33;
+    pub const PAINTING_VARIANT: i32 = 34;
+    pub const SNIFFER_STATE: i32 = 35;
+    pub const ARMADILLO_STATE: i32 = 36;
+    pub const COPPER_GOLEM_STATE: i32 = 37;
+    pub const WEATHERING_COPPER_STATE: i32 = 38;
+    pub const VECTOR3: i32 = 39;
+    pub const QUATERNION: i32 = 40;
+    pub const RESOLVABLE_PROFILE: i32 = 41;
+    pub const HUMANOID_ARM: i32 = 42;
+    pub const DYE_COLOR: i32 = 43;
 }
 fn read_value(kind: i32, r: &mut Reader) -> Result<Option<Value>> {
     use serializer::*;
@@ -75,15 +99,18 @@ fn read_value(kind: i32, r: &mut Reader) -> Result<Option<Value>> {
         OPTIONAL_LIVING_ENTITY_REFERENCE => {
             Value::OptUuid(if r.bool()? { Some(r.uuid()?) } else { None })
         }
+        // VillagerData: type, profession and level.
+        VILLAGER_DATA => Value::Ids(vec![r.varint()?, r.varint()?, r.varint()?]),
         // VarInt-encoded: direction, block states, optional ints, pose, the
-        // holder-registry variants (21..=33) and enum states (36..=39), arm, dye.
+        // holder-registry variants (cat to zombie nautilus, painting) and the
+        // enum states (sniffer to weathering copper), arm, dye.
         DIRECTION
         | BLOCK_STATE
         | OPTIONAL_BLOCK_STATE
         | OPTIONAL_UNSIGNED_INT
         | POSE
-        | 21..=33
-        | 36..=39
+        | CAT_VARIANT..=ZOMBIE_NAUTILUS_VARIANT
+        | PAINTING_VARIANT..=WEATHERING_COPPER_STATE
         | HUMANOID_ARM
         | DYE_COLOR => Value::Id(r.varint()?),
         _ => return Ok(None),
@@ -93,6 +120,7 @@ fn write_value(kind: i32, v: &Value, w: &mut Writer) {
     match v {
         Value::Byte(b) => w.i8(*b),
         Value::Int(i) | Value::Id(i) => w.varint(*i),
+        Value::Ids(ids) => ids.iter().for_each(|i| w.varint(*i)),
         Value::Long(l) => w.varlong(*l),
         Value::Float(f) => w.f32(*f),
         Value::String(s) => w.string(s),

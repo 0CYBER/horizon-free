@@ -10,6 +10,7 @@ pub mod containers;
 pub mod data;
 pub mod discovery;
 pub mod entity;
+pub mod tracking;
 pub mod guest;
 pub mod hub;
 pub mod menu;

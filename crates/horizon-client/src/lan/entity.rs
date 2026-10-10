@@ -1,14 +1,17 @@
-//! Entity tracking (ServerEntity / TrackedEntity): the game describes every
-//! entity it simulates as an `EntityState` each tick; a `Tracker` remembers
-//! what one client has been told and produces the spawn, movement, metadata,
-//! equipment and removal packets that bring it up to date.
+//! Entity tracking (ChunkMap.TrackedEntity / ServerEntity): the game describes
+//! every entity it simulates as an `EntityState` each tick; a `Tracker`
+//! remembers what one client has been told and produces the spawn, movement,
+//! motion, metadata, equipment and removal packets that bring it up to date,
+//! at the entity type's update interval (`tracking`).
+use super::tracking;
 use horizon_protocol::{
     buf::pack_degrees,
     entity_data::Value,
     item::Stack,
     packets::play::{
-        self, AddEntity, MoveEntity, MoveEntityPos, MoveEntityPosRot, MoveEntityRot, RotateHead,
-        SetEntityData, SetEntityMotion, SetEquipment, TeleportEntity, VecDelta,
+        self, AddEntity, EntityPositionSync, MoveEntity, MoveEntityPos, MoveEntityPosRot,
+        MoveEntityRot, PositionPath, RotateHead, SetEntityData, SetEntityMotion, SetEquipment,
+        VecDelta,
     },
 };
 
@@ -30,24 +33,27 @@ pub struct EntityState {
     /// SynchedEntityData entries that differ from the defaults.
     pub meta: Vec<(u8, i32, Value)>,
     /// EquipmentSlot ordinals (0 main hand, 1 off hand, 2 feet, 3 legs,
-    /// 4 chest, 5 head) and their stacks.
+    /// 4 chest, 5 head, 6 body, 7 saddle) and their stacks.
     pub equipment: Vec<(u8, Option<Stack>)>,
-    /// Whether movement packets should include a velocity (items, projectiles).
-    pub send_velocity: bool,
 }
 
-/// What a client was last told about one entity.
+/// What a client was last told about one entity (ServerEntity's fields).
 struct Sent {
-    /// The position in 1/4096 blocks (VecDeltaCodec base).
-    base: [i64; 3],
-    position: [f64; 3],
+    /// VecDeltaCodec's base: the last position sent.
+    base: [f64; 3],
+    /// lastSentYRot / lastSentXRot / lastSentYHeadRot.
     rotation: (i8, i8),
     head: i8,
+    /// lastSentMovement.
     velocity: [f64; 3],
     meta: Vec<(u8, i32, Value)>,
     equipment: Vec<(u8, Option<Stack>)>,
-    on_ground: bool,
-    ticks: u32,
+    was_on_ground: bool,
+    tick: u32,
+    teleport_delay: u32,
+    /// The type's update interval (0: never) and whether velocity is tracked.
+    interval: u32,
+    track_deltas: bool,
 }
 
 #[derive(Default)]
@@ -55,19 +61,16 @@ pub struct Tracker {
     sent: std::collections::HashMap<i32, Sent>,
 }
 
-fn quantize(p: [f64; 3]) -> [i64; 3] {
-    [
-        (p[0] * 4096.0).round() as i64,
-        (p[1] * 4096.0).round() as i64,
-        (p[2] * 4096.0).round() as i64,
-    ]
+/// VecDeltaCodec.encode.
+fn encode(v: f64) -> i64 {
+    (v * 4096.0).round() as i64
 }
-fn dequantize(q: [i64; 3]) -> [f64; 3] {
-    [
-        q[0] as f64 / 4096.0,
-        q[1] as f64 / 4096.0,
-        q[2] as f64 / 4096.0,
-    ]
+
+/// The horizontal range within which a client sees an entity of `kind`
+/// (TrackedEntity.updatePlayer: the type's range, capped by the view distance).
+pub fn visible_range(kind: &str, view_distance: i32) -> f64 {
+    let chunks = i32::from(tracking::settings(kind).0);
+    f64::from(chunks.min(view_distance) * 16)
 }
 
 impl Tracker {
@@ -94,6 +97,7 @@ impl Tracker {
     pub fn spawn(&mut self, e: &EntityState, entity_type: i32) -> Vec<play::Clientbound> {
         let rotation = (pack_degrees(e.pitch), pack_degrees(e.yaw));
         let head = pack_degrees(e.head_yaw);
+        let (_, interval, track_deltas) = tracking::settings(&e.kind);
         let mut out = vec![play::Clientbound::AddEntity(AddEntity {
             id: e.id,
             uuid: e.uuid,
@@ -120,114 +124,132 @@ impl Tracker {
         self.sent.insert(
             e.id,
             Sent {
-                base: quantize(e.position),
-                position: e.position,
+                base: e.position,
                 rotation,
                 head,
                 velocity: e.velocity,
                 meta: e.meta.clone(),
                 equipment: e.equipment.clone(),
-                on_ground: e.on_ground,
-                ticks: 0,
+                was_on_ground: e.on_ground,
+                tick: 0,
+                teleport_delay: 0,
+                interval,
+                track_deltas,
             },
         );
         out
     }
 
-    /// Changes since the last update (ServerEntity.sendChanges).
+    /// Changes since the last update (ServerEntity.sendChanges): movement and
+    /// rotation every update interval (positions at least every 60 ticks, a
+    /// full position sync every 400 or when the entity lands or leaves the
+    /// ground), velocity for types that track it, changed data at once.
     pub fn update(&mut self, e: &EntityState) -> Vec<play::Clientbound> {
         let Some(s) = self.sent.get_mut(&e.id) else {
             return Vec::new();
         };
         let mut out = Vec::new();
-        s.ticks += 1;
-        let rotation = (pack_degrees(e.pitch), pack_degrees(e.yaw));
-        let rotated = rotation != s.rotation;
-        let now = quantize(e.position);
-        let delta = [now[0] - s.base[0], now[1] - s.base[1], now[2] - s.base[2]];
-        let moved = delta != [0; 3];
-        let fits = delta.iter().all(|d| i16::try_from(*d).is_ok());
-        if moved && !fits {
-            out.push(play::Clientbound::TeleportEntity(TeleportEntity {
+        let dirty = e.meta != s.meta;
+        let due = s.interval != 0 && s.tick.is_multiple_of(s.interval);
+        if due || dirty {
+            let rotation = (pack_degrees(e.pitch), pack_degrees(e.yaw));
+            let turned = |a: i8, b: i8| (i32::from(a) - i32::from(b)).abs() >= 1;
+            let rotate = turned(rotation.1, s.rotation.1) || turned(rotation.0, s.rotation.0);
+            s.teleport_delay += 1;
+            let d: f64 = (0..3).map(|k| (e.position[k] - s.base[k]).powi(2)).sum();
+            let send_position = d >= 7.629_394_5e-6 || s.tick.is_multiple_of(60);
+            let sync = EntityPositionSync {
                 id: e.id,
-                position: e.position,
-                delta: e.velocity,
+                path: PositionPath::Linear(e.position),
                 yaw: e.yaw,
                 pitch: e.pitch,
-                relatives: 0,
                 on_ground: e.on_ground,
-            }));
-            s.base = now;
-        } else if moved || rotated || e.on_ground != s.on_ground {
-            let d = VecDelta::Linear([delta[0] as i16, delta[1] as i16, delta[2] as i16]);
-            let rot = Some((rotation.1, rotation.0));
-            let packet = if moved && rotated {
-                play::Clientbound::MoveEntityPosRot(MoveEntityPosRot(MoveEntity {
-                    id: e.id,
-                    delta: Some(d),
-                    rotation: rot,
-                    on_ground: e.on_ground,
-                }))
-            } else if moved {
-                play::Clientbound::MoveEntityPos(MoveEntityPos(MoveEntity {
-                    id: e.id,
-                    delta: Some(d),
-                    rotation: None,
-                    on_ground: e.on_ground,
-                }))
-            } else {
-                play::Clientbound::MoveEntityRot(MoveEntityRot(MoveEntity {
+            };
+            // ServerEntity.createMovePacket.
+            let packet = if s.teleport_delay > 400 || s.was_on_ground != e.on_ground {
+                s.was_on_ground = e.on_ground;
+                s.teleport_delay = 0;
+                Some(play::Clientbound::EntityPositionSync(sync))
+            } else if send_position {
+                let delta = [0, 1, 2].map(|k| encode(e.position[k]) - encode(s.base[k]));
+                if delta.iter().any(|v| i16::try_from(*v).is_err()) {
+                    Some(play::Clientbound::EntityPositionSync(sync))
+                } else {
+                    let m = MoveEntity {
+                        id: e.id,
+                        delta: Some(VecDelta::Linear(delta.map(|v| v as i16))),
+                        rotation: rotate.then_some((rotation.1, rotation.0)),
+                        on_ground: e.on_ground,
+                    };
+                    Some(if rotate {
+                        play::Clientbound::MoveEntityPosRot(MoveEntityPosRot(m))
+                    } else {
+                        play::Clientbound::MoveEntityPos(MoveEntityPos(m))
+                    })
+                }
+            } else if rotate {
+                Some(play::Clientbound::MoveEntityRot(MoveEntityRot(MoveEntity {
                     id: e.id,
                     delta: None,
-                    rotation: rot,
+                    rotation: Some((rotation.1, rotation.0)),
                     on_ground: e.on_ground,
-                }))
+                })))
+            } else {
+                None
             };
-            out.push(packet);
-            if moved {
-                s.base = now;
+            if s.track_deltas {
+                let diff: f64 = (0..3).map(|k| (e.velocity[k] - s.velocity[k]).powi(2)).sum();
+                let still = e.velocity.iter().all(|v| *v == 0.0);
+                if diff > 1.0e-7 || diff > 0.0 && still {
+                    s.velocity = e.velocity;
+                    out.push(play::Clientbound::SetEntityMotion(SetEntityMotion {
+                        id: e.id,
+                        velocity: e.velocity,
+                    }));
+                }
             }
-        }
-        if moved || rotated || e.on_ground != s.on_ground {
-            s.rotation = rotation;
-            s.on_ground = e.on_ground;
-        }
-        s.position = dequantize(s.base);
-        let head = pack_degrees(e.head_yaw);
-        if head != s.head {
-            out.push(play::Clientbound::RotateHead(RotateHead {
-                id: e.id,
-                head_yaw: head,
-            }));
-            s.head = head;
-        }
-        if e.send_velocity {
-            let dv: f64 = (0..3)
-                .map(|i| (e.velocity[i] - s.velocity[i]).powi(2))
-                .sum();
-            if dv > 1.0e-7 || (e.velocity == [0.0; 3] && s.velocity != [0.0; 3]) {
-                out.push(play::Clientbound::SetEntityMotion(SetEntityMotion {
+            if let Some(packet) = packet {
+                let (position, rotated) = match &packet {
+                    play::Clientbound::EntityPositionSync(_)
+                    | play::Clientbound::MoveEntityPosRot(_) => (true, true),
+                    play::Clientbound::MoveEntityPos(_) => (true, false),
+                    _ => (false, true),
+                };
+                out.push(packet);
+                if position {
+                    s.base = e.position;
+                }
+                if rotated {
+                    s.rotation = rotation;
+                }
+            }
+            // ServerEntity.sendDirtyEntityData.
+            if dirty {
+                let changed: Vec<_> = e
+                    .meta
+                    .iter()
+                    .filter(|m| !s.meta.contains(m))
+                    .cloned()
+                    .collect();
+                if !changed.is_empty() {
+                    out.push(play::Clientbound::SetEntityData(SetEntityData {
+                        id: e.id,
+                        values: changed,
+                    }));
+                }
+                s.meta = e.meta.clone();
+            }
+            let head = pack_degrees(e.head_yaw);
+            if turned(head, s.head) {
+                out.push(play::Clientbound::RotateHead(RotateHead {
                     id: e.id,
-                    velocity: e.velocity,
+                    head_yaw: head,
                 }));
-                s.velocity = e.velocity;
+                s.head = head;
             }
         }
-        if e.meta != s.meta {
-            let changed: Vec<_> = e
-                .meta
-                .iter()
-                .filter(|m| !s.meta.contains(m))
-                .cloned()
-                .collect();
-            if !changed.is_empty() {
-                out.push(play::Clientbound::SetEntityData(SetEntityData {
-                    id: e.id,
-                    values: changed,
-                }));
-            }
-            s.meta = e.meta.clone();
-        }
+        s.tick += 1;
+        // LivingEntity.detectEquipmentUpdates: changed slots every tick.
         if e.equipment != s.equipment {
             // Cleared slots are sent as empty stacks.
             let mut slots: Vec<(u8, Option<Stack>)> = e
@@ -271,20 +293,46 @@ mod tests {
             data: 0,
             meta: Vec::new(),
             equipment: Vec::new(),
-            send_velocity: false,
         }
     }
 
     #[test]
-    fn small_moves_are_relative_and_large_ones_teleport() {
+    fn moves_go_out_every_update_interval() {
         let mut t = Tracker::default();
         let spawn = t.spawn(&state(0.0), 100);
         assert!(matches!(spawn[0], play::Clientbound::AddEntity(_)));
-        assert!(t.update(&state(0.0)).is_empty());
-        let step = t.update(&state(0.5));
-        assert!(matches!(step[0], play::Clientbound::MoveEntityPos(_)));
+        // Tick 0 is due and a multiple of 60: the position goes out unchanged.
+        assert!(matches!(
+            t.update(&state(0.0))[..],
+            [play::Clientbound::MoveEntityPos(_)]
+        ));
+        // A zombie updates every third tick.
+        assert!(t.update(&state(0.5)).is_empty());
+        assert!(t.update(&state(0.5)).is_empty());
+        assert!(matches!(
+            t.update(&state(0.5))[..],
+            [play::Clientbound::MoveEntityPos(_)]
+        ));
+        for _ in 0..2 {
+            t.update(&state(40.0));
+        }
         let jump = t.update(&state(40.0));
-        assert!(matches!(jump[0], play::Clientbound::TeleportEntity(_)));
+        assert!(matches!(jump[0], play::Clientbound::EntityPositionSync(_)));
+    }
+
+    #[test]
+    fn landing_sends_a_position_sync() {
+        let mut t = Tracker::default();
+        let mut e = state(0.0);
+        t.spawn(&e, 100);
+        t.update(&e);
+        e.on_ground = false;
+        t.update(&e);
+        t.update(&e);
+        assert!(matches!(
+            t.update(&e)[..],
+            [play::Clientbound::EntityPositionSync(_)]
+        ));
     }
 
     #[test]
@@ -292,6 +340,7 @@ mod tests {
         let mut t = Tracker::default();
         let mut e = state(0.0);
         t.spawn(&e, 100);
+        t.update(&e);
         e.meta.push((0, 0, Value::Byte(1)));
         e.equipment.push((0, Some(Stack::new(5, 1))));
         let out = t.update(&e);
