@@ -20,7 +20,9 @@ pub enum Sampled {
     Product(Vec<Sampled>),
 }
 impl Sampled {
-    /// `SampledFloat.sample`: constants draw nothing.
+    /// `SampledFloat.sample`: constants draw nothing (sounds.json only has
+    /// constants, but the random stays part of the call as in vanilla).
+    #[allow(clippy::only_used_in_recursion)]
     pub fn sample(&self, random: &mut impl RandomSource) -> f32 {
         match self {
             Self::Constant(v) => *v,

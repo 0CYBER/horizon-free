@@ -552,3 +552,47 @@ impl Sounds for Audio {
         self.bound().update_category_volume(source, gain);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn channel(samples: Vec<f32>, linear: Option<f32>, at: [f32; 3], looping: bool) -> Channel {
+        Channel {
+            samples: Some((Arc::new(samples), 48_000)),
+            position: 0.0,
+            state: State::Playing,
+            gain: 1.0,
+            pitch: 1.0,
+            linear,
+            looping,
+            at,
+            relative: false,
+        }
+    }
+
+    #[test]
+    fn linear_attenuation_reaches_zero_at_the_max_distance() {
+        assert_eq!(distance_gain(None, 100.0), 1.0);
+        assert_eq!(distance_gain(Some(16.0), 0.0), 1.0);
+        assert_eq!(distance_gain(Some(16.0), 8.0), 0.5);
+        assert_eq!(distance_gain(Some(16.0), 16.0), 0.0);
+        assert_eq!(distance_gain(Some(16.0), 40.0), 0.0);
+    }
+
+    #[test]
+    fn sources_play_attenuated_then_stop_or_loop() {
+        let mut m = Mixer::default();
+        m.channels
+            .insert(1, channel(vec![1.0; 4], Some(16.0), [8.0, 0.0, 0.0], false));
+        m.channels
+            .insert(2, channel(vec![1.0; 4], None, [0.0; 3], true));
+        let mut data = [0.0f32; 16];
+        mix(&mut m, &mut data, 2, 48_000);
+        assert_eq!(m.channels[&1].state, State::Stopped);
+        assert_eq!(m.channels[&2].state, State::Playing);
+        // Mono sum of the two at the first frame: the far one is half as loud.
+        let first = data[0] + data[1];
+        assert!(first > 1.4 && first < 3.1, "{first}");
+    }
+}
