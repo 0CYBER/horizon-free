@@ -5,6 +5,7 @@
 //! `tools/test_menu_click_parity.py` compares every click with vanilla's menu
 //! classes.
 use crate::{
+    brewing::Brewing,
     crafting::Recipes,
     items::{ItemStack, Items},
 };
@@ -13,6 +14,7 @@ use crate::{
 pub struct Env<'a> {
     pub items: &'a Items,
     pub recipes: &'a Recipes,
+    pub brewing: &'a Brewing,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -51,6 +53,7 @@ pub enum Kind {
     Shulker,
     /// The cooking recipe type: smelting, blasting or smoking.
     Furnace(&'static str),
+    Brewing,
 }
 
 impl Kind {
@@ -67,6 +70,7 @@ impl Kind {
             "furnace" => Self::Furnace("smelting"),
             "blast_furnace" => Self::Furnace("blasting"),
             "smoker" => Self::Furnace("smoking"),
+            "brewing" => Self::Brewing,
             _ => return None,
         })
     }
@@ -84,6 +88,12 @@ enum Role {
     Output,
     /// `ResultSlot` of a crafting grid.
     CraftResult,
+    /// `BrewingStandMenu.PotionSlot`.
+    Potion,
+    /// `BrewingStandMenu.IngredientsSlot`.
+    Ingredient,
+    /// `BrewingStandMenu.FuelSlot`.
+    BrewFuel,
 }
 
 #[derive(Clone, Copy)]
@@ -220,6 +230,27 @@ impl Menu {
                 slots.extend(main(27, Role::Shulker));
                 player(&mut slots);
             }
+            Kind::Brewing => {
+                containers[MAIN] = vec![None; 5];
+                for (index, role) in [
+                    Role::Potion,
+                    Role::Potion,
+                    Role::Potion,
+                    Role::Ingredient,
+                    Role::BrewFuel,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    slots.push(Slot {
+                        container: MAIN,
+                        index,
+                        role,
+                    });
+                }
+                player(&mut slots);
+                data = 4;
+            }
             Kind::Furnace(_) => {
                 containers[MAIN] = vec![None; 3];
                 slots.extend([
@@ -349,6 +380,19 @@ impl Menu {
             Role::Shulker => Self::fits_inside(stack),
             Role::Fuel => Self::is_fuel(env, stack) || Self::is_bucket(stack),
             Role::Output | Role::CraftResult => false,
+            Role::Potion => {
+                env.brewing.is_bottle(stack)
+                    || env
+                        .items
+                        .item_tags
+                        .get("minecraft:brewing_potion_inputs")
+                        .is_some_and(|m| m.contains(&*stack.item))
+            }
+            Role::Ingredient => env.brewing.is_reagent(stack),
+            Role::BrewFuel => env
+                .items
+                .get(&stack.item)
+                .is_some_and(|i| i.brewing_fuel.is_some()),
         }
     }
 
@@ -367,7 +411,7 @@ impl Menu {
     /// `Slot.getMaxStackSize(stack)`.
     fn slot_max(&self, env: &Env, s: usize, stack: &ItemStack) -> u32 {
         let own = match self.slots[s].role {
-            Role::Armor(_) => 1,
+            Role::Armor(_) | Role::Potion => 1,
             Role::Fuel if Self::is_bucket(stack) => return 1,
             _ => CONTAINER_MAX,
         };
@@ -739,6 +783,56 @@ impl Menu {
                         return None;
                     }
                 } else if !self.move_to(env, &mut stack, 0, 9, false) {
+                    return None;
+                }
+            }
+            Kind::Brewing => {
+                after_take = true;
+                let slot = self.slots[index];
+                let commit = |m: &mut Self, stack: &ItemStack| {
+                    m.containers[slot.container][slot.index] =
+                        (stack.count > 0).then(|| stack.clone());
+                };
+                if index <= 4 {
+                    if !self.move_to(env, &mut stack, 5, 41, true) {
+                        return None;
+                    }
+                } else if env
+                    .items
+                    .get(&clicked.item)
+                    .is_some_and(|i| i.brewing_fuel.is_some())
+                {
+                    let moved = self.move_to(env, &mut stack, 4, 5, false);
+                    if moved
+                        || (env.brewing.is_reagent(&stack)
+                            && !self.move_to(env, &mut stack, 3, 4, false))
+                    {
+                        commit(self, &stack);
+                        return None;
+                    }
+                } else if env.brewing.is_reagent(&stack) {
+                    if !self.move_to(env, &mut stack, 3, 4, false) {
+                        return None;
+                    }
+                } else if env.brewing.is_bottle(&stack)
+                    || env
+                        .items
+                        .item_tags
+                        .get("minecraft:brewing_potion_inputs")
+                        .is_some_and(|m| m.contains(&*stack.item))
+                {
+                    if !self.move_to(env, &mut stack, 0, 3, false) {
+                        return None;
+                    }
+                } else if (5..32).contains(&index) {
+                    if !self.move_to(env, &mut stack, 32, 41, false) {
+                        return None;
+                    }
+                } else if (32..41).contains(&index) {
+                    if !self.move_to(env, &mut stack, 5, 32, false) {
+                        return None;
+                    }
+                } else if !self.move_to(env, &mut stack, 5, 41, false) {
                     return None;
                 }
             }

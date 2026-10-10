@@ -79,9 +79,11 @@ fn main() -> horizon_client::Result<()> {
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
     let items = Items::catalog(root)?;
     let recipes = Recipes::load(root, &items)?;
+    let brewing = horizon_client::brewing::Brewing::load(root, &items);
     let env = Env {
         items: &items,
         recipes: &recipes,
+        brewing: &brewing,
     };
     let mut out = String::new();
     for line in input.lines() {

@@ -19,22 +19,25 @@ except ImportError:
     import lab
 
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
-         'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39}
-DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4}
+         'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41}
+DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4}
 COMMON = ['stone', 'dirt', 'cobblestone', 'oak_planks', 'stick', 'coal', 'iron_ingot', 'diamond', 'apple', 'bread',
           'oak_log', 'sand', 'bucket', 'water_bucket', 'lava_bucket', 'ender_pearl', 'snowball', 'egg', 'white_wool',
           'iron_helmet', 'diamond_chestplate', 'leather_leggings', 'iron_boots', 'shield', 'carved_pumpkin',
           'elytra', 'turtle_helmet', 'iron_sword', 'diamond_pickaxe', 'bow', 'shulker_box', 'red_shulker_box',
           'raw_iron', 'potato', 'beef', 'chicken', 'sticky_piston', 'blaze_rod', 'lava_bucket', 'oak_sapling',
-          'white_dye', 'red_dye', 'torch', 'crafting_table', 'furnace', 'chest']
+          'white_dye', 'red_dye', 'torch', 'crafting_table', 'furnace', 'chest', 'glass_bottle', 'nether_wart', 'blaze_powder',
+          'redstone', 'gunpowder', 'sugar', 'potion', 'splash_potion', 'lingering_potion', 'fermented_spider_eye', 'dragon_breath']
 
 
 def quote(text):
     return '"' + text + '"'
 
 
-def snbt(item, count, damage=0, curse=False):
+def snbt(item, count, damage=0, curse=False, potion=None):
     comps = []
+    if potion:
+        comps.append('"minecraft:potion_contents":{potion:"%s"}' % potion)
     if damage:
         comps.append('"minecraft:damage":%d' % damage)
     if curse:
@@ -60,7 +63,8 @@ class Gen:
         if info.get('minecraft:max_damage') and rng.random() < 0.3:
             damage = rng.randrange(1, info['minecraft:max_damage'])
         count = 1 if top == 1 else rng.choice([1, 1, 2, top, top, top - 1, rng.randrange(1, top + 1)])
-        return snbt(item, max(1, count), damage, curse=rng.random() < 0.15 and 'equippable' in json.dumps(info))
+        potion = rng.choice(['minecraft:water', 'minecraft:awkward', 'minecraft:healing', 'minecraft:thick']) if item.endswith('potion') and rng.random() < 0.8 else None
+        return snbt(item, max(1, count), damage, curse=rng.random() < 0.15 and 'equippable' in json.dumps(info), potion=potion)
 
     def slots(self, size, density):
         return [self.stack() if self.rng.random() < density else '-' for _ in range(size)]
