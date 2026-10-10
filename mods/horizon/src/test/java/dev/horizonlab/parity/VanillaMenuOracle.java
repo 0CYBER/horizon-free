@@ -86,10 +86,13 @@ public final class VanillaMenuOracle {
         World world;
         boolean creative;
         Inventory inv;
+        // No advancements are granted, so criterion triggers find no listeners.
+        net.minecraft.server.PlayerAdvancements advancements;
         FakePlayer() {
             super(null, null, null, null);
         }
         @Override public Inventory getInventory() { return inv; }
+        @Override public net.minecraft.server.PlayerAdvancements getAdvancements() { return advancements; }
         @Override public ServerLevel level() { return world; }
         @Override public boolean hasInfiniteMaterials() { return creative; }
         @Override public boolean isCreative() { return creative; }
@@ -166,6 +169,8 @@ public final class VanillaMenuOracle {
                     var player = make(FakePlayer.class);
                     player.world = world;
                     player.creative = f.get("creative").getAsBoolean();
+                    player.advancements = make(net.minecraft.server.PlayerAdvancements.class);
+                    set(player.advancements, net.minecraft.server.PlayerAdvancements.class, "activeTriggers", new java.util.IdentityHashMap<>());
                     set(player, ServerPlayer.class, "connection", make(Connection.class));
                     var inv = new Inventory(player, new EntityEquipment());
                     player.inv = inv;
