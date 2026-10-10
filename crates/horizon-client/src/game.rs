@@ -108,7 +108,7 @@ use horizon_client::{
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
     items::{ItemStack, Items},
-    keymapping::KeyState,
+    keymapping::KeyAction,
     light::LightTables,
     mesher::{MeshTables, Vertex},
     mobs::{Mob, MobType, MobTypes},
@@ -567,7 +567,7 @@ struct Game<'a> {
     /// `Options.smoothCamera` (cinematic camera), not persisted.
     smooth_camera: bool,
     /// Sneak, sprint, attack and use as ToggleKeyMappings.
-    toggles: [KeyState; 4],
+    toggles: horizon_client::keymapping::ToggleKeys,
     /// A world screen with the pointer captured was open last frame.
     was_playing: bool,
     /// Minecraft.pause: a single-player screen that pauses the game is open.
@@ -2745,7 +2745,7 @@ impl Game<'_> {
     /// Keep the held-key state of toggled sneak and sprint in step with their mapping.
     fn sync_toggle(&mut self, slot: usize) {
         let key = [KeyCode::ShiftLeft, KeyCode::ControlLeft][slot];
-        if self.toggles[slot].is_down {
+        if self.toggles.is_down(slot) {
             self.keys.insert(key);
         } else {
             self.keys.remove(&key);
@@ -2765,20 +2765,15 @@ impl Game<'_> {
             self.settings.toggle_attack,
             self.settings.toggle_use,
         ];
-        for (slot, option) in options.into_iter().enumerate() {
-            if playing {
-                if self.toggles[slot].should_restore_state_on_screen_closed(option) {
-                    self.toggles[slot].set_down(true, option);
-                }
-            } else {
-                self.toggles[slot].release(option);
-            }
-            match slot {
-                0 | 1 => self.sync_toggle(slot),
-                2 => self.left = self.toggles[2].is_down,
-                _ => self.right = self.toggles[3].is_down,
-            }
+        if playing {
+            self.toggles.screen_closed(options);
+        } else {
+            self.toggles.screen_opened(options);
         }
+        self.sync_toggle(0);
+        self.sync_toggle(1);
+        self.left = self.toggles.is_down(2);
+        self.right = self.toggles.is_down(3);
     }
     /// `MouseHandler.handleAccumulatedMovement` and `Entity.turn`, once per frame.
     fn apply_mouse_look(&mut self) {
@@ -7681,15 +7676,16 @@ impl Game<'_> {
                 if pressed && self.attack() {
                     return Ok(());
                 }
-                self.toggles[2].set_down(pressed, self.settings.toggle_attack);
-                self.left = self.toggles[2].is_down;
+                self.toggles
+                    .button(2, pressed, false, self.settings.toggle_attack);
+                self.left = self.toggles.is_down(2);
                 if pressed {
                     self.destroy_delay = 0;
                 }
             }
             MouseButton::Right => {
-                self.toggles[3].set_down(pressed, self.settings.toggle_use);
-                self.right = self.toggles[3].is_down;
+                self.toggles.button(3, pressed, false, self.settings.toggle_use);
+                self.right = self.toggles.is_down(3);
                 if pressed {
                     self.use_item()?;
                     self.use_delay = 4;
@@ -8141,18 +8137,23 @@ impl ApplicationHandler for Game<'_> {
                         }
                         None => return Ok(()),
                     };
-                    // Sneak and sprint are ToggleKeyMappings: a press flips them when toggling.
+                    // Sneak and sprint are ToggleKeyMappings: a press (or a key
+                    // repeat) flips them when toggling; only releases reach them
+                    // behind a screen (KeyboardHandler.keyPress).
                     let toggle = match key {
                         KeyCode::ShiftLeft => Some((0, self.settings.toggle_crouch)),
                         KeyCode::ControlLeft => Some((1, self.settings.toggle_sprint)),
                         _ => None,
                     };
                     if let Some((slot, option)) = toggle {
-                        if !event.repeat {
-                            self.toggles[slot]
-                                .set_down(event.state == ElementState::Pressed, option);
-                            self.sync_toggle(slot);
-                        }
+                        let action = match (event.state, event.repeat) {
+                            (ElementState::Released, _) => KeyAction::Release,
+                            (_, false) => KeyAction::Press,
+                            (_, true) => KeyAction::Repeat,
+                        };
+                        let screen_open = self.screen != Screen::Playing || self.title.is_some();
+                        self.toggles.key(slot, action, screen_open, option);
+                        self.sync_toggle(slot);
                         if event.state != ElementState::Pressed {
                             return Ok(());
                         }
@@ -8460,12 +8461,7 @@ pub fn run() -> Result<()> {
         focused: true,
         mouse: MouseLook::default(),
         smooth_camera: false,
-        toggles: [
-            KeyState::toggle(true, true),
-            KeyState::toggle(true, true),
-            KeyState::toggle(true, false),
-            KeyState::toggle(false, false),
-        ],
+        toggles: Default::default(),
         was_playing: false,
         pause: false,
         debug: false,
