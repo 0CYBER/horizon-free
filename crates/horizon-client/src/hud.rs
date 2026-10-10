@@ -68,6 +68,11 @@ impl HudAtlas {
         let g = self.font.glyph(ch);
         g.rect.map(|rect| (rect, g.advance))
     }
+    /// A font glyph's atlas cell (none for blank glyphs such as the space) and advance.
+    pub fn glyph_cell(&self, ch: char) -> (Option<Rect>, f32) {
+        let g = self.font.glyph(ch);
+        (g.rect, g.advance)
+    }
     pub fn build(root: &Path) -> Result<Self> {
         let textures = root.join("assets/minecraft/textures");
         let mut files = Vec::new();

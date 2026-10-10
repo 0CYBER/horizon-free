@@ -4483,8 +4483,22 @@ impl Game<'_> {
                     .unwrap_or((0.0, 0.0));
                 prev + (cur - prev) * alpha as f32
             };
+            let (view_yaw, view_pitch) = if self.camera_type == perspective::CameraType::ThirdPersonFront {
+                (self.yaw + 180.0, -self.pitch)
+            } else {
+                (self.yaw, self.pitch)
+            };
             let scene = horizon_client::block_entity_render::Scene {
                 camera,
+                // Camera.setRotation.
+                orientation: glam::Quat::from_euler(
+                    glam::EulerRot::YXZ,
+                    std::f32::consts::PI - view_yaw.to_radians(),
+                    -view_pitch.to_radians(),
+                    0.0,
+                ),
+                anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
+                texts: None,
                 partial: alpha as f32,
                 game_time: self.world.game_time,
                 world: &self.world,
@@ -4496,7 +4510,7 @@ impl Game<'_> {
                     _ => None,
                 },
                 banner: &|p| self.banner_layers_at(p),
-                glyph: &|c| self.res.atlas.glyph(c),
+                glyph: &|c| self.res.atlas.glyph_cell(c),
             };
             self.res
                 .block_entity_render
