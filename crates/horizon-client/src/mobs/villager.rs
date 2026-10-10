@@ -447,7 +447,7 @@ fn work(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
 }
 pub fn sleeping(m: &Mob) -> bool {
-    m.extra.ints[1] != 0
+    matches!(m.species(), Species::Villager | Species::WanderingTrader) && m.extra.ints[1] != 0
 }
 /// `LivingEntity.startSleeping`: lie in the bed (`setPosToBed`).
 fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld) {
@@ -647,6 +647,8 @@ pub struct Ext {
     pub golem_until: i64,
     /// The `last_hurt_by_time` of the player's hit already counted.
     pub hurt_seen: i32,
+    /// A zombie villager's cure under way.
+    pub cure: Option<super::zombie_villager::Cure>,
 }
 pub fn ext(m: &Mob) -> Option<&Ext> {
     m.extra.villager.as_deref()

@@ -568,6 +568,19 @@ impl Behaviours {
     ) {
         self.sim(level, ticks).update_neighbors_at(pos, block);
     }
+    /// `BlockState.handleNeighborChanged(level, pos, changedBlock, orientation, movedByPiston)`
+    /// for the state currently at `pos`.
+    pub fn handle_neighbor_changed<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        changed: BlockId,
+    ) {
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        sim.neighbor_changed(state, pos, changed, false);
+    }
     /// Entity collision with a block (`entityInside`) for the entity-sensing
     /// blocks: pressure plates, tripwires and buttons hit by arrows are
     /// re-evaluated through [`LevelAccess::count_entities`].

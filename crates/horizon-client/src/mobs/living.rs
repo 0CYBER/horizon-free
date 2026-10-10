@@ -90,6 +90,10 @@ impl Mob {
     pub fn dims(&self) -> (f64, f64, f64) {
         let k = &self.kind;
         let (mut w, mut h, mut e) = (k.width, k.height, k.eye_height);
+        // Sniffer.DIGGING_DIMENSIONS: 0.4 lower, its eyes at 0.81.
+        if k.species == super::Species::Sniffer && super::sniffer::digging(self) {
+            (h, e) = (h - f64::from(0.4_f32), f64::from(0.81_f32));
+        }
         if self.is_baby() {
             match super::species::def(k.species).baby {
                 super::species::Baby::Abs(bw, bh, be) => (w, h, e) = (bw, bh, be),
@@ -126,6 +130,10 @@ impl Mob {
         self.extra.age < 0
     }
     pub fn fluid_jump_threshold(&self) -> f64 {
+        // Breeze.getFluidJumpThreshold: its eye height.
+        if self.species() == super::Species::Breeze {
+            return self.eye_height();
+        }
         if self.eye_height() < 0.4 { 0.0 } else { 0.4 }
     }
     pub fn is_in_liquid(&self) -> bool {
@@ -310,6 +318,11 @@ impl Mob {
             y += (0.05 * 1.0 - movement.y) * 0.2;
         } else {
             y -= self.gravity();
+        }
+        // LivingEntity.shouldDiscardFriction (a breeze's long jump).
+        if super::breeze::discards_friction(self) {
+            self.velocity = Vec3::new(movement.x, y, movement.z);
+            return;
         }
         let drag = 0.91f32;
         let f = friction * drag;

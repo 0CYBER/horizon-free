@@ -87,6 +87,10 @@ pub enum Family {
     Wither,
     Allay,
     Villager,
+    Trader,
+    Breeze,
+    Sniffer,
+    HappyGhast,
     Warden,
     Creaking,
 }
@@ -125,10 +129,19 @@ pub fn family(s: Species) -> Family {
         S::Allay => Family::Allay,
         S::Creaking => Family::Creaking,
         S::Villager => Family::Villager,
+        S::WanderingTrader => Family::Trader,
+        S::Breeze => Family::Breeze,
+        S::Sniffer => Family::Sniffer,
+        S::HappyGhast => Family::HappyGhast,
         S::Piglin | S::PiglinBrute | S::Hoglin | S::Zoglin => Family::Piglin,
-        S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse | S::Camel => {
-            Family::Equine
-        }
+        S::Horse
+        | S::Donkey
+        | S::Mule
+        | S::SkeletonHorse
+        | S::ZombieHorse
+        | S::Camel
+        | S::Llama
+        | S::TraderLlama => Family::Equine,
         S::Phantom => Family::Phantom,
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
@@ -173,6 +186,10 @@ pub fn register(m: &mut Mob) {
         Family::Wither => super::wither::register(m),
         Family::Allay => super::allay::register(m),
         Family::Villager => super::villager::register(m),
+        Family::Trader => super::trader::register(m),
+        Family::Breeze => super::breeze::register(m),
+        Family::Sniffer => super::sniffer::register(m),
+        Family::HappyGhast => super::happy_ghast::register(m),
         Family::Warden => super::warden::register(m),
         Family::Creaking => super::creaking::register(m),
     }
@@ -197,6 +214,9 @@ fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
 pub fn custom_move_control(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.species() == Species::Ghast {
         return super::nether::ghast_move_control(m, w);
+    }
+    if m.species() == Species::HappyGhast {
+        return super::happy_ghast::move_control(m, w);
     }
     if m.species() == Species::Phantom {
         return super::phantom::move_control(m);
@@ -355,6 +375,7 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         } else if m.air < 300 {
             m.air = (m.air + 4).min(300);
         }
+
         if m.kind.flags.water_sensitive
             && (m.fluids.in_water || w.raining && w.can_see_sky(ex, ey, ez))
         {
@@ -381,6 +402,8 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             play_ambient(m, w, events);
         }
     }
+    // Entity.baseTick ends with Leashable.tickLeash.
+    super::leash::tick(m, w, events);
 }
 fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let sound = match m.species() {
@@ -409,6 +432,27 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Axolotl if !m.fluids.in_water => "entity.axolotl.idle_air",
         Species::Bat if m.extra.flag && m.random.next_int_bound(4).unwrap_or(1) != 0 => return,
         Species::Allay if m.extra.main_hand.is_some() => "entity.allay.ambient_with_item",
+        // HappyGhast: its own voice, never pitched up.
+        Species::HappyGhast => {
+            let sound = super::happy_ghast::sounds(m)[0];
+            events.push(MobEvent::Sound(
+                sound,
+                m.center(),
+                super::happy_ghast::volume(m),
+                1.0,
+            ));
+            return;
+        }
+        // Sniffer.getAmbientSound.
+        Species::Sniffer => match super::sniffer::ambient(m) {
+            Some(s) => s,
+            None => return,
+        },
+        // Breeze.playAmbientSound.
+        Species::Breeze => match super::breeze::ambient(m) {
+            Some(s) => s,
+            None => return,
+        },
         // Creaking.getAmbientSound: silent while awake.
         Species::Creaking if m.extra.flag => return,
         // Shulker.playAmbientSound: silent while closed.
@@ -518,6 +562,7 @@ fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         super::equine::ridden_step(m);
         return;
     }
+    super::riders::drive(m, w);
     let tick_count = m.age as i64;
     let id_based = tick_count + i64::from(m.id);
     let mut targets = std::mem::take(&mut m.ai.targets);
@@ -593,7 +638,14 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Ravager => super::ravager::ai_step(m, w, events),
         Species::Wither => super::wither::ai_step(m, w, events),
         Species::Allay => super::allay::ai_step(m),
-        Species::Villager | Species::WanderingTrader => super::villager::ai_step(m, w),
+        Species::Breeze => super::breeze::ai_step(m, events),
+        Species::Sniffer => super::sniffer::ai_step(m, events),
+        Species::HappyGhast => super::happy_ghast::ai_step(m, w),
+        Species::Villager => super::villager::ai_step(m, w),
+        Species::WanderingTrader => {
+            super::villager::ai_step(m, w);
+            super::trader::ai_step(m, w);
+        }
         Species::Shulker => {
             super::shulker::tick(m, w, events);
             super::shulker::ai_step(m, w, events);
@@ -610,15 +662,21 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 /// Mob.checkDespawn (players are the only despawn reference).
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
     let creature = m.kind.category == "creature";
-    // Warden.removeWhenFarAway is false.
-    if m.persistent || m.species() == Species::Warden || creature && m.kind.flags.animal {
+    // Warden.removeWhenFarAway is false; a jockey's chicken despawns like a monster.
+    if m.persistent
+        || m.species() == Species::Warden
+        || creature && m.kind.flags.animal && !m.extra.jockey
+    {
         m.ai.no_action_time = 0;
         return true;
     }
     let Some(p) = &w.player else { return true };
     let d = m.distance_sqr(p.position);
     // Patrols and raiders (`removeWhenFarAway`, `requiresCustomPersistence`).
-    if super::raider::keeps_alive(m, d) {
+    if super::raider::keeps_alive(m, d)
+        || super::zombie_villager::keeps_alive(m)
+        || super::riders::keeps_alive(m)
+    {
         return true;
     }
     let despawn = if m.kind.category == "water_ambient" {
@@ -659,6 +717,7 @@ pub fn speed_bonus(m: &Mob) -> f64 {
 pub fn sound_volume(m: &Mob) -> f32 {
     match m.species() {
         Species::Ghast => 5.0,
+        Species::HappyGhast => super::happy_ghast::volume(m),
         Species::Warden => 4.0,
         Species::Slime | Species::MagmaCube => 0.4 * m.extra.size.max(1) as f32,
         Species::Cod
@@ -667,7 +726,11 @@ pub fn sound_volume(m: &Mob) -> f32 {
         | Species::Pufferfish
         | Species::Bat => 0.1,
         Species::Squid | Species::GlowSquid => 0.4,
-        Species::Horse | Species::Donkey | Species::Mule => 0.8,
+        Species::Horse
+        | Species::Donkey
+        | Species::Mule
+        | Species::Llama
+        | Species::TraderLlama => 0.8,
         _ => 1.0,
     }
 }
@@ -772,6 +835,37 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     }
     if amount <= 0.0 {
         amount = 1.0;
+    }
+    // The held weapon's enchantments: Sharpness, Smite, Bane of Arthropods,
+    // Fire Aspect and Knockback.
+    let target_species = match who {
+        Who::Mob(id) => cx.w.seen(id).map(|s| s.species),
+        Who::Player => None,
+    };
+    amount += super::gear::melee_bonus(m, target_species);
+    let burn = super::gear::fire_aspect(m);
+    if burn > 0 {
+        cx.events.push(MobEvent::Ignite {
+            target: who,
+            seconds: burn,
+        });
+    }
+    let knock = super::gear::knockback(m);
+    if knock > 0 {
+        let (dx, dz) = match who {
+            Who::Player => cx.w.player.as_ref().map_or((0.0, 0.0), |p| {
+                (p.position.x - m.position.x, p.position.z - m.position.z)
+            }),
+            Who::Mob(id) => cx.w.seen(id).map_or((0.0, 0.0), |s| {
+                (s.position.x - m.position.x, s.position.z - m.position.z)
+            }),
+        };
+        let len = (dx * dx + dz * dz).sqrt().max(1e-5);
+        let k = f64::from(knock) * 0.5;
+        cx.events.push(MobEvent::Push {
+            target: who,
+            velocity: [dx / len * k, 0.1, dz / len * k],
+        });
     }
     // Zombies set their target on fire while burning (Zombie.doHurtTarget).
     if m.fire_ticks > 0 && matches!(m.species(), Species::Zombie) && m.random.next_float() < 0.3 {

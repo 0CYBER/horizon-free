@@ -25,6 +25,36 @@ pub struct EntityMemory {
     /// Entities of types Horizon does not simulate, kept per chunk and
     /// written back unchanged.
     unknown: HashMap<(i32, i32), Vec<Tag>>,
+    /// Entities without a Horizon entity ID (orbs, arrows, falling blocks, crystals,
+    /// the dragon): the UUID and compound they were loaded with, found again by
+    /// type and position (an entity that has moved since loading is saved afresh).
+    anon: HashMap<(String, [u64; 3]), (Vec3, Option<[i32; 4]>, Tag)>,
+}
+
+fn anon_key(kind: &str, p: Vec3) -> (String, [u64; 3]) {
+    (
+        kind.to_owned(),
+        [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()],
+    )
+}
+/// The loaded compound underneath the fields Horizon models: what the entity was
+/// loaded with, with every key of `modelled` replacing its loaded value.
+fn with_raw(modelled: Tag, raw: Option<&Tag>) -> Tag {
+    let (Some(Tag::Compound(raw)), Tag::Compound(modelled)) = (raw, &modelled) else {
+        return modelled;
+    };
+    let mut out = raw.clone();
+    for (k, v) in modelled {
+        // Defaults Horizon invents for fields it does not simulate give way to the save.
+        let invented = matches!(
+            k.to_string_lossy().as_str(),
+            "Fire" | "Air" | "Invulnerable" | "PortalCooldown" | "HasBeenShot"
+        );
+        if !(invented && out.contains_key(k)) {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    Tag::Compound(out)
 }
 
 fn painting_center(p: &horizon_client::entities::Painting) -> Vec3 {
@@ -111,6 +141,19 @@ impl Game<'_> {
             for tag in tags {
                 let kind = entity_nbt::kind(&tag).unwrap_or_default();
                 let uuid = entity_nbt::uuid(&tag);
+                if matches!(
+                    kind.as_str(),
+                    "minecraft:experience_orb"
+                        | "minecraft:arrow"
+                        | "minecraft:falling_block"
+                        | "minecraft:end_crystal"
+                        | "minecraft:ender_dragon"
+                ) && let Some(at) = entity_nbt::position(&tag)
+                {
+                    self.persist
+                        .anon
+                        .insert(anon_key(&kind, at), (at, uuid, tag.clone()));
+                }
                 match kind.as_str() {
                     "minecraft:item" => {
                         self.next_entity += 1;
@@ -217,57 +260,134 @@ impl Game<'_> {
                         }
                     }
                     _ if self.res.mob_types.contains_key(&kind) => {
-                        self.next_entity += 1;
-                        // Structure entities placed with finalizeEntities.
-                        let mut tag = tag;
-                        let finalize = match &mut tag {
-                            Tag::Compound(c) => c.remove(&"horizon:finalize".into()).is_some(),
-                            _ => false,
-                        };
-                        if let Some(mut m) =
-                            entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, self.next_entity)
-                        {
-                            if finalize {
-                                let facts = self.biome_facts(
-                                    m.position.x.floor() as i32,
-                                    m.position.y.floor() as i32,
-                                    m.position.z.floor() as i32,
-                                );
-                                let at = [m.position.x, m.position.y, m.position.z];
-                                let difficulty = self.local_difficulty(at);
-                                horizon_client::mobs::spawning::finalize(
-                                    &mut m,
-                                    &facts,
-                                    &difficulty,
-                                );
-                                // Cat.finalizeSpawn: black in #cats_spawn_as_black.
-                                if m.species() == horizon_client::mobs::Species::Cat {
-                                    let p = [
-                                        m.position.x.floor() as i32,
-                                        m.position.y.floor() as i32,
-                                        m.position.z.floor() as i32,
-                                    ];
-                                    let black = self.structure_tag("minecraft:cats_spawn_as_black");
-                                    if self.structures_at(p).iter().any(|s| black.contains(s)) {
-                                        m.extra.variant = 10;
-                                        m.persistent = true;
-                                    }
-                                }
-                            }
-                            self.remember(m.id, uuid, tag);
-                            self.mobs.push(m);
-                        }
+                        self.load_mob(tag, None);
                     }
                     _ => self.persist.unknown.entry(key).or_default().push(tag),
                 }
             }
         }
     }
+    /// A saved mob and, under `Passengers`, the mobs riding it.
+    fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
+        self.next_entity += 1;
+        let uuid = entity_nbt::uuid(&tag);
+        // Structure entities placed with finalizeEntities.
+        let mut tag = tag;
+        let mut finalize = false;
+        let mut riders = Vec::new();
+        let mut unknown = Vec::new();
+        if let Tag::Compound(c) = &mut tag {
+            finalize = c.remove(&"horizon:finalize".into()).is_some();
+            if let Some(Tag::List(list)) = c.remove(&"Passengers".into()) {
+                for p in list {
+                    let known =
+                        entity_nbt::kind(&p).is_some_and(|k| self.res.mob_types.contains_key(&k));
+                    if known {
+                        riders.push(p);
+                    } else {
+                        unknown.push(p);
+                    }
+                }
+            }
+            if !unknown.is_empty() {
+                c.insert("Passengers".into(), Tag::List(unknown));
+            }
+        }
+        let mut m = entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, self.next_entity)?;
+        m.extra.mount = mount;
+        m.extra.passenger = mount.is_some();
+        if finalize {
+            let facts = self.biome_facts(
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            );
+            let at = [m.position.x, m.position.y, m.position.z];
+            let difficulty = self.local_difficulty(at);
+            horizon_client::mobs::spawning::finalize(&mut m, &facts, &difficulty);
+            // Cat.finalizeSpawn: black in #cats_spawn_as_black.
+            if m.species() == horizon_client::mobs::Species::Cat {
+                let p = [
+                    m.position.x.floor() as i32,
+                    m.position.y.floor() as i32,
+                    m.position.z.floor() as i32,
+                ];
+                let black = self.structure_tag("minecraft:cats_spawn_as_black");
+                if self.structures_at(p).iter().any(|s| black.contains(s)) {
+                    m.extra.variant = 10;
+                    m.persistent = true;
+                }
+            }
+        }
+        let id = m.id;
+        self.remember(id, uuid, tag);
+        self.mobs.push(m);
+        if finalize {
+            self.enchant_spawn_equipment(id);
+        }
+        for rider in riders {
+            if let Some(r) = self.load_mob(rider, Some(id))
+                && let Some(v) = self.mobs.iter_mut().find(|m| m.id == id)
+            {
+                v.extra.rider = Some(r);
+            }
+        }
+        Some(id)
+    }
+    /// The root of a stack of riders (`Entity.getRootVehicle`).
+    fn mob_root(&self, mut i: usize) -> usize {
+        for _ in 0..8 {
+            let Some(v) = self.mobs[i].extra.mount else {
+                break;
+            };
+            let Some(j) = self.mobs.iter().position(|m| m.id == v) else {
+                break;
+            };
+            i = j;
+        }
+        i
+    }
+    /// A mob's entity tag with the mobs riding it under `Passengers`.
+    fn mob_tree_nbt(&mut self, i: usize) -> Tag {
+        let id = self.mobs[i].id;
+        let uuid = self.uuid_for(id);
+        let mut tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
+        self.write_leash(&mut tag, i);
+        let riders: Vec<usize> = (0..self.mobs.len())
+            .filter(|&j| self.mobs[j].extra.mount == Some(id) && self.mobs[j].alive())
+            .collect();
+        let riders: Vec<Tag> = riders.into_iter().map(|j| self.mob_tree_nbt(j)).collect();
+        if let Tag::Compound(c) = &mut tag {
+            let mut list = match c.get(&"Passengers".into()) {
+                Some(Tag::List(l)) => l.clone(),
+                _ => Vec::new(),
+            };
+            list.extend(riders);
+            if list.is_empty() {
+                c.remove(&"Passengers".into());
+            } else {
+                c.insert("Passengers".into(), Tag::List(list));
+            }
+        }
+        tag
+    }
     fn remember(&mut self, id: u32, uuid: Option<[i32; 4]>, tag: Tag) {
         if let Some(u) = uuid {
             self.persist.uuids.insert(id, u);
         }
         self.persist.raw.insert(id, tag);
+    }
+    /// The mob that was loaded or saved with a UUID.
+    pub(super) fn mob_by_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
+        self.persist
+            .uuids
+            .iter()
+            .find(|(id, u)| **u == uuid && self.mobs.iter().any(|m| m.id == **id))
+            .map(|(id, _)| *id)
+    }
+    /// A mob's UUID, made up for new ones.
+    pub(super) fn mob_uuid(&mut self, id: u32) -> [i32; 4] {
+        self.uuid_for(id)
     }
     pub(super) fn uuid_for(&mut self, id: u32) -> [i32; 4] {
         *self.persist.uuids.entry(id).or_insert_with(random_uuid)
@@ -324,13 +444,16 @@ impl Game<'_> {
         let mut out: HashMap<(i32, i32), Vec<Tag>> =
             keys.iter().map(|k| (*k, Vec::new())).collect();
         let player_uuid = self.level.player_uuid;
+        // A rider is saved inside its root vehicle, in the root's chunk.
         let mobs: Vec<usize> = (0..self.mobs.len())
-            .filter(|&i| keys.contains(&chunk_of(self.mobs[i].position)) && self.mobs[i].alive())
+            .filter(|&i| {
+                self.mob_root(i) == i
+                    && keys.contains(&chunk_of(self.mobs[i].position))
+                    && self.mobs[i].alive()
+            })
             .collect();
         for i in mobs {
-            let id = self.mobs[i].id;
-            let uuid = self.uuid_for(id);
-            let tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
+            let tag = self.mob_tree_nbt(i);
             out.entry(chunk_of(self.mobs[i].position))
                 .or_default()
                 .push(tag);
@@ -347,31 +470,44 @@ impl Game<'_> {
                 .or_default()
                 .push(tag);
         }
+        let anon = |persist: &EntityMemory, kind: &str, at: Vec3| {
+            persist
+                .anon
+                .get(&anon_key(kind, at))
+                .map(|(_, uuid, raw)| (uuid.unwrap_or_else(random_uuid), Some(raw.clone())))
+                .unwrap_or_else(|| (random_uuid(), None))
+        };
         for o in &self.orbs {
             if keys.contains(&chunk_of(o.position)) {
+                let (uuid, raw) = anon(&self.persist, "minecraft:experience_orb", o.position);
                 out.entry(chunk_of(o.position))
                     .or_default()
-                    .push(entity_nbt::orb_to_nbt(o, random_uuid()));
+                    .push(with_raw(entity_nbt::orb_to_nbt(o, uuid), raw.as_ref()));
             }
         }
         for a in &self.arrows {
             if keys.contains(&chunk_of(a.position)) {
                 let owner = if a.from_player { player_uuid } else { None };
-                out.entry(chunk_of(a.position))
-                    .or_default()
-                    .push(entity_nbt::arrow_to_nbt(a, random_uuid(), owner));
+                let (uuid, raw) = anon(&self.persist, "minecraft:arrow", a.position);
+                out.entry(chunk_of(a.position)).or_default().push(with_raw(
+                    entity_nbt::arrow_to_nbt(a, uuid, owner),
+                    raw.as_ref(),
+                ));
             }
         }
         for f in &self.falling {
             if keys.contains(&chunk_of(f.position)) {
+                let (uuid, raw) = anon(&self.persist, "minecraft:falling_block", f.position);
                 let tag = entity_nbt::falling_block_to_nbt(
                     self.state_to_nbt(f.state),
                     f.position,
                     f.velocity,
                     f.age,
-                    random_uuid(),
+                    uuid,
                 );
-                out.entry(chunk_of(f.position)).or_default().push(tag);
+                out.entry(chunk_of(f.position))
+                    .or_default()
+                    .push(with_raw(tag, raw.as_ref()));
             }
         }
         for b in &self.boats {
@@ -396,15 +532,17 @@ impl Game<'_> {
         if let Some(d) = &self.dragon
             && keys.contains(&chunk_of(d.position))
         {
+            let (uuid, raw) = anon(&self.persist, "minecraft:ender_dragon", d.position);
             out.entry(chunk_of(d.position))
                 .or_default()
-                .push(d.to_nbt(random_uuid(), None));
+                .push(d.to_nbt(uuid, raw.as_ref()));
         }
         for c in &self.crystals {
             if keys.contains(&chunk_of(c.position)) {
+                let (uuid, raw) = anon(&self.persist, "minecraft:end_crystal", c.position);
                 out.entry(chunk_of(c.position))
                     .or_default()
-                    .push(c.to_nbt(random_uuid(), None));
+                    .push(c.to_nbt(uuid, raw.as_ref()));
             }
         }
         for c in &self.carts {
@@ -520,8 +658,13 @@ impl Game<'_> {
                 }
                 keep
             });
+            // Riders leave with their root vehicle.
+            let leaving: HashSet<u32> = (0..self.mobs.len())
+                .filter(|&i| gone(self.mobs[self.mob_root(i)].position))
+                .map(|i| self.mobs[i].id)
+                .collect();
             self.mobs.retain(|m| {
-                let keep = !gone(m.position);
+                let keep = !leaving.contains(&m.id);
                 if !keep {
                     removed.push(m.id);
                 }
@@ -537,6 +680,9 @@ impl Game<'_> {
             self.orbs.retain(|o| !gone(o.position));
             self.arrows.retain(|a| !gone(a.position));
             self.falling.retain(|f| !gone(f.position));
+            self.persist
+                .anon
+                .retain(|_, (at, _, _)| !keys.contains(&chunk_of(*at)));
             for id in removed {
                 self.persist.uuids.remove(&id);
                 self.persist.raw.remove(&id);
@@ -555,6 +701,11 @@ impl Game<'_> {
             .iter()
             .map(|m| m.id)
             .chain(self.dropped.iter().map(|e| e.id))
+            .chain(self.boats.iter().map(|e| e.id))
+            .chain(self.carts.iter().map(|e| e.id))
+            .chain(self.armor_stands.iter().map(|e| e.id))
+            .chain(self.item_frames.iter().map(|e| e.id))
+            .chain(self.paintings.iter().map(|e| e.id))
             .collect();
         self.persist.uuids.retain(|id, _| alive.contains(id));
         self.persist.raw.retain(|id, _| alive.contains(id));

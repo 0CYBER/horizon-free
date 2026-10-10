@@ -1,0 +1,393 @@
+//! Hub operations on what guests perceive and do beyond the basics: sounds,
+//! level events, animations and block containers with their clicks.
+use super::{
+    hub::Hub,
+    menu::{self, Menu, Rules, View},
+};
+use crate::{items::ItemStack, world::World};
+use horizon_protocol::{
+    item::Hashed,
+    packets::play::{self, Clientbound as C},
+};
+use horizon_world::nbt::Tag;
+use std::collections::HashMap;
+
+impl Hub {
+    pub fn send_to(&self, conn: u32, packet: &C) {
+        if let Some(g) = self.guest(conn) {
+            g.send(packet);
+        }
+    }
+
+    /// Send to every placed guest within `range` blocks of `at`.
+    pub fn broadcast_near(&self, at: [f64; 3], range: f64, packet: &C, except: Option<u32>) {
+        let body = packet.encode();
+        for g in self
+            .guests
+            .iter()
+            .filter(|g| g.placed && Some(g.conn) != except)
+        {
+            let d: f64 = (0..3).map(|k| (g.position[k] - at[k]).powi(2)).sum();
+            if d <= range * range {
+                g.sender.send(body.clone());
+            }
+        }
+    }
+
+    /// ClientboundSoundPacket for a sound event name (an inline event when
+    /// the registry does not know it).
+    pub fn sound(
+        &self,
+        name: &str,
+        at: [f64; 3],
+        volume: f32,
+        pitch: f32,
+        source: i32,
+        except: Option<u32>,
+    ) {
+        let sound = match self.sync.id("minecraft:sound_event", name) {
+            Some(id) => (id, None),
+            None => (-1, Some((name.to_owned(), None))),
+        };
+        let packet = C::Sound(play::Sound {
+            sound,
+            source,
+            x: (at[0] * 8.0) as i32,
+            y: (at[1] * 8.0) as i32,
+            z: (at[2] * 8.0) as i32,
+            volume,
+            pitch,
+            seed: self.ticks as i64,
+        });
+        self.broadcast_near(at, f64::from(volume.max(1.0)) * 16.0, &packet, except);
+    }
+
+    /// ClientboundLevelEventPacket (block break particles and sounds ...).
+    pub fn level_event(&self, kind: i32, pos: [i32; 3], data: i32, except: Option<u32>) {
+        let at = [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])];
+        self.broadcast_near(
+            at,
+            64.0,
+            &C::LevelEvent(play::LevelEvent {
+                kind,
+                pos,
+                data,
+                global: false,
+            }),
+            except,
+        );
+    }
+
+    pub fn entity_event(&self, id: i32, event: i8, at: [f64; 3]) {
+        self.broadcast_near(
+            at,
+            128.0,
+            &C::EntityEvent(play::EntityEvent { id, event }),
+            None,
+        );
+    }
+
+    pub fn swing(&self, id: i32, hand: i32, at: [f64; 3], except: Option<u32>) {
+        self.broadcast_near(
+            at,
+            128.0,
+            &C::SwingAnimation(play::SwingAnimation {
+                id,
+                hand,
+                kind: 1,
+                duration: 6,
+            }),
+            except,
+        );
+    }
+
+    pub fn take_item(&self, item: i32, collector: i32, count: i32, at: [f64; 3]) {
+        self.broadcast_near(
+            at,
+            64.0,
+            &C::TakeItemEntity(play::TakeItemEntity {
+                item,
+                player: collector,
+                amount: count,
+            }),
+            None,
+        );
+    }
+
+    /// Open a block container for a guest (ServerPlayer.openMenu).
+    pub fn open_container(
+        &mut self,
+        conn: u32,
+        menu_kind: &str,
+        title: Tag,
+        pos: (i32, i32, i32),
+        items: Vec<Option<ItemStack>>,
+    ) {
+        let Some(kind) = self
+            .sync
+            .builtin
+            .get("minecraft:menu")
+            .and_then(|m| m.id(menu_kind))
+        else {
+            return;
+        };
+        let Some(i) = self.guests.iter().position(|g| g.conn == conn) else {
+            return;
+        };
+        self.close_container_at(i);
+        let g = &mut self.guests[i];
+        g.next_window = g.next_window % 100 + 1;
+        let window = g.next_window;
+        g.send(&C::OpenScreen(play::OpenScreen {
+            container: window,
+            menu: kind,
+            title,
+        }));
+        g.menu = Some(Menu {
+            window,
+            kind,
+            pos: Some(pos),
+            size: items.len(),
+            state: 0,
+            sent: Vec::new(),
+            drag: None,
+        });
+        self.send_menu_content(i, items);
+    }
+
+    fn send_menu_content(&mut self, i: usize, mut items: Vec<Option<ItemStack>>) {
+        for j in 0..36 {
+            items.push(self.guests[i].inventory[player_slot(j)].clone());
+        }
+        let net: Vec<_> = items.iter().map(|s| self.stack(s)).collect();
+        let carried = self.guests[i].carried.clone();
+        let carried = self.stack(&carried);
+        let g = &mut self.guests[i];
+        let Some(menu) = g.menu.as_mut() else {
+            return;
+        };
+        menu.state = (menu.state + 1) & 0x7FFF;
+        let packet = C::ContainerSetContent(play::ContainerSetContent {
+            container: menu.window,
+            state: menu.state,
+            items: net,
+            carried,
+        });
+        menu.sent = items;
+        g.send(&packet);
+    }
+
+    fn close_container_at(&mut self, i: usize) {
+        let g = &mut self.guests[i];
+        if let Some(menu) = g.menu.take() {
+            g.send(&C::ContainerClose(play::ContainerClose {
+                container: menu.window,
+            }));
+        }
+    }
+
+    pub(super) fn close_container_for(&mut self, i: usize) {
+        self.close_container_at(i);
+    }
+
+    pub fn close_container(&mut self, conn: u32) {
+        if let Some(i) = self.guests.iter().position(|g| g.conn == conn) {
+            self.close_container_at(i);
+        }
+    }
+
+    /// The client closed its window.
+    pub fn container_closed(&mut self, conn: u32, window: i32) {
+        if let Some(g) = self.guest_mut(conn)
+            && g.menu.as_ref().is_some_and(|m| m.window == window)
+        {
+            g.menu = None;
+        }
+    }
+
+    fn hashed_matches(&mut self, claimed: &Option<Hashed>, mine: &Option<ItemStack>) -> bool {
+        match (claimed, mine) {
+            (None, None) => true,
+            (Some(h), Some(s)) => h.item == self.item_id(&s.item) && h.count == s.count as i32,
+            _ => false,
+        }
+    }
+
+    fn view_slot(&self, i: usize, world: &World, slot: usize) -> Option<ItemStack> {
+        let g = &self.guests[i];
+        match &g.menu {
+            Some(m) if slot < m.size => {
+                let e = world.block_entities.get(&m.pos?)?;
+                e.slots().get(slot).cloned().flatten()
+            }
+            Some(m) => g
+                .inventory
+                .get(player_slot(slot - m.size))
+                .cloned()
+                .flatten(),
+            None => g.menu_slot(slot),
+        }
+    }
+
+    /// ServerGamePacketListenerImpl.handleContainerClick. Returns the stacks
+    /// thrown out of the menu.
+    pub fn container_click(
+        &mut self,
+        conn: u32,
+        p: play::ContainerClick,
+        world: &mut World,
+        rules: &dyn Rules,
+    ) -> Vec<ItemStack> {
+        let Some(i) = self.guests.iter().position(|g| g.conn == conn) else {
+            return Vec::new();
+        };
+        let in_menu = p.container != 0;
+        let window_ok = !in_menu
+            || self.guests[i]
+                .menu
+                .as_ref()
+                .is_some_and(|m| m.window == p.container);
+        if !window_ok || self.guests[i].spectator() {
+            return Vec::new();
+        }
+        let pos = self.guests[i].menu.as_ref().and_then(|m| m.pos);
+        let mut drag = if in_menu {
+            self.guests[i].menu.as_mut().and_then(|m| m.drag.take())
+        } else {
+            self.guests[i].drag.take()
+        };
+        let (drops, changed) = {
+            let guest = &mut self.guests[i];
+            let mut entity = pos.and_then(|k| world.block_entities.get_mut(&k));
+            let slots = entity.as_mut().map(|e| e.slots_mut());
+            if in_menu && slots.is_none() {
+                return Vec::new();
+            }
+            let mut view = View {
+                guest,
+                container: slots,
+            };
+            menu::click(
+                &mut view,
+                &mut drag,
+                i32::from(p.slot),
+                i32::from(p.button),
+                p.input,
+                rules,
+            )
+        };
+        if in_menu {
+            if let Some(m) = self.guests[i].menu.as_mut() {
+                m.drag = drag;
+            }
+        } else {
+            self.guests[i].drag = drag;
+        }
+        // Tell the client about every slot it got wrong, or that it did not claim.
+        let claimed: HashMap<usize, Option<Hashed>> = p
+            .changed
+            .iter()
+            .map(|(s, h)| (*s as usize, h.clone()))
+            .collect();
+        let total = if in_menu {
+            self.guests[i].menu.as_ref().map_or(0, |m| m.size) + 36
+        } else {
+            46
+        };
+        let mut resend: Vec<usize> = Vec::new();
+        for slot in 0..total {
+            let mine = self.view_slot(i, world, slot);
+            let agreed = match claimed.get(&slot) {
+                Some(c) => self.hashed_matches(c, &mine),
+                None => !changed.contains(&slot),
+            };
+            if !agreed {
+                resend.push(slot);
+            }
+        }
+        for slot in resend {
+            let mine = self.view_slot(i, world, slot);
+            let net = self.stack(&mine);
+            let g = &mut self.guests[i];
+            let state = if in_menu {
+                g.menu.as_mut().map_or(0, |m| {
+                    m.state = (m.state + 1) & 0x7FFF;
+                    m.state
+                })
+            } else {
+                g.menu_state = (g.menu_state + 1) & 0x7FFF;
+                g.menu_state
+            };
+            g.send(&C::ContainerSetSlot(play::ContainerSetSlot {
+                container: p.container,
+                state,
+                slot: slot as i16,
+                item: net,
+            }));
+        }
+        let carried = self.guests[i].carried.clone();
+        if !self.hashed_matches(&p.carried, &carried) {
+            let net = self.stack(&carried);
+            self.guests[i].send(&C::SetCursorItem(play::SetCursorItem { item: net }));
+        }
+        // What the client now believes equals the server's state.
+        let items: Vec<_> = (0..total).map(|s| self.view_slot(i, world, s)).collect();
+        if in_menu {
+            if let Some(m) = self.guests[i].menu.as_mut() {
+                m.sent = items;
+            }
+        } else {
+            self.guests[i].menu_sent = items;
+        }
+        drops
+    }
+
+    /// Slot changes of open containers (AbstractContainerMenu.broadcastChanges).
+    pub fn sync_containers(&mut self, world: &World) {
+        for i in 0..self.guests.len() {
+            let Some(menu) = self.guests[i]
+                .menu
+                .as_ref()
+                .filter(|_| self.guests[i].placed)
+            else {
+                continue;
+            };
+            let (size, window, pos) = (menu.size, menu.window, menu.pos);
+            if !pos.is_some_and(|k| world.block_entities.contains_key(&k)) {
+                self.close_container_at(i);
+                continue;
+            }
+            for slot in 0..size + 36 {
+                let now = self.view_slot(i, world, slot);
+                let sent = self.guests[i]
+                    .menu
+                    .as_ref()
+                    .and_then(|m| m.sent.get(slot).cloned());
+                if sent.as_ref() == Some(&now) {
+                    continue;
+                }
+                let net = self.stack(&now);
+                let g = &mut self.guests[i];
+                if let Some(m) = g.menu.as_mut() {
+                    m.state = (m.state + 1) & 0x7FFF;
+                    let state = m.state;
+                    if m.sent.len() <= slot {
+                        m.sent.resize(slot + 1, None);
+                    }
+                    m.sent[slot] = now;
+                    g.send(&C::ContainerSetSlot(play::ContainerSetSlot {
+                        container: window,
+                        state,
+                        slot: slot as i16,
+                        item: net,
+                    }));
+                }
+            }
+        }
+    }
+}
+
+/// Inventory index of the n-th player slot of a container menu (27 main, then the hotbar).
+fn player_slot(n: usize) -> usize {
+    if n < 27 { 9 + n } else { n - 27 }
+}

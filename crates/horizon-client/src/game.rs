@@ -10,6 +10,7 @@ mod blockctl;
 mod boats;
 mod books;
 mod bossbars;
+mod breezes;
 mod cartography;
 mod chat;
 mod combat;
@@ -30,14 +31,22 @@ mod fov;
 mod frames;
 mod functions;
 mod game_mode;
+mod ghasts;
 mod golems;
 mod growth;
 mod jukebox;
+mod lan;
+mod lan_actions;
+mod lan_screen;
+mod leads;
 mod lightning;
+mod llamas;
 mod loom;
 mod machines;
 mod maps;
 mod minecarts;
+mod mob_blocks;
+mod mob_gear;
 mod mount_menu;
 mod mounts;
 mod music;
@@ -45,6 +54,7 @@ mod names;
 mod options;
 mod packs;
 mod paintings;
+mod passengers;
 mod persist;
 mod perspective;
 mod piglins;
@@ -60,6 +70,7 @@ mod screens;
 mod sculk;
 mod shield;
 mod sign_edit;
+mod sniffers;
 mod station_control;
 mod stations;
 mod stats;
@@ -73,7 +84,10 @@ mod totem;
 mod trading;
 mod trident;
 mod villagers;
+mod wandering_trader;
+mod wind;
 mod wither;
+mod zombie_villagers;
 use horizon_client::{
     Result,
     assets::Assets,
@@ -264,6 +278,8 @@ enum Screen {
     Stats,
     /// The Advancements screen.
     Advancements,
+    /// WorldOptionsScreen (game/lan_screen.rs).
+    WorldOptions,
 }
 #[derive(Clone)]
 enum Icon {
@@ -529,6 +545,7 @@ struct Game<'a> {
     message: Option<(String, Instant)>,
     save: Arc<SaveDir>,
     level: Level,
+    session_lock: Option<horizon_client::save::SessionLock>,
     audio: Audio,
     music: horizon_client::music::MusicManager,
     ambience: horizon_client::ambience::Ambience,
@@ -660,6 +677,18 @@ struct Game<'a> {
     persist: persist::EntityMemory,
     /// Connected to a server: the world comes from the network (game/remote.rs).
     remote: Option<remote::Remote>,
+    /// This world is open to the network (game/lan.rs).
+    lan: Option<lan::LanHost>,
+    world_options: Option<lan_screen::WorldOptions>,
+    /// The block a guest is acting on (game/lan_actions.rs).
+    forced_hit: Option<Hit>,
+    /// Level events of this tick for the guests, and the guest acting now.
+    lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
+    lan_acting: Option<u32>,
+    /// Command feedback to forward to a guest.
+    chat_capture: Option<Vec<String>>,
+    /// Allow Cheats: whether guests may be given commands.
+    cheats: bool,
     ui: chat::UiState,
     combat: combat::CombatTracker,
     mount: mounts::MountState,
@@ -756,6 +785,14 @@ impl Game<'_> {
     /// Voxel traversal against non-air, non-fluid blocks, clipped against
     /// each block's outline shape (`BlockGetter.clip` with `ClipContext.Block.OUTLINE`).
     fn pick(&self) -> Option<Hit> {
+        // A guest of a hosted world acts on the block their client targeted.
+        if let Some(hit) = &self.forced_hit {
+            return Some(Hit {
+                pos: hit.pos,
+                face: hit.face,
+                point: hit.point,
+            });
+        }
         let origin = self.eye_position()?;
         self.clip_ray(origin, view_vector(self.yaw, self.pitch), self.reach())
     }
@@ -1247,6 +1284,7 @@ impl Game<'_> {
     /// Side effects reported by the behaviour library, in vanilla order.
     fn process_level_events(&mut self) -> Result<()> {
         let events = std::mem::take(&mut self.level_events);
+        self.lan_record_events(&events);
         for event in events {
             match event {
                 LevelEvent::LevelEvent {
@@ -1410,6 +1448,16 @@ impl Game<'_> {
                         let _ = self.spawn_mob("minecraft:tadpole", spawn, true);
                     }
                 }
+                LevelEvent::BlockEvent {
+                    pos,
+                    kind: "hatch_sniffer",
+                    ..
+                } => self.hatch_sniffer([pos.x, pos.y, pos.z]),
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "spawn_ghastling",
+                } => self.spawn_ghastling([pos.x, pos.y, pos.z], state),
                 LevelEvent::BlockEvent {
                     pos,
                     state,
@@ -1719,6 +1767,7 @@ impl Game<'_> {
             || self.interact_boat()
             || self.interact_cart()
             || self.interact_mob()?
+            || self.interact_knot()
         {
             return Ok(());
         }
@@ -2533,6 +2582,7 @@ impl Game<'_> {
             self.tick_mobs()?;
             self.tick_experience();
         }
+        self.tick_lan();
         self.tick_hand();
         self.tick_sleep();
         self.tick_portal()?;
@@ -3104,6 +3154,7 @@ impl Game<'_> {
             Screen::Dead => self.draw_death_screen(&mut batch),
             Screen::Stats => self.draw_stats(&mut batch),
             Screen::Advancements => self.draw_advancements(&mut batch),
+            Screen::WorldOptions => self.draw_world_options(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
             }
@@ -3872,6 +3923,7 @@ impl Game<'_> {
         // Mobs and their projectiles.
         self.mob_geometry(camera, alpha, &mut out);
         self.player_model_geometry(camera, alpha, &mut out);
+        self.guest_model_geometry(camera, alpha, &mut out);
         self.fangs_geometry(camera, alpha, &mut out);
         self.name_tag_geometry(camera, alpha, &mut out);
         // Arrows: two crossed quads along the flight direction.
@@ -4121,6 +4173,7 @@ impl Game<'_> {
         self.cart_geometry(camera, alpha, &mut out);
         self.beacon_geometry(camera, alpha, &mut out);
         self.fishing_geometry(camera, alpha, &mut out);
+        self.leash_geometry(camera, alpha, &mut out);
         self.trident_geometry(camera, alpha, &mut out);
         self.rocket_geometry(camera, alpha, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
@@ -4691,6 +4744,8 @@ impl Game<'_> {
     ) -> Result<()> {
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         horizon_client::save::migrate_legacy(&save_root)?;
+        self.session_lock = None;
+        self.session_lock = Some(horizon_client::save::SessionLock::acquire(&save_root)?);
         self.persist = Default::default();
         self.score = Default::default();
         self.fns = Default::default();
@@ -4809,6 +4864,7 @@ impl Game<'_> {
         self.spawn = None;
         self.spawn_search = 0;
         self.mobs.clear();
+        self.creatures.reset_trader();
         self.arrows.clear();
         self.dropped.clear();
         self.particles.clear();
@@ -6722,6 +6778,7 @@ impl Game<'_> {
         self.save_maps();
         self.save_raids();
         self.save_fight();
+        self.save_wandering_trader();
         self.save_stats();
         self.save_advancements();
         self.save_scoreboard();
@@ -6951,6 +7008,7 @@ impl Game<'_> {
                 Screen::Dead => {}
                 Screen::Stats => self.screen = Screen::Paused,
                 Screen::Advancements => self.close_advancements(),
+                Screen::WorldOptions => self.close_world_options(),
                 Screen::Chat => self.close_chat(),
             },
             KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
@@ -7335,6 +7393,9 @@ impl ApplicationHandler for Game<'_> {
                             self.click_creative(button == MouseButton::Right);
                         }
                         Screen::Paused if pressed => self.pause_click()?,
+                        Screen::WorldOptions if pressed && button == MouseButton::Left => {
+                            self.world_options_click()
+                        }
                         Screen::Dead if pressed => self.death_click()?,
                         Screen::Advancements if button == MouseButton::Left => {
                             let size = self
@@ -7410,6 +7471,9 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => {
                     self.remote_chat_key(&event)
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::WorldOptions => {
+                    self.world_options_key(&event)
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Options => {
                     if event.state == ElementState::Pressed
@@ -7760,6 +7824,7 @@ pub fn run() -> Result<()> {
         message: None,
         save,
         level,
+        session_lock: None,
         audio,
         music: Default::default(),
         ambience: Default::default(),
@@ -7860,6 +7925,13 @@ pub fn run() -> Result<()> {
         pending_bench: None,
         persist: Default::default(),
         remote: None,
+        lan: None,
+        world_options: None,
+        forced_hit: None,
+        lan_events: Vec::new(),
+        lan_acting: None,
+        chat_capture: None,
+        cheats: true,
         ui: Default::default(),
         combat: Default::default(),
         mount: Default::default(),

@@ -485,6 +485,12 @@ impl Game<'_> {
                 let Some(Arg::GameMode(m)) = ctx.get("gamemode") else {
                     return Ok(0);
                 };
+                self.set_default_game_mode(match m {
+                    horizon_client::command::args::GameMode::Survival => 0,
+                    horizon_client::command::args::GameMode::Creative => 1,
+                    horizon_client::command::args::GameMode::Adventure => 2,
+                    horizon_client::command::args::GameMode::Spectator => 3,
+                });
                 self.feedback(Text::translate(
                     "commands.defaultgamemode.success",
                     &[Text::translate(&format!("gameMode.{}", m.name()), &[])],
@@ -546,6 +552,7 @@ impl Game<'_> {
             id if id.starts_with("worldborder.") => self.cmd_worldborder(id, ctx),
             id if id.starts_with("loot.") => self.cmd_loot(id, ctx),
             "teammsg" => self.cmd_teammsg(ctx),
+            id if id.starts_with("stopwatch.") => self.cmd_stopwatch(id, ctx),
             id if id.starts_with("tick.") => self.cmd_tick(id, ctx),
             id if id.starts_with("random.") => self.cmd_random(id, ctx),
             "function" => self.cmd_function(ctx),

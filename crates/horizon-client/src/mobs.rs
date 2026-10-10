@@ -9,7 +9,10 @@ pub mod ai;
 pub mod allay;
 pub mod anim;
 pub mod aquatic;
+pub mod brain;
+pub mod breeze;
 pub mod camel;
+pub mod caravan;
 pub mod control;
 pub mod creaking;
 pub mod cube;
@@ -17,13 +20,17 @@ pub mod data;
 pub mod enderman;
 pub mod equine;
 pub mod farm;
+pub mod gear;
 pub mod goals;
 pub mod golem;
 pub mod guardian;
+pub mod happy_ghast;
 pub mod hostile;
 pub mod illager;
 pub mod keyframes;
+pub mod leash;
 pub mod living;
+pub mod llama;
 pub mod nav;
 pub mod nether;
 pub mod path;
@@ -32,10 +39,13 @@ pub mod piglin;
 pub mod raider;
 pub mod ravager;
 pub mod render;
+pub mod riders;
 pub mod shulker;
+pub mod sniffer;
 pub mod spawning;
 pub mod species;
 pub mod tame;
+pub mod trader;
 pub mod undead;
 pub mod vex;
 pub mod villager;
@@ -43,6 +53,7 @@ pub mod warden;
 pub mod witch;
 pub mod wither;
 mod world;
+pub mod zombie_villager;
 
 use crate::{blocks::BlockFacts, mesher::Vertex, world::World};
 pub use data::MobData;
@@ -482,12 +493,31 @@ pub struct Extra {
     pub meeting: Option<[i32; 3]>,
     /// Villager and wandering trader offers and experience.
     pub trade: Option<Box<crate::merchant::Trader>>,
+    /// Who holds this mob's lead, a holder not yet found after loading, and
+    /// the spin the rope's torque gives it.
+    pub leash: Option<leash::Holder>,
+    pub leash_pending: Option<leash::Pending>,
+    pub leash_spin: f64,
+    /// More species scratch values.
+    pub scratch: [i32; 4],
+    /// Block positions a species remembers (a sniffer's explored ground).
+    pub positions: Vec<[i32; 3]>,
     /// A warden's brain, anger and vibrations.
     pub warden: Option<Box<warden::Warden>>,
     /// A raider's patrol and raid state.
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.
     pub villager: Option<Box<villager::Ext>>,
+    /// The mob this one rides, and the mob riding it (`getVehicle`, `getFirstPassenger`).
+    pub mount: Option<u32>,
+    pub rider: Option<u32>,
+    /// A chicken carrying a zombie (`IsChickenJockey`).
+    pub jockey: bool,
+    /// A skeleton horse waiting to spring its trap, and how long it has waited.
+    pub trap: bool,
+    pub trap_time: i32,
+    /// Enchantments on the equipment above.
+    pub gear: Option<Box<gear::Gear>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -721,6 +751,16 @@ pub enum MobEvent {
         table: &'static str,
         at: [f64; 3],
     },
+    /// A lead snaps or loses its holder: the lead item drops when asked.
+    LeashBreak {
+        mob: u32,
+        drop: bool,
+        sound: bool,
+    },
+    /// A zombie villager's cure is complete: the game turns it back into a villager.
+    CureZombieVillager {
+        mob: u32,
+    },
     /// A vibration travelling to a listener (`VibrationParticleOption`).
     Vibration {
         from: [f64; 3],
@@ -786,6 +826,16 @@ pub struct Seen {
     /// A villager's claimed job site and bed.
     pub job: Option<[i32; 3]>,
     pub bed: Option<[i32; 3]>,
+    pub yaw: f32,
+    pub velocity: Vec3,
+    /// Who holds this mob's lead.
+    pub leash: Option<leash::Holder>,
+    /// A llama's caravan head (its id plus one, 0 when not in a caravan).
+    pub caravan: u32,
+    /// A wandering trader's despawn delay.
+    pub delay: i32,
+    /// `getLastHurtByMob` and its timestamp.
+    pub hurt_by: Option<(Who, i32)>,
     /// A raider in an active raid.
     pub active_raid: bool,
     /// A villager's reputation of the player (`getPlayerReputation`).
@@ -812,6 +862,8 @@ pub struct PlayerView {
     pub hurt_by: Option<(Who, i64)>,
     /// `getLastHurtMob` and when.
     pub last_hurt: Option<(Who, i64)>,
+    pub velocity: Vec3,
+    pub yaw: f32,
     /// The Hero of the Village effect.
     pub hero: bool,
     /// The player's UUID (villagers' gossip is keyed by it).
@@ -971,6 +1023,11 @@ impl Mob {
             let toughness = 2.0 + (self.kind.armor_toughness + worn_toughness) / 4.0;
             let effective = (armor - amount / toughness).clamp(armor * 0.2, 20.0);
             amount *= 1.0 - effective / 25.0;
+        }
+        // CombatRules.getDamageAfterMagicAbsorb: enchantment protection.
+        let epf = gear::protection(self, source.kind);
+        if epf > 0.0 {
+            amount *= 1.0 - epf / 25.0;
         }
         let mut knock = true;
         if self.invulnerable as f32 > 10.0 {

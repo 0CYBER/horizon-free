@@ -4,6 +4,7 @@
 //! golem. Players placing the pumpkin and dispensers share it.
 use super::Game;
 use horizon_client::Result;
+use horizon_world::chunk::BlockState;
 
 impl Game<'_> {
     fn golem_block(&self, p: [i32; 3]) -> &str {
@@ -55,7 +56,7 @@ impl Game<'_> {
             return Ok(());
         }
         let Some((kind, blocks, base)) = self.find_golem(head) else {
-            return Ok(());
+            return self.try_spawn_copper_golem(head);
         };
         for p in blocks {
             let state = self.world.block(p[0], p[1], p[2]);
@@ -77,6 +78,59 @@ impl Game<'_> {
             m.previous_body_yaw = 0.0;
             m.previous_head_yaw = 0.0;
         }
+        Ok(())
+    }
+    /// A pumpkin on a copper block: the block turns into the matching copper
+    /// chest (facing the pumpkin's way) and a copper golem appears where the
+    /// pumpkin was (`CarvedPumpkinBlock.spawnGolemInWorld` with
+    /// `CopperChestBlock.getFromCopperBlock`).
+    fn try_spawn_copper_golem(&mut self, head: [i32; 3]) -> Result<()> {
+        let below = [head[0], head[1] - 1, head[2]];
+        let registry = self.res.assets.registry;
+        let name = self.golem_block(below).to_string();
+        let Some(base) = name.strip_prefix("minecraft:") else {
+            return Ok(());
+        };
+        let waxed = base.strip_prefix("waxed_").unwrap_or(base);
+        if !matches!(
+            waxed,
+            "copper_block" | "exposed_copper" | "weathered_copper" | "oxidized_copper"
+        ) {
+            return Ok(());
+        }
+        let chest = format!(
+            "minecraft:{}_chest",
+            base.strip_suffix("_block").unwrap_or(base)
+        );
+        let pumpkin = self.world.block(head[0], head[1], head[2]);
+        let facing = registry
+            .state(pumpkin)
+            .and_then(|s| s.properties.get("facing").cloned())
+            .unwrap_or_else(|| "north".into());
+        let chest_state = BlockState {
+            name: chest.clone(),
+            properties: [
+                ("facing".to_string(), facing),
+                ("type".to_string(), "single".to_string()),
+                ("waterlogged".to_string(), "false".to_string()),
+            ]
+            .into(),
+        };
+        let Some(chest_id) = registry
+            .id(&chest_state)
+            .or_else(|| registry.default_state(&chest))
+        else {
+            return Ok(());
+        };
+        self.destroy_particles(head, pumpkin);
+        self.level_set(head, self.world.air)?;
+        self.level_set(below, chest_id)?;
+        let at = [
+            f64::from(head[0]) + 0.5,
+            f64::from(head[1]) + 0.05,
+            f64::from(head[2]) + 0.5,
+        ];
+        let _ = self.spawn_mob("minecraft:copper_golem", at, false);
         Ok(())
     }
 }

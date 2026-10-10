@@ -6,6 +6,8 @@ use std::{
 };
 
 pub const MISSING_MODEL: &str = "minecraft:builtin/missing";
+/// `ItemModelGenerator.GENERATED_ITEM_MODEL_ID`.
+pub const GENERATED_MODEL: &str = "minecraft:builtin/generated";
 
 /// Decoded models are immutable and their inherited geometry is shared.
 pub struct ModelLibrary {
@@ -21,8 +23,14 @@ pub struct ResolvedCuboidModel {
     /// Cyclic and dangling aliases are absent from `textures`.
     pub unresolved_textures: BTreeSet<String>,
     geometry: Option<Arc<CuboidModel>>,
+    generated: bool,
 }
 impl ResolvedCuboidModel {
+    /// Whether the top geometry is `builtin/generated`'s layer extrusion
+    /// (no model closer to the leaf has elements of its own).
+    pub fn uses_item_generator(&self) -> bool {
+        self.generated
+    }
     pub fn elements(&self) -> &[Option<Element>] {
         self.geometry
             .as_ref()
@@ -39,6 +47,25 @@ impl ResolvedCuboidModel {
     }
 }
 impl ModelLibrary {
+    /// A library that also knows `builtin/generated`, the parent of every
+    /// flat item model; the native client registers it as a special model.
+    pub fn with_item_generator(mut models: BTreeMap<String, CuboidModel>) -> Result<Self> {
+        models.insert(
+            GENERATED_MODEL.to_owned(),
+            CuboidModel {
+                parent: None,
+                ambient_occlusion: None,
+                gui_light: Some(GuiLight::Front),
+                textures: BTreeMap::from([(
+                    "particle".to_owned(),
+                    TextureSlot::Reference("layer0".to_owned()),
+                )]),
+                elements: None,
+                display: None,
+            },
+        );
+        Self::new(models)
+    }
     pub fn new(models: BTreeMap<String, CuboidModel>) -> Result<Self> {
         let mut decoded = BTreeMap::new();
         for (name, model) in models {
@@ -64,12 +91,14 @@ impl ModelLibrary {
         let mut name = identifier(name)?;
         let mut visited = BTreeSet::new();
         let mut chain = Vec::new();
+        let mut names = Vec::new();
         loop {
             if !visited.insert(name.clone()) {
                 return Err(error("cyclic model parent"));
             }
             let model = self.models.get(&name).unwrap_or(&self.missing);
             chain.push(model);
+            names.push(name.clone());
             match &model.parent {
                 Some(parent) => name = parent.clone(),
                 None => break,
@@ -87,6 +116,11 @@ impl ModelLibrary {
             .iter()
             .find(|m| m.elements.is_some())
             .map(|m| Arc::clone(m));
+        let generated = chain
+            .iter()
+            .zip(&names)
+            .find(|(m, name)| m.elements.is_some() || *name == GENERATED_MODEL)
+            .is_some_and(|(_, name)| name == GENERATED_MODEL);
         let display = ItemTransforms {
             contexts: std::array::from_fn(|index| {
                 chain
@@ -146,6 +180,7 @@ impl ModelLibrary {
             textures,
             unresolved_textures,
             geometry,
+            generated,
         })
     }
 }
