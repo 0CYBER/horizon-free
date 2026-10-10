@@ -156,7 +156,7 @@ pub fn tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     let age = m.age;
     let mut il = m.extra.illusions.take().unwrap_or_default();
     il.ticks = (il.ticks - 1).max(0);
-    if hurt == 1 || age % 1200 == 0 {
+    if hurt == 1 || age.is_multiple_of(1200) {
         il.ticks = 3;
         for i in 0..COPIES {
             il.offsets[0][i] = il.offsets[1][i];
