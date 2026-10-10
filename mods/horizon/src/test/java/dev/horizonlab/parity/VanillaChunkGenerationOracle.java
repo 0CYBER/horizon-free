@@ -291,7 +291,13 @@ public final class VanillaChunkGenerationOracle {
             public LightChunk getChunkForLighting(int x, int z) { return null; }
             public BlockGetter getLevel() { return blockGetter; }
         };
-        OracleLevel.light = new net.minecraft.world.level.lighting.LevelLightEngine(lightGetter, true, dimensionType.hasSkyLight());
+        // Features run before any light exists in a real server, so every brightness query reads 0 (an empty engine would claim full sky light).
+        OracleLevel.light = new net.minecraft.world.level.lighting.LevelLightEngine(lightGetter, true, dimensionType.hasSkyLight()) {
+            @Override
+            public int getRawBrightness(final net.minecraft.core.BlockPos pos, final int skyDampen) {
+                return 0;
+            }
+        };
         var check = new StructureCheck((pos, visitor) -> CompletableFuture.completedFuture(null), access, templates, levelKey, generator, randomState, height, biomeSource, seed, DataFixers.getDataFixer());
         var level = (ServerLevel) allocate.invoke(unsafe, OracleLevel.class);
         OracleLevel.structures = new StructureManager(level, new WorldOptions(seed, true, false), check);
