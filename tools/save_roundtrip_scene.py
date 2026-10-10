@@ -36,8 +36,10 @@ FULL = [
     ('smoker', f'{{{NAME},cooking_total_time:100}}'),
     ('brewing_stand', f'{{Items:[{{Slot:0b,id:"minecraft:potion",count:1}},{{Slot:3b,id:"minecraft:nether_wart",count:2}},'
                       '{Slot:4b,id:"minecraft:blaze_powder",count:1}],BrewTime:200,Fuel:10}'),
+    # The beef must not finish cooking while the scene runs: its item would land
+    # near the sculk sensors at a time that depends on how long each game ran.
     ('campfire', '{Items:[{Slot:0b,id:"minecraft:beef",count:1}],CookingTimes:[I;10,0,0,0],'
-                 'CookingTotalTimes:[I;600,0,0,0]}'),
+                 'CookingTotalTimes:[I;60000,0,0,0]}'),
     ('soul_campfire', ''),
     ('chiseled_bookshelf', '{Items:[{Slot:0b,id:"minecraft:book",count:1},{Slot:3b,id:"minecraft:book",count:1}],'
                            'last_interacted_slot:3}'),
@@ -110,7 +112,8 @@ ENTITIES = [
     ('glow_item_frame', 'Facing:2b'),
     ('painting', 'Facing:3b,variant:"minecraft:kebab"'),
     ('arrow', 'inGround:1b,life:5s,damage:2.0d'),
-    ('falling_block', 'BlockState:{id:"minecraft:anvil",properties:{facing:"east"}},Time:3,HurtEntities:1b,FallHurtAmount:2f'),
+    # Time starts far below 600, after which FallingBlockEntity drops itself as an item.
+    ('falling_block', 'BlockState:{id:"minecraft:anvil",properties:{facing:"east"}},Time:-100000,HurtEntities:1b,FallHurtAmount:2f'),
     ('tnt', 'fuse:50s,block_state:{id:"minecraft:tnt",properties:{unstable:"true"}}'),
     ('oak_boat', ''), ('chest_boat', ''),
     ('minecart', ''), ('chest_minecart', 'Items:[{Slot:0b,id:"minecraft:apple",count:2}]'),

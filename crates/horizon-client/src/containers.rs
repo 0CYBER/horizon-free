@@ -75,6 +75,9 @@ pub struct Crafter {
     pub disabled: [bool; 9],
     pub triggered: bool,
     pub crafting_ticks: i32,
+    /// The block state's `triggered` when last ticked (not saved): the block
+    /// entity flag follows it only when it changes (`CrafterBlock.neighborChanged`).
+    pub state_triggered: Option<bool>,
 }
 impl Crafter {
     /// `slotCanBeDisabled`: only empty slots.
@@ -184,7 +187,12 @@ impl BlockEntity {
             return Some(Self::Sculk(Box::new(sculk)));
         }
         if name == "minecraft:crafter" {
-            return Some(Self::Crafter(Crafter::default()));
+            // CrafterBlock.newBlockEntity copies the placed state's flag: the
+            // first tick sees it as a change from untriggered.
+            return Some(Self::Crafter(Crafter {
+                state_triggered: Some(false),
+                ..Crafter::default()
+            }));
         }
         if name.ends_with("_banner") {
             return Some(Self::Banner(Banner::default()));

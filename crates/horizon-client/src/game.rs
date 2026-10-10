@@ -482,7 +482,14 @@ struct FallingBlock {
     position: Vec3,
     previous: Vec3,
     velocity: Vec3,
-    age: u32,
+    /// `FallingBlockEntity.time`: signed, a save can start it below zero.
+    age: i32,
+    /// `Entity.isNoGravity`.
+    no_gravity: bool,
+    /// `FallingBlockEntity.dropItem`.
+    drop_item: bool,
+    /// The UUID and compound it was loaded with, kept while it moves.
+    saved: Option<Box<([i32; 4], horizon_world::nbt::Tag)>>,
 }
 pub struct Resources {
     assets: Arc<Assets>,
@@ -1487,6 +1494,9 @@ impl Game<'_> {
                         previous: p,
                         velocity: Vec3::ZERO,
                         age: 0,
+                        no_gravity: false,
+                        drop_item: true,
+                        saved: None,
                     });
                 }
                 LevelEvent::Player { pos, effect, .. } => match effect {
@@ -1695,10 +1705,14 @@ impl Game<'_> {
     fn tick_falling(&mut self) -> Result<()> {
         let mut falling = std::mem::take(&mut self.falling);
         let mut landed = Vec::new();
+        let mut dropped = Vec::new();
+        let entity_drops = self.ui.rules.bool("entity_drops");
         falling.retain_mut(|f| {
             f.previous = f.position;
-            f.age += 1;
-            f.velocity.y -= 0.04;
+            f.age = f.age.wrapping_add(1);
+            if !f.no_gravity {
+                f.velocity.y -= 0.04;
+            }
             let next = Vec3::new(
                 f.position.x + f.velocity.x,
                 f.position.y + f.velocity.y,
@@ -1709,8 +1723,18 @@ impl Game<'_> {
                 next.y.floor() as i32,
                 next.z.floor() as i32,
             );
-            let solid = self.res.facts.get(below).full_collision;
-            if solid || f.age > 600 {
+            let solid = self.res.facts.get(below).full_collision && f.velocity.y < 0.0;
+            // FallingBlockEntity.tick: off the ground, it gives up after 600
+            // ticks (100 outside the world) and drops itself as an item.
+            let y = next.y.floor() as i32;
+            let outside = y <= horizon_client::chunk::MIN_Y || y >= horizon_client::chunk::MIN_Y + 384;
+            if !solid && (f.age > 100 && outside || f.age > 600) {
+                if f.drop_item && entity_drops {
+                    dropped.push((f.state, next));
+                }
+                return false;
+            }
+            if solid {
                 landed.push((
                     f.state,
                     [
@@ -1730,6 +1754,25 @@ impl Game<'_> {
             true
         });
         self.falling = falling;
+        for (state, at) in dropped {
+            // Entity.spawnAtLocation: an item entity where the block was.
+            let item = self.res.facts.get(state).item.clone();
+            if &*item != "minecraft:air" {
+                let r = &mut self.world.random;
+                let v = [
+                    r.next_double() * 0.2 - 0.1,
+                    0.2,
+                    r.next_double() * 0.2 - 0.1,
+                ];
+                let stack = ItemStack {
+                    item,
+                    count: 1,
+                    damage: 0,
+                    extra: None,
+                };
+                self.spawn_item(stack, [at.x, at.y, at.z], v, 10);
+            }
+        }
         for (state, pos) in landed {
             let landing = self.with_level(|b, level, ticks| {
                 b.falling_block_landed(
