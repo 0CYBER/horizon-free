@@ -40,12 +40,8 @@ pub struct State {
     pub banner_at: Option<[f64; 3]>,
     /// Beds around the raid's centre.
     pub homes: Option<std::sync::Arc<Vec<[i32; 3]>>>,
-    /// The ravager this raider rides, and (for a ravager) that it carries one.
-    pub vehicle: Option<u32>,
+    /// A ravager carrying a raider, set every tick from `Extra::rider`.
     pub rider: bool,
-    /// Quick Charge (pillager crossbows) or Sharpness (vindicator axes) from
-    /// the raid's enchanting.
-    pub enchant: u8,
 }
 impl State {
     /// A ravager carrying a raider (`hasControllingPassenger`).

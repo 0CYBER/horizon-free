@@ -84,6 +84,9 @@ pub struct Audio {
     next_tracked: u64,
     /// A `SoundSource` index the next sound plays on (`/playsound`).
     source_override: Option<usize>,
+    /// Positional sounds played since the last drain, kept while the world
+    /// is open to the network so guests hear them too.
+    pub capture: Option<Vec<(String, [f64; 3], f32, f32)>>,
 }
 fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
     use symphonia::core::{
@@ -192,6 +195,7 @@ impl Audio {
             music: None,
             next_tracked: 0,
             source_override: None,
+            capture: None,
         }
     }
     fn open(mixer: Arc<Mutex<Mixer>>) -> Result<(cpal::Stream, u32)> {
@@ -309,6 +313,9 @@ impl Audio {
     }
     /// Play a sound event at a world position (None = non-positional UI sound).
     pub fn play(&mut self, event: &str, at: Option<[f64; 3]>, volume: f32, pitch: f32) {
+        if let (Some(capture), Some(at)) = (self.capture.as_mut(), at) {
+            capture.push((event.to_owned(), at, volume, pitch));
+        }
         let Some(variant) = self.resolve(event, 0) else {
             return;
         };
