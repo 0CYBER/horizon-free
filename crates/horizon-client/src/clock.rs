@@ -35,7 +35,11 @@ impl Timer {
     /// `advanceGameTime`: the whole ticks to run now. `target_mspt` maps the
     /// default milliseconds per tick to the target in force (the tick-rate
     /// manager's, when the level runs normally). The caller runs at most ten.
-    pub fn advance_game_time(&mut self, current_ms: i64, target_mspt: impl FnOnce(f32) -> f32) -> i32 {
+    pub fn advance_game_time(
+        &mut self,
+        current_ms: i64,
+        target_mspt: impl FnOnce(f32) -> f32,
+    ) -> i32 {
         self.delta_ticks = (current_ms - self.last_ms) as f32 / target_mspt(self.ms_per_tick);
         self.last_ms = current_ms;
         self.delta_tick_residual += self.delta_ticks;
@@ -123,8 +127,13 @@ impl Default for TickRateManager {
 impl TickRateManager {
     /// `setTickRate` (`Math.max(rate, 1.0F)`, NaN propagates).
     pub fn set_tick_rate(&mut self, rate: f32) {
-        self.tickrate = if rate.is_nan() || rate > 1.0 { rate } else { 1.0 };
-        self.nanoseconds_per_tick = (NANOSECONDS_PER_SECOND as f64 / f64::from(self.tickrate)) as i64;
+        self.tickrate = if rate.is_nan() || rate > 1.0 {
+            rate
+        } else {
+            1.0
+        };
+        self.nanoseconds_per_tick =
+            (NANOSECONDS_PER_SECOND as f64 / f64::from(self.tickrate)) as i64;
     }
     pub fn tickrate(&self) -> f32 {
         self.tickrate
@@ -188,6 +197,9 @@ pub struct ServerTickRateManager {
 impl ServerTickRateManager {
     pub fn is_sprinting(&self) -> bool {
         self.scheduled_current_sprint_ticks > 0
+    }
+    pub fn remaining_sprint_ticks(&self) -> i64 {
+        self.remaining_sprint_ticks
     }
     /// `stepGameIfPaused`.
     pub fn step_game_if_paused(&mut self, ticks: i32) -> bool {
@@ -263,6 +275,173 @@ impl ServerTickRateManager {
     /// `setTickRate`.
     pub fn set_tick_rate(&mut self, rate: f32) {
         self.base.set_tick_rate(rate);
+    }
+}
+
+/// Ticks one sprint frame may run (rendering carries on between frames).
+const SPRINT_PER_FRAME: i64 = 40;
+const SAMPLES: usize = 100;
+
+/// The game's clock: `DeltaTracker.Timer` pacing driven by the
+/// `ServerTickRateManager` the `/tick` command controls, over a virtual
+/// millisecond clock built from the frame times it is fed. The integrated
+/// simulation is one loop, so the tick rate paces it directly (the vanilla
+/// client timer only ever slows down, because its server ticks separately).
+#[derive(Clone, Debug)]
+pub struct FixedStep {
+    timer: Timer,
+    manager: ServerTickRateManager,
+    now: std::time::Duration,
+    pause: bool,
+    sprint_checked: bool,
+    sprint_report: Option<SprintReport>,
+    tick_times: [i64; SAMPLES],
+    aggregated: i64,
+    tick_count: i64,
+}
+
+impl Default for FixedStep {
+    fn default() -> Self {
+        Self {
+            timer: Timer::new(20.0, 0),
+            manager: ServerTickRateManager::default(),
+            now: std::time::Duration::ZERO,
+            pause: false,
+            sprint_checked: false,
+            sprint_report: None,
+            tick_times: [0; SAMPLES],
+            aggregated: 0,
+            tick_count: 0,
+        }
+    }
+}
+
+impl FixedStep {
+    fn now_ms(&self) -> i64 {
+        self.now.as_millis() as i64
+    }
+    fn now_ns(&self) -> i64 {
+        self.now.as_nanos() as i64
+    }
+    /// The length of one tick at the current rate.
+    pub fn tick_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(self.manager.base.nanoseconds_per_tick().max(1) as u64)
+    }
+    /// Feed one frame's elapsed time; returns the ticks to run (at most ten,
+    /// or a sprint frame's worth).
+    pub fn advance(&mut self, elapsed: std::time::Duration) -> u32 {
+        self.now += elapsed;
+        let now_ms = self.now_ms();
+        if self.manager.is_sprinting() {
+            // Keep the timer current so leaving the sprint does not replay it.
+            self.timer.advance_game_time(now_ms, |d| d);
+            let remaining = self.manager.remaining_sprint_ticks();
+            // One extra pass lets the sprint finish and report.
+            return (remaining + 1).min(SPRINT_PER_FRAME) as u32;
+        }
+        let runs = self.manager.base.runs_normally();
+        let mspt = self.manager.base.milliseconds_per_tick();
+        let ticks = self
+            .timer
+            .advance_game_time(now_ms, |default| if runs { mspt } else { default });
+        ticks.clamp(0, 10) as u32
+    }
+    /// Restart pacing from now (after loading, so no backlog replays).
+    pub fn reset(&mut self) {
+        self.timer = Timer::new(20.0, self.now_ms());
+        self.timer.update_pause_state(self.pause);
+    }
+    /// The partial tick for interpolation (`getGameTimeDeltaPartialTick(false)`).
+    pub fn fraction(&self) -> f64 {
+        f64::from(self.timer.game_time_delta_partial_tick(false))
+    }
+    /// After a frame: whether the game is paused by a screen (the residual
+    /// stops accumulating) and whether the level is frozen.
+    pub fn end_frame(&mut self, pause: bool) {
+        self.pause = pause;
+        self.timer.update_pause_state(pause);
+        self.timer
+            .update_frozen_state(!self.manager.base.runs_normally());
+    }
+    pub fn paused(&self) -> bool {
+        self.pause
+    }
+    /// `TickRateManager.tick` for one tick, then whether the world runs
+    /// (`runsNormally`). Also the sprint check that opens a sprint tick.
+    pub fn world_runs(&mut self) -> bool {
+        self.manager.base.tick();
+        self.sprint_checked = false;
+        if self.manager.is_sprinting() {
+            let (_, report) = self.manager.check_should_sprint_this_tick(self.now_ns());
+            self.sprint_checked = report.is_none();
+            if report.is_some() {
+                self.sprint_report = report;
+            }
+        }
+        self.manager.base.runs_normally()
+    }
+    /// The report of a sprint that just finished, once.
+    pub fn take_sprint_report(&mut self) -> Option<SprintReport> {
+        self.sprint_report.take()
+    }
+    pub fn rate(&self) -> f32 {
+        self.manager.base.tickrate()
+    }
+    pub fn set_rate(&mut self, rate: f32) {
+        self.manager.set_tick_rate(rate);
+    }
+    pub fn frozen(&self) -> bool {
+        self.manager.base.is_frozen()
+    }
+    pub fn set_frozen(&mut self, frozen: bool) {
+        self.manager.base.set_frozen(frozen);
+    }
+    pub fn sprinting(&self) -> bool {
+        self.manager.is_sprinting()
+    }
+    /// `requestGameToSprint`: true when a sprint was already running.
+    pub fn start_sprint(&mut self, ticks: u32) -> bool {
+        self.manager
+            .request_game_to_sprint(ticks.min(i32::MAX as u32) as i32)
+    }
+    /// `stopSprinting`: the report when a sprint was running.
+    pub fn stop_sprint(&mut self) -> Option<SprintReport> {
+        self.manager.stop_sprinting()
+    }
+    pub fn stepping(&self) -> bool {
+        self.manager.base.is_stepping_forward()
+    }
+    /// `stepGameIfPaused`: only works while frozen.
+    pub fn start_step(&mut self, ticks: u32) -> bool {
+        self.manager
+            .step_game_if_paused(ticks.min(i32::MAX as u32) as i32)
+    }
+    pub fn stop_step(&mut self) -> bool {
+        self.manager.stop_stepping()
+    }
+    /// Record how long a tick took (`MinecraftServer.tickServer` bookkeeping
+    /// and `endTickWork`).
+    pub fn record(&mut self, took: std::time::Duration) {
+        let took = took.as_nanos() as i64;
+        let index = (self.tick_count % SAMPLES as i64) as usize;
+        self.aggregated -= self.tick_times[index];
+        self.aggregated += took;
+        self.tick_times[index] = took;
+        self.tick_count += 1;
+        if self.sprint_checked {
+            let end = self.now_ns() + took;
+            self.manager.end_tick_work(end);
+        }
+    }
+    /// `getAverageTickTimeNanos`.
+    pub fn average_nanos(&self) -> u64 {
+        (self.aggregated / SAMPLES.min(self.tick_count.max(1) as usize) as i64).max(0) as u64
+    }
+    /// The sorted `getTickTimesNanos` array (always 100 entries).
+    pub fn sorted_samples(&self) -> Vec<u64> {
+        let mut v: Vec<u64> = self.tick_times.iter().map(|&t| t.max(0) as u64).collect();
+        v.sort_unstable();
+        v
     }
 }
 

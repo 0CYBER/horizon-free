@@ -39,6 +39,7 @@ pub mod tame;
 pub mod undead;
 pub mod vex;
 pub mod villager;
+pub mod warden;
 pub mod witch;
 pub mod wither;
 mod world;
@@ -338,6 +339,7 @@ pub enum DamageKind {
     Generic,
     InWall,
     Thorns,
+    SonicBoom,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -392,6 +394,7 @@ impl Damage {
                 | DamageKind::Magic
                 | DamageKind::InWall
                 | DamageKind::Generic
+                | DamageKind::SonicBoom
         )
     }
     pub fn is_fire(&self) -> bool {
@@ -439,6 +442,8 @@ pub struct Extra {
     pub pick_up_loot: bool,
     pub saddled: bool,
     pub chested: bool,
+    /// The chest contents of a donkey or mule (15 slots).
+    pub items: Vec<Option<crate::items::ItemStack>>,
     pub tame: bool,
     pub sitting: bool,
     /// The owner's UUID (tamed animals).
@@ -477,6 +482,8 @@ pub struct Extra {
     pub meeting: Option<[i32; 3]>,
     /// Villager and wandering trader offers and experience.
     pub trade: Option<Box<crate::merchant::Trader>>,
+    /// A warden's brain, anger and vibrations.
+    pub warden: Option<Box<warden::Warden>>,
     /// A raider's patrol and raid state.
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.
@@ -523,6 +530,12 @@ pub struct Mob {
     pub extra: Extra,
     pub fluids: living::Fluids,
     pub no_gravity: bool,
+    /// `NoAI`: no goals and no movement.
+    pub no_ai: bool,
+    /// `Silent`.
+    pub silent: bool,
+    /// `Invulnerable`: immune to damage (but not to `/kill`).
+    pub invulnerable_flag: bool,
     pub climbing: bool,
     pub fire_ticks: i32,
     pub air: i32,
@@ -708,6 +721,21 @@ pub enum MobEvent {
         table: &'static str,
         at: [f64; 3],
     },
+    /// A vibration travelling to a listener (`VibrationParticleOption`).
+    Vibration {
+        from: [f64; 3],
+        to: [f64; 3],
+        ticks: i32,
+    },
+    /// The crumbs of the block under a digging or emerging warden.
+    DigParticles {
+        at: [f64; 3],
+    },
+    /// `Warden.applyDarknessAround`: darkness for survival players nearby.
+    Darkness {
+        at: [f64; 3],
+        radius: f64,
+    },
     /// A creaking bound to the heart at `home` was hurt (`creakingHurt` when a player did it).
     CreakingHurt {
         home: [i32; 3],
@@ -850,6 +878,9 @@ impl Mob {
             extra: Extra::default(),
             fluids: living::Fluids::default(),
             no_gravity: false,
+            no_ai: false,
+            silent: false,
+            invulnerable_flag: false,
             climbing: false,
             fire_ticks: 0,
             air: 300,
@@ -923,7 +954,7 @@ impl Mob {
         .fold((0.0, 0.0), |(a, t), (x, y)| (a + x, t + y))
     }
     pub fn damage(&mut self, amount: f32, source: Damage) -> bool {
-        if !self.alive() || self.removed {
+        if !self.alive() || self.removed || self.invulnerable_flag {
             return false;
         }
         if source.is_fire() && (self.kind.flags.fire_immune) {

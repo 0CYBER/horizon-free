@@ -79,7 +79,10 @@ pub fn sound_source(event: &str) -> usize {
 }
 /// Volume multiplier of an event's source (master applied separately).
 pub fn event_volume(event: &str) -> f32 {
-    let i = sound_source(event);
+    source_volume(sound_source(event))
+}
+/// Volume multiplier of a sound source by index.
+pub fn source_volume(i: usize) -> f32 {
     if i == 0 {
         1.0
     } else {
@@ -156,6 +159,10 @@ pub struct Settings {
     pub auto_suggestions: bool,
     pub reduced_debug_info: bool,
     pub high_contrast: bool,
+    /// `showSubtitles`: the closed-caption overlay.
+    pub show_subtitles: bool,
+    /// `notificationDisplayTime`: a multiplier for subtitle and toast times.
+    pub notification_display_time: f32,
     pub main_hand_left: bool,
     /// Enabled resource packs, bottom first (resourcePacks).
     pub resource_packs: Vec<String>,
@@ -225,6 +232,8 @@ impl Default for Settings {
             auto_suggestions: true,
             reduced_debug_info: false,
             high_contrast: false,
+            show_subtitles: false,
+            notification_display_time: 1.0,
             main_hand_left: false,
             resource_packs: Vec::new(),
             keys: KeyBinds::default(),
@@ -339,6 +348,8 @@ impl Settings {
             auto_suggestions: f.bool("autoSuggestions"),
             reduced_debug_info: f.bool("reducedDebugInfo"),
             high_contrast: f.bool("highContrast"),
+            show_subtitles: f.bool("showSubtitles"),
+            notification_display_time: f.double("notificationDisplayTime") as f32,
             main_hand_left: f.name("mainHand") == "left",
             resource_packs: f.list("resourcePacks"),
             keys,
@@ -424,6 +435,12 @@ impl Settings {
         put_b(&mut f, "autoSuggestions", self.auto_suggestions);
         put_b(&mut f, "reducedDebugInfo", self.reduced_debug_info);
         put_b(&mut f, "highContrast", self.high_contrast);
+        put_b(&mut f, "showSubtitles", self.show_subtitles);
+        put_f(
+            &mut f,
+            "notificationDisplayTime",
+            self.notification_display_time,
+        );
         put_name(
             &mut f,
             "mainHand",
@@ -494,5 +511,22 @@ mod tests {
         let again = Settings::parse(&out);
         assert_eq!(again.fov, 90.0);
         assert_eq!(again.keys.get("key.jump"), "key.keyboard.j");
+    }
+    #[test]
+    fn subtitle_options() {
+        let s = Settings::parse("showSubtitles:true\nnotificationDisplayTime:2.5\n");
+        assert!(s.show_subtitles);
+        assert_eq!(s.notification_display_time, 2.5);
+        let again = Settings::parse(&s.serialize());
+        assert!(again.show_subtitles);
+        assert_eq!(again.notification_display_time, 2.5);
+        let d = Settings::parse("");
+        assert!(!d.show_subtitles);
+        assert_eq!(d.notification_display_time, 1.0);
+        // Codec.doubleRange(0.5, 10.0) rejects other values; the default stays.
+        assert_eq!(
+            Settings::parse("notificationDisplayTime:50\n").notification_display_time,
+            1.0
+        );
     }
 }

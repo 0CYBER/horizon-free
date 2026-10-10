@@ -77,6 +77,9 @@ pub struct Frame<'a> {
     pub screen: &'a [crate::screen_effects::ScreenQuad],
     pub game_time: f32,
     pub ticks: u64,
+    /// The darkness effect on the lightmap: the brightness it takes off the
+    /// gamma option and the pulsing scale subtracted from the light.
+    pub darkness: (f32, f32),
 }
 pub struct Renderer {
     instance: wgpu::Instance,
@@ -916,16 +919,21 @@ impl Renderer {
     }
     /// VSync on: tear-free presentation (Mailbox, else Fifo); off: Immediate when available.
     pub fn set_vsync(&mut self, vsync: bool) {
-        let has = |m| self.present_modes.contains(&m);
-        let mode = match (
-            vsync,
-            has(wgpu::PresentMode::Mailbox),
-            has(wgpu::PresentMode::Immediate),
-        ) {
-            (true, true, _) => wgpu::PresentMode::Mailbox,
-            (true, false, _) => wgpu::PresentMode::Fifo,
-            (false, _, true) => wgpu::PresentMode::Immediate,
-            (false, true, false) => wgpu::PresentMode::Mailbox,
+        use crate::window::{PresentMode, vsync_present_mode};
+        let supported: Vec<PresentMode> = self
+            .present_modes
+            .iter()
+            .filter_map(|m| match m {
+                wgpu::PresentMode::Fifo => Some(PresentMode::Fifo),
+                wgpu::PresentMode::Mailbox => Some(PresentMode::Mailbox),
+                wgpu::PresentMode::Immediate => Some(PresentMode::Immediate),
+                _ => None,
+            })
+            .collect();
+        // GpuSurface.PresentMode.getSupportedVsyncMode.
+        let mode = match vsync_present_mode(&supported, vsync) {
+            Some(PresentMode::Mailbox) => wgpu::PresentMode::Mailbox,
+            Some(PresentMode::Immediate) => wgpu::PresentMode::Immediate,
             _ => wgpu::PresentMode::Fifo,
         };
         if self.config.present_mode != mode {
@@ -1186,7 +1194,11 @@ impl Renderer {
             }
         };
         self.animate(frame.ticks);
-        self.update_lightmap(&frame.sky, 0.0, self.gamma);
+        self.update_lightmap(
+            &frame.sky,
+            frame.darkness.1,
+            (self.gamma - frame.darkness.0).max(0.0),
+        );
         let view_proj = self.view_projection(frame);
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
         let (yaw, pitch) = (frame.yaw.to_radians(), frame.pitch.to_radians());

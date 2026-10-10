@@ -98,7 +98,10 @@ pub fn framerate_limit(option_limit: i32, c: FrameContext) -> i32 {
 
 /// `isHeavilyThrottled`.
 pub fn heavily_throttled(reason: ThrottleReason) -> bool {
-    matches!(reason, ThrottleReason::WindowIconified | ThrottleReason::LongAfk)
+    matches!(
+        reason,
+        ThrottleReason::WindowIconified | ThrottleReason::LongAfk
+    )
 }
 
 /// Present modes the renderer can choose between.
@@ -115,7 +118,11 @@ pub fn vsync_present_mode(supported: &[PresentMode], vsync: bool) -> Option<Pres
     let preferred: &[PresentMode] = if vsync {
         &[PresentMode::Fifo]
     } else {
-        &[PresentMode::Immediate, PresentMode::Mailbox, PresentMode::Fifo]
+        &[
+            PresentMode::Immediate,
+            PresentMode::Mailbox,
+            PresentMode::Fifo,
+        ]
     };
     preferred.iter().copied().find(|m| supported.contains(m))
 }
@@ -211,16 +218,29 @@ mod tests {
     #[test]
     fn limiter_paces_frames_at_the_target() {
         let mut limiter = FramerateLimiter::new(0);
-        let mut clock = Virtual { now: 1_000_000, oversleep: 200_000 };
+        let mut clock = Virtual {
+            now: 1_000_000,
+            oversleep: 200_000,
+        };
         limiter.limit_display_fps(100, &mut clock);
         assert!(clock.now >= 10_000_000);
         assert!(clock.now < 10_000_000 + 1_000_000);
     }
     #[test]
     fn vsync_only_uses_fifo() {
-        let all = [PresentMode::Mailbox, PresentMode::Fifo, PresentMode::Immediate];
+        let all = [
+            PresentMode::Mailbox,
+            PresentMode::Fifo,
+            PresentMode::Immediate,
+        ];
         assert_eq!(vsync_present_mode(&all, true), Some(PresentMode::Fifo));
-        assert_eq!(vsync_present_mode(&all, false), Some(PresentMode::Immediate));
-        assert_eq!(vsync_present_mode(&[PresentMode::Fifo], false), Some(PresentMode::Fifo));
+        assert_eq!(
+            vsync_present_mode(&all, false),
+            Some(PresentMode::Immediate)
+        );
+        assert_eq!(
+            vsync_present_mode(&[PresentMode::Fifo], false),
+            Some(PresentMode::Fifo)
+        );
     }
 }

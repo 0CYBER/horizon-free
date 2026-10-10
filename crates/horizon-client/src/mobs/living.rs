@@ -99,6 +99,11 @@ impl Mob {
                 super::species::Baby::None => {}
             }
         }
+        // Warden.getDefaultDimensions: a metre tall while digging or emerging.
+        if self.kind.species == super::Species::Warden && super::warden::digging_or_emerging(self) {
+            h = 1.0;
+            e = 0.85;
+        }
         if self.kind.species == super::Species::Pufferfish {
             let s = super::aquatic::puff_scale(self.extra.size);
             (w, h, e) = (w * s, h * s, e * s);

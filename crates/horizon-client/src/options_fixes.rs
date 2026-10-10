@@ -199,9 +199,10 @@ fn rename(raw: &mut Raw, from: &str, to: &str, fix: impl FnOnce(&str) -> String)
 /// `OPTIONS` fixers from `version` up to the current data version.
 pub fn update(raw: &mut Raw, version: i32) -> Result<(), FixFailed> {
     if version < 816
-        && let Some(lang) = raw.get_mut("lang") {
-            *lang = lang.to_lowercase();
-        }
+        && let Some(lang) = raw.get_mut("lang")
+    {
+        *lang = lang.to_lowercase();
+    }
     if version < 1344 {
         let keys: Vec<String> = raw
             .keys()
@@ -246,22 +247,24 @@ pub fn update(raw: &mut Raw, version: i32) -> Result<(), FixFailed> {
         }
     }
     if version < 1936
-        && let Some(opacity) = raw.get("chatOpacity") {
-            let background = java_parse_double(opacity).map_or(0.5, |v| (0.9 * v + 0.1) / 2.0);
-            raw.insert(
-                "textBackgroundOpacity".into(),
-                crate::java_text::double_to_string(background),
-            );
-        }
+        && let Some(opacity) = raw.get("chatOpacity")
+    {
+        let background = java_parse_double(opacity).map_or(0.5, |v| (0.9 * v + 0.1) / 2.0);
+        raw.insert(
+            "textBackgroundOpacity".into(),
+            crate::java_text::double_to_string(background),
+        );
+    }
     if version < 2556 {
         rename(raw, "fancyGraphics", "graphicsMode", |v| {
             if v == "true" { "1" } else { "0" }.to_owned()
         });
     }
     if version < 2558
-        && let Some(v) = raw.remove("key_key.swapHands") {
-            raw.insert("key_key.swapOffhand".into(), v);
-        }
+        && let Some(v) = raw.remove("key_key.swapHands")
+    {
+        raw.insert("key_key.swapOffhand".into(), v);
+    }
     if version < 3201 {
         for key in ["resourcePacks", "incompatibleResourcePacks"] {
             if let Some(v) = raw.get_mut(key) {
@@ -270,21 +273,23 @@ pub fn update(raw: &mut Raw, version: i32) -> Result<(), FixFailed> {
         }
     }
     if version < 3214
-        && let Some(ao) = raw.get_mut("ao") {
-            match ao.as_str() {
-                "0" => *ao = "false".into(),
-                "1" | "2" => *ao = "true".into(),
-                _ => {}
-            }
+        && let Some(ao) = raw.get_mut("ao")
+    {
+        match ao.as_str() {
+            "0" => *ao = "false".into(),
+            "1" | "2" => *ao = "true".into(),
+            _ => {}
         }
+    }
     if version < 3319 {
         raw.insert("onboardAccessibility".into(), "false".into());
     }
     if version < 3943
-        && let Some(v) = raw.get_mut("menuBackgroundBlurriness") {
-            let value = java_parse_float(v).map_or(5, |d| ((d * 10.0) + 0.5).floor() as i32);
-            *v = value.to_string();
-        }
+        && let Some(v) = raw.get_mut("menuBackgroundBlurriness")
+    {
+        let value = java_parse_float(v).map_or(5, |d| ((d * 10.0) + 0.5).floor() as i32);
+        *v = value.to_string();
+    }
     if version < 4651 {
         let mode = raw.get("graphicsMode").cloned();
         for (name, fast, fancy, fabulous) in [

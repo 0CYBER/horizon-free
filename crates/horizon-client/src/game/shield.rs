@@ -252,14 +252,8 @@ pub(super) fn draw_shield_icon(
     atlas: &horizon_client::hud::HudAtlas,
     x: f32,
     y: f32,
+    passes: &[(String, u32)],
 ) {
-    let Some(r) = atlas
-        .sprites
-        .get("entity/shield/shield_base_nopattern")
-        .copied()
-    else {
-        return;
-    };
     // display.gui: rotation [15, -25, -5], translation [2, 3, 0], scale 0.65.
     let (sx, cx) = 15f32.to_radians().sin_cos();
     let (sy, cy) = (-25f32).to_radians().sin_cos();
@@ -282,15 +276,9 @@ pub(super) fn draw_shield_icon(
             qz,
         ]
     };
-    let tex = |u: f32, v: f32| {
-        [
-            r.u0 + (r.u1 - r.u0) * u / 64.0,
-            r.v0 + (r.v1 - r.v0) * v / 64.0,
-        ]
-    };
     // ShieldModel: plate texOffs(0, 0) box(-6, -11, -2, 12, 22, 1) and
     // handle texOffs(26, 0) box(-1, -3, -1, 2, 6, 6).
-    let mut faces: Vec<(f32, [[f32; 2]; 4], [[f32; 2]; 4], u32)> = Vec::new();
+    let mut faces: Vec<(f32, [[f32; 2]; 4], [[f32; 2]; 4], f32)> = Vec::new();
     for (tu, tv, from, size) in [
         (0.0, 0.0, [-6.0, -11.0, -2.0], [12.0, 22.0, 1.0]),
         (26.0, 0.0, [-1.0, -3.0, -1.0], [2.0, 6.0, 6.0]),
@@ -324,16 +312,64 @@ pub(super) fn draw_shield_icon(
             }
             let p = verts.map(place);
             let depth = p.iter().map(|q| q[2]).sum::<f32>() / 4.0;
-            let uv = [tex(c, b), tex(a, b), tex(a, e), tex(c, e)];
+            let texels = [[c, b], [a, b], [a, e], [c, e]];
             // Flat item lighting: faces toward the viewer are brightest.
             let shade = (0.6 + 0.4 * normal[2]).min(1.0);
-            let s = (shade * 255.0) as u8;
-            let color = horizon_client::hud::rgba(s, s, s, 255);
-            faces.push((depth, p.map(|q| [q[0], q[1]]), uv, color));
+            faces.push((depth, p.map(|q| [q[0], q[1]]), texels, shade));
         }
     }
-    faces.sort_by(|a, b| a.0.total_cmp(&b.0));
-    for (_, p, uv, color) in faces {
+    // Every pass redraws the same boxes; equal depths keep the pass order.
+    let mut quads = Vec::new();
+    for (index, (name, tint)) in passes.iter().enumerate() {
+        let Some(r) = atlas.sprites.get(name).copied() else {
+            continue;
+        };
+        for (depth, p, texels, shade) in &faces {
+            let uv = texels.map(|[u, v]| {
+                [
+                    r.u0 + (r.u1 - r.u0) * u / 64.0,
+                    r.v0 + (r.v1 - r.v0) * v / 64.0,
+                ]
+            });
+            let c = |s: u32| (((tint >> s) & 255) as f32 * shade) as u8;
+            quads.push((
+                *depth,
+                index,
+                *p,
+                uv,
+                horizon_client::hud::rgba(c(16), c(8), c(0), 255),
+            ));
+        }
+    }
+    quads.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    for (_, _, p, uv, color) in quads {
         batch.quad(p, uv, color);
     }
+}
+/// The textures a shield draws: the plain or patterned base, then the
+/// banner layers (`ShieldSpecialRenderer.submit`).
+pub(super) fn shield_passes(
+    banners: &horizon_client::banner::Banners,
+    stack: &ItemStack,
+) -> Vec<(String, u32)> {
+    let data = stack.data();
+    let layers = data.map_or(&[][..], |d| &d.banner_patterns[..]);
+    let base = data.and_then(|d| d.base_color.as_deref());
+    if layers.is_empty() && base.is_none() {
+        return vec![("entity/shield/shield_base_nopattern".into(), 0xFFFFFF)];
+    }
+    let mut passes = vec![
+        ("entity/shield/shield_base".into(), 0xFFFFFF),
+        (
+            "entity/shield/base".into(),
+            horizon_client::banner::dye_rgb(base.unwrap_or("white")),
+        ),
+    ];
+    for layer in layers.iter().take(16) {
+        passes.push((
+            banners.shield_texture(&layer.pattern),
+            horizon_client::banner::dye_rgb(&layer.color),
+        ));
+    }
+    passes
 }

@@ -372,7 +372,9 @@ impl Spec {
             (Spec::Unit, V::Double(x)) => (*x >= 0.0 && *x <= 1.0).then(|| v.clone()),
             (Spec::UnitSquare | Spec::UnitSquareImplicit, V::Double(x)) => {
                 let root = x.sqrt();
-                (0.0..=1.0).contains(&root).then_some(V::Double(root * root))
+                (0.0..=1.0)
+                    .contains(&root)
+                    .then_some(V::Double(root * root))
             }
             (Spec::Named(names), V::Int(x)) => {
                 (*x >= 0 && (*x as usize) < names.len()).then(|| v.clone())

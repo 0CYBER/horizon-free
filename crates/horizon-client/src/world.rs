@@ -26,6 +26,11 @@ pub struct World {
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
     pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
+    /// States (by id) whose writes are recorded in `watched_writes` (sculk
+    /// blocks, which need a block entity).
+    pub watched: Vec<bool>,
+    /// Writes of watched states: position, previous and new state.
+    pub watched_writes: Vec<((i32, i32, i32), u16, u16)>,
     /// `ChunkAccess.inhabitedTime` of resident chunks: ticks a player spent
     /// within spawning range (local difficulty).
     pub inhabited: HashMap<(i32, i32), i64>,
@@ -106,6 +111,8 @@ impl World {
             loaded_entities: Vec::new(),
             modified: HashSet::new(),
             block_entities: HashMap::new(),
+            watched: Vec::new(),
+            watched_writes: Vec::new(),
             inhabited: HashMap::new(),
             game_time: 0,
             day_time: 1000,
@@ -177,6 +184,11 @@ impl World {
         }
         let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0 as u16);
         if u32::from(previous) != state.0 {
+            let watches = |id: u16| self.watched.get(usize::from(id)).copied().unwrap_or(false);
+            if watches(previous) || watches(state.0 as u16) {
+                self.watched_writes
+                    .push(((x, y, z), previous, state.0 as u16));
+            }
             self.revision = self.revision.wrapping_add(1);
             self.modified.insert((x >> 4, z >> 4));
             let sy = (y - MIN_Y) >> 4;

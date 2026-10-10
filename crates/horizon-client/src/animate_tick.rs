@@ -57,6 +57,8 @@ enum Animate {
         drag: bool,
     },
     Fire,
+    /// An active sculk sensor.
+    SculkSensor,
 }
 fn step(facing: &str) -> [i32; 3] {
     match facing {
@@ -128,6 +130,11 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             drag: prop("drag").as_deref() == Some("true"),
         },
         "fire" | "soul_fire" => Animate::Fire,
+        "sculk_sensor" | "calibrated_sculk_sensor"
+            if prop("sculk_sensor_phase").as_deref() == Some("active") =>
+        {
+            Animate::SculkSensor
+        }
         _ if name.ends_with("candle_cake") && lit => Animate::CandleCake,
         _ if (name == "candle" || name.ends_with("_candle")) && lit => {
             Animate::Candles(prop("candles").and_then(|c| c.parse().ok()).unwrap_or(1))
@@ -903,6 +910,35 @@ fn block_animate_tick(
                     1 => line(engine, [0, -1, 0], h, 0.0, 0.5),
                     _ => line(engine, [0, -1, 0], h, 0.0, 0.3),
                 }
+            }
+        }
+        Animate::SculkSensor => {
+            // SculkSensorBlock.animateTick.
+            let r = engine.random();
+            let direction = r.next_int_bound(6).unwrap_or(0);
+            // Direction.values(): down, up, north, south, west, east.
+            if direction >= 2 {
+                let step = [[0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]][direction as usize - 2];
+                let x = fx
+                    + 0.5
+                    + if step[0] == 0 {
+                        0.5 - r.next_double()
+                    } else {
+                        f64::from(step[0]) * 0.6
+                    };
+                let z = fz
+                    + 0.5
+                    + if step[2] == 0 {
+                        0.5 - r.next_double()
+                    } else {
+                        f64::from(step[2]) * 0.6
+                    };
+                let ya = f64::from(r.next_float() * 0.04);
+                engine.add(
+                    &crate::particles::ParticleOptions::sculk_to_redstone(),
+                    [x, fy + 0.25, z],
+                    [0.0, ya, 0.0],
+                );
             }
         }
         Animate::RespawnAnchor => {

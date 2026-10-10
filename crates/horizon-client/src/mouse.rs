@@ -30,7 +30,11 @@ impl SmoothDouble {
 
 /// `Math.signum(double)`.
 pub fn java_signum(v: f64) -> f64 {
-    if v == 0.0 || v.is_nan() { v } else { v.signum() }
+    if v == 0.0 || v.is_nan() {
+        v
+    } else {
+        v.signum()
+    }
 }
 
 /// `ScrollWheelHandler`.
@@ -170,7 +174,15 @@ impl MouseLook {
 
     /// `onMove`: relative motion counts while the pointer is grabbed, absolute
     /// motion otherwise.
-    pub fn on_move(&mut self, xpos: f64, ypos: f64, xrel: f64, yrel: f64, window_active: bool, grabbed: bool) {
+    pub fn on_move(
+        &mut self,
+        xpos: f64,
+        ypos: f64,
+        xrel: f64,
+        yrel: f64,
+        window_active: bool,
+        grabbed: bool,
+    ) {
         if self.ignore_first_move {
             self.xpos = xpos;
             self.ypos = ypos;
@@ -219,19 +231,27 @@ impl MouseLook {
         let sens = sensitivity_mod * 8.0;
         let (xo, yo) = if look.smooth_camera {
             (
-                self.smooth_turn_x.get_new_delta_value(self.accumulated_dx * sens, mousea * sens),
-                self.smooth_turn_y.get_new_delta_value(self.accumulated_dy * sens, mousea * sens),
+                self.smooth_turn_x
+                    .get_new_delta_value(self.accumulated_dx * sens, mousea * sens),
+                self.smooth_turn_y
+                    .get_new_delta_value(self.accumulated_dy * sens, mousea * sens),
             )
         } else if look.scoping {
             self.smooth_turn_x.reset();
             self.smooth_turn_y.reset();
-            (self.accumulated_dx * sensitivity_mod, self.accumulated_dy * sensitivity_mod)
+            (
+                self.accumulated_dx * sensitivity_mod,
+                self.accumulated_dy * sensitivity_mod,
+            )
         } else {
             self.smooth_turn_x.reset();
             self.smooth_turn_y.reset();
             (self.accumulated_dx * sens, self.accumulated_dy * sens)
         };
-        (if look.invert_x { -xo } else { xo }, if look.invert_y { -yo } else { yo })
+        (
+            if look.invert_x { -xo } else { xo },
+            if look.invert_y { -yo } else { yo },
+        )
     }
 
     /// `onScroll` for the in-game case (no screen, player present): the wheel
@@ -267,10 +287,21 @@ mod tests {
                 1.0,
                 true,
                 true,
-                LookOptions { sensitivity: 0.5, smooth_camera: false, scoping: false, invert_x: false, invert_y: false },
+                LookOptions {
+                    sensitivity: 0.5,
+                    smooth_camera: false,
+                    scoping: false,
+                    invert_x: false,
+                    invert_y: false,
+                },
             )
             .unwrap();
-        let mut rot = Rotation { x_rot: 0.0, y_rot: 0.0, x_rot_o: 0.0, y_rot_o: 0.0 };
+        let mut rot = Rotation {
+            x_rot: 0.0,
+            y_rot: 0.0,
+            x_rot_o: 0.0,
+            y_rot_o: 0.0,
+        };
         rot.turn(xo, 0.0);
         assert!((rot.y_rot - 0.15 * 1.0).abs() < 1e-6, "{}", rot.y_rot);
     }

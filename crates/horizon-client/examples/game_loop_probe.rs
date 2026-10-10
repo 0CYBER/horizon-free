@@ -6,6 +6,7 @@ use horizon_client::{
     clock::{ServerTickRateManager, Timer},
     keymapping::KeyState,
     mouse::{LookOptions, MouseLook, Rotation},
+    options_file::{OptionsFile, V},
     window::{self, FrameContext, InactivityFpsLimit},
 };
 use serde_json::Value;
@@ -91,9 +92,16 @@ fn rate(c: &Value, out: &mut impl Write) -> Result<()> {
         match name {
             "rate" => m.set_tick_rate(fl(&op[1])),
             "freeze" => m.base.set_frozen(b(&op[1])),
-            "step" => result = format!(" {}", m.step_game_if_paused(op[1].as_i64().unwrap() as i32)),
+            "step" => {
+                result = format!(" {}", m.step_game_if_paused(op[1].as_i64().unwrap() as i32))
+            }
             "stopstep" => result = format!(" {}", m.stop_stepping()),
-            "sprint" => result = format!(" {}", m.request_game_to_sprint(op[1].as_i64().unwrap() as i32)),
+            "sprint" => {
+                result = format!(
+                    " {}",
+                    m.request_game_to_sprint(op[1].as_i64().unwrap() as i32)
+                )
+            }
             "check" => {
                 let (run, r) = m.check_should_sprint_this_tick(op[1].as_i64().unwrap());
                 result = format!(" {run}");
@@ -142,7 +150,11 @@ fn scale(c: &Value, out: &mut impl Write) -> Result<()> {
 
 fn limit(c: &Value, out: &mut impl Write) -> Result<()> {
     let ctx = FrameContext {
-        inactivity: if b(&c["afk"]) { InactivityFpsLimit::Afk } else { InactivityFpsLimit::Minimized },
+        inactivity: if b(&c["afk"]) {
+            InactivityFpsLimit::Afk
+        } else {
+            InactivityFpsLimit::Minimized
+        },
         iconified: b(&c["iconified"]),
         focused: b(&c["focused"]),
         exclusive_fullscreen: false,
@@ -179,14 +191,28 @@ fn mouse(c: &Value, out: &mut impl Write) -> Result<()> {
     };
     let (active, grabbed) = (b(&c["active"]), b(&c["grabbed"]));
     let mut handler = MouseLook::default();
-    let mut rotation = Rotation { x_rot: 0.0, y_rot: 0.0, x_rot_o: 0.0, y_rot_o: 0.0 };
+    let mut rotation = Rotation {
+        x_rot: 0.0,
+        y_rot: 0.0,
+        x_rot_o: 0.0,
+        y_rot_o: 0.0,
+    };
     writeln!(out, "mouse")?;
     for op in c["ops"].as_array().unwrap() {
         match op[0].as_str().unwrap() {
-            "move" => handler.on_move(db(&op[1]), db(&op[2]), db(&op[3]), db(&op[4]), active, grabbed),
+            "move" => handler.on_move(
+                db(&op[1]),
+                db(&op[2]),
+                db(&op[3]),
+                db(&op[4]),
+                active,
+                grabbed,
+            ),
             "ignore" => handler.set_ignore_first_move(),
             "frame" => {
-                if let Some((xo, yo)) = handler.handle_accumulated_movement(db(&op[1]), active, grabbed, look) {
+                if let Some((xo, yo)) =
+                    handler.handle_accumulated_movement(db(&op[1]), active, grabbed, look)
+                {
                     rotation.turn(xo, yo);
                 }
                 writeln!(
@@ -207,10 +233,20 @@ fn mouse(c: &Value, out: &mut impl Write) -> Result<()> {
 fn scroll(c: &Value, out: &mut impl Write) -> Result<()> {
     let mut handler = MouseLook::default();
     let mut slot = c["slot"].as_i64().unwrap() as i32;
+    // OptionInstance.set quantises the wheel sensitivity.
+    let mut file = OptionsFile::default();
+    file.set("mouseWheelSensitivity", V::Double(db(&c["sens"])));
+    let sensitivity = file.double("mouseWheelSensitivity");
     writeln!(out, "scroll")?;
     for op in c["ops"].as_array().unwrap() {
-        if let Some((wheel, _)) = handler.on_scroll(db(&op[0]), db(&op[1]), b(&c["discrete"]), db(&c["sens"])) {
-            slot = horizon_client::mouse::ScrollWheelHandler::next_selection(f64::from(wheel), slot, 9);
+        if let Some((wheel, _)) =
+            handler.on_scroll(db(&op[0]), db(&op[1]), b(&c["discrete"]), sensitivity)
+        {
+            slot = horizon_client::mouse::ScrollWheelHandler::next_selection(
+                f64::from(wheel),
+                slot,
+                9,
+            );
         }
         writeln!(out, "{slot}")?;
     }
@@ -232,7 +268,9 @@ fn key(c: &Value, out: &mut impl Write) -> Result<()> {
             "option" => option = b(&op[1]),
             "down" => state.set_down(b(&op[1]), option),
             "release" => state.release(option),
-            "restore" => result = format!(" {}", state.should_restore_state_on_screen_closed(option)),
+            "restore" => {
+                result = format!(" {}", state.should_restore_state_on_screen_closed(option))
+            }
             "click" => state.click(),
             "consume" => result = format!(" {}", state.consume_click()),
             "ingame" => result = format!(" {}", state.should_set_on_ingame_focus(option)),

@@ -88,6 +88,7 @@ impl Game<'_> {
             thunder,
             skybox: self.dim == Dim::Overworld,
             blindness: None,
+            darkness: self.darkness_fog(),
         })
     }
     /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon (y 63) and not under water.

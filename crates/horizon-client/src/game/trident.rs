@@ -177,6 +177,7 @@ impl Game<'_> {
             returning: 0,
             creative_only: self.creative,
         });
+        self.player_projectile_shot();
         self.audio
             .play("minecraft:item.trident.throw", at, 1.0, 1.0);
     }
