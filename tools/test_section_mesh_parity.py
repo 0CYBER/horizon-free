@@ -29,6 +29,7 @@ except ImportError:
     import test_model_baking_parity as baking
 
 BUILD = lab.ROOT / 'target/section-mesh-parity'
+RESOURCES = lab.LOCAL / 'horizon-client' / '26.3'
 SECTION_Y = 0
 COLORS = {'grass': 0x91BD59, 'foliage': 0x77AB2F, 'dry_foliage': 0xA88B5E, 'water': 0x3F76E4}
 POSITION_TOLERANCE = 1e-4
@@ -71,6 +72,8 @@ class Scene:
         self.blocks = {}
         self.light_override = {}
         self.noise = None
+        self.biomes = None
+        self.options = {}
 
     def put(self, x, y, z, name, **properties):
         self.blocks[(x, y, z)] = name if isinstance(name, int) else self.states(name, **properties)
@@ -130,8 +133,38 @@ class Scene:
         return result
 
     def row(self):
-        return {'name': self.name, 'nether': self.nether, 'section_y': SECTION_Y, 'colors': COLORS, 'light': [15, 0],
-                'blocks': [[*p, s] for p, s in sorted(self.blocks.items())], 'lights': self.lights()}
+        row = {'name': self.name, 'nether': self.nether, 'section_y': SECTION_Y, 'colors': COLORS, 'light': [15, 0],
+               'blocks': [[*p, s] for p, s in sorted(self.blocks.items())], 'lights': self.lights()}
+        if self.biomes is not None:
+            row['biomes'] = self.biomes
+        row.update(self.options)
+        return row
+
+    def tinted_columns(self):
+        """Every tint source at several heights over the section's 16x16 footprint."""
+        names = [('grass_block', {}), ('short_grass', {}), ('oak_leaves', {}), ('water', {}), ('leaf_litter', {'segment_amount': 2}),
+                 ('sugar_cane', {}), ('fern', {}), ('vine', {'north': True}), ('mangrove_leaves', {}), ('jungle_leaves', {})]
+        for x in range(16):
+            for z in range(16):
+                for layer, y in enumerate((1, 5, 9, 13)):
+                    name, properties = names[(x * 5 + z * 3 + layer) % len(names)]
+                    self.put(x, y, z, 'stone')
+                    self.put(x, y + 1, z, name, **properties)
+                    if name == 'water':
+                        self.put(x, y + 2, z, 'water')
+
+    def biome_field(self, seed, radius, names, default='plains'):
+        """Noise-biome quart cells: a Voronoi patchwork that shifts with height."""
+        rng = random.Random(seed)
+        sites = [[(rng.uniform(-4, 8), rng.uniform(-4, 8), rng.choice(names)) for _ in range(9)] for _ in range(10)]
+        cells = []
+        for qy in range(-3, 8):
+            layer = sites[(qy + 3) // 2 % len(sites)]
+            for qx in range(-4, 8):
+                for qz in range(-4, 8):
+                    best = min(layer, key=lambda site: (site[0] - qx) ** 2 + (site[1] - qz) ** 2)
+                    cells.append([qx, qy, qz, 'minecraft:' + best[2]])
+        self.biomes = {'seed': rng.randrange(-2 ** 63, 2 ** 63), 'radius': radius, 'default': 'minecraft:' + default, 'cells': cells}
 
 
 def corpus(states, full=True):
@@ -306,6 +339,38 @@ def corpus(states, full=True):
             s.put(rng.randrange(-1, 17), rng.randrange(-1, 17), rng.randrange(-1, 17), rng.choice(ids))
         if seed % 2:
             s.noise = seed
+    # Biome tint blending: BiomeManager's zoomed biome at each block's own height, averaged
+    # over the blend radius, for real biome colours (colormaps, overrides, modifiers).
+    biome_names = sorted(path.stem for path in (RESOURCES / 'data/minecraft/worldgen/biome').glob('*.json'))
+    common = ['plains', 'swamp', 'dark_forest', 'desert', 'jungle', 'badlands', 'mangrove_swamp', 'warm_ocean', 'snowy_plains',
+              'birch_forest', 'cherry_grove', 'pale_garden', 'savanna', 'taiga', 'old_growth_pine_taiga', 'lush_caves']
+    for i, radius in enumerate((2, 0, 1, 3, 5, 7)):
+        s = scene(f'biome_blend_r{radius}')
+        s.floor(0)
+        s.tinted_columns()
+        s.biome_field(0x42494F4D + i, radius, common)
+    for i in range(0, len(biome_names), 8):
+        s = scene(f'biome_each_{i // 8}')
+        s.tinted_columns()
+        s.biome_field(0x45414348 + i, 2, biome_names[i:i + 8], biome_names[i])
+    # Options: flat lighting (ao off) and opaque leaves (cutoutLeaves off) alone and together.
+    leaves = ['oak_leaves', 'spruce_leaves', 'birch_leaves', 'jungle_leaves', 'acacia_leaves', 'dark_oak_leaves',
+              'azalea_leaves', 'flowering_azalea_leaves', 'mangrove_leaves', 'cherry_leaves', 'pale_oak_leaves']
+    option_palette = ['stone', 'glass', 'grass_block', 'water', 'lava', 'oak_slab', 'oak_stairs', 'torch', 'poppy', 'short_grass',
+                      'glowstone', 'oak_fence', 'ice', 'oak_log', 'tinted_glass', 'slime_block', 'honey_block'] + leaves * 2
+    for i, options in enumerate(({'smooth': False}, {'cutout_leaves': False}, {'smooth': False, 'cutout_leaves': False})):
+        rng = random.Random(0x4F505453 + i)
+        s = scene(f'options_{i}', nether=i == 2)
+        s.options = options
+        s.floor(0)
+        for x in range(-1, 17):
+            for y in range(1, 17):
+                for z in range(-1, 17):
+                    if rng.random() < 0.5:
+                        name = rng.choice(option_palette)
+                        s.put(x, y, z, rng.choice(states.by_name['minecraft:' + name]))
+        if i:
+            s.noise = i
     s = scene('cubes_nether', nether=True)
     s.floor(3, 'netherrack')
     s.fill(4, 4, 4, 6, 6, 6, 'nether_bricks')
@@ -337,6 +402,7 @@ def light(coords):
 
 
 def compare(scene, client, rust, states, report, limit):
+    blend_zero = scene.get('biomes', {}).get('radius') == 0
     blocks = {tuple(b[:3]): b[3] for b in scene['blocks']}
     def describe(quad, rotation):
         v = quad['vertices']
@@ -377,6 +443,11 @@ def compare(scene, client, rust, states, report, limit):
                 if any(abs(p[i] - q[i]) > UV_TOLERANCE for i in (3, 4)):
                     problems.add('uv')
                 cp, cq = channels(p[5]), channels(q[5])
+                if blend_zero and cp[3] == 0 and cq[3] == 255:
+                    # With biomeBlendRadius 0 the client uses the resolver's colour as is,
+                    # and biome colours given as plain RGB have alpha 0: tinted vertices come
+                    # out fully transparent. Horizon keeps them opaque; RGB is compared.
+                    cp[3] = 255
                 if cp != cq:
                     problems.add('color' if max(abs(x - y) for x, y in zip(cp, cq)) > 1 else 'color_rounding')
                 if light(p[6]) != light(q[6]):
