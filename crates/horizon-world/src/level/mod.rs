@@ -196,6 +196,8 @@ pub enum EntityQuery {
     Everything,
     /// Living entities only (stone plates).
     Mobs,
+    /// Minecarts only (detector rails).
+    Minecart,
 }
 
 /// Side effects reported to the caller, in vanilla call order.

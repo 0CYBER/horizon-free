@@ -117,6 +117,7 @@ public final class VanillaBlockUpdateOracle {
         World() {
             super(null, null, null, null, null, null, false, 0L, List.of(), false);
         }
+        java.util.LinkedHashSet<String> blockEvents;
         void emit(String line) {
             log.append(line).append('\n');
         }
@@ -173,7 +174,7 @@ public final class VanillaBlockUpdateOracle {
             emit("G " + pos(BlockPos.containing(p)) + " " + e.getRegisteredName());
         }
         @Override public <T extends net.minecraft.core.particles.ParticleOptions> int sendParticles(T p, double x, double y, double z, int n, double a, double b, double c, double s) { return 0; }
-        @Override public void blockEvent(BlockPos p, Block block, int a, int b) { emit("B " + pos(p) + " " + BuiltInRegistries.BLOCK.getKey(block) + " " + a + " " + b); }
+        @Override public void blockEvent(BlockPos p, Block block, int a, int b) { blockEvents.add("B " + pos(p) + " " + BuiltInRegistries.BLOCK.getKey(block) + " " + a + " " + b); }
         @Override public void updatePOIOnBlockStateChange(BlockPos p, BlockState a, BlockState b) { }
         @Override public boolean isPositionEntityTicking(BlockPos p) { return true; }
         @Override public boolean shouldTickBlocksAt(BlockPos p) { return true; }
@@ -287,6 +288,7 @@ public final class VanillaBlockUpdateOracle {
         World w = make(World.class);
         w.cells = new HashMap<>();
         w.log = new StringBuilder();
+        w.blockEvents = new java.util.LinkedHashSet<>();
         for (var cell : f.getAsJsonArray("cells")) {
             var c = cell.getAsJsonArray();
             BlockState s = Block.stateById(c.get(3).getAsInt());
@@ -372,6 +374,7 @@ public final class VanillaBlockUpdateOracle {
         for (String s : summary(w, before)) result.append(s).append('\n');
         pending(w, result);
         result.append(w.log);
+        for (String s : w.blockEvents) result.append(s).append('\n');
         result.append("rng ").append(w.rng.nextLong()).append('\n');
     }
 }

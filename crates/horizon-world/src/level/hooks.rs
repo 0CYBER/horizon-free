@@ -90,7 +90,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::BaseFire => self.base_fire_on_place(pos, state, same),
                 Class::DetectorRail | Class::BaseRail => {
                     if !same {
-                        self.rail_update_state(pos, state, moved);
+                        let updated = self.rail_update_state(pos, state, moved);
+                        if class == Class::DetectorRail {
+                            self.detector_rail_check_pressed(pos, updated);
+                        }
                     }
                 }
                 Class::Brushable => {
@@ -415,6 +418,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let signal = self.plate_signal_for_state(state);
             if signal == 0 {
                 self.plate_check_pressed(pos, state, signal);
+            }
+        } else if data.is(Class::DetectorRail) {
+            if !b.table.bool(state, b.props.powered) {
+                self.detector_rail_check_pressed(pos, state);
             }
         } else if data.is(Class::TripWire)
             && !b.table.bool(state, b.props.powered)

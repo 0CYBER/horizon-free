@@ -515,6 +515,40 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         }
     }
+    /// `DetectorRailBlock.checkPressed`.
+    pub(crate) fn detector_rail_check_pressed(&mut self, pos: BlockPos, state: BlockStateId) {
+        let b = self.b;
+        if !self.can_survive(state, pos) || !b.is_block(self.state(pos), b.block(state)) {
+            return;
+        }
+        let was = b.table.bool(state, b.props.powered);
+        // getInteractingMinecartOfType: the 0.2-inset search box.
+        let (x, y, z) = (f64::from(pos.x), f64::from(pos.y), f64::from(pos.z));
+        let area = Aabb::new(
+            Vec3::new(x + 0.2, y, z + 0.2),
+            Vec3::new(x + 0.8, y + 0.8, z + 0.8),
+        );
+        let pressed = self
+            .level
+            .count_entities(area, super::EntityQuery::Minecart)
+            > 0;
+        let block = b.block(state);
+        if pressed != was {
+            let next = b.table.set_bool(state, b.props.powered, pressed);
+            self.set_block_and_update(pos, next);
+            let rail = self.rail_new(pos, next);
+            for connection in rail.connections {
+                let at = self.state(connection);
+                self.neighbor_changed_full(at, connection, b.block(at), false);
+            }
+            self.update_neighbors_at(pos, block);
+            self.update_neighbors_at(below(pos), block);
+        }
+        if pressed {
+            self.schedule_tick(pos, block, 20);
+        }
+        self.update_neighbour_for_output_signal(pos, block);
+    }
     pub(crate) fn tripwire_tick(&mut self, pos: BlockPos) {
         let b = self.b;
         let state = self.state(pos);

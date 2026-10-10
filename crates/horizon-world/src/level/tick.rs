@@ -52,6 +52,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.plate_check_pressed(pos, state, signal);
                     }
                 }
+                Class::DetectorRail => {
+                    if b.table.bool(state, b.props.powered) {
+                        self.detector_rail_check_pressed(pos, state);
+                    }
+                }
                 Class::BigDripleaf => self.big_dripleaf_tick(pos, state),
                 Class::AbstractCauldron => self.cauldron_tick(state, pos),
                 Class::BubbleColumn => {
