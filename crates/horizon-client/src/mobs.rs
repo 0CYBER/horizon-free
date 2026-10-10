@@ -47,6 +47,7 @@ pub mod riders;
 pub mod shulker;
 pub mod sniffer;
 pub mod spawning;
+pub mod spawn_rules;
 pub mod species;
 pub mod sulfur_cube;
 pub mod tame;
@@ -903,6 +904,10 @@ pub struct MobWorld<'a> {
     pub mob_griefing: bool,
     /// `getCurrentDifficultyAt` near the player.
     pub difficulty: spawning::LocalDifficulty,
+    /// The End (its dimension type's monster spawn light rules).
+    pub end: bool,
+    /// The world seed (slime chunks).
+    pub world_seed: i64,
 }
 impl Mob {
     pub fn new(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {

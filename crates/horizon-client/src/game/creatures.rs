@@ -467,6 +467,8 @@ impl Game<'_> {
             block_tags: &self.res.items.block_tags,
             biomes: &self.res.biomes,
             mob_griefing: self.ui.rules.bool("mob_griefing"),
+            end: self.dim == Dim::End,
+            world_seed: self.level.seed,
             difficulty: self.local_difficulty(
                 self.player
                     .as_ref()
