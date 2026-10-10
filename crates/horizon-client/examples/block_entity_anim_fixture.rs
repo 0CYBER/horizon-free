@@ -7,8 +7,8 @@
 use horizon_client::{
     assets::Assets,
     block_entity_anim::{
-        Bell, BellEntity, BlockEntityAnims, Conduit, ConduitTarget, DIRECTIONS, PotWobble,
-        Shulker, ShulkerStatus, Skull, WobbleStyle, direction_index,
+        Bell, BellEntity, BlockEntityAnims, Conduit, ConduitTarget, DIRECTIONS, PotWobble, Shulker,
+        ShulkerStatus, Skull, WobbleStyle, direction_index,
     },
     blocks::{BlockFacts, Fluid},
     items::Items,
@@ -126,7 +126,7 @@ fn main() -> Result<()> {
         // The neighbourhood as block states (conduits).
         let mut blocks: HashMap<[i32; 3], String> = HashMap::new();
         blocks.insert(pos, block.clone());
-        let mut place = |blocks: &mut HashMap<[i32; 3], String>, set: &Value| {
+        let place = |blocks: &mut HashMap<[i32; 3], String>, set: &Value| {
             for (k, v) in set.as_object().into_iter().flatten() {
                 let o = offset(k);
                 blocks.insert(
@@ -154,7 +154,9 @@ fn main() -> Result<()> {
         let mut random = LegacyRandom::new(case["seed"].as_i64().unwrap_or(0));
         let name = block.split('[').next().unwrap_or_default().to_owned();
         let mut anims = BlockEntityAnims::default();
-        let facing = prop(&block, "facing").and_then(direction_index).unwrap_or(1);
+        let facing = prop(&block, "facing")
+            .and_then(direction_index)
+            .unwrap_or(1);
         let mut text = String::new();
         for step in case["steps"].as_array().into_iter().flatten() {
             let time = step["time"].as_i64().unwrap_or(0);
@@ -251,10 +253,14 @@ fn main() -> Result<()> {
             } else if name == "minecraft:conduit" {
                 let c = anims.conduits.entry(pos).or_insert_with(Conduit::default);
                 let state_of = |p: [i32; 3]| -> Option<u32> {
-                    find_state(registry, blocks.get(&p).map_or("minecraft:air", String::as_str))
+                    find_state(
+                        registry,
+                        blocks.get(&p).map_or("minecraft:air", String::as_str),
+                    )
                 };
-                let is_water =
-                    |p: [i32; 3]| state_of(p).is_some_and(|s| facts.get(s).fluid == Fluid::Water);
+                let is_water = |p: [i32; 3]| {
+                    state_of(p).is_some_and(|s| facts.get(BlockStateId(s)).fluid == Fluid::Water)
+                };
                 let is_frame = |p: [i32; 3]| {
                     let spec = blocks.get(&p).map_or("minecraft:air", String::as_str);
                     frames.contains(spec.split('[').next().unwrap_or_default())

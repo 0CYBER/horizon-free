@@ -92,8 +92,9 @@ def cases():
         p = pos()
         entities = []
         for _ in range(rng.choice([0, 1, 2, 5, 12, 25])):
+            # Multiples of 1/1024: serde_json parses other decimals approximately (1 ulp off).
             spread = rng.choice([10, 33, 50, 70])
-            entities.append({'pos': [p[k] + 0.5 + rng.uniform(-spread, spread) for k in range(3)],
+            entities.append({'pos': [p[k] + 0.5 + round(rng.uniform(-spread, spread) * 1024) / 1024 for k in range(3)],
                              'raider': rng.random() < 0.5, 'alive': rng.random() < 0.85, 'removed': rng.random() < 0.08})
         steps = []
         start = rng.randint(-50, 10 ** 6)
@@ -128,7 +129,7 @@ def cases():
         waterlogged = 'true' if rng.random() < 0.9 else 'false'
         extra = {'world': world, 'seed': rng.randint(0, 2 ** 40)}
         if rng.random() < 0.3:
-            extra['target'] = {'pos': [rng.uniform(-8, 8) for _ in range(3)], 'width': round(rng.uniform(0.3, 2), 3),
+            extra['target'] = {'pos': [round(rng.uniform(-8, 8) * 1024) / 1024 for _ in range(3)], 'width': round(rng.uniform(0.3, 2), 3),
                                'height': round(rng.uniform(0.5, 3), 3), 'eye': round(rng.uniform(0.2, 2.5), 3)}
         add('conduit', f'minecraft:conduit[waterlogged={waterlogged}]', steps, **extra)
 
