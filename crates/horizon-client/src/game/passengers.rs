@@ -1,0 +1,272 @@
+//! Mobs riding mobs: boarding and dismounting, keeping riders on their
+//! vehicles, the jockeys that spawn mounted (chicken jockeys, spider
+//! jockeys, strider jockeys, zombie horsemen) and the skeleton horse trap.
+//! Saving riders under `Passengers` lives in `persist.rs`.
+use super::Game;
+use horizon_client::mobs::{Species, riders};
+use horizon_core::{geometry::Vec3, random::RandomSource};
+use std::collections::HashMap;
+
+/// `Zombie.finalizeSpawn`: a baby zombie takes a chicken one time in twenty,
+/// and another one time in twenty of the rest.
+const CHICKEN_JOCKEY_ODDS: f32 = 0.05;
+/// The seconds a skeleton horse trap waits for a player: 15 minutes.
+const TRAP_LIFETIME: i32 = 18000;
+/// `SkeletonTrapGoal`: a player this close springs the trap.
+const TRAP_RANGE: f64 = 10.0;
+/// Ticks of invulnerability the trap's riders and horses start with.
+const TRAP_INVULNERABLE: i32 = 60;
+
+fn zombie_kind(s: Species) -> bool {
+    matches!(
+        s,
+        Species::Zombie | Species::Husk | Species::Drowned | Species::ZombieVillager
+    )
+}
+
+impl Game<'_> {
+    /// `Entity.startRiding` for two mobs.
+    pub(super) fn mount_mob(&mut self, rider: u32, vehicle: u32) {
+        if rider == vehicle {
+            return;
+        }
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == rider) {
+            m.extra.mount = Some(vehicle);
+            m.extra.passenger = true;
+        }
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == vehicle) {
+            m.extra.rider = Some(rider);
+        }
+    }
+    /// Riders sit on their vehicles (`Entity.positionRider`), and let go when
+    /// the vehicle dies or is gone.
+    pub(super) fn sync_riders(&mut self) {
+        let index: HashMap<u32, usize> = self
+            .mobs
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
+        let mut riding: HashMap<u32, u32> = HashMap::new();
+        for i in 0..self.mobs.len() {
+            let Some(v) = self.mobs[i].extra.mount else {
+                continue;
+            };
+            let valid = self.mobs[i].alive()
+                && !self.mobs[i].removed
+                && index
+                    .get(&v)
+                    .is_some_and(|&j| self.mobs[j].alive() && !self.mobs[j].removed);
+            if valid {
+                riding.insert(v, self.mobs[i].id);
+            } else {
+                let m = &mut self.mobs[i];
+                m.extra.mount = None;
+                m.extra.passenger = false;
+            }
+        }
+        for m in &mut self.mobs {
+            m.extra.rider = riding.get(&m.id).copied();
+        }
+        // Riders of riders settle over a few passes.
+        for _ in 0..3 {
+            for i in 0..self.mobs.len() {
+                let Some(v) = self.mobs[i].extra.mount else {
+                    continue;
+                };
+                let Some(&j) = index.get(&v) else { continue };
+                let vehicle = &self.mobs[j];
+                let attach = riders::passenger_attachment(vehicle);
+                let (pos, prev) = (vehicle.position, vehicle.previous);
+                let (yaw, prev_yaw) = (vehicle.yaw, vehicle.previous_yaw);
+                let (body, prev_body) = (vehicle.body_yaw, vehicle.previous_body_yaw);
+                let m = &mut self.mobs[i];
+                let offset = riders::vehicle_attachment(m);
+                m.position = riders::seat(attach, offset, pos, yaw);
+                m.previous = riders::seat(attach, offset, prev, prev_yaw);
+                m.velocity = Vec3::ZERO;
+                m.fall_distance = 0.0;
+                m.on_ground = false;
+                m.body_yaw = body;
+                m.previous_body_yaw = prev_body;
+                m.extra.passenger = true;
+                // A rider never walks off on its own.
+                m.ai.nav.stop();
+            }
+        }
+    }
+
+    /// `finalizeSpawn` jockeys of a naturally spawned mob: baby zombies on
+    /// chickens, skeletons on spiders, piglins and baby striders on striders,
+    /// zombies on zombie horses.
+    pub(super) fn spawn_jockeys(&mut self, id: u32, natural: bool) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        let (species, baby) = (m.species(), m.is_baby());
+        let at = [m.position.x, m.position.y, m.position.z];
+        match species {
+            s if zombie_kind(s) && baby => {
+                if self.world.random.next_float() < CHICKEN_JOCKEY_ODDS {
+                    if let Some(chicken) = self.free_chicken_near(at) {
+                        self.make_chicken_jockey(chicken);
+                        self.mount_mob(id, chicken);
+                    }
+                } else if self.world.random.next_float() < CHICKEN_JOCKEY_ODDS
+                    && let Some(chicken) = self.spawn_mob("minecraft:chicken", at, false)
+                {
+                    self.make_chicken_jockey(chicken);
+                    self.mount_mob(id, chicken);
+                }
+            }
+            // Spider.finalizeSpawn: one in a hundred carries a skeleton.
+            Species::Spider if self.world.random.next_int_bound(100).unwrap_or(1) == 0 => {
+                if let Some(skeleton) = self.spawn_mob("minecraft:skeleton", at, false) {
+                    self.mount_mob(skeleton, id);
+                }
+            }
+            Species::Strider if !baby => self.spawn_strider_jockey(id, at),
+            // ZombieHorse.finalizeSpawn: a zombie with an iron spear.
+            Species::ZombieHorse if natural => {
+                if let Some(zombie) = self.spawn_mob("minecraft:zombie", at, false) {
+                    if let Some(z) = self.mobs.iter_mut().find(|m| m.id == zombie) {
+                        z.extra.main_hand = Some("minecraft:iron_spear".into());
+                    }
+                    self.mount_mob(zombie, id);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn free_chicken_near(&self, at: [f64; 3]) -> Option<u32> {
+        self.mobs
+            .iter()
+            .find(|c| {
+                c.species() == Species::Chicken
+                    && c.alive()
+                    && c.extra.rider.is_none()
+                    && c.extra.mount.is_none()
+                    && (c.position.x - at[0]).abs() <= 5.3
+                    && (c.position.y - at[1]).abs() <= 3.0 + 1.0
+                    && (c.position.z - at[2]).abs() <= 5.3
+            })
+            .map(|c| c.id)
+    }
+    fn make_chicken_jockey(&mut self, chicken: u32) {
+        if let Some(c) = self.mobs.iter_mut().find(|m| m.id == chicken) {
+            c.extra.jockey = true;
+        }
+    }
+    /// `Strider.finalizeSpawn`: one strider in thirty carries a zombified
+    /// piglin holding a warped fungus on a stick (and wears a saddle), one in
+    /// ten of the rest a baby strider.
+    fn spawn_strider_jockey(&mut self, id: u32, at: [f64; 3]) {
+        if self.world.random.next_int_bound(30).unwrap_or(1) == 0 {
+            if !self.ui.rules.bool("spawn_mobs") {
+                return;
+            }
+            if let Some(piglin) = self.spawn_mob("minecraft:zombified_piglin", at, false) {
+                let baby = self.world.random.next_float() < CHICKEN_JOCKEY_ODDS;
+                if let Some(p) = self.mobs.iter_mut().find(|m| m.id == piglin) {
+                    p.extra.main_hand = Some("minecraft:warped_fungus_on_a_stick".into());
+                    p.extra.age = if baby { i32::MIN / 2 } else { 0 };
+                }
+                if let Some(s) = self.mobs.iter_mut().find(|m| m.id == id) {
+                    s.extra.saddled = true;
+                }
+                self.mount_mob(piglin, id);
+            }
+        } else if self.world.random.next_int_bound(10).unwrap_or(1) == 0
+            && let Some(baby) = self.spawn_mob("minecraft:strider", at, false)
+        {
+            if let Some(b) = self.mobs.iter_mut().find(|m| m.id == baby) {
+                b.extra.age = -24000;
+            }
+            self.mount_mob(baby, id);
+        }
+    }
+
+    /// `SkeletonHorse.customServerAiStep` and `SkeletonTrapGoal`: a trap
+    /// horse is a trap for fifteen minutes; a player within ten blocks springs
+    /// it.
+    pub(super) fn tick_skeleton_traps(&mut self) {
+        let player = self
+            .player
+            .as_ref()
+            .filter(|p| !p.health.dead_or_dying())
+            .map(|p| p.position);
+        let mut sprung = Vec::new();
+        for m in &mut self.mobs {
+            if m.species() != Species::SkeletonHorse || !m.extra.trap || !m.alive() {
+                continue;
+            }
+            if !m.persistent {
+                m.extra.trap_time += 1;
+                if m.extra.trap_time > TRAP_LIFETIME {
+                    m.removed = true;
+                    continue;
+                }
+            }
+            if player.is_some_and(|p| m.distance_sqr(p) < TRAP_RANGE * TRAP_RANGE) {
+                sprung.push(m.id);
+            }
+        }
+        for id in sprung {
+            self.spring_skeleton_trap(id);
+        }
+    }
+    fn spring_skeleton_trap(&mut self, id: u32) {
+        let Some(horse) = self.mobs.iter_mut().find(|m| m.id == id) else {
+            return;
+        };
+        horse.extra.trap = false;
+        horse.extra.tame = true;
+        horse.extra.age = 0;
+        let at = [horse.position.x, horse.position.y, horse.position.z];
+        self.spawn_bolt(at, true);
+        let Some(skeleton) = self.trap_skeleton(at) else {
+            return;
+        };
+        self.mount_mob(skeleton, id);
+        for _ in 0..3 {
+            let Some(other) = self.spawn_mob("minecraft:skeleton_horse", at, true) else {
+                continue;
+            };
+            let (dx, dz) = (
+                self.world.random.triangle(0.0, 1.1485),
+                self.world.random.triangle(0.0, 1.1485),
+            );
+            if let Some(h) = self.mobs.iter_mut().find(|m| m.id == other) {
+                h.invulnerable = TRAP_INVULNERABLE;
+                h.extra.tame = true;
+                h.extra.age = 0;
+                h.velocity = Vec3::new(h.velocity.x + dx, h.velocity.y, h.velocity.z + dz);
+            }
+            if let Some(rider) = self.trap_skeleton(at) {
+                self.mount_mob(rider, other);
+            }
+        }
+    }
+    /// `SkeletonTrapGoal.createSkeleton`: an iron helmet unless it already
+    /// has a helm.
+    fn trap_skeleton(&mut self, at: [f64; 3]) -> Option<u32> {
+        let id = self.spawn_mob("minecraft:skeleton", at, true)?;
+        let m = self.mobs.iter_mut().find(|m| m.id == id)?;
+        m.invulnerable = TRAP_INVULNERABLE;
+        if m.extra.head.is_none() {
+            m.extra.head = Some("minecraft:iron_helmet".into());
+        }
+        let (weapon, helmet) = (m.extra.main_hand.clone(), m.extra.head.clone());
+        let special = self.local_difficulty(at).special();
+        // `SkeletonTrapGoal.enchant`: the weapon and the helmet, always.
+        for (slot, item) in [
+            (horizon_client::mobs::gear::MAIN, weapon),
+            (horizon_client::mobs::gear::HEAD, helmet),
+        ] {
+            if let Some(item) = item {
+                self.enchant_item(id, slot, &item, special);
+            }
+        }
+        Some(id)
+    }
+}

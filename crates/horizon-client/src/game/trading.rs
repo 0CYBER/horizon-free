@@ -99,29 +99,9 @@ impl Game<'_> {
         };
         self.res.stations.trades.offers_from_set(&ctx, set, random)
     }
-    /// `Villager.mobInteract` / `WanderingTrader.mobInteract`: shake the
-    /// head without offers, else open the trading screen.
-    pub(super) fn interact_trader(
-        &mut self,
-        index: usize,
-        item: &str,
-    ) -> horizon_client::Result<bool> {
-        let m = &self.mobs[index];
-        let species = m.species();
-        if !matches!(species, Species::Villager | Species::WanderingTrader)
-            || !m.alive()
-            || item == "minecraft:villager_spawn_egg"
-            || self.station.is_some()
-        {
-            return Ok(false);
-        }
-        if m.is_baby() {
-            let mut events = Vec::new();
-            villager::set_unhappy(&mut self.mobs[index], &mut events);
-            self.handle_mob_events(events)?;
-            return Ok(true);
-        }
-        // AbstractVillager.getOffers: generated on first use.
+    /// `AbstractVillager.getOffers`: generated on first use.
+    pub(super) fn ensure_offers(&mut self, index: usize) {
+        let species = self.mobs[index].species();
         if self.mobs[index].extra.trade.is_none() {
             let m = &self.mobs[index];
             let variant = VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()];
@@ -147,6 +127,30 @@ impl Game<'_> {
                 ..Default::default()
             }));
         }
+    }
+    /// `Villager.mobInteract` / `WanderingTrader.mobInteract`: shake the
+    /// head without offers, else open the trading screen.
+    pub(super) fn interact_trader(
+        &mut self,
+        index: usize,
+        item: &str,
+    ) -> horizon_client::Result<bool> {
+        let m = &self.mobs[index];
+        let species = m.species();
+        if !matches!(species, Species::Villager | Species::WanderingTrader)
+            || !m.alive()
+            || item == "minecraft:villager_spawn_egg"
+            || self.station.is_some()
+        {
+            return Ok(false);
+        }
+        if m.is_baby() {
+            let mut events = Vec::new();
+            villager::set_unhappy(&mut self.mobs[index], &mut events);
+            self.handle_mob_events(events)?;
+            return Ok(true);
+        }
+        self.ensure_offers(index);
         let m = &self.mobs[index];
         let mut trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
         // Villager.updateSpecialPrices: reputation and Hero of the Village.

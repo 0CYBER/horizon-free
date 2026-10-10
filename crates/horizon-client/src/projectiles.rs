@@ -63,6 +63,8 @@ pub struct Projectile {
     pub stuck: bool,
     /// Whether the projectile has left its owner's box (Projectile.leftOwner).
     pub left_owner: bool,
+    /// The shooter's bow enchantments (Power, Punch, Flame, Piercing).
+    pub bonus: crate::mobs::gear::ArrowBonus,
 }
 /// What a projectile struck this tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -122,6 +124,7 @@ impl Projectile {
             age: 0,
             stuck: false,
             left_owner: false,
+            bonus: Default::default(),
         }
     }
     pub fn is_arrow(&self) -> bool {
