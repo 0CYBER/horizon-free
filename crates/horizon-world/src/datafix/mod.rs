@@ -1,0 +1,233 @@
+//! Vanilla's DataFixers from the 1.20 schemas on (`net.minecraft.util.datafix`):
+//! the data of worlds saved by 1.20 to 26.2 brought to the 26.3 format exactly
+//! as 26.3 does when it reads them, and the file fixes it runs when it opens
+//! such a world (`net.minecraft.util.filefix`).
+//!
+//! DataFixerUpper reads the data once with the schema of its version (running
+//! the schema's read hooks), applies every fix with a key above that version
+//! in order, and writes it with the current schema. Each fix finds its values
+//! with the schema just below its own key ([`schema`]). Data older than the
+//! 1.20 schemas (DataVersion 3463) is not supported: the fixes before them are
+//! not ported, see [`OLDEST_SUPPORTED`].
+pub mod dynamic;
+mod fixes_a;
+mod fixes_b;
+mod fixes_c;
+pub mod files;
+mod items;
+pub mod json;
+pub mod schema;
+mod text;
+
+use crate::nbt::Tag;
+use dynamic::{as_str, string};
+use schema::{Key, Ty, key, walk};
+
+/// The DataVersion of the game.
+pub const CURRENT: i32 = crate::DATA_VERSION;
+/// Data saved before this DataVersion (1.20) needs fixes that are not ported.
+pub const OLDEST_SUPPORTED: i32 = 3463;
+
+/// `Identifier.tryParse` validity, as `NamespacedSchema.ensureNamespaced` uses it.
+pub fn identifier(id: &str) -> Option<(String, String)> {
+    let (ns, path) = match id.split_once(':') {
+        Some((ns, path)) => (if ns.is_empty() { "minecraft" } else { ns }, path),
+        None => ("minecraft", id),
+    };
+    let ns_ok = ns.bytes().all(|c| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.'));
+    let path_ok = path
+        .bytes()
+        .all(|c| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.' | b'/'));
+    (ns_ok && path_ok).then(|| (ns.to_owned(), path.to_owned()))
+}
+
+/// What a fix works on: the root value, its type and the fix's key.
+pub struct Cx<'a> {
+    root: Ty,
+    data: &'a mut Tag,
+    k: Key,
+}
+
+impl Cx<'_> {
+    /// Every value of `ty`, read with the fix's input schema.
+    pub fn each(&mut self, ty: Ty, mut f: impl FnMut(&mut Tag)) {
+        walk(self.root, self.data, self.k - 1, ty, &mut f);
+    }
+    /// Every value of `ty` read with the fix's output schema (fixes declared
+    /// on `getOutputSchema().getType(...)`).
+    pub fn each_out(&mut self, ty: Ty, mut f: impl FnMut(&mut Tag)) {
+        walk(self.root, self.data, self.k, ty, &mut f);
+    }
+    /// Every entity of one type (`NamedEntityFix` and friends).
+    pub fn entity(&mut self, id: &str, mut f: impl FnMut(&mut Tag)) {
+        self.each(Ty::Entity, |e| {
+            if id_is(e, id) {
+                f(e);
+            }
+        });
+    }
+    /// Every block entity of one type.
+    pub fn block_entity(&mut self, id: &str, mut f: impl FnMut(&mut Tag)) {
+        self.each(Ty::BlockEntity, |e| {
+            if id_is(e, id) {
+                f(e);
+            }
+        });
+    }
+    /// Every item stack whose id passes `filter`.
+    pub fn item(&mut self, filter: impl Fn(&str) -> bool, mut f: impl FnMut(&mut Tag)) {
+        self.each(Ty::ItemStack, |s| {
+            if let Some(id) = as_str(s.get("id"))
+                && filter(&dynamic::namespaced(&id))
+            {
+                f(s);
+            }
+        });
+    }
+    /// A name type renamed in place (`fixTypeEverywhere` over a namespaced string).
+    pub fn rename(&mut self, ty: Ty, rename: impl Fn(&str) -> Option<&'static str>) {
+        self.each(ty, |v| {
+            if let Some(name) = as_str(Some(v))
+                && let Some(new) = rename(&name)
+            {
+                *v = string(new);
+            }
+        });
+    }
+}
+
+/// The entity or block entity `id` field, namespaced.
+pub fn id_is(v: &Tag, id: &str) -> bool {
+    as_str(v.get("id")).is_some_and(|s| dynamic::namespaced(&s) == id)
+}
+
+/// `createRenamer`: the id namespaced, looked up in a table.
+pub fn renamer<'a>(table: &'a [(&'a str, &'static str)]) -> impl Fn(&str) -> Option<&'static str> + 'a {
+    move |id: &str| {
+        let id = dynamic::namespaced(id);
+        table.iter().find(|(from, _)| *from == id).map(|(_, to)| *to)
+    }
+}
+
+type FixFn = fn(&mut Cx);
+
+/// Every fix from the 1.20 schemas on, in DataFixers order.
+fn fixes() -> Vec<(Key, FixFn)> {
+    let mut out = Vec::new();
+    fixes_a::register(&mut out);
+    fixes_b::register(&mut out);
+    fixes_c::register(&mut out);
+    out
+}
+
+/// `DataFixer.update(type, data, from, to)` for a root value.
+pub fn update(root: Ty, data: &mut Tag, from: i32, to: i32) {
+    if from >= to {
+        return;
+    }
+    let from_key = key(from.max(0) as u32, 0);
+    let to_version = to as u32;
+    // The data is read once with the schema of its version (its read hooks)...
+    read_hooks(root, data, from_key);
+    // ...then every fix above that key, up to the target version...
+    for (k, fix) in fixes() {
+        if k > from_key && k / 10 <= to_version {
+            fix(&mut Cx { root, data, k });
+        }
+    }
+    // ...and written with the target schema (its write hooks).
+    write_hooks(root, data, key(to_version, 9));
+}
+
+/// The read hooks of the schema the data was saved with.
+fn read_hooks(root: Ty, data: &mut Tag, k: Key) {
+    walk(root, data, k, Ty::ItemStack, &mut |stack| {
+        if k < key(3818, 5) {
+            items::add_names(stack);
+        } else if let Tag::String(_) = stack {
+            // V3818_5 UNPACK_PLAIN_ID: a bare item id is a stack of one.
+            *stack = Tag::compound([("id", stack.clone()), ("count", Tag::Int(1))]);
+        }
+    });
+    walk(root, data, k, Ty::Objective, &mut fixes_a::unpack_objective);
+}
+
+fn write_hooks(root: Ty, data: &mut Tag, k: Key) {
+    walk(root, data, k, Ty::Objective, &mut fixes_a::repack_objective);
+}
+
+/// `SimpleRegionStorage.upgradeChunkTag` for a region chunk (`ChunkMap`):
+/// the dimension and generator are passed to the fixes as `__context`.
+pub fn update_chunk(tag: &mut Tag, dimension: &str, generator: Option<&str>) {
+    let version = dynamic::as_int(tag.get("DataVersion"), -1);
+    if version >= CURRENT {
+        return;
+    }
+    let mut context = Tag::compound([("dimension", string(dimension))]);
+    if let Some(g) = generator {
+        dynamic::set(&mut context, "generator", string(g));
+    }
+    dynamic::set(tag, "__context", context);
+    update(Ty::Chunk, tag, version, CURRENT);
+    dynamic::remove(tag, "__context");
+    dynamic::set(tag, "DataVersion", Tag::Int(CURRENT));
+}
+
+/// `SimpleRegionStorage.upgradeChunkTag` for entity chunks (default version -1)
+/// and POI chunks (default 1945).
+pub fn update_region_tag(root: Ty, tag: &mut Tag) {
+    let default = if root == Ty::PoiChunk { 1945 } else { -1 };
+    let version = dynamic::as_int(tag.get("DataVersion"), default);
+    if version >= CURRENT {
+        return;
+    }
+    update(root, tag, version, CURRENT);
+    dynamic::set(tag, "DataVersion", Tag::Int(CURRENT));
+}
+
+/// `PlayerDataStorage.load`: the DataVersion field stays as loaded.
+pub fn update_player(tag: &mut Tag) {
+    let version = dynamic::as_int(tag.get("DataVersion"), -1);
+    update(Ty::Player, tag, version, CURRENT);
+}
+
+/// The saved data type of a file below a `data` folder (`namespace/path.dat`).
+pub fn saved_data_type(relative: &str) -> Option<Ty> {
+    let name = relative.strip_suffix(".dat").unwrap_or(relative);
+    if name.ends_with("/command_storage") {
+        return Some(Ty::SavedCommandStorage);
+    }
+    if let Some(n) = name.strip_prefix("minecraft/maps/")
+        && !n.is_empty()
+        && n.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Some(Ty::SavedMapData);
+    }
+    Some(match name {
+        "minecraft/custom_boss_events" => Ty::SavedCustomBossEvents,
+        "minecraft/scoreboard" => Ty::SavedScoreboard,
+        "minecraft/chunk_tickets" => Ty::SavedTickets,
+        "minecraft/world_border" => Ty::SavedWorldBorder,
+        "minecraft/game_rules" => Ty::SavedGameRules,
+        "minecraft/ender_dragon_fight" => Ty::SavedEnderDragonFight,
+        "minecraft/wandering_trader" => Ty::SavedWanderingTrader,
+        "minecraft/maps/last_id" => Ty::SavedMapIndex,
+        "minecraft/weather" => Ty::SavedWeather,
+        "minecraft/scheduled_events" => Ty::SavedScheduledEvents,
+        "minecraft/world_gen_settings" => Ty::SavedWorldGenSettings,
+        "minecraft/random_sequences" => Ty::SavedRandomSequences,
+        "minecraft/stopwatches" => Ty::SavedStopwatches,
+        "minecraft/raids" => Ty::SavedRaids,
+        "minecraft/world_clocks" => Ty::SavedWorldClocks,
+        _ => return None,
+    })
+}
+
+/// `SavedDataStorage.readTagFromDisk`: default version 1343, field kept.
+pub fn update_saved_data(ty: Ty, tag: &mut Tag) {
+    let version = dynamic::as_int(tag.get("DataVersion"), 1343);
+    update(ty, tag, version, CURRENT);
+}
+
+#[cfg(test)]
+mod tests;
