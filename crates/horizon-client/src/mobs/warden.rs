@@ -11,7 +11,10 @@ use super::{
     path::{Path, PathType},
 };
 use crate::sculk::{self, Context, Info};
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{
+    geometry::{Vec3, trig::Mth},
+    random::RandomSource,
+};
 use std::{collections::HashMap, f32::consts::PI};
 
 pub const EMERGE_DURATION: i64 = 134;
@@ -1472,16 +1475,16 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, animations: &HashMap<String, Anim
     // animateWalk
     let speed_modifier = (3.0 * s.speed).min(0.5);
     let adjusted = s.pos * 0.8662;
-    let (cos, sin) = (adjusted.cos(), adjusted.sin());
+    let (cos, sin) = (adjusted.mcos(), adjusted.msin());
     let speed_min = speed_modifier.min(0.35);
     let head_z = p.get("head")[5] + 0.3 * sin * speed_modifier;
     p.zrot("head", head_z);
-    let head_x = p.get("head")[3] + 1.2 * (adjusted + PI / 2.0).cos() * speed_min;
+    let head_x = p.get("head")[3] + 1.2 * (adjusted + PI / 2.0).mcos() * speed_min;
     p.xrot("head", head_x);
     p.zrot("body", 0.1 * sin * speed_modifier);
     p.xrot("body", cos * speed_min);
     p.xrot("left_leg", cos * speed_modifier);
-    p.xrot("right_leg", (adjusted + PI).cos() * speed_modifier);
+    p.xrot("right_leg", (adjusted + PI).mcos() * speed_modifier);
     p.xrot("left_arm", -(0.8 * cos * speed_modifier));
     p.zrot("left_arm", 0.0);
     p.xrot("right_arm", -(0.8 * sin * speed_modifier));
@@ -1495,7 +1498,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, animations: &HashMap<String, Anim
     }
     // animateIdlePose
     let scaled = s.age * 0.1;
-    let (wobble_cos, wobble_sin) = (scaled.cos(), scaled.sin());
+    let (wobble_cos, wobble_sin) = (scaled.mcos(), scaled.msin());
     let head_z = p.get("head")[5] + 0.06 * wobble_cos;
     p.zrot("head", head_z);
     let head_x = p.get("head")[3] + 0.06 * wobble_sin;
@@ -1538,12 +1541,12 @@ pub fn emissive_layers(m: &Mob, partial: f32) -> [(&'static str, &'static str, f
         (
             "warden#pulsating_spots",
             "entity/warden/warden_pulsating_spots_1",
-            ((age * 0.045).cos() * 0.25).max(0.0),
+            ((age * 0.045).mcos() * 0.25).max(0.0),
         ),
         (
             "warden#pulsating_spots",
             "entity/warden/warden_pulsating_spots_2",
-            ((age * 0.045 + PI).cos() * 0.25).max(0.0),
+            ((age * 0.045 + PI).mcos() * 0.25).max(0.0),
         ),
         (
             "warden#tendrils",

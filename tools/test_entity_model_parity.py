@@ -157,7 +157,7 @@ SPECIES = {
     'piglin': PIGLIN, 'piglin_brute': PIGLIN,
     'cat': FELINE, 'ocelot': FELINE,
     'creaking': [{'canMove': F}, {'attackAnimationState': 2}, {'invulnerabilityAnimationState': 3}, {'deathAnimationState': 1}],
-    'evoker': ILLAGER, 'pillager': ILLAGER, 'vindicator': ILLAGER,
+    'evoker': ILLAGER, 'pillager': ILLAGER, 'vindicator': ILLAGER, 'illusioner': ILLAGER,
     'sheep': [{'eatTick': t} for t in (2, 10, 36, 39)],
     'guardian': [{'tailAnimation': 4.0, 'spikesAnimation': 0.3}, {'tailAnimation': 0.0, 'spikesAnimation': 0.0}],
     'elder_guardian': [{'tailAnimation': 4.0, 'spikesAnimation': 0.3}],

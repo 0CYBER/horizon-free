@@ -174,6 +174,8 @@ public final class VanillaEntityAnimOracle {
                 var cls = findClass(head[1]);
                 var baked = roots.get(location).bakeRoot();
                 var model = (net.minecraft.client.model.Model<EntityRenderState>) cls.getConstructor(ModelPart.class).newInstance(baked);
+                // IllusionerRenderer shows the hat IllagerModel hides.
+                if (layer.equals("minecraft:illusioner#main")) ((net.minecraft.client.model.monster.illager.IllagerModel<?>) (Object) model).getHat().visible = true;
                 var type = stateClass(cls);
                 var state = (EntityRenderState) type.getDeclaredConstructor().newInstance();
                 state.getClass();

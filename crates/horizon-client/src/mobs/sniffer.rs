@@ -630,11 +630,8 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, animations: &HashMap<String, Anim
             a.apply(ms, 1.0, p);
         }
     }
-    if m.is_baby()
-        && let Some(a) = get("BABY_TRANSFORM")
-    {
-        a.apply(0, 1.0, p);
-    }
+    // The baby layer is SniffletModel geometry, but SnifferRenderer wraps it
+    // in a plain SnifferModel, so SnifferAnimation.BABY_TRANSFORM never runs.
 }
 #[cfg(test)]
 mod tests {

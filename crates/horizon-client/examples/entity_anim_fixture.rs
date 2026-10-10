@@ -406,7 +406,7 @@ fn main() -> horizon_client::Result<()> {
                     num("ticksUsingItem"),
                 );
             }
-            Species::Evoker | Species::Pillager | Species::Vindicator => {
+            Species::Evoker | Species::Illusioner | Species::Pillager | Species::Vindicator => {
                 use horizon_client::mobs::illager::{ArmPose, anim_pose};
                 let pose = match case["armPose"].as_str() {
                     Some("CROSSED") => ArmPose::Crossed,
