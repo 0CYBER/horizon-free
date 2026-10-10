@@ -5420,6 +5420,79 @@ impl Game<'_> {
         }
         None
     }
+    /// `CauldronInteractions` for the held item aimed at a cauldron.
+    fn use_on_cauldron(&mut self, pos: [i32; 3]) -> Result<bool> {
+        use horizon_client::cauldron::{self, Outcome};
+        struct Hand<'g, 'a>(&'g mut Game<'a>);
+        impl cauldron::Player for Hand<'_, '_> {
+            fn creative(&self) -> bool {
+                self.0.creative
+            }
+            fn hand(&mut self) -> &mut Option<ItemStack> {
+                let selected = self.0.selected;
+                &mut self.0.inventory[selected]
+            }
+            fn add(&mut self, stack: &mut ItemStack) -> bool {
+                let before = stack.count;
+                match self.0.give(stack.clone()) {
+                    None => stack.count = 0,
+                    Some(rest) => stack.count = rest.count,
+                }
+                stack.count < before
+            }
+            fn contains(&self, stack: &ItemStack) -> bool {
+                self.0
+                    .inventory
+                    .iter()
+                    .flatten()
+                    .any(|have| have.same_item_same_components(stack))
+            }
+            fn drop_stack(&mut self, stack: ItemStack) {
+                if let Some(eye) = self.0.eye_position() {
+                    self.0.spawn_item(stack, eye, [0.0, 0.1, 0.0], 40);
+                }
+            }
+        }
+        let registry = self.res.assets.registry;
+        let id = self.world.block(pos[0], pos[1], pos[2]);
+        let Some(state) = registry
+            .state(id)
+            .filter(|s| s.name.ends_with("cauldron"))
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        let Some(held) = self.inventory[self.selected].as_ref() else {
+            return Ok(false);
+        };
+        let removes_dye = cauldron::removes_dye(&self.res.items, &held.item);
+        let above = self.world.block(pos[0], pos[1] + 1, pos[2]);
+        let under_water = registry
+            .state(above)
+            .is_some_and(|s| s.name == "minecraft:water");
+        let result = cauldron::interact(&state, under_water, removes_dye, &mut Hand(self));
+        if result.outcome == Outcome::Pass {
+            return Ok(false);
+        }
+        if let Some(block) = result.block
+            && let Ok(new) = registry.resolve(&block)
+        {
+            self.level_set(pos, new)?;
+        }
+        if let Some(sound) = result.sound {
+            self.audio.play(
+                sound,
+                Some([
+                    f64::from(pos[0]) + 0.5,
+                    f64::from(pos[1]) + 0.5,
+                    f64::from(pos[2]) + 0.5,
+                ]),
+                1.0,
+                1.0,
+            );
+        }
+        Ok(true)
+    }
     /// `BlockTransformer.transformBlock` for a held axe, hoe or shovel.
     fn use_block_transformer(
         &mut self,
@@ -5560,6 +5633,11 @@ impl Game<'_> {
                 f64::from(p[2]) + 0.5,
             ]
         };
+        if let Some(hit) = self.pick()
+            && self.use_on_cauldron(hit.pos)?
+        {
+            return Ok(true);
+        }
         if item == "bucket" {
             let Some(hit) = self.pick_fluid() else {
                 return Ok(false);

@@ -3,7 +3,7 @@
 //!
 //! usage: cauldron_fixture RESOURCES INPUT OUTPUT
 use horizon_client::{
-    cauldron::{Outcome, Player, interact},
+    cauldron::{Outcome, Player, interact, removes_dye},
     crafting::Recipes,
     item_data::{canon_stack, parse_stack},
     items::{ItemStack, Items},
@@ -99,10 +99,14 @@ fn main() -> horizon_client::Result<()> {
             hand: held,
         };
         let cauldron = parse(case["state"].as_str().unwrap_or_default());
+        let dye = stand
+            .hand
+            .as_ref()
+            .is_some_and(|h| removes_dye(&items, &h.item));
         let result = interact(
-            &items,
             &cauldron,
             case["under_water"].as_bool().unwrap_or(false),
+            dye,
             &mut stand,
         );
         if let Some(block) = &result.block {

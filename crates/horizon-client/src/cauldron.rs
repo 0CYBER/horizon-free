@@ -2,6 +2,14 @@
 //! powder snow cauldron. `tools/test_cauldron_parity.py` compares every item
 //! with vanilla's `useItemOn`.
 use crate::items::{ItemStack, Items};
+
+/// `ItemTags.CAULDRON_CAN_REMOVE_DYE` membership.
+pub fn removes_dye(items: &Items, item: &str) -> bool {
+    items
+        .item_tags
+        .get("minecraft:cauldron_can_remove_dye")
+        .is_some_and(|members| members.contains(item))
+}
 use horizon_world::chunk::BlockState;
 
 /// The player side of an interaction.
@@ -105,11 +113,12 @@ const COLORS: [&str; 16] = [
 ];
 
 /// The cauldron interaction of the held item (`useItemOn`); the hand stack is
-/// changed through `player`.
+/// changed through `player`. `removes_dye` is whether the held item is in the
+/// `cauldron_can_remove_dye` tag.
 pub fn interact(
-    items: &Items,
     cauldron: &BlockState,
     under_water: bool,
+    removes_dye: bool,
     player: &mut dyn Player,
 ) -> Interaction {
     let Some(held) = player.hand().clone() else {
@@ -126,12 +135,7 @@ pub fn interact(
     let item = &*held.item;
     let water_potion = held.data().and_then(|d| d.potion.as_deref()) == Some("minecraft:water");
     // Dispatcher.get: tags first, then the item map.
-    if kind == "water"
-        && items
-            .item_tags
-            .get("minecraft:cauldron_can_remove_dye")
-            .is_some_and(|members| members.contains(item))
-    {
+    if kind == "water" && removes_dye {
         if held.data().and_then(|d| d.dyed_color).is_none() {
             return pass();
         }
