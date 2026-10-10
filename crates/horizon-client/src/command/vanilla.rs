@@ -11,19 +11,19 @@ use crate::gamerules::{RULES, Value};
 pub const ALL: u8 = 0;
 pub const GAMEMASTERS: u8 = 2;
 
-const PLAYERS: ArgType = ArgType::Entity {
+pub const PLAYERS: ArgType = ArgType::Entity {
     single: false,
     players: true,
 };
-const PLAYER: ArgType = ArgType::Entity {
+pub const PLAYER: ArgType = ArgType::Entity {
     single: true,
     players: true,
 };
-const ENTITIES: ArgType = ArgType::Entity {
+pub const ENTITIES: ArgType = ArgType::Entity {
     single: false,
     players: false,
 };
-const ENTITY: ArgType = ArgType::Entity {
+pub const ENTITY: ArgType = ArgType::Entity {
     single: true,
     players: false,
 };
@@ -110,6 +110,28 @@ pub fn build() -> Dispatcher {
         let dur = d.argument(k, "duration", ArgType::Time { min: 1 });
         d.executes(dur, "weather");
     }
+
+    // raid start <omenlvl> | stop | check | sound <type> | spawnleader | setomen <level> | glow
+    let raid = d.literal(root, "raid");
+    d.requires(raid, 3);
+    let start = d.literal(raid, "start");
+    let level = d.argument(start, "omenlvl", integer(0));
+    d.executes(level, "raid.start");
+    for (name, id) in [
+        ("stop", "raid.stop"),
+        ("check", "raid.check"),
+        ("spawnleader", "raid.spawnleader"),
+        ("glow", "raid.glow"),
+    ] {
+        let n = d.literal(raid, name);
+        d.executes(n, id);
+    }
+    let sound = d.literal(raid, "sound");
+    let kind = d.argument(sound, "type", ArgType::Greedy);
+    d.executes(kind, "raid.sound");
+    let setomen = d.literal(raid, "setomen");
+    let level = d.argument(setomen, "level", integer(0));
+    d.executes(level, "raid.setomen");
 
     // kill [<targets>]
     let kill = d.literal(root, "kill");
@@ -295,6 +317,15 @@ pub fn build() -> Dispatcher {
     let a = d.argument(b, "biome", ArgType::Resource(Resource::Biome));
     d.executes(a, "locate.biome");
 
+    // warden_spawn_tracker (clear | set <warning_level>)
+    let tracker = d.literal(root, "warden_spawn_tracker");
+    d.requires(tracker, GAMEMASTERS);
+    let clear = d.literal(tracker, "clear");
+    d.executes(clear, "warden_spawn_tracker.clear");
+    let set = d.literal(tracker, "set");
+    let level = d.argument(set, "warning_level", ArgType::Integer { min: 0, max: 4 });
+    d.executes(level, "warden_spawn_tracker.set");
+
     // say / me / msg / list
     let say = d.literal(root, "say");
     d.requires(say, GAMEMASTERS);
@@ -342,67 +373,12 @@ pub fn build() -> Dispatcher {
     let fade_out = d.argument(stay, "fadeOut", ArgType::Time { min: 0 });
     d.executes(fade_out, "title");
 
-    execute(&mut d, root);
+    super::tree_scoreboard::register(&mut d, root);
+    super::tree_data::register(&mut d, root);
+    super::tree_execute::register(&mut d, root);
+    super::tree_misc::register(&mut d, root);
+    super::tree_world::register(&mut d, root);
     d
-}
-
-/// ExecuteCommand: modifiers redirect back to `execute`, `run` to the root;
-/// conditions both execute (as a test) and continue the chain. `store`,
-/// `summon`, `on` and score/data conditions are not implemented.
-fn execute(d: &mut Dispatcher, root: usize) {
-    let ex = d.literal(root, "execute");
-    d.requires(ex, GAMEMASTERS);
-    let run = d.literal(ex, "run");
-    d.redirect(run, root);
-    for name in ["as", "at"] {
-        let l = d.literal(ex, name);
-        let t = d.argument(l, "targets", ENTITIES);
-        d.redirect(t, ex);
-    }
-    let positioned = d.literal(ex, "positioned");
-    let pos = d.argument(positioned, "pos", ArgType::Vec3 { center: true });
-    d.redirect(pos, ex);
-    let as_ = d.literal(positioned, "as");
-    let t = d.argument(as_, "targets", ENTITIES);
-    d.redirect(t, ex);
-    let rotated = d.literal(ex, "rotated");
-    let rot = d.argument(rotated, "rot", ArgType::Rotation);
-    d.redirect(rot, ex);
-    let as_ = d.literal(rotated, "as");
-    let t = d.argument(as_, "targets", ENTITIES);
-    d.redirect(t, ex);
-    let facing = d.literal(ex, "facing");
-    let pos = d.argument(facing, "pos", ArgType::Vec3 { center: true });
-    d.redirect(pos, ex);
-    let entity = d.literal(facing, "entity");
-    let t = d.argument(entity, "targets", ENTITIES);
-    let anchor = d.argument(t, "anchor", ArgType::Anchor);
-    d.redirect(anchor, ex);
-    let align = d.literal(ex, "align");
-    let axes = d.argument(align, "axes", ArgType::Swizzle);
-    d.redirect(axes, ex);
-    let anchored = d.literal(ex, "anchored");
-    let anchor = d.argument(anchored, "anchor", ArgType::Anchor);
-    d.redirect(anchor, ex);
-    let in_ = d.literal(ex, "in");
-    let dim = d.argument(in_, "dimension", ArgType::Dimension);
-    d.redirect(dim, ex);
-    for mode in ["if", "unless"] {
-        let m = d.literal(ex, mode);
-        let block = d.literal(m, "block");
-        let pos = d.argument(block, "pos", ArgType::BlockPos);
-        let predicate = d.argument(pos, "block", ArgType::BlockPredicate);
-        let entity = d.literal(m, "entity");
-        let targets = d.argument(entity, "entities", ENTITIES);
-        let loaded = d.literal(m, "loaded");
-        let lpos = d.argument(loaded, "pos", ArgType::BlockPos);
-        let dimension = d.literal(m, "dimension");
-        let dim = d.argument(dimension, "dimension", ArgType::Dimension);
-        for node in [predicate, targets, lpos, dim] {
-            d.executes(node, "execute");
-            d.redirect(node, ex);
-        }
-    }
 }
 
 /// AdvancementCommands: grant|revoke <targets> only|from|until|through

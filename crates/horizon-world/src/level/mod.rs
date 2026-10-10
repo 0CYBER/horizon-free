@@ -101,10 +101,11 @@ pub mod states;
 pub mod ticks;
 
 mod bonemeal;
+mod buckets;
+mod creaking;
 mod falling;
 mod feature_world;
 mod fluids;
-mod golems;
 mod growth;
 mod hooks;
 mod interact;
@@ -113,6 +114,7 @@ mod place;
 mod query;
 mod rails;
 mod redstone;
+pub mod sculk;
 mod shapes;
 mod signals;
 mod speleothem;
@@ -127,6 +129,7 @@ mod growth_tests;
 #[cfg(test)]
 mod tests;
 
+pub use buckets::BucketContent;
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
 pub use falling::Landing;
 pub use interact::{InteractionResult, PlayerContext, PlayerEffect};
@@ -250,8 +253,13 @@ pub enum LevelEvent {
         state: BlockStateId,
         effect: PlayerEffect,
     },
-    /// `Level.gameEvent` (vibration system), by vanilla identifier.
-    GameEvent { pos: BlockPos, event: &'static str },
+    /// `Level.gameEvent` (vibration system), by vanilla identifier, with the
+    /// affected block state when the event carries one.
+    GameEvent {
+        pos: BlockPos,
+        event: &'static str,
+        state: Option<BlockStateId>,
+    },
 }
 
 /// The world as seen by block behaviour. Implemented by the game and tests.

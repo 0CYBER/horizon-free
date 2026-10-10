@@ -465,6 +465,13 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 );
             }
         }
+        S::Creaking if super::creaking::eyes_glowing(m) => push(
+            &mut v,
+            "creaking#eyes",
+            "entity/creaking/creaking_eyes",
+            white,
+            true,
+        ),
         S::Spider | S::CaveSpider => push(
             &mut v,
             &m.kind.model_key(),
@@ -684,7 +691,7 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
             .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
     };
     let mut base = glam::Mat4::from_translation(p.as_vec3()) * rotation;
-    if m.death_time > 0 {
+    if m.death_time > 0 && !super::creaking::tearing_down(m) {
         let f = ((m.death_time as f32 + alpha - 1.0) / 20.0 * 1.6)
             .sqrt()
             .min(1.0);
@@ -806,7 +813,8 @@ pub fn render_with(
         return;
     }
     let base = base_transform(m, alpha, camera);
-    let overlay = u32::from(m.hurt_time > 0 || m.death_time > 0);
+    let overlay =
+        u32::from(m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m)));
     let s = anim::state(m, alpha);
     let (model_key, texture) = body(m);
     let model = m
@@ -832,7 +840,21 @@ pub fn render_with(
         draw(part, base, &poses, *uv, *color, light, overlay, out);
     }
     held_items(m, &model, base, &poses, atlas, light, out);
-    for layer in layers(m) {
+    let mut all_layers = layers(m);
+    // WardenRenderer: the translucent emissive layers fade with the animations.
+    if m.species() == Species::Warden {
+        for (model, texture, a) in super::warden::emissive_layers(m, alpha) {
+            if a > 0.0 {
+                all_layers.push(Layer {
+                    model: model.into(),
+                    texture: texture.into(),
+                    color: ((a.clamp(0.0, 1.0) * 255.0) as u32) << 24 | 0x00FF_FFFF,
+                    full_bright: true,
+                });
+            }
+        }
+    }
+    for layer in all_layers {
         let Some(part) = m.kind.layer(&layer.model).cloned() else {
             continue;
         };
@@ -859,7 +881,8 @@ pub fn render_single(
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform(m, alpha, camera);
-    let overlay = u32::from(m.hurt_time > 0 || m.death_time > 0);
+    let overlay =
+        u32::from(m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m)));
     let s = anim::state(m, alpha);
     let model = m.kind.model.clone();
     let mut poses = Poses::new(&model);

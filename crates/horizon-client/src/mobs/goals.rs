@@ -731,6 +731,8 @@ pub struct MeleeAttack {
     pub until_attack: i32,
     last_check: i64,
     raise_arm: i32,
+    /// Ticks between attacks (20 unless set).
+    pub interval: i32,
 }
 impl MeleeAttack {
     pub fn new(speed: f64, follow_unseen: bool) -> Self {
@@ -743,10 +745,15 @@ impl MeleeAttack {
             until_attack: 0,
             last_check: i64::MIN / 2,
             raise_arm: 0,
+            interval: 20,
         }
     }
     pub fn zombie(mut self) -> Self {
         self.zombie = true;
+        self
+    }
+    pub fn interval(mut self, ticks: i32) -> Self {
+        self.interval = ticks;
         self
     }
 }
@@ -834,7 +841,7 @@ impl Goal for MeleeAttack {
         }
         self.until_attack = (self.until_attack - 1).max(0);
         if self.until_attack <= 0 && m.within_melee_range(&t) && m.sees(cx.w, who) {
-            self.until_attack = adjusted(true, 20);
+            self.until_attack = adjusted(true, self.interval);
             m.swing();
             super::ai::do_hurt_target(m, who, cx);
         }

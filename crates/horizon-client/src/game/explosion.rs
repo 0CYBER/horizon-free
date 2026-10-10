@@ -326,6 +326,9 @@ impl Game<'_> {
         fire: bool,
     ) -> Result<()> {
         let mut targets = self.exploded_positions(center, radius);
+        // Explosion.explode: the blast is heard.
+        let ctx = horizon_client::sculk::Context::default();
+        self.post_game_event("minecraft:explode", center, ctx);
         self.explosion_hurt_entities(center, radius);
         if interaction != BlockInteraction::Keep {
             // Util.shuffle(list, level.random)

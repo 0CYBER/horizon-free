@@ -146,11 +146,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 Class::Observer => self.observer_tick(pos, state),
                 Class::Eyeblossom => self.eyeblossom_tick(state, pos, false),
+                Class::CreakingHeart => self.heart_tick(state, pos),
                 Class::DriedGhast => self.dried_ghast_tick(state, pos),
                 Class::SnifferEgg => self.sniffer_egg_tick(state, pos),
                 Class::RedstoneLamp => self.lamp_tick(pos, state),
                 Class::RedstoneTorch => self.torch_tick(pos, state),
                 Class::Scaffolding => self.scaffolding_tick(pos, state),
+                Class::SculkSensor => self.sculk_sensor_tick(pos, state),
+                Class::SculkShrieker => self.sculk_shrieker_tick(pos, state),
+                Class::SculkCatalyst => self.sculk_catalyst_tick(pos, state),
                 Class::Speleothem => {
                     let tip = b.table.dir(state, p.vertical_direction);
                     if tip == Some(Direction::Up) && !self.can_survive(state, pos) {

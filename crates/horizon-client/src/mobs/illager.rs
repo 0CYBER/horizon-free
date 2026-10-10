@@ -384,8 +384,10 @@ impl CrossbowAttack {
 pub fn crossbow_goal(speed: f64, radius: f64) -> impl Goal {
     CrossbowAttack::new(speed, radius)
 }
-/// `CrossbowItem.getChargeDuration` without Quick Charge.
-const CHARGE: i32 = 25;
+/// `CrossbowItem.getChargeDuration` (25 ticks, 5 fewer per level of Quick Charge).
+pub fn charge_ticks(m: &Mob) -> i32 {
+    25 - 5 * i32::from(super::raider::state(m).map_or(0, |s| s.enchant))
+}
 fn holding_crossbow(m: &Mob) -> bool {
     m.extra.main_hand.as_deref() == Some("minecraft:crossbow")
 }
@@ -469,7 +471,7 @@ impl Goal for CrossbowAttack {
             }
             Crossbow::Charging => {
                 m.extra.using_item += 1;
-                if m.extra.using_item >= CHARGE {
+                if m.extra.using_item >= charge_ticks(m) {
                     m.extra.using_item = 0;
                     m.extra.flag = false;
                     self.state = Crossbow::Charged;
@@ -534,6 +536,7 @@ fn shoot_crossbow(m: &mut Mob, who: Who, cx: &mut Cx) {
 enum ArmPose {
     Spellcasting,
     Crossed,
+    Celebrating,
     Neutral,
     Attacking,
     CrossbowHold,
@@ -554,15 +557,21 @@ fn arm_pose(m: &Mob) -> ArmPose {
             }
         }
         Species::Evoker if m.extra.variant2 != 0 => ArmPose::Spellcasting,
+        Species::Evoker if celebrating(m) => ArmPose::Celebrating,
         Species::Evoker => ArmPose::Crossed,
         _ => {
             if m.ai.aggressive {
                 ArmPose::Attacking
+            } else if celebrating(m) {
+                ArmPose::Celebrating
             } else {
                 ArmPose::Crossed
             }
         }
     }
+}
+fn celebrating(m: &Mob) -> bool {
+    super::raider::state(m).is_some_and(|s| s.celebrating)
 }
 /// Whether the held item shows (vindicators only draw their axe when angry).
 pub fn shows_item(m: &Mob) -> bool {
@@ -637,8 +646,8 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         ArmPose::CrossbowCharge => {
             p.yrot("right_arm", -0.8);
             p.xrot("right_arm", -0.970_796_35);
-            let a =
-                (m.extra.using_item as f32 + s.partial).clamp(0.0, CHARGE as f32) / CHARGE as f32;
+            let charge = charge_ticks(m) as f32;
+            let a = (m.extra.using_item as f32 + s.partial).clamp(0.0, charge) / charge;
             p.yrot("left_arm", 0.4 + (0.85 - 0.4) * a);
             p.xrot("left_arm", -0.970_796_35 + (-PI / 2.0 + 0.970_796_35) * a);
         }
@@ -651,6 +660,19 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
                 v[2] = 0.0;
                 v[0] = x;
                 v[3] = (s.age * 0.6662).cos() * 0.25;
+                v[4] = 0.0;
+                v[5] = z_rot;
+            }
+        }
+        ArmPose::Celebrating => {
+            for (arm, x, z_rot) in [
+                ("right_arm", -5.0, 2.670_354),
+                ("left_arm", 5.0, -PI * 0.75),
+            ] {
+                let v = p.get(arm);
+                v[2] = 0.0;
+                v[0] = x;
+                v[3] = (s.age * 0.6662).cos() * 0.05;
                 v[4] = 0.0;
                 v[5] = z_rot;
             }

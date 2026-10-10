@@ -19,9 +19,9 @@ use std::{
 #[derive(Default)]
 pub struct EntityMemory {
     /// UUIDs of mobs and item entities by Horizon entity ID.
-    uuids: HashMap<u32, [i32; 4]>,
+    pub(super) uuids: HashMap<u32, [i32; 4]>,
     /// The compound each mob or item entity was loaded with.
-    raw: HashMap<u32, Tag>,
+    pub(super) raw: HashMap<u32, Tag>,
     /// Entities of types Horizon does not simulate, kept per chunk and
     /// written back unchanged.
     unknown: HashMap<(i32, i32), Vec<Tag>>,
@@ -281,8 +281,16 @@ impl Game<'_> {
     pub(super) fn mob_uuid(&mut self, id: u32) -> [i32; 4] {
         self.uuid_for(id)
     }
-    fn uuid_for(&mut self, id: u32) -> [i32; 4] {
+    pub(super) fn uuid_for(&mut self, id: u32) -> [i32; 4] {
         *self.persist.uuids.entry(id).or_insert_with(random_uuid)
+    }
+    /// The loaded mob with a saved UUID.
+    pub(super) fn mob_id_for_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
+        self.persist
+            .uuids
+            .iter()
+            .find(|(id, u)| **u == uuid && self.mobs.iter().any(|m| m.id == **id && !m.removed))
+            .map(|(id, _)| *id)
     }
     /// `BlockState.CODEC`: a block name or `{id, properties}` (or legacy `{Name, Properties}`).
     fn state_from_nbt(&self, tag: &Tag) -> Option<BlockStateId> {

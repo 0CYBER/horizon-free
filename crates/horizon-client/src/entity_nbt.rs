@@ -121,10 +121,21 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let Tag::Compound(map) = &mut tag else {
         return tag;
     };
+    for (key, on) in [
+        ("NoAI", m.no_ai),
+        ("Silent", m.silent),
+        ("Invulnerable", m.invulnerable_flag),
+    ] {
+        if on {
+            map.insert(key.into(), Tag::Byte(1));
+        } else {
+            map.remove(&horizon_world::nbt::JavaString::from(key));
+        }
+    }
     for (key, value) in [
         ("AbsorptionAmount", Tag::Float(0)),
         ("FallFlying", Tag::Byte(0)),
-        ("CanPickUpLoot", Tag::Byte(0)),
+        ("CanPickUpLoot", Tag::Byte(i8::from(m.extra.pick_up_loot))),
         ("LeftHanded", Tag::Byte(0)),
         (
             "Brain",
@@ -210,6 +221,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 crate::mobs::llama::to_nbt(m, map);
             }
             map.insert("ChestedHorse".into(), Tag::Byte(i8::from(m.extra.chested)));
+            if m.extra.chested && !m.extra.items.is_empty() {
+                map.insert("Items".into(), crate::save::encode_items(&m.extra.items));
+            } else {
+                map.remove(&"Items".into());
+            }
             let mut equipment = Vec::new();
             if m.extra.saddled {
                 equipment.push((
@@ -251,6 +267,14 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("equipment".into(), Tag::Compound(equipment));
         }
+        "minecraft:creaking" => {
+            // home_pos: the heart it is bound to.
+            if let Some(home) = m.extra.home {
+                map.insert("home_pos".into(), Tag::IntArray(home.to_vec()));
+            } else {
+                map.remove(&"home_pos".into());
+            }
+        }
         "minecraft:villager" => {
             use crate::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
             let data = Tag::compound([
@@ -277,6 +301,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.insert("RestocksToday".into(), Tag::Int(t.restocks_today));
             put_offers(map, m);
             put_memories(map, m);
+            crate::mobs::villager::write_nbt(m, map);
         }
         "minecraft:wandering_trader" => put_offers(map, m),
         "minecraft:allay" => {
@@ -319,6 +344,15 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         "minecraft:sniffer" => crate::mobs::sniffer::to_nbt(m, map),
         "minecraft:wither" => {
             map.insert("Invul".into(), Tag::Int(m.extra.counter));
+        }
+        "minecraft:warden" => {
+            if let Some(st) = &m.extra.warden {
+                map.insert("listener".into(), st.vibration.to_nbt());
+                map.insert(
+                    "anger".into(),
+                    Tag::compound([("suspects", Tag::List(Vec::new()))]),
+                );
+            }
         }
         "minecraft:ravager" => {
             map.insert("AttackTick".into(), Tag::Int(m.extra.counter));
@@ -369,6 +403,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         }
         _ => {}
     }
+    crate::mobs::raider::write_nbt(m, map);
     // LivingEntity equipment: what the mob holds now.
     if !crate::mobs::equine::is_equine(m.species()) {
         let mut equipment = match map.get(&"equipment".into()) {
@@ -397,7 +432,22 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                         equipment.get(&slot.into()).and_then(|e| e.get("id")),
                         Some(Tag::String(s)) if s.to_string_lossy() == **id
                     );
-                    if !keep {
+                    if slot == "head"
+                        && &**id == crate::mobs::raider::BANNER
+                        && crate::mobs::raider::is_raider(m.species())
+                    {
+                        // The captain's ominous banner keeps its patterns.
+                        let has_patterns = equipment
+                            .get(&slot.into())
+                            .and_then(|e| e.get("components"))
+                            .is_some();
+                        if !has_patterns {
+                            equipment.insert(
+                                slot.into(),
+                                crate::save::item_to_nbt(&crate::mobs::raider::ominous_banner()),
+                            );
+                        }
+                    } else if !keep {
                         equipment.insert(
                             slot.into(),
                             Tag::compound([
@@ -464,12 +514,17 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     }
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
     m.persistent = flag(tag, "PersistenceRequired");
+    m.extra.pick_up_loot = flag(tag, "CanPickUpLoot");
     m.custom_name = custom_name(tag);
     if m.kind.category == "creature" {
         m.extra.age = number(tag.get("Age")).unwrap_or(0) as i32;
         m.extra.age_locked = flag(tag, "AgeLocked");
     }
     m.name_visible = flag(tag, "CustomNameVisible");
+    m.no_ai = flag(tag, "NoAI");
+    m.silent = flag(tag, "Silent");
+    m.invulnerable_flag = flag(tag, "Invulnerable");
+    m.no_gravity = m.no_gravity || flag(tag, "NoGravity");
     if m.species() == crate::mobs::Species::Creeper {
         m.extra.charged = flag(tag, "powered");
     }
@@ -500,6 +555,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             crate::mobs::llama::from_nbt(&mut m, tag);
         }
         m.extra.chested = flag(tag, "ChestedHorse");
+        if m.extra.chested {
+            m.extra.items = crate::save::decode_items(tag.get("Items"), 15);
+        }
         let eq = tag.get("equipment");
         m.extra.saddled = eq.and_then(|e| e.get("saddle")).is_some();
         m.extra.head = eq
@@ -583,6 +641,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.egg_time = -1 - 400;
         }
     }
+    if m.species() == crate::mobs::Species::Creaking
+        && let Some(Tag::IntArray(home)) = tag.get("home_pos")
+        && home.len() == 3
+    {
+        crate::mobs::creaking::set_transient(&mut m, [home[0], home[1], home[2]]);
+    }
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;
     }
@@ -590,6 +654,13 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         crate::mobs::sniffer::from_nbt(&mut m, tag);
     }
     m.extra.leash_pending = crate::mobs::leash::pending_from_nbt(tag.get("leash"));
+    if m.species() == crate::mobs::Species::Warden {
+        // The brain starts afresh: a minute before it digs back down.
+        crate::mobs::warden::finalize(&mut m, false, &mut Vec::new());
+        if let (Some(st), Some(listener)) = (m.extra.warden.as_mut(), tag.get("listener")) {
+            st.vibration = crate::sculk::Data::from_nbt(listener);
+        }
+    }
     if m.species() == crate::mobs::Species::Ravager {
         m.extra.counter = number(tag.get("AttackTick")).unwrap_or(0) as i32;
         m.extra.counter2 = number(tag.get("StunTick")).unwrap_or(0) as i32;
@@ -626,6 +697,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.health = health;
         m.extra.flag2 = flag(tag, "wasOnGround");
     }
+    crate::mobs::raider::read_nbt(&mut m, tag);
     // A mob saved mid-death finishes dying; one saved dead is dropped.
     if m.health <= 0.0 && m.death_time == 0 {
         return None;
@@ -1039,7 +1111,7 @@ fn put_offers(map: &mut Compound, m: &Mob) {
 }
 /// The villager brain's `job_site`, `home` and `meeting_point` memories.
 fn put_memories(map: &mut Compound, m: &Mob) {
-    let memories: Vec<(&str, Tag)> = [
+    let mut memories: Vec<(&str, Tag)> = [
         ("minecraft:job_site", m.extra.home),
         ("minecraft:home", m.extra.bed),
         ("minecraft:meeting_point", m.extra.meeting),
@@ -1053,6 +1125,7 @@ fn put_memories(map: &mut Compound, m: &Mob) {
         Some((key, Tag::compound([("value", pos)])))
     })
     .collect();
+    crate::mobs::villager::write_memories(m, &mut memories);
     map.insert(
         "Brain".into(),
         Tag::compound([("memories", Tag::compound(memories))]),
@@ -1086,6 +1159,9 @@ fn read_villager(m: &mut Mob, tag: &Tag) {
     m.extra.home = memory("minecraft:job_site");
     m.extra.bed = memory("minecraft:home");
     m.extra.meeting = memory("minecraft:meeting_point");
+    if m.species() == crate::mobs::Species::Villager {
+        crate::mobs::villager::read_nbt(m, tag);
+    }
     let Some(Tag::List(recipes)) = tag.get("Offers").and_then(|o| o.get("Recipes")) else {
         return;
     };

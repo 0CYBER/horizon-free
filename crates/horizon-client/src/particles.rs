@@ -41,6 +41,7 @@ macro_rules! particle_types {
 particle_types! {
     Block = "block",
     BlockCrumble = "block_crumble",
+    Trail = "trail",
     DustPillar = "dust_pillar",
     FallingDust = "falling_dust",
     Smoke = "smoke",
@@ -123,6 +124,12 @@ particle_types! {
     SmallGust = "small_gust",
     GustEmitterLarge = "gust_emitter_large",
     GustEmitterSmall = "gust_emitter_small",
+    DustColorTransition = "dust_color_transition",
+    SculkCharge = "sculk_charge",
+    SculkChargePop = "sculk_charge_pop",
+    Shriek = "shriek",
+    SonicBoom = "sonic_boom",
+    Vibration = "vibration",
 }
 impl ParticleType {
     /// `ParticleType.getOverrideLimiter`: spawned regardless of distance.
@@ -147,8 +154,13 @@ pub struct ParticleOptions {
     pub block: Option<(String, u32)>,
     /// RGB(A) for dust, spells, entity effects and tinted leaves.
     pub color: [f32; 4],
-    /// `DustParticleOptions.scale`, `PowerParticleOption.power`, `SpellParticleOption.power`.
+    /// `DustParticleOptions.scale`, `PowerParticleOption.power`, `SpellParticleOption.power`,
+    /// `SculkChargeParticleOptions.roll`, `ShriekParticleOption.delay`.
     pub scale: f32,
+    /// `DustColorTransitionOptions.toColor` (`color` is the from colour).
+    pub to_color: [f32; 3],
+    /// `TrailParticleOption`: the point it flies to and how many ticks it takes.
+    pub trail: Option<([f64; 3], i32)>,
 }
 impl ParticleOptions {
     pub fn simple(ty: ParticleType) -> Self {
@@ -157,6 +169,55 @@ impl ParticleOptions {
             block: None,
             color: [1.0; 4],
             scale: 1.0,
+            to_color: [1.0, 0.0, 0.0],
+            trail: None,
+        }
+    }
+    /// `DustColorTransitionOptions`.
+    pub fn dust_transition(from: [f32; 3], to: [f32; 3], scale: f32) -> Self {
+        Self {
+            color: [from[0], from[1], from[2], 1.0],
+            to_color: to,
+            scale: scale.clamp(0.01, 4.0),
+            ..Self::simple(ParticleType::DustColorTransition)
+        }
+    }
+    /// `DustColorTransitionOptions.SCULK_TO_REDSTONE`.
+    pub fn sculk_to_redstone() -> Self {
+        let rgb = |c: u32| {
+            [
+                ((c >> 16) & 255) as f32 / 255.0,
+                ((c >> 8) & 255) as f32 / 255.0,
+                (c & 255) as f32 / 255.0,
+            ]
+        };
+        Self::dust_transition(rgb(3_790_560), rgb(16_711_680), 1.0)
+    }
+    /// `SculkChargeParticleOptions(roll)`.
+    pub fn sculk_charge(roll: f32) -> Self {
+        Self {
+            scale: roll,
+            ..Self::simple(ParticleType::SculkCharge)
+        }
+    }
+    /// `ShriekParticleOption(delay)`.
+    pub fn shriek(delay: i32) -> Self {
+        Self {
+            scale: delay as f32,
+            ..Self::simple(ParticleType::Shriek)
+        }
+    }
+    /// `TrailParticleOption(target, color, duration)`.
+    pub fn trail(target: [f64; 3], rgb: u32, duration: i32) -> Self {
+        Self {
+            color: [
+                ((rgb >> 16) & 255) as f32 / 255.0,
+                ((rgb >> 8) & 255) as f32 / 255.0,
+                (rgb & 255) as f32 / 255.0,
+                1.0,
+            ],
+            trail: Some((target, duration)),
+            ..Self::simple(ParticleType::Trail)
         }
     }
     pub fn block(ty: ParticleType, sprite: String, tint: u32) -> Self {
@@ -197,6 +258,8 @@ enum Size {
     Lava,
     Portal,
     ReversePortal,
+    /// `ShriekParticle.getQuadSize`.
+    Shriek,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Light {
@@ -274,6 +337,27 @@ enum Behaviour {
     },
     DragonBreath {
         hit_ground: bool,
+    },
+    /// `ShriekParticle`: waits `delay` ticks, then rises.
+    Shriek {
+        delay: i32,
+    },
+    /// `VibrationSignalParticle`: flies to a listener.
+    Vibration {
+        dest: [f64; 3],
+        rot: f32,
+        rot_o: f32,
+        pitch: f32,
+        pitch_o: f32,
+    },
+    /// `DustColorTransitionParticle`: from one colour to the other.
+    Transition {
+        from: [f32; 3],
+        to: [f32; 3],
+    },
+    /// `TrailParticle`: eases towards its target over its lifetime.
+    Trail {
+        target: [f64; 3],
     },
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -525,6 +609,7 @@ impl Particle {
             Size::ReversePortal => {
                 self.size * (1.0 - (self.age as f32 + a) / (self.lifetime as f32 * 1.5))
             }
+            Size::Shriek => self.size * (t * 0.75).clamp(0.0, 1.0),
         }
     }
 }
@@ -668,6 +753,27 @@ impl ParticleEngine {
         self.emitters.clear();
         self.particles.clear();
         self.pending.clear();
+    }
+    /// A vibration signal flying from `from` to `to` in `ticks`
+    /// (`VibrationParticleOption`).
+    pub fn vibration(&mut self, from: [f64; 3], to: [f64; 3], ticks: i32) {
+        let mut q = Particle::blank(ParticleType::Vibration, from);
+        q.size = 0.3;
+        q.lifetime = ticks;
+        q.has_physics = false;
+        q.light = Light::Block15;
+        q.set = self.set_of(ParticleType::Vibration);
+        let d = [from[0] - to[0], from[1] - to[1], from[2] - to[2]];
+        let rot = d[0].atan2(d[2]) as f32;
+        let pitch = d[1].atan2((d[0] * d[0] + d[2] * d[2]).sqrt()) as f32;
+        q.behaviour = Behaviour::Vibration {
+            dest: to,
+            rot,
+            rot_o: rot,
+            pitch,
+            pitch_o: pitch,
+        };
+        self.pending.push(q);
     }
     /// `ParticleEngine.add` (via `particlesToAdd`, applied on the next tick).
     pub fn push(&mut self, particle: Particle) {
@@ -1425,12 +1531,17 @@ impl ParticleEngine {
                 q.set = set;
                 q
             }
-            T::Explosion => {
+            T::Explosion | T::SonicBoom => {
                 let mut q = Particle::moving(r, ty, p, [0.0; 3]);
                 q.lifetime = 6 + r.next_int_bound(4).unwrap_or(0);
                 let col = r.next_float() * 0.6 + 0.4;
                 q.set_color(col, col, col);
                 q.size = 2.0 * (1.0 - v[0] as f32 * 0.5);
+                if ty == T::SonicBoom {
+                    // SonicBoomParticle.
+                    q.lifetime = 16;
+                    q.size = 1.5;
+                }
                 q.light = Light::FullBright;
                 q.behaviour = Behaviour::HugeExplosion;
                 q.set = set;
@@ -1510,6 +1621,69 @@ impl ParticleEngine {
                 q.size *= 1.5;
                 q.lifetime = 6;
                 q.size_curve = Size::GrowIn;
+                q
+            }
+            T::DustColorTransition => {
+                let mut q = Particle::moving(r, ty, p, v);
+                q.friction = 0.96;
+                q.speed_up_when_y_blocked = true;
+                for c in &mut q.velocity {
+                    *c *= f64::from(0.1f32);
+                }
+                q.size *= 0.75 * o.scale;
+                let base = (8.0 / (r.next_double() * 0.8 + 0.2)) as i32;
+                q.lifetime = ((base as f32 * o.scale).max(1.0)) as i32;
+                let factor = r.next_float() * 0.4 + 0.6;
+                let mut randomize = |c: f32| (r.next_float() * 0.2 + 0.8) * c * factor;
+                let from = [
+                    randomize(o.color[0]),
+                    randomize(o.color[1]),
+                    randomize(o.color[2]),
+                ];
+                let to = [
+                    randomize(o.to_color[0]),
+                    randomize(o.to_color[1]),
+                    randomize(o.to_color[2]),
+                ];
+                q.size_curve = Size::GrowIn;
+                q.behaviour = Behaviour::Transition { from, to };
+                q.set = set;
+                q
+            }
+            // SculkChargeParticle / SculkChargePopParticle.
+            T::SculkCharge | T::SculkChargePop => {
+                let mut q = Particle::moving(r, ty, p, v);
+                q.friction = 0.96;
+                q.scale(if ty == T::SculkCharge { 1.5 } else { 1.0 });
+                q.has_physics = false;
+                q.velocity = v;
+                q.light = Light::Block15;
+                q.behaviour = Behaviour::Animated;
+                q.set = set;
+                if ty == T::SculkCharge {
+                    q.roll = o.scale;
+                    q.o_roll = o.scale;
+                    q.lifetime = r.next_int_bound(12).unwrap_or(0) + 8;
+                } else {
+                    q.lifetime = r.next_int_bound(4).unwrap_or(0) + 6;
+                }
+                q
+            }
+            // Vibration signals are created by `vibration`, aimed at a listener.
+            T::Vibration => return None,
+            // ShriekParticle.
+            T::Shriek => {
+                let mut q = Particle::moving(r, ty, p, [0.0; 3]);
+                q.size = 0.85;
+                q.lifetime = 30;
+                q.gravity = 0.0;
+                q.velocity = [0.0, 0.1, 0.0];
+                q.light = Light::Block15;
+                q.size_curve = Size::Shriek;
+                q.behaviour = Behaviour::Shriek {
+                    delay: o.scale as i32,
+                };
+                q.set = set;
                 q
             }
             T::Dust => {
@@ -1702,6 +1876,24 @@ impl ParticleEngine {
                 q.behaviour = Behaviour::DragonBreath { hit_ground: false };
                 q.set = set;
                 q.set_power(o.scale);
+                q
+            }
+            T::Trail => {
+                let (target, duration) = o.trail?;
+                let mut q = Particle::at(r, ty, p);
+                let jitter = |r: &mut LegacyRandom| 0.875 + r.next_float() * 0.25;
+                let (jr, jg, jb) = (jitter(r), jitter(r), jitter(r));
+                q.set_color(
+                    (o.color[0] * jr).min(1.0),
+                    (o.color[1] * jg).min(1.0),
+                    (o.color[2] * jb).min(1.0),
+                );
+                q.size = 0.26;
+                q.lifetime = duration;
+                q.has_physics = false;
+                q.free_move = true;
+                q.light = Light::FullBright;
+                q.behaviour = Behaviour::Trail { target };
                 q
             }
         };
@@ -2188,6 +2380,62 @@ impl ParticleEngine {
                     start[2] + p.velocity[2] * f64::from(pos),
                 ];
             }
+            Behaviour::Transition { .. } => {
+                p.base_tick(level);
+                self.sprite_from_age(p);
+            }
+            Behaviour::Shriek { delay } => {
+                if delay > 0 {
+                    p.behaviour = Behaviour::Shriek { delay: delay - 1 };
+                } else {
+                    p.base_tick(level);
+                    self.sprite_from_age(p);
+                }
+            }
+            Behaviour::Vibration {
+                dest, rot, pitch, ..
+            } => {
+                p.previous = p.position;
+                let age = p.age;
+                p.age += 1;
+                if age >= p.lifetime {
+                    p.removed = true;
+                    return;
+                }
+                let remaining = p.lifetime - p.age;
+                if remaining > 0 {
+                    let alpha = 1.0 / f64::from(remaining);
+                    for i in 0..3 {
+                        p.position[i] += (dest[i] - p.position[i]) * alpha;
+                    }
+                }
+                let d = [
+                    p.position[0] - dest[0],
+                    p.position[1] - dest[1],
+                    p.position[2] - dest[2],
+                ];
+                p.behaviour = Behaviour::Vibration {
+                    dest,
+                    rot: d[0].atan2(d[2]) as f32,
+                    rot_o: rot,
+                    pitch: d[1].atan2((d[0] * d[0] + d[2] * d[2]).sqrt()) as f32,
+                    pitch_o: pitch,
+                };
+                self.sprite_from_age(p);
+            }
+            Behaviour::Trail { target } => {
+                p.previous = p.position;
+                let age = p.age;
+                p.age += 1;
+                if age >= p.lifetime {
+                    p.removed = true;
+                    return;
+                }
+                let alpha = 1.0 / f64::from((p.lifetime - p.age).max(1));
+                for i in 0..3 {
+                    p.position[i] += (target[i] - p.position[i]) * alpha;
+                }
+            }
             Behaviour::HugeExplosion => {
                 p.previous = p.position;
                 let age = p.age;
@@ -2468,6 +2716,58 @@ impl ParticleEngine {
             if let Behaviour::FlyTowards { alpha: la, .. } = p.behaviour {
                 alpha = lifetime_alpha(la, p.age, p.lifetime, partial);
             }
+            let mut rotations = [Some(rotation), None];
+            let mut rgb = [p.rgba[0], p.rgba[1], p.rgba[2]];
+            match p.behaviour {
+                // ShriekParticle.extract: two tilted quads, fading out.
+                Behaviour::Shriek { delay } => {
+                    if delay > 0 {
+                        continue;
+                    }
+                    alpha = 1.0 - ((p.age as f32 + partial) / p.lifetime as f32).clamp(0.0, 1.0);
+                    rotations = [
+                        Some(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_3)),
+                        Some(Quat::from_euler(
+                            glam::EulerRot::YXZ,
+                            -std::f32::consts::PI,
+                            std::f32::consts::FRAC_PI_3,
+                            0.0,
+                        )),
+                    ];
+                }
+                // VibrationSignalParticle.extract: two quads along the flight.
+                Behaviour::Vibration {
+                    rot,
+                    rot_o,
+                    pitch,
+                    pitch_o,
+                    ..
+                } => {
+                    let sway =
+                        ((p.age as f32 + partial - std::f32::consts::TAU) * 0.05).sin() * 2.0;
+                    let lerped_rot = rot_o + (rot - rot_o) * partial;
+                    let lerped_pitch =
+                        pitch_o + (pitch - pitch_o) * partial + std::f32::consts::FRAC_PI_2;
+                    rotations = [
+                        Some(
+                            Quat::from_rotation_y(lerped_rot)
+                                * Quat::from_rotation_x(-lerped_pitch)
+                                * Quat::from_rotation_y(sway),
+                        ),
+                        Some(
+                            Quat::from_rotation_y(-std::f32::consts::PI + lerped_rot)
+                                * Quat::from_rotation_x(lerped_pitch)
+                                * Quat::from_rotation_y(sway),
+                        ),
+                    ];
+                }
+                // DustColorTransitionParticle.lerpColors.
+                Behaviour::Transition { from, to } => {
+                    let t = (p.age as f32 + partial) / (p.lifetime as f32 + 1.0);
+                    rgb = std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t);
+                }
+                _ => {}
+            }
             let block = ParticleLevel::block_at(p.position);
             let packed = light_at(block);
             let (sky, mut block_light) = (u32::from(packed >> 4) * 16, u32::from(packed & 15) * 16);
@@ -2489,7 +2789,7 @@ impl ParticleEngine {
             }
             let light = sky_light | block_light << 8;
             let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u32;
-            let color = c(alpha) << 24 | c(p.rgba[2]) << 16 | c(p.rgba[1]) << 8 | c(p.rgba[0]);
+            let color = c(alpha) << 24 | c(rgb[2]) << 16 | c(rgb[1]) << 8 | c(rgb[0]);
             let (du, dv) = (r.u1 - r.u0, r.v1 - r.v0);
             let (u0, v0, u1, v1) = (
                 r.u0 + du * p.uv[0],
@@ -2497,20 +2797,22 @@ impl ParticleEngine {
                 r.u0 + du * p.uv[2],
                 r.v0 + dv * p.uv[3],
             );
-            for (n, uv) in [
-                ((1.0, -1.0), [u1, v1]),
-                ((1.0, 1.0), [u1, v0]),
-                ((-1.0, 1.0), [u0, v0]),
-                ((-1.0, -1.0), [u0, v1]),
-            ] {
-                let v = center + rotation * FVec3::new(n.0, n.1, 0.0) * size;
-                out.push(Vertex {
-                    pos: v.to_array(),
-                    uv,
-                    layer: 0,
-                    color,
-                    light,
-                });
+            for rotation in rotations.into_iter().flatten() {
+                for (n, uv) in [
+                    ((1.0, -1.0), [u1, v1]),
+                    ((1.0, 1.0), [u1, v0]),
+                    ((-1.0, 1.0), [u0, v0]),
+                    ((-1.0, -1.0), [u0, v1]),
+                ] {
+                    let v = center + rotation * FVec3::new(n.0, n.1, 0.0) * size;
+                    out.push(Vertex {
+                        pos: v.to_array(),
+                        uv,
+                        layer: 0,
+                        color,
+                        light,
+                    });
+                }
             }
         }
     }

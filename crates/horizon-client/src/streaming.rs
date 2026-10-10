@@ -104,6 +104,8 @@ pub struct Streaming {
     sequence: u64,
     pub center: (i32, i32),
     pub radius: i32,
+    /// `/forceload`ed chunks: kept loaded whatever the distance.
+    pub forced: HashSet<(i32, i32)>,
     /// No work is scheduled while paused (title screen).
     pub paused: bool,
     /// Dimension flags: sky light, Nether face shading.
@@ -218,6 +220,7 @@ impl Streaming {
             sequence: 0,
             center: (0, 0),
             radius: 8,
+            forced: HashSet::new(),
             paused: false,
             sky_light: true,
             nether_shading: false,
@@ -329,10 +332,23 @@ impl Streaming {
                     self.decorated.insert(key);
                     if self.in_range(key.0, key.1, 2) {
                         self.generated_total += 1;
+                        // A chunk saved with its light needs no light job; its
+                        // unlit neighbours still light themselves from it.
+                        let loaded = chunk.light_loaded;
                         world.chunks.insert(key, Arc::new(chunk));
+                        if loaded {
+                            self.lit.insert(key);
+                            for sy in 0..SECTIONS as i32 {
+                                world.dirty_sections.insert((key.0, sy, key.1));
+                            }
+                        }
                         for dz in -1..=1 {
                             for dx in -1..=1 {
-                                world.dirty_light.insert((key.0 + dx, key.1 + dz));
+                                let n = (key.0 + dx, key.1 + dz);
+                                if !loaded || world.chunks.get(&n).is_some_and(|c| !c.light_loaded)
+                                {
+                                    world.dirty_light.insert(n);
+                                }
                             }
                         }
                     }
@@ -393,9 +409,14 @@ impl Streaming {
         }
         // Drop far proto chunks that are not checked out.
         let (cx, cz, r4) = (self.center.0, self.center.1, i64::from(self.radius + 4));
+        let forced = &self.forced;
         self.protos.retain(|&(x, z), p| {
             let d = i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2);
-            p.is_none() || d <= r4 * r4
+            p.is_none()
+                || d <= r4 * r4
+                || forced
+                    .iter()
+                    .any(|f| (x - f.0).abs() <= 3 && (z - f.1).abs() <= 3)
         });
         let (protos, finishing) = (&self.protos, &self.finishing);
         self.decorated.retain(|k| {
@@ -491,7 +512,25 @@ impl Streaming {
                     wanted.push((self.distance(x, z), x, z));
                 }
             }
+            // Forced chunks and their generation neighbourhood.
+            let reach = margin - 1;
+            for &(fx, fz) in &self.forced {
+                for dz in -reach..=reach {
+                    for dx in -reach..=reach {
+                        let (x, z) = (fx + dx, fz + dz);
+                        if world.chunks.contains_key(&(x, z))
+                            || self.generating.contains(&(x, z))
+                            || self.protos.contains_key(&(x, z))
+                            || self.finishing.contains(&(x, z))
+                        {
+                            continue;
+                        }
+                        wanted.push((self.distance(x, z), x, z));
+                    }
+                }
+            }
             wanted.sort_unstable();
+            wanted.dedup();
             for (d, x, z) in wanted.into_iter().take(workers * 3 - self.generating.len()) {
                 self.generating.insert((x, z));
                 self.submit(d * 4, Job::Generate(x, z));
@@ -628,7 +667,13 @@ impl Streaming {
     }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
         let r = i64::from(self.radius + margin);
-        self.distance(x, z) <= r * r
+        if self.distance(x, z) <= r * r {
+            return true;
+        }
+        let reach = (margin - 1).max(0);
+        self.forced
+            .iter()
+            .any(|f| (x - f.0).abs() <= reach && (z - f.1).abs() <= reach)
     }
 }
 impl Drop for Streaming {

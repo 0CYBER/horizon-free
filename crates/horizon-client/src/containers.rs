@@ -58,6 +58,79 @@ pub enum BlockEntity {
     Beacon(Box<Beacon>),
     /// `LecternBlockEntity`: the book and the open page.
     Lectern(Lectern),
+    /// Sculk sensors, shriekers and catalysts (`crate::sculk`).
+    Sculk(Box<crate::sculk::SculkEntity>),
+    /// `CreakingHeartBlockEntity`: its protector and the hurt emitter.
+    CreakingHeart(Box<CreakingHeart>),
+    /// `BannerBlockEntity`: the pattern layers.
+    Banner(Banner),
+    /// `CrafterBlockEntity`.
+    Crafter(Crafter),
+}
+/// `CrafterBlockEntity`: nine slots that can be disabled, the powered flag
+/// and the ticks left in the crafting animation.
+#[derive(Clone, Debug, Default)]
+pub struct Crafter {
+    pub items: [Option<ItemStack>; 9],
+    pub disabled: [bool; 9],
+    pub triggered: bool,
+    pub crafting_ticks: i32,
+}
+impl Crafter {
+    /// `slotCanBeDisabled`: only empty slots.
+    pub fn slot_can_be_disabled(&self, slot: usize) -> bool {
+        slot < 9 && self.items[slot].is_none()
+    }
+    /// `setSlotState`.
+    pub fn set_slot_state(&mut self, slot: usize, enabled: bool) {
+        if self.slot_can_be_disabled(slot) {
+            self.disabled[slot] = !enabled;
+        }
+    }
+    /// `getRedstoneSignal`: filled or disabled slots.
+    pub fn redstone_signal(&self) -> i32 {
+        (0..9)
+            .filter(|&i| self.items[i].is_some() || self.disabled[i])
+            .count() as i32
+    }
+    /// `canPlaceItem`: a hopper fills the smallest stacks first.
+    pub fn can_place(&self, slot: usize, stack: &ItemStack, max_stack: u32) -> bool {
+        if slot >= 9 || self.disabled[slot] {
+            return false;
+        }
+        let Some(current) = &self.items[slot] else {
+            return true;
+        };
+        if current.count >= max_stack {
+            return false;
+        }
+        !(slot + 1..9).any(|i| {
+            !self.disabled[i]
+                && match &self.items[i] {
+                    None => true,
+                    Some(other) => {
+                        other.count < current.count && other.same_item_same_components(stack)
+                    }
+                }
+        })
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct Banner {
+    pub layers: Vec<crate::banner::BannerLayer>,
+    pub name: Option<String>,
+}
+/// `CreakingHeartBlockEntity` (the logic is in `game/creaking.rs`).
+#[derive(Clone, Debug, Default)]
+pub struct CreakingHeart {
+    /// The protector: its entity id once resolved, and its UUID (the saved form).
+    pub creaking: Option<(Option<u32>, [i32; 4])>,
+    pub ticks_existed: i64,
+    pub ticker: i32,
+    /// Ticks left of the hurt effect (`emitter`) and where it heads.
+    pub emitter: i32,
+    pub emitter_target: Option<[f64; 3]>,
+    pub output_signal: i32,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Lectern {
@@ -101,8 +174,20 @@ impl BlockEntity {
                 speed: 1.0,
             }));
         }
+        if name == "minecraft:creaking_heart" {
+            return Some(Self::CreakingHeart(Box::default()));
+        }
         if name == "minecraft:lectern" {
             return Some(Self::Lectern(Lectern::default()));
+        }
+        if let Some(sculk) = crate::sculk::SculkEntity::for_block(name) {
+            return Some(Self::Sculk(Box::new(sculk)));
+        }
+        if name == "minecraft:crafter" {
+            return Some(Self::Crafter(Crafter::default()));
+        }
+        if name.ends_with("_banner") {
+            return Some(Self::Banner(Banner::default()));
         }
         if name == "minecraft:beacon" {
             return Some(Self::Beacon(Box::new(Beacon {
@@ -135,6 +220,7 @@ impl BlockEntity {
             "minecraft:blast_furnace" => "minecraft:blast_furnace",
             "minecraft:smoker" => "minecraft:smoker",
             n if n.ends_with("shulker_box") => "minecraft:shulker_box",
+            "minecraft:crafter" => "minecraft:crafter",
             _ => return None,
         })
     }
@@ -155,6 +241,10 @@ impl BlockEntity {
             Self::Jukebox(_) => "minecraft:jukebox",
             Self::Beacon(_) => "minecraft:beacon",
             Self::Lectern(_) => "minecraft:lectern",
+            Self::Sculk(s) => s.id(),
+            Self::Banner(_) => "minecraft:banner",
+            Self::Crafter(_) => "minecraft:crafter",
+            Self::CreakingHeart(_) => "minecraft:creaking_heart",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -164,8 +254,11 @@ impl BlockEntity {
             Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
             Self::Sign(_) => Vec::new(),
             Self::Jukebox(j) => j.record.iter().cloned().collect(),
-            Self::Beacon(_) => Vec::new(),
+            Self::Beacon(_) | Self::CreakingHeart(_) => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
+            Self::Sculk(_) => Vec::new(),
+            Self::Banner(_) => Vec::new(),
+            Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -173,7 +266,14 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &f.items,
             Self::Brewing(b) => &b.items,
-            Self::Sign(_) | Self::Jukebox(_) | Self::Beacon(_) | Self::Lectern(_) => &[],
+            Self::Sign(_)
+            | Self::Jukebox(_)
+            | Self::Beacon(_)
+            | Self::Lectern(_)
+            | Self::Sculk(_)
+            | Self::Banner(_) => &[],
+            Self::Crafter(c) => &c.items,
+            Self::CreakingHeart(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -181,7 +281,14 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &mut f.items,
             Self::Brewing(b) => &mut b.items,
-            Self::Sign(_) | Self::Jukebox(_) | Self::Beacon(_) | Self::Lectern(_) => &mut [],
+            Self::Sign(_)
+            | Self::Jukebox(_)
+            | Self::Beacon(_)
+            | Self::Lectern(_)
+            | Self::Sculk(_)
+            | Self::Banner(_) => &mut [],
+            Self::Crafter(c) => &mut c.items,
+            Self::CreakingHeart(_) => &mut [],
         }
     }
 }

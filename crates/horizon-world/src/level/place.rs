@@ -786,7 +786,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 );
                 Some(table.set_text(default, p.orientation, &orientation))
             }
-            Class::CreakingHeart | Class::RotatedPillar | Class::InfestedRotatedPillar => {
+            Class::CreakingHeart => {
+                let state =
+                    table.set_text(default, p.axis, super::states::axis_name(axis_of(ctx.face)));
+                Some(self.heart_placement(state, ctx.pos))
+            }
+            Class::RotatedPillar | Class::InfestedRotatedPillar => {
                 Some(table.set_text(default, p.axis, super::states::axis_name(axis_of(ctx.face))))
             }
             Class::DecoratedPot => {
@@ -1514,7 +1519,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             volume: (sounds.volume + 1.0) / 2.0,
             pitch: sounds.pitch * 0.8,
         });
-        self.game_event(ctx.pos, "minecraft:block_place");
+        self.game_event_state(ctx.pos, "minecraft:block_place", placed);
         PlaceOutcome::Placed {
             pos: ctx.pos,
             state: placed,

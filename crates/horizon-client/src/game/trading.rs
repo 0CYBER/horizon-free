@@ -148,7 +148,13 @@ impl Game<'_> {
             }));
         }
         let m = &self.mobs[index];
-        let trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
+        let mut trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
+        // Villager.updateSpecialPrices: reputation and Hero of the Village.
+        if species == Species::Villager {
+            let reputation = self.villager_reputation(m.id);
+            merchant::update_special_prices(&mut trade.offers, reputation, self.hero_amplifier());
+        }
+        let m = &self.mobs[index];
         if trade.offers.is_empty() {
             let mut events = Vec::new();
             villager::set_unhappy(&mut self.mobs[index], &mut events);
@@ -193,6 +199,10 @@ impl Game<'_> {
         let trade = m.extra.trade.get_or_insert_default();
         trade.xp = state.xp;
         trade.offers = state.offers.clone();
+        // setTradingPlayer(null) resets the special prices.
+        for offer in &mut trade.offers {
+            offer.special_price_diff = 0;
+        }
     }
     /// Opens a merchant menu for a villager (or a generated one for tests).
     pub(super) fn open_merchant(&mut self, profession: &str, variant: &str, level: i32) {
@@ -247,6 +257,16 @@ impl Game<'_> {
             .map(|p| [p.position.x, p.position.y + 0.5, p.position.z]);
         self.audio
             .play("minecraft:entity.villager.yes", at, 1.0, 1.0);
+        // Villager.notifyTrade: the villager remembers the trade.
+        let villager = s
+            .merchant
+            .as_ref()
+            .filter(|m| m.progress())
+            .and_then(|m| m.mob);
+        if let Some(mob) = villager {
+            self.villager_traded(mob);
+        }
+        let Some(m) = s.merchant.as_mut() else { return };
         if level_up {
             let (profession, variant, level) =
                 (m.profession.clone(), m.variant.clone(), m.level + 1);
@@ -256,6 +276,14 @@ impl Game<'_> {
                 m.offers.extend(more);
             }
             pop += 5;
+        }
+        // The prices follow the villager's new reputation.
+        if let Some(mob) = villager {
+            let reputation = self.villager_reputation(mob);
+            let hero = self.hero_amplifier();
+            if let Some(m) = s.merchant.as_mut() {
+                merchant::update_special_prices(&mut m.offers, reputation, hero);
+            }
         }
         if offer.reward_exp
             && let Some(at) = at

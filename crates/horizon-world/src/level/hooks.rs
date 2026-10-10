@@ -96,11 +96,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Brushable => {
                     self.schedule_tick(pos, block, 2);
                 }
-                Class::CarvedPumpkin => {
-                    if !same {
-                        self.carved_pumpkin_try_spawn_golem(pos);
-                    }
-                }
                 Class::Composter => {
                     if b.table.int(state, b.props.level) == 7 {
                         self.schedule_tick(pos, block, 20);
@@ -126,18 +121,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Frogspawn => {
                     let delay = self.random().next_int_between(3600, 12000).unwrap_or(3600);
                     self.schedule_tick(pos, block, delay);
-                }
-                // SnifferEggBlock.onPlace: a third of the hatch time, boosted on moss.
-                Class::SnifferEgg => {
-                    let boosted = b
-                        .tag("minecraft:sniffer_egg_hatch_boost")
-                        .is_some_and(|t| b.in_set(self.below_state(pos), t));
-                    if boosted {
-                        self.level_event(3009, pos, 0);
-                    }
-                    let hatch = if boosted { 12000 } else { 24000 };
-                    let offset = self.random().next_int_bound(300).unwrap_or(0);
-                    self.schedule_tick(pos, block, hatch / 3 + offset);
                 }
                 Class::FrostedIce => {
                     let delay = self
@@ -187,6 +170,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 Class::Scaffolding => {
                     self.schedule_tick(pos, block, 1);
+                }
+                Class::SnifferEgg => {
+                    let boosted = b.is_block(self.below_state(pos), b.named.moss_block);
+                    if boosted {
+                        self.level_event(3009, pos, 0);
+                    }
+                    let delay = if boosted { 12000 } else { 24000 } / 3;
+                    let jitter = self.random().next_int_bound(300).unwrap_or(0);
+                    self.schedule_tick(pos, block, delay + jitter);
                 }
                 Class::SculkSensor => {
                     if !same
