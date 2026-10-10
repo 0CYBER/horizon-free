@@ -788,7 +788,21 @@ pub fn render_with(
         draw(part, base, &poses, *uv, *color, light, overlay, out);
     }
     held_items(m, &model, base, &poses, atlas, light, out);
-    for layer in layers(m) {
+    let mut all_layers = layers(m);
+    // WardenRenderer: the translucent emissive layers fade with the animations.
+    if m.species() == Species::Warden {
+        for (model, texture, a) in super::warden::emissive_layers(m, alpha) {
+            if a > 0.0 {
+                all_layers.push(Layer {
+                    model: model.into(),
+                    texture: texture.into(),
+                    color: ((a.clamp(0.0, 1.0) * 255.0) as u32) << 24 | 0x00FF_FFFF,
+                    full_bright: true,
+                });
+            }
+        }
+    }
+    for layer in all_layers {
         let Some(part) = m.kind.layer(&layer.model).cloned() else {
             continue;
         };

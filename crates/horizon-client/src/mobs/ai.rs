@@ -87,6 +87,7 @@ pub enum Family {
     Wither,
     Allay,
     Villager,
+    Warden,
     Creaking,
 }
 pub fn family(s: Species) -> Family {
@@ -132,6 +133,7 @@ pub fn family(s: Species) -> Family {
         S::Enderman => Family::Enderman,
         S::Slime | S::MagmaCube => Family::Cube,
         S::Guardian | S::ElderGuardian => Family::Guardian,
+        S::Warden => Family::Warden,
         S::Shulker => Family::Shulker,
         _ => Family::Generic,
     }
@@ -171,6 +173,7 @@ pub fn register(m: &mut Mob) {
         Family::Wither => super::wither::register(m),
         Family::Allay => super::allay::register(m),
         Family::Villager => super::villager::register(m),
+        Family::Warden => super::warden::register(m),
         Family::Creaking => super::creaking::register(m),
     }
     super::raider::register(m);
@@ -262,7 +265,9 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
         }
         return false;
     }
-    ai_step(m, w, events);
+    if !m.no_ai {
+        ai_step(m, w, events);
+    }
     // Mob.tickHeadTurn -> BodyRotationControl.clientTick
     if m.alive() {
         m.body_rotation_tick();
@@ -379,6 +384,11 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let sound = match m.species() {
+        // Warden.getAmbientSound: by anger, silent while roaring or digging.
+        Species::Warden => match super::warden::ambient_sound(m) {
+            Some(sound) => sound,
+            None => return,
+        },
         Species::Zombie | Species::Husk if m.is_baby() => m.kind.sounds[0],
         Species::Drowned if m.fluids.in_water => "entity.drowned.ambient_water",
         Species::Enderman if m.ai.target.is_some() => "entity.enderman.scream",
@@ -550,6 +560,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Enderman => super::enderman::custom_server_ai_step(m, cx),
         Species::Blaze => super::nether::blaze_server_ai_step(m, cx),
         Species::ElderGuardian => super::guardian::elder_server_ai_step(m, cx),
+        Species::Warden => super::warden::server_ai_step(m, cx),
         // SpellcasterIllager.customServerAiStep.
         Species::Evoker if m.extra.counter > 0 => m.extra.counter -= 1,
         _ => {}
@@ -577,6 +588,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Zoglin if m.extra.anim_ticks > 0 => m.extra.anim_ticks -= 1,
         s if super::equine::is_equine(s) => super::equine::ai_step(m, w, events),
         Species::Phantom => super::phantom::flap_sound(m, events),
+        Species::Warden => super::warden::ai_step(m, events),
         Species::Guardian | Species::ElderGuardian => super::guardian::ai_step(m, w, events),
         Species::Vex => super::vex::ai_step(m, w),
         Species::Ravager => super::ravager::ai_step(m, w, events),
@@ -599,8 +611,11 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 /// Mob.checkDespawn (players are the only despawn reference).
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
     let creature = m.kind.category == "creature";
-    // A jockey's chicken despawns like a monster (`Chicken.removeWhenFarAway`).
-    if m.persistent || creature && m.kind.flags.animal && !m.extra.jockey {
+    // Warden.removeWhenFarAway is false; a jockey's chicken despawns like a monster.
+    if m.persistent
+        || m.species() == Species::Warden
+        || creature && m.kind.flags.animal && !m.extra.jockey
+    {
         m.ai.no_action_time = 0;
         return true;
     }
@@ -651,6 +666,7 @@ pub fn speed_bonus(m: &Mob) -> f64 {
 pub fn sound_volume(m: &Mob) -> f32 {
     match m.species() {
         Species::Ghast => 5.0,
+        Species::Warden => 4.0,
         Species::Slime | Species::MagmaCube => 0.4 * m.extra.size.max(1) as f32,
         Species::Cod
         | Species::Salmon
@@ -692,6 +708,7 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
         Species::Allay if m.extra.tame && source.attacker == Some(Who::Player) => false,
         Species::Creaking => super::creaking::accepts_damage(m, source),
         Species::Wither => super::wither::accepts(m, source.kind, source.attacker, false),
+        Species::Warden => super::warden::accepts_damage(m, source),
         Species::Shulker => super::shulker::accepts(m, source),
         Species::Enderman => super::enderman::on_damage(m, source),
         Species::WitherSkeleton | Species::Blaze | Species::MagmaCube | Species::Strider
@@ -708,6 +725,7 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
     match m.species() {
         Species::Enderman => super::enderman::after_hurt(m, source),
         Species::Shulker => super::shulker::after_hurt(m),
+        Species::Warden => super::warden::hurt(m, source),
         Species::Wolf => super::tame::after_hurt(m, source),
         // NeutralMob: an iron golem hit by the player stays angry a while.
         // PiglinAi.wasHurtBy: drop what is being admired, no admiring for

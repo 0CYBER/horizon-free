@@ -26,6 +26,9 @@ struct Voice {
     step: f64,
     left: f32,
     right: f32,
+    /// The sound event and `SoundSource` index (what `/stopsound` matches).
+    event: Arc<str>,
+    source: usize,
 }
 #[derive(Default)]
 struct Mixer {
@@ -49,8 +52,25 @@ struct MusicTrack {
     /// Set by the decoder thread once the voice is in the mixer (or failed).
     ready: Arc<std::sync::atomic::AtomicBool>,
 }
+/// A sound the player could have heard (`SoundEventListener.onPlaySound`):
+/// what the subtitle overlay needs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Heard {
+    /// The `subtitle` translation key of the sound event.
+    pub subtitle: String,
+    /// Where it played (None = relative to the listener, e.g. UI sounds).
+    pub at: Option<[f64; 3]>,
+    /// `SoundEngine.getRange`: infinite for relative and non-attenuated sounds.
+    pub range: f32,
+    pub looping: bool,
+}
 pub struct Audio {
     _stream: Option<cpal::Stream>,
+    /// `subtitle` keys of `sounds.json` events.
+    subtitles: HashMap<String, String>,
+    /// Record `Heard` sounds (the subtitle overlay is listening).
+    pub record_heard: bool,
+    heard: Vec<Heard>,
     mixer: Arc<Mutex<Mixer>>,
     rate: u32,
     root: PathBuf,
@@ -62,6 +82,8 @@ pub struct Audio {
     pub master: f32,
     music: Option<MusicTrack>,
     next_tracked: u64,
+    /// A `SoundSource` index the next sound plays on (`/playsound`).
+    source_override: Option<usize>,
 }
 fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
     use symphonia::core::{
@@ -108,6 +130,7 @@ fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
 impl Audio {
     pub fn new(root: &Path) -> Self {
         let mut events = HashMap::new();
+        let mut subtitles = HashMap::new();
         if let Ok(text) = fs::read(root.join("assets/minecraft/sounds.json"))
             && let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&text)
         {
@@ -135,6 +158,9 @@ impl Audio {
                         },
                     })
                     .collect::<Vec<_>>();
+                if let Some(key) = def["subtitle"].as_str() {
+                    subtitles.insert(format!("minecraft:{name}"), key.to_owned());
+                }
                 events.insert(format!("minecraft:{name}"), variants);
             }
         }
@@ -151,6 +177,9 @@ impl Audio {
         };
         Self {
             _stream: stream,
+            subtitles,
+            record_heard: false,
+            heard: Vec::new(),
             mixer,
             rate,
             root: root.to_owned(),
@@ -162,6 +191,7 @@ impl Audio {
             master: 1.0,
             music: None,
             next_tracked: 0,
+            source_override: None,
         }
     }
     fn open(mixer: Arc<Mutex<Mixer>>) -> Result<(cpal::Stream, u32)> {
@@ -279,12 +309,27 @@ impl Audio {
     }
     /// Play a sound event at a world position (None = non-positional UI sound).
     pub fn play(&mut self, event: &str, at: Option<[f64; 3]>, volume: f32, pitch: f32) {
-        if self._stream.is_none() {
-            return;
-        }
         let Some(variant) = self.resolve(event, 0) else {
             return;
         };
+        if self.record_heard
+            && let Some(key) = self.subtitles.get(event)
+        {
+            let range = if at.is_some() {
+                variant.attenuation * volume.max(1.0)
+            } else {
+                f32::INFINITY
+            };
+            self.heard.push(Heard {
+                subtitle: key.clone(),
+                at,
+                range,
+                looping: false,
+            });
+        }
+        if self._stream.is_none() {
+            return;
+        }
         let file = variant.name.trim_start_matches("minecraft:").to_owned();
         let entry = self.cache.entry(file.clone()).or_insert_with(|| {
             decode(
@@ -297,9 +342,12 @@ impl Audio {
         let Some((samples, rate)) = entry.clone() else {
             return;
         };
+        let source = self
+            .source_override
+            .unwrap_or_else(|| crate::settings::sound_source(event));
         let volume = (volume * variant.volume).clamp(0.0, 1.0)
             * self.master
-            * crate::settings::event_volume(event);
+            * crate::settings::source_volume(source);
         let pitch = (pitch * variant.pitch).clamp(0.5, 2.0);
         let (mut left, mut right) = (volume, volume);
         if let Some(p) = at {
@@ -333,6 +381,8 @@ impl Audio {
                 step,
                 left,
                 right,
+                event: event.into(),
+                source,
             });
         }
     }
@@ -356,6 +406,7 @@ impl Audio {
         let step_scale = f64::from(variant.pitch.clamp(0.5, 2.0)) / f64::from(self.rate);
         let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (mixer, done) = (self.mixer.clone(), ready.clone());
+        let music_event = event.to_owned();
         std::thread::spawn(move || {
             if let Some((samples, rate)) = decode(&path)
                 && let Ok(mut m) = mixer.lock()
@@ -367,6 +418,8 @@ impl Audio {
                     step: f64::from(rate) * step_scale,
                     left: volume,
                     right: volume,
+                    event: music_event.as_str().into(),
+                    source: 1,
                 });
             }
             done.store(true, std::sync::atomic::Ordering::Release);
@@ -407,6 +460,50 @@ impl Audio {
     pub fn music_event(&self) -> Option<&str> {
         self.music.as_ref().map(|t| t.event.as_str())
     }
+    /// Every sound event id (for command completion).
+    pub fn event_names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.events.keys().cloned().collect();
+        v.sort();
+        v
+    }
+    /// Play a sound on a given `SoundSource` index (`/playsound`).
+    pub fn play_on(
+        &mut self,
+        source: usize,
+        event: &str,
+        at: Option<[f64; 3]>,
+        volume: f32,
+        pitch: f32,
+    ) {
+        self.source_override = Some(source);
+        self.play(event, at, volume, pitch);
+        self.source_override = None;
+    }
+    /// `ClientboundStopSoundPacket`: stop the playing sounds of an event
+    /// and/or a source.
+    pub fn stop_sounds(&mut self, event: Option<&str>, source: Option<usize>) {
+        let matches = |v: &Voice| {
+            event.is_none_or(|e| &*v.event == e) && source.is_none_or(|s| v.source == s)
+        };
+        if let Ok(mut m) = self.mixer.lock() {
+            m.voices.retain(|v| !matches(v));
+            m.tracked.retain(|t| !matches(&t.voice));
+            if m.music.as_ref().is_some_and(matches) {
+                m.music = None;
+            }
+        }
+        if self
+            .music
+            .as_ref()
+            .is_some_and(|t| event.is_none_or(|e| t.event == e) && source.is_none_or(|s| s == 1))
+        {
+            self.music = None;
+        }
+    }
+    /// The sounds played since the last call, for the subtitle overlay.
+    pub fn take_heard(&mut self) -> Vec<Heard> {
+        std::mem::take(&mut self.heard)
+    }
     /// `SoundManager.updateCategoryVolume(MUSIC, gain)`.
     pub fn set_music_gain(&mut self, gain: f32) {
         if let Ok(mut m) = self.mixer.lock() {
@@ -416,8 +513,18 @@ impl Audio {
     /// Play a relative (non-positional) tickable sound instance the caller
     /// keeps a handle to: ambient loops (`looping`) and sub-sounds.
     pub fn play_tracked(&mut self, event: &str, volume: f32, looping: bool) -> Option<u64> {
-        self._stream.as_ref()?;
         let variant = self.resolve(event, 0)?;
+        if self.record_heard
+            && let Some(key) = self.subtitles.get(event)
+        {
+            self.heard.push(Heard {
+                subtitle: key.clone(),
+                at: None,
+                range: f32::INFINITY,
+                looping,
+            });
+        }
+        self._stream.as_ref()?;
         let file = variant.name.trim_start_matches("minecraft:").to_owned();
         let root = &self.root;
         let (samples, rate) = self
@@ -443,6 +550,8 @@ impl Audio {
                 step,
                 left: gain,
                 right: gain,
+                event: event.into(),
+                source: crate::settings::sound_source(event),
             },
             looping,
             volume: volume.clamp(0.0, 1.0),

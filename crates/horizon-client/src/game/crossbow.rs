@@ -144,6 +144,7 @@ impl Game<'_> {
             );
             arrow.shoot(&mut self.world.random, dir.to_array(), 3.15, 1.0);
             self.creatures.projectiles.push(arrow);
+            self.player_projectile_shot();
             let pitch = if index == 0 {
                 1.0
             } else {

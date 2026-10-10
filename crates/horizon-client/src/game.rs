@@ -4,10 +4,12 @@ mod advancements;
 mod advancements_screen;
 mod allays;
 mod armor_stands;
+mod banners;
 mod beacon;
 mod blockctl;
 mod boats;
 mod books;
+mod bossbars;
 mod cartography;
 mod chat;
 mod combat;
@@ -26,16 +28,19 @@ mod fireworks;
 mod fishing;
 mod fov;
 mod frames;
+mod functions;
 mod game_mode;
 mod golems;
 mod growth;
 mod jukebox;
 mod lightning;
+mod loom;
 mod machines;
 mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+mod mount_menu;
 mod mounts;
 mod music;
 mod names;
@@ -49,10 +54,13 @@ mod piglins;
 mod postprocess;
 mod potions;
 mod raids;
+mod recipe_book;
 mod remote;
 mod render_control;
 mod render_tick;
+mod scoreboard;
 mod screens;
+mod sculk;
 mod shield;
 mod sign_edit;
 mod station_control;
@@ -61,6 +69,7 @@ mod stats;
 mod stats_screen;
 mod storage;
 mod structures;
+mod subtitle_hud;
 mod titles;
 mod tnt;
 mod totem;
@@ -308,14 +317,17 @@ impl LevelAccess for GameLevel<'_> {
     fn block_entity_analog_signal(
         &self,
         pos: BlockPos,
-        _state: BlockStateId,
+        state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        if let Some(signal) = sculk::sensor_signal(self.world, self.behaviours, state, pos) {
+            return signal;
+        }
         if let Some((_, comparator)) = jukebox::jukebox_signals(self.world, self.items, pos) {
             return comparator;
         }
         if let Some(signal) = creaking::heart_signal(self.world, pos) {
-            return if self.registry.state(_state).is_some_and(|s| {
+            return if self.registry.state(state).is_some_and(|s| {
                 s.properties
                     .get("creaking_heart_state")
                     .is_some_and(|v| v == "uprooted")
@@ -537,6 +549,7 @@ struct Game<'a> {
     mobs: Vec<Mob>,
     arrows: Vec<Arrow>,
     creatures: creatures::Creatures,
+    sculk: sculk::SculkState,
     raiding: raids::Raiding,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
@@ -628,6 +641,12 @@ struct Game<'a> {
     ender_open: Option<(i32, i32, i32)>,
     /// Contents of broken shulker boxes waiting for their dropped item.
     pending_shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
+    /// Layers of broken banners waiting for their dropped item.
+    pending_banner: HashMap<[i32; 3], horizon_client::containers::Banner>,
+    /// The recipe book of the open screen (game/recipe_book.rs).
+    recipe_ui: recipe_book::RecipeUi,
+    /// The horse inventory (game/mount_menu.rs).
+    mount_menu: mount_menu::MountMenu,
     /// The player's fishing hook.
     hook: Option<fishing::Hook>,
     tridents: Vec<trident::ThrownTrident>,
@@ -649,6 +668,13 @@ struct Game<'a> {
     combat: combat::CombatTracker,
     mount: mounts::MountState,
     stats: stats::Stats,
+    score: scoreboard::ScoreState,
+    fns: functions::FnState,
+    bosses: bossbars::BossState,
+    exec: commands::execute::ExecState,
+    rand_sequences: horizon_client::random_sequences::RandomSequences,
+    border: horizon_client::worldborder::WorldBorder,
+    subtitles: subtitle_hud::SubtitleState,
     adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
@@ -999,6 +1025,7 @@ impl Game<'_> {
     /// Block.popResource
     fn pop_resource(&mut self, pos: [i32; 3], mut stack: ItemStack) {
         self.attach_shulker_contents(pos, &mut stack);
+        self.attach_banner_layers(pos, &mut stack);
         let r = &mut self.world.random;
         let mut offset = || f64::from(r.next_float()) * 0.5 - 0.25;
         let p = [
@@ -1248,6 +1275,12 @@ impl Game<'_> {
                         sounds.pitch * 0.8,
                     );
                 }
+                LevelEvent::LevelEvent {
+                    id: 3006,
+                    pos,
+                    data,
+                } => self.sculk_charge_event(pos, data),
+                LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
                 LevelEvent::LevelEvent { id, pos, .. } => {
                     let c = Some([
                         f64::from(pos.x) + 0.5,
@@ -1397,10 +1430,17 @@ impl Game<'_> {
                         },
                     );
                 }
+                LevelEvent::GameEvent { pos, event, state } => {
+                    self.sculk_level_event(pos, event, state)
+                }
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "shrieker_respond",
+                } => self.shrieker_block_event(pos, state),
                 LevelEvent::GrowTree { .. }
                 | LevelEvent::PlaceFeature { .. }
-                | LevelEvent::BlockEvent { .. }
-                | LevelEvent::GameEvent { .. } => {}
+                | LevelEvent::BlockEvent { .. } => {}
             }
         }
         Ok(())
@@ -1437,6 +1477,12 @@ impl Game<'_> {
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
+            self.post_block_game_event(
+                "minecraft:container_open",
+                [key.0, key.1, key.2],
+                Some(horizon_client::mobs::Who::Player),
+                None,
+            );
             let stat = match &*name {
                 "minecraft:chest" => "open_chest",
                 "minecraft:trapped_chest" => "trigger_trapped_chest",
@@ -1558,6 +1604,9 @@ impl Game<'_> {
         self.process_level_events()
     }
     fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.with_player_actor(|game| game.break_block_as_player(pos))
+    }
+    fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
@@ -1655,6 +1704,9 @@ impl Game<'_> {
         Ok(())
     }
     fn use_item(&mut self) -> Result<()> {
+        self.with_player_actor(|game| game.use_item_as_player())
+    }
+    fn use_item_as_player(&mut self) -> Result<()> {
         // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
         if self.spectator() {
             return Ok(());
@@ -1831,6 +1883,7 @@ impl Game<'_> {
                 .block_entities
                 .insert((target[0], target[1], target[2]), entity);
             self.fill_placed_box(target, &stack);
+            self.fill_placed_banner(target, &stack);
             if sign {
                 self.open_sign_editor((target[0], target[1], target[2]), true);
             }
@@ -1965,6 +2018,8 @@ impl Game<'_> {
         }
         if ticks >= duration {
             self.using = None;
+            // Consumable.onConsume.
+            self.post_entity_event("minecraft:eat", horizon_client::mobs::Who::Player);
             if let Some((nutrition, saturation)) = info.food
                 && let Some(p) = self.player.as_mut()
             {
@@ -2239,15 +2294,21 @@ impl Game<'_> {
             return self.tick_remote();
         }
         self.ticks += 1;
-        self.world.game_time += 1;
-        if self.ui.rules.bool("advance_weather") {
-            self.world.weather.tick(&mut self.world.random);
+        // `/tick freeze` stops the world but not the player.
+        let running = self.clock.world_runs();
+        if running {
+            self.world.game_time += 1;
+            if self.ui.rules.bool("advance_weather") {
+                self.world.weather.tick(&mut self.world.random);
+            }
+            self.tick_weather_effects();
         }
-        self.tick_weather_effects();
         if self.ticks.is_multiple_of(6000) {
             self.save_game()?;
         }
-        self.advance_clock();
+        if running {
+            self.advance_clock();
+        }
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
@@ -2417,6 +2478,7 @@ impl Game<'_> {
             self.death_message();
             // ServerPlayer.die: deaths, and the time-since counters restart.
             self.stats.custom("deaths", 1);
+            self.score_player_died();
             if let Some(kind) = killer {
                 self.stats.add("killed_by", &kind, 1);
                 let view = horizon_client::advancements::EntityView {
@@ -2452,31 +2514,41 @@ impl Game<'_> {
         self.tick_burning();
         self.tick_using();
         self.titles.tick();
-        self.tick_paintings();
-        self.tick_item_frames();
-        self.tick_armor_stands();
-        self.tick_boats();
-        self.tick_carts();
-        self.tick_thunder();
-        self.tick_lecterns();
-        self.tick_maps();
-        self.tick_bolts();
-        self.tick_fishing();
-        self.tick_tridents();
-        self.tick_rockets();
+        if running {
+            self.tick_paintings();
+            self.tick_item_frames();
+            self.tick_armor_stands();
+            self.tick_boats();
+            self.tick_carts();
+            self.tick_thunder();
+            self.tick_lecterns();
+            self.tick_maps();
+            self.tick_bolts();
+            self.tick_fishing();
+            self.tick_tridents();
+            self.tick_rockets();
+        }
         self.tick_mining()?;
-        self.tick_items();
+        if running {
+            self.tick_items();
+        }
         self.spawn_loaded_entities();
-        self.tick_mobs()?;
-        self.tick_experience();
+        if running {
+            self.tick_mobs()?;
+            self.tick_experience();
+        }
         self.tick_hand();
         self.tick_sleep();
         self.tick_portal()?;
-        self.tick_end()?;
+        if running {
+            self.tick_end()?;
+        }
         self.postprocess_chunks()?;
-        self.tick_blocks()?;
-        self.tick_falling()?;
-        self.tick_tnt()?;
+        if running {
+            self.tick_blocks()?;
+            self.tick_falling()?;
+            self.tick_tnt()?;
+        }
         if let Some(p) = &self.player {
             // Player.aiStep bob and Entity.walkDist (0.6 per block).
             let (dx, dz) = (
@@ -2494,8 +2566,11 @@ impl Game<'_> {
             };
             self.bob.1 += (target - self.bob.1) * 0.4;
         }
-        self.tick_block_entities()?;
-        self.tick_brewing_stands()?;
+        if running {
+            self.tick_block_entities()?;
+            self.tick_sculk()?;
+            self.tick_brewing_stands()?;
+        }
         if let Some(r) = &self.renderer {
             let eye = self.player.as_ref().map(|p| {
                 [
@@ -2678,13 +2753,18 @@ impl Game<'_> {
             .map(|t| Icon::Flat(t.trim_start_matches("minecraft:").to_owned()))
     }
     fn draw_item(&mut self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
-        if &*stack.item == "minecraft:shield" {
-            shield::draw_shield_icon(batch, &self.res.atlas, x, y);
-            return;
-        }
-        let icon = self.icon(&stack.item);
+        // Special-model items: the shield and banners draw their own 3D icon.
+        let banner = if &*stack.item == "minecraft:shield" {
+            let passes = shield::shield_passes(&self.res.stations.banners, stack);
+            shield::draw_shield_icon(batch, &self.res.atlas, x, y, &passes);
+            true
+        } else {
+            self.draw_banner_icon(batch, stack, x, y)
+        };
+        let icon = if banner { None } else { self.icon(&stack.item) };
         let atlas = &self.res.atlas;
         match icon {
+            None if banner => {}
             Some(Icon::Flat(name)) => batch.sprite_scaled(atlas, &name, x, y, 16.0, 16.0, u32::MAX),
             Some(Icon::Cube {
                 top,
@@ -2843,7 +2923,10 @@ impl Game<'_> {
         self.draw_effect_icons(&mut batch);
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
         self.draw_boss_bar(&mut batch);
+        self.draw_custom_bossbars(&mut batch, 12.0 + 19.0 * self.builtin_bar_count() as f32);
         self.draw_titles(&mut batch);
+        self.draw_scoreboard(&mut batch);
+        self.draw_subtitles(&mut batch);
         // Gui.renderVehicleHealth / the jump bar while riding a mount.
         let mounted = !self.creative && !spectator && self.draw_mount_hud(&mut batch, w, h);
         let atlas = &self.res.atlas;
@@ -3042,7 +3125,7 @@ impl Game<'_> {
     }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
         (
-            (batch.width - 176.0) / 2.0,
+            (batch.width - 176.0) / 2.0 + self.recipe_book_shift(batch.width),
             (batch.height - self.screen_height()) / 2.0,
         )
     }
@@ -3053,19 +3136,22 @@ impl Game<'_> {
     }
     /// 300.. are the open container's slots.
     fn slots(&self) -> Vec<usize> {
-        if let Some(v) = self.station_slots() {
+        if let Some(v) = self.station_slots().or_else(|| self.mount_slots()) {
             return v;
         }
         let mut v: Vec<usize> = (0..36).collect();
         match self.container_kind() {
-            Some(BlockEntity::Chest(items)) => v.extend((0..items.len()).map(|i| 300 + i)),
+            Some(BlockEntity::Chest(_)) => v.extend((0..self.container_size()).map(|i| 300 + i)),
             Some(BlockEntity::Furnace(_)) => v.extend(300..303),
             Some(BlockEntity::Brewing(_)) => v.extend(300..305),
+            Some(BlockEntity::Crafter(_)) => v.extend(300..310),
             Some(
                 BlockEntity::Sign(_)
                 | BlockEntity::Jukebox(_)
                 | BlockEntity::Beacon(_)
                 | BlockEntity::Lectern(_)
+                | BlockEntity::Sculk(_)
+                | BlockEntity::Banner(_)
                 | BlockEntity::CreakingHeart(_),
             ) => {}
             None => {
@@ -3083,15 +3169,18 @@ impl Game<'_> {
         if let Some(p) = self
             .station_slot_position(i)
             .or_else(|| self.machine_slot_position(i))
+            .or_else(|| self.crafter_slot_position(i))
+            .or_else(|| self.mount_slot_position(i))
         {
             return p;
         }
         let table = self.craft_size == 3;
         // ContainerScreen (3 rows) shifts the player inventory down by one pixel.
-        let shift = if matches!(self.container_kind(), Some(BlockEntity::Chest(_))) {
-            1.0
-        } else {
-            0.0
+        // ChestMenu: the inventory sits `18 * (rows - 3) + 1` lower than the
+        // 3-row layout of the other menus.
+        let shift = match self.chest_rows() {
+            Some(rows) => 1.0 + (rows as f32 - 3.0) * 18.0,
+            None => 0.0,
         };
         match i {
             0..9 => (8.0 + i as f32 * 18.0, 142.0 + shift),
@@ -3137,6 +3226,9 @@ impl Game<'_> {
         })
     }
     fn slot_mut(&mut self, i: usize) -> &mut Option<ItemStack> {
+        if i >= mount_menu::SADDLE {
+            return self.mount_slot_mut(i);
+        }
         if i >= stations::INPUT {
             return self.station_slot_mut(i);
         }
@@ -3147,19 +3239,20 @@ impl Game<'_> {
             return &mut self.offhand;
         }
         if i >= 300 {
-            let key = self.container;
-            return match key.and_then(|k| self.world.block_entities.get_mut(&k)) {
-                Some(e) => e
-                    .slots_mut()
-                    .get_mut(i - 300)
-                    .unwrap_or(&mut self.scratch_slot),
-                None => &mut self.scratch_slot,
-            };
+            return self.container_slot_mut(i - 300);
         }
         if (100..109).contains(&i) {
             &mut self.craft_grid[i - 100]
         } else {
             &mut self.inventory[i]
+        }
+    }
+    /// What a slot shows: the crafting result slots are computed.
+    fn slot_view(&mut self, i: usize) -> Option<ItemStack> {
+        match i {
+            200 => self.craft_result(),
+            309 => self.crafter_result(),
+            _ => self.slot_mut(i).clone(),
         }
     }
     fn craft_result(&self) -> Option<ItemStack> {
@@ -3205,42 +3298,7 @@ impl Game<'_> {
                 .and_then(|k| self.world.block_entities.get(&k))
             {
                 Some(BlockEntity::Chest(_)) if self.draw_machine_screen(batch, ox, oy) => {}
-                Some(BlockEntity::Chest(_)) => {
-                    // ContainerScreen with 3 rows: top 71px, then the player inventory from v=126.
-                    part(
-                        batch,
-                        "gui/container/generic_54",
-                        0.0,
-                        0.0,
-                        176.0,
-                        71.0,
-                        ox,
-                        oy,
-                    );
-                    part(
-                        batch,
-                        "gui/container/generic_54",
-                        0.0,
-                        126.0,
-                        176.0,
-                        96.0,
-                        ox,
-                        oy + 71.0,
-                    );
-                    let name = self
-                        .container
-                        .map(|k| self.world.block(k.0, k.1, k.2))
-                        .map(|s| self.res.facts.get(s).name.clone());
-                    let title = if self.open_cart_kind().is_some() {
-                        "Minecart with Chest"
-                    } else if name.as_deref() == Some("minecraft:barrel") {
-                        "Barrel"
-                    } else {
-                        "Chest"
-                    };
-                    batch.text(atlas, title, ox + 8.0, oy + 6.0, grey, false);
-                    batch.text(atlas, "Inventory", ox + 8.0, oy + 73.0, grey, false);
-                }
+                Some(BlockEntity::Chest(_)) => self.draw_chest_screen(batch, ox, oy),
                 Some(BlockEntity::Furnace(f)) => {
                     let (tex, title) = match f.kind {
                         horizon_client::containers::FurnaceKind::Furnace => {
@@ -3287,13 +3345,17 @@ impl Game<'_> {
                     }
                 }
                 Some(BlockEntity::Brewing(_)) => {}
+                Some(BlockEntity::Crafter(_)) => self.draw_crafter_screen(batch, ox, oy),
                 Some(
                     BlockEntity::Sign(_)
                     | BlockEntity::Jukebox(_)
                     | BlockEntity::Beacon(_)
                     | BlockEntity::Lectern(_)
+                    | BlockEntity::Sculk(_)
+                    | BlockEntity::Banner(_)
                     | BlockEntity::CreakingHeart(_),
                 ) => {}
+                None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
                     let texture = if self.craft_size == 3 {
                         "gui/container/crafting_table"
@@ -3320,7 +3382,7 @@ impl Game<'_> {
                 }
             }
         }
-        if self.container.is_none() && self.craft_size != 3 {
+        if self.container.is_none() && self.craft_size != 3 && !self.mount_active() {
             self.draw_inventory_player(batch, ox, oy);
         }
         for i in self.slots() {
@@ -3342,15 +3404,12 @@ impl Game<'_> {
                     oy + sy,
                 );
             }
-            let stack = if i == 200 {
-                self.craft_result()
-            } else {
-                self.slot_mut(i).clone()
-            };
+            let stack = self.slot_view(i);
             if let Some(stack) = stack {
                 self.draw_item(batch, &stack, ox + sx, oy + sy);
             }
         }
+        self.draw_recipe_book(batch);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
             batch.fill(
@@ -3369,6 +3428,8 @@ impl Game<'_> {
     }
     pub(super) fn close_container(&mut self) {
         self.close_station();
+        self.mount_closed();
+        self.recipe_ui.reset_screen();
         if self.remote.is_some() {
             return self.remote_close_container();
         }
@@ -3383,6 +3444,12 @@ impl Game<'_> {
         }
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
+            self.post_block_game_event(
+                "minecraft:container_close",
+                [key.0, key.1, key.2],
+                Some(horizon_client::mobs::Who::Player),
+                None,
+            );
             let name = self
                 .res
                 .facts
@@ -3418,6 +3485,12 @@ impl Game<'_> {
         self.close_cart_container();
     }
     fn click_inventory(&mut self, right: bool) {
+        if self.mount_click(right) {
+            return;
+        }
+        if self.recipe_book_click(right) {
+            return;
+        }
         if self.station_click(right) {
             return;
         }
@@ -3435,6 +3508,17 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return;
         };
+        let held_shift =
+            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        if self.crafter_click(slot, held_shift) {
+            return;
+        }
+        if held_shift && self.container.is_some() && self.container_quick_move(slot) {
+            if let Some(key) = self.container {
+                self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+            }
+            return;
+        }
         if let Some(c) = &self.carried
             && self.refuses(slot, c)
         {
@@ -3480,6 +3564,12 @@ impl Game<'_> {
             let mut crafted = 0;
             while let Some(result) = self.craft_result() {
                 let made = (result.item.clone(), result.count);
+                let cells = self.craft_size * self.craft_size;
+                let remainders = self.res.recipes.remainders(
+                    &self.res.items,
+                    &self.craft_grid[..cells],
+                    &result,
+                );
                 if shift {
                     if self.give(result).is_some() {
                         break;
@@ -3502,6 +3592,14 @@ impl Game<'_> {
                         if s.count == 0 {
                             *cell = None;
                         }
+                    }
+                }
+                for (i, rest) in remainders.into_iter().enumerate() {
+                    let Some(rest) = rest else { continue };
+                    match &mut self.craft_grid[i] {
+                        cell @ None => *cell = Some(rest),
+                        Some(c) if c.same_item_same_components(&rest) => c.count += rest.count,
+                        _ => self.give_or_drop(rest),
                     }
                 }
                 crafted += 1;
@@ -3894,6 +3992,7 @@ impl Game<'_> {
                     Some(BlockEntity::Sign(sign)) => Some(sign),
                     _ => None,
                 },
+                banner: &|p| self.banner_layers_at(p),
                 glyph: &|c| self.res.atlas.glyph(c),
             };
             self.res
@@ -4334,6 +4433,8 @@ impl Game<'_> {
     }
     fn tick_block_entities(&mut self) -> Result<()> {
         self.tick_hoppers()?;
+        self.tick_crafters();
+        self.tick_mount_menu();
         self.tick_jukeboxes();
         self.tick_beacons();
         self.tick_creaking_hearts()?;
@@ -4392,6 +4493,11 @@ impl Game<'_> {
         self.tick_creatures()?;
         self.position_rider();
         self.tick_stats();
+        self.tick_scoreboard();
+        self.load_bossbars();
+        self.tick_functions();
+        self.tick_worldborder();
+        self.tick_subtitles();
         self.spawn_phantoms();
         self.tick_advancements();
         self.tick_player_model();
@@ -4590,6 +4696,11 @@ impl Game<'_> {
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         horizon_client::save::migrate_legacy(&save_root)?;
         self.persist = Default::default();
+        self.score = Default::default();
+        self.fns = Default::default();
+        self.bosses = Default::default();
+        self.rand_sequences = Default::default();
+        self.border = Default::default();
         let level = Level::read(&save_root).unwrap_or_else(|| Level {
             name: name.unwrap_or(folder).to_owned(),
             // WorldOptions.randomSeed when no seed was given.
@@ -5712,6 +5823,7 @@ impl Game<'_> {
             on_ground,
         );
         self.creatures.projectiles.push(arrow);
+        self.player_projectile_shot();
         let pitch = 1.0 / (self.world.random.next_float() * 0.4 + 1.2) + power * 0.5;
         self.audio
             .play("minecraft:entity.arrow.shoot", Some(eye), 1.0, pitch);
@@ -5788,6 +5900,10 @@ impl Game<'_> {
             }
             first(&d["model"])
         });
+        if item.ends_with("_banner") {
+            // The banner item model is a special renderer over this base model.
+            current = Some("minecraft:item/template_banner".to_owned());
+        }
         for _ in 0..16 {
             let Some(m) = current.take() else { break };
             let path = m.trim_start_matches("minecraft:").to_owned();
@@ -5934,6 +6050,9 @@ impl Game<'_> {
                     * glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::XYZ, deg(rot[0]), deg(rot[1]), deg(rot[2])))
                     * glam::Mat4::from_scale(glam::Vec3::from(scale))
                     * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
+                if self.held_banner_geometry(m, &stack, packed, &mut out) {
+                    return out;
+                }
                 let atlas = &self.res.atlas;
                 let quad = |corners: [glam::Vec3; 4],
                             name: &str,
@@ -6511,24 +6630,8 @@ impl Game<'_> {
             self.carried = None;
         }
     }
-    fn save_game(&mut self) -> Result<()> {
-        if self.remote.is_some() {
-            return Ok(());
-        }
-        let keys: Vec<_> = self.world.modified.drain().collect();
-        let chunks: Vec<_> = keys
-            .iter()
-            .filter_map(|k| self.world.chunks.get(k))
-            .map(|c| self.with_entities(c))
-            .collect();
-        self.save
-            .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
-        self.save_entities()?;
-        self.save_maps();
-        self.save_raids();
-        self.save_fight();
-        self.save_stats();
-        self.save_advancements();
+    /// Copy the live player and world state into the `Level` that gets saved.
+    pub(super) fn sync_level(&mut self) {
         self.level.selected_slot = self.selected as i32;
         let mode = self.mode_id();
         let level = &mut self.level;
@@ -6590,6 +6693,7 @@ impl Game<'_> {
             self.ender_items = items.clone();
         }
         level.ender_items = self.ender_items.clone();
+        level.recipe_book.recipes = self.adv.recipes.iter().cloned().collect();
         level.active_effects = self
             .potions
             .effects
@@ -6605,7 +6709,31 @@ impl Game<'_> {
                 )
             })
             .collect();
-        level.write(&self.world_root)?;
+    }
+    fn save_game(&mut self) -> Result<()> {
+        if self.remote.is_some() {
+            return Ok(());
+        }
+        let keys: Vec<_> = self.world.modified.drain().collect();
+        let chunks: Vec<_> = keys
+            .iter()
+            .filter_map(|k| self.world.chunks.get(k))
+            .map(|c| self.with_entities(c))
+            .collect();
+        self.save
+            .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
+        self.save_entities()?;
+        self.save_maps();
+        self.save_raids();
+        self.save_fight();
+        self.save_stats();
+        self.save_advancements();
+        self.save_scoreboard();
+        self.save_bossbars();
+        self.save_schedule();
+        self.save_warden_tracker();
+        self.sync_level();
+        self.level.write(&self.world_root)?;
         self.save_world_state();
         self.message = Some(("Saved the game".into(), Instant::now()));
         Ok(())
@@ -6715,7 +6843,11 @@ impl Game<'_> {
         }
         let celestial = if title {
             self.panorama_geometry()
-        } else if self.dim == Dim::Overworld {
+        } else if self.dim == Dim::Overworld
+            && self.potions.effects.get("darkness").is_none()
+            && self.potions.effects.get("blindness").is_none()
+        {
+            // Camera.doesMobEffectBlockSky: no sun, moon or stars.
             self.celestial_geometry(&sky)
         } else if self.dim == Dim::End {
             self.end_sky_geometry()
@@ -6794,6 +6926,7 @@ impl Game<'_> {
             screen: &screen,
             game_time: self.world.game_time as f32,
             ticks: self.ticks,
+            darkness: self.darkness_lighting(alpha as f32),
         };
         self.renderer.as_mut().ok_or("renderer")?.render(&frame)
     }
@@ -6824,6 +6957,7 @@ impl Game<'_> {
                 Screen::Advancements => self.close_advancements(),
                 Screen::Chat => self.close_chat(),
             },
+            KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
             // key.advancements.
             KeyCode::KeyL if self.screen == Screen::Playing => self.open_advancements(false),
@@ -6838,12 +6972,15 @@ impl Game<'_> {
             KeyCode::KeyE => match self.screen {
                 Screen::Playing if self.spectator() => {}
                 Screen::Playing => {
-                    self.screen = if self.creative {
-                        Screen::Creative
-                    } else {
-                        Screen::Inventory
-                    };
-                    self.capture(false);
+                    // key.inventory while riding a tamed mount opens its inventory.
+                    if !self.open_ridden_mount_menu() {
+                        self.screen = if self.creative {
+                            Screen::Creative
+                        } else {
+                            Screen::Inventory
+                        };
+                        self.capture(false);
+                    }
                 }
                 Screen::Creative => {
                     if let Some(c) = self.carried.take() {
@@ -7062,6 +7199,9 @@ impl ApplicationHandler for Game<'_> {
                         if self.screen == Screen::Advancements {
                             self.advancements_drag();
                         }
+                        if self.screen == Screen::Inventory {
+                            self.loom_drag();
+                        }
                         if self.dragging && self.screen == Screen::Options {
                             let _ = b;
                             self.options_drag()?;
@@ -7193,6 +7333,7 @@ impl ApplicationHandler for Game<'_> {
                                 self.container_changed(key);
                             }
                         }
+                        Screen::Inventory => self.loom_release(),
                         Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
@@ -7253,6 +7394,14 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     self.creative_screen.scroll = 0.0;
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.recipe_search_focused()
+                        && event.state == ElementState::Pressed
+                        && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
+                {
+                    // The recipe book's search box takes every key but Escape.
+                    self.recipe_key(&event);
                 }
                 WindowEvent::KeyboardInput { event, .. }
                     if self.station_typing()
@@ -7333,12 +7482,14 @@ impl ApplicationHandler for Game<'_> {
                     }
                     let steps = self.clock.advance(elapsed);
                     for _ in 0..steps {
+                        let started = Instant::now();
                         if self.title.is_none() {
                             self.tick()?;
                             self.tick_ambience();
                             self.tick_fov();
                         }
                         self.tick_music();
+                        self.clock.record(started.elapsed());
                     }
                     let rendered = self.render()?;
                     let finished = self
@@ -7626,6 +7777,7 @@ pub fn run() -> Result<()> {
         mobs: Vec::new(),
         arrows: Vec::new(),
         creatures: Default::default(),
+        sculk: Default::default(),
         raiding: Default::default(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
@@ -7695,6 +7847,9 @@ pub fn run() -> Result<()> {
         ender_items: vec![None; 27],
         ender_open: None,
         pending_shulker: HashMap::new(),
+        pending_banner: HashMap::new(),
+        recipe_ui: Default::default(),
+        mount_menu: Default::default(),
         hook: None,
         tridents: Vec::new(),
         rockets: Vec::new(),
@@ -7713,6 +7868,13 @@ pub fn run() -> Result<()> {
         combat: Default::default(),
         mount: Default::default(),
         stats: Default::default(),
+        score: Default::default(),
+        fns: Default::default(),
+        bosses: Default::default(),
+        exec: Default::default(),
+        rand_sequences: Default::default(),
+        border: Default::default(),
+        subtitles: Default::default(),
         adv: Default::default(),
         stats_ui: Default::default(),
         adv_ui: Default::default(),

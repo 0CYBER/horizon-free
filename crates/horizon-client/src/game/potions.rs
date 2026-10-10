@@ -187,6 +187,7 @@ impl Game<'_> {
             return true;
         }
         self.using = None;
+        self.post_entity_event("minecraft:drink", horizon_client::mobs::Who::Player);
         if ominous {
             self.drink_ominous_bottle(slot, stack);
             return true;

@@ -126,6 +126,10 @@ impl Game<'_> {
         Some([x, top.y, z])
     }
     pub(super) fn spawn_bolt(&mut self, at: [f64; 3], visual_only: bool) {
+        if !visual_only {
+            let ctx = horizon_client::sculk::Context::default();
+            self.post_game_event("minecraft:lightning_strike", at, ctx);
+        }
         let r = &mut self.world.random;
         let seed = r.next_long();
         let flashes = r.next_int_bound(3).unwrap_or(0) + 1;
