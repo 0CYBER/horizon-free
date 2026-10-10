@@ -144,6 +144,8 @@ def nbt_matches(vanilla, rust, default):
     Horizon sets must match, and every other vanilla key must be the fresh default."""
     if isinstance(vanilla, dict) and isinstance(rust, dict):
         default = default if isinstance(default, dict) else {}
+        if 'LootTableSeed' in rust and 'LootTable' not in rust:
+            rust = {k: v for k, v in rust.items() if k != 'LootTableSeed'}  # vanilla saves the seed only with a table
         for key, value in vanilla.items():
             if key in ('x', 'y', 'z') or (key == 'components' and value == {}):
                 continue
@@ -152,7 +154,7 @@ def nbt_matches(vanilla, rust, default):
                     return False
             elif value != default.get(key):
                 return False
-        return all(key in vanilla or key in ('x', 'y', 'z') for key in rust)
+        return all(key in vanilla or key in ('x', 'y', 'z') or nbt_matches(default.get(key), rust[key], None) for key in rust)
     if isinstance(vanilla, list) and isinstance(rust, list):
         return len(vanilla) == len(rust) and all(nbt_matches(a, b, None) for a, b in zip(vanilla, rust))
     if isinstance(vanilla, tuple) and isinstance(rust, tuple) and vanilla[0] in 'bsil' and rust[0] in 'bsil':
@@ -162,8 +164,11 @@ def nbt_matches(vanilla, rust, default):
 
 
 def entity_matches(vanilla, rust):
-    if rust is None or vanilla is None:
+    if vanilla is None:
         return False
+    if rust is None:
+        # A DUMMY pending entry in a proto chunk: vanilla creates the default block entity on demand.
+        return nbt_matches(parse_nbt(vanilla[0])[0], {}, parse_nbt(vanilla[1])[0])
     return nbt_matches(parse_nbt(vanilla[0])[0], parse_nbt(rust[0])[0], parse_nbt(vanilla[1])[0])
 
 

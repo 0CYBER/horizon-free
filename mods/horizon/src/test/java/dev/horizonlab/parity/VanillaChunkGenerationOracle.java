@@ -101,7 +101,7 @@ public final class VanillaChunkGenerationOracle {
         }
         @Override
         public net.minecraft.world.flag.FeatureFlagSet enabledFeatures() {
-            return net.minecraft.world.flag.FeatureFlagSet.of();
+            return net.minecraft.world.flag.FeatureFlags.DEFAULT_FLAGS; // an empty set filters every block out of holderLookup, so jigsaw final states fail to parse
         }
         @Override
         public RegistryAccess registryAccess() {
@@ -318,7 +318,7 @@ public final class VanillaChunkGenerationOracle {
                         var id = access.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure());
                         if (System.getenv("HORIZON_PIECES") != null) for (var piece : start.getPieces()) {
                             var pb = piece.getBoundingBox();
-                            w.println("piece " + x + " " + z + " " + net.minecraft.core.registries.BuiltInRegistries.STRUCTURE_PIECE.getKey(piece.getType()) + " " + pb.minX() + " " + pb.minY() + " " + pb.minZ() + " " + pb.maxX() + " " + pb.maxY() + " " + pb.maxZ());
+                            w.println("piece " + x + " " + z + " " + net.minecraft.core.registries.BuiltInRegistries.STRUCTURE_PIECE.getKey(piece.getType()) + " " + pb.minX() + " " + pb.minY() + " " + pb.minZ() + " " + pb.maxX() + " " + pb.maxY() + " " + pb.maxZ() + (piece instanceof net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece pool ? " " + pool.getElement() + " rot=" + pool.getRotation() : ""));
                         }
                         w.println("start " + id + " " + x + " " + z + " " + box.minX() + " " + box.minY() + " " + box.minZ() + " " + box.maxX() + " " + box.maxY() + " " + box.maxZ());
                     }
