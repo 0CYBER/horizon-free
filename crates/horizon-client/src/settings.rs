@@ -2,7 +2,8 @@
 //! encodings (Options.processOptions); lines Horizon does not know are kept.
 //! The option screens live in `options_ui`.
 use crate::keybinds::KeyBinds;
-use std::{collections::BTreeMap, fs, path::Path};
+use crate::options_file::{OptionsFile, V};
+use std::{fs, path::Path};
 
 /// SoundSource names in vanilla order.
 pub const SOUND_SOURCES: [&str; 11] = [
@@ -20,7 +21,7 @@ pub fn set_source_volumes(volumes: [f32; 11]) {
 pub fn sound_source(event: &str) -> usize {
     let e = event.trim_start_matches("minecraft:");
     let index = |name: &str| SOUND_SOURCES.iter().position(|n| *n == name).unwrap_or(0);
-    const HOSTILE: [&str; 24] = [
+    const HOSTILE: [&str; 25] = [
         "zombie",
         "skeleton",
         "creeper",
@@ -39,6 +40,7 @@ pub fn sound_source(event: &str) -> usize {
         "pillager",
         "vindicator",
         "evoker",
+        "illusioner",
         "ravager",
         "guardian",
         "elder_guardian",
@@ -166,8 +168,13 @@ pub struct Settings {
     /// Enabled resource packs, bottom first (resourcePacks).
     pub resource_packs: Vec<String>,
     pub keys: KeyBinds,
-    /// Lines Horizon does not interpret, kept verbatim.
-    pub extra: BTreeMap<String, String>,
+    /// Every option in its stored form (the typed fields above mirror it).
+    pub file: OptionsFile,
+    pub invert_x: bool,
+    pub toggle_attack: bool,
+    pub toggle_use: bool,
+    /// Taps of the sprint key counted as double taps (sprintWindow).
+    pub sprint_window: i32,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -229,267 +236,228 @@ impl Default for Settings {
             show_subtitles: false,
             notification_display_time: 1.0,
             main_hand_left: false,
-            resource_packs: vec!["vanilla".into()],
+            resource_packs: Vec::new(),
             keys: KeyBinds::default(),
-            extra: BTreeMap::new(),
+            file: OptionsFile::default(),
+            invert_x: false,
+            toggle_attack: false,
+            toggle_use: false,
+            sprint_window: 7,
         }
     }
 }
-fn unquote(v: &str) -> &str {
-    v.strip_prefix('"')
-        .and_then(|v| v.strip_suffix('"'))
-        .unwrap_or(v)
+fn put_f(f: &mut OptionsFile, key: &str, v: f32) {
+    if v != f.double(key) as f32 {
+        f.set(key, V::Double(f64::from(v)));
+    }
 }
-fn parse_list(v: &str) -> Vec<String> {
-    serde_json::from_str::<Vec<String>>(v).unwrap_or_default()
+fn put_i(f: &mut OptionsFile, key: &str, v: i32) {
+    if v != f.int(key) {
+        f.set(key, V::Int(v));
+    }
+}
+fn put_b(f: &mut OptionsFile, key: &str, v: bool) {
+    if v != f.bool(key) {
+        f.set(key, V::Bool(v));
+    }
+}
+fn put_name(f: &mut OptionsFile, key: &str, v: &str) {
+    if v != f.name(key) {
+        f.set_name(key, v);
+    }
+}
+fn put_s(f: &mut OptionsFile, key: &str, v: &str) {
+    if v != f.string(key) {
+        f.set(key, V::Str(v.to_owned()));
+    }
 }
 impl Settings {
     pub fn load(path: &Path) -> Self {
-        let Ok(text) = fs::read_to_string(path) else {
+        let Ok(bytes) = fs::read(path) else {
             return Self::default();
         };
-        Self::parse(&text)
+        Self::parse(&String::from_utf8_lossy(&bytes))
     }
     pub fn parse(text: &str) -> Self {
-        let mut s = Self::default();
-        for line in text.lines() {
-            let Some((k, v)) = line.split_once(':') else {
-                continue;
-            };
-            let f = |d: f32| v.parse::<f32>().unwrap_or(d);
-            let b = |d: bool| match v {
-                "true" => true,
-                "false" => false,
-                _ => d,
-            };
-            let i = |d: i32| v.parse::<i32>().unwrap_or(d);
-            match k {
-                "version" => {}
-                "fov" => {
-                    s.fov = v
-                        .parse::<f32>()
-                        .map_or(70.0, |f| (f * 40.0 + 70.0).round().clamp(30.0, 110.0))
-                }
-                "renderDistance" => s.render_distance = i(12).clamp(2, 32),
-                "simulationDistance" => s.simulation_distance = i(12).clamp(5, 32),
-                "mouseSensitivity" => s.sensitivity = f(0.5).clamp(0.0, 1.0),
-                "guiScale" => s.gui_scale = v.parse().unwrap_or(0),
-                "bobView" => s.view_bobbing = b(true),
-                "gamma" => s.gamma = f(0.5).clamp(0.0, 1.0),
-                "maxFps" => s.max_fps = v.parse::<u32>().unwrap_or(260).clamp(10, 260),
-                "enableVsync" => s.vsync = b(true),
-                "fullscreen" => s.fullscreen = b(false),
-                "ao" => s.smooth_lighting = b(true),
-                "renderClouds" => s.clouds = unquote(v).to_owned(),
-                "cloudRange" => s.cloud_range = i(128).clamp(2, 128),
-                "particles" => s.particles = v.parse::<u8>().unwrap_or(0).min(2),
-                "entityDistanceScaling" => s.entity_distance = f(1.0).clamp(0.5, 5.0),
-                "entityShadows" => s.entity_shadows = b(true),
-                "biomeBlendRadius" => s.biome_blend = i(2).clamp(0, 7),
-                "graphicsPreset" => s.graphics_preset = unquote(v).to_owned(),
-                "mipmapLevels" => s.mipmap_levels = i(4).clamp(0, 4),
-                "weatherRadius" => s.weather_radius = i(10).clamp(3, 10),
-                "chunkSectionFadeInTime" => s.chunk_fade = f(0.75).clamp(0.0, 2.0),
-                "vignette" => s.vignette = b(true),
-                "showAutosaveIndicator" => s.autosave_indicator = b(true),
-                "cutoutLeaves" => s.cutout_leaves = b(true),
-                "improvedTransparency" => s.improved_transparency = b(false),
-                "attackIndicator" => s.attack_indicator = v.parse::<u8>().unwrap_or(1).min(2),
-                "inactivityFpsLimit" => s.inactivity_fps_limit = unquote(v).to_owned(),
-                "prioritizeChunkUpdates" => {
-                    s.prioritize_chunk_updates = v.parse::<u8>().unwrap_or(0).min(2)
-                }
-                "menuBackgroundBlurriness" => s.menu_blur = i(5).clamp(0, 10),
-                "invertYMouse" => s.invert_y = b(false),
-                "mouseWheelSensitivity" => s.mouse_wheel_sensitivity = f(1.0).clamp(0.01, 10.0),
-                "discrete_mouse_scroll" => s.discrete_scroll = b(false),
-                "toggleCrouch" => s.toggle_crouch = b(false),
-                "toggleSprint" => s.toggle_sprint = b(false),
-                "autoJump" => s.auto_jump = b(false),
-                "lang" => s.language = v.to_owned(),
-                "forceUnicodeFont" => s.force_unicode = b(false),
-                "japaneseGlyphVariants" => s.japanese_glyphs = b(false),
-                "chatVisibility" => s.chat_visibility = v.parse::<u8>().unwrap_or(0).min(2),
-                "chatColors" => s.chat_colors = b(true),
-                "chatLinks" => s.chat_links = b(true),
-                "chatOpacity" => s.chat_opacity = f(1.0).clamp(0.0, 1.0),
-                "textBackgroundOpacity" => s.text_background_opacity = f(0.5).clamp(0.0, 1.0),
-                "chatScale" => s.chat_scale = f(1.0).clamp(0.0, 1.0),
-                "chatWidth" => s.chat_width = f(1.0).clamp(0.0, 1.0),
-                "chatHeightFocused" => s.chat_height_focused = f(1.0).clamp(0.0, 1.0),
-                "chatHeightUnfocused" => s.chat_height_unfocused = f(0.4375).clamp(0.0, 1.0),
-                "chatLineSpacing" => s.chat_line_spacing = f(0.0).clamp(0.0, 1.0),
-                "autoSuggestions" => s.auto_suggestions = b(true),
-                "reducedDebugInfo" => s.reduced_debug_info = b(false),
-                "highContrast" => s.high_contrast = b(false),
-                "showSubtitles" => s.show_subtitles = b(false),
-                "notificationDisplayTime" => {
-                    s.notification_display_time = f(1.0).clamp(0.5, 10.0);
-                }
-                "mainHand" => s.main_hand_left = unquote(v) == "left",
-                "resourcePacks" => s.resource_packs = parse_list(v),
-                _ if k.starts_with("key_") => {
-                    if !s.keys.set_saved(&k[4..], v) {
-                        s.extra.insert(k.to_owned(), v.to_owned());
-                    }
-                }
-                _ if k.starts_with("soundCategory_") => {
-                    let name = &k["soundCategory_".len()..];
-                    match SOUND_SOURCES.iter().position(|n| *n == name) {
-                        Some(0) => s.master_volume = f(1.0).clamp(0.0, 1.0),
-                        Some(i) => s.volumes[i] = f(1.0).clamp(0.0, 1.0),
-                        None => {
-                            s.extra.insert(k.to_owned(), v.to_owned());
-                        }
-                    }
-                }
-                _ => {
-                    s.extra.insert(k.to_owned(), v.to_owned());
-                }
-            }
-        }
-        s
+        Self::from_file(OptionsFile::parse(text))
     }
-    /// The `options.txt` text (Options.save: `version` first, then key:value).
-    pub fn serialize(&self) -> String {
-        let mut lines: Vec<(String, String)> = vec![
-            ("ao".into(), self.smooth_lighting.to_string()),
-            ("biomeBlendRadius".into(), self.biome_blend.to_string()),
-            ("chunkSectionFadeInTime".into(), self.chunk_fade.to_string()),
-            ("cutoutLeaves".into(), self.cutout_leaves.to_string()),
-            ("enableVsync".into(), self.vsync.to_string()),
-            (
-                "entityDistanceScaling".into(),
-                self.entity_distance.to_string(),
-            ),
-            ("entityShadows".into(), self.entity_shadows.to_string()),
-            ("forceUnicodeFont".into(), self.force_unicode.to_string()),
-            (
-                "japaneseGlyphVariants".into(),
-                self.japanese_glyphs.to_string(),
-            ),
-            ("fov".into(), ((self.fov - 70.0) / 40.0).to_string()),
-            (
-                "graphicsPreset".into(),
-                format!("\"{}\"", self.graphics_preset),
-            ),
-            (
-                "prioritizeChunkUpdates".into(),
-                self.prioritize_chunk_updates.to_string(),
-            ),
-            ("fullscreen".into(), self.fullscreen.to_string()),
-            ("gamma".into(), self.gamma.to_string()),
-            ("guiScale".into(), self.gui_scale.to_string()),
-            ("maxFps".into(), self.max_fps.to_string()),
-            (
-                "improvedTransparency".into(),
-                self.improved_transparency.to_string(),
-            ),
-            (
-                "inactivityFpsLimit".into(),
-                format!("\"{}\"", self.inactivity_fps_limit),
-            ),
-            ("mipmapLevels".into(), self.mipmap_levels.to_string()),
-            ("particles".into(), self.particles.to_string()),
-            (
-                "reducedDebugInfo".into(),
-                self.reduced_debug_info.to_string(),
-            ),
-            ("renderClouds".into(), format!("\"{}\"", self.clouds)),
-            ("cloudRange".into(), self.cloud_range.to_string()),
-            ("renderDistance".into(), self.render_distance.to_string()),
-            (
-                "simulationDistance".into(),
-                self.simulation_distance.to_string(),
-            ),
-            ("vignette".into(), self.vignette.to_string()),
-            ("weatherRadius".into(), self.weather_radius.to_string()),
-            ("autoJump".into(), self.auto_jump.to_string()),
-            ("autoSuggestions".into(), self.auto_suggestions.to_string()),
-            ("chatColors".into(), self.chat_colors.to_string()),
-            ("chatLinks".into(), self.chat_links.to_string()),
-            (
-                "discrete_mouse_scroll".into(),
-                self.discrete_scroll.to_string(),
-            ),
-            ("invertYMouse".into(), self.invert_y.to_string()),
-            ("bobView".into(), self.view_bobbing.to_string()),
-            ("toggleCrouch".into(), self.toggle_crouch.to_string()),
-            ("toggleSprint".into(), self.toggle_sprint.to_string()),
-            ("mouseSensitivity".into(), self.sensitivity.to_string()),
-            ("highContrast".into(), self.high_contrast.to_string()),
-            ("showSubtitles".into(), self.show_subtitles.to_string()),
-            (
-                "notificationDisplayTime".into(),
-                self.notification_display_time.to_string(),
-            ),
-            (
-                "resourcePacks".into(),
-                serde_json::to_string(&self.resource_packs).unwrap_or_else(|_| "[]".into()),
-            ),
-            ("lang".into(), self.language.clone()),
-            ("chatVisibility".into(), self.chat_visibility.to_string()),
-            ("chatOpacity".into(), self.chat_opacity.to_string()),
-            ("chatLineSpacing".into(), self.chat_line_spacing.to_string()),
-            (
-                "textBackgroundOpacity".into(),
-                self.text_background_opacity.to_string(),
-            ),
-            (
-                "chatHeightFocused".into(),
-                self.chat_height_focused.to_string(),
-            ),
-            (
-                "chatHeightUnfocused".into(),
-                self.chat_height_unfocused.to_string(),
-            ),
-            ("chatScale".into(), self.chat_scale.to_string()),
-            ("chatWidth".into(), self.chat_width.to_string()),
-            (
-                "mainHand".into(),
-                if self.main_hand_left {
-                    "\"left\"".into()
-                } else {
-                    "\"right\"".into()
-                },
-            ),
-            ("attackIndicator".into(), self.attack_indicator.to_string()),
-            (
-                "mouseWheelSensitivity".into(),
-                self.mouse_wheel_sensitivity.to_string(),
-            ),
-            (
-                "showAutosaveIndicator".into(),
-                self.autosave_indicator.to_string(),
-            ),
-            (
-                "menuBackgroundBlurriness".into(),
-                self.menu_blur.to_string(),
-            ),
-        ];
-        for (name, key) in self.keys.saved() {
-            lines.push((format!("key_{name}"), key));
+    /// Typed view of an options file.
+    pub fn from_file(f: OptionsFile) -> Self {
+        let mut keys = KeyBinds::default();
+        for (name, _, _) in crate::keybinds::MAPPINGS {
+            keys.set(name, &f.key_binding(name));
         }
+        let mut volumes = [1.0; 11];
+        for (i, source) in SOUND_SOURCES.iter().enumerate() {
+            volumes[i] = f.double(&format!("soundCategory_{source}")) as f32;
+        }
+        Self {
+            fov: f.int("fov") as f32,
+            render_distance: f.int("renderDistance"),
+            simulation_distance: f.int("simulationDistance"),
+            sensitivity: f.double("mouseSensitivity") as f32,
+            master_volume: volumes[0],
+            volumes,
+            gui_scale: f.int("guiScale").max(0) as u32,
+            view_bobbing: f.bool("bobView"),
+            gamma: f.double("gamma") as f32,
+            max_fps: f.int("maxFps") as u32,
+            vsync: f.bool("enableVsync"),
+            fullscreen: f.bool("fullscreen"),
+            smooth_lighting: f.bool("ao"),
+            clouds: f.name("renderClouds"),
+            cloud_range: f.int("cloudRange"),
+            particles: f.int("particles") as u8,
+            entity_distance: f.double("entityDistanceScaling") as f32,
+            entity_shadows: f.bool("entityShadows"),
+            biome_blend: f.int("biomeBlendRadius"),
+            graphics_preset: f.name("graphicsPreset"),
+            mipmap_levels: f.int("mipmapLevels"),
+            weather_radius: f.int("weatherRadius"),
+            chunk_fade: f.double("chunkSectionFadeInTime") as f32,
+            vignette: f.bool("vignette"),
+            autosave_indicator: f.bool("showAutosaveIndicator"),
+            cutout_leaves: f.bool("cutoutLeaves"),
+            improved_transparency: f.bool("improvedTransparency"),
+            attack_indicator: f.int("attackIndicator") as u8,
+            inactivity_fps_limit: f.name("inactivityFpsLimit"),
+            prioritize_chunk_updates: f.int("prioritizeChunkUpdates") as u8,
+            menu_blur: f.int("menuBackgroundBlurriness"),
+            invert_x: f.bool("invertXMouse"),
+            invert_y: f.bool("invertYMouse"),
+            mouse_wheel_sensitivity: f.double("mouseWheelSensitivity") as f32,
+            discrete_scroll: f.bool("discrete_mouse_scroll"),
+            toggle_crouch: f.bool("toggleCrouch"),
+            toggle_sprint: f.bool("toggleSprint"),
+            toggle_attack: f.bool("toggleAttack"),
+            toggle_use: f.bool("toggleUse"),
+            sprint_window: f.int("sprintWindow"),
+            auto_jump: f.bool("autoJump"),
+            language: f.string("lang"),
+            force_unicode: f.bool("forceUnicodeFont"),
+            japanese_glyphs: f.bool("japaneseGlyphVariants"),
+            chat_visibility: f.int("chatVisibility") as u8,
+            chat_colors: f.bool("chatColors"),
+            chat_links: f.bool("chatLinks"),
+            chat_opacity: f.double("chatOpacity") as f32,
+            text_background_opacity: f.double("textBackgroundOpacity") as f32,
+            chat_scale: f.double("chatScale") as f32,
+            chat_width: f.double("chatWidth") as f32,
+            chat_height_focused: f.double("chatHeightFocused") as f32,
+            chat_height_unfocused: f.double("chatHeightUnfocused") as f32,
+            chat_line_spacing: f.double("chatLineSpacing") as f32,
+            auto_suggestions: f.bool("autoSuggestions"),
+            reduced_debug_info: f.bool("reducedDebugInfo"),
+            high_contrast: f.bool("highContrast"),
+            show_subtitles: f.bool("showSubtitles"),
+            notification_display_time: f.double("notificationDisplayTime") as f32,
+            main_hand_left: f.name("mainHand") == "left",
+            resource_packs: f.list("resourcePacks"),
+            keys,
+            file: f,
+        }
+    }
+    /// The options file reflecting the typed fields; values the game did not
+    /// change keep their stored form.
+    pub fn to_file(&self) -> OptionsFile {
+        let mut f = self.file.clone();
+        put_i(&mut f, "fov", self.fov as i32);
+        put_i(&mut f, "renderDistance", self.render_distance);
+        put_i(&mut f, "simulationDistance", self.simulation_distance);
+        put_f(&mut f, "mouseSensitivity", self.sensitivity);
         for (i, source) in SOUND_SOURCES.iter().enumerate() {
             let v = if i == 0 {
                 self.master_volume
             } else {
                 self.volumes[i]
             };
-            lines.push((format!("soundCategory_{source}"), v.to_string()));
+            put_f(&mut f, &format!("soundCategory_{source}"), v);
         }
-        let known: std::collections::BTreeSet<String> =
-            lines.iter().map(|(k, _)| k.clone()).collect();
-        for (k, v) in &self.extra {
-            if !known.contains(k) {
-                lines.push((k.clone(), v.clone()));
-            }
+        put_i(&mut f, "guiScale", self.gui_scale as i32);
+        put_b(&mut f, "bobView", self.view_bobbing);
+        put_f(&mut f, "gamma", self.gamma);
+        put_i(&mut f, "maxFps", self.max_fps as i32);
+        put_b(&mut f, "enableVsync", self.vsync);
+        put_b(&mut f, "fullscreen", self.fullscreen);
+        put_b(&mut f, "ao", self.smooth_lighting);
+        put_name(&mut f, "renderClouds", &self.clouds);
+        put_i(&mut f, "cloudRange", self.cloud_range);
+        put_i(&mut f, "particles", i32::from(self.particles));
+        put_f(&mut f, "entityDistanceScaling", self.entity_distance);
+        put_b(&mut f, "entityShadows", self.entity_shadows);
+        put_i(&mut f, "biomeBlendRadius", self.biome_blend);
+        put_name(&mut f, "graphicsPreset", &self.graphics_preset);
+        put_i(&mut f, "mipmapLevels", self.mipmap_levels);
+        put_i(&mut f, "weatherRadius", self.weather_radius);
+        put_f(&mut f, "chunkSectionFadeInTime", self.chunk_fade);
+        put_b(&mut f, "vignette", self.vignette);
+        put_b(&mut f, "showAutosaveIndicator", self.autosave_indicator);
+        put_b(&mut f, "cutoutLeaves", self.cutout_leaves);
+        put_b(&mut f, "improvedTransparency", self.improved_transparency);
+        put_i(&mut f, "attackIndicator", i32::from(self.attack_indicator));
+        put_name(&mut f, "inactivityFpsLimit", &self.inactivity_fps_limit);
+        put_i(
+            &mut f,
+            "prioritizeChunkUpdates",
+            i32::from(self.prioritize_chunk_updates),
+        );
+        put_i(&mut f, "menuBackgroundBlurriness", self.menu_blur);
+        put_b(&mut f, "invertXMouse", self.invert_x);
+        put_b(&mut f, "invertYMouse", self.invert_y);
+        put_f(
+            &mut f,
+            "mouseWheelSensitivity",
+            self.mouse_wheel_sensitivity,
+        );
+        put_b(&mut f, "discrete_mouse_scroll", self.discrete_scroll);
+        put_b(&mut f, "toggleCrouch", self.toggle_crouch);
+        put_b(&mut f, "toggleSprint", self.toggle_sprint);
+        put_b(&mut f, "toggleAttack", self.toggle_attack);
+        put_b(&mut f, "toggleUse", self.toggle_use);
+        put_i(&mut f, "sprintWindow", self.sprint_window);
+        put_b(&mut f, "autoJump", self.auto_jump);
+        put_s(&mut f, "lang", &self.language);
+        put_b(&mut f, "forceUnicodeFont", self.force_unicode);
+        put_b(&mut f, "japaneseGlyphVariants", self.japanese_glyphs);
+        put_i(&mut f, "chatVisibility", i32::from(self.chat_visibility));
+        put_b(&mut f, "chatColors", self.chat_colors);
+        put_b(&mut f, "chatLinks", self.chat_links);
+        put_f(&mut f, "chatOpacity", self.chat_opacity);
+        put_f(
+            &mut f,
+            "textBackgroundOpacity",
+            self.text_background_opacity,
+        );
+        put_f(&mut f, "chatScale", self.chat_scale);
+        put_f(&mut f, "chatWidth", self.chat_width);
+        put_f(&mut f, "chatHeightFocused", self.chat_height_focused);
+        put_f(&mut f, "chatHeightUnfocused", self.chat_height_unfocused);
+        put_f(&mut f, "chatLineSpacing", self.chat_line_spacing);
+        put_b(&mut f, "autoSuggestions", self.auto_suggestions);
+        put_b(&mut f, "reducedDebugInfo", self.reduced_debug_info);
+        put_b(&mut f, "highContrast", self.high_contrast);
+        put_b(&mut f, "showSubtitles", self.show_subtitles);
+        put_f(
+            &mut f,
+            "notificationDisplayTime",
+            self.notification_display_time,
+        );
+        put_name(
+            &mut f,
+            "mainHand",
+            if self.main_hand_left { "left" } else { "right" },
+        );
+        if self.resource_packs != f.list("resourcePacks") {
+            f.set("resourcePacks", V::List(self.resource_packs.clone()));
         }
-        let mut out = format!("version:{}\n", horizon_world::DATA_VERSION);
-        for (k, v) in lines {
-            out.push_str(&format!("{k}:{v}\n"));
+        for (name, key) in self.keys.saved() {
+            put_s(&mut f, &format!("key_{name}"), &key);
         }
-        out
+        f
+    }
+    /// The `options.txt` text (Options.save).
+    pub fn serialize(&self) -> String {
+        self.to_file().serialize()
     }
     pub fn save(&self, path: &Path) {
         let _ = fs::write(path, self.serialize());
@@ -538,7 +506,8 @@ mod tests {
         let out = s.serialize();
         assert!(out.starts_with("version:"));
         assert!(out.contains("\nkey_key.jump:key.keyboard.j\n"));
-        assert!(out.contains("\nsomeFutureOption:42\n"));
+        // Options.save writes only the options it knows.
+        assert!(!out.contains("someFutureOption"));
         assert!(out.contains("\nrenderClouds:\"fast\"\n"));
         let again = Settings::parse(&out);
         assert_eq!(again.fov, 90.0);
@@ -555,10 +524,10 @@ mod tests {
         let d = Settings::parse("");
         assert!(!d.show_subtitles);
         assert_eq!(d.notification_display_time, 1.0);
-        // The multiplier stays within the slider's range.
+        // Codec.doubleRange(0.5, 10.0) rejects other values; the default stays.
         assert_eq!(
             Settings::parse("notificationDisplayTime:50\n").notification_display_time,
-            10.0
+            1.0
         );
     }
 }

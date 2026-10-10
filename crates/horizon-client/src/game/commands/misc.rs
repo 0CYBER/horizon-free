@@ -1,11 +1,15 @@
 //! `/random` (RandomCommand) and `/teammsg` (TeamMsgCommand).
 use super::{Arg, Context, Game, R, Target, err};
 use crate::game::chat::PLAYER_NAME;
-use horizon_client::text::{self, Text};
+use horizon_client::{
+    clock::SprintReport,
+    java_text::format_fixed,
+    text::{self, Text},
+};
 use horizon_core::random::RandomSource;
 
 fn millis(nanos: u64) -> String {
-    format!("{:.1}", nanos as f32 / 1_000_000.0)
+    format_fixed(f64::from(nanos as f32 / 1_000_000.0), 1)
 }
 
 impl Game<'_> {
@@ -79,14 +83,14 @@ impl Game<'_> {
                 self.clock.set_rate(rate);
                 self.feedback(t(
                     "commands.tick.rate.success",
-                    &[lit(format!("{rate:.1}"))],
+                    &[lit(format_fixed(f64::from(rate), 1))],
                 ));
                 Ok(rate as i32)
             }
             "tick.query" => {
                 let rate = self.clock.rate();
                 let busy = millis(self.clock.average_nanos());
-                let rate_text = format!("{rate:.1}");
+                let rate_text = format_fixed(f64::from(rate), 1);
                 if self.clock.sprinting() {
                     self.feedback(t("commands.tick.status.sprinting", &[]));
                     self.feedback(t(
@@ -137,16 +141,19 @@ impl Game<'_> {
                 Ok(1)
             }
             "tick.sprint.stop" => {
-                if !self.clock.stop_sprint() {
+                let Some(report) = self.clock.stop_sprint() else {
                     return Err(err("commands.tick.sprint.stop.fail", &[]));
-                }
+                };
+                self.sprint_report(&report);
                 self.feedback(t("commands.tick.sprint.stop.success", &[]));
                 Ok(1)
             }
             "tick.freeze" | "tick.unfreeze" => {
                 let freeze = id == "tick.freeze";
                 if freeze {
-                    self.clock.stop_sprint();
+                    if let Some(report) = self.clock.stop_sprint() {
+                        self.sprint_report(&report);
+                    }
                     self.clock.stop_step();
                 }
                 self.clock.set_frozen(freeze);
@@ -175,6 +182,16 @@ impl Game<'_> {
                 Ok(1)
             }
         }
+    }
+    /// The report `/tick sprint` prints when a sprint ends.
+    pub(in crate::game) fn sprint_report(&mut self, report: &SprintReport) {
+        self.feedback(Text::translate(
+            "commands.tick.sprint.report",
+            &[
+                Text::literal(report.ticks_per_second.to_string()),
+                Text::literal(report.milliseconds_per_tick.clone()),
+            ],
+        ));
     }
     pub(super) fn cmd_random(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let seed = self.level.seed;

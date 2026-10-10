@@ -9,6 +9,7 @@ pub mod carving;
 pub mod density;
 pub mod geometry;
 pub mod noise;
+pub mod paletted;
 pub mod position;
 pub mod random;
 pub mod storage;

@@ -26,6 +26,8 @@ pub struct World {
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
     pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
+    /// `BaseContainerBlockEntity.name`: custom names of container block entities.
+    pub block_names: HashMap<(i32, i32, i32), String>,
     /// States (by id) whose writes are recorded in `watched_writes` (sculk
     /// blocks, which need a block entity).
     pub watched: Vec<bool>,
@@ -114,6 +116,7 @@ impl World {
             loaded_entities: Vec::new(),
             modified: HashSet::new(),
             block_entities: HashMap::new(),
+            block_names: HashMap::new(),
             watched: Vec::new(),
             watched_writes: Vec::new(),
             inhabited: HashMap::new(),
