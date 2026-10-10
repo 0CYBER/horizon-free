@@ -128,6 +128,14 @@ impl Ambience {
     pub fn was_underwater(&self) -> bool {
         self.was_underwater
     }
+    /// `BiomeAmbientSoundsHandler.loopSounds`.
+    pub fn loops(&self) -> &[(String, InstanceId)] {
+        &self.loops
+    }
+    /// `UnderwaterAmbientSoundHandler.tickDelay`.
+    pub fn underwater_delay(&self) -> i32 {
+        self.underwater_delay
+    }
     /// A new player (leaving or changing worlds): fresh handlers.
     pub fn clear(&mut self, sounds: &mut impl Sounds) {
         for (_, id) in self.loops.drain(..) {
