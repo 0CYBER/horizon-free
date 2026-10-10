@@ -230,6 +230,8 @@ impl PieceContext<'_> {
         let mut nbt = Compound::new();
         nbt.insert("id".into(), Tag::String("minecraft:mob_spawner".into()));
         nbt.insert("SpawnData".into(), Tag::Compound(data));
+        // SpawnerBlockEntity.setEntityId on a fresh spawner: no potentials.
+        nbt.insert("SpawnPotentials".into(), Tag::List(Vec::new()));
         self.world.block_entity(pos, nbt)
     }
 }

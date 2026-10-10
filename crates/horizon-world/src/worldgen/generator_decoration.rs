@@ -329,18 +329,16 @@ impl Decoration {
             decoration: self,
             temperatures: &mut worker.temperatures,
             behaviours: data.behaviours.as_deref(),
-            build: (generation.min_y, generation.min_y + generation.height),
+            // WorldGenRegion.isOutsideBuildHeight: the level's range, not the noise's.
+            build: (min_y, min_y + height),
         };
         let mut stats = DecorateStats::default();
         let blocks = self.blocks;
         let references = region[4].structure_starts.clone();
+        // ChunkGenerator.getWritableArea: the chunk's minimum Y + 1 to its maximum Y.
         let chunk_box = BoundingBox::new(
-            [center.x * 16, generation.min_y + 1, center.z * 16],
-            [
-                center.x * 16 + 15,
-                generation.min_y + generation.height - 1,
-                center.z * 16 + 15,
-            ],
+            [center.x * 16, min_y + 1, center.z * 16],
+            [center.x * 16 + 15, min_y + height - 1, center.z * 16 + 15],
         );
         let mut structure_errors = 0;
         let result = self.plan.decorate(
@@ -495,6 +493,11 @@ impl crate::level::LevelAccess for ShapeLevel<'_, '_> {
         &mut self.random
     }
     fn game_time(&self) -> i64 {
+        0
+    }
+    /// Lighting has not run during FEATURES: the light engine has no data for
+    /// these chunks, so sky light reads zero too (MushroomBlock.canSurvive).
+    fn sky_light(&self, _: BlockPos) -> i32 {
         0
     }
 }
@@ -668,6 +671,40 @@ impl PlacementContext for World<'_> {
         nbt.insert("id".into(), Tag::String(name.as_str().into()));
         nbt.insert("LootTable".into(), Tag::String(table.into()));
         nbt.insert("LootTableSeed".into(), Tag::Long(random.next_long()));
+        self.set_block_entity(position, nbt)
+    }
+    /// BeehiveDecorator: `getBlockEntity(pos, BEEHIVE)` then
+    /// `storeBee(Occupant.create(ticks))` for each bee (min ticks in hive 600).
+    fn store_beehive_occupants(
+        &mut self,
+        position: [i32; 3],
+        ticks_in_hive: &[i32],
+    ) -> Result<(), PlacementQueryError> {
+        use crate::nbt::Tag;
+        let chunk = self.region.chunk(position[0] >> 4, position[2] >> 4)?;
+        let state = chunk.block(position[0], position[1], position[2]);
+        let registry = self.decoration.bindings.registry();
+        if !matches!(
+            registry.state(state).map(|s| s.name.as_str()),
+            Some("minecraft:bee_nest" | "minecraft:beehive")
+        ) {
+            return Ok(());
+        }
+        let bees = ticks_in_hive
+            .iter()
+            .map(|&ticks| {
+                let mut entity = crate::nbt::Compound::new();
+                entity.insert("id".into(), Tag::String("minecraft:bee".into()));
+                let mut bee = crate::nbt::Compound::new();
+                bee.insert("entity_data".into(), Tag::Compound(entity));
+                bee.insert("ticks_in_hive".into(), Tag::Int(ticks));
+                bee.insert("min_ticks_in_hive".into(), Tag::Int(600));
+                Tag::Compound(bee)
+            })
+            .collect();
+        let mut nbt = crate::nbt::Compound::new();
+        nbt.insert("id".into(), Tag::String("minecraft:beehive".into()));
+        nbt.insert("bees".into(), Tag::List(bees));
         self.set_block_entity(position, nbt)
     }
     /// SpawnerBlockEntity.setEntityId: the next spawn data and no potentials.

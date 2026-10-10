@@ -96,6 +96,11 @@ impl StructureState {
     pub(super) fn cached_rings(&self, set: &str) -> Option<Vec<ChunkPos>> {
         self.rings.get().and_then(|rings| rings.get(set).cloned())
     }
+    /// Drop the cached starts, so that later chunks build fresh pieces (the
+    /// pieces keep per-start placement state such as a shipwreck's height).
+    pub(super) fn forget_starts(&self) {
+        self.starts.lock().unwrap().clear();
+    }
     /// The (cached) structure starts owned by a chunk.
     pub(super) fn starts_at(
         &self,

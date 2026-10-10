@@ -411,9 +411,17 @@ public final class VanillaChunkGenerationOracle {
                     var tag = target.getBlockEntityNbtForSaving(pos, registry);
                     if (tag == null) continue;
                     var st = target.getBlockState(pos);
-                    var fresh = ((net.minecraft.world.level.block.EntityBlock) st.getBlock()).newBlockEntity(pos, st).saveWithFullMetadata(registry);
-                    if ("DUMMY".equals(tag.getStringOr("id", ""))) tag = fresh;
-                    w.println("be " + pos.getX() + " " + pos.getY() + " " + pos.getZ() + "\t" + canonicalOf(tag) + "\t" + canonicalOf(fresh));
+                    var block = (net.minecraft.world.level.block.EntityBlock) st.getBlock();
+                    var fresh = block.newBlockEntity(pos, st).saveWithFullMetadata(registry);
+                    // The value of each key Horizon leaves out: what loading a tag without
+                    // it gives (BrewingStandBlockEntity reads a missing total_brew_time as 400).
+                    var empty = block.newBlockEntity(pos, st);
+                    empty.loadWithComponents(net.minecraft.world.level.storage.TagValueInput.create(
+                        net.minecraft.util.ProblemReporter.DISCARDING, registry, new net.minecraft.nbt.CompoundTag()));
+                    var absent = empty.saveWithFullMetadata(registry);
+                    // A DUMMY pending entry becomes a fresh block entity, not a loaded one.
+                    if ("DUMMY".equals(tag.getStringOr("id", ""))) tag = absent = fresh;
+                    w.println("be " + pos.getX() + " " + pos.getY() + " " + pos.getZ() + "\t" + canonicalOf(tag) + "\t" + canonicalOf(absent));
                 }
             }
             }
