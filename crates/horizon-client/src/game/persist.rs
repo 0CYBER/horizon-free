@@ -217,51 +217,115 @@ impl Game<'_> {
                         }
                     }
                     _ if self.res.mob_types.contains_key(&kind) => {
-                        self.next_entity += 1;
-                        // Structure entities placed with finalizeEntities.
-                        let mut tag = tag;
-                        let finalize = match &mut tag {
-                            Tag::Compound(c) => c.remove(&"horizon:finalize".into()).is_some(),
-                            _ => false,
-                        };
-                        if let Some(mut m) =
-                            entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, self.next_entity)
-                        {
-                            if finalize {
-                                let facts = self.biome_facts(
-                                    m.position.x.floor() as i32,
-                                    m.position.y.floor() as i32,
-                                    m.position.z.floor() as i32,
-                                );
-                                let at = [m.position.x, m.position.y, m.position.z];
-                                let difficulty = self.local_difficulty(at);
-                                horizon_client::mobs::spawning::finalize(
-                                    &mut m,
-                                    &facts,
-                                    &difficulty,
-                                );
-                                // Cat.finalizeSpawn: black in #cats_spawn_as_black.
-                                if m.species() == horizon_client::mobs::Species::Cat {
-                                    let p = [
-                                        m.position.x.floor() as i32,
-                                        m.position.y.floor() as i32,
-                                        m.position.z.floor() as i32,
-                                    ];
-                                    let black = self.structure_tag("minecraft:cats_spawn_as_black");
-                                    if self.structures_at(p).iter().any(|s| black.contains(s)) {
-                                        m.extra.variant = 10;
-                                        m.persistent = true;
-                                    }
-                                }
-                            }
-                            self.remember(m.id, uuid, tag);
-                            self.mobs.push(m);
-                        }
+                        self.load_mob(tag, None);
                     }
                     _ => self.persist.unknown.entry(key).or_default().push(tag),
                 }
             }
         }
+    }
+    /// A saved mob and, under `Passengers`, the mobs riding it.
+    fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
+        self.next_entity += 1;
+        let uuid = entity_nbt::uuid(&tag);
+        // Structure entities placed with finalizeEntities.
+        let mut tag = tag;
+        let mut finalize = false;
+        let mut riders = Vec::new();
+        let mut unknown = Vec::new();
+        if let Tag::Compound(c) = &mut tag {
+            finalize = c.remove(&"horizon:finalize".into()).is_some();
+            if let Some(Tag::List(list)) = c.remove(&"Passengers".into()) {
+                for p in list {
+                    let known =
+                        entity_nbt::kind(&p).is_some_and(|k| self.res.mob_types.contains_key(&k));
+                    if known {
+                        riders.push(p);
+                    } else {
+                        unknown.push(p);
+                    }
+                }
+            }
+            if !unknown.is_empty() {
+                c.insert("Passengers".into(), Tag::List(unknown));
+            }
+        }
+        let mut m = entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, self.next_entity)?;
+        m.extra.mount = mount;
+        m.extra.passenger = mount.is_some();
+        if finalize {
+            let facts = self.biome_facts(
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            );
+            let at = [m.position.x, m.position.y, m.position.z];
+            let difficulty = self.local_difficulty(at);
+            horizon_client::mobs::spawning::finalize(&mut m, &facts, &difficulty);
+            // Cat.finalizeSpawn: black in #cats_spawn_as_black.
+            if m.species() == horizon_client::mobs::Species::Cat {
+                let p = [
+                    m.position.x.floor() as i32,
+                    m.position.y.floor() as i32,
+                    m.position.z.floor() as i32,
+                ];
+                let black = self.structure_tag("minecraft:cats_spawn_as_black");
+                if self.structures_at(p).iter().any(|s| black.contains(s)) {
+                    m.extra.variant = 10;
+                    m.persistent = true;
+                }
+            }
+        }
+        let id = m.id;
+        self.remember(id, uuid, tag);
+        self.mobs.push(m);
+        if finalize {
+            self.enchant_spawn_equipment(id);
+        }
+        for rider in riders {
+            if let Some(r) = self.load_mob(rider, Some(id))
+                && let Some(v) = self.mobs.iter_mut().find(|m| m.id == id)
+            {
+                v.extra.rider = Some(r);
+            }
+        }
+        Some(id)
+    }
+    /// The root of a stack of riders (`Entity.getRootVehicle`).
+    fn mob_root(&self, mut i: usize) -> usize {
+        for _ in 0..8 {
+            let Some(v) = self.mobs[i].extra.mount else {
+                break;
+            };
+            let Some(j) = self.mobs.iter().position(|m| m.id == v) else {
+                break;
+            };
+            i = j;
+        }
+        i
+    }
+    /// A mob's entity tag with the mobs riding it under `Passengers`.
+    fn mob_tree_nbt(&mut self, i: usize) -> Tag {
+        let id = self.mobs[i].id;
+        let uuid = self.uuid_for(id);
+        let mut tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
+        let riders: Vec<usize> = (0..self.mobs.len())
+            .filter(|&j| self.mobs[j].extra.mount == Some(id) && self.mobs[j].alive())
+            .collect();
+        let riders: Vec<Tag> = riders.into_iter().map(|j| self.mob_tree_nbt(j)).collect();
+        if let Tag::Compound(c) = &mut tag {
+            let mut list = match c.get(&"Passengers".into()) {
+                Some(Tag::List(l)) => l.clone(),
+                _ => Vec::new(),
+            };
+            list.extend(riders);
+            if list.is_empty() {
+                c.remove(&"Passengers".into());
+            } else {
+                c.insert("Passengers".into(), Tag::List(list));
+            }
+        }
+        tag
     }
     fn remember(&mut self, id: u32, uuid: Option<[i32; 4]>, tag: Tag) {
         if let Some(u) = uuid {
@@ -324,13 +388,16 @@ impl Game<'_> {
         let mut out: HashMap<(i32, i32), Vec<Tag>> =
             keys.iter().map(|k| (*k, Vec::new())).collect();
         let player_uuid = self.level.player_uuid;
+        // A rider is saved inside its root vehicle, in the root's chunk.
         let mobs: Vec<usize> = (0..self.mobs.len())
-            .filter(|&i| keys.contains(&chunk_of(self.mobs[i].position)) && self.mobs[i].alive())
+            .filter(|&i| {
+                self.mob_root(i) == i
+                    && keys.contains(&chunk_of(self.mobs[i].position))
+                    && self.mobs[i].alive()
+            })
             .collect();
         for i in mobs {
-            let id = self.mobs[i].id;
-            let uuid = self.uuid_for(id);
-            let tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
+            let tag = self.mob_tree_nbt(i);
             out.entry(chunk_of(self.mobs[i].position))
                 .or_default()
                 .push(tag);
@@ -520,8 +587,13 @@ impl Game<'_> {
                 }
                 keep
             });
+            // Riders leave with their root vehicle.
+            let leaving: HashSet<u32> = (0..self.mobs.len())
+                .filter(|&i| gone(self.mobs[self.mob_root(i)].position))
+                .map(|i| self.mobs[i].id)
+                .collect();
             self.mobs.retain(|m| {
-                let keep = !gone(m.position);
+                let keep = !leaving.contains(&m.id);
                 if !keep {
                     removed.push(m.id);
                 }

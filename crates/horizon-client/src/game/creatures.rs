@@ -244,6 +244,10 @@ impl Game<'_> {
         }
         let id = mob.id;
         self.mobs.push(mob);
+        self.enchant_spawn_equipment(id);
+        if !persistent && !scripted {
+            self.spawn_jockeys(id, true);
+        }
         Some(id)
     }
     /// The `summon` command: spawn a mob in front of the player or at a position.
@@ -266,6 +270,7 @@ impl Game<'_> {
         if baby && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
             m.extra.age = -24000;
         }
+        self.spawn_jockeys(id, false);
         Ok(id)
     }
     /// The `mobs` command: nearby mobs with position, health and running goals.
@@ -285,6 +290,9 @@ impl Game<'_> {
                     "target": m.ai.target.map(|t| format!("{t:?}")),
                     "goals": m.ai.goals.running_names(),
                     "held": m.extra.main_hand.as_deref(),
+                    "mount": m.extra.mount,
+                    "rider": m.extra.rider,
+                    "enchants": horizon_client::mobs::gear::gear(m).map(|g| g.slots.iter().map(|s| s.iter().map(|(e, l)| format!("{e}:{l}")).collect::<Vec<_>>()).collect::<Vec<_>>()),
                     "ints": m.extra.ints,
                     "pois": [m.extra.home, m.extra.bed, m.extra.meeting],
                     "profession": m.extra.variant2,
@@ -307,7 +315,7 @@ impl Game<'_> {
                         "leader": s.patrol_leader,
                         "patrolling": s.patrolling,
                         "patrol_target": s.patrol_target,
-                        "vehicle": s.vehicle,
+                        "vehicle": m.extra.mount,
                     })),
                 })
             })
@@ -679,6 +687,9 @@ impl Game<'_> {
         }
         self.mobs.append(&mut mobs);
         self.sync_riders();
+        self.tick_skeleton_traps();
+        self.cache_mob_icons();
+        self.tick_apparition();
         self.villager_reputation_tick();
         self.villager_pickups();
         for m in dead {
@@ -774,7 +785,16 @@ impl Game<'_> {
                     m.extra.feet.clone(),
                 ]
             };
-            for item in std::iter::once(m.extra.main_hand.clone()).chain(worn) {
+            for (index, item) in std::iter::once(m.extra.main_hand.clone())
+                .chain(worn)
+                .enumerate()
+            {
+                // Main hand, then head to feet (the enchantment slots).
+                let slot = if index == 0 {
+                    horizon_client::mobs::gear::MAIN
+                } else {
+                    horizon_client::mobs::gear::HEAD + index - 1
+                };
                 // Equipment drop chance 8.5% (+ player kill only).
                 // Vexes never drop their sword.
                 if let Some(item) = &item
@@ -783,17 +803,13 @@ impl Game<'_> {
                     && m.species() != Species::Vex
                     && self.world.random.next_float() < 0.085
                 {
-                    self.spawn_item(
-                        ItemStack {
-                            item: item.clone(),
-                            count: 1,
-                            damage: 0,
-                            extra: None,
-                        },
-                        pos,
-                        [0.0, 0.2, 0.0],
-                        10,
-                    );
+                    let mut stack = ItemStack::new(item, 1);
+                    if let Some(g) = horizon_client::mobs::gear::gear(m) {
+                        for (e, l) in &g.slots[slot] {
+                            stack.enchant(e, *l);
+                        }
+                    }
+                    self.spawn_item(stack, pos, [0.0, 0.2, 0.0], 10);
                 }
             }
         }
@@ -889,10 +905,12 @@ impl Game<'_> {
                     amount,
                     source,
                 } => {
+                    let mut killed = false;
                     if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
                         let hit = t.damage(amount, source);
                         if hit {
                             let (kind, center, dead) = (t.kind.clone(), t.center(), !t.alive());
+                            killed = dead;
                             let pitch = (self.world.random.next_float()
                                 - self.world.random.next_float())
                                 * 0.2
@@ -907,6 +925,9 @@ impl Game<'_> {
                                 );
                             }
                         }
+                    }
+                    if killed && let Some(Who::Mob(killer)) = source.attacker {
+                        self.zombie_killed(killer, target);
                     }
                 }
                 MobEvent::FinishAdmiring { mob } => self.finish_admiring(mob),
@@ -1064,6 +1085,7 @@ impl Game<'_> {
                 MobEvent::CreakingTearDown { center, spread } => {
                     self.creaking_tear_down(center, spread)
                 }
+                MobEvent::CureZombieVillager { mob } => self.cure_zombie_villager(mob),
                 MobEvent::VillagerMeet { mob, other } => self.villager_meet(mob, other),
                 MobEvent::VillagerBirth { parent, partner } => self.villager_birth(parent, partner),
                 MobEvent::GolemCheck { mob, needed } => self.villager_golem_check(mob, needed),
@@ -1283,7 +1305,7 @@ impl Game<'_> {
         self.give_player_effect("minecraft:mining_fatigue", 6000, 2);
         self.audio
             .play("minecraft:entity.elder_guardian.curse", Some(at), 1.0, 1.0);
-        self.creatures.elder_apparition = 30;
+        self.creatures.elder_apparition = super::mob_blocks::APPARITION_TICKS;
     }
     /// Damage of a given type to the player from a point.
     pub(super) fn mob_hits_player_kind(&mut self, amount: f32, from: [f64; 3], kind: &str) {
@@ -1476,7 +1498,22 @@ impl Game<'_> {
         };
         match (&p.kind, hit) {
             (ProjectileKind::Arrow { effect, .. }, Hit::Entity { who, .. }) => {
-                let amount = p.arrow_damage(&mut self.world.random);
+                let amount = p.arrow_damage(&mut self.world.random) + p.bonus.damage;
+                // Punch pushes along the flight, Flame burns for five seconds.
+                let flight = (p.velocity.x * p.velocity.x + p.velocity.z * p.velocity.z).sqrt();
+                if p.bonus.punch > 0 && flight > 1e-6 {
+                    let k = f64::from(p.bonus.punch) * 0.6 / flight;
+                    self.handle_mob_events(vec![MobEvent::Push {
+                        target: who,
+                        velocity: [p.velocity.x * k, 0.1, p.velocity.z * k],
+                    }])?;
+                }
+                if p.bonus.flame {
+                    self.handle_mob_events(vec![MobEvent::Ignite {
+                        target: who,
+                        seconds: 5,
+                    }])?;
+                }
                 match who {
                     Who::Player => {
                         if !self.creative {
@@ -1802,6 +1839,9 @@ impl Game<'_> {
             .unwrap_or_default();
         let creative = self.creative;
         let selected = self.selected;
+        if self.interact_zombie_villager(index, &item) {
+            return Ok(true);
+        }
         if self.interact_trader(index, &item)? {
             self.swing_arm();
             return Ok(true);
@@ -2290,6 +2330,7 @@ impl Game<'_> {
                 &self.res.mob_data,
                 out,
             );
+            self.mob_block_geometry(mob, camera, alpha, packed, out);
             // GuardianRenderer: the laser to the locked target.
             if let Some((time, scale)) = horizon_client::mobs::guardian::beam(mob, alpha as f32)
                 && let Some(target) = self.beam_target(mob.ai.target, alpha)
@@ -2311,6 +2352,7 @@ impl Game<'_> {
                 );
             }
         }
+        self.elder_apparition_geometry(alpha, out);
         // Projectiles: arrows as crossed quads, the rest as item billboards.
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
         let forward = glam::Vec3::new(
@@ -2489,6 +2531,10 @@ fn push_apart(mobs: &mut [Mob]) {
         let bi = mobs[i].bounds();
         for j in (i + 1)..n {
             if !mobs[j].alive() || !bi.intersects(mobs[j].bounds()) {
+                continue;
+            }
+            // A rider and its vehicle do not push each other.
+            if mobs[i].extra.mount == Some(mobs[j].id) || mobs[j].extra.mount == Some(mobs[i].id) {
                 continue;
             }
             let (dx, dz) = (

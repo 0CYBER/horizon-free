@@ -367,6 +367,10 @@ impl Game<'_> {
     }
     /// A chat message from the game (ChatComponent.addServerSystemMessage).
     pub(super) fn system_message(&mut self, text: Text) {
+        if let Some(capture) = self.chat_capture.as_mut() {
+            capture.push(text.plain());
+            return;
+        }
         let focused = self.screen == Screen::Chat;
         self.ui.chat.add(
             &self.res.atlas,
@@ -462,6 +466,7 @@ impl Game<'_> {
             self.ui
                 .chat
                 .add(&self.res.atlas, line, None, self.ticks, focused);
+            self.lan_host_chat(message);
         }
     }
     pub(super) fn chat_scroll(&mut self, amount: f32) {
