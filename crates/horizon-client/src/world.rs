@@ -39,6 +39,9 @@ pub struct World {
     pub game_time: i64,
     pub day_time: i64,
     pub weather: Weather,
+    /// Every block position written since the log was last drained, kept
+    /// only while the world is open to the network (see `lan`).
+    pub block_log: Option<Vec<(i32, i32, i32)>>,
 }
 /// ServerLevel weather state (advanceWeatherCycle).
 #[derive(Clone, Copy, Debug, Default)]
@@ -120,6 +123,7 @@ impl World {
             game_time: 0,
             day_time: 1000,
             weather: Weather::default(),
+            block_log: None,
         }
     }
     /// A controlled blockstate scene for the native scene probes: material
@@ -193,6 +197,9 @@ impl World {
                     .push(((x, y, z), previous, state.0 as u16));
             }
             self.revision = self.revision.wrapping_add(1);
+            if let Some(log) = &mut self.block_log {
+                log.push((x, y, z));
+            }
             self.modified.insert((x >> 4, z >> 4));
             let sy = (y - MIN_Y) >> 4;
             for dz in -1..=1 {

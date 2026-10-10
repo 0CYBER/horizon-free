@@ -24,7 +24,7 @@ fn pause_buttons(w: f32, h: f32) -> Vec<(f32, f32, f32, &'static str, u8, bool)>
             98.0,
             "options.worldOptions.button",
             9,
-            false,
+            true,
         ),
         (x0 + 4.0, y0 + 146.0, 204.0, "menu.returnToMenu", 2, true),
     ]
@@ -114,6 +114,7 @@ impl Game<'_> {
             Some(1) => self.open_options(false),
             Some(3) => self.open_stats(),
             Some(4) => self.open_advancements(true),
+            Some(9) => self.open_world_options(),
             Some(2) => self.close_world()?,
             _ => {}
         }

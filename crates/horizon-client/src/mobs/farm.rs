@@ -81,7 +81,7 @@ pub fn chicken_ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
         m.velocity.y *= 0.6;
     }
     a.flap += a.flapping * 2.0;
-    if m.alive() && !m.is_baby() {
+    if m.alive() && !m.is_baby() && !m.extra.jockey {
         m.extra.egg_time -= 1;
         if m.extra.egg_time <= 0 {
             let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;

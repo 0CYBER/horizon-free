@@ -518,6 +518,7 @@ fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         super::equine::ridden_step(m);
         return;
     }
+    super::riders::drive(m, w);
     let tick_count = m.age as i64;
     let id_based = tick_count + i64::from(m.id);
     let mut targets = std::mem::take(&mut m.ai.targets);
@@ -610,15 +611,21 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 /// Mob.checkDespawn (players are the only despawn reference).
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
     let creature = m.kind.category == "creature";
-    // Warden.removeWhenFarAway is false.
-    if m.persistent || m.species() == Species::Warden || creature && m.kind.flags.animal {
+    // Warden.removeWhenFarAway is false; a jockey's chicken despawns like a monster.
+    if m.persistent
+        || m.species() == Species::Warden
+        || creature && m.kind.flags.animal && !m.extra.jockey
+    {
         m.ai.no_action_time = 0;
         return true;
     }
     let Some(p) = &w.player else { return true };
     let d = m.distance_sqr(p.position);
     // Patrols and raiders (`removeWhenFarAway`, `requiresCustomPersistence`).
-    if super::raider::keeps_alive(m, d) {
+    if super::raider::keeps_alive(m, d)
+        || super::zombie_villager::keeps_alive(m)
+        || super::riders::keeps_alive(m)
+    {
         return true;
     }
     let despawn = if m.kind.category == "water_ambient" {
@@ -772,6 +779,37 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     }
     if amount <= 0.0 {
         amount = 1.0;
+    }
+    // The held weapon's enchantments: Sharpness, Smite, Bane of Arthropods,
+    // Fire Aspect and Knockback.
+    let target_species = match who {
+        Who::Mob(id) => cx.w.seen(id).map(|s| s.species),
+        Who::Player => None,
+    };
+    amount += super::gear::melee_bonus(m, target_species);
+    let burn = super::gear::fire_aspect(m);
+    if burn > 0 {
+        cx.events.push(MobEvent::Ignite {
+            target: who,
+            seconds: burn,
+        });
+    }
+    let knock = super::gear::knockback(m);
+    if knock > 0 {
+        let (dx, dz) = match who {
+            Who::Player => cx.w.player.as_ref().map_or((0.0, 0.0), |p| {
+                (p.position.x - m.position.x, p.position.z - m.position.z)
+            }),
+            Who::Mob(id) => cx.w.seen(id).map_or((0.0, 0.0), |s| {
+                (s.position.x - m.position.x, s.position.z - m.position.z)
+            }),
+        };
+        let len = (dx * dx + dz * dz).sqrt().max(1e-5);
+        let k = f64::from(knock) * 0.5;
+        cx.events.push(MobEvent::Push {
+            target: who,
+            velocity: [dx / len * k, 0.1, dz / len * k],
+        });
     }
     // Zombies set their target on fire while burning (Zombie.doHurtTarget).
     if m.fire_ticks > 0 && matches!(m.species(), Species::Zombie) && m.random.next_float() < 0.3 {

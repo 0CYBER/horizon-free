@@ -113,6 +113,26 @@ pub fn dimension_dir(world: &Path, dimension: &str) -> PathBuf {
         .unwrap_or(("minecraft", dimension));
     world.join("dimensions").join(namespace).join(path)
 }
+/// `DirectoryLock`: `session.lock` holds "\u{2603}" (UTF-16BE) under an exclusive
+/// file lock for as long as the world is open, so two instances cannot share it.
+pub struct SessionLock(#[allow(dead_code)] fs::File);
+impl SessionLock {
+    pub fn acquire(world: &Path) -> Result<Self> {
+        use std::io::Write;
+        fs::create_dir_all(world)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(world.join("session.lock"))?;
+        file.try_lock()
+            .map_err(|_| format!("{} is already open in another instance", world.display()))?;
+        file.set_len(0)?;
+        file.write_all(&[0x26, 0x03])?;
+        file.flush()?;
+        Ok(Self(file))
+    }
+}
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
 pub fn migrate_legacy(world: &Path) -> Result<()> {
@@ -199,6 +219,9 @@ pub struct ChunkExtras {
     pub root: Compound,
     /// Block entities Horizon does not model.
     pub block_entities: Vec<Tag>,
+    /// The NBT of the modelled block entities as loaded, to restore the fields and
+    /// detail Horizon does not model when it saves them (`block_entity_nbt::overlay`).
+    pub block_entity_sources: Vec<((i32, i32, i32), Tag)>,
     /// Scheduled ticks (`block_ticks`/`fluid_ticks`): delays relative to the
     /// save time. Registered with the level's tick scheduler on arrival and
     /// replaced with the scheduler's pending ticks when saving.
@@ -435,6 +458,17 @@ pub fn encode_block_entity(
     }
     Tag::compound(entries)
 }
+/// `block_entity_nbt::overlay`, then a container that now holds items loses its
+/// loot table (vanilla clears it when the loot is generated into the container).
+fn merge_block_entity(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
+    let mut merged = crate::block_entity_nbt::overlay(original, loaded, current);
+    let has_items = matches!(current.get("Items"), Some(Tag::List(items)) if !items.is_empty());
+    if has_items && let Tag::Compound(map) = &mut merged {
+        map.remove(&"LootTable".into());
+        map.remove(&"LootTableSeed".into());
+    }
+    merged
+}
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
@@ -495,7 +529,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
             f.lit_remaining = int("lit_time_remaining").unwrap_or(0);
             f.lit_total = int("lit_total_time").unwrap_or(0);
             f.cooking_timer = int("cooking_time_spent").unwrap_or(0);
-            f.cooking_total = int("cooking_total_time").unwrap_or(200);
+            f.cooking_total = int("cooking_total_time").unwrap_or(0);
             if let Some(speed) = float(tag.get("speed_multiplier")) {
                 f.speed = speed as f32;
             }
@@ -737,13 +771,30 @@ pub fn encode_with(
         .block_entities
         .iter()
         .map(|(p, e)| {
-            let mut tag = encode_block_entity(*p, e, &block_name(p));
+            let block = block_name(p);
+            let mut current = encode_block_entity(*p, e, &block);
             if let Some((_, name)) = chunk.block_names.iter().find(|(q, _)| q == p)
-                && let Tag::Compound(map) = &mut tag
+                && let Tag::Compound(map) = &mut current
             {
                 map.insert("CustomName".into(), string(name));
             }
-            tag
+            let source = extras
+                .and_then(|x| x.block_entity_sources.iter().find(|(q, _)| q == p))
+                .map(|(_, tag)| tag)
+                .filter(|tag| {
+                    crate::block_entity_nbt::id(tag) == crate::block_entity_nbt::id(&current)
+                });
+            let merged = match source {
+                Some(original) => {
+                    let loaded = decode_block_entity(original).map_or_else(
+                        || current.clone(),
+                        |(q, e)| encode_block_entity(q, &e, &block),
+                    );
+                    merge_block_entity(original, &loaded, &current)
+                }
+                None => current,
+            };
+            crate::block_entity_nbt::canonical(&merged).unwrap_or(merged)
         })
         .collect();
     if let Some(extras) = extras {
@@ -757,7 +808,8 @@ pub fn encode_with(
             let still_there =
                 tables.is_none_or(|t| t.block_entity.get(state).copied().unwrap_or(true));
             if still_there && !chunk.block_entities.iter().any(|(p, _)| *p == pos) {
-                block_entities.push(raw.clone());
+                block_entities
+                    .push(crate::block_entity_nbt::canonical(raw).unwrap_or_else(|| raw.clone()));
             }
         }
     }
@@ -958,6 +1010,7 @@ pub fn decode_with(
                     if let Some(name) = text(e.get("CustomName")) {
                         chunk.block_names.push((be.0, name));
                     }
+                    extras.block_entity_sources.push((be.0, e.clone()));
                     chunk.block_entities.push(be);
                 }
                 None => extras.block_entities.push(e.clone()),
@@ -1312,7 +1365,7 @@ pub fn random_uuid() -> [i32; 4] {
     let b = (b & !(0xC000_0000_0000_0000)) | 0x8000_0000_0000_0000;
     [(a >> 32) as i32, a as i32, (b >> 32) as i32, b as i32]
 }
-fn uuid_tag(u: [i32; 4]) -> Tag {
+pub(crate) fn uuid_tag(u: [i32; 4]) -> Tag {
     Tag::IntArray(u.to_vec())
 }
 pub(crate) fn uuid_from_tag(tag: Option<&Tag>) -> Option<[i32; 4]> {
@@ -1593,7 +1646,7 @@ impl Level {
         level.player_extra = player;
         Some(level)
     }
-    fn read_player(&mut self, p: &Tag) {
+    pub fn read_player(&mut self, p: &Tag) {
         let n = |k: &str| number(p.get(k));
         let f = |k: &str| float(p.get(k));
         self.position = read_doubles::<3>(p.get("Pos"));
@@ -1799,8 +1852,10 @@ impl Level {
                 }),
             ),
         ];
-        if !equipment.is_empty() {
-            entries.push(("equipment", Tag::compound(equipment)));
+        // Vanilla writes `equipment` even when empty and omits an empty effect list.
+        entries.push(("equipment", Tag::compound(equipment)));
+        if self.active_effects.is_empty() {
+            entries.retain(|(key, _)| *key != "active_effects");
         }
         if let Some(pos) = self.position {
             entries.push(("Pos", doubles(&pos)));
@@ -2140,6 +2195,19 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn session_lock_is_exclusive() {
+        let dir = std::env::temp_dir().join(format!("horizon-lock-{}", std::process::id()));
+        let first = super::SessionLock::acquire(&dir).expect("first lock");
+        assert!(super::SessionLock::acquire(&dir).is_err());
+        assert_eq!(
+            std::fs::read(dir.join("session.lock")).unwrap(),
+            [0x26, 0x03]
+        );
+        drop(first);
+        assert!(super::SessionLock::acquire(&dir).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[test]
     fn crafter_block_entity_round_trips() {
         let mut crafter = crate::containers::Crafter::default();

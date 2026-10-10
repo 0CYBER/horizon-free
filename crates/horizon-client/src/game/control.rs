@@ -34,6 +34,7 @@ const HELP: &[&str] = &[
     "bench SECONDS                  reset stats, wait, then reply with the summary",
     "open WORLD [SEED] [creative]   open or create a world from the title screen",
     "save                           save the world",
+    "save-all                       save the world, rewriting every resident chunk",
     "connect HOST[:PORT] [NAME]     join a multiplayer server (offline mode) from the title screen",
     "chat MESSAGE                   send chat or a /command to the server",
     "disconnect                     leave the server for the server list",
@@ -78,11 +79,15 @@ impl Game<'_> {
         if let Some(value) = self.block_command(&words)? {
             return Ok(Some(value));
         }
+        if let Some(value) = self.lan_control(&words)? {
+            return Ok(Some(value));
+        }
         match words[0] {
             "help" => Ok(Some(json!({ "commands": HELP
                 .iter()
                 .chain(super::station_control::HELP)
                 .chain(super::blockctl::HELP)
+                .chain(super::lan::HELP)
                 .chain(super::render_control::HELP)
                 .chain(super::sculk::HELP)
                 .collect::<Vec<_>>() }))),
@@ -391,6 +396,15 @@ impl Game<'_> {
                 self.save_game()?;
                 ok()
             }
+            "save-all" => {
+                // Like `save-all flush`: also rewrite chunks that were not modified
+                // (the save round-trip harness compares them with vanilla's files).
+                self.require_world()?;
+                let keys: Vec<_> = self.world.chunks.keys().copied().collect();
+                self.world.modified.extend(keys);
+                self.save_game()?;
+                ok()
+            }
             "dragon-hurt" => {
                 // Test hook: damage the dragon's head as the player would.
                 let amount: f32 = arg(1)?.parse()?;
@@ -451,6 +465,7 @@ impl Game<'_> {
             Screen::Chat => "chat",
             Screen::Stats => "stats",
             Screen::Advancements => "advancements",
+            Screen::WorldOptions => "world-options",
         }
     }
 
