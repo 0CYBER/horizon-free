@@ -5746,7 +5746,7 @@ impl Game<'_> {
             }
             return Ok(true);
         }
-        if self.use_block_transformer(&stack, hit.pos, hit.face)? {
+        if self.use_block_transformer(stack, hit.pos, hit.face)? {
             return Ok(true);
         }
         if item == "honeycomb" {

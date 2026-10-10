@@ -142,7 +142,7 @@ impl Predicate {
         match self {
             Self::Blocks(names) => {
                 let state = around.state([0, 0, 0]);
-                names.iter().any(|n| *n == state.name)
+                names.contains(&state.name)
             }
             Self::Tag { tag, offset } => {
                 let state = around.state(*offset);

@@ -878,9 +878,9 @@ impl Menu {
         if input == Input::QuickCraft {
             let expected = self.quick_status;
             self.quick_status = button & 3;
-            if (expected != 1 || self.quick_status != 2) && expected != self.quick_status {
-                self.reset_quick_craft();
-            } else if self.carried.is_none() {
+            if ((expected != 1 || self.quick_status != 2) && expected != self.quick_status)
+                || self.carried.is_none()
+            {
                 self.reset_quick_craft();
             } else if self.quick_status == 0 {
                 self.quick_type = (button >> 2) & 3;
@@ -1069,7 +1069,7 @@ impl Menu {
                     let amount = if primary {
                         clicked.count
                     } else {
-                        (clicked.count + 1) / 2
+                        clicked.count.div_ceil(2)
                     };
                     if let Some(taken) = self.try_remove(env, s, amount, u32::MAX) {
                         self.carried = Some(taken);
@@ -1190,10 +1190,10 @@ impl Menu {
                     let item = self.slot(t).expect("has item").clone();
                     if pass != 0 || item.count != Self::max_stack(env, &item) {
                         let room = carried_max - have.count;
-                        if let Some(removed) = self.safe_take(env, t, item.count, room) {
-                            if let Some(c) = self.carried.as_mut() {
-                                c.count += removed.count;
-                            }
+                        if let Some(removed) = self.safe_take(env, t, item.count, room)
+                            && let Some(c) = self.carried.as_mut()
+                        {
+                            c.count += removed.count;
                         }
                     }
                 }
