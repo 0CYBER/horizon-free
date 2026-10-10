@@ -446,6 +446,7 @@ pub struct Resources {
     facts: BlockFacts,
     items: Items,
     recipes: Recipes,
+    transformers: horizon_client::block_transform::Transformers,
     biomes: Arc<Biomes>,
     environment: Environment,
     atlas: HudAtlas,
@@ -5419,6 +5420,90 @@ impl Game<'_> {
         }
         None
     }
+    /// `BlockTransformer.transformBlock` for a held axe, hoe or shovel.
+    fn use_block_transformer(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        face: [i32; 3],
+    ) -> Result<bool> {
+        use horizon_client::block_transform::Around;
+        struct Column<'w> {
+            world: &'w World,
+            registry: &'w horizon_world::registry::BlockRegistry,
+            pos: [i32; 3],
+        }
+        impl Around for Column<'_> {
+            fn state(&self, o: [i32; 3]) -> horizon_world::chunk::BlockState {
+                let id = self
+                    .world
+                    .block(self.pos[0] + o[0], self.pos[1] + o[1], self.pos[2] + o[2]);
+                self.registry
+                    .state(id)
+                    .cloned()
+                    .unwrap_or_else(|| horizon_world::chunk::BlockState {
+                        name: "minecraft:air".into(),
+                        properties: Default::default(),
+                    })
+            }
+        }
+        let Some(id) = self
+            .res
+            .items
+            .get(&stack.item)
+            .and_then(|i| i.block_transformer.clone())
+        else {
+            return Ok(false);
+        };
+        let face_name = match face {
+            [0, -1, 0] => "down",
+            [0, 1, 0] => "up",
+            [0, 0, -1] => "north",
+            [0, 0, 1] => "south",
+            [-1, 0, 0] => "west",
+            _ => "east",
+        };
+        let registry = self.res.assets.registry;
+        let (state, sound, loot, damage) = {
+            let around = Column {
+                world: &self.world,
+                registry,
+                pos,
+            };
+            let Some((_, t, state)) = self.res.transformers.apply(
+                &self.res.items,
+                registry,
+                &id,
+                face_name,
+                &around,
+            ) else {
+                return Ok(false);
+            };
+            (state, t.sound.clone(), t.loot.clone(), t.damage)
+        };
+        let Ok(new) = registry.resolve(&state) else {
+            return Ok(false);
+        };
+        self.level_set(pos, new)?;
+        if loot.as_deref() == Some("minecraft:till/rooted_dirt") {
+            self.pop_resource(
+                [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]],
+                ItemStack::new("minecraft:hanging_roots", 1),
+            );
+        }
+        self.audio.play(
+            &sound,
+            Some([
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]) + 0.5,
+                f64::from(pos[2]) + 0.5,
+            ]),
+            1.0,
+            1.0,
+        );
+        self.damage_held(damage);
+        Ok(true)
+    }
     fn set_state_named(&mut self, pos: [i32; 3], name: &str, keep: &[&str]) -> Result<bool> {
         let registry = &self.res.assets.registry;
         let old = self.world.block(pos[0], pos[1], pos[2]);
@@ -5514,17 +5599,6 @@ impl Game<'_> {
             return Ok(false);
         };
         let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        let name = self
-            .res
-            .facts
-            .get(clicked)
-            .name
-            .trim_start_matches("minecraft:")
-            .to_owned();
-        let above_air =
-            self.res
-                .facts
-                .is_air(self.world.block(hit.pos[0], hit.pos[1] + 1, hit.pos[2]));
         if item == "water_bucket" || item == "lava_bucket" {
             let target = if self.res.facts.get(clicked).replaceable {
                 hit.pos
@@ -5561,60 +5635,21 @@ impl Game<'_> {
             }
             return Ok(true);
         }
-        if item.ends_with("_hoe") && hit.face != [0, -1, 0] && above_air {
-            // HoeItem.TILLABLES
-            let result = match name.as_str() {
-                "grass_block" | "dirt_path" | "dirt" => Some("minecraft:farmland"),
-                "coarse_dirt" | "rooted_dirt" => Some("minecraft:dirt"),
-                _ => None,
-            };
-            if let Some(result) = result {
-                self.set_state_named(hit.pos, result, &[])?;
-                if name == "rooted_dirt" {
-                    self.pop_resource(
-                        [hit.pos[0], hit.pos[1] - 1, hit.pos[2]],
-                        ItemStack {
-                            item: Arc::from("minecraft:hanging_roots"),
-                            count: 1,
-                            damage: 0,
-                            extra: None,
-                        },
-                    );
-                }
-                self.audio
-                    .play("minecraft:item.hoe.till", Some(at(hit.pos)), 1.0, 1.0);
-                self.damage_held(1);
-                return Ok(true);
-            }
-        }
-        if item.ends_with("_shovel")
-            && hit.face != [0, -1, 0]
-            && above_air
-            && matches!(
-                name.as_str(),
-                "grass_block" | "dirt" | "podzol" | "coarse_dirt" | "mycelium" | "rooted_dirt"
-            )
-        {
-            // ShovelItem.FLATTENABLES
-            self.set_state_named(hit.pos, "minecraft:dirt_path", &[])?;
-            self.audio
-                .play("minecraft:item.shovel.flatten", Some(at(hit.pos)), 1.0, 1.0);
-            self.damage_held(1);
+        if self.use_block_transformer(&stack, hit.pos, hit.face)? {
             return Ok(true);
         }
-        if item.ends_with("_axe") && !name.starts_with("stripped_") {
-            // AxeItem.STRIPPABLES
-            let strippable = name.ends_with("_log")
-                || name.ends_with("_wood")
-                || name.ends_with("_stem")
-                || name.ends_with("_hyphae")
-                || name == "bamboo_block";
-            let stripped = format!("minecraft:stripped_{name}");
-            if strippable && self.res.assets.registry.default_state(&stripped).is_some() {
-                self.set_state_named(hit.pos, &stripped, &["axis"])?;
+        if item == "honeycomb" {
+            let registry = self.res.assets.registry;
+            let old = registry.state(clicked).cloned();
+            if let Some(waxed) = old.and_then(|old| self.res.transformers.waxed(registry, &old))
+                && let Ok(state) = registry.resolve(&waxed)
+            {
+                self.level_set(hit.pos, state)?;
                 self.audio
-                    .play("minecraft:item.axe.strip", Some(at(hit.pos)), 1.0, 1.0);
-                self.damage_held(1);
+                    .play("minecraft:item.honeycomb.wax_on", Some(at(hit.pos)), 1.0, 1.0);
+                if !self.creative {
+                    self.consume_held();
+                }
                 return Ok(true);
             }
         }
@@ -7606,6 +7641,8 @@ pub fn run() -> Result<()> {
     let items = Items::load(&root, assets.registry, &facts)?;
     eprintln!("load items: {:.2}s", started.elapsed().as_secs_f32());
     let recipes = Recipes::load(&root, &items)?;
+    let transformers =
+        horizon_client::block_transform::Transformers::load(&root, assets.registry)?;
     let biomes = Arc::new(Biomes::load(&root)?);
     let environment = Environment::load(&root)?;
     eprintln!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
@@ -7677,6 +7714,7 @@ pub fn run() -> Result<()> {
         facts,
         items,
         recipes,
+        transformers,
         biomes,
         environment,
         atlas,
