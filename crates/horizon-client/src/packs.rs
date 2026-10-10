@@ -3,7 +3,9 @@
 //! and High Contrast packs, `pack.mcmeta` metadata and format compatibility,
 //! and an overlay resource root that layers the enabled packs over the
 //! vanilla resources (later packs win), so every loader sees one tree.
+mod pattern;
 use crate::{text::Text, zip::Zip};
+use pattern::Pattern;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
@@ -26,6 +28,30 @@ pub struct Pack {
     pub title: Text,
     pub description: Text,
     pub compatible: bool,
+    /// Overlay directories active for this game version, in `pack.mcmeta` order.
+    pub overlays: Vec<String>,
+    /// `filter.block` entries (namespace and path patterns) hiding resources
+    /// of the packs below this one.
+    pub filter: Vec<Filter>,
+}
+#[derive(Clone, Debug, Default)]
+pub struct Filter {
+    namespace: Option<Pattern>,
+    path: Option<Pattern>,
+}
+impl Filter {
+    fn blocks(&self, file: &str) -> bool {
+        let Some(rest) = file.strip_prefix("assets/") else {
+            return false;
+        };
+        let Some((namespace, path)) = rest.split_once('/') else {
+            return false;
+        };
+        self.namespace
+            .as_ref()
+            .is_none_or(|p| p.is_match(namespace))
+            && self.path.as_ref().is_none_or(|p| p.is_match(path))
+    }
 }
 /// A minimal text component from JSON (strings, `text`, `translate`, arrays).
 pub fn component(v: &serde_json::Value) -> Text {
@@ -102,6 +128,58 @@ pub fn compatible(meta: &serde_json::Value) -> bool {
     }
     format_of(&pack["pack_format"]).is_some_and(|f| f.0 == current.0)
 }
+/// Whether an `overlays.entries[]` item applies to the current format
+/// (OverlayMetadataSection: `formats` as an int, `[min, max]` or
+/// `{min_inclusive, max_inclusive}`, or `min_format`/`max_format`).
+fn overlay_applies(entry: &serde_json::Value) -> bool {
+    let current = RESOURCE_FORMAT;
+    if let (Some(min), Some(max)) = (
+        format_of(&entry["min_format"]),
+        format_of(&entry["max_format"]),
+    ) {
+        return min <= current && current <= (max.0, if max.1 == 0 { i64::MAX } else { max.1 });
+    }
+    let formats = &entry["formats"];
+    if let Some(n) = formats.as_i64() {
+        return n == current.0;
+    }
+    if let Some(a) = formats.as_array() {
+        return match (
+            a.first().and_then(|v| v.as_i64()),
+            a.get(1).and_then(|v| v.as_i64()),
+        ) {
+            (Some(lo), Some(hi)) => lo <= current.0 && current.0 <= hi,
+            _ => false,
+        };
+    }
+    match (
+        formats["min_inclusive"].as_i64(),
+        formats["max_inclusive"].as_i64(),
+    ) {
+        (Some(lo), Some(hi)) => lo <= current.0 && current.0 <= hi,
+        _ => false,
+    }
+}
+fn overlays_of(meta: &serde_json::Value) -> Vec<String> {
+    meta["overlays"]["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| overlay_applies(e))
+        .filter_map(|e| e["directory"].as_str().map(str::to_owned))
+        .collect()
+}
+fn filter_of(meta: &serde_json::Value) -> Vec<Filter> {
+    meta["filter"]["block"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|b| Filter {
+            namespace: b["namespace"].as_str().and_then(Pattern::new),
+            path: b["path"].as_str().and_then(Pattern::new),
+        })
+        .collect()
+}
 fn read_meta(source: &Source) -> Option<serde_json::Value> {
     let bytes = match source {
         Source::Dir(d) => fs::read(d.join("pack.mcmeta")).ok()?,
@@ -116,6 +194,8 @@ fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
         title,
         description: component(&meta["pack"]["description"]),
         compatible: compatible(&meta),
+        overlays: overlays_of(&meta),
+        filter: filter_of(&meta),
         source,
     })
 }
@@ -155,30 +235,44 @@ pub fn discover(resources: &Path, packs_dir: &Path) -> Vec<Pack> {
     out.extend(user);
     out
 }
-/// Files a pack provides under `assets/`.
-fn pack_files(source: &Source) -> io::Result<BTreeMap<String, Option<PathBuf>>> {
+/// A file a pack provides: its path (folder packs) and its name inside the pack.
+type Provided = (Option<PathBuf>, String);
+/// Files a pack provides under `assets/`, keyed by their resource name; active
+/// overlay directories are applied after the base, in order, later wins.
+fn pack_files(pack: &Pack) -> io::Result<BTreeMap<String, Provided>> {
     let mut out = BTreeMap::new();
-    match source {
+    let roots = std::iter::once(String::new())
+        .chain(pack.overlays.iter().map(|d| format!("{d}/")))
+        .collect::<Vec<_>>();
+    match &pack.source {
         Source::Dir(d) => {
-            let mut stack = vec![d.join("assets")];
-            while let Some(dir) = stack.pop() {
-                let Ok(entries) = fs::read_dir(&dir) else {
-                    continue;
-                };
-                for e in entries.flatten() {
-                    let p = e.path();
-                    if p.is_dir() {
-                        stack.push(p);
-                    } else if let Ok(rel) = p.strip_prefix(d) {
-                        out.insert(rel.to_string_lossy().replace('\\', "/"), Some(p.clone()));
+            for root in &roots {
+                let base = d.join(root.trim_end_matches('/'));
+                let mut stack = vec![base.join("assets")];
+                while let Some(dir) = stack.pop() {
+                    let Ok(entries) = fs::read_dir(&dir) else {
+                        continue;
+                    };
+                    for e in entries.flatten() {
+                        let p = e.path();
+                        if p.is_dir() {
+                            stack.push(p);
+                        } else if let Ok(rel) = p.strip_prefix(&base) {
+                            let rel = rel.to_string_lossy().replace('\\', "/");
+                            out.insert(rel.clone(), (Some(p.clone()), format!("{root}{rel}")));
+                        }
                     }
                 }
             }
         }
         Source::Zip(z) => {
-            for name in Zip::open(z)?.names() {
-                if name.starts_with("assets/") {
-                    out.insert(name.to_owned(), None);
+            let zip = Zip::open(z)?;
+            for root in &roots {
+                let prefix = format!("{root}assets/");
+                for name in zip.names() {
+                    if let Some(rest) = name.strip_prefix(&prefix) {
+                        out.insert(format!("assets/{rest}"), (None, name.to_owned()));
+                    }
                 }
             }
         }
@@ -205,12 +299,16 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
     }
     fs::create_dir_all(out)?;
     // Final owner of every overridden file.
-    let mut files: BTreeMap<String, (usize, Option<PathBuf>)> = BTreeMap::new();
+    let mut files: BTreeMap<String, (usize, Provided)> = BTreeMap::new();
     for (i, p) in packs.iter().enumerate() {
-        for (name, path) in pack_files(&p.source)? {
-            files.insert(name, (i, path));
+        // A pack's filter hides what the packs below it provide.
+        files.retain(|name, _| !p.filter.iter().any(|f| f.blocks(name)));
+        for (name, provided) in pack_files(p)? {
+            files.insert(name, (i, provided));
         }
     }
+    // Vanilla sits below every pack, so filters hide its files too.
+    let filters: Vec<&Filter> = packs.iter().flat_map(|p| &p.filter).collect();
     let touched_dirs: BTreeSet<String> = files
         .keys()
         .flat_map(|f| {
@@ -233,7 +331,8 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
         vanilla: &Path,
         out: &Path,
         touched: &BTreeSet<String>,
-        files: &BTreeMap<String, (usize, Option<PathBuf>)>,
+        files: &BTreeMap<String, (usize, Provided)>,
+        filters: &[&Filter],
         zips: &[Option<Zip>],
     ) -> io::Result<()> {
         let src = if rel.is_empty() {
@@ -265,25 +364,31 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
         }
         for name in names {
             let child = format!("{prefix}{name}");
-            if let Some((owner, path)) = files.get(&child) {
+            if let Some((owner, (path, inner))) = files.get(&child) {
                 let target = out.join(&child);
                 match path {
                     Some(p) => link(p, &target)?,
                     None => {
                         if let Some(Some(z)) = zips.get(*owner) {
-                            fs::write(&target, z.read(&child)?)?;
+                            fs::write(&target, z.read(inner)?)?;
                         }
                     }
                 }
+            } else if vanilla.join(&child).is_dir()
+                && (touched.contains(&child) || !filters.is_empty())
+            {
+                mirror(&child, vanilla, out, touched, files, filters, zips)?;
             } else if touched.contains(&child) {
-                mirror(&child, vanilla, out, touched, files, zips)?;
+                mirror(&child, vanilla, out, touched, files, filters, zips)?;
+            } else if filters.iter().any(|f| f.blocks(&child)) {
+                // Hidden by a pack's filter.
             } else {
                 link(&vanilla.join(&child), &out.join(&child))?;
             }
         }
         Ok(())
     }
-    mirror("", vanilla, out, &touched_dirs, &files, &zips)
+    mirror("", vanilla, out, &touched_dirs, &files, &filters, &zips)
 }
 /// The packs to apply for an options.txt `resourcePacks` list (bottom first).
 pub fn enabled(all: &[Pack], ids: &[String]) -> Vec<Pack> {
@@ -386,6 +491,62 @@ mod tests {
             b"{}"
         );
         assert_eq!(fs::read(out.join("facts.json")).unwrap(), b"[]");
+        let _ = fs::remove_dir_all(base);
+    }
+    #[test]
+    fn overlays_and_filters() {
+        let v = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
+        let meta = v(r#"{"overlays":{"entries":[
+            {"formats":[90,96],"directory":"old"},
+            {"formats":{"min_inclusive":97,"max_inclusive":97},"directory":"new"},
+            {"min_format":97,"max_format":[97,5],"directory":"also"},
+            {"formats":50,"directory":"no"}]}}"#);
+        assert_eq!(overlays_of(&meta), ["new", "also"]);
+        let base = std::env::temp_dir().join(format!("horizon-packs-ov-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let vanilla = base.join("vanilla");
+        fs::create_dir_all(vanilla.join("assets/minecraft/textures/block")).unwrap();
+        fs::write(
+            vanilla.join("assets/minecraft/textures/block/stone.png"),
+            b"v",
+        )
+        .unwrap();
+        fs::write(
+            vanilla.join("assets/minecraft/textures/block/dirt.png"),
+            b"v",
+        )
+        .unwrap();
+        let dir = base.join("packs/P");
+        fs::create_dir_all(dir.join("new/assets/minecraft/textures/block")).unwrap();
+        fs::create_dir_all(dir.join("old/assets/minecraft/textures/block")).unwrap();
+        fs::write(
+            dir.join("pack.mcmeta"),
+            br#"{"pack":{"description":"p","pack_format":97},
+            "overlays":{"entries":[{"formats":97,"directory":"new"},{"formats":1,"directory":"old"}]},
+            "filter":{"block":[{"path":"textures/block/dirt\\.png"}]}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("new/assets/minecraft/textures/block/stone.png"),
+            b"overlay",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("old/assets/minecraft/textures/block/stone.png"),
+            b"old",
+        )
+        .unwrap();
+        let packs = discover(&vanilla, &base.join("packs"));
+        let out = base.join("overlay");
+        build_overlay(&vanilla, &packs, &out).unwrap();
+        assert_eq!(
+            fs::read(out.join("assets/minecraft/textures/block/stone.png")).unwrap(),
+            b"overlay"
+        );
+        assert!(
+            !out.join("assets/minecraft/textures/block/dirt.png")
+                .exists()
+        );
         let _ = fs::remove_dir_all(base);
     }
 }
