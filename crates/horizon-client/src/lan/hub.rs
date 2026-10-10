@@ -91,7 +91,7 @@ pub struct Hub {
     pub config: HubConfig,
     pub encoder: ChunkEncoder,
     pub guests: Vec<Guest>,
-    sync: Arc<SyncData>,
+    pub(super) sync: Arc<SyncData>,
     pub ticks: u64,
     last_clock: i64,
     weather: (bool, f32, f32),
@@ -549,6 +549,7 @@ impl Hub {
             }
         }
         self.broadcast_block_changes(ctx.world);
+        self.sync_containers(ctx.world);
         self.track_entities(ctx);
         for i in 0..self.guests.len() {
             if self.guests[i].placed {
@@ -1247,3 +1248,39 @@ const COMMANDS: &[&str] = &[
     "weather",
     "xp",
 ];
+
+impl Hub {
+    pub fn item_name(&self, id: i32) -> Option<std::sync::Arc<str>> {
+        self.sync
+            .builtin
+            .get("minecraft:item")?
+            .name(id)
+            .map(std::sync::Arc::from)
+    }
+    pub fn enchantment_name(&self, id: i32) -> Option<String> {
+        self.sync
+            .dynamic
+            .name("minecraft:enchantment", id)
+            .map(str::to_owned)
+    }
+
+    /// ServerPlayer.respawn: back to `at` with a fresh start.
+    pub fn respawn(&mut self, i: usize, at: [f64; 3]) {
+        let mode = self.guests[i].game_mode;
+        let info = self.spawn_info(mode);
+        self.close_container_for(i);
+        let g = &mut self.guests[i];
+        g.position = at;
+        g.previous_position = at;
+        g.send(&C::Respawn(play::Respawn {
+            spawn: info,
+            keep: 0,
+        }));
+        g.center = None;
+        g.sent_chunks.clear();
+        g.chunk_queue.clear();
+        g.tracker.clear();
+        self.teleport(i, None);
+        self.send_inventory(i);
+    }
+}

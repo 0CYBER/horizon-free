@@ -34,6 +34,7 @@ mod golems;
 mod growth;
 mod jukebox;
 mod lan;
+mod lan_actions;
 mod lan_screen;
 mod lightning;
 mod loom;
@@ -667,6 +668,13 @@ struct Game<'a> {
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
     world_options: Option<lan_screen::WorldOptions>,
+    /// The block a guest is acting on (game/lan_actions.rs).
+    forced_hit: Option<Hit>,
+    /// Level events of this tick for the guests, and the guest acting now.
+    lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
+    lan_acting: Option<u32>,
+    /// Command feedback to forward to a guest.
+    chat_capture: Option<Vec<String>>,
     /// Allow Cheats: whether guests may be given commands.
     cheats: bool,
     ui: chat::UiState,
@@ -765,6 +773,14 @@ impl Game<'_> {
     /// Voxel traversal against non-air, non-fluid blocks, clipped against
     /// each block's outline shape (`BlockGetter.clip` with `ClipContext.Block.OUTLINE`).
     fn pick(&self) -> Option<Hit> {
+        // A guest of a hosted world acts on the block their client targeted.
+        if let Some(hit) = &self.forced_hit {
+            return Some(Hit {
+                pos: hit.pos,
+                face: hit.face,
+                point: hit.point,
+            });
+        }
         let origin = self.eye_position()?;
         self.clip_ray(origin, view_vector(self.yaw, self.pitch), self.reach())
     }
@@ -1256,6 +1272,7 @@ impl Game<'_> {
     /// Side effects reported by the behaviour library, in vanilla order.
     fn process_level_events(&mut self) -> Result<()> {
         let events = std::mem::take(&mut self.level_events);
+        self.lan_record_events(&events);
         for event in events {
             match event {
                 LevelEvent::LevelEvent {
@@ -7881,6 +7898,10 @@ pub fn run() -> Result<()> {
         remote: None,
         lan: None,
         world_options: None,
+        forced_hit: None,
+        lan_events: Vec::new(),
+        lan_acting: None,
+        chat_capture: None,
         cheats: true,
         ui: Default::default(),
         combat: Default::default(),

@@ -46,6 +46,11 @@ pub(super) struct LanHost {
     /// The guests' models in the host's world.
     pub models: HashMap<u32, Mob>,
     host_mode: i32,
+    pub play: HashMap<u32, super::lan_actions::GuestPlay>,
+    /// Blocks broken this tick (their sound is a level event for the guests).
+    pub broken: Vec<[f64; 3]>,
+    /// Hurt and death state of the mobs guests see.
+    mob_state: HashMap<u32, (i32, bool)>,
 }
 
 /// A stable UUID for an entity that has none.
@@ -211,7 +216,11 @@ impl Game<'_> {
             host_uuid,
             models: HashMap::new(),
             host_mode: self.mode_id(),
+            play: HashMap::new(),
+            broken: Vec::new(),
+            mob_state: HashMap::new(),
         });
+        self.audio.capture = Some(Vec::new());
         self.system_message(Text::translate(
             "menu.multiplayerOptions.publish.started.lan",
             &[Text::literal(port.to_string())],
@@ -231,6 +240,8 @@ impl Game<'_> {
         // Give the writer threads a moment to flush the disconnect packets.
         std::thread::sleep(std::time::Duration::from_millis(100));
         self.world.block_log = None;
+        self.audio.capture = None;
+        self.lan_events.clear();
         self.streaming.extra.clear();
         if announce {
             self.system_message(Text::translate(
@@ -409,6 +420,9 @@ impl Game<'_> {
                 }
             }
         }
+        self.lan_flush_effects(&mut host);
+        self.tick_guests(&mut host);
+        self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
         self.lan_update_models(&mut host);
         self.lan = Some(host);
@@ -451,12 +465,52 @@ impl Game<'_> {
         host.hub.place_new_player(conn, &mut ctx);
     }
 
-    fn lan_guest_packet(
-        &mut self,
-        _host: &mut LanHost,
-        _conn: u32,
-        _packet: horizon_protocol::packets::play::Serverbound,
-    ) {
+    /// Level events the game queued, for the guests (`process_level_events`).
+    pub(super) fn lan_record_events(&mut self, events: &[horizon_world::level::LevelEvent]) {
+        if self.audio.capture.is_none() {
+            return;
+        }
+        for e in events {
+            if let horizon_world::level::LevelEvent::LevelEvent { id, pos, data } = e {
+                self.lan_events.push((
+                    *id as i32,
+                    [pos.x, pos.y, pos.z],
+                    *data as i32,
+                    self.lan_acting,
+                ));
+            }
+        }
+    }
+
+    /// Send the tick's level events, sounds and mob animations.
+    fn lan_flush_effects(&mut self, host: &mut LanHost) {
+        for (kind, pos, data, acting) in std::mem::take(&mut self.lan_events) {
+            if kind == 2001 {
+                host.broken
+                    .push([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
+            }
+            host.hub.level_event(kind, pos, data, acting);
+        }
+        self.lan_broadcast_effects(host);
+        if host.hub.guests.is_empty() {
+            host.mob_state.clear();
+            return;
+        }
+        // Hurt and death animations of mobs.
+        let mut seen = HashMap::new();
+        for m in &self.mobs {
+            let dead = !m.alive();
+            let old = host.mob_state.get(&m.id).copied();
+            let at = [m.position.x, m.position.y, m.position.z];
+            if m.hurt_time > old.map_or(0, |o| o.0) && !dead {
+                host.hub.entity_event(m.id as i32, 2, at);
+            }
+            if dead && !old.is_some_and(|o| o.1) {
+                host.hub.entity_event(m.id as i32, 3, at);
+            }
+            seen.insert(m.id, (m.hurt_time, dead));
+        }
+        host.mob_state = seen;
     }
 
     /// Keep the chunks around every guest loaded.

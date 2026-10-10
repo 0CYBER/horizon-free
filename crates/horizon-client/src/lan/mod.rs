@@ -6,10 +6,12 @@
 //! world that is not open to the network pays nothing.
 pub mod chunks;
 pub mod conn;
+pub mod containers;
 pub mod data;
 pub mod entity;
 pub mod guest;
 pub mod hub;
+pub mod menu;
 pub mod playerdata;
 
 pub use conn::PlayerSender;

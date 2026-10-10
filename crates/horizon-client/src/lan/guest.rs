@@ -82,6 +82,11 @@ pub struct Guest {
     pub dead: bool,
     /// The join packets were sent (PlayerList.placeNewPlayer ran).
     pub placed: bool,
+    /// The open block container, if any.
+    pub menu: Option<super::menu::Menu>,
+    pub next_window: i32,
+    /// An unfinished drag in the inventory menu.
+    pub drag: Option<(u8, Vec<usize>)>,
     /// The compound this player was loaded from, for fields Horizon does not model.
     pub saved: Option<horizon_world::nbt::Tag>,
 }
@@ -142,6 +147,9 @@ impl Guest {
             ticks: 0,
             dead: false,
             placed: false,
+            menu: None,
+            next_window: 0,
+            drag: None,
             saved: None,
         }
     }
