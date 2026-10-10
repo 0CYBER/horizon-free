@@ -261,7 +261,7 @@ pub const ALL: &[Def] = &[
             "entity.donkey.death"
         ],
         Some("entity.horse.step"),
-        Baby::Scale(0.7, None)
+        Baby::Scale(0.5, None)
     ),
     def!(
         Mule,
@@ -275,7 +275,7 @@ pub const ALL: &[Def] = &[
             "entity.mule.death"
         ],
         Some("entity.horse.step"),
-        Baby::Scale(0.7, None)
+        Baby::Scale(0.5, None)
     ),
     def!(
         Llama,
