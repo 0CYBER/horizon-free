@@ -292,6 +292,8 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         Climate::Cold => 2,
     };
     match m.species() {
+        // Warden.finalizeSpawn: a minute before it digs back down.
+        S::Warden => super::warden::finalize(m, false, &mut Vec::new()),
         S::Pig | S::Cow | S::Chicken => m.extra.variant = climate_index,
         S::Sheep => m.extra.color = super::farm::sheep_color(biome.climate, &mut m.random),
         S::Mooshroom => m.extra.variant = 0,

@@ -151,6 +151,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::RedstoneLamp => self.lamp_tick(pos, state),
                 Class::RedstoneTorch => self.torch_tick(pos, state),
                 Class::Scaffolding => self.scaffolding_tick(pos, state),
+                Class::SculkSensor => self.sculk_sensor_tick(pos, state),
+                Class::SculkShrieker => self.sculk_shrieker_tick(pos, state),
+                Class::SculkCatalyst => self.sculk_catalyst_tick(pos, state),
                 Class::Speleothem => {
                     let tip = b.table.dir(state, p.vertical_direction);
                     if tip == Some(Direction::Up) && !self.can_survive(state, pos) {

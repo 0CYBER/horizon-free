@@ -19,9 +19,9 @@ use std::{
 #[derive(Default)]
 pub struct EntityMemory {
     /// UUIDs of mobs and item entities by Horizon entity ID.
-    uuids: HashMap<u32, [i32; 4]>,
+    pub(super) uuids: HashMap<u32, [i32; 4]>,
     /// The compound each mob or item entity was loaded with.
-    raw: HashMap<u32, Tag>,
+    pub(super) raw: HashMap<u32, Tag>,
     /// Entities of types Horizon does not simulate, kept per chunk and
     /// written back unchanged.
     unknown: HashMap<(i32, i32), Vec<Tag>>,

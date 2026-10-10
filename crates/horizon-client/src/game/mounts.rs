@@ -26,7 +26,7 @@ fn seat(s: Species) -> f64 {
 #[derive(Default)]
 pub(super) struct MountState {
     /// `jumpRidingTicks`: -10 cooling down after a jump, >= 0 charging.
-    jump_ticks: i32,
+    pub(super) jump_ticks: i32,
     /// `jumpRidingScale` (0..1).
     pub(super) jump_scale: f32,
     was_jumping: bool,
@@ -98,6 +98,15 @@ impl Game<'_> {
         }
         if !equine::is_equine(species) || !m.alive() || Some(m.id) == self.riding {
             return false;
+        }
+        // AbstractHorse.mobInteract: shift + use opens a tamed adult's inventory.
+        if !m.is_baby()
+            && m.extra.tame
+            && (self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+                || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight))
+        {
+            self.open_mount_menu(index);
+            return true;
         }
         if self.feed_mount(index, item) {
             return true;
