@@ -382,6 +382,7 @@ impl Game<'_> {
                 dimension: self.dim.id().to_owned(),
                 seed: self.level.seed,
                 max_players: MAX_PLAYERS,
+                dedicated: false,
             },
         );
         let port = hub.lan.port;
@@ -539,7 +540,7 @@ impl Game<'_> {
             let events = {
                 let mut ctx = TickCtx {
                     world: &mut self.world,
-                    host: &state,
+                    host: Some(&state),
                     entities: &entities,
                     next_entity: &mut self.next_entity,
                     spawn,
@@ -550,6 +551,8 @@ impl Game<'_> {
                     } else {
                         0.0
                     },
+                    tick_rate: self.clock.rate(),
+                    tick_frozen: self.clock.frozen(),
                 };
                 host.hub.tick(&mut ctx)
             };
@@ -607,13 +610,15 @@ impl Game<'_> {
         }
         let mut ctx = TickCtx {
             world: &mut self.world,
-            host: state,
+            host: Some(state),
             entities,
             next_entity: &mut self.next_entity,
             spawn,
             difficulty: i32::from(self.ui.difficulty),
             difficulty_locked: false,
             clock_rate: self.ui.clock.rate,
+            tick_rate: self.clock.rate(),
+            tick_frozen: self.clock.frozen(),
         };
         host.hub.place_new_player(conn, &mut ctx);
     }

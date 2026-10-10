@@ -17,6 +17,7 @@ use horizon_protocol::{
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::{literal, translatable},
 };
+use horizon_protocol::ids::play::clientbound as ids;
 use horizon_world::nbt::{JavaString, Tag};
 use std::sync::{Arc, atomic::Ordering};
 
@@ -41,6 +42,8 @@ pub struct HubConfig {
     pub dimension: String,
     pub seed: i64,
     pub max_players: usize,
+    /// A dedicated server: operators from `ops`, the dedicated-only commands.
+    pub dedicated: bool,
 }
 
 /// The host player as the other players see them.
@@ -64,7 +67,8 @@ pub struct HostState {
 /// Everything the hub needs from the game for one tick.
 pub struct TickCtx<'a> {
     pub world: &'a mut World,
-    pub host: &'a HostState,
+    /// The player playing on the host (none on a dedicated server).
+    pub host: Option<&'a HostState>,
     pub entities: &'a [EntityState],
     pub next_entity: &'a mut u32,
     /// Where new players appear.
@@ -73,6 +77,9 @@ pub struct TickCtx<'a> {
     pub difficulty_locked: bool,
     /// The overworld clock's speed (0 when the day does not advance).
     pub clock_rate: f32,
+    /// TickRateManager: the tick rate and whether the game is frozen.
+    pub tick_rate: f32,
+    pub tick_frozen: bool,
 }
 
 /// What the gameplay code has to do for a guest.
@@ -94,7 +101,13 @@ pub struct Hub {
     pub(super) sync: Arc<SyncData>,
     pub ticks: u64,
     last_clock: i64,
+    last_rate: f32,
+    ticking: (f32, bool),
     weather: (bool, f32, f32),
+    /// ClientboundUpdateRecipesPacket, when the game provides it.
+    pub recipes: Option<Vec<u8>>,
+    /// Operators and their permission levels (dedicated servers).
+    pub ops: std::collections::HashMap<u128, u8>,
     chat_type: i32,
     dimension_type: i32,
     clock_ids: Vec<i32>,
@@ -130,6 +143,10 @@ impl Hub {
             sync,
             ticks: 0,
             last_clock: i64::MIN,
+            last_rate: 0.0,
+            ticking: (20.0, false),
+            recipes: None,
+            ops: Default::default(),
             weather: (false, 0.0, 0.0),
             chat_type,
             dimension_type,
@@ -228,13 +245,13 @@ impl Hub {
             game_mode: Some(mode),
             listed: Some(true),
             latency: Some(latency),
-            display_name: None,
+            display_name: Some(None),
             list_order: Some(0),
             show_hat: Some(true),
         }
     }
-    /// ClientboundPlayerInfoUpdatePacket.createPlayerInitializing actions.
-    const INFO_ACTIONS: u8 = 1 | 4 | 8 | 16 | 64 | 128;
+    /// ClientboundPlayerInfoUpdatePacket.createPlayerInitializing: every action.
+    const INFO_ACTIONS: u8 = 0xFF;
 
     // ---- joining -------------------------------------------------------
 
@@ -259,6 +276,7 @@ impl Hub {
         let conn = j.conn;
         let mut guest = Guest::new(j, entity_id, ctx.spawn, self.config.view_distance);
         guest.game_mode = self.config.default_game_mode;
+        guest.permission = self.default_permission(guest.uuid);
         guest.joined_tick = self.ticks;
         guest.position = ctx.spawn;
         guest.previous_position = ctx.spawn;
@@ -266,33 +284,41 @@ impl Hub {
         conn
     }
 
+    /// The permission level a player gets: an integrated server gives every
+    /// guest the game masters' level when commands are allowed
+    /// (IntegratedServer.setGuestCommandAccess); a dedicated server its
+    /// operators' level (`ops`).
+    fn default_permission(&self, uuid: u128) -> u8 {
+        if self.config.dedicated {
+            self.ops.get(&uuid).copied().unwrap_or(0)
+        } else if self.config.guest_commands {
+            2
+        } else {
+            0
+        }
+    }
+
+    /// The levels of a server, in MinecraftServer.levelKeys order.
+    fn level_keys() -> Vec<String> {
+        ["overworld", "the_end", "the_nether"]
+            .map(|l| format!("minecraft:{l}"))
+            .to_vec()
+    }
+
     /// PlayerList.placeNewPlayer for a guest whose saved state is loaded.
     pub fn place_new_player(&mut self, conn: u32, ctx: &mut TickCtx) {
         let Some(i) = self.guests.iter().position(|g| g.conn == conn) else {
             return;
         };
-        let (name, uuid, entity_id, mode, view) = {
+        let (name, uuid, entity_id, mode) = {
             let g = &self.guests[i];
-            (
-                g.name.clone(),
-                g.uuid,
-                g.entity_id,
-                g.game_mode,
-                g.view_distance,
-            )
+            (g.name.clone(), g.uuid, g.entity_id, g.game_mode)
         };
-        let _ = view;
-        let levels = vec![
-            "minecraft:overworld".to_owned(),
-            "minecraft:the_nether".to_owned(),
-            "minecraft:the_end".to_owned(),
-        ];
-        self.guests[i].placed = true;
         let g = &self.guests[i];
         g.send(&C::Login(play::Login {
             player_id: entity_id,
             hardcore: self.config.hardcore,
-            levels,
+            levels: Self::level_keys(),
             max_players: self.config.max_players as i32,
             chunk_radius: self.config.view_distance,
             simulation_distance: self.config.simulation_distance,
@@ -315,13 +341,38 @@ impl Hub {
         g.send(&C::SetHeldSlot(play::SetHeldSlot {
             slot: g.selected as i32,
         }));
-        self.send_commands(i);
-        self.system_message(yellow_translation("multiplayer.player.joined", &[&name]));
+        if let Some(recipes) = &self.recipes {
+            g.sender.send(recipes.clone());
+        }
+        // PlayerList.sendPlayerPermissionLevel, then the recipe book.
+        self.send_permission_level(i);
+        let g = &self.guests[i];
+        g.send(&raw(
+            ids::RECIPE_BOOK_SETTINGS,
+            vec![0; 8], // four books, each closed and unfiltered
+        ));
+        g.send(&raw(ids::RECIPE_BOOK_ADD, vec![0, 1])); // no entries, replace
+        // The others hear of the newcomer before it joins the list.
+        self.broadcast_except(
+            conn,
+            &C::SystemChat(play::SystemChat {
+                content: yellow_translation("multiplayer.player.joined", &[&name]),
+                overlay: false,
+            }),
+        );
+        self.guests[i].placed = true;
         self.teleport(i, None);
+        let g = &self.guests[i];
+        g.send(&C::ServerData(play::ServerData {
+            motd: literal(&self.lan.shared.motd()),
+            icon: None,
+        }));
         // The player list: everyone already here, then the newcomer to all.
-        let mut entries =
-            vec![self.player_info(ctx.host.uuid, &ctx.host.name, ctx.host.game_mode, 0)];
-        for o in self.guests.iter().filter(|o| o.conn != conn) {
+        let mut entries = Vec::new();
+        if let Some(host) = ctx.host {
+            entries.push(self.player_info(host.uuid, &host.name, host.game_mode, 0));
+        }
+        for o in self.guests.iter().filter(|o| o.conn != conn && o.placed) {
             entries.push(self.player_info(
                 o.uuid,
                 &o.name,
@@ -329,26 +380,40 @@ impl Hub {
                 o.latency.load(Ordering::Relaxed),
             ));
         }
-        entries.push(self.player_info(uuid, &name, mode, 0));
-        let own = play::PlayerInfoUpdate {
+        self.guests[i].send(&C::PlayerInfoUpdate(play::PlayerInfoUpdate {
             actions: Self::INFO_ACTIONS,
             entries,
-        };
-        self.guests[i].send(&C::PlayerInfoUpdate(own));
+        }));
         let newcomer = play::PlayerInfoUpdate {
             actions: Self::INFO_ACTIONS,
             entries: vec![self.player_info(uuid, &name, mode, 0)],
         };
-        self.broadcast_except(conn, &C::PlayerInfoUpdate(newcomer));
+        self.broadcast(&C::PlayerInfoUpdate(newcomer));
         self.send_level_info(i, ctx);
+        // ServerPlayer.sendPostEffects and initInventoryMenu.
+        self.guests[i].send(&raw(ids::POST_EFFECTS, vec![0]));
         self.send_inventory(i);
     }
 
-    /// Send everyone the command tree again (the permissions changed).
-    pub fn resend_commands(&self) {
+    /// PlayerList.sendPlayerPermissionLevel: the op level as an entity event
+    /// (24 + level), then the commands that level may use.
+    fn send_permission_level(&self, i: usize) {
+        let g = &self.guests[i];
+        g.send(&C::EntityEvent(play::EntityEvent {
+            id: g.entity_id,
+            event: 24 + g.permission.min(4) as i8,
+        }));
+        self.send_commands(i);
+    }
+
+    /// The permissions changed: tell everyone their level and commands again.
+    pub fn resend_commands(&mut self) {
         for i in 0..self.guests.len() {
+            if !self.config.dedicated {
+                self.guests[i].permission = self.default_permission(self.guests[i].uuid);
+            }
             if self.guests[i].placed {
-                self.send_commands(i);
+                self.send_permission_level(i);
             }
         }
     }
@@ -356,52 +421,25 @@ impl Hub {
     /// Commands.sendCommands: the command tree for this player.
     fn send_commands(&self, i: usize) {
         let g = &self.guests[i];
-        // A root with every command taking free-form arguments.
-        let mut nodes = vec![play::CommandNode {
-            kind: 0,
-            executable: false,
-            restricted: false,
-            children: Vec::new(),
-            redirect: None,
-            name: String::new(),
-            parser: None,
-            suggestions: None,
-        }];
-        if self.config.guest_commands {
-            let argument = |name: &str| play::CommandNode {
-                kind: 2,
-                executable: true,
-                restricted: false,
-                children: Vec::new(),
-                redirect: None,
-                name: name.to_owned(),
-                // brigadier:string with the greedy phrase type.
-                parser: self
-                    .sync
-                    .builtin
-                    .get("minecraft:command_argument_type")
-                    .and_then(|ids| ids.id("brigadier:string"))
-                    .map(|id| (id, vec![2])),
-                suggestions: None,
-            };
-            for name in COMMANDS {
-                nodes.push(play::CommandNode {
-                    kind: 1,
-                    executable: true,
+        let packet = match &self.sync.commands {
+            Some(tree) => tree.packet(g.permission, self.config.dedicated, &self.sync.builtin),
+            None => play::Commands {
+                nodes: vec![play::CommandNode {
+                    kind: 0,
+                    executable: false,
                     restricted: false,
-                    children: vec![nodes.len() as i32 + 1],
+                    children: Vec::new(),
                     redirect: None,
-                    name: (*name).to_owned(),
+                    name: String::new(),
                     parser: None,
                     suggestions: None,
-                });
-                nodes.push(argument("args"));
-                let literal_index = nodes.len() as i32 - 2;
-                nodes[0].children.push(literal_index);
-            }
-        }
-        g.send(&C::Commands(play::Commands { nodes, root: 0 }));
+                }],
+                root: 0,
+            },
+        };
+        g.send(&C::Commands(packet));
     }
+
 
     /// ServerGamePacketListenerImpl.teleport: move the client and wait for its confirmation.
     pub fn teleport(&mut self, i: usize, position: Option<[f64; 3]>) {
@@ -435,7 +473,8 @@ impl Hub {
             lerp_time: 0,
             absolute_max_size: 29_999_984,
             warning_blocks: 5,
-            warning_time: 15,
+            // WorldBorder.DEFAULT_WARNING_TIME, in ticks.
+            warning_time: 300,
         }));
         g.send(&self.time_packet(ctx.world, ctx.clock_rate));
         g.send(&C::SetDefaultSpawnPosition(play::SetDefaultSpawnPosition {
@@ -469,8 +508,14 @@ impl Hub {
             event: game_event::LEVEL_CHUNKS_LOAD_START,
             param: 0.0,
         }));
+        // TickRateManager.updateJoiningPlayer.
+        g.send(&ticking_state(ctx.tick_rate, ctx.tick_frozen));
+        g.send(&raw(ids::TICKING_STEP, vec![0]));
     }
 
+    /// ServerClockManager.createFullSyncPacket: every clock. Horizon keeps the
+    /// overworld clock (the day time); the End's clock runs with the game
+    /// time. Clocks do not advance without the advance_time rule.
     fn time_packet(&self, world: &World, rate: f32) -> C {
         let overworld = self
             .sync
@@ -481,11 +526,22 @@ impl Hub {
             clocks: self
                 .clock_ids
                 .iter()
-                .map(|&id| play::ClockState {
-                    clock: id,
-                    total_ticks: if id == overworld { world.day_time } else { 0 },
-                    partial_tick: 0.0,
-                    rate: if id == overworld { rate } else { 0.0 },
+                .map(|&id| {
+                    if id == overworld {
+                        play::ClockState {
+                            clock: id,
+                            total_ticks: world.day_time,
+                            partial_tick: 0.0,
+                            rate,
+                        }
+                    } else {
+                        play::ClockState {
+                            clock: id,
+                            total_ticks: world.game_time,
+                            partial_tick: 0.0,
+                            rate: if rate > 0.0 { 1.0 } else { 0.0 },
+                        }
+                    }
                 })
                 .collect(),
         })
@@ -604,9 +660,40 @@ impl Hub {
     /// Time and weather (ServerLevel.tickTime / advanceWeatherCycle broadcasts).
     fn sync_world(&mut self, ctx: &TickCtx) {
         let world = &*ctx.world;
-        if self.ticks.is_multiple_of(20) || self.last_clock == i64::MIN {
-            self.broadcast(&self.time_packet(world, ctx.clock_rate));
-            self.last_clock = world.day_time;
+        // MinecraftServer.tickServer: the game time every 20 ticks
+        // (forceGameTimeSynchronization, no clocks).
+        if self.ticks.is_multiple_of(20) {
+            self.broadcast(&C::SetTime(play::SetTime {
+                game_time: world.game_time,
+                clocks: Vec::new(),
+            }));
+        }
+        // ServerClockManager.modifyClock: a day that jumped (`time set`, `time
+        // add`) or a new rate updates the overworld clock.
+        let (day, rate) = (world.day_time, ctx.clock_rate);
+        let step = i64::from(rate.ceil() as i32).max(1);
+        if self.last_clock != i64::MIN
+            && ((day - self.last_clock).abs() > step || rate != self.last_rate)
+        {
+            let overworld = self
+                .sync
+                .id("minecraft:world_clock", "minecraft:overworld")
+                .unwrap_or(0);
+            self.broadcast(&C::SetTime(play::SetTime {
+                game_time: world.game_time,
+                clocks: vec![play::ClockState {
+                    clock: overworld,
+                    total_ticks: day,
+                    partial_tick: 0.0,
+                    rate,
+                }],
+            }));
+        }
+        self.last_clock = day;
+        self.last_rate = rate;
+        if (ctx.tick_rate, ctx.tick_frozen) != self.ticking {
+            self.ticking = (ctx.tick_rate, ctx.tick_frozen);
+            self.broadcast(&ticking_state(ctx.tick_rate, ctx.tick_frozen));
         }
         let w = &world.weather;
         let (raining, rain, thunder) = self.weather;
@@ -900,22 +987,23 @@ impl Hub {
     fn track_entities(&mut self, ctx: &mut TickCtx) {
         let mut all: Vec<EntityState> =
             Vec::with_capacity(ctx.entities.len() + self.guests.len() + 1);
-        let h = ctx.host;
-        let equipment = {
-            let e = &h.equipment;
-            self.equipment_of(&e[0], &e[1], [&e[5], &e[4], &e[3], &e[2]])
-        };
-        all.push(self.player_state(
-            h.entity_id,
-            h.uuid,
-            h.position,
-            (h.yaw, h.pitch, h.head_yaw),
-            h.on_ground,
-            (h.sneaking, h.sprinting, false, false),
-            0x7F,
-            h.health,
-            equipment,
-        ));
+        if let Some(h) = ctx.host {
+            let equipment = {
+                let e = &h.equipment;
+                self.equipment_of(&e[0], &e[1], [&e[5], &e[4], &e[3], &e[2]])
+            };
+            all.push(self.player_state(
+                h.entity_id,
+                h.uuid,
+                h.position,
+                (h.yaw, h.pitch, h.head_yaw),
+                h.on_ground,
+                (h.sneaking, h.sprinting, false, false),
+                0x7F,
+                h.health,
+                equipment,
+            ));
+        }
         let placed: Vec<usize> = (0..self.guests.len())
             .filter(|&i| self.guests[i].placed)
             .collect();
@@ -1119,11 +1207,6 @@ impl Hub {
                         events.push(HostEvent::Chat(format!("<{name}> {text}")));
                     }
                 }
-                S::Unknown(id, ref payload) => {
-                    // Packets Horizon does not model: ignore the ones that only
-                    // matter to vanilla's chat signing.
-                    let _ = (id, payload);
-                }
                 other => events.push(HostEvent::Packet(conn, Box::new(other))),
             }
         }
@@ -1217,43 +1300,6 @@ impl Hub {
     }
 }
 
-/// The commands guests may type when the host allows them.
-const COMMANDS: &[&str] = &[
-    "advancement",
-    "attribute",
-    "clear",
-    "clone",
-    "damage",
-    "data",
-    "difficulty",
-    "effect",
-    "enchant",
-    "experience",
-    "fill",
-    "gamemode",
-    "gamerule",
-    "give",
-    "kill",
-    "me",
-    "msg",
-    "particle",
-    "playsound",
-    "say",
-    "scoreboard",
-    "seed",
-    "setblock",
-    "spawnpoint",
-    "summon",
-    "tag",
-    "teleport",
-    "tell",
-    "time",
-    "title",
-    "tp",
-    "weather",
-    "xp",
-];
-
 impl Hub {
     pub fn item_name(&self, id: i32) -> Option<std::sync::Arc<str>> {
         self.sync
@@ -1288,4 +1334,17 @@ impl Hub {
         self.teleport(i, None);
         self.send_inventory(i);
     }
+}
+
+/// A packet Horizon sends as raw bytes (no fields worth a type).
+fn raw(id: i32, payload: Vec<u8>) -> C {
+    C::Unknown(id, payload)
+}
+
+/// ClientboundTickingStatePacket: the tick rate and whether the game is frozen.
+fn ticking_state(rate: f32, frozen: bool) -> C {
+    let mut w = horizon_protocol::buf::Writer::new();
+    w.f32(rate);
+    w.bool(frozen);
+    raw(ids::TICKING_STATE, w.data)
 }

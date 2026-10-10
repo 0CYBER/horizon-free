@@ -36,6 +36,8 @@ pub struct Guest {
     pub head_yaw: f32,
     pub on_ground: bool,
     pub game_mode: i32,
+    /// The permission level (0 none, 2 game masters, 4 owners).
+    pub permission: u8,
     pub sneaking: bool,
     pub sprinting: bool,
     pub fall_flying: bool,
@@ -110,6 +112,7 @@ impl Guest {
             head_yaw: 0.0,
             on_ground: false,
             game_mode: SURVIVAL,
+            permission: 0,
             sneaking: false,
             sprinting: false,
             fall_flying: false,
