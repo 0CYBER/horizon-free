@@ -33,6 +33,7 @@ struct Cells {
     thundering: bool,
     events: Vec<LevelEvent>,
     command_blocks: HashMap<BlockPos, bool>,
+    lecterns_with_books: std::rc::Rc<std::collections::HashSet<BlockStateId>>,
 }
 impl LevelAccess for Cells {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
@@ -49,6 +50,11 @@ impl LevelAccess for Cells {
     }
     fn is_loaded(&self, _pos: BlockPos) -> bool {
         true
+    }
+    /// Fresh block entities hold nothing, but a lectern whose state has a book
+    /// reads page progress 1 of an empty book: signal 14.
+    fn block_entity_analog_signal(&self, _pos: BlockPos, state: BlockStateId, _direction: Direction) -> i32 {
+        if self.lecterns_with_books.contains(&state) { 14 } else { 0 }
     }
     /// A chest's fresh block entity: nobody has it open.
     fn recheck_container_openers(&mut self, _pos: BlockPos) -> Option<(i32, i32)> {
@@ -131,6 +137,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let registry = load_registry(resources)?;
     let behaviours = Behaviours::load(&registry, resources)?;
     let air = registry.default_state("minecraft:air").unwrap();
+    let lecterns_with_books: std::rc::Rc<std::collections::HashSet<BlockStateId>> = std::rc::Rc::new(
+        (0..registry.len() as u32)
+            .map(BlockStateId)
+            .filter(|&id| {
+                registry.state(id).is_some_and(|s| {
+                    s.name == "minecraft:lectern" && s.properties.get("has_book").is_some_and(|v| v == "true")
+                })
+            })
+            .collect(),
+    );
     let mut out = std::io::BufWriter::new(std::fs::File::create(output)?);
     for (index, line) in std::io::BufReader::new(std::fs::File::open(cases)?)
         .lines()
@@ -171,6 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or(false),
             events: Vec::new(),
             command_blocks: HashMap::new(),
+            lecterns_with_books: lecterns_with_books.clone(),
         };
         let mut ticks = Ticks::new(0);
         for x in -3..=3 {
