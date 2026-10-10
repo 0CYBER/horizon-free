@@ -6,6 +6,7 @@ use horizon_assets::{
     item_model::*,
     math::Mat4,
     model::{CuboidModel, Direction},
+    palette::{PalettedPermutations, apply_palette},
     resolve::{MISSING_MODEL, ModelLibrary},
 };
 use serde_json::{Value, json};
@@ -23,6 +24,8 @@ fn bits(v: f32) -> u32 {
 
 struct Sprites {
     root: PathBuf,
+    /// The items atlas's paletted permutations (armour trim sprites).
+    permutations: Vec<PalettedPermutations>,
     cache: RefCell<BTreeMap<String, Option<SpriteMask>>>,
 }
 impl SpriteLookup for Sprites {
@@ -38,27 +41,48 @@ impl SpriteLookup for Sprites {
     }
 }
 impl Sprites {
-    fn load(&self, sprite: &str) -> Option<SpriteMask> {
-        let (namespace, path) = sprite.split_once(':')?;
-        let png = self
-            .root
-            .join(format!("assets/{namespace}/textures/{path}.png"));
-        let mut decoder = png::Decoder::new(BufReader::new(File::open(&png).ok()?));
+    fn png(&self, sprite: &str, directory: &str) -> PathBuf {
+        let (namespace, path) = sprite.split_once(':').unwrap_or(("minecraft", sprite));
+        self.root
+            .join(format!("assets/{namespace}/{directory}/{path}.png"))
+    }
+    /// The image as ARGB pixels in reading order, with its size.
+    fn argb(png: &Path) -> Option<(usize, usize, Vec<u32>)> {
+        let mut decoder = png::Decoder::new(BufReader::new(File::open(png).ok()?));
         decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
         let mut reader = decoder.read_info().ok()?;
         let mut bytes = vec![0; reader.output_buffer_size()?];
         let info = reader.next_frame(&mut bytes).ok()?;
         let channels = info.color_type.samples();
-        let alpha = |pixel: &[u8]| match info.color_type {
-            png::ColorType::Rgba => pixel[3],
-            png::ColorType::GrayscaleAlpha => pixel[1],
-            _ => 255,
-        };
-        let (iw, ih) = (info.width as usize, info.height as usize);
-        let pixels: Vec<u8> = bytes[..info.buffer_size()]
+        let pixels = bytes[..info.buffer_size()]
             .chunks_exact(channels)
-            .map(alpha)
+            .map(|p| {
+                let (r, g, b, a) = match info.color_type {
+                    png::ColorType::Rgba => (p[0], p[1], p[2], p[3]),
+                    png::ColorType::Rgb => (p[0], p[1], p[2], 255),
+                    png::ColorType::GrayscaleAlpha => (p[0], p[0], p[0], p[1]),
+                    _ => (p[0], p[0], p[0], 255),
+                };
+                u32::from_be_bytes([a, r, g, b])
+            })
             .collect();
+        Some((info.width as usize, info.height as usize, pixels))
+    }
+    fn load(&self, sprite: &str) -> Option<SpriteMask> {
+        let png = self.png(sprite, "textures");
+        let (iw, ih, argb) = match Self::argb(&png) {
+            Some(image) => image,
+            None => {
+                // PalettedPermutations: the base texture through PaletteMapping.
+                let p = self.permutations.iter().find_map(|s| s.find(sprite))?;
+                let (w, h, mut pixels) = Self::argb(&self.png(p.base, "textures"))?;
+                let (_, _, key) = Self::argb(&self.png(p.palette_key, "textures/palettes"))?;
+                let (_, _, target) = Self::argb(&self.png(p.palette, "textures/palettes"))?;
+                apply_palette(&mut pixels, &key, &target)?;
+                (w, h, pixels)
+            }
+        };
+        let pixels: Vec<u8> = argb.iter().map(|p| (p >> 24) as u8).collect();
         let meta = fs::read_to_string(png.with_extension("png.mcmeta")).ok();
         let animation = meta
             .and_then(|m| serde_json::from_str::<Value>(&m).ok())
@@ -215,6 +239,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let library = ModelLibrary::with_item_generator(cuboids)?;
     let sprites = Sprites {
         root: root.clone(),
+        permutations: PalettedPermutations::from_atlas(
+            &fs::read_to_string(root.join("assets/minecraft/atlases/items.json")).unwrap_or_default(),
+        ),
         cache: RefCell::default(),
     };
     let grass = {
