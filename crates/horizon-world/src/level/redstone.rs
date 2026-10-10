@@ -1067,35 +1067,45 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.set_block(pos, b.table.set_bool(next, p.powered, signal), 3);
         }
     }
-    /// `NoteBlock.playNote` (block event; instrument pitch from `note`).
+    /// `NoteBlock.playNote`: queues the block event and emits the game event.
     pub(crate) fn note_play(&mut self, pos: BlockPos, state: BlockStateId) {
+        let b = self.b;
+        let instrument = b.table.text(state, b.props.instrument);
+        let mob_head = super::data::INSTRUMENTS
+            .iter()
+            .position(|n| *n == instrument)
+            .is_some_and(|i| super::data::instrument_works_above(i as u8));
+        if mob_head || b.is_air(self.above_state(pos)) {
+            self.block_event(pos, b.block(state), 0, 0);
+            self.game_event(pos, "minecraft:note_block_play");
+        }
+    }
+    /// `NoteBlock.triggerEvent`: the note's sound.
+    pub(crate) fn note_trigger_event(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         let instrument = b.table.text(state, b.props.instrument).to_owned();
         let mob_head = super::data::INSTRUMENTS
             .iter()
             .position(|n| *n == instrument)
             .is_some_and(|i| super::data::instrument_works_above(i as u8));
-        if mob_head || b.is_air(self.above_state(pos)) {
-            let note = b.table.int(state, b.props.note);
-            let pitch = if mob_head {
-                1.0
-            } else {
-                2f64.powf(f64::from(note - 12) / 12.0) as f32
-            };
-            let sound = match instrument.as_str() {
-                "custom_head" => "minecraft:ui.button.click".to_owned(),
-                "dragon" => "minecraft:block.note_block.imitate.ender_dragon".to_owned(),
-                name if mob_head => format!("minecraft:block.note_block.imitate.{name}"),
-                name => format!("minecraft:block.note_block.{name}"),
-            };
-            self.emit(LevelEvent::Sound {
-                pos,
-                sound: sound.into(),
-                volume: 3.0,
-                pitch,
-            });
-            self.game_event(pos, "minecraft:note_block_play");
-        }
+        let note = b.table.int(state, b.props.note);
+        let pitch = if mob_head {
+            1.0
+        } else {
+            2f64.powf(f64::from(note - 12) / 12.0) as f32
+        };
+        let sound = match instrument.as_str() {
+            "custom_head" => "minecraft:ui.button.click".to_owned(),
+            "dragon" => "minecraft:block.note_block.imitate.ender_dragon".to_owned(),
+            name if mob_head => format!("minecraft:block.note_block.imitate.{name}"),
+            name => format!("minecraft:block.note_block.{name}"),
+        };
+        self.emit(LevelEvent::Sound {
+            pos,
+            sound: sound.into(),
+            volume: 3.0,
+            pitch,
+        });
     }
     pub(crate) fn note_neighbor_changed(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;

@@ -509,7 +509,16 @@ impl Items {
             return vec![];
         };
         let name = block.name.trim_start_matches("minecraft:");
-        let Some(table) = self.loot.get(&format!("minecraft:blocks/{name}")) else {
+        // `Blocks.wallVariant`: wall signs, banners, heads, fans and torches
+        // reuse the standing block's loot table.
+        let standing = name.replacen("_wall_", "_", 1);
+        let standing = standing.strip_prefix("wall_").unwrap_or(&standing);
+        let standing = standing.replacen("wall_", "", 1);
+        let table = self
+            .loot
+            .get(&format!("minecraft:blocks/{name}"))
+            .or_else(|| self.loot.get(&format!("minecraft:blocks/{standing}")));
+        let Some(table) = table else {
             return vec![];
         };
         let ctx = LootContext {
