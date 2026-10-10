@@ -752,9 +752,6 @@ struct Game<'a> {
     adv_ui: advancements_screen::AdvUi,
     camera_type: perspective::CameraType,
     fangs: fangs::FangState,
-    /// Structure `spawn_overrides`: structure -> category -> (piece only, spawns).
-    spawn_overrides:
-        HashMap<String, HashMap<String, (bool, Vec<horizon_client::biome::SpawnEntry>)>>,
     /// The local player as a model (third person, the inventory).
     player_model: Option<Mob>,
 }
@@ -8628,7 +8625,6 @@ pub fn run() -> Result<()> {
         adv_ui: Default::default(),
         camera_type: Default::default(),
         fangs: Default::default(),
-        spawn_overrides: HashMap::new(),
         player_model: None,
     };
     game.ui.vanilla_root = vanilla_root;

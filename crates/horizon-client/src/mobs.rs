@@ -48,6 +48,7 @@ pub mod shulker;
 pub mod sniffer;
 pub mod spawning;
 pub mod spawn_rules;
+pub mod spawn_selection;
 pub mod species;
 pub mod sulfur_cube;
 pub mod tame;

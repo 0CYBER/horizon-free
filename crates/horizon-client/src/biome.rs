@@ -17,6 +17,8 @@ pub struct SpawnEntry {
     pub weight: u32,
     pub min: u32,
     pub max: u32,
+    /// A `ConstantInt` count (sampling draws nothing).
+    pub constant: bool,
 }
 #[derive(Clone, Debug)]
 pub struct BiomeInfo {
@@ -105,29 +107,7 @@ impl Biomes {
             let mut spawns: HashMap<String, Vec<SpawnEntry>> = HashMap::new();
             let categories = &attributes["minecraft:gameplay/natural_mob_spawns"]["argument"]["spawns_by_category"];
             for (category, entries) in categories.as_object().into_iter().flatten() {
-                let list = entries
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|e| {
-                        let (min, max) = match &e["count"] {
-                            Value::Number(n) => {
-                                let n = n.as_u64().unwrap_or(1) as u32;
-                                (n, n)
-                            }
-                            c => (
-                                c["min_inclusive"].as_u64().unwrap_or(1) as u32,
-                                c["max_inclusive"].as_u64().unwrap_or(1) as u32,
-                            ),
-                        };
-                        Some(SpawnEntry {
-                            entity: e["type"].as_str()?.to_owned(),
-                            weight: e["weight"].as_u64().unwrap_or(1) as u32,
-                            min,
-                            max,
-                        })
-                    })
-                    .collect();
+                let list = crate::mobs::spawn_selection::parse_entries(entries);
                 spawns.insert(category.clone(), list);
             }
             list.push(BiomeInfo {

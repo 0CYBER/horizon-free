@@ -3,6 +3,7 @@
 //! breeding, conversions, drops), projectiles, player interactions
 //! (feeding, shearing, milking, spawn eggs, throwing) and rendering.
 use super::{Dim, Game, view_vector};
+use horizon_client::mobs::spawn_selection;
 use horizon_client::{
     Result,
     blocks::Fluid,
@@ -355,23 +356,6 @@ impl Game<'_> {
         }
         horizon_client::chunk::MIN_Y
     }
-    fn weighted_entry(
-        &mut self,
-        entries: &[horizon_client::biome::SpawnEntry],
-    ) -> Option<horizon_client::biome::SpawnEntry> {
-        let total: u32 = entries.iter().map(|e| e.weight).sum();
-        if total == 0 {
-            return None;
-        }
-        let mut r = self.world.random.next_int_bound(total as i32).ok()? as u32;
-        for e in entries {
-            if r < e.weight {
-                return Some(e.clone());
-            }
-            r -= e.weight;
-        }
-        None
-    }
     /// NaturalSpawner.spawnMobsForChunkGeneration (creature packs at generation).
     pub(super) fn spawn_generation_creatures(&mut self, cx: i32, cz: i32) {
         let Some(chunk) = self.world.chunks.get(&(cx, cz)).cloned() else {
@@ -383,15 +367,11 @@ impl Game<'_> {
         };
         let (xo, zo) = (cx * 16, cz * 16);
         while self.world.random.next_float() < biome.creature_probability {
-            let Some(entry) = self.weighted_entry(&entries) else {
+            let Some(entry) = spawn_selection::weighted_pick(&entries, &mut self.world.random)
+            else {
                 return;
             };
-            let count = entry.min
-                + self
-                    .world
-                    .random
-                    .next_int_bound((entry.max - entry.min + 1) as i32)
-                    .unwrap_or(0) as u32;
+            let count = spawn_selection::sample_count(&entry, &mut self.world.random);
             let mut x = xo + self.world.random.next_int_bound(16).unwrap_or(0);
             let mut z = zo + self.world.random.next_int_bound(16).unwrap_or(0);
             let (sx, sz) = (x, z);
@@ -592,26 +572,22 @@ impl Game<'_> {
                         break;
                     };
                     let biome = self.res.biomes.get(chunk.biome(x, y, z)).clone();
-                    let list = match self.structure_spawns(category, [x, y, z]) {
-                        Some(list) => list,
-                        None => match biome.spawns.get(category).cloned() {
-                            Some(list) => list,
-                            None => break,
-                        },
-                    };
-                    let list: Vec<_> = list
-                        .into_iter()
-                        .filter(|e| self.res.mob_types.contains_key(&e.entity))
-                        .collect();
-                    let Some(e) = self.weighted_entry(&list) else {
+                    let list = self.spawn_list(category, [x, y, z], &biome.spawns);
+                    let reduced = self
+                        .res
+                        .mob_data
+                        .biome_tags
+                        .get("minecraft:reduced_water_ambient_spawns")
+                        .is_some_and(|t| t.contains(&biome.name));
+                    let Some(e) = spawn_selection::random_spawn_mob_at(
+                        &list,
+                        category,
+                        reduced,
+                        &mut self.world.random,
+                    ) else {
                         break;
                     };
-                    group = e.min
-                        + self
-                            .world
-                            .random
-                            .next_int_bound((e.max - e.min + 1) as i32)
-                            .unwrap_or(0) as u32;
+                    group = spawn_selection::sample_count(&e, &mut self.world.random);
                     entry = Some(e);
                 }
                 let e = entry.clone().unwrap_or_else(|| unreachable!());
