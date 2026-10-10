@@ -617,6 +617,9 @@ struct Game<'a> {
     /// Camera.oldFovModifier / fovModifier.
     /// `Camera` (eye height and field-of-view easing, view placement).
     view: horizon_client::camera::Camera,
+    /// `FramerateLimiter` and its clock.
+    limiter: horizon_client::window::FramerateLimiter,
+    frame_clock: horizon_client::window::SystemClock,
     /// Hud.scopeScale (spyglass overlay size).
     scope_scale: f32,
     /// Duration of the last frame in ticks (GUI easing).
@@ -8196,6 +8199,7 @@ impl ApplicationHandler for Game<'_> {
                     }
                     self.apply_mouse_look();
                     let rendered = self.render()?;
+                    self.limit_frame();
                     self.pause = self.pauses_game();
                     self.clock.end_frame(self.pause);
                     let finished = self
@@ -8259,10 +8263,6 @@ impl ApplicationHandler for Game<'_> {
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
             event_loop.exit();
-            return;
-        }
-        if let Some(due) = self.next_frame_due() {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(due));
             return;
         }
         if let Some(w) = &self.window {
@@ -8504,6 +8504,8 @@ pub fn run() -> Result<()> {
         chest_open: HashMap::new(),
         using: None,
         view: Default::default(),
+        limiter: horizon_client::window::FramerateLimiter::new(0),
+        frame_clock: Default::default(),
         scope_scale: 0.5,
         frame_ticks: 0.0,
         title: None,
