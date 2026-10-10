@@ -93,6 +93,8 @@ pub enum Family {
     HappyGhast,
     Warden,
     Creaking,
+    /// Nautili and zombie nautili.
+    Nautilus,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -140,11 +142,13 @@ pub fn family(s: Species) -> Family {
         | S::SkeletonHorse
         | S::ZombieHorse
         | S::Camel
+        | S::CamelHusk
         | S::Llama
         | S::TraderLlama => Family::Equine,
+        S::Nautilus | S::ZombieNautilus => Family::Nautilus,
         S::Phantom => Family::Phantom,
         S::Enderman => Family::Enderman,
-        S::Slime | S::MagmaCube => Family::Cube,
+        S::Slime | S::MagmaCube | S::SulfurCube => Family::Cube,
         S::Guardian | S::ElderGuardian => Family::Guardian,
         S::Warden => Family::Warden,
         S::Shulker => Family::Shulker,
@@ -193,6 +197,7 @@ pub fn register(m: &mut Mob) {
         Family::HappyGhast => super::happy_ghast::register(m),
         Family::Warden => super::warden::register(m),
         Family::Creaking => super::creaking::register(m),
+        Family::Nautilus => super::nautilus::register(m),
     }
     super::raider::register(m);
 }
@@ -418,6 +423,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         },
         Species::Zombie | Species::Husk if m.is_baby() => m.kind.sounds[0],
         Species::Drowned if m.fluids.in_water => "entity.drowned.ambient_water",
+        // Nautilus/ZombieNautilus.getAmbientSound: by age, under water or on land.
+        Species::Nautilus | Species::ZombieNautilus => super::nautilus::sounds(m)[0],
         Species::Enderman if m.ai.target.is_some() => "entity.enderman.scream",
         Species::Wolf if m.ai.target.is_some() => "entity.wolf.growl",
         Species::Wolf if m.random.next_int_bound(3).unwrap_or(1) == 0 => {
@@ -656,6 +663,11 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         Species::SnowGolem => super::golem::snow_ai_step(m, w, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
+        Species::SulfurCube => {
+            super::cube::ai_step(m, w, events);
+            super::sulfur_cube::ai_step(m, w, events);
+        }
+        Species::Nautilus | Species::ZombieNautilus => super::nautilus::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {
             m.extra.anim_ticks -= 1;
@@ -680,6 +692,11 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
     if super::raider::keeps_alive(m, d)
         || super::zombie_villager::keeps_alive(m)
         || super::riders::keeps_alive(m)
+        // requiresCustomPersistence: a tame nautilus, a sulfur cube holding a
+        // block or let out of a bucket.
+        || super::nautilus::is_nautilus(m.species()) && m.extra.tame
+        || m.species() == Species::SulfurCube
+            && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0)
     {
         return true;
     }
@@ -718,12 +735,23 @@ pub fn speed_bonus(m: &Mob) -> f64 {
         _ => 1.0,
     }
 }
+/// The ambient, hurt and death sounds of species that pick them by state
+/// (`getHurtSound` / `getDeathSound` overrides); the type's otherwise.
+pub fn voice_sounds(m: &Mob) -> [&'static str; 3] {
+    match m.species() {
+        Species::Nautilus | Species::ZombieNautilus => super::nautilus::sounds(m),
+        Species::SulfurCube => super::sulfur_cube::sounds(m),
+        _ => m.kind.sounds,
+    }
+}
 pub fn sound_volume(m: &Mob) -> f32 {
     match m.species() {
         Species::Ghast => 5.0,
         Species::HappyGhast => super::happy_ghast::volume(m),
         Species::Warden => 4.0,
-        Species::Slime | Species::MagmaCube => 0.4 * m.extra.size.max(1) as f32,
+        Species::Slime | Species::MagmaCube | Species::SulfurCube => {
+            0.4 * m.extra.size.max(1) as f32
+        }
         Species::Cod
         | Species::Salmon
         | Species::TropicalFish
@@ -744,6 +772,10 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     // Guardian.getWalkTargetValue: water first.
     if family(m.species()) == Family::Guardian && w.fluid(p[0], p[1], p[2]) == Fluid::Water {
         return 10.0 + light();
+    }
+    // AbstractNautilus.getWalkTargetValue: everywhere alike.
+    if matches!(m.species(), Species::Nautilus | Species::ZombieNautilus) {
+        return 0.0;
     }
     if m.hostile()
         && !matches!(
@@ -770,6 +802,7 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
         Species::Wither => super::wither::accepts(m, source.kind, source.attacker, false),
         Species::Warden => super::warden::accepts_damage(m, source),
         Species::Shulker => super::shulker::accepts(m, source),
+        Species::SulfurCube => super::sulfur_cube::accepts_damage(m, source, _amount),
         Species::Enderman => super::enderman::on_damage(m, source),
         Species::WitherSkeleton | Species::Blaze | Species::MagmaCube | Species::Strider
             if source.is_fire() =>
@@ -787,6 +820,7 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
         Species::Shulker => super::shulker::after_hurt(m),
         Species::Warden => super::warden::hurt(m, source),
         Species::Wolf => super::tame::after_hurt(m, source),
+        Species::Nautilus | Species::ZombieNautilus => super::nautilus::after_hurt(m, source),
         // NeutralMob: an iron golem hit by the player stays angry a while.
         // PiglinAi.wasHurtBy: drop what is being admired, no admiring for
         // a while after a player's hit, and anger.
@@ -907,6 +941,7 @@ pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<Mo
         Family::Shulker => true,
         Family::Vex => super::vex::travel(m),
         Family::Villager => super::villager::travel(m),
+        Family::Nautilus => super::nautilus::travel(m, w, input, events),
         _ => false,
     }
 }

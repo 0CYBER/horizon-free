@@ -333,14 +333,26 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 );
             }
         }
-        "minecraft:camel" => {
+        "minecraft:camel" | "minecraft:camel_husk" => {
             // LastPoseTick: negative while sitting.
             let sitting = crate::mobs::camel::sitting(m);
             map.insert(
                 "LastPoseTick".into(),
                 Tag::Long(if sitting { -1 } else { 0 }),
             );
+            if let Some(saddle) = m.saddle_item() {
+                map.insert(
+                    "equipment".into(),
+                    Tag::compound([("saddle", crate::save::item_to_nbt(&saddle))]),
+                );
+            } else {
+                map.remove(&"equipment".into());
+            }
         }
+        "minecraft:nautilus" | "minecraft:zombie_nautilus" => {
+            crate::mobs::nautilus::to_nbt(m, map);
+        }
+        "minecraft:sulfur_cube" => crate::mobs::sulfur_cube::to_nbt(m, map),
         "minecraft:sniffer" => crate::mobs::sniffer::to_nbt(m, map),
         "minecraft:wither" => {
             map.insert("Invul".into(), Tag::Int(m.extra.counter));
@@ -412,8 +424,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             ("mainhand", &m.extra.main_hand),
             ("offhand", &m.extra.off_hand),
             (
-                // A happy ghast wears its harness in the body slot.
-                if m.species() == crate::mobs::Species::HappyGhast {
+                // A happy ghast wears its harness in the body slot (and a
+                // nautilus its armour, a sulfur cube its swallowed block).
+                if crate::mobs::species::body_slot(m.species()) {
                     "body"
                 } else {
                     "head"
@@ -517,7 +530,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             .map(Into::into);
         if !crate::mobs::equine::is_equine(m.species()) {
             let slot = |key| eq.get(key).and_then(|i| text(i.get("id"))).map(Into::into);
-            m.extra.head = slot(if m.species() == crate::mobs::Species::HappyGhast {
+            m.extra.head = slot(if crate::mobs::species::body_slot(m.species()) {
                 "body"
             } else {
                 "head"
@@ -677,12 +690,20 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             .and_then(|b| b.get("minecraft:liked_player"))
             .is_some();
     }
-    if m.species() == crate::mobs::Species::Camel {
+    if crate::mobs::camel::is_camel(m.species()) {
         let sitting = matches!(tag.get("LastPoseTick"), Some(Tag::Long(v)) if *v < 0);
         crate::mobs::camel::stand_up_instantly(&mut m);
         if sitting {
             m.extra.egg_time = -1 - 400;
         }
+        // Camels are always tame (`Camel.register` in Horizon).
+        m.extra.tame = true;
+    }
+    if crate::mobs::nautilus::is_nautilus(m.species()) {
+        crate::mobs::nautilus::from_nbt(&mut m, tag);
+    }
+    if m.species() == crate::mobs::Species::SulfurCube {
+        crate::mobs::sulfur_cube::from_nbt(&mut m, tag);
     }
     if m.species() == crate::mobs::Species::Creaking
         && let Some(Tag::IntArray(home)) = tag.get("home_pos")

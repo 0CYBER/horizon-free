@@ -137,6 +137,11 @@ pub fn body(m: &Mob) -> (String, String) {
                 "entity/ghast/happy_ghast".into()
             },
         ),
+        S::Nautilus | S::ZombieNautilus => (
+            super::nautilus::model(m).into(),
+            super::nautilus::texture(m),
+        ),
+        S::SulfurCube => super::sulfur_cube::body(m),
         S::Sniffer => (
             baby_or(m, "sniffer#main", "sniffer_baby#main"),
             if baby {
@@ -396,7 +401,13 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 } else {
                     white
                 };
-                push(&mut v, "horse_armor#main", &tex, color, false);
+                // UndeadHorseRenderer bakes its own armour layer.
+                let layer = if matches!(s, S::ZombieHorse | S::SkeletonHorse) {
+                    "undead_horse_armor#main"
+                } else {
+                    "horse_armor#main"
+                };
+                push(&mut v, layer, &tex, color, false);
             }
         }
         // SimpleEquipmentLayer: pig and strider saddles.
@@ -433,6 +444,32 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         S::IronGolem => {
             if let Some(texture) = super::golem::crackiness(m) {
                 push(&mut v, "iron_golem#main", texture, white, false);
+            }
+        }
+        // NautilusRenderer: the armour and saddle SimpleEquipmentLayers.
+        S::Nautilus | S::ZombieNautilus if !m.is_baby() => {
+            if let Some(texture) = m
+                .extra
+                .head
+                .as_deref()
+                .and_then(super::nautilus::armor_texture)
+            {
+                push(&mut v, "nautilus_armor#main", &texture, white, false);
+            }
+            if m.extra.saddled {
+                push(
+                    &mut v,
+                    "nautilus#saddle",
+                    "entity/equipment/nautilus_saddle/saddle",
+                    white,
+                    false,
+                );
+            }
+        }
+        // SulfurCubeInnerLayer.
+        S::SulfurCube => {
+            if let Some((model, texture)) = super::sulfur_cube::inner(m) {
+                push(&mut v, model, texture, white, false);
             }
         }
         // SlimeOuterLayer: the translucent outer cube.
@@ -751,6 +788,7 @@ fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
             glam::Mat4::from_scale(glam::Vec3::new(xz, y, xz))
         }
         Species::Slime | Species::MagmaCube => super::cube::scale(m, alpha),
+        Species::SulfurCube => super::sulfur_cube::scale(m, alpha),
         _ => glam::Mat4::IDENTITY,
     }
 }

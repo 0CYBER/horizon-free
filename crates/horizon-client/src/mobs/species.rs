@@ -89,6 +89,10 @@ pub enum Species {
     HappyGhast,
     Warden,
     Creaking,
+    CamelHusk,
+    Nautilus,
+    ZombieNautilus,
+    SulfurCube,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -1238,6 +1242,60 @@ pub const ALL: &[Def] = &[
         None,
         Baby::None
     ),
+    // After the camel: the camel husk reuses `camel#main`.
+    def!(
+        CamelHusk,
+        "camel_husk",
+        "camel#main",
+        "entity/camel/camel_husk",
+        A::Camel,
+        [
+            "entity.camel_husk.ambient",
+            "entity.camel_husk.hurt",
+            "entity.camel_husk.death"
+        ],
+        Some("entity.camel_husk.step"),
+        Baby::None
+    ),
+    def!(
+        Nautilus,
+        "nautilus",
+        "nautilus#main",
+        "entity/nautilus/nautilus",
+        A::Nautilus,
+        [
+            "entity.nautilus.ambient",
+            "entity.nautilus.hurt",
+            "entity.nautilus.death"
+        ],
+        None,
+        Baby::Scale(0.5, None)
+    ),
+    def!(
+        ZombieNautilus,
+        "zombie_nautilus",
+        "zombie_nautilus#main",
+        "entity/nautilus/zombie_nautilus",
+        A::Nautilus,
+        [
+            "entity.zombie_nautilus.ambient",
+            "entity.zombie_nautilus.hurt",
+            "entity.zombie_nautilus.death"
+        ],
+        None,
+        Baby::None
+    ),
+    // Babies are size 1 and adults size 2: the size scales the dimensions.
+    def!(
+        SulfurCube,
+        "sulfur_cube",
+        "sulfur_cube#main",
+        "entity/sulfur_cube/sulfur_cube_outer",
+        A::Slime,
+        ["", "entity.sulfur_cube.hurt", "entity.sulfur_cube.death"],
+        None,
+        Baby::None
+    ),
 ];
 pub fn def(s: Species) -> &'static Def {
     ALL.iter().find(|d| d.species == s).unwrap_or(&ALL[0])
@@ -1260,7 +1318,7 @@ impl Def {
             Species::Sheep => &["sheep_baby"],
             Species::Chicken => &["chicken_baby", "cold_chicken"],
             Species::Rabbit => &["rabbit_baby"],
-            Species::Horse => &["horse_baby"],
+            Species::Horse => &["horse_baby", "horse_armor"],
             Species::Donkey => &["donkey_baby"],
             Species::Mule => &["mule_baby"],
             Species::Llama => &["llama_baby"],
@@ -1269,12 +1327,14 @@ impl Def {
             Species::Panda => &["panda_baby"],
             Species::PolarBear => &["polar_bear_baby"],
             Species::Fox => &["fox_baby"],
-            Species::Wolf => &["wolf_baby"],
+            Species::Wolf => &["wolf_baby", "wolf_armor"],
             Species::Sniffer => &["sniffer_baby"],
             Species::HappyGhast => &[
                 "happy_ghast_baby",
                 "happy_ghast_harness",
                 "happy_ghast_ropes",
+                "happy_ghast_baby_harness",
+                "happy_ghast_baby_ropes",
             ],
             Species::Cat => &["cat_baby"],
             Species::Ocelot => &["ocelot_baby"],
@@ -1303,8 +1363,12 @@ impl Def {
             Species::Zoglin => &["zoglin_baby"],
             Species::Strider => &["strider_baby"],
             Species::Camel => &["camel_baby"],
-            Species::ZombieHorse => &["zombie_horse_baby"],
-            Species::SkeletonHorse => &["skeleton_horse_baby"],
+            Species::CamelHusk => &["camel_husk"],
+            Species::Nautilus => &["nautilus_baby", "nautilus_armor"],
+            Species::ZombieNautilus => &["zombie_nautilus_coral", "nautilus_armor", "nautilus"],
+            Species::SulfurCube => &["sulfur_cube_small"],
+            Species::ZombieHorse => &["zombie_horse_baby", "undead_horse_armor"],
+            Species::SkeletonHorse => &["skeleton_horse_baby", "undead_horse_armor"],
             _ => &[],
         };
         v.extend_from_slice(extra);
@@ -1330,6 +1394,8 @@ impl Def {
                 | S::ZombifiedPiglin
                 | S::Zoglin
                 | S::Wither
+                | S::CamelHusk
+                | S::ZombieNautilus
         );
         let aquatic = matches!(
             s,
@@ -1390,6 +1456,7 @@ impl Def {
                     | S::Bogged
                     | S::Parched
                     | S::Phantom
+                    | S::ZombieNautilus
             ),
             undead,
             breathes_water: aquatic
@@ -1405,10 +1472,12 @@ impl Def {
                         | S::SnowGolem
                         | S::Ghast
                         | S::Blaze
+                        | S::Nautilus
                 ),
-            needs_water: aquatic,
+            // Nautilus.handleAirSupply: it dries out on land.
+            needs_water: aquatic || s == S::Nautilus,
             water_sensitive: matches!(s, S::Enderman | S::Blaze | S::SnowGolem),
-            animal: !matches!(s, S::Bat)
+            animal: !matches!(s, S::Bat | S::SulfurCube)
                 && !self.hostile_class()
                 && !aquatic
                 && !matches!(
@@ -1474,6 +1543,9 @@ impl Def {
             S::Goat => "goat_food",
             S::Sniffer => "sniffer_food",
             S::HappyGhast => "happy_ghast_food",
+            S::CamelHusk => "camel_husk_food",
+            S::Nautilus | S::ZombieNautilus => "nautilus_food",
+            S::SulfurCube => "sulfur_cube_food",
             S::Panda => "panda_food",
             S::Fox => "fox_food",
             S::Wolf => "wolf_food",
@@ -1496,6 +1568,8 @@ impl Def {
             Species::Horse | Species::Donkey | Species::Mule => "horse_tempt_items",
             Species::Llama | Species::TraderLlama => "llama_tempt_items",
             Species::Strider => "strider_tempt_items",
+            // An adult sulfur cube follows what it can swallow.
+            Species::SulfurCube => "sulfur_cube_swallowable",
             _ => return None,
         })
     }
@@ -1528,7 +1602,7 @@ impl Def {
     pub fn max_head_x_rot(&self) -> f32 {
         match self.species {
             Species::Dolphin | Species::Axolotl => 1.0,
-            Species::Slime | Species::MagmaCube => 0.0,
+            Species::Slime | Species::MagmaCube | Species::SulfurCube => 0.0,
             _ => 40.0,
         }
     }
@@ -1578,4 +1652,12 @@ impl Def {
             _ => Brain::Passive,
         }
     }
+}
+/// Mobs whose `body` equipment slot Horizon keeps in `Extra::head` (a
+/// happy ghast's harness, nautilus armour, a sulfur cube's swallowed block).
+pub fn body_slot(s: Species) -> bool {
+    matches!(
+        s,
+        Species::HappyGhast | Species::Nautilus | Species::ZombieNautilus | Species::SulfurCube
+    )
 }

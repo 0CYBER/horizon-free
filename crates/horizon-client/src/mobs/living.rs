@@ -430,7 +430,7 @@ impl Mob {
     pub fn jump_from_ground(&mut self) {
         if matches!(
             self.species(),
-            super::Species::Slime | super::Species::MagmaCube
+            super::Species::Slime | super::Species::MagmaCube | super::Species::SulfurCube
         ) {
             super::cube::jump(self);
             return;

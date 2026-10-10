@@ -12,10 +12,11 @@ except ImportError:
     import test_rust_parity as base
 
 # Entity types that are not mobs (or are players): Horizon models them outside the mob table.
-# Horizon models these differently on purpose: slimes/magma cubes are created already sized (size 1,
+# Horizon models these differently on purpose: slimes/magma/sulfur cubes are created already sized (size 1,
 # vanilla applies setSize at spawn), and the phantom keeps its move control speed in attrs.speed.
 KNOWN = {('minecraft:slime', k) for k in ('max_health', 'movement_speed', 'attack_damage')} | \
-    {('minecraft:magma_cube', k) for k in ('max_health', 'movement_speed', 'attack_damage')} | {('minecraft:phantom', 'movement_speed')}
+    {('minecraft:magma_cube', k) for k in ('max_health', 'movement_speed', 'attack_damage')} | \
+    {('minecraft:sulfur_cube', k) for k in ('max_health', 'movement_speed')} | {('minecraft:phantom', 'movement_speed')}
 
 
 def parse(path):

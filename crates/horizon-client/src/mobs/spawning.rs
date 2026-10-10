@@ -24,6 +24,8 @@ pub struct BiomeFacts {
     pub wolf: u8,
     /// `MoonBrightnessCheck(>= 0.9)`: the full moon.
     pub full_moon: bool,
+    /// `spawns_coral_variant_zombie_nautilus` (the warm ocean).
+    pub coral_nautilus: bool,
 }
 /// SpawnPlacementTypes for the species.
 pub fn placement_ok(species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> bool {
@@ -173,7 +175,14 @@ pub fn spawn_rules_ok(
         {
             !w.block_name(x, y - 1, z).contains("nether_wart_block") || species == S::Ghast
         }
-        S::Husk | S::Stray => dark_enough(w, random, x, y, z) && w.can_see_sky(x, y, z),
+        // Monster.checkSurfaceMonstersSpawnRules.
+        S::Husk | S::Stray | S::CamelHusk => {
+            dark_enough(w, random, x, y, z) && w.can_see_sky(x, y, z)
+        }
+        // AbstractNautilus.checkNautilusSpawnRules.
+        S::Nautilus => super::nautilus::spawn_rules_ok(w, x, y, z),
+        // SulfurCube.checkSulfurCubeSpawnRules: anywhere it fits.
+        S::SulfurCube => true,
         S::Drowned => w.fluid(x, y, z) == Fluid::Water && dark_enough(w, random, x, y, z),
         _ => {
             // Monster.checkMonsterSpawnRules
@@ -367,7 +376,9 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         }
         S::Llama | S::TraderLlama => super::llama::finalize(m),
         // Camel.finalizeSpawn: standing, with fixed attributes.
-        S::Camel => super::camel::stand_up_instantly(m),
+        S::Camel | S::CamelHusk => super::camel::stand_up_instantly(m),
+        S::Nautilus | S::ZombieNautilus => super::nautilus::finalize(m, biome.coral_nautilus),
+        S::SulfurCube => super::sulfur_cube::finalize(m),
         // Piglin.createSpawnWeapon: half crossbows, half golden swords, and
         // each piece of golden armour one time in ten.
         S::Piglin if !m.is_baby() => {

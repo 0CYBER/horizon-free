@@ -137,6 +137,66 @@ impl Game<'_> {
             }
             _ => {}
         }
+        // After Zombie.finalizeSpawn's chickens: Husk and Drowned mounts.
+        match species {
+            Species::Husk if natural => self.spawn_camel_husk_jockey(id, at),
+            Species::Drowned if natural && !baby => self.spawn_zombie_nautilus_jockey(id, at),
+            _ => {}
+        }
+    }
+    /// `Husk.finalizeSpawn`: where a camel husk fits, one natural husk in ten
+    /// takes an iron spear and rides one (with a parched; Horizon seats one
+    /// rider, so the parched stands beside it).
+    fn spawn_camel_husk_jockey(&mut self, id: u32, at: [f64; 3]) {
+        let (bx, by, bz) = (at[0].floor(), at[1].floor(), at[2].floor());
+        let room = {
+            let w = self.mob_world_base(&[]);
+            w.no_collision(horizon_core::geometry::Aabb::new(
+                Vec3::new(bx + 0.5 - 0.85, by, bz + 0.5 - 0.85),
+                Vec3::new(bx + 0.5 + 0.85, by + 2.375, bz + 0.5 + 0.85),
+            ))
+        };
+        if !room || self.world.random.next_float() >= 0.1 {
+            return;
+        }
+        if let Some(h) = self.mobs.iter_mut().find(|m| m.id == id) {
+            h.extra.main_hand = Some("minecraft:iron_spear".into());
+        }
+        let Some(camel) = self.spawn_mob("minecraft:camel_husk", at, false) else {
+            return;
+        };
+        self.mount_mob(id, camel);
+        let _ = self.spawn_mob("minecraft:parched", at, false);
+    }
+    /// `Drowned.finalizeSpawn`: half the natural drowned holding a trident,
+    /// outside the rivers and oceans that breed more drowned, ride a zombie
+    /// nautilus.
+    fn spawn_zombie_nautilus_jockey(&mut self, id: u32, at: [f64; 3]) {
+        let Some(d) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        if d.extra.main_hand.as_deref() != Some("minecraft:trident")
+            || self.world.random.next_float() >= 0.5
+        {
+            return;
+        }
+        let (x, y, z) = (
+            at[0].floor() as i32,
+            at[1].floor() as i32,
+            at[2].floor() as i32,
+        );
+        let frequent = self.world.chunks.get(&(x >> 4, z >> 4)).is_some_and(|c| {
+            let b = self.res.biomes.get(c.biome(x, y, z));
+            self.res
+                .mob_data
+                .biome_has("minecraft:more_frequent_drowned_spawns", &b.name)
+        });
+        if frequent {
+            return;
+        }
+        if let Some(n) = self.spawn_mob("minecraft:zombie_nautilus", at, false) {
+            self.mount_mob(id, n);
+        }
     }
     fn free_chicken_near(&self, at: [f64; 3]) -> Option<u32> {
         self.mobs

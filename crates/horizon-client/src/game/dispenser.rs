@@ -553,20 +553,32 @@ impl Game<'_> {
                             | Species::SkeletonHorse
                             | Species::ZombieHorse
                             | Species::Camel
+                            | Species::CamelHusk
                     );
+                    // AbstractNautilus.canDispenserEquipIntoSlot: saddle and
+                    // body on a tame adult.
+                    let nautilus = horizon_client::mobs::nautilus::is_nautilus(species)
+                        && tamed
+                        && !m.is_baby();
                     let slot_free = match (slot.as_str(), armor_index) {
                         (_, Some(0)) => m.extra.head.is_none(),
                         (_, Some(1)) => m.extra.chest.is_none(),
                         (_, Some(2)) => m.extra.legs.is_none(),
                         (_, Some(3)) => m.extra.feet.is_none(),
                         ("saddle", _) => !m.extra.saddled,
-                        ("body", _) => species == Species::Horse && m.extra.head.is_none(),
+                        ("body", _) => {
+                            (species == Species::Horse
+                                || nautilus && item.ends_with("_nautilus_armor"))
+                                && m.extra.head.is_none()
+                        }
                         _ => false,
                     };
                     // Mob.canDispenserEquipIntoSlot and the overrides.
                     let saddle_ok = slot == "saddle"
-                        && (matches!(species, Species::Pig | Species::Strider) || equine && tamed);
-                    let body_ok = slot == "body" && equine && tamed;
+                        && (matches!(species, Species::Pig | Species::Strider)
+                            || equine && tamed
+                            || nautilus);
+                    let body_ok = slot == "body" && (equine && tamed || nautilus);
                     if !slot_free || !(m.extra.pick_up_loot || saddle_ok || body_ok) {
                         continue;
                     }

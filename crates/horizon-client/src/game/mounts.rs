@@ -20,6 +20,7 @@ fn seat(s: Species) -> f64 {
         Species::Llama | Species::TraderLlama => 1.37,
         Species::Donkey => 1.1125,
         Species::Mule => 1.2125,
+        Species::Nautilus | Species::ZombieNautilus => 1.1375,
         _ => 1.31875,
     };
     attach - 0.6
@@ -111,6 +112,9 @@ impl Game<'_> {
         if species == Species::HappyGhast {
             return self.interact_happy_ghast(index, item);
         }
+        if horizon_client::mobs::nautilus::is_nautilus(species) {
+            return self.interact_nautilus(index, item);
+        }
         if !equine::is_equine(species) || !m.alive() || Some(m.id) == self.riding {
             return false;
         }
@@ -175,11 +179,17 @@ impl Game<'_> {
     }
     /// `AbstractHorse.handleEating`.
     fn feed_mount(&mut self, index: usize, item: &str) -> bool {
-        let camel = self.mobs[index].species() == Species::Camel;
-        if camel != (item == "minecraft:cactus") {
+        let species = self.mobs[index].species();
+        let camel = species == Species::Camel;
+        // CamelHusk.isFood: rabbit's feet (and it never falls in love).
+        if species == Species::CamelHusk && item != "minecraft:rabbit_foot" {
+            return false;
+        }
+        if species != Species::CamelHusk && camel != (item == "minecraft:cactus") {
             return false;
         }
         let (heal, age_up, temper, love) = match item {
+            "minecraft:rabbit_foot" if species == Species::CamelHusk => (2.0, 10, 0, false),
             // Camel.handleEating.
             "minecraft:cactus" => (2.0, 10, 0, true),
             "minecraft:wheat" => (2.0, 20, 3, false),
@@ -222,6 +232,7 @@ impl Game<'_> {
         let at = m.center();
         let sound = match m.species() {
             Species::Camel => "minecraft:entity.camel.eat",
+            Species::CamelHusk => "minecraft:entity.camel_husk.eat",
             Species::Donkey => "minecraft:entity.donkey.eat",
             Species::Mule => "minecraft:entity.mule.eat",
             _ => "minecraft:entity.horse.eat",
@@ -249,7 +260,10 @@ impl Game<'_> {
             Species::Strider => held.as_deref() == Some("minecraft:warped_fungus_on_a_stick"),
             _ => false,
         };
-        let saddled = self.mobs[i].extra.saddled && equine::is_equine(self.mobs[i].species());
+        // PlayerRideableJumping: horses, camels and nautili (the dash).
+        let saddled = self.mobs[i].extra.saddled
+            && (equine::is_equine(self.mobs[i].species())
+                || horizon_client::mobs::nautilus::is_nautilus(self.mobs[i].species()));
         let mut jump = 0.0;
         if saddled {
             let st = &mut self.mount;
@@ -290,9 +304,12 @@ impl Game<'_> {
             ) {
                 m.extra.counter = 20;
             }
-            let sound = "minecraft:entity.horse.jump";
-            let at = m.center();
-            self.audio.play(sound, Some(at), 0.4, 1.0);
+            // The nautilus plays its dash sound itself.
+            if equine::is_equine(m.species()) {
+                let sound = "minecraft:entity.horse.jump";
+                let at = m.center();
+                self.audio.play(sound, Some(at), 0.4, 1.0);
+            }
         }
         let m = &mut self.mobs[i];
         let pending = m.rider.map_or(0.0, |r| r.jump);
@@ -315,7 +332,7 @@ impl Game<'_> {
         };
         let m = &self.mobs[i];
         let mut at = Vec3::new(m.position.x, m.position.y + seat(m.species()), m.position.z);
-        if m.species() == Species::Camel {
+        if horizon_client::mobs::camel::is_camel(m.species()) {
             // Camel.getPassengerAttachmentPoint: the driver half a block
             // forward, at the body anchor (lower while sitting).
             let scale = if m.is_baby() { 0.6 } else { 1.0 };

@@ -14,6 +14,9 @@ const SQUISH: usize = 0;
 const TARGET_SQUISH: usize = 1;
 
 pub fn register(m: &mut Mob) {
+    if m.species() == Species::SulfurCube {
+        return super::sulfur_cube::register(m);
+    }
     m.ai.goals.add(1, CubeFloat);
     m.ai.goals.add(2, CubeAttack { tired: 0 });
     m.ai.goals.add(
@@ -59,7 +62,8 @@ fn tiny(m: &Mob) -> bool {
     m.extra.size <= 1
 }
 fn can_deal_damage(m: &Mob) -> bool {
-    m.species() == Species::MagmaCube || !tiny(m)
+    // SulfurCube.canDealDamage: never.
+    m.species() == Species::MagmaCube || !tiny(m) && m.species() != Species::SulfurCube
 }
 fn jump_delay(m: &mut Mob) -> i32 {
     let base = m.random.next_int_bound(20).unwrap_or(0) + 10;
@@ -75,6 +79,10 @@ fn sound_pitch(m: &mut Mob) -> f32 {
 }
 /// CubeMobMoveControl.tick
 pub fn move_control(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    // SulfurCubeMobMoveControl: still while holding a block.
+    if m.species() == Species::SulfurCube && super::sulfur_cube::has_body(m) {
+        return;
+    }
     let want = m.extra.vector[0] as f32;
     m.yaw = rotlerp(m.yaw, want, 90.0);
     m.head_yaw = m.yaw;
@@ -97,6 +105,7 @@ pub fn move_control(m: &mut Mob, events: &mut Vec<MobEvent>) {
             m.ai.jump = true;
             let jump = match (m.species(), tiny(m)) {
                 (Species::MagmaCube, _) => "entity.magma_cube.jump",
+                (Species::SulfurCube, _) => super::sulfur_cube::jump_sound(m),
                 (_, true) => "entity.slime.jump_small",
                 _ => "entity.slime.jump",
             };
@@ -112,11 +121,11 @@ pub fn move_control(m: &mut Mob, events: &mut Vec<MobEvent>) {
         m.set_speed(speed);
     }
 }
-fn set_direction(m: &mut Mob, y_rot: f32, aggressive: bool) {
+pub(super) fn set_direction(m: &mut Mob, y_rot: f32, aggressive: bool) {
     m.extra.vector[0] = f64::from(y_rot);
     m.extra.flag = aggressive;
 }
-fn set_wanted(m: &mut Mob, speed: f64) {
+pub(super) fn set_wanted(m: &mut Mob, speed: f64) {
     m.ai.mov.speed_modifier = speed;
     m.ai.mov.operation = Operation::MoveTo;
 }
@@ -136,6 +145,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let was = m.extra.flag2;
     if m.on_ground && !was {
         let squish = match (m.species(), tiny(m)) {
+            (Species::SulfurCube, _) => super::sulfur_cube::squish_sound(m),
             (Species::MagmaCube, true) => "entity.magma_cube.squish_small",
             (Species::MagmaCube, false) => "entity.magma_cube.squish",
             (_, true) => "entity.slime.squish_small",
@@ -213,7 +223,7 @@ pub fn scale(m: &Mob, alpha: f32) -> glam::Mat4 {
 }
 /// CubeMobFloatGoal
 #[derive(Clone, Debug)]
-struct CubeFloat;
+pub(super) struct CubeFloat;
 impl Goal for CubeFloat {
     goal_clone!();
     fn flags(&self) -> u8 {
@@ -271,8 +281,8 @@ impl Goal for CubeAttack {
     }
 }
 /// CubeMobRandomDirectionGoal
-#[derive(Clone, Debug)]
-struct CubeRandomDirection {
+#[derive(Clone, Debug, Default)]
+pub(super) struct CubeRandomDirection {
     degrees: f32,
     next: i32,
 }
@@ -296,7 +306,7 @@ impl Goal for CubeRandomDirection {
 }
 /// CubeMobKeepOnJumpingGoal
 #[derive(Clone, Debug)]
-struct CubeKeepJumping;
+pub(super) struct CubeKeepJumping;
 impl Goal for CubeKeepJumping {
     goal_clone!();
     fn flags(&self) -> u8 {

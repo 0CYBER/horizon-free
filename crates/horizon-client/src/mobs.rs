@@ -33,6 +33,7 @@ pub mod keyframes;
 pub mod leash;
 pub mod living;
 pub mod llama;
+pub mod nautilus;
 pub mod nav;
 pub mod nether;
 pub mod path;
@@ -46,6 +47,7 @@ pub mod shulker;
 pub mod sniffer;
 pub mod spawning;
 pub mod species;
+pub mod sulfur_cube;
 pub mod tame;
 pub mod trader;
 pub mod undead;
@@ -236,6 +238,7 @@ impl MobTypes {
         let types: Value = serde_json::from_slice(&fs::read(root.join("entity-types.json"))?)?;
         let models: Value = serde_json::from_slice(&fs::read(root.join("entity-models.json"))?)?;
         let item_tags = crate::items::load_tags(root, "item").unwrap_or_default();
+        sulfur_cube::load_archetype_items(&item_tags);
         let tag = |name: &str| -> Arc<[String]> {
             let mut v: Vec<String> = item_tags
                 .get(&format!("minecraft:{name}"))

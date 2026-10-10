@@ -51,19 +51,39 @@ pub fn refuse_to_move(m: &Mob) -> bool {
 }
 fn sit_down(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if !sitting(m) {
-        sound(m, "entity.camel.sit", events);
+        sound(m, voice(m, 0), events);
         m.extra.egg_time = -(m.age as i32).max(1);
     }
 }
 pub fn stand_up(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if sitting(m) {
-        sound(m, "entity.camel.stand", events);
+        sound(m, voice(m, 1), events);
         m.extra.egg_time = m.age as i32;
     }
 }
 /// `standUpInstantly`.
 pub fn stand_up_instantly(m: &mut Mob) {
     m.extra.egg_time = (i64::from(m.age) - STAND_UP - 1).max(0) as i32;
+}
+/// `is_camel`: camels and camel husks (`CamelHusk extends Camel`).
+pub fn is_camel(s: super::Species) -> bool {
+    matches!(s, super::Species::Camel | super::Species::CamelHusk)
+}
+/// The sit, stand, dash ready, dash and eat sounds (`CamelHusk` overrides each).
+pub fn voice(m: &Mob, which: usize) -> &'static str {
+    let husk = m.species() == super::Species::CamelHusk;
+    match (which, husk) {
+        (0, false) => "entity.camel.sit",
+        (0, true) => "entity.camel_husk.sit",
+        (1, false) => "entity.camel.stand",
+        (1, true) => "entity.camel_husk.stand",
+        (2, false) => "entity.camel.dash_ready",
+        (2, true) => "entity.camel_husk.dash_ready",
+        (3, false) => "entity.camel.dash",
+        (3, true) => "entity.camel_husk.dash",
+        (_, false) => "entity.camel.eat",
+        (_, true) => "entity.camel_husk.eat",
+    }
 }
 fn sound(m: &Mob, name: &'static str, events: &mut Vec<MobEvent>) {
     events.push(MobEvent::Sound(
@@ -82,7 +102,10 @@ impl Goal for CamelPanic {
         self.0.flags()
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        m.rider.is_none() && self.0.can_use(m, cx)
+        // CamelHusk.isMobControlled: not with a mob on its back either.
+        m.rider.is_none()
+            && !(m.species() == super::Species::CamelHusk && m.extra.rider.is_some())
+            && self.0.can_use(m, cx)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         self.0.can_continue(m, cx)
@@ -130,7 +153,7 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.extra.anim_ticks > 0 {
         m.extra.anim_ticks -= 1;
         if m.extra.anim_ticks == 0 {
-            sound(m, "entity.camel.dash_ready", events);
+            sound(m, voice(m, 2), events);
         }
     }
     if sitting(m) && m.fluids.in_water {
@@ -188,7 +211,7 @@ pub fn dash(m: &mut Mob, amount: f32, events: &mut Vec<MobEvent>) {
     m.velocity.y += 1.4285 * a * 0.42;
     m.extra.anim_ticks = DASH_COOLDOWN;
     m.extra.flag2 = true;
-    sound(m, "entity.camel.dash", events);
+    sound(m, voice(m, 3), events);
 }
 /// `CamelModel.setupAnim`.
 pub fn anim(

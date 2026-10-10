@@ -195,6 +195,7 @@ impl Game<'_> {
             Climate::Temperate
         };
         BiomeFacts {
+            coral_nautilus: has("minecraft:spawns_coral_variant_zombie_nautilus"),
             climate,
             temperature: b.temperature,
             snowy: has("minecraft:spawns_snow_foxes")
@@ -638,6 +639,7 @@ impl Game<'_> {
                         || matches!(
                             kind.species,
                             Species::Slime
+                                | Species::SulfurCube
                                 | Species::Ghast
                                 | Species::MagmaCube
                                 | Species::Guardian
@@ -731,6 +733,7 @@ impl Game<'_> {
         self.tick_sniffer_effects();
         self.tick_player_effects();
         self.piglin_pickups();
+        self.sulfur_cube_pickups();
         Ok(())
     }
     /// LivingEntity.die / dropAllDeathLoot.
@@ -854,6 +857,9 @@ impl Game<'_> {
                 self.spawn_orbs(pos, xp);
             }
         }
+        if m.species() == Species::SulfurCube {
+            self.split_sulfur_cube(m);
+        }
         if m.species() == Species::Slime || m.species() == Species::MagmaCube {
             // Slime.remove: split into 2-4 smaller slimes.
             let size = m.extra.size;
@@ -944,13 +950,17 @@ impl Game<'_> {
                     if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
                         let hit = t.damage(amount, source);
                         if hit {
-                            let (kind, center, dead) = (t.kind.clone(), t.center(), !t.alive());
+                            let (voice, center, dead) = (
+                                horizon_client::mobs::ai::voice_sounds(t),
+                                t.center(),
+                                !t.alive(),
+                            );
                             killed = dead;
                             let pitch = (self.world.random.next_float()
                                 - self.world.random.next_float())
                                 * 0.2
                                 + 1.0;
-                            let s = kind.sounds[if dead { 2 } else { 1 }];
+                            let s = voice[if dead { 2 } else { 1 }];
                             if !s.is_empty() {
                                 self.audio.play(
                                     &format!("minecraft:{s}"),
@@ -1317,6 +1327,12 @@ impl Game<'_> {
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
                 self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
                 return;
+            }
+            // Nautilus.getBreedOffspring: a tame parent's baby is tame too.
+            if p.species() == Species::Nautilus && p.extra.tame {
+                child.extra.tame = true;
+                child.extra.owner = p.extra.owner;
+                child.persistent = true;
             }
             // Offspring inherit a parent's variant (pigs/cows/chickens) or mixed wool.
             child.extra.variant = p.extra.variant;
@@ -1945,6 +1961,10 @@ impl Game<'_> {
             return Ok(true);
         }
         if self.interact_allay(index, &item) {
+            self.swing_arm();
+            return Ok(true);
+        }
+        if self.interact_sulfur_cube(index, &item) {
             self.swing_arm();
             return Ok(true);
         }
@@ -2595,7 +2615,9 @@ impl Game<'_> {
     }
 }
 fn species_drops_harness(m: &Mob) -> bool {
-    m.species() == Species::HappyGhast
+    // Body equipment set to drop when killed: a harness, nautilus armour, a
+    // sulfur cube's swallowed block.
+    horizon_client::mobs::species::body_slot(m.species())
 }
 fn eat_sound(s: Species) -> &'static str {
     match s {
@@ -2626,6 +2648,11 @@ fn experience_reward(m: &Mob, random: &mut impl RandomSource) -> u32 {
         | S::Pufferfish
         | S::Dolphin => 1 + random.next_int_bound(3).unwrap_or(0) as u32,
         S::IronGolem | S::SnowGolem | S::Villager | S::WanderingTrader => 0,
+        // SulfurCube.getBaseExperienceReward.
+        S::SulfurCube if m.is_baby() => 0,
+        S::SulfurCube => 1 + random.next_int_bound(2).unwrap_or(0) as u32,
+        // Animals in the monster category (Animal.getBaseExperienceReward).
+        S::CamelHusk | S::ZombieNautilus => 1 + random.next_int_bound(3).unwrap_or(0) as u32,
         _ if m.hostile() => {
             5 + if m.extra.main_hand.is_some() {
                 1 + random.next_int_bound(3).unwrap_or(0) as u32

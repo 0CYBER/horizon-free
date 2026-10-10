@@ -9,6 +9,7 @@ use std::f32::consts::PI;
 /// The setupAnim implementation a model uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anim {
+    Nautilus,
     HappyGhast,
     Sniffer,
     Breeze,
@@ -461,6 +462,7 @@ pub fn setup(
         Anim::Breeze => super::breeze::anim(m, s, p, w_anims),
         Anim::Sniffer => super::sniffer::anim(m, s, p, w_anims),
         Anim::HappyGhast => super::happy_ghast::anim(m, s, p),
+        Anim::Nautilus => super::nautilus::anim(m, s, p, w_anims),
         Anim::Llama => super::llama::anim(m, s, p),
         Anim::Warden => super::warden::anim(m, s, p, w_anims),
         Anim::Allay => super::allay::anim(m, s, p),

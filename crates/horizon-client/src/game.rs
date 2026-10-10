@@ -52,6 +52,7 @@ mod mount_menu;
 mod mounts;
 mod music;
 mod names;
+mod nautili;
 mod options;
 mod packs;
 mod paintings;
@@ -79,6 +80,7 @@ mod stats_screen;
 mod storage;
 mod structures;
 mod subtitle_hud;
+mod sulfur_cubes;
 mod titles;
 mod tnt;
 mod totem;
@@ -4891,7 +4893,8 @@ impl Game<'_> {
                 );
             }
             self.last_hurt_by_player.insert(mob.id);
-            let kind = mob.kind.clone();
+            // getHurtSound / getDeathSound (by species state).
+            let voice = horizon_client::mobs::ai::voice_sounds(mob);
             let dead = !mob.alive();
             let sound = if crit {
                 "minecraft:entity.player.attack.crit"
@@ -4901,7 +4904,7 @@ impl Game<'_> {
                 "minecraft:entity.player.attack.weak"
             };
             self.audio.play(sound, Some(center), 1.0, 1.0);
-            let event = format!("minecraft:{}", kind.sounds[if dead { 2 } else { 1 }]);
+            let event = format!("minecraft:{}", voice[if dead { 2 } else { 1 }]);
             let pitch =
                 (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
             self.audio.play(&event, Some(center), 1.0, pitch);

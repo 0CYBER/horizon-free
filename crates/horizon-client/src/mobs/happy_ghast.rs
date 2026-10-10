@@ -424,6 +424,19 @@ pub fn volume(m: &Mob) -> f32 {
 }
 /// `HappyGhastModel.setupAnim`: the tentacles, and the body squeezed under a harness.
 pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
+    // HappyGhastHarnessModel.setupAnim: the goggles down while ridden
+    // (vanilla's literal -0.7854, not -PI/4).
+    #[allow(clippy::approx_constant)]
+    if p.has("goggles") {
+        let g = p.get("goggles");
+        if m.rider.is_some() {
+            g[3] = 0.0;
+            g[1] = 14.0;
+        } else {
+            g[3] = -0.7854;
+            g[1] = 9.0;
+        }
+    }
     if wearing_harness(m) {
         let b = p.get("body");
         b[6] = 0.9375;

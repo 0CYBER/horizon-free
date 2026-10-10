@@ -197,15 +197,31 @@ fn main() -> horizon_client::Result<()> {
         // Variant layers (sizes, hatless villagers, climate cows...) animate
         // like their base model.
         let mut base = adult.clone();
-        for cut in ["_no_hat", "_small", "_medium", "_large"] {
+        // Armour layers (horse, wolf, nautilus), the coral zombie nautilus,
+        // the happy ghast's harness and ropes and hatless babies animate like
+        // their base model too; the undead horses share one armour layer.
+        let cuts = [
+            "_no_hat", "_small", "_medium", "_large", "_big", "_armor", "_coral", "_harness",
+            "_ropes", "_baby",
+        ];
+        let norm = |s: &str| {
+            let mut s = s.to_owned();
+            for cut in cuts {
+                s = s.replace(cut, "");
+            }
+            s.replace("undead_horse#", "zombie_horse#")
+        };
+        for cut in cuts {
             base = base.replace(cut, "");
         }
+        let base = base.replace("undead_horse#", "zombie_horse#");
         let base = base.trim_start_matches("cold_").trim_start_matches("warm_");
         let Some(def) = species::ALL.iter().find(|d| {
             d.model == layer
                 || (baby && d.model == adult)
                 || d.model == base
                 || d.model.trim_end_matches("#main") == base.trim_end_matches("#main")
+                || norm(d.model) == base
         }) else {
             out.push_str(&format!("{}\n", json!({"skip": "no species"})));
             continue;

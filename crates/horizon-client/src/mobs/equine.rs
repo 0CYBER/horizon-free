@@ -55,6 +55,7 @@ pub fn is_equine(s: Species) -> bool {
             | Species::SkeletonHorse
             | Species::ZombieHorse
             | Species::Camel
+            | Species::CamelHusk
             | Species::Llama
             | Species::TraderLlama
     )
@@ -75,7 +76,7 @@ fn can_rear(s: Species) -> bool {
     )
 }
 pub fn register(m: &mut Mob) {
-    if m.species() == Species::Camel {
+    if super::camel::is_camel(m.species()) {
         return super::camel::register(m);
     }
     if super::llama::is_llama(m.species()) {
@@ -159,6 +160,7 @@ pub fn controlled(m: &Mob) -> bool {
         // Pig/Strider.getControllingPassenger: saddled, the rider holding the stick.
         Species::Pig | Species::Strider => m.extra.saddled && r.steer,
         Species::HappyGhast => super::happy_ghast::controlled(m),
+        Species::Nautilus | Species::ZombieNautilus => super::nautilus::controlled(m),
         _ => m.extra.saddled || m.species() == Species::SkeletonHorse && m.extra.tame,
     }
 }
@@ -305,6 +307,10 @@ pub fn ridden_step(m: &mut Mob) {
     let Some(r) = m.rider else {
         return;
     };
+    // AbstractNautilus.tickRidden turns half way toward the rider.
+    if super::nautilus::is_nautilus(m.species()) {
+        return super::nautilus::ridden(m);
+    }
     m.yaw = r.yaw;
     m.head_pitch = r.pitch * 0.5;
     m.body_yaw = r.yaw;
@@ -313,6 +319,7 @@ pub fn ridden_step(m: &mut Mob) {
     if m.species() == Species::HappyGhast {
         return super::happy_ghast::ridden(m);
     }
+
     if matches!(m.species(), Species::Pig | Species::Strider) {
         // Pig/Strider: always forward along the rider's look, at a fraction
         // of the movement speed, boosted by the stick.
@@ -328,7 +335,7 @@ pub fn ridden_step(m: &mut Mob) {
         m.set_speed((m.attrs.speed * factor) as f32 * boost);
         return;
     }
-    if m.species() == Species::Camel {
+    if super::camel::is_camel(m.species()) {
         // Camel.tickRidden / getRiddenInput: forward stands it up; no input
         // while sitting; the jump is a dash.
         if r.forward > 0.0 && super::camel::sitting(m) {
@@ -394,7 +401,7 @@ pub fn ridden_step(m: &mut Mob) {
 /// `AbstractHorse.aiStep` and `tick`: healing, grazing, the rear and the
 /// eating/standing/mouth animations.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    if m.species() == Species::Camel {
+    if super::camel::is_camel(m.species()) {
         return super::camel::ai_step(m, events);
     }
     if super::llama::is_llama(m.species()) {
@@ -457,6 +464,7 @@ pub fn texture(m: &Mob) -> String {
         Species::Mule => format!("entity/horse/mule{baby}"),
         Species::SkeletonHorse => format!("entity/horse/horse_skeleton{baby}"),
         Species::Camel => format!("entity/camel/camel{baby}"),
+        Species::CamelHusk => "entity/camel/camel_husk".into(),
         _ => format!("entity/horse/horse_zombie{baby}"),
     }
 }
@@ -478,7 +486,8 @@ pub fn model_name(s: Species) -> &'static str {
         Species::Donkey => "donkey",
         Species::Mule => "mule",
         Species::SkeletonHorse => "skeleton_horse",
-        Species::Camel => "camel",
+        // CamelHuskRenderer: the camel's model (and its saddle layer).
+        Species::Camel | Species::CamelHusk => "camel",
         _ => "zombie_horse",
     }
 }
@@ -490,6 +499,7 @@ pub fn saddle_texture(s: Species) -> &'static str {
         Species::SkeletonHorse => "entity/equipment/skeleton_horse_saddle/saddle",
         Species::ZombieHorse => "entity/equipment/zombie_horse_saddle/saddle",
         Species::Camel => "entity/equipment/camel_saddle/saddle",
+        Species::CamelHusk => "entity/equipment/camel_husk_saddle/saddle",
         _ => "entity/equipment/horse_saddle/saddle",
     }
 }
