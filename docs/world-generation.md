@@ -190,3 +190,21 @@ Subsequent [biome lookup and chunk suites](biome-lookup.md) now validate fuzzy
 block-to-quart selection, section-atomic biome fills and multi-noise chunk
 assignment through actual `ChunkGenerator.doCreateBiomes`. The original report
 above remains a record of its narrower tested source snapshot.
+
+## Whole-chunk differential harness
+
+`tools/test_chunk_generation_parity.py` generates chunks in actual vanilla classes (`VanillaChunkGenerationOracle`: structure starts and
+references, biomes, noise, surface, carvers, then biome decoration and structure pieces through real `WorldGenRegion`s) and with
+`crates/horizon-world/examples/chunk_dump.rs`, and compares every block state, quart biome and block entity (canonical NBT) of each target
+chunk. Cases are terrain sites for several seeds across the overworld, Nether and End, plus rectangles around every structure kind found
+by scanning the seed. `--phase structures` isolates terrain plus structure pieces, `--phase terrain` stops before features.
+
+Result on seed 12345 (overworld 42 sites / 372 chunks, Nether, End): structure pieces 0 differences on all 35 overworld structure sites; full
+generation 4 differing chunks (3 blocks, 1 block entity) out of 372; Nether and End terrain sites 0 differences.
+
+Harness normalisations (not generation differences): sections above the noise height (Nether roof, End sky) are all air in vanilla and
+absent in Horizon; structure templates keep their stored NBT integer width; a vanilla block entity left as a `DUMMY` default is equal to no
+Horizon entry; `LootTableSeed` without a `LootTable` and a vault's default reward table are ignored.
+
+Remaining known differences: a handful of single blocks near structure pieces in full generation (abandoned camps, shipwreck, villages) that
+need per-feature tracing, and tree features only through `tools/test_tree_feature_parity.py` (8,898 fixtures, all equal).

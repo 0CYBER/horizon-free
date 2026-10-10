@@ -152,6 +152,8 @@ pub struct StateTransforms {
     mirror: Vec<[u32; 2]>,
     full: Vec<bool>,
     loot: BTreeSet<BlockStateId>,
+    /// Block entity type of every state that has one (`BlockState.hasBlockEntity`).
+    entity_types: HashMap<BlockStateId, Arc<str>>,
 }
 impl StateTransforms {
     pub fn from_json(json: &str, states: usize) -> Result<Self, super::DecodeError> {
@@ -197,12 +199,26 @@ impl StateTransforms {
             .into_iter()
             .map(BlockStateId)
             .collect();
+        let mut entity_types = HashMap::new();
+        if let Some(types) = value["block_entities"].as_object() {
+            for (name, states) in types {
+                let name: Arc<str> = Arc::from(name.as_str());
+                for id in ids(states) {
+                    entity_types.insert(BlockStateId(id), name.clone());
+                }
+            }
+        }
         Ok(Self {
             rotate,
             mirror,
             full,
             loot,
+            entity_types,
         })
+    }
+    /// The block entity type a state carries, when it has one.
+    pub fn entity_type(&self, state: BlockStateId) -> Option<&Arc<str>> {
+        self.entity_types.get(&state)
     }
     pub fn rotate(&self, state: BlockStateId, rotation: Rotation) -> BlockStateId {
         match rotation {
