@@ -147,6 +147,13 @@ pub struct PlayerMotion {
     pub flying: bool,
     /// The jump key last tick (LocalPlayer.aiStep's wasJumping).
     pub was_jumping: bool,
+    /// `LocalPlayer.autoJumpEnabled` (the Auto-Jump option) and
+    /// `autoJumpTime`; `was_auto_jump` is this tick's `wasAutoJump`.
+    pub auto_jump_enabled: bool,
+    pub auto_jump_time: i32,
+    pub was_auto_jump: bool,
+    /// `input.getMoveVector()` this tick (before `modifyInput`).
+    pub move_vector: [f32; 2],
     /// A usable glider (elytra) is worn; the game sets it each tick.
     pub glider: bool,
     /// The view pitch (xRot), for gliding.
@@ -230,6 +237,10 @@ impl PlayerMotion {
             spectator: false,
             flying: false,
             was_jumping: false,
+            auto_jump_enabled: false,
+            auto_jump_time: 0,
+            was_auto_jump: false,
+            move_vector: [0.0, 0.0],
             glider: false,
             pitch: 0.0,
             fall_flying: false,
@@ -473,7 +484,7 @@ impl MotionWorld<'_, '_, '_> {
             self.player.ground.on_ground = false;
         } else if !self.player.may_fly {
             self.player.flying = false;
-        } else if !was_jumping && jumping {
+        } else if !was_jumping && jumping && !self.player.was_auto_jump {
             if self.player.jump_trigger_time == 0 {
                 self.player.jump_trigger_time = 7;
             } else {
@@ -545,9 +556,18 @@ impl MotionWorld<'_, '_, '_> {
     }
     pub fn controlled_simulation_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
         self.update_local_crouching()?;
+        let mut keys = keys;
+        // LocalPlayer.aiStep: a pending auto-jump presses jump for this tick
+        // (input.makeJump) and keeps the jump from toggling flight.
+        self.player.was_auto_jump = self.player.auto_jump_time > 0;
+        if self.player.was_auto_jump {
+            self.player.auto_jump_time -= 1;
+            keys.jump = true;
+        }
         self.player.sprint_input_tick(keys)?;
         self.player.shift_key_down = keys.shift;
         let direction = keys.direction();
+        self.player.move_vector = direction;
         let sneak = if direction[0] * direction[0] + direction[1] * direction[1] != 0.0
             && self.player.moving_slowly()
         {
@@ -668,8 +688,69 @@ impl MotionWorld<'_, '_, '_> {
         let movement = self.player.velocity;
         self.move_self(movement)
     }
+    /// `LocalPlayer.move`: the move, then `updateAutoJump` with the float
+    /// horizontal displacement.
     pub fn move_self(&mut self, movement: Vec3) -> Result<()> {
-        entity_move::move_entity(self, MoverType::SelfMovement, movement)
+        let before = self.player.position;
+        entity_move::move_entity(self, MoverType::SelfMovement, movement)?;
+        let dx = (self.player.position.x - before.x) as f32;
+        let dz = (self.player.position.z - before.z) as f32;
+        self.update_auto_jump(dx, dz)
+    }
+    /// `LocalPlayer.updateAutoJump` behind `canAutoJump`.
+    pub fn update_auto_jump(&mut self, xa: f32, za: f32) -> Result<()> {
+        let p = &*self.player;
+        // canAutoJump; MotionWorld drives an unmounted player (not a passenger).
+        let ready = crate::auto_jump::can_auto_jump(
+            p.auto_jump_enabled,
+            p.auto_jump_time,
+            p.ground.on_ground,
+            p.shift_key_down,
+            false,
+            p.move_vector,
+            1.0,
+        );
+        if !ready || f64::from(self.block_jump_factor()?) < 1.0 {
+            return Ok(());
+        }
+        // Player.getSpeed: the movement speed attribute as it is now.
+        let speed = self.player.attribute("minecraft:movement_speed")? as f32;
+        let p = &*self.player;
+        let jumper = crate::auto_jump::AutoJumper {
+            position: p.position,
+            max_y: p.bounds().max_position().y,
+            x_rot: p.pitch,
+            y_rot: p.yaw,
+            speed,
+            move_vector: p.move_vector,
+            width: p.dimensions.width,
+            height: p.dimensions.height,
+            jump_boost: p.status.jump_boost,
+        };
+        if crate::auto_jump::update_auto_jump(self, &jumper, xa, za)? {
+            self.player.auto_jump_time = 1;
+        }
+        Ok(())
+    }
+}
+impl crate::auto_jump::AutoJumpWorld for MotionWorld<'_, '_, '_> {
+    type Error = Box<dyn std::error::Error>;
+    fn collision_shape(&mut self, p: BlockPos) -> Result<horizon_core::geometry::VoxelShape> {
+        let context = self.context();
+        let state = self.block(p);
+        let binding = self.collision_binding;
+        Ok(binding.collision_shape_with_context(&mut self.collisions(), state, p, &context)?)
+    }
+    fn collision_boxes(&mut self, bounds: Aabb) -> Result<Vec<Aabb>> {
+        let context = self.context();
+        let mut scene = self.collisions();
+        let mut boxes = Vec::new();
+        for hit in horizon_world::block_collision_scan::BlockCollisionScan::new(
+            &mut scene, context, bounds, false, 1_000_000,
+        )? {
+            boxes.extend_from_slice(hit?.shape.boxes());
+        }
+        Ok(boxes)
     }
 }
 // Current resident movement domain: dry, standing, no vehicles or gliding.

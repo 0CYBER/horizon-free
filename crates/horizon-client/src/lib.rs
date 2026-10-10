@@ -7,6 +7,7 @@ pub mod animate_tick;
 pub mod assets;
 pub mod attribute_updates;
 pub mod audio;
+pub mod auto_jump;
 pub mod banner;
 pub mod biome;
 pub mod block_entity_nbt;

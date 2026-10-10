@@ -2517,6 +2517,8 @@ impl Game<'_> {
         player.yaw = self.yaw;
         let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
         player.may_fly = self.creative || spectator;
+        // LocalPlayer.sendPosition: autoJumpEnabled follows the option.
+        player.auto_jump_enabled = self.settings.auto_jump;
         player.invulnerable = self.creative || spectator;
         player.spectator = spectator;
         player.pitch = self.pitch;
