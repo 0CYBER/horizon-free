@@ -77,6 +77,19 @@ public final class VanillaChunkGenerationOracle {
             super(null, null, null, null, null, null, false, 0L, null, false);
         }
         static long seed;
+        static int nextEntityId;
+        @Override
+        public int getNextEntityId() {
+            return nextEntityId++;
+        }
+        @Override
+        public float getMoonBrightness(final BlockPos pos) {
+            return 0.0F;
+        }
+        @Override
+        public long getOverworldClockTime() {
+            return 0L;
+        }
         static RegistryAccess access;
         static net.minecraft.world.level.dimension.DimensionType type;
         static StructureManager structures;
@@ -101,7 +114,7 @@ public final class VanillaChunkGenerationOracle {
         }
         @Override
         public net.minecraft.world.flag.FeatureFlagSet enabledFeatures() {
-            return net.minecraft.world.flag.FeatureFlags.DEFAULT_FLAGS; // an empty set filters every block out of holderLookup, so jigsaw final states fail to parse
+            return net.minecraft.world.flag.FeatureFlags.DEFAULT_FLAGS; // with none enabled, holderLookup filters every block out and jigsaw final states fail to parse
         }
         @Override
         public RegistryAccess registryAccess() {
@@ -138,6 +151,7 @@ public final class VanillaChunkGenerationOracle {
                 if (type == int.class) return 0;
                 if (type == boolean.class) return false;
                 if (type == float.class) return 0f;
+                if (type == net.minecraft.world.Difficulty.class) return net.minecraft.world.Difficulty.NORMAL;
                 if (type == double.class) return 0d;
                 return null;
             });
