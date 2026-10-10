@@ -68,8 +68,10 @@ The registry loader checks data version, duplicate states, default IDs and
 block-name coverage. The local oracle exports all 35,723 state identities and
 defaults from vanilla. This imports identities, not block implementations,
 shapes or behavior. Registry exports and game-derived fixtures stay in `.local/`.
-Chunk access requires data version 5023; older saves need an unimplemented
-data-fixing layer. `BlockRegistry::resolve` rejects invalid property descriptors. The separate
+Chunk access requires data version 5023. The DataFixerUpper chain is not ported:
+opening a world whose `level.dat` is older fails with a message pointing at
+`tools/upgrade_world.py`, which runs vanilla's own `--forceUpgrade` on a copy
+(exercised only against a current-version world; no older server jar is local). `BlockRegistry::resolve` rejects invalid property descriptors. The separate
 [block-state JSON codec](block-state-codecs.md) reproduces vanilla property
 fallback for compact and full JSON forms.
 

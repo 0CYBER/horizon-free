@@ -546,19 +546,23 @@ impl Settings {
         }
         s
     }
-    /// The compound written to the player file; `toBeDisplayed` stays empty.
+    /// The compound written to the player file.
     pub fn write(&self) -> Tag {
         let mut entries: Vec<(&str, Tag)> = Vec::new();
         for b in BookType::ALL {
             let (open, filter) = b.keys();
-            entries.push((open, Tag::Byte(i8::from(self.open[b.index()]))));
-            entries.push((filter, Tag::Byte(i8::from(self.filtering[b.index()]))));
+            // The codec omits settings at their default (false).
+            if self.open[b.index()] {
+                entries.push((open, Tag::Byte(1)));
+            }
+            if self.filtering[b.index()] {
+                entries.push((filter, Tag::Byte(1)));
+            }
         }
         let list = |ids: &[String]| {
             Tag::List(ids.iter().map(|i| Tag::String(i.as_str().into())).collect())
         };
         entries.push(("recipes", list(&self.recipes)));
-        entries.push(("toBeDisplayed", Tag::List(Vec::new())));
         Tag::compound(entries)
     }
 }
