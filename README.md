@@ -16,41 +16,41 @@ Horizon is a Rust rewrite of Minecraft Java **26.3** targeting one-to-one vanill
 
 Parity is **not** complete. Still missing: the warden and the sculk family, the breeze, sniffer, creaking, happy ghast, llamas and a few other mobs, raids and pillager patrols, villager breeding and gossip, the loom, crafter and recipe book, scoreboards, subtitles, and spawned mob gear enchantments. Multiplayer joins vanilla servers but Horizon cannot host one. See [Rust rewrite status](docs/rust-parity.md).
 
-### Java parity: 73%
+### Java parity: 80%
 
 Each subsystem scores 0 (absent), 0.25 (started, not playable), 0.5 (playable,
 major vanilla features missing), 0.75 (playable, mostly complete) or 1 (complete
 and verified against vanilla by differential tests). The percentage is the
 average; `tests/test_parity.py` keeps it in sync with this table. Last audited
-2026-10-09 against the code, not the docs: all 217 `tools/test_*_parity.py`
-differential harnesses pass, and the client joins a vanilla 26.3 server.
+2026-10-10 against the code, not the docs: of the 232 `tools/test_*_parity.py`
+differential harnesses, 223 pass, 8 fail and the item model harness runs out of
+memory; the failures are new harnesses that still find divergences.
 
 | Subsystem | Score | Main gaps |
 | --- | ---: | --- |
-| Window, input and game loop | 0.75 | Frame timing and input not compared with vanilla |
-| Assets and resources | 0.75 | Heuristic item icons for some items |
-| Network protocol and multiplayer | 0.5 | Joins vanilla servers (chunks, entities, chat); cannot host or open to LAN |
-| Chunk storage and palettes | 0.75 | Client uses plain arrays; palettes only on save |
-| Section meshing | 0.75 | Whole-mesh output not compared with vanilla |
-| Rendering | 0.75 | Held blocks not drawn in mob hands; no elder guardian curse overlay |
-| Lighting | 0.75 | Slabs/stairs light wrong; light not saved or tested against vanilla |
-| World generation | 0.75 | Tree feature output diverges from vanilla; whole chunks not compared end to end |
-| Region files and saves | 0.75 | Light not saved; some block entities kept as raw NBT |
-| Entities and physics | 0.75 | No warden, breeze, sniffer, creaking, happy ghast, llamas or copper golem; no raids, patrols or villager breeding |
-| Interaction and inventory | 0.75 | No loom, crafter, recipe book or horse inventory screen |
-| Menus, HUD and chat | 0.75 | About 30 commands; no scoreboards, subtitles or recipe book |
-| Audio | 0.75 | Music and ambience not verified by ear; no subtitles |
-| Block behaviours and ticking | 0.75 | No sculk or creaking hearts; dispensers lack most item behaviours |
+| Window, input and game loop | 0.75 | Game loop and options match vanilla; camera, auto-jump, toggle sprint/sneak and the frame limiter not compared |
+| Assets and resources | 0.75 | Item model pipeline not yet used for all GUI icons; item model harness does not finish; no pack screen |
+| Network protocol and multiplayer | 0.75 | Opens worlds to LAN, but hosting is not tested against a vanilla client; no dedicated server mode |
+| Chunk storage and palettes | 1 | None: client and saves share paletted containers, identical to vanilla over 266 scenarios |
+| Section meshing | 1 | None: 112 scenes and over a million quads identical to vanilla |
+| Rendering | 0.75 | Entity model harness fails; block entity renderers and HUD overlays not compared |
+| Lighting | 1 | None: saved and relit light matches vanilla, slabs and stairs included |
+| World generation | 0.75 | Whole-chunk harness still finds single-block differences near camps, shipwrecks and villages |
+| Region files and saves | 0.75 | Save round-trip harness fails; older DataVersions are not upgraded |
+| Entities and physics | 0.75 | Attributes and dimensions match; AI, loot and spawn rules not compared; drowned, villagers, traders and the wither unverified |
+| Interaction and inventory | 0.75 | Menu click harness fails |
+| Menus, HUD and chat | 0.75 | Command parse harness fails; no /item modify, /spectate, /waypoint or /dialog; no tab list or world border rendering |
+| Audio | 0.75 | Sound engine, music and ambience not compared with vanilla |
+| Block behaviours and ticking | 0.75 | Block update, random tick and redstone harnesses fail; a few dispenser behaviours missing |
 
 ### Next steps
 
-1. `/summon` with NBT, and enchantments on spawned mob gear (`mob_spawn_equipment`).
-2. Pillager patrols and raids (bad omen, raid waves, the raid bar), then villager breeding, gossip and iron golem summoning.
-3. The warden and the sculk family (sensors, shriekers, catalysts), then the creaking and its heart.
-4. Remaining mobs: breeze, sniffer, llamas and trader llamas, happy ghast, copper golem, illusioner.
-5. The loom, crafter, recipe book and horse inventory screen.
-6. Scoreboards and subtitles.
-7. Hosting: an integrated server so Horizon worlds can be opened to LAN.
+1. Fix the divergences the failing harnesses report: block updates, random ticks, redstone, command parsing, menu clicks, save round-trip, whole chunks and entity models.
+2. Let the item model harness finish, and draw every GUI icon through the item model pipeline.
+3. An audio harness: sound engine attenuation, weighted sound events, music and ambience.
+4. Mob AI, loot and spawn-rule harnesses, and an oracle for drowned, villagers, traders and the wither.
+5. The missing commands, the tab list and world border rendering.
+6. Test LAN hosting with a vanilla client, and upgrade saves from older DataVersions.
 
 ```sh
 python3 tools/prepare_native_client.py --prepare   # needs JDK 25; extracts private vanilla resources
