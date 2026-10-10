@@ -16,10 +16,11 @@
 use crate::{
     Result,
     biome::Biomes,
-    chunk::{Blocks, Chunk, Light, MIN_Y, SECTIONS},
+    chunk::{BIOME_STRATEGY, BLOCK_STRATEGY, Chunk, Light, MIN_Y, SECTIONS},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
+    paletted::PalettedContainer,
     position::{BlockPos, ChunkPos},
     ticks::{SavedTick, TickPriority, TickTypeId},
 };
@@ -42,29 +43,6 @@ use std::{
 
 pub const VERSION_NAME: &str = "26.3";
 
-fn pack(indices: &[u16], bits: u32) -> Vec<i64> {
-    let per_long = (64 / bits) as usize;
-    let mut longs = vec![0i64; indices.len().div_ceil(per_long)];
-    for (i, &v) in indices.iter().enumerate() {
-        longs[i / per_long] |=
-            (i64::from(v) & ((1i64 << bits) - 1)) << ((i % per_long) as u32 * bits);
-    }
-    longs
-}
-fn unpack(longs: &[i64], bits: u32, count: usize) -> Vec<u16> {
-    let per_long = (64 / bits) as usize;
-    let mask = (1u64 << bits) - 1;
-    (0..count)
-        .map(|i| {
-            longs.get(i / per_long).map_or(0, |&l| {
-                ((l as u64 >> ((i % per_long) as u32 * bits)) & mask) as u16
-            })
-        })
-        .collect()
-}
-fn bits_for(len: usize, min: u32) -> u32 {
-    (usize::BITS - (len.max(1) - 1).leading_zeros()).max(min)
-}
 fn string(s: &str) -> Tag {
     Tag::String(s.into())
 }
@@ -691,33 +669,22 @@ pub fn encode_with(
     });
     for (si, section) in chunk.sections.iter().enumerate() {
         let y = (MIN_Y >> 4) + si as i32;
-        let ids: Vec<u16> = match &section.blocks {
-            Blocks::Uniform(v) => vec![*v],
-            Blocks::Full(a) => a.to_vec(),
-        };
-        let mut palette: Vec<u16> = Vec::new();
-        let mut lookup: HashMap<u16, u16> = HashMap::new();
-        let indices: Vec<u16> = ids
-            .iter()
-            .map(|id| {
-                *lookup.entry(*id).or_insert_with(|| {
-                    palette.push(*id);
-                    (palette.len() - 1) as u16
-                })
-            })
-            .collect();
+        // PalettedContainer.pack: distinct states in index order, indices at
+        // the saved width.
+        let packed = section.blocks.pack();
         let mut states = vec![(
             "palette",
             Tag::List(
-                palette
+                packed
+                    .palette
                     .iter()
-                    .map(|id| {
-                        let state = registry.state(BlockStateId(u32::from(*id)));
+                    .map(|&id| {
+                        let state = registry.state(BlockStateId(id));
                         match state {
                             // BlockState.CODEC: the block name for default states.
                             Some(s)
                                 if tables.is_some_and(|t| {
-                                    t.default_state.get(*id as usize) == Some(&true)
+                                    t.default_state.get(id as usize) == Some(&true)
                                 }) =>
                             {
                                 string(&s.name)
@@ -729,37 +696,27 @@ pub fn encode_with(
                     .collect(),
             ),
         )];
-        if palette.len() > 1 {
+        if let Some(data) = &packed.data {
             states.push((
                 "data",
-                Tag::LongArray(pack(&indices, bits_for(palette.len(), 4))),
+                Tag::LongArray(data.iter().map(|&w| w as i64).collect()),
             ));
         }
-        let quart: Vec<u16> = (0..64).map(|i| chunk.biomes[si * 64 + i]).collect();
-        let mut biome_palette: Vec<u16> = Vec::new();
-        let biome_indices: Vec<u16> = quart
-            .iter()
-            .map(|b| match biome_palette.iter().position(|p| p == b) {
-                Some(i) => i as u16,
-                None => {
-                    biome_palette.push(*b);
-                    (biome_palette.len() - 1) as u16
-                }
-            })
-            .collect();
+        let biome_packed = section.biomes.pack();
         let mut biome_tag = vec![(
             "palette",
             Tag::List(
-                biome_palette
+                biome_packed
+                    .palette
                     .iter()
-                    .map(|b| string(&biomes.get(*b).name))
+                    .map(|&b| string(&biomes.get(b as u16).name))
                     .collect(),
             ),
         )];
-        if biome_palette.len() > 1 {
+        if let Some(data) = &biome_packed.data {
             biome_tag.push((
                 "data",
-                Tag::LongArray(pack(&biome_indices, bits_for(biome_palette.len(), 0))),
+                Tag::LongArray(data.iter().map(|&w| w as i64).collect()),
             ));
         }
         let mut entries = vec![
@@ -793,7 +750,12 @@ pub fn encode_with(
         .iter()
         .map(|(p, e)| {
             let block = block_name(p);
-            let current = encode_block_entity(*p, e, &block);
+            let mut current = encode_block_entity(*p, e, &block);
+            if let Some((_, name)) = chunk.block_names.iter().find(|(q, _)| q == p)
+                && let Tag::Compound(map) = &mut current
+            {
+                map.insert("CustomName".into(), string(name));
+            }
             let source = extras
                 .and_then(|x| x.block_entity_sources.iter().find(|(q, _)| q == p))
                 .map(|(_, tag)| tag)
@@ -939,7 +901,6 @@ pub fn decode_with(
     }
     let air = registry.default_state("minecraft:air")?.0 as u16;
     let mut cache: HashMap<String, u16> = HashMap::new();
-    let mut biome_data = (*chunk.biomes).clone();
     let Some(Tag::List(sections)) = tag.get("sections") else {
         return Some(chunk);
     };
@@ -982,15 +943,17 @@ pub fn decode_with(
                 })
                 .collect();
             let target = Arc::make_mut(&mut chunk.sections[si as usize]);
-            if ids.len() <= 1 {
-                target.blocks = Blocks::Uniform(ids.first().copied().unwrap_or(air));
-            } else if let Some(Tag::LongArray(data)) = states.get("data") {
-                let indices = unpack(data, bits_for(ids.len(), 4), 4096);
-                let mut full = Box::new([air; 4096]);
-                for (i, idx) in indices.iter().enumerate() {
-                    full[i] = ids.get(*idx as usize).copied().unwrap_or(air);
+            let data = match states.get("data") {
+                Some(Tag::LongArray(data)) => {
+                    Some(data.iter().map(|&w| w as u64).collect::<Vec<_>>())
                 }
-                target.blocks = Blocks::Full(full);
+                _ => None,
+            };
+            let palette: Vec<u32> = ids.iter().map(|&id| u32::from(id)).collect();
+            if let Ok(blocks) =
+                PalettedContainer::from_packed(BLOCK_STRATEGY, palette, data.as_deref())
+            {
+                target.blocks = blocks;
             }
         }
         if let Some(b) = section.get("biomes")
@@ -1003,18 +966,23 @@ pub fn decode_with(
                     _ => 0,
                 })
                 .collect();
-            let indices = match b.get("data") {
-                Some(Tag::LongArray(data)) if ids.len() > 1 => {
-                    unpack(data, bits_for(ids.len(), 0), 64)
+            let data = match b.get("data") {
+                Some(Tag::LongArray(data)) => {
+                    Some(data.iter().map(|&w| w as u64).collect::<Vec<_>>())
                 }
-                _ => vec![0; 64],
+                _ => None,
             };
-            for (i, idx) in indices.iter().enumerate() {
-                biome_data[si as usize * 64 + i] = ids.get(*idx as usize).copied().unwrap_or(0);
+            let palette: Vec<u32> = ids.iter().map(|&id| u32::from(id)).collect();
+            let target = Arc::make_mut(&mut chunk.sections[si as usize]);
+            if let Ok(container) =
+                PalettedContainer::from_packed(BIOME_STRATEGY, palette.clone(), data.as_deref())
+            {
+                target.biomes = container;
+            } else if let Some(&first) = palette.first() {
+                target.biomes = PalettedContainer::new(BIOME_STRATEGY, first);
             }
         }
     }
-    chunk.biomes = Arc::new(biome_data);
     let mut extras = ChunkExtras {
         last_update: number(tag.get("LastUpdate")).unwrap_or(0),
         ..ChunkExtras::default()
@@ -1023,6 +991,9 @@ pub fn decode_with(
         for e in entities {
             match decode_block_entity(e) {
                 Some(be) => {
+                    if let Some(name) = text(e.get("CustomName")) {
+                        chunk.block_names.push((be.0, name));
+                    }
                     extras.block_entity_sources.push((be.0, e.clone()));
                     chunk.block_entities.push(be);
                 }

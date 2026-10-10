@@ -214,10 +214,9 @@ impl Game<'_> {
                         continue;
                     }
                     let qy = ((y - MIN_Y) >> 2).clamp(0, HEIGHT / 4 - 1);
-                    let index = (qy * 16 + ((z & 15) >> 2) * 4 + ((x & 15) >> 2)) as usize;
                     if let Some(chunk) = self.world.chunks.get_mut(&key) {
                         let chunk = std::sync::Arc::make_mut(chunk);
-                        std::sync::Arc::make_mut(&mut chunk.biomes)[index] = target as u16;
+                        chunk.set_biome_cell((x & 15) >> 2, qy, (z & 15) >> 2, target as u16);
                     }
                     touched.insert(key);
                     changed += 1;

@@ -48,7 +48,7 @@ pub fn vehicle_attachment(r: &Mob) -> f64 {
         | S::Bogged
         | S::Parched
         | S::WitherSkeleton => 0.7,
-        S::Pillager | S::Vindicator | S::Evoker => 0.6,
+        S::Pillager | S::Vindicator | S::Evoker | S::Illusioner => 0.6,
         _ => 0.0,
     }
 }

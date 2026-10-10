@@ -20,6 +20,7 @@ fn raider(s: Species) -> bool {
             | Species::Vindicator
             | Species::Witch
             | Species::Evoker
+            | Species::Illusioner
             | Species::Ravager
     )
 }
@@ -30,6 +31,7 @@ fn targets(m: &mut Mob, villagers_seen: bool) {
         Species::Vindicator,
         Species::Witch,
         Species::Evoker,
+        Species::Illusioner,
         Species::Vex,
         Species::Ravager,
     ];
@@ -95,7 +97,7 @@ enum Spell {
 /// `SpellcasterCastingSpellGoal`: stand still facing the target while a
 /// spell is cast.
 #[derive(Clone, Debug)]
-struct CastingSpell;
+pub(super) struct CastingSpell;
 impl Goal for CastingSpell {
     goal_clone!();
     fn flags(&self) -> u8 {
@@ -542,6 +544,7 @@ enum ArmPose {
     Attacking,
     CrossbowHold,
     CrossbowCharge,
+    Bow,
 }
 /// `Pillager` / `Vindicator.getArmPose`.
 fn arm_pose(m: &Mob) -> ArmPose {
@@ -557,6 +560,9 @@ fn arm_pose(m: &Mob) -> ArmPose {
                 ArmPose::Neutral
             }
         }
+        Species::Illusioner if m.extra.variant2 != 0 => ArmPose::Spellcasting,
+        Species::Illusioner if m.ai.aggressive => ArmPose::Bow,
+        Species::Illusioner => ArmPose::Crossed,
         Species::Evoker if m.extra.variant2 != 0 => ArmPose::Spellcasting,
         Species::Evoker if celebrating(m) => ArmPose::Celebrating,
         Species::Evoker => ArmPose::Crossed,
@@ -576,7 +582,11 @@ fn celebrating(m: &Mob) -> bool {
 }
 /// Whether the held item shows (vindicators only draw their axe when angry).
 pub fn shows_item(m: &Mob) -> bool {
-    m.species() != Species::Vindicator || m.ai.aggressive
+    match m.species() {
+        Species::Vindicator => m.ai.aggressive,
+        Species::Illusioner => m.extra.variant2 != 0 || m.ai.aggressive,
+        _ => true,
+    }
 }
 fn hide(p: &mut Poses, part: &str) {
     if p.has(part) {
@@ -600,6 +610,10 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     p.zrot("left_arm", 0.0);
     p.xrot("right_leg", (pos * 0.6662).cos() * 1.4 * sp * 0.5);
     p.xrot("left_leg", (pos * 0.6662 + PI).cos() * 1.4 * sp * 0.5);
+    // IllagerModel hides the hat; the illusioner's renderer shows it.
+    if m.species() != Species::Illusioner {
+        hide(p, "hat");
+    }
     let pose = arm_pose(m);
     match pose {
         ArmPose::Attacking => {
@@ -637,6 +651,13 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
             };
             bob(p, "right_arm", 1.0);
             bob(p, "left_arm", -1.0);
+        }
+        ArmPose::Bow => {
+            p.yrot("right_arm", -0.1 + hy);
+            p.xrot("right_arm", -PI / 2.0 + hx);
+            p.xrot("left_arm", -0.942_477_9 + hx);
+            p.yrot("left_arm", hy - 0.4);
+            p.zrot("left_arm", PI / 2.0);
         }
         ArmPose::CrossbowHold => {
             p.yrot("right_arm", -0.3 + hy);

@@ -24,7 +24,8 @@ emit for the same scenes.
   loads the prepared resources (`Assets`, `BlockFacts`, `Biomes`,
   `load_visibility`, `MeshTables`), builds the same blocks and light in real
   client `Chunk`s (a 3x3 chunk region), sets every biome's colours to the
-  scene constants and runs `Mesher::mesh`.
+  scene constants (or, for the biome-blend scenes, keeps the real biome
+  definitions and fills the chunks' quart biome arrays) and runs `Mesher::mesh`.
 - **Comparison**: quads are matched as multisets per scene, keyed by sprite,
   render-layer class (translucent vs. solid/cutout) and geometry rounded to
   1/1000 after binary32 normalisation, with a winding-preserving rotation.
@@ -37,7 +38,7 @@ emit for the same scenes.
   overlay classes (`HalfTransparentBlock`/`LeavesBlock`), tint source counts
   and `getOffset` at five columns.
 
-The corpus (94 sections, ~842k quads, ~206k of them fluid quads) has full
+The corpus (112 sections, ~1.0M quads, ~206k of them fluid quads) has full
 cubes in open air, corners, cavities and overhangs; slabs, stairs, walls,
 fences, panes, bars, torches, flowers and grasses with XZ/XYZ offsets, tall
 plants, tinted blocks (grass, leaves, stems, redstone, lily pad, petals, leaf
@@ -49,6 +50,27 @@ emissive and light-emitting blocks (magma, glowstone, sea lantern, active
 sculk sensor, glow lichen); Nether shading; every block's default state; every
 `RenderShape.MODEL` state of the registry on a sparse grid; and dense random
 scenes mixing all model states with fluids under propagated or random light.
+
+Biome tint blending is compared against the client's real
+`ClientLevel.calculateBlockTint`: the oracle builds a `BiomeManager` (the
+eight-corner zoom with a random hashed seed) over a fixed noise-biome map of
+real `Biome` objects from the registry bootstrap (colormap sampling, colour
+overrides, the dark-forest and swamp grass modifiers), initialises
+`GrassColor`/`FoliageColor`/`DryFoliageColor` from the jar's colormaps, and
+averages the resolver over the blend radius at each block's own height. The
+`biome_blend_r*` scenes (radius 0, 1, 2, 3, 5, 7) put tinted blocks (grass,
+leaves, water, leaf litter, cane, ferns, vines) at four heights on every
+column of a Voronoi patchwork of 16 common biomes that shifts with height;
+the `biome_each_*` scenes cover all 67 biomes. Option scenes (`options_*`)
+cover flat lighting (`ao` off), opaque leaves (`cutoutLeaves` off, which
+`SectionCompiler` draws in the solid layer and `LeavesBlock.skipRendering`
+joins) and both together.
+
+With `biomeBlendRadius` 0 the client takes the resolver's colour as is. Biome
+colours given as plain RGB (all water colours, most grass/foliage overrides)
+have alpha 0 there, so the client's tinted vertices come out fully
+transparent, which the terrain shader would discard. Horizon keeps them
+opaque and the gate compares RGB for radius-0 scenes.
 
 ## Running
 
@@ -112,15 +134,14 @@ gate.
 
 ## What remains different or untested
 
-- Biome tint blending: vanilla blends `BiomeManager`'s zoomed biome at each
-  block's own height; Horizon blends its quart biome cells at the section's
-  mid-height. The gate uses one constant colour per resolver, so this is not
-  compared.
+- Changing `biomeBlendRadius`, `ao` or `cutoutLeaves` in the options does not
+  remesh resident sections; new and edited sections use the new values.
 - Model variant seeds: `DoublePlantBlock`, `DoorBlock` and `AbstractBedBlock`
   override `getSeed`; Horizon seeds every block from its own position. No
   vanilla block among those has weighted variants, so output is unaffected.
-- Settings: only smooth lighting on and cutout ("fancy") leaves are covered;
-  Horizon has no flat-lighting or opaque-leaves modes.
+- Opaque leaves: the vertex layer carries a flag (`OPAQUE_LAYER`) that makes
+  the terrain shader ignore the texture's alpha; the shader side is not
+  compared (GPU pixels).
 - Layers: vanilla's solid and cutout layers are compared as one class because
   Horizon draws both in its opaque pass.
 - Not compared: block entities and their renderers, animated sprite frames,

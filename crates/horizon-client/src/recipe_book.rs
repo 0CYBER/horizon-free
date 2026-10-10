@@ -280,14 +280,27 @@ impl Book {
                     ingredients,
                     result,
                 } => (Display::Shapeless(ingredients.clone()), result),
-                Recipe::Special(_) => continue,
+                // Custom recipes are never learnable; the others show one
+                // display per material count (TransmuteRecipe.display).
+                Recipe::Special(special) => {
+                    for (display, result) in special.book_displays() {
+                        entries.push(Entry {
+                            id: format!("minecraft:{name}"),
+                            category: crafting_category(&category),
+                            group: group(&grp),
+                            display,
+                            result,
+                        });
+                    }
+                    continue;
+                }
             };
             entries.push(Entry {
                 id: format!("minecraft:{name}"),
                 category: crafting_category(&category),
                 group: group(&grp),
                 display,
-                result: result.clone(),
+                result: result.create(),
             });
         }
         for c in &recipes.cooking {
@@ -376,24 +389,33 @@ impl Book {
         items.sort_by_key(|i| (self.order.get(i).copied().unwrap_or(usize::MAX), i.clone()));
         items
     }
-    /// `RecipeCollection` search: the result's name or registry path, or
-    /// `@namespace`.
-    pub fn matches_search(&self, entry: &Entry, query: &str, name: &str) -> bool {
+    /// The recipe-book search tree (`SessionSearchTrees.updateRecipes`, a
+    /// `FullTextSearchTree`): without a colon the text must occur in a
+    /// tooltip line of a result item of the collection; `namespace:path`
+    /// needs the namespace in a result id and the path in an id or a line.
+    pub fn collection_matches(
+        &self,
+        entries: &[usize],
+        query: &str,
+        tooltip: &dyn Fn(&ItemStack) -> Vec<String>,
+    ) -> bool {
         let query = query.to_lowercase();
-        if let Some(ns) = query.strip_prefix('@') {
-            return entry
-                .result
-                .item
-                .split(':')
-                .next()
-                .is_some_and(|n| n.starts_with(ns));
-        }
-        name.to_lowercase().contains(&query)
-            || entry
-                .result
-                .item
-                .trim_start_matches("minecraft:")
-                .contains(&query)
+        let results: Vec<&ItemStack> = entries.iter().map(|&i| &self.entries[i].result).collect();
+        let in_lines = |text: &str| {
+            results
+                .iter()
+                .any(|r| tooltip(r).iter().any(|l| l.to_lowercase().contains(text)))
+        };
+        let Some((namespace, path)) = query.split_once(':') else {
+            return in_lines(&query);
+        };
+        let (namespace, path) = (namespace.trim(), path.trim());
+        let id = |r: &&ItemStack| {
+            let (ns, p) = r.item.split_once(':').unwrap_or(("minecraft", &r.item));
+            (ns.to_lowercase(), p.to_lowercase())
+        };
+        results.iter().any(|r| id(r).0.contains(namespace))
+            && (results.iter().any(|r| id(r).1.contains(path)) || in_lines(path))
     }
 }
 
@@ -524,6 +546,8 @@ pub struct Settings {
     pub filtering: [bool; 4],
     /// Unlocked recipe ids (`recipes`).
     pub recipes: Vec<String>,
+    /// Recipes not yet shown in the book (`toBeDisplayed`): they animate once.
+    pub to_be_displayed: Vec<String>,
 }
 impl Settings {
     pub fn read(tag: Option<&Tag>) -> Self {
@@ -535,15 +559,18 @@ impl Settings {
             s.open[b.index()] = flag(open);
             s.filtering[b.index()] = flag(filter);
         }
-        if let Some(Tag::List(list)) = tag.get("recipes") {
-            s.recipes = list
+        let ids = |key: &str| match tag.get(key) {
+            Some(Tag::List(list)) => list
                 .iter()
                 .filter_map(|t| match t {
                     Tag::String(id) => Some(id.to_string_lossy()),
                     _ => None,
                 })
-                .collect();
-        }
+                .collect(),
+            _ => Vec::new(),
+        };
+        s.recipes = ids("recipes");
+        s.to_be_displayed = ids("toBeDisplayed");
         s
     }
     /// The compound written to the player file.
@@ -563,6 +590,7 @@ impl Settings {
             Tag::List(ids.iter().map(|i| Tag::String(i.as_str().into())).collect())
         };
         entries.push(("recipes", list(&self.recipes)));
+        entries.push(("toBeDisplayed", list(&self.to_be_displayed)));
         Tag::compound(entries)
     }
 }
@@ -674,6 +702,25 @@ mod tests {
         // Locked recipes are hidden.
         let some: BTreeSet<String> = ["minecraft:c".to_owned()].into();
         assert_eq!(book.collections(&some, BookType::Crafting, tab).len(), 1);
+    }
+    #[test]
+    fn search_reads_tooltip_lines_and_ids() {
+        let book = Book {
+            entries: vec![Entry {
+                id: "minecraft:stick".into(),
+                category: Category::CraftingMisc,
+                group: None,
+                display: Display::Shapeless(Vec::new()),
+                result: ItemStack::new("minecraft:stick", 4),
+            }],
+            order: HashMap::new(),
+        };
+        let lines = |s: &ItemStack| vec![format!("Item {}", s.item), "Stick".to_owned()];
+        assert!(book.collection_matches(&[0], "STI", &lines));
+        // Plain text searches tooltips only, not the registry path.
+        assert!(!book.collection_matches(&[0], "stick:", &lines));
+        assert!(book.collection_matches(&[0], "minecraft:stic", &lines));
+        assert!(!book.collection_matches(&[0], "other:stick", &lines));
     }
     #[test]
     fn settings_round_trip() {

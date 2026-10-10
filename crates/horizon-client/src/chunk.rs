@@ -1,6 +1,7 @@
 //! Resident client chunk storage. Sections are reference-counted so worker
 //! threads can mesh and light immutable snapshots while the game thread edits
 //! (copy-on-write through `Arc::make_mut`).
+use horizon_core::paletted::{PalettedContainer, Strategy};
 use horizon_world::registry::BlockStateId;
 use std::sync::Arc;
 
@@ -8,11 +9,11 @@ pub const MIN_Y: i32 = -64;
 pub const HEIGHT: i32 = 384;
 pub const SECTIONS: usize = (HEIGHT / 16) as usize;
 
-#[derive(Clone)]
-pub enum Blocks {
-    Uniform(u16),
-    Full(Box<[u16; 4096]>),
-}
+/// Block states are `PalettedContainer`s over the pinned registry (35,723
+/// states: a 16-bit global palette); biomes are 4x4x4 containers over the
+/// biome table (67 entries: a 7-bit global palette).
+pub const BLOCK_STRATEGY: Strategy = Strategy::blocks(16);
+pub const BIOME_STRATEGY: Strategy = Strategy::biomes(7);
 /// Packed light per block: sky light in the high nibble, block light in the low one.
 #[derive(Clone)]
 pub enum Light {
@@ -25,13 +26,16 @@ pub fn index(x: i32, y: i32, z: i32) -> usize {
 }
 #[derive(Clone)]
 pub struct Section {
-    pub blocks: Blocks,
+    pub blocks: PalettedContainer,
+    /// Biome table index per 4x4x4 cell, `(y << 2 | z) << 2 | x`.
+    pub biomes: PalettedContainer,
     pub light: Light,
 }
 impl Default for Section {
     fn default() -> Self {
         Self {
-            blocks: Blocks::Uniform(0),
+            blocks: PalettedContainer::new(BLOCK_STRATEGY, 0),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 0),
             light: Light::Uniform(0xF0),
         }
     }
@@ -39,23 +43,19 @@ impl Default for Section {
 impl Section {
     #[inline]
     pub fn get(&self, i: usize) -> u16 {
-        match &self.blocks {
-            Blocks::Uniform(v) => *v,
-            Blocks::Full(a) => a[i],
-        }
+        self.blocks.get(i) as u16
     }
     pub fn set(&mut self, i: usize, v: u16) -> u16 {
-        match &mut self.blocks {
-            Blocks::Uniform(u) if *u == v => v,
-            Blocks::Uniform(u) => {
-                let old = *u;
-                let mut a = Box::new([old; 4096]);
-                a[i] = v;
-                self.blocks = Blocks::Full(a);
-                old
-            }
-            Blocks::Full(a) => std::mem::replace(&mut a[i], v),
-        }
+        self.blocks.set(i, u32::from(v)) as u16
+    }
+    /// All 4,096 block states in index order.
+    pub fn unpack(&self, out: &mut [u16; 4096]) {
+        self.blocks.unpack_u16(out);
+    }
+    /// The block states of a whole section at once.
+    pub fn from_blocks(values: &[u16; 4096]) -> PalettedContainer {
+        let wide: Vec<u32> = values.iter().map(|&v| u32::from(v)).collect();
+        PalettedContainer::from_values(BLOCK_STRATEGY, &wide)
     }
     #[inline]
     pub fn light(&self, i: usize) -> u8 {
@@ -65,17 +65,26 @@ impl Section {
         }
     }
     pub fn is_uniform(&self, v: u16) -> bool {
-        match &self.blocks {
-            Blocks::Uniform(u) => *u == v,
-            Blocks::Full(a) => a.iter().all(|&b| b == v),
-        }
+        self.blocks.is_uniform(u32::from(v))
     }
-    /// Collapse storage that became uniform.
+    /// Heap bytes held by the block, biome and light storage (benchmark accounting).
+    pub fn heap_bytes(&self) -> usize {
+        self.blocks.heap_bytes()
+            + self.biomes.heap_bytes()
+            + match &self.light {
+                Light::Uniform(_) => 0,
+                Light::Full(_) => 4096,
+            }
+    }
+    /// Collapse storage that became uniform, and drop palette entries no
+    /// block uses any more.
     pub fn compact(&mut self) {
-        if let Blocks::Full(a) = &self.blocks
-            && a.iter().all(|&b| b == a[0])
-        {
-            self.blocks = Blocks::Uniform(a[0]);
+        for container in [&mut self.blocks, &mut self.biomes] {
+            if container.bits() != 0
+                && let Some(v) = container.uniform()
+            {
+                *container = PalettedContainer::new(container.strategy(), v);
+            }
         }
         if let Light::Full(a) = &self.light
             && a.iter().all(|&b| b == a[0])
@@ -89,8 +98,6 @@ pub struct Chunk {
     pub x: i32,
     pub z: i32,
     pub sections: Vec<Arc<Section>>,
-    /// Biome index per 4x4x4 cell (x,z in 0..4, y in 0..96) into `Biomes`.
-    pub biomes: Arc<Vec<u16>>,
     /// Highest non-air, light-blocking-or-fluid Y per column (MOTION_BLOCKING-like), for rain/sky.
     pub heights: Arc<[i16; 256]>,
     pub lit: bool,
@@ -100,6 +107,8 @@ pub struct Chunk {
     pub fresh: bool,
     /// Block entities read from a save, moved into the world on arrival.
     pub block_entities: Vec<((i32, i32, i32), crate::containers::BlockEntity)>,
+    /// `CustomName` of the container block entities (shown as the screen title).
+    pub block_names: Vec<((i32, i32, i32), String)>,
     /// Generation postprocessing marks (ProtoChunk.postProcessing) as world
     /// positions, applied once by LevelChunk.postProcessGeneration.
     pub postprocess: Vec<[i32; 3]>,
@@ -119,12 +128,12 @@ impl Chunk {
             sections: (0..SECTIONS)
                 .map(|_| Arc::new(Section::default()))
                 .collect(),
-            biomes: Arc::new(vec![0; 16 * (HEIGHT as usize / 4)]),
             heights: Arc::new([MIN_Y as i16; 256]),
             lit: false,
             light_loaded: false,
             fresh: false,
             block_entities: Vec::new(),
+            block_names: Vec::new(),
             structure_refs: Vec::new(),
             postprocess: Vec::new(),
             saved: None,
@@ -161,9 +170,25 @@ impl Chunk {
         }
         self.sections[s as usize].light(index(x, y, z))
     }
+    /// Heap bytes held by the sections (benchmark accounting).
+    pub fn heap_bytes(&self) -> usize {
+        self.sections.iter().map(|s| s.heap_bytes()).sum::<usize>()
+    }
+    /// Biome table index at a block position (`ChunkAccess.getNoiseBiome` with
+    /// the quart y clamped to the column).
     #[inline]
     pub fn biome(&self, x: i32, y: i32, z: i32) -> u16 {
         let qy = ((y - MIN_Y) >> 2).clamp(0, HEIGHT / 4 - 1);
-        self.biomes[(qy * 16 + ((z & 15) >> 2) * 4 + ((x & 15) >> 2)) as usize]
+        self.sections[(qy >> 2) as usize]
+            .biomes
+            .get(((qy & 3) << 4 | ((z & 15) >> 2) << 2 | (x & 15) >> 2) as usize) as u16
+    }
+    /// Sets the biome of one quart cell (`qy` counts from the column's bottom).
+    pub fn set_biome_cell(&mut self, qx: i32, qy: i32, qz: i32, biome: u16) {
+        let section = Arc::make_mut(&mut self.sections[(qy >> 2) as usize]);
+        section.biomes.set(
+            ((qy & 3) << 4 | (qz & 3) << 2 | (qx & 3)) as usize,
+            u32::from(biome),
+        );
     }
 }

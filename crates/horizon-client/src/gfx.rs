@@ -919,16 +919,21 @@ impl Renderer {
     }
     /// VSync on: tear-free presentation (Mailbox, else Fifo); off: Immediate when available.
     pub fn set_vsync(&mut self, vsync: bool) {
-        let has = |m| self.present_modes.contains(&m);
-        let mode = match (
-            vsync,
-            has(wgpu::PresentMode::Mailbox),
-            has(wgpu::PresentMode::Immediate),
-        ) {
-            (true, true, _) => wgpu::PresentMode::Mailbox,
-            (true, false, _) => wgpu::PresentMode::Fifo,
-            (false, _, true) => wgpu::PresentMode::Immediate,
-            (false, true, false) => wgpu::PresentMode::Mailbox,
+        use crate::window::{PresentMode, vsync_present_mode};
+        let supported: Vec<PresentMode> = self
+            .present_modes
+            .iter()
+            .filter_map(|m| match m {
+                wgpu::PresentMode::Fifo => Some(PresentMode::Fifo),
+                wgpu::PresentMode::Mailbox => Some(PresentMode::Mailbox),
+                wgpu::PresentMode::Immediate => Some(PresentMode::Immediate),
+                _ => None,
+            })
+            .collect();
+        // GpuSurface.PresentMode.getSupportedVsyncMode.
+        let mode = match vsync_present_mode(&supported, vsync) {
+            Some(PresentMode::Mailbox) => wgpu::PresentMode::Mailbox,
+            Some(PresentMode::Immediate) => wgpu::PresentMode::Immediate,
             _ => wgpu::PresentMode::Fifo,
         };
         if self.config.present_mode != mode {

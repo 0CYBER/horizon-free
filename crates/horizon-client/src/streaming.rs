@@ -8,6 +8,7 @@ use crate::{
     mesher::{MeshTables, Mesher, Region, SectionMesh, borrow},
     world::World,
 };
+use horizon_core::biome::BiomeZoom;
 use std::{
     collections::{BinaryHeap, HashMap, HashSet},
     sync::{
@@ -40,12 +41,21 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     fn decorate(&self, _worker: &mut Self::Worker, _region: &mut [Proto; 9]) {}
     fn finish(&self, proto: Proto) -> Chunk;
 }
+/// Per-job mesher inputs that change with the dimension or the options.
+#[derive(Clone, Copy)]
+struct MeshSettings {
+    nether: bool,
+    zoom: BiomeZoom,
+    blend_radius: i32,
+    smooth_lighting: bool,
+    cutout_leaves: bool,
+}
 enum Job {
     Generate(i32, i32),
     Decorate(i32, i32, Box<[Proto; 9]>),
     Finish(Proto),
     Light(i32, i32, Box<Region>, u64, bool),
-    Mesh(i32, i32, i32, Box<Region>, u64, bool),
+    Mesh(i32, i32, i32, Box<Region>, u64, MeshSettings),
 }
 pub enum Done {
     Generated(Chunk),
@@ -111,6 +121,12 @@ pub struct Streaming {
     /// Dimension flags: sky light, Nether face shading.
     pub sky_light: bool,
     pub nether_shading: bool,
+    /// `BiomeManager`'s zoom seed (the hashed world seed) and `biomeBlendRadius`.
+    pub biome_zoom: BiomeZoom,
+    pub biome_blend: i32,
+    /// The `ao` and `cutoutLeaves` options.
+    pub smooth_lighting: bool,
+    pub cutout_leaves: bool,
     /// Incremental relighting of block edits on lit chunks (see `light::relight`).
     light_tables: Arc<LightTables>,
     /// Applied edits by sequence, replayed onto light jobs snapshotted before them.
@@ -158,6 +174,10 @@ impl Streaming {
                         let mut worker = generator.worker();
                         let mut mesher = Mesher {
                             nether_shading: false,
+                            zoom: BiomeZoom::new(0),
+                            blend_radius: 2,
+                            smooth_lighting: true,
+                            cutout_leaves: true,
                             assets: &context.assets,
                             tables: &context.tables,
                             biomes: &context.biomes,
@@ -192,8 +212,12 @@ impl Streaming {
                                     light_chunk(&borrow(&region), &context.light, sky),
                                     seq,
                                 ),
-                                Job::Mesh(x, sy, z, region, seq, nether) => {
-                                    mesher.nether_shading = nether;
+                                Job::Mesh(x, sy, z, region, seq, settings) => {
+                                    mesher.nether_shading = settings.nether;
+                                    mesher.zoom = settings.zoom;
+                                    mesher.blend_radius = settings.blend_radius;
+                                    mesher.smooth_lighting = settings.smooth_lighting;
+                                    mesher.cutout_leaves = settings.cutout_leaves;
                                     Done::Meshed(x, sy, z, mesher.mesh(&borrow(&region), sy), seq)
                                 }
                             };
@@ -227,6 +251,10 @@ impl Streaming {
             paused: false,
             sky_light: true,
             nether_shading: false,
+            biome_zoom: BiomeZoom::new(0),
+            biome_blend: 2,
+            smooth_lighting: true,
+            cutout_leaves: true,
             light_tables,
             light_log: Vec::new(),
             light_edit_sequence: 0,
@@ -333,6 +361,9 @@ impl Streaming {
                     world
                         .block_entities
                         .extend(std::mem::take(&mut chunk.block_entities));
+                    world
+                        .block_names
+                        .extend(std::mem::take(&mut chunk.block_names));
                     let entities = std::mem::take(&mut chunk.entities);
                     if !entities.is_empty() {
                         world.loaded_entities.push(((chunk.x, chunk.z), entities));
@@ -599,7 +630,20 @@ impl Streaming {
             self.meshing.insert((x, sy, z), self.sequence);
             self.submit(
                 self.distance(x, z) * 4 + if first { 2 } else { 0 },
-                Job::Mesh(x, sy, z, region, self.sequence, self.nether_shading),
+                Job::Mesh(
+                    x,
+                    sy,
+                    z,
+                    region,
+                    self.sequence,
+                    MeshSettings {
+                        nether: self.nether_shading,
+                        zoom: self.biome_zoom,
+                        blend_radius: self.biome_blend,
+                        smooth_lighting: self.smooth_lighting,
+                        cutout_leaves: self.cutout_leaves,
+                    },
+                ),
             );
         }
         (uploads, removed)

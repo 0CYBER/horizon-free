@@ -239,11 +239,8 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 map.remove(&"Items".into());
             }
             let mut equipment = Vec::new();
-            if m.extra.saddled {
-                equipment.push((
-                    "saddle",
-                    Tag::compound([("id", string("minecraft:saddle")), ("count", Tag::Int(1))]),
-                ));
+            if let Some(saddle) = m.saddle_item() {
+                equipment.push(("saddle", crate::save::item_to_nbt(&saddle)));
             }
             if let Some(armor) = &m.extra.head {
                 equipment.push((
@@ -273,11 +270,8 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 Some(Tag::Compound(c)) => c.clone(),
                 _ => Compound::new(),
             };
-            if m.extra.saddled {
-                equipment.insert(
-                    "saddle".into(),
-                    Tag::compound([("id", string("minecraft:saddle")), ("count", Tag::Int(1))]),
-                );
+            if let Some(saddle) = m.saddle_item() {
+                equipment.insert("saddle".into(), crate::save::item_to_nbt(&saddle));
             } else {
                 equipment.remove(&"saddle".into());
             }
@@ -572,8 +566,15 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.species(),
         crate::mobs::Species::Pig | crate::mobs::Species::Strider
     ) {
-        m.extra.saddled =
-            tag.get("equipment").and_then(|e| e.get("saddle")).is_some() || flag(tag, "Saddle");
+        let saddle = tag
+            .get("equipment")
+            .and_then(|e| e.get("saddle"))
+            .and_then(crate::save::item_from_nbt);
+        if saddle.is_some() || flag(tag, "Saddle") {
+            m.set_saddle(Some(saddle.unwrap_or_else(|| {
+                crate::items::ItemStack::new("minecraft:saddle", 1)
+            })));
+        }
     }
     if crate::mobs::equine::is_equine(m.species()) {
         m.extra.tame = flag(tag, "Tame");
@@ -590,7 +591,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.items = crate::save::decode_items(tag.get("Items"), 15);
         }
         let eq = tag.get("equipment");
-        m.extra.saddled = eq.and_then(|e| e.get("saddle")).is_some();
+        m.set_saddle(
+            eq.and_then(|e| e.get("saddle"))
+                .and_then(crate::save::item_from_nbt),
+        );
         m.extra.head = eq
             .and_then(|e| e.get("body"))
             .and_then(|b| text(b.get("id")))

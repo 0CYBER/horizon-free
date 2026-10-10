@@ -336,30 +336,28 @@ impl Game<'_> {
         }
     }
     fn sculk_scan_chunk(&mut self, key: (i32, i32)) {
-        use horizon_client::chunk::{Blocks, MIN_Y};
+        use horizon_client::chunk::MIN_Y;
         let Some(chunk) = self.world.chunks.get(&key).cloned() else {
             return;
         };
         let mut found = Vec::new();
         for (s, section) in chunk.sections.iter().enumerate() {
             let y0 = MIN_Y + s as i32 * 16;
-            match &section.blocks {
-                Blocks::Uniform(v) => {
-                    // A uniform section of sculk blocks does not exist.
-                    let _ = v;
-                }
-                Blocks::Full(a) => {
-                    for (i, v) in a.iter().enumerate() {
-                        if self.kind_of_state(*v) != 0 {
-                            let (x, z, y) = (i & 15, (i >> 4) & 15, i >> 8);
-                            found.push((
-                                key.0 * 16 + x as i32,
-                                y0 + y as i32,
-                                key.1 * 16 + z as i32,
-                                *v,
-                            ));
-                        }
-                    }
+            if section.blocks.uniform().is_some() {
+                // A uniform section of sculk blocks does not exist.
+                continue;
+            }
+            let mut a = [0u16; 4096];
+            section.unpack(&mut a);
+            for (i, v) in a.iter().enumerate() {
+                if self.kind_of_state(*v) != 0 {
+                    let (x, z, y) = (i & 15, (i >> 4) & 15, i >> 8);
+                    found.push((
+                        key.0 * 16 + x as i32,
+                        y0 + y as i32,
+                        key.1 * 16 + z as i32,
+                        *v,
+                    ));
                 }
             }
         }
