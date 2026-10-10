@@ -17,6 +17,7 @@ pub mod data;
 pub mod enderman;
 pub mod equine;
 pub mod farm;
+pub mod gear;
 pub mod goals;
 pub mod golem;
 pub mod guardian;
@@ -32,6 +33,7 @@ pub mod piglin;
 pub mod raider;
 pub mod ravager;
 pub mod render;
+pub mod riders;
 pub mod shulker;
 pub mod spawning;
 pub mod species;
@@ -482,6 +484,16 @@ pub struct Extra {
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.
     pub villager: Option<Box<villager::Ext>>,
+    /// The mob this one rides, and the mob riding it (`getVehicle`, `getFirstPassenger`).
+    pub mount: Option<u32>,
+    pub rider: Option<u32>,
+    /// A chicken carrying a zombie (`IsChickenJockey`).
+    pub jockey: bool,
+    /// A skeleton horse waiting to spring its trap, and how long it has waited.
+    pub trap: bool,
+    pub trap_time: i32,
+    /// Enchantments on the equipment above.
+    pub gear: Option<Box<gear::Gear>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -945,6 +957,11 @@ impl Mob {
             let toughness = 2.0 + (self.kind.armor_toughness + worn_toughness) / 4.0;
             let effective = (armor - amount / toughness).clamp(armor * 0.2, 20.0);
             amount *= 1.0 - effective / 25.0;
+        }
+        // CombatRules.getDamageAfterMagicAbsorb: enchantment protection.
+        let epf = gear::protection(self, source.kind);
+        if epf > 0.0 {
+            amount *= 1.0 - epf / 25.0;
         }
         let mut knock = true;
         if self.invulnerable as f32 > 10.0 {

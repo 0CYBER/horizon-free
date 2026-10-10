@@ -363,20 +363,33 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         _ => {}
     }
     crate::mobs::raider::write_nbt(m, map);
+    crate::mobs::riders::write_nbt(m, map);
     // LivingEntity equipment: what the mob holds now.
     if !crate::mobs::equine::is_equine(m.species()) {
         let mut equipment = match map.get(&"equipment".into()) {
             Some(Tag::Compound(c)) => c.clone(),
             _ => horizon_world::nbt::Compound::new(),
         };
-        for (slot, item) in [
+        for (index, (slot, item)) in [
             ("mainhand", &m.extra.main_hand),
             ("offhand", &m.extra.off_hand),
             ("head", &m.extra.head),
             ("chest", &m.extra.chest),
             ("legs", &m.extra.legs),
             ("feet", &m.extra.feet),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            // Enchanted gear is saved with its `minecraft:enchantments`.
+            if let (Some(id), Some(g)) = (item, crate::mobs::gear::gear(m))
+                && !g.slots[index].is_empty()
+            {
+                let mut stack = crate::items::ItemStack::new(id, 1);
+                stack.data_mut().enchantments = g.slots[index].clone();
+                equipment.insert(slot.into(), crate::save::item_to_nbt(&stack));
+                continue;
+            }
             match item {
                 Some(id) => {
                     let keep = matches!(
@@ -457,6 +470,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.chest = slot("chest");
             m.extra.legs = slot("legs");
             m.extra.feet = slot("feet");
+        }
+        // Their enchantments.
+        for (index, key) in crate::mobs::gear::KEYS.iter().enumerate() {
+            if let Some(stack) = eq.get(key).and_then(crate::save::item_from_nbt) {
+                crate::mobs::gear::set(&mut m, index, stack.enchantments().to_vec());
+            }
         }
     }
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
@@ -632,6 +651,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.flag2 = flag(tag, "wasOnGround");
     }
     crate::mobs::raider::read_nbt(&mut m, tag);
+    crate::mobs::riders::read_nbt(&mut m, tag);
     // A mob saved mid-death finishes dying; one saved dead is dropped.
     if m.health <= 0.0 && m.death_time == 0 {
         return None;

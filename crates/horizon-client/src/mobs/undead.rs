@@ -417,6 +417,7 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
         start,
         Some(Who::Mob(m.id)),
     );
+    p.bonus = super::gear::arrow_bonus(m);
     p.shoot(
         &mut m.random,
         [xd, yd + dist * 0.2, zd],
