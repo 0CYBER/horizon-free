@@ -9,7 +9,7 @@
 use super::{Dim, Game, Mining, Screen};
 use horizon_client::{
     Result,
-    chunk::{Blocks, Chunk, Light, MIN_Y, SECTIONS, Section},
+    chunk::{BIOME_STRATEGY, BLOCK_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section},
     containers::{BlockEntity, Furnace, FurnaceKind},
     entities::{Experience, ItemEntity},
     hud::{HudBatch, rgba},
@@ -22,7 +22,7 @@ use horizon_client::{
     streaming::{ChunkGenerator, Proto, Streaming},
     world::World,
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{geometry::Vec3, paletted::PalettedContainer, random::RandomSource};
 use horizon_protocol::{
     entity_data::{ITEM_ENTITY_ITEM, Value},
     item::{Hashed, Stack},
@@ -434,54 +434,55 @@ impl Game<'_> {
             .sections(r.dimension.sections(), 16, r.biome_bits)
             .map_err(|e| e.to_string())?;
         let mut chunk = Chunk::empty(p.x, p.z);
-        let mut biomes = vec![0u16; chunk.biomes.len()];
         let offset = (r.dimension.min_y - MIN_Y).div_euclid(16);
+        // Biome table index per quart cell of the dimension's own sections.
+        let mut biome_cells: Vec<[u32; 64]> = Vec::with_capacity(sections.len());
         for (i, s) in sections.iter().enumerate() {
             let target = offset + i as i32;
+            let mut cells = [0u32; 64];
+            for (j, cell) in cells.iter_mut().enumerate() {
+                *cell = u32::from(
+                    r.biome_map
+                        .get(s.biomes.get(j) as usize)
+                        .copied()
+                        .unwrap_or(0),
+                );
+            }
+            biome_cells.push(cells);
             if !(0..SECTIONS as i32).contains(&target) {
                 continue;
             }
-            let blocks = if s.states.bits == 0 {
-                Blocks::Uniform(s.states.get(0) as u16)
-            } else {
-                let mut a = Box::new([0u16; 4096]);
-                for (j, v) in a.iter_mut().enumerate() {
-                    *v = s.states.get(j) as u16;
-                }
-                Blocks::Full(a)
-            };
+            let strategy = BLOCK_STRATEGY;
+            let palette = s.states.palette.iter().map(|&p| p as u32).collect();
+            let words = s.states.data.iter().map(|&w| w as u64).collect();
+            let blocks = PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
+                .map_err(|e| e.to_string())?;
             let mut section = Section {
                 blocks,
+                biomes: PalettedContainer::from_values(BIOME_STRATEGY, &cells),
                 light: Light::Uniform(0xF0),
             };
             section.compact();
             chunk.sections[target as usize] = Arc::new(section);
-            for j in 0..64 {
-                let biome = r
-                    .biome_map
-                    .get(s.biomes.get(j) as usize)
-                    .copied()
-                    .unwrap_or(0);
-                if let Some(cell) = biomes.get_mut(target as usize * 64 + j) {
-                    *cell = biome;
+        }
+        // Sections outside the dimension's range take its nearest biomes
+        // (the column's top or bottom cell layer repeated).
+        if !biome_cells.is_empty() {
+            let last = biome_cells.len() - 1;
+            for si in 0..SECTIONS as i32 {
+                let i = si - offset;
+                if (0..sections.len() as i32).contains(&i) {
+                    continue;
                 }
+                let (edge, layer) = if i < 0 { (0, 0) } else { (last, 3) };
+                let mut cells = [0u32; 64];
+                for (j, cell) in cells.iter_mut().enumerate() {
+                    *cell = biome_cells[edge][layer * 16 + j % 16];
+                }
+                Arc::make_mut(&mut chunk.sections[si as usize]).biomes =
+                    PalettedContainer::from_values(BIOME_STRATEGY, &cells);
             }
         }
-        // Columns outside the dimension's range take its nearest biome.
-        let (lo, hi) = (
-            offset.max(0) as usize * 64,
-            ((offset + sections.len() as i32).min(SECTIONS as i32)) as usize * 64,
-        );
-        if lo < hi {
-            for j in 0..biomes.len() {
-                if j < lo {
-                    biomes[j] = biomes[lo + j % 16];
-                } else if j >= hi {
-                    biomes[j] = biomes[hi - 16 + j % 16];
-                }
-            }
-        }
-        chunk.biomes = Arc::new(biomes);
         Ok(chunk)
     }
     /// Keep the renderable block entities (chests, furnaces) in step with blocks.

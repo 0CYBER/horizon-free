@@ -383,6 +383,13 @@ impl Padded {
         let mut blocks = vec![0u16; P * P * P];
         let mut light = vec![0u8; P * P * P];
         let base_y = MIN_Y + sy * 16;
+        // The section itself is unpacked in one pass; the border cells of the
+        // neighbouring sections are read one by one.
+        let mut own = Box::new([0u16; 4096]);
+        let center = region[1][1].map(|c| &c.sections[sy as usize]);
+        if let Some(section) = center {
+            section.unpack(&mut own);
+        }
         for y in -B..16 + B {
             let wy = base_y + y;
             for z in -B..16 + B {
@@ -390,7 +397,14 @@ impl Padded {
                     let chunk = region[((z + 16) >> 4) as usize][((x + 16) >> 4) as usize];
                     let i = pi(x, y, z);
                     if let Some(c) = chunk {
-                        blocks[i] = c.get(x & 15, wy, z & 15);
+                        blocks[i] = if (0..16).contains(&x)
+                            && (0..16).contains(&y)
+                            && (0..16).contains(&z)
+                        {
+                            own[(y << 8 | z << 4 | x) as usize]
+                        } else {
+                            c.get(x & 15, wy, z & 15)
+                        };
                         light[i] = c.light(x & 15, wy, z & 15);
                     } else {
                         light[i] = 0xF0;

@@ -104,14 +104,21 @@ fn scene(
         blend_radius = int(&field["radius"])?;
         let default = biomes.id(field["default"].as_str().ok_or("missing default biome")?);
         for chunk in &mut chunks {
-            Arc::make_mut(&mut chunk.biomes).fill(default);
+            for qy in 0..96 {
+                for cell in 0..16 {
+                    chunk.set_biome_cell(cell & 3, qy, cell >> 2, default);
+                }
+            }
         }
         for cell in field["cells"].as_array().ok_or("missing biome cells")? {
             let (qx, qy, qz) = (int(&cell[0])?, int(&cell[1])?, int(&cell[2])?);
             let i = chunk_index(qx * 4, qz * 4)?;
-            let slot = ((qy - MIN_Y / 4) * 16 + (qz & 3) * 4 + (qx & 3)) as usize;
-            Arc::make_mut(&mut chunks[i].biomes)[slot] =
-                biomes.id(cell[3].as_str().ok_or("biome name")?);
+            chunks[i].set_biome_cell(
+                qx,
+                qy - MIN_Y / 4,
+                qz,
+                biomes.id(cell[3].as_str().ok_or("biome name")?),
+            );
         }
     }
     let region: [[Option<&Chunk>; 3]; 3] =
