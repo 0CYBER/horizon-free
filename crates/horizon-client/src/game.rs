@@ -105,11 +105,13 @@ use horizon_client::{
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
     items::{ItemStack, Items},
+    keymapping::KeyState,
     light::LightTables,
     mesher::{MeshTables, Vertex},
     mobs::{Mob, MobType, MobTypes},
     models,
     motion::{MotionEvent, MotionResources, MotionWorld, PlayerMotion},
+    mouse::{LookOptions, MouseLook, Rotation},
     particles::Particle,
     save::{Level, Persistent, SaveDir},
     settings::Settings,
@@ -534,12 +536,24 @@ struct Game<'a> {
     cursor: (f32, f32),
     captured: bool,
     focused: bool,
+    /// MouseHandler's accumulated look and wheel state.
+    mouse: MouseLook,
+    /// `Options.smoothCamera` (cinematic camera), not persisted.
+    smooth_camera: bool,
+    /// Sneak, sprint, attack and use as ToggleKeyMappings.
+    toggles: [KeyState; 4],
+    /// A world screen with the pointer captured was open last frame.
+    was_playing: bool,
+    /// Minecraft.pause: a single-player screen that pauses the game is open.
+    pause: bool,
     debug: bool,
     screen: Screen,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     started: Instant,
     previous: Instant,
+    /// FramerateLimitTracker.latestInputTime.
+    last_input: Instant,
     frames: u64,
     fps: f32,
     fps_frames: u64,
@@ -2631,16 +2645,92 @@ impl Game<'_> {
             });
             self.res.block_entity_render.tick(r.block_entities(), eye);
         }
-        self.tick_particles();
+        if running {
+            self.tick_particles();
+        }
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
             self.use_item()?;
             self.use_delay = 4;
         }
         Ok(())
     }
+    /// Keep the held-key state of toggled sneak and sprint in step with their mapping.
+    fn sync_toggle(&mut self, slot: usize) {
+        let key = [KeyCode::ShiftLeft, KeyCode::ControlLeft][slot];
+        if self.toggles[slot].is_down {
+            self.keys.insert(key);
+        } else {
+            self.keys.remove(&key);
+        }
+    }
+    /// `KeyMapping.releaseAll` when a screen opens and
+    /// `restoreToggleStatesOnScreenClosed` when it closes.
+    fn track_toggle_screens(&mut self) {
+        let playing = self.screen == Screen::Playing && self.title.is_none();
+        if playing == self.was_playing {
+            return;
+        }
+        self.was_playing = playing;
+        let options = [
+            self.settings.toggle_crouch,
+            self.settings.toggle_sprint,
+            self.settings.toggle_attack,
+            self.settings.toggle_use,
+        ];
+        for (slot, option) in options.into_iter().enumerate() {
+            if playing {
+                if self.toggles[slot].should_restore_state_on_screen_closed(option) {
+                    self.toggles[slot].set_down(true, option);
+                }
+            } else {
+                self.toggles[slot].release(option);
+            }
+            match slot {
+                0 | 1 => self.sync_toggle(slot),
+                2 => self.left = self.toggles[2].is_down,
+                _ => self.right = self.toggles[3].is_down,
+            }
+        }
+    }
+    /// `MouseHandler.handleAccumulatedMovement` and `Entity.turn`, once per frame.
+    fn apply_mouse_look(&mut self) {
+        let look = LookOptions {
+            sensitivity: f64::from(self.settings.sensitivity),
+            smooth_camera: self.smooth_camera,
+            scoping: self.scoping(),
+            invert_x: self.settings.invert_x,
+            invert_y: self.settings.invert_y,
+        };
+        let time = self.started.elapsed().as_secs_f64();
+        let grabbed = self.captured && self.screen == Screen::Playing && self.player.is_some();
+        if let Some((xo, yo)) =
+            self.mouse
+                .handle_accumulated_movement(time, self.focused, grabbed, look)
+        {
+            let mut rotation = Rotation {
+                x_rot: self.pitch,
+                y_rot: self.yaw,
+                x_rot_o: self.pitch,
+                y_rot_o: self.yaw,
+            };
+            rotation.turn(xo, yo);
+            self.yaw = rotation.y_rot;
+            self.pitch = rotation.x_rot;
+        }
+    }
+    /// `Minecraft.pause`: a single-player game with a pausing screen open.
+    fn pauses_game(&self) -> bool {
+        self.remote.is_none()
+            && self.title.is_none()
+            && (matches!(
+                self.screen,
+                Screen::Paused | Screen::Options | Screen::Stats | Screen::Advancements
+            ) || self.book.is_some())
+    }
     fn capture(&mut self, capture: bool) {
         let Some(window) = &self.window else { return };
         if capture {
+            self.mouse.set_ignore_first_move();
             self.captured = window
                 .set_cursor_grab(CursorGrabMode::Locked)
                 .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
@@ -7106,13 +7196,15 @@ impl Game<'_> {
                 if pressed && self.attack() {
                     return Ok(());
                 }
-                self.left = pressed;
+                self.toggles[2].set_down(pressed, self.settings.toggle_attack);
+                self.left = self.toggles[2].is_down;
                 if pressed {
                     self.destroy_delay = 0;
                 }
             }
             MouseButton::Right => {
-                self.right = pressed;
+                self.toggles[3].set_down(pressed, self.settings.toggle_use);
+                self.right = self.toggles[3].is_down;
                 if pressed {
                     self.use_item()?;
                     self.use_delay = 4;
@@ -7222,6 +7314,15 @@ impl ApplicationHandler for Game<'_> {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
             return;
         }
+        if matches!(
+            event,
+            WindowEvent::KeyboardInput { .. }
+                | WindowEvent::MouseInput { .. }
+                | WindowEvent::MouseWheel { .. }
+                | WindowEvent::CursorMoved { .. }
+        ) {
+            self.last_input = Instant::now();
+        }
         let result: Result<()> = (|| {
             match event {
                 WindowEvent::CloseRequested => {
@@ -7274,10 +7375,33 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
-                    let d = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y,
-                        MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                    let (raw_x, raw_y) = match delta {
+                        MouseScrollDelta::LineDelta(x, y) => (f64::from(x), f64::from(y)),
+                        MouseScrollDelta::PixelDelta(p) => (p.x / 30.0, p.y / 30.0),
                     };
+                    // MouseHandler.onScroll: discrete scrolling and the wheel sensitivity.
+                    let discrete = self.settings.discrete_scroll;
+                    let wheel_sensitivity = f64::from(self.settings.mouse_wheel_sensitivity);
+                    let scaled = |v: f64| {
+                        (if discrete {
+                            horizon_client::mouse::java_signum(v)
+                        } else {
+                            v
+                        }) * wheel_sensitivity
+                    };
+                    let d = scaled(raw_y) as f32;
+                    if self.screen == Screen::Playing
+                        && self.player.is_some()
+                        && let Some((wheel, _)) =
+                            self.mouse
+                                .on_scroll(raw_x, raw_y, discrete, wheel_sensitivity)
+                    {
+                        self.selected = horizon_client::mouse::ScrollWheelHandler::next_selection(
+                            f64::from(wheel),
+                            self.selected as i32,
+                            9,
+                        ) as usize;
+                    }
                     if self.screen == Screen::Chat && d != 0.0 {
                         self.chat_scroll(d);
                     }
@@ -7300,15 +7424,7 @@ impl ApplicationHandler for Game<'_> {
                         self.stats_scroll(d);
                     }
                     if self.screen == Screen::Advancements {
-                        let x = match delta {
-                            MouseScrollDelta::LineDelta(x, _) => x,
-                            MouseScrollDelta::PixelDelta(p) => p.x as f32,
-                        };
-                        self.advancements_scroll(x, d);
-                    }
-                    if self.screen == Screen::Playing && d != 0.0 {
-                        self.selected =
-                            (self.selected as i32 - d.signum() as i32).rem_euclid(9) as usize;
+                        self.advancements_scroll(scaled(raw_x) as f32, d);
                     }
                 }
                 WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
@@ -7513,6 +7629,15 @@ impl ApplicationHandler for Game<'_> {
                     let PhysicalKey::Code(key) = event.physical_key else {
                         return Ok(());
                     };
+                    // key.smoothCamera toggles the cinematic camera.
+                    if self.screen == Screen::Playing
+                        && event.state == ElementState::Pressed
+                        && !event.repeat
+                        && horizon_client::keybinds::key_name(key)
+                            .is_some_and(|n| self.settings.keys.get("key.smoothCamera") == n)
+                    {
+                        self.smooth_camera = !self.smooth_camera;
+                    }
                     // Key binds: act as the default key of the bound mapping.
                     let key = match self.settings.keys.translate(key) {
                         Some(Ok(k)) => k,
@@ -7524,11 +7649,27 @@ impl ApplicationHandler for Game<'_> {
                         }
                         None => return Ok(()),
                     };
-                    if event.state != ElementState::Pressed {
+                    // Sneak and sprint are ToggleKeyMappings: a press flips them when toggling.
+                    let toggle = match key {
+                        KeyCode::ShiftLeft => Some((0, self.settings.toggle_crouch)),
+                        KeyCode::ControlLeft => Some((1, self.settings.toggle_sprint)),
+                        _ => None,
+                    };
+                    if let Some((slot, option)) = toggle {
+                        if !event.repeat {
+                            self.toggles[slot]
+                                .set_down(event.state == ElementState::Pressed, option);
+                            self.sync_toggle(slot);
+                        }
+                        if event.state != ElementState::Pressed {
+                            return Ok(());
+                        }
+                    } else if event.state != ElementState::Pressed {
                         self.keys.remove(&key);
                         return Ok(());
+                    } else {
+                        self.keys.insert(key);
                     }
-                    self.keys.insert(key);
                     if event.repeat {
                         return Ok(());
                     }
@@ -7551,18 +7692,25 @@ impl ApplicationHandler for Game<'_> {
                         self.update_world();
                         self.spawn_player()?;
                     }
+                    self.track_toggle_screens();
                     let steps = self.clock.advance(elapsed);
                     for _ in 0..steps {
                         let started = Instant::now();
-                        if self.title.is_none() {
+                        if self.title.is_none() && !self.pause {
                             self.tick()?;
                             self.tick_ambience();
                             self.tick_fov();
                         }
                         self.tick_music();
                         self.clock.record(started.elapsed());
+                        if let Some(report) = self.clock.take_sprint_report() {
+                            self.sprint_report(&report);
+                        }
                     }
+                    self.apply_mouse_look();
                     let rendered = self.render()?;
+                    self.pause = self.pauses_game();
+                    self.clock.end_frame(self.pause);
                     let finished = self
                         .renderer
                         .as_mut()
@@ -7614,12 +7762,9 @@ impl ApplicationHandler for Game<'_> {
             && self.screen == Screen::Playing
             && let DeviceEvent::MouseMotion { delta: (x, y) } = event
         {
-            // MouseHandler.turnPlayer at default sensitivity 0.5: 0.15 degrees per count.
-            let s = f64::from(self.settings.sensitivity) * 0.6 + 0.2;
-            // Scoping drops MouseHandler's 8x factor.
-            let f = s * s * s * if self.scoping() { 1.0 } else { 8.0 };
-            self.yaw += (x * f * 0.15) as f32;
-            self.pitch = (self.pitch + (y * f * 0.15) as f32).clamp(-90.0, 90.0);
+            // MouseHandler.onMove with the pointer grabbed; applied once per frame.
+            self.mouse.on_move(0.0, 0.0, x, y, true, true);
+            self.last_input = Instant::now();
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -7820,12 +7965,23 @@ pub fn run() -> Result<()> {
         cursor: (0.0, 0.0),
         captured: false,
         focused: true,
+        mouse: MouseLook::default(),
+        smooth_camera: false,
+        toggles: [
+            KeyState::toggle(true, true),
+            KeyState::toggle(true, true),
+            KeyState::toggle(true, false),
+            KeyState::toggle(false, false),
+        ],
+        was_playing: false,
+        pause: false,
         debug: false,
         screen: Screen::Playing,
         window: None,
         renderer: None,
         started: now,
         previous: now,
+        last_input: now,
         frames: 0,
         fps: 0.0,
         fps_frames: 0,
