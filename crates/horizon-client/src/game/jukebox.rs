@@ -12,9 +12,6 @@ use horizon_client::{
 use horizon_core::{position::BlockPos, random::RandomSource};
 use horizon_world::level::flags as level_flags;
 
-/// Linear attenuation range of a song (`SimpleSoundInstance.forJukeboxSong`: volume 4).
-const RANGE: f64 = 64.0;
-
 impl Game<'_> {
     fn jukebox(&self, pos: [i32; 3]) -> Option<&Jukebox> {
         match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
@@ -101,9 +98,9 @@ impl Game<'_> {
         let Some(s) = self.res.items.songs.get(song).cloned() else {
             return;
         };
-        if let Some(id) = self.audio.play_tracked(&s.sound, 0.0, false) {
-            self.jukebox_sounds.insert((pos[0], pos[1], pos[2]), id);
-        }
+        // LevelRenderer.playJukeboxSong: SimpleSoundInstance.forJukeboxSong.
+        let id = self.audio.play_jukebox_song(&s.sound, pos);
+        self.jukebox_sounds.insert((pos[0], pos[1], pos[2]), id);
         let description =
             horizon_client::component::to_text(&s.description, &mut |k| Text::literal(k));
         self.titles
@@ -113,7 +110,7 @@ impl Game<'_> {
     }
     fn stop_song(&mut self, pos: [i32; 3]) {
         if let Some(id) = self.jukebox_sounds.remove(&(pos[0], pos[1], pos[2])) {
-            self.audio.stop_tracked(id);
+            self.audio.stop_and_release(id);
         }
     }
     /// `popOutTheItem`: the disc above the jukebox, and the song stops.
@@ -202,30 +199,20 @@ impl Game<'_> {
         }
         self.update_song_volumes();
     }
-    /// Linear distance attenuation of each song at the listener.
+    /// Let go of songs that ended or whose jukebox stopped.
     fn update_song_volumes(&mut self) {
-        let Some(eye) = self.eye_position() else {
-            return;
-        };
         let sounds: Vec<_> = self
             .jukebox_sounds
             .iter()
             .map(|(k, id)| (*k, *id))
             .collect();
         for (k, id) in sounds {
-            if !self.audio.tracked_active(id)
+            if !self.audio.engine.is_active(id)
                 || !matches!(self.world.block_entities.get(&k), Some(BlockEntity::Jukebox(j)) if j.playing)
             {
-                self.audio.stop_tracked(id);
+                self.audio.stop_and_release(id);
                 self.jukebox_sounds.remove(&k);
-                continue;
             }
-            let d = ((f64::from(k.0) + 0.5 - eye[0]).powi(2)
-                + (f64::from(k.1) + 0.5 - eye[1]).powi(2)
-                + (f64::from(k.2) + 0.5 - eye[2]).powi(2))
-            .sqrt();
-            self.audio
-                .set_tracked_volume(id, (1.0 - d / RANGE).clamp(0.0, 1.0) as f32);
         }
     }
 }

@@ -594,6 +594,8 @@ struct Game<'a> {
     audio: Audio,
     music: horizon_client::music::MusicManager,
     ambience: horizon_client::ambience::Ambience,
+    /// The sound engine was told the game paused (pauseAllExcept).
+    sound_paused: bool,
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: horizon_client::particles::ParticleEngine,
@@ -5706,6 +5708,10 @@ impl Game<'_> {
     }
     fn close_world(&mut self) -> Result<()> {
         self.ambience.clear(&mut self.audio);
+        // updateLevelInEngines(null): every sound stops; the music manager
+        // lets go of its track.
+        self.music.stop_playing(None, &mut self.audio);
+        self.audio.stop_all();
         if self.remote.is_some() {
             return self.leave_server(None);
         }
@@ -7409,8 +7415,8 @@ impl Game<'_> {
                 self.pitch,
             ),
         };
-        self.audio.listener = [camera.x, camera.y, camera.z];
-        self.audio.listener_yaw = view_yaw;
+        self.audio
+            .set_listener([camera.x, camera.y, camera.z], view_yaw);
         let block = [
             camera.x.floor() as i32,
             camera.y.floor() as i32,
@@ -8209,6 +8215,7 @@ impl ApplicationHandler for Game<'_> {
                             self.tick_fov();
                         }
                         self.tick_music();
+                        self.tick_sound_engine();
                         self.clock.record(started.elapsed());
                         if let Some(report) = self.clock.take_sprint_report() {
                             self.sprint_report(&report);
@@ -8507,6 +8514,7 @@ pub fn run() -> Result<()> {
         audio,
         music: Default::default(),
         ambience: Default::default(),
+        sound_paused: false,
         dropped: Vec::new(),
         next_entity: 0,
         particles,

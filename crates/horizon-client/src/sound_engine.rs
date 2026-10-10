@@ -934,3 +934,86 @@ pub fn unique_seed() -> i64 {
         .map_or(0, |d| d.as_nanos() as i64);
     next ^ nanos
 }
+/// The `SoundManager` calls game code makes.
+pub trait Sounds {
+    fn engine(&mut self) -> &mut SoundEngine;
+    /// `SoundManager.play` of a new instance (`retain`: the caller keeps it).
+    fn play_instance(&mut self, instance: SoundInstance, retain: bool) -> (InstanceId, PlayResult);
+    /// `SoundManager.play` of an instance the caller holds.
+    fn play_id(&mut self, id: InstanceId) -> PlayResult;
+    /// `SoundManager.stop(SoundInstance)`.
+    fn stop_instance(&mut self, id: InstanceId);
+    /// `SoundManager.isActive`.
+    fn is_active(&mut self, id: InstanceId) -> bool {
+        self.engine().is_active(id)
+    }
+    /// `SoundManager.updateCategoryVolume`.
+    fn update_category_volume(&mut self, source: usize, gain: f32);
+    /// The caller drops its instance.
+    fn release(&mut self, id: InstanceId) {
+        self.engine().release(id);
+    }
+}
+/// An engine with its backend.
+pub struct Bound<'a, B: Backend> {
+    pub engine: &'a mut SoundEngine,
+    pub backend: &'a mut B,
+}
+impl<B: Backend> Sounds for Bound<'_, B> {
+    fn engine(&mut self) -> &mut SoundEngine {
+        self.engine
+    }
+    fn play_instance(&mut self, instance: SoundInstance, retain: bool) -> (InstanceId, PlayResult) {
+        self.engine.play_new(instance, retain, self.backend)
+    }
+    fn play_id(&mut self, id: InstanceId) -> PlayResult {
+        self.engine.play(id, self.backend)
+    }
+    fn stop_instance(&mut self, id: InstanceId) {
+        self.engine.stop(id, self.backend);
+    }
+    fn update_category_volume(&mut self, source: usize, gain: f32) {
+        self.engine
+            .update_category_volume(source, gain, self.backend);
+    }
+}
+#[cfg(test)]
+pub mod test_backend {
+    use super::{Backend, ChannelId};
+    use crate::sound_events::Sound;
+    use std::collections::HashMap;
+    /// Channels that play until stopped.
+    #[derive(Default)]
+    pub struct Null {
+        next: ChannelId,
+        pub stopped: HashMap<ChannelId, bool>,
+        pub volume: HashMap<ChannelId, f32>,
+    }
+    impl Backend for Null {
+        fn create(&mut self, _streaming: bool) -> Option<ChannelId> {
+            self.next += 1;
+            self.stopped.insert(self.next, false);
+            Some(self.next)
+        }
+        fn destroy(&mut self, c: ChannelId) {
+            self.stopped.remove(&c);
+        }
+        fn set_pitch(&mut self, _: ChannelId, _: f32) {}
+        fn set_volume(&mut self, c: ChannelId, v: f32) {
+            self.volume.insert(c, v);
+        }
+        fn set_attenuation(&mut self, _: ChannelId, _: Option<f32>) {}
+        fn set_looping(&mut self, _: ChannelId, _: bool) {}
+        fn set_position(&mut self, _: ChannelId, _: [f64; 3]) {}
+        fn set_relative(&mut self, _: ChannelId, _: bool) {}
+        fn start(&mut self, _: ChannelId, _: &Sound, _: bool) {}
+        fn stop(&mut self, c: ChannelId) {
+            self.stopped.insert(c, true);
+        }
+        fn pause(&mut self, _: ChannelId) {}
+        fn unpause(&mut self, _: ChannelId) {}
+        fn stopped(&mut self, c: ChannelId) -> bool {
+            self.stopped.get(&c).copied().unwrap_or(true)
+        }
+    }
+}
