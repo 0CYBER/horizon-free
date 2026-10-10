@@ -9,6 +9,7 @@ use super::{
         NearestTarget, Prey, RandomLookAround, Stroll, goal_clone,
     },
 };
+use horizon_core::geometry::trig::Mth;
 use horizon_core::random::RandomSource;
 use std::f32::consts::PI;
 
@@ -251,48 +252,112 @@ pub fn hoglin_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     };
     cx.events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
 }
+/// `AbstractPiglinModel.setupAnim`: the ears flap around their default angle
+/// (30 degrees for adults, 5 for babies).
+pub fn ears(p: &mut Poses, s: &State) {
+    use horizon_core::geometry::trig::DEG_TO_RAD;
+    let default = if s.baby { 5.0 } else { 30.0 } * DEG_TO_RAD;
+    let freq = s.age * 0.1 + s.pos * 0.5;
+    let amp = 0.08 + s.speed * 0.4;
+    p.zrot("left_ear", -default - (freq * 1.2).mcos() * amp);
+    p.zrot("right_ear", default + freq.mcos() * amp);
+}
 /// Piglins' and brutes' ears flap (`AbstractPiglinModel`), arms follow the
 /// arm pose (`PiglinModel`).
 pub fn piglin_anim(m: &Mob, s: &State, p: &mut Poses) {
-    super::anim::humanoid_item(p, s, m.extra.main_hand.is_some());
-    let default = PI / 6.0;
-    let freq = s.age * 0.1 + s.pos * 0.5;
-    let amp = 0.08 + s.speed * 0.4;
-    p.zrot("left_ear", -default - (freq * 1.2).cos() * amp);
-    p.zrot("right_ear", default + freq.cos() * amp);
-    let (hy, hx) = (s.y_rot.to_radians(), s.x_rot.to_radians());
-    if m.extra.using_item > 0 {
-        // ADMIRING_ITEM: head down at the left hand.
-        p.xrot("head", 0.5);
-        p.yrot("head", 0.0);
-        p.yrot("left_arm", 0.5);
-        p.xrot("left_arm", -0.9);
+    let pose = if m.extra.using_item > 0 {
+        PiglinPose::AdmiringItem
     } else if m.extra.flag {
-        p.yrot("right_arm", -0.8);
-        p.xrot("right_arm", -0.970_796_35);
-        let a = (m.extra.using_item as f32).clamp(0.0, 25.0) / 25.0;
-        p.yrot("left_arm", 0.4 + 0.45 * a);
-        p.xrot("left_arm", -0.970_796_35 + (-PI / 2.0 + 0.970_796_35) * a);
+        PiglinPose::CrossbowCharge
     } else if m.extra.main_hand.as_deref() == Some("minecraft:crossbow") && m.ai.aggressive {
-        p.yrot("right_arm", -0.3 + hy);
-        p.yrot("left_arm", 0.6 + hy);
-        p.xrot("right_arm", -PI / 2.0 + hx + 0.1);
-        p.xrot("left_arm", -1.5 + hx);
-    } else if m.ai.aggressive && m.extra.main_hand.is_some() && s.swing == 0.0 {
-        p.xrot("right_arm", -1.8);
+        PiglinPose::CrossbowHold
+    } else if m.ai.aggressive && m.extra.main_hand.is_some() {
+        PiglinPose::MeleeWeapon
+    } else {
+        PiglinPose::Default
+    };
+    piglin_pose(p, s, pose, 25.0, m.extra.using_item as f32);
+}
+/// `PiglinArmPose`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PiglinPose {
+    Default,
+    Dancing,
+    MeleeWeapon,
+    CrossbowHold,
+    CrossbowCharge,
+    AdmiringItem,
+}
+/// `PiglinModel.setupAnim` for a piglin facing right-handed.
+pub fn piglin_pose(p: &mut Poses, s: &State, pose: PiglinPose, max_charge: f32, ticks: f32) {
+    use super::anim::{ArmPose, Hum, humanoid};
+    let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
+    h.weapon_swing = pose == PiglinPose::MeleeWeapon;
+    h.charge = (max_charge, ticks);
+    humanoid(p, s, &h);
+    ears(p, s);
+    let (hy, hx) = (s.y_rot.to_radians(), s.x_rot.to_radians());
+    let rad = |v: f64| v as f32;
+    let deg = horizon_core::geometry::trig::DEG_TO_RAD;
+    match pose {
+        PiglinPose::Dancing => {
+            let dance = s.age / 60.0;
+            p.zrot(
+                "right_ear",
+                rad(std::f64::consts::PI / 6.0) + deg * (dance * 30.0).msin() * 10.0,
+            );
+            p.zrot(
+                "left_ear",
+                rad(-std::f64::consts::PI / 6.0) - deg * (dance * 30.0).mcos() * 10.0,
+            );
+            p.get("head")[0] += (dance * 10.0).msin();
+            p.get("head")[1] += (dance * 40.0).msin() + 0.4;
+            let z = deg * (70.0 + (dance * 40.0).mcos() * 10.0);
+            p.zrot("right_arm", z);
+            p.zrot("left_arm", -z);
+            p.get("right_arm")[1] += (dance * 40.0).msin() * 0.5 - 0.5;
+            p.get("left_arm")[1] += (dance * 40.0).msin() * 0.5 + 0.5;
+            p.get("body")[1] += (dance * 40.0).msin() * 0.35;
+        }
+        PiglinPose::MeleeWeapon if s.swing == 0.0 => p.xrot("right_arm", -1.8),
+        PiglinPose::CrossbowHold => {
+            p.yrot("right_arm", -0.3 + hy);
+            p.yrot("left_arm", 0.6 + hy);
+            p.xrot("right_arm", -PI / 2.0 + hx + 0.1);
+            p.xrot("left_arm", -1.5 + hx);
+        }
+        PiglinPose::CrossbowCharge => {
+            p.yrot("right_arm", -0.8);
+            p.xrot("right_arm", -0.970_796_35);
+            p.xrot("left_arm", -0.970_796_35);
+            let alpha = ticks.clamp(0.0, max_charge) / max_charge;
+            p.yrot("left_arm", 0.4 + alpha * (0.85 - 0.4));
+            let x = -0.970_796_35 + alpha * (-PI / 2.0 - -0.970_796_35);
+            p.xrot("left_arm", x);
+        }
+        PiglinPose::AdmiringItem => {
+            p.xrot("head", 0.5);
+            p.yrot("head", 0.0);
+            p.yrot("left_arm", 0.5);
+            p.xrot("left_arm", -0.9);
+        }
+        _ => {}
     }
 }
 /// `HoglinModel.setupAnim`.
 pub fn hoglin_anim(m: &Mob, s: &State, p: &mut Poses) {
     let (pos, sp) = (s.pos, s.speed);
-    p.zrot("right_ear", -PI * 2.0 / 9.0 - sp * pos.sin());
-    p.zrot("left_ear", PI * 2.0 / 9.0 + sp * pos.sin());
+    p.zrot("right_ear", -PI * 2.0 / 9.0 - sp * pos.msin());
+    p.zrot("left_ear", PI * 2.0 / 9.0 + sp * pos.msin());
     p.yrot("head", s.y_rot.to_radians());
     let remaining = m.extra.anim_ticks as f32;
     let f = 1.0 - (10.0 - 2.0 * remaining).abs() / 10.0;
     p.xrot("head", 0.872_664_63 + (-PI / 9.0 - 0.872_664_63) * f);
-    p.xrot("right_front_leg", pos.cos() * 1.2 * sp);
-    p.xrot("left_front_leg", (pos + PI).cos() * 1.2 * sp);
-    p.xrot("right_hind_leg", (pos + PI).cos() * 1.2 * sp);
-    p.xrot("left_hind_leg", pos.cos() * 1.2 * sp);
+    if s.baby {
+        p.get("head")[1] += f * 2.5;
+    }
+    p.xrot("right_front_leg", pos.mcos() * 1.2 * sp);
+    p.xrot("left_front_leg", (pos + PI).mcos() * 1.2 * sp);
+    p.xrot("right_hind_leg", (pos + PI).mcos() * 1.2 * sp);
+    p.xrot("left_hind_leg", pos.mcos() * 1.2 * sp);
 }

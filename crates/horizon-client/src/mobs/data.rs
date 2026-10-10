@@ -68,6 +68,14 @@ impl MobData {
         data.entity_tags = crate::items::load_tags(root, "entity_type").unwrap_or_default();
         data
     }
+    /// Only the keyframe animation definitions of `mob-data.json`.
+    pub fn load_animations(root: &Path) -> HashMap<String, Animation> {
+        fs::read(root.join("mob-data.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .map(|v| Self::from_json(&v).animations)
+            .unwrap_or_default()
+    }
     pub fn entity_has(&self, tag: &str, entity: &str) -> bool {
         self.entity_tags
             .get(tag)

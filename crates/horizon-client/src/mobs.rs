@@ -9,6 +9,7 @@ pub mod ai;
 pub mod allay;
 pub mod anim;
 pub mod aquatic;
+pub mod body_anim;
 pub mod brain;
 pub mod breeze;
 pub mod camel;

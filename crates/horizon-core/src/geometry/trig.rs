@@ -23,6 +23,20 @@ pub fn cos(angle: f64) -> f32 {
     sine_table()[((angle * SCALE + 16384.0) as i64 & 65535) as usize]
 }
 
+/// `Mth.sin` / `Mth.cos` on a float, as the models call them.
+pub trait Mth {
+    fn msin(self) -> f32;
+    fn mcos(self) -> f32;
+}
+impl Mth for f32 {
+    fn msin(self) -> f32 {
+        sin(f64::from(self))
+    }
+    fn mcos(self) -> f32 {
+        cos(f64::from(self))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,12 +12,13 @@ use super::{
     nav::NavKind,
 };
 use crate::blocks::Fluid;
+use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use std::f32::consts::PI;
 
 // Squid animation slots in AnimState.v.
 const TENTACLE_MOVEMENT: usize = 0;
-const TENTACLE_ANGLE: usize = 1;
+pub const TENTACLE_ANGLE: usize = 1;
 const X_BODY_ROT: usize = 2;
 const Z_BODY_ROT: usize = 3;
 const TENTACLE_SPEED: usize = 4;
@@ -229,7 +230,7 @@ fn squid_ai_step(m: &mut Mob) {
     if m.fluids.in_water {
         if v[TENTACLE_MOVEMENT] < PI {
             let scale = v[TENTACLE_MOVEMENT] / PI;
-            v[TENTACLE_ANGLE] = (scale * scale * PI).sin() * PI * 0.25;
+            v[TENTACLE_ANGLE] = (scale * scale * PI).msin() * PI * 0.25;
             if scale > 0.75 {
                 let mv = m.extra.vector;
                 m.velocity = Vec3::new(mv[0], mv[1], mv[2]);
@@ -250,7 +251,7 @@ fn squid_ai_step(m: &mut Mob) {
         v[Z_BODY_ROT] += PI * v[ROTATE_SPEED] * 1.5;
         v[X_BODY_ROT] += (-(horizontal.atan2(mv.y) as f32).to_degrees() - v[X_BODY_ROT]) * 0.1;
     } else {
-        v[TENTACLE_ANGLE] = v[TENTACLE_MOVEMENT].sin().abs() * PI * 0.25;
+        v[TENTACLE_ANGLE] = v[TENTACLE_MOVEMENT].msin().abs() * PI * 0.25;
         let yd = m.velocity.y - m.kind.gravity;
         m.velocity = Vec3::new(0.0, yd * 0.98, 0.0);
         let v = &mut m.anim.v;
@@ -339,9 +340,9 @@ impl Goal for SquidRandomMovement {
             let angle = m.random.next_float() * PI * 2.0;
             let y = -0.1 + m.random.next_float() * 0.2;
             m.extra.vector = [
-                f64::from(angle.cos() * 0.2),
+                f64::from(angle.mcos() * 0.2),
                 f64::from(y),
-                f64::from(angle.sin() * 0.2),
+                f64::from(angle.msin() * 0.2),
             ];
         }
     }
@@ -496,23 +497,23 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
                 p.xrot(&format!("tentacle{i}"), angle);
             }
         }
-        S::Cod => p.yrot("tail_fin", -amp * 0.45 * (0.6 * s.age).sin()),
+        S::Cod => p.yrot("tail_fin", -amp * 0.45 * (0.6 * s.age).msin()),
         // TadpoleModel: a stronger tail swing out of water.
         S::Tadpole => {
             let a = if m.fluids.in_water { 1.0 } else { 1.5 };
-            p.yrot("tail", -a * 0.25 * (0.3 * s.age).sin())
+            p.yrot("tail", -a * 0.25 * (0.3 * s.age).msin())
         }
-        S::TropicalFish => p.yrot("tail", -amp * 0.45 * (0.6 * s.age).sin()),
+        S::TropicalFish => p.yrot("tail", -amp * 0.45 * (0.6 * s.age).msin()),
         S::Salmon => {
             let (a, k) = if m.fluids.in_water {
                 (1.0, 1.0)
             } else {
                 (1.3, 1.7)
             };
-            p.yrot("body_back", -a * 0.25 * (k * 0.6 * s.age).sin());
+            p.yrot("body_back", -a * 0.25 * (k * 0.6 * s.age).msin());
         }
         S::Pufferfish => {
-            let fin = 0.2 - 0.4 * (s.age * 0.2).sin();
+            let fin = 0.2 - 0.4 * (s.age * 0.2).msin();
             if p.has("right_blue_fin") {
                 p.zrot("right_blue_fin", -fin);
                 p.zrot("left_blue_fin", fin);
@@ -526,9 +527,9 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
             p.yrot("body", s.y_rot.to_radians());
             let moving = m.velocity.x * m.velocity.x + m.velocity.z * m.velocity.z > 1.0e-7;
             if moving {
-                p.get("body")[3] += -0.05 - 0.05 * (s.age * 0.3).cos();
-                p.xrot("tail", -0.1 * (s.age * 0.3).cos());
-                p.xrot("tail_fin", -0.2 * (s.age * 0.3).cos());
+                p.get("body")[3] += -0.05 - 0.05 * (s.age * 0.3).mcos();
+                p.xrot("tail", -0.1 * (s.age * 0.3).mcos());
+                p.xrot("tail_fin", -0.2 * (s.age * 0.3).mcos());
             }
         }
         _ => {}
@@ -565,7 +566,7 @@ pub fn rotations(m: &Mob, alpha: f32, body: f32) -> Option<glam::Mat4> {
                 (1.0, 1.0)
             };
             let mut t = glam::Mat4::from_rotation_y((180.0 - body).to_radians())
-                * glam::Mat4::from_rotation_y((a * 4.3 * (k * 0.6 * age).sin()).to_radians());
+                * glam::Mat4::from_rotation_y((a * 4.3 * (k * 0.6 * age).msin()).to_radians());
             if !m.fluids.in_water {
                 let off = if m.species() == S::Cod {
                     glam::Vec3::new(0.1, 0.1, -0.1)
@@ -577,7 +578,7 @@ pub fn rotations(m: &Mob, alpha: f32, body: f32) -> Option<glam::Mat4> {
             Some(t)
         }
         S::Pufferfish => Some(
-            glam::Mat4::from_translation(glam::Vec3::new(0.0, (age * 0.05).cos() * 0.08, 0.0))
+            glam::Mat4::from_translation(glam::Vec3::new(0.0, (age * 0.05).mcos() * 0.08, 0.0))
                 * glam::Mat4::from_rotation_y((180.0 - body).to_radians()),
         ),
         _ => None,

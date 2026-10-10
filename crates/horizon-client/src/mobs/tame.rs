@@ -10,6 +10,7 @@ use super::{
         reduced,
     },
 };
+use horizon_core::geometry::trig::Mth;
 use horizon_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
@@ -54,8 +55,8 @@ pub fn wolf_variant_for(biome: &str, has_tag: &dyn Fn(&str) -> bool) -> u8 {
 pub const RED: u8 = 14;
 
 // AnimState slots: begging interest and the shake animation.
-const INTEREST: usize = 0;
-const SHAKE: usize = 1;
+pub const INTEREST: usize = 0;
+pub const SHAKE: usize = 1;
 
 pub fn register(m: &mut Mob) {
     m.extra.color = RED;
@@ -537,7 +538,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.anim.vo[SHAKE] = 0.0;
         }
         if m.anim.v[SHAKE] > 0.4 {
-            let count = (((m.anim.v[SHAKE] - 0.4) * PI).sin() * 7.0) as u32;
+            let count = (((m.anim.v[SHAKE] - 0.4) * PI).msin() * 7.0) as u32;
             if count > 0 {
                 events.push(MobEvent::Particles {
                     kind: "splash",
@@ -576,7 +577,7 @@ fn tail_angle(m: &Mob) -> f32 {
 /// `WolfRenderState.getBodyRollAngle`.
 fn body_roll(shake: f32, offset: f32) -> f32 {
     let p = ((shake + offset) / 1.8).clamp(0.0, 1.0);
-    (p * PI).sin() * (p * PI * 11.0).sin() * 0.15 * PI
+    (p * PI).msin() * (p * PI * 11.0).msin() * 0.15 * PI
 }
 /// `WolfModel.setupAnim` with the adult and baby overrides.
 pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
@@ -585,7 +586,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     if angry(m) {
         p.yrot("tail", 0.0);
     } else {
-        p.yrot("tail", (pos * 0.6662).cos() * 1.4 * speed);
+        p.yrot("tail", (pos * 0.6662).mcos() * 1.4 * speed);
     }
     if m.extra.sitting {
         let age = if baby { 0.5 } else { 1.0 };
@@ -615,10 +616,10 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
             p.yrot("upper_body", 0.0);
         }
     } else {
-        p.xrot("right_hind_leg", (pos * 0.6662).cos() * 1.4 * speed);
-        p.xrot("left_hind_leg", (pos * 0.6662 + PI).cos() * 1.4 * speed);
-        p.xrot("right_front_leg", (pos * 0.6662 + PI).cos() * 1.4 * speed);
-        p.xrot("left_front_leg", (pos * 0.6662).cos() * 1.4 * speed);
+        p.xrot("right_hind_leg", (pos * 0.6662).mcos() * 1.4 * speed);
+        p.xrot("left_hind_leg", (pos * 0.6662 + PI).mcos() * 1.4 * speed);
+        p.xrot("right_front_leg", (pos * 0.6662 + PI).mcos() * 1.4 * speed);
+        p.xrot("left_front_leg", (pos * 0.6662).mcos() * 1.4 * speed);
     }
     // shakeOffWater
     let shake = m.anim.lerp(SHAKE, s.partial);
@@ -946,26 +947,39 @@ pub fn cat_rotations(m: &Mob, partial: f32) -> glam::Mat4 {
     glam::Mat4::from_translation(glam::Vec3::new(0.4 * lie, 0.15 * lie, 0.1 * lie))
         * glam::Mat4::from_rotation_z((90.0 * lie).to_radians())
 }
+/// `Mth.rotLerp`: degrees-wrapping, applied by the feline models to radians.
 fn rot_lerp(t: f32, from: f32, to: f32) -> f32 {
-    let mut d = (to - from) % (PI * 2.0);
-    if d < -PI {
-        d += PI * 2.0;
-    }
-    if d >= PI {
-        d -= PI * 2.0;
-    }
-    from + t * d
+    from + t * super::living::wrap(to - from)
 }
-/// `AdultFelineModel` / `BabyFelineModel.setupAnim` for cats.
+/// `FelineRenderState` values the feline models read.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Feline {
+    pub crouching: bool,
+    pub sprinting: bool,
+    pub sitting: bool,
+    pub lie_down: f32,
+    pub lie_down_tail: f32,
+    pub relax_one: f32,
+}
+/// `AdultFelineModel` / `BabyFelineModel.setupAnim` for cats and ocelots.
 pub fn cat_anim(m: &Mob, s: &State, p: &mut Poses) {
-    let baby = m.is_baby();
-    let age = if baby { 0.5 } else { 1.0 };
     let wanted = m.ai.mov.has_wanted();
     let speed_mod = m.ai.mov.speed_modifier;
     // Cat.customServerAiStep: crouch while stalking, sprint while dashing.
-    let crouching = wanted && (speed_mod - 0.6).abs() < 1e-6;
-    let sprinting = wanted && (speed_mod - 1.33).abs() < 1e-6;
-    let sitting = cat_sitting(m);
+    let st = Feline {
+        crouching: wanted && (speed_mod - 0.6).abs() < 1e-6,
+        sprinting: wanted && (speed_mod - 1.33).abs() < 1e-6,
+        sitting: cat_sitting(m),
+        lie_down: m.anim.lerp(LIE, s.partial),
+        lie_down_tail: m.anim.lerp(LIE_TAIL, s.partial),
+        relax_one: m.anim.lerp(RELAX, s.partial),
+    };
+    feline(p, s, &st);
+}
+pub fn feline(p: &mut Poses, s: &State, st: &Feline) {
+    let baby = s.baby;
+    let age = if baby { 0.5 } else { 1.0 };
+    let (crouching, sprinting, sitting) = (st.crouching, st.sprinting, st.sitting);
     let add = |p: &mut Poses, part: &str, x: f32, y: f32, z: f32| {
         let v = p.get(part);
         v[0] += x;
@@ -994,18 +1008,18 @@ pub fn cat_anim(m: &Mob, s: &State, p: &mut Poses) {
             p.xrot("body", PI / 2.0);
         }
         if sprinting {
-            p.xrot("left_hind_leg", (pos * 0.6662).cos() * sp);
-            p.xrot("right_hind_leg", (pos * 0.6662 + 0.3).cos() * sp);
-            p.xrot("left_front_leg", (pos * 0.6662 + PI + 0.3).cos() * sp);
-            p.xrot("right_front_leg", (pos * 0.6662 + PI).cos() * sp);
-            p.xrot("tail2", 1.727_876_1 + PI / 10.0 * pos.cos() * sp);
+            p.xrot("left_hind_leg", (pos * 0.6662).mcos() * sp);
+            p.xrot("right_hind_leg", (pos * 0.6662 + 0.3).mcos() * sp);
+            p.xrot("left_front_leg", (pos * 0.6662 + PI + 0.3).mcos() * sp);
+            p.xrot("right_front_leg", (pos * 0.6662 + PI).mcos() * sp);
+            p.xrot("tail2", 1.727_876_1 + PI / 10.0 * pos.mcos() * sp);
         } else {
-            p.xrot("left_hind_leg", (pos * 0.6662).cos() * sp);
-            p.xrot("right_hind_leg", (pos * 0.6662 + PI).cos() * sp);
-            p.xrot("left_front_leg", (pos * 0.6662 + PI).cos() * sp);
-            p.xrot("right_front_leg", (pos * 0.6662).cos() * sp);
+            p.xrot("left_hind_leg", (pos * 0.6662).mcos() * sp);
+            p.xrot("right_hind_leg", (pos * 0.6662 + PI).mcos() * sp);
+            p.xrot("left_front_leg", (pos * 0.6662 + PI).mcos() * sp);
+            p.xrot("right_front_leg", (pos * 0.6662).mcos() * sp);
             let swing = if crouching { 0.471_238_94 } else { PI / 4.0 };
-            p.xrot("tail2", 1.727_876_1 + swing * pos.cos() * sp);
+            p.xrot("tail2", 1.727_876_1 + swing * pos.mcos() * sp);
         }
     } else if baby {
         let x = p.get("body")[3] - 0.436_332_32;
@@ -1034,9 +1048,31 @@ pub fn cat_anim(m: &Mob, s: &State, p: &mut Poses) {
         p.xrot("right_hind_leg", -PI / 2.0);
         add(p, "right_hind_leg", 0.0, 3.0 * age, -4.0 * age);
     }
-    let lie = m.anim.lerp(LIE, s.partial);
-    let lie_tail = m.anim.lerp(LIE_TAIL, s.partial);
-    if lie > 0.0 && !baby {
+    let lie = st.lie_down;
+    let lie_tail = st.lie_down_tail;
+    if lie > 0.0 && baby {
+        add(p, "body", 1.0, 0.0, 0.0);
+        let hx = p.get("head")[3];
+        p.xrot("head", rot_lerp(lie, hx, PI / 18.0));
+        let hz = p.get("head")[5];
+        p.zrot("head", rot_lerp(lie, hz, -PI * 5.0 / 12.0));
+        add(p, "head", 1.5, 0.75, -0.5);
+        p.xrot("right_front_leg", -PI / 4.0);
+        add(p, "right_front_leg", 3.5, -0.5, 0.0);
+        p.xrot("left_front_leg", -PI / 2.0);
+        add(p, "left_front_leg", 1.5, -1.0, -2.0);
+        p.xrot("right_hind_leg", PI * 2.0 / 9.0);
+        p.yrot("right_hind_leg", PI / 9.0);
+        p.zrot("right_hind_leg", -PI / 9.0);
+        add(p, "right_hind_leg", 2.5, -0.25, 0.5);
+        add(p, "left_hind_leg", 1.5, 0.0, -1.0);
+        let t = p.get("tail1");
+        let (tx, ty, tz) = (t[3], t[4], t[5]);
+        p.xrot("tail1", tx + rot_lerp(lie_tail, tx, -PI / 6.0));
+        p.yrot("tail1", ty + rot_lerp(lie_tail, ty, 0.0));
+        p.zrot("tail1", tz + rot_lerp(lie_tail, tz, -PI / 18.0));
+        add(p, "tail1", 1.0, 0.5, -0.25);
+    } else if lie > 0.0 {
         let (hz, hy) = (p.get("head")[5], p.get("head")[4]);
         p.zrot("head", rot_lerp(lie, hz, -1.270_796_3));
         p.yrot("head", rot_lerp(lie, hy, 1.270_796_3));
@@ -1052,7 +1088,7 @@ pub fn cat_anim(m: &Mob, s: &State, p: &mut Poses) {
         p.xrot("tail1", rot_lerp(lie_tail, t1, 0.8));
         p.xrot("tail2", rot_lerp(lie_tail, t2, -0.4));
     }
-    let relax = m.anim.lerp(RELAX, s.partial);
+    let relax = st.relax_one;
     if relax > 0.0 {
         let hx = p.get("head")[3];
         p.xrot("head", rot_lerp(relax, hx, -0.581_776_44));

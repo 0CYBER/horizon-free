@@ -12,15 +12,16 @@ use super::{
     nav::NavKind,
     path::PathType,
 };
+use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use std::f32::consts::PI;
 
 // Guardian state: `flag` an active beam target (DATA_ID_ATTACK_TARGET),
 // `flag2` moving (DATA_ID_MOVING), `counter2` the client attack time.
 // AnimState slots: tail animation, its speed, spikes animation.
-const TAIL: usize = 0;
+pub const TAIL: usize = 0;
 const TAIL_SPEED: usize = 1;
-const SPIKES: usize = 2;
+pub const SPIKES: usize = 2;
 const EYE_X: usize = 3;
 const EYE_Y: usize = 4;
 
@@ -166,8 +167,8 @@ pub fn move_control(m: &mut Mob) {
     let t = f64::from(m.age as i32 + m.id as i32);
     let push = (t * 0.5).sin() * 0.05;
     let (cos, sin) = (
-        f64::from(m.yaw.to_radians().cos()),
-        f64::from(m.yaw.to_radians().sin()),
+        f64::from(m.yaw.to_radians().mcos()),
+        f64::from(m.yaw.to_radians().msin()),
     );
     let y_push = (t * 0.75).sin() * 0.05;
     m.velocity = m.velocity.add_vector(Vec3::new(
@@ -277,7 +278,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         m.anim.v[EYE_Y] = if look[1] - m.eye_y() > 0.0 { 0.0 } else { 1.0 };
         let yaw = m.head_yaw.to_radians();
         let pitch = m.head_pitch.to_radians();
-        let view = [-yaw.sin() * pitch.cos(), yaw.cos() * pitch.cos()];
+        let view = [-yaw.msin() * pitch.mcos(), yaw.mcos() * pitch.mcos()];
         let d = [m.position.x - look[0], m.position.z - look[2]];
         let len = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-9);
         let (dx, dz) = ((d[0] / len) as f32, (d[1] / len) as f32);
@@ -365,7 +366,7 @@ pub fn beam_geometry(
         128u32.saturating_sub((cs * 64.0) as u32),
     );
     let color = 0xFF00_0000 | (b.min(255) << 16) | (g.min(255) << 8) | r.min(255);
-    let at = |a: f32, radius: f32| (a.cos() * radius, a.sin() * radius);
+    let at = |a: f32, radius: f32| (a.mcos() * radius, a.msin() * radius);
     let quarter = std::f32::consts::FRAC_PI_4;
     let (wx, wz) = at(rot + PI, 0.2);
     let (ex, ez) = at(rot, 0.2);
@@ -432,7 +433,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         8.0, -8.0, 0.0, 0.0, -8.0, -8.0, 8.0, 8.0, 8.0, -8.0, 0.0, 0.0,
     ];
     for i in 0..12 {
-        let offset = 1.0 + (s.age * 1.5 + i as f32).cos() * 0.01 - withdrawal;
+        let offset = 1.0 + (s.age * 1.5 + i as f32).mcos() * 0.01 - withdrawal;
         let part = p.get(&format!("spike{i}"));
         part[0] = X[i] * offset;
         part[1] = 16.0 + Y[i] * offset;
@@ -442,7 +443,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     e[0] = m.anim.v[EYE_X];
     e[1] = m.anim.v[EYE_Y];
     let tail = m.anim.lerp(TAIL, s.partial);
-    p.yrot("tail0", tail.sin() * PI * 0.05);
-    p.yrot("tail1", tail.sin() * PI * 0.1);
-    p.yrot("tail2", tail.sin() * PI * 0.15);
+    p.yrot("tail0", tail.msin() * PI * 0.05);
+    p.yrot("tail1", tail.msin() * PI * 0.1);
+    p.yrot("tail2", tail.msin() * PI * 0.15);
 }

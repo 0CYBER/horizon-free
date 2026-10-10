@@ -172,6 +172,7 @@ impl Game<'_> {
         lightmap_brightness(if self.dim == Dim::Nether { 0.1 } else { 0.0 }, raw)
     }
     pub(super) fn tick_particles(&mut self) {
+        self.res.fog.state.tick_flicker();
         let eye = self.eye_position();
         if let Some(e) = eye {
             let brightness = self.eye_brightness(e);

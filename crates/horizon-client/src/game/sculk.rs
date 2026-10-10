@@ -1094,6 +1094,29 @@ impl Game<'_> {
         (modifier, pulse.max(0.0))
     }
 
+    /// `LightmapRenderStateExtractor`: the night vision effect's intensity
+    /// (`GameRenderer.nightVisionScale`), or conduit power's water vision.
+    pub(super) fn night_vision_intensity(&self) -> f32 {
+        use horizon_client::fog::FogType;
+        if let Some(e) = self.potions.effects.get("night_vision") {
+            // MobEffectInstance.endsWithin(200); -1 is infinite.
+            return if e.duration < 0 || e.duration > 200 {
+                1.0
+            } else {
+                0.7 + (e.duration as f32 * std::f32::consts::PI * 0.2).sin() * 0.3
+            };
+        }
+        if self.potions.effects.get("conduit_power").is_some()
+            && let Some(eye) = self.eye_position()
+        {
+            let in_water =
+                horizon_client::fog::fog_type(&self.world, &self.res.facts, eye, self.forward())
+                    == FogType::Water;
+            return self.res.fog.state.water_vision(in_water);
+        }
+        0.0
+    }
+
     /// `Warden.applyDarknessAround` / `MobEffectUtil.addEffectToPlayersAround`.
     pub(super) fn apply_darkness(&mut self, at: [f64; 3], radius: f64) {
         if self.creative || self.spectator() {

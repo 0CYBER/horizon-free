@@ -32,8 +32,9 @@ pub struct BiomeInfo {
     pub foliage: u32,
     pub dry_foliage: u32,
     pub water: u32,
-    pub sky: u32,
-    pub fog: u32,
+    pub sky: Option<u32>,
+    /// The biome's own fog colour attribute; otherwise the dimension's applies.
+    pub fog: Option<u32>,
     pub water_fog: u32,
 }
 pub struct Biomes {
@@ -77,13 +78,6 @@ impl Biomes {
         let grass = colormap(root, "grass")?;
         let foliage = colormap(root, "foliage")?;
         let dry = colormap(root, "dry_foliage")?;
-        let dimension: Value = serde_json::from_slice(&fs::read(
-            root.join("data/minecraft/dimension_type/overworld.json"),
-        )?)?;
-        let default_fog =
-            color(&dimension["attributes"]["minecraft:visual/fog_color"]).unwrap_or(0xC0D8FF);
-        let default_sky =
-            color(&dimension["attributes"]["minecraft:visual/sky_color"]).unwrap_or(0x78A7FF);
         let mut list = Vec::new();
         let mut names: Vec<_> = fs::read_dir(root.join("data/minecraft/worldgen/biome"))?
             .filter_map(|e| e.ok())
@@ -151,8 +145,8 @@ impl Biomes {
                 dry_foliage: color(&effects["dry_foliage_color"])
                     .unwrap_or_else(|| sample(&dry, temperature, downfall, 0x5D4930)),
                 water: color(&effects["water_color"]).unwrap_or(0x3F76E4),
-                sky: color(&attributes["minecraft:visual/sky_color"]).unwrap_or(default_sky),
-                fog: color(&attributes["minecraft:visual/fog_color"]).unwrap_or(default_fog),
+                sky: color(&attributes["minecraft:visual/sky_color"]),
+                fog: color(&attributes["minecraft:visual/fog_color"]),
                 water_fog: color(&attributes["minecraft:visual/water_fog_color"])
                     .unwrap_or(0x050533),
                 name,

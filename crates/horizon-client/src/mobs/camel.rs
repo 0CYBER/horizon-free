@@ -8,6 +8,7 @@ use super::{
         Tempt, goal_clone,
     },
 };
+use horizon_core::geometry::trig::Mth;
 use horizon_core::random::RandomSource;
 use std::collections::HashMap;
 
@@ -179,7 +180,7 @@ pub fn dash(m: &mut Mob, amount: f32, events: &mut Vec<MobEvent>) {
         return;
     }
     let yaw = m.yaw.to_radians();
-    let (dx, dz) = (f64::from(-yaw.sin()), f64::from(yaw.cos()));
+    let (dx, dz) = (f64::from(-yaw.msin()), f64::from(yaw.mcos()));
     let speed = m.movement_speed();
     let a = f64::from(amount);
     m.velocity.x += dx * 22.2222 * a * speed;

@@ -9,6 +9,7 @@ use super::{
     },
 };
 use crate::projectiles::{Projectile, ProjectileKind};
+use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use std::f32::consts::PI;
 
@@ -306,8 +307,8 @@ fn cast_fangs(m: &mut Mob, cx: &mut Cx) {
         for i in 0..5 {
             let a = angle + i as f32 * PI * 0.4;
             place(
-                x + f64::from(a.cos()) * 1.5,
-                z + f64::from(a.sin()) * 1.5,
+                x + f64::from(a.mcos()) * 1.5,
+                z + f64::from(a.msin()) * 1.5,
                 a,
                 0,
             );
@@ -315,8 +316,8 @@ fn cast_fangs(m: &mut Mob, cx: &mut Cx) {
         for i in 0..8 {
             let a = angle + i as f32 * PI * 2.0 / 8.0 + PI * 2.0 / 5.0;
             place(
-                x + f64::from(a.cos()) * 2.5,
-                z + f64::from(a.sin()) * 2.5,
+                x + f64::from(a.mcos()) * 2.5,
+                z + f64::from(a.msin()) * 2.5,
                 a,
                 3,
             );
@@ -325,8 +326,8 @@ fn cast_fangs(m: &mut Mob, cx: &mut Cx) {
         for i in 0..16 {
             let reach = 1.25 * f64::from(i + 1);
             place(
-                x + f64::from(angle.cos()) * reach,
-                z + f64::from(angle.sin()) * reach,
+                x + f64::from(angle.mcos()) * reach,
+                z + f64::from(angle.msin()) * reach,
                 angle,
                 i,
             );
@@ -535,8 +536,9 @@ fn shoot_crossbow(m: &mut Mob, who: Who, cx: &mut Cx) {
         pitch,
     ));
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ArmPose {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ArmPose {
+    BowAndArrow,
     Spellcasting,
     Crossed,
     Celebrating,
@@ -589,39 +591,55 @@ pub fn shows_item(m: &Mob) -> bool {
     }
 }
 fn hide(p: &mut Poses, part: &str) {
-    if p.has(part) {
-        let v = p.get(part);
-        v[6] = 0.0;
-        v[7] = 0.0;
-        v[8] = 0.0;
-    }
+    p.visible(part, false);
 }
 /// `IllagerModel.setupAnim`.
 pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
-    let (hy, hx) = (s.y_rot.to_radians(), s.x_rot.to_radians());
-    p.yrot("head", hy);
-    p.xrot("head", hx);
-    let (pos, sp) = (s.pos, s.speed);
-    p.xrot("right_arm", (pos * 0.6662 + PI).cos() * 2.0 * sp * 0.5);
-    p.yrot("right_arm", 0.0);
-    p.zrot("right_arm", 0.0);
-    p.xrot("left_arm", (pos * 0.6662).cos() * 2.0 * sp * 0.5);
-    p.yrot("left_arm", 0.0);
-    p.zrot("left_arm", 0.0);
-    p.xrot("right_leg", (pos * 0.6662).cos() * 1.4 * sp * 0.5);
-    p.xrot("left_leg", (pos * 0.6662 + PI).cos() * 1.4 * sp * 0.5);
+    anim_pose(m, s, p, arm_pose(m));
+}
+/// `IllagerModel.setupAnim` for a given arm pose.
+pub fn anim_pose(m: &Mob, s: &State, p: &mut Poses, pose: ArmPose) {
     // IllagerModel hides the hat; the illusioner's renderer shows it.
     if m.species() != Species::Illusioner {
         hide(p, "hat");
     }
-    let pose = arm_pose(m);
+    let (hy, hx) = (s.y_rot.to_radians(), s.x_rot.to_radians());
+    p.yrot("head", hy);
+    p.xrot("head", hx);
+    let (pos, sp) = (s.pos, s.speed);
+    if m.extra.passenger {
+        for arm in ["right_arm", "left_arm"] {
+            p.xrot(arm, -PI / 5.0);
+            p.yrot(arm, 0.0);
+            p.zrot(arm, 0.0);
+        }
+        p.xrot("right_leg", -1.413_716_7);
+        p.yrot("right_leg", PI / 10.0);
+        p.zrot("right_leg", 0.078_539_82);
+        p.xrot("left_leg", -1.413_716_7);
+        p.yrot("left_leg", -PI / 10.0);
+        p.zrot("left_leg", -0.078_539_82);
+    } else {
+        p.xrot("right_arm", (pos * 0.6662 + PI).mcos() * 2.0 * sp * 0.5);
+        p.yrot("right_arm", 0.0);
+        p.zrot("right_arm", 0.0);
+        p.xrot("left_arm", (pos * 0.6662).mcos() * 2.0 * sp * 0.5);
+        p.yrot("left_arm", 0.0);
+        p.zrot("left_arm", 0.0);
+        p.xrot("right_leg", (pos * 0.6662).mcos() * 1.4 * sp * 0.5);
+        p.yrot("right_leg", 0.0);
+        p.zrot("right_leg", 0.0);
+        p.xrot("left_leg", (pos * 0.6662 + PI).mcos() * 1.4 * sp * 0.5);
+        p.yrot("left_leg", 0.0);
+        p.zrot("left_leg", 0.0);
+    }
     match pose {
         ArmPose::Attacking => {
             if m.extra.main_hand.is_none() {
                 // animateZombieArms + bobArms
                 let swing = s.swing;
-                let a = (swing * PI).sin();
-                let b = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).sin();
+                let a = (swing * PI).msin();
+                let b = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).msin();
                 p.zrot("right_arm", 0.0);
                 p.zrot("left_arm", 0.0);
                 p.yrot("right_arm", -(0.1 - a * 0.6));
@@ -632,22 +650,25 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
             } else {
                 // swingWeaponDown (right-handed).
                 let swing = s.swing;
-                let a2 = (swing * PI).sin();
-                let a = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).sin();
+                let a2 = (swing * PI).msin();
+                let a = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).msin();
                 p.zrot("right_arm", 0.0);
                 p.zrot("left_arm", 0.0);
                 p.yrot("right_arm", PI / 20.0);
                 p.yrot("left_arm", -PI / 20.0);
                 p.xrot(
                     "right_arm",
-                    -1.884_955_8 + (s.age * 0.09).cos() * 0.15 + (a2 * 2.2 - a * 0.4),
+                    -1.884_955_8 + (s.age * 0.09).mcos() * 0.15 + (a2 * 2.2 - a * 0.4),
                 );
-                p.xrot("left_arm", (s.age * 0.19).cos() * 0.5);
+                p.xrot(
+                    "left_arm",
+                    -0.0 + (s.age * 0.19).mcos() * 0.5 + (a2 * 1.2 - a * 0.4),
+                );
             }
             let bob = |p: &mut Poses, part: &str, sign: f32| {
                 let v = p.get(part);
-                v[5] += sign * ((s.age * 0.09).cos() * 0.05 + 0.05);
-                v[3] += sign * (s.age * 0.067).sin() * 0.05;
+                v[5] += sign * ((s.age * 0.09).mcos() * 0.05 + 0.05);
+                v[3] += sign * (s.age * 0.067).msin() * 0.05;
             };
             bob(p, "right_arm", 1.0);
             bob(p, "left_arm", -1.0);
@@ -681,7 +702,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
                 let v = p.get(arm);
                 v[2] = 0.0;
                 v[0] = x;
-                v[3] = (s.age * 0.6662).cos() * 0.25;
+                v[3] = (s.age * 0.6662).mcos() * 0.25;
                 v[4] = 0.0;
                 v[5] = z_rot;
             }
@@ -694,10 +715,17 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
                 let v = p.get(arm);
                 v[2] = 0.0;
                 v[0] = x;
-                v[3] = (s.age * 0.6662).cos() * 0.05;
+                v[3] = (s.age * 0.6662).mcos() * 0.05;
                 v[4] = 0.0;
                 v[5] = z_rot;
             }
+        }
+        ArmPose::BowAndArrow => {
+            p.yrot("right_arm", -0.1 + hy);
+            p.xrot("right_arm", -PI / 2.0 + hx);
+            p.xrot("left_arm", -0.942_477_9 + hx);
+            p.yrot("left_arm", hy - 0.4);
+            p.zrot("left_arm", PI / 2.0);
         }
         ArmPose::Crossed | ArmPose::Neutral => {}
     }
