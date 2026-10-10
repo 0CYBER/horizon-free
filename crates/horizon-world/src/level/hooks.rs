@@ -96,6 +96,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Brushable => {
                     self.schedule_tick(pos, block, 2);
                 }
+                Class::CarvedPumpkin => {
+                    if !same {
+                        self.carved_pumpkin_try_spawn_golem(pos);
+                    }
+                }
                 Class::Composter => {
                     if b.table.int(state, b.props.level) == 7 {
                         self.schedule_tick(pos, block, 20);

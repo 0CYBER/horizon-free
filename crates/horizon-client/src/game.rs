@@ -27,6 +27,7 @@ mod fov;
 mod frames;
 mod game_mode;
 mod ghasts;
+mod golems;
 mod growth;
 mod jukebox;
 mod leads;
@@ -1371,6 +1372,14 @@ impl Game<'_> {
                     kind: "hatch_sniffer",
                     ..
                 } => self.hatch_sniffer([pos.x, pos.y, pos.z]),
+                LevelEvent::BlockEvent {
+                    pos,
+                    kind: kind @ ("spawn_snow_golem" | "spawn_iron_golem" | "spawn_copper_golem"),
+                    ..
+                } => self.spawn_built_golem(
+                    [pos.x, pos.y, pos.z],
+                    &format!("minecraft:{}", &kind["spawn_".len()..]),
+                ),
                 LevelEvent::BlockEvent {
                     pos,
                     state,

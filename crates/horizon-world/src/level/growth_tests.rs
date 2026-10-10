@@ -447,3 +447,55 @@ fn sniffer_eggs_crack_twice_then_hatch_a_snifflet() {
         }
     )));
 }
+#[test]
+fn a_pumpkin_on_a_copper_block_makes_a_copper_golem_and_a_chest() {
+    let Some(f) = fixture() else { return };
+    let mut w = World::new(f, 5);
+    w.floor("stone", 1);
+    let copper = w.id("weathered_copper", &[]);
+    let pos = BlockPos::new(0, 64, 0);
+    w.put(pos, copper);
+    let pumpkin = w.id("carved_pumpkin", &[("facing", "east")]);
+    f.behaviours.set_block(
+        &mut w.level,
+        &mut w.ticks,
+        pos.offset(0, 1, 0),
+        pumpkin,
+        flags::UPDATE_ALL,
+    );
+    assert_eq!(w.name(pos.offset(0, 1, 0)), "minecraft:air");
+    assert_eq!(w.name(pos), "minecraft:weathered_copper_chest");
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::BlockEvent {
+            kind: "spawn_copper_golem",
+            ..
+        }
+    )));
+}
+#[test]
+fn a_pumpkin_on_an_iron_t_makes_an_iron_golem() {
+    let Some(f) = fixture() else { return };
+    let mut w = World::new(f, 5);
+    w.floor("stone", 2);
+    let iron = w.id("iron_block", &[]);
+    for (x, y) in [(-1, 65), (0, 65), (1, 65), (0, 64)] {
+        w.put(BlockPos::new(x, y, 0), iron);
+    }
+    let pumpkin = w.id("carved_pumpkin", &[("facing", "north")]);
+    f.behaviours.set_block(
+        &mut w.level,
+        &mut w.ticks,
+        BlockPos::new(0, 66, 0),
+        pumpkin,
+        flags::UPDATE_ALL,
+    );
+    assert_eq!(w.name(BlockPos::new(0, 65, 0)), "minecraft:air");
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::BlockEvent {
+            kind: "spawn_iron_golem",
+            ..
+        }
+    )));
+}

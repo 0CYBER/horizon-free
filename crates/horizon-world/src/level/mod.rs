@@ -104,6 +104,7 @@ mod bonemeal;
 mod falling;
 mod feature_world;
 mod fluids;
+mod golems;
 mod growth;
 mod hooks;
 mod interact;
