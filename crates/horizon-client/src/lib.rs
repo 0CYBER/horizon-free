@@ -10,6 +10,7 @@ pub mod audio;
 pub mod banner;
 pub mod biome;
 pub mod block_entity_render;
+pub mod block_transform;
 pub mod blocks;
 pub mod bossbar;
 pub mod brewing;
