@@ -4,12 +4,13 @@
 #![forbid(unsafe_code)]
 use horizon_client::{
     assets::Assets,
-    biome::{Biomes, GrassModifier},
+    biome::{BiomeInfo, Biomes, GrassModifier},
     blocks::BlockFacts,
     chunk::{Chunk, Light, MIN_Y, index},
-    mesher::{MeshTables, Mesher, Vertex},
+    mesher::{MeshTables, Mesher, OPAQUE_LAYER, Vertex},
     models,
 };
+use horizon_core::biome::BiomeZoom;
 use horizon_world::registry::BlockStateId;
 use serde_json::{Value, json};
 use std::{
@@ -48,17 +49,23 @@ fn scene(
     assets: &Assets,
     tables: &MeshTables,
     biomes: &mut Biomes,
+    pristine: &[BiomeInfo],
     names: &BTreeMap<u32, &str>,
     elapsed: &mut Duration,
 ) -> Result<Value> {
     let colors = &row["colors"];
     let color = |k: &str| -> Result<u32> { Ok(int(&colors[k])? as u32 & 0xFF_FFFF) };
-    for biome in &mut biomes.list {
-        biome.grass = color("grass")?;
-        biome.modifier = GrassModifier::None;
-        biome.foliage = color("foliage")?;
-        biome.dry_foliage = color("dry_foliage")?;
-        biome.water = color("water")?;
+    // Scenes without a biome field give every biome the same constant colours;
+    // the others use the real biome definitions.
+    biomes.list = pristine.to_vec();
+    if row.get("biomes").is_none() {
+        for biome in &mut biomes.list {
+            biome.grass = color("grass")?;
+            biome.modifier = GrassModifier::None;
+            biome.foliage = color("foliage")?;
+            biome.dry_foliage = color("dry_foliage")?;
+            biome.water = color("water")?;
+        }
     }
     let default = row["light"].as_array().ok_or("missing default light")?;
     let packed = |sky: i32, block: i32| (sky << 4 | block) as u8;
@@ -89,6 +96,31 @@ fn scene(
             values[index(x, y, z)] = packed(int(&cell[3])?, int(&cell[4])?);
         }
     }
+    let (mut zoom, mut blend_radius) = (BiomeZoom::new(0), 2);
+    let smooth_lighting = row["smooth"].as_bool().unwrap_or(true);
+    let cutout_leaves = row["cutout_leaves"].as_bool().unwrap_or(true);
+    if let Some(field) = row.get("biomes") {
+        zoom = BiomeZoom::new(field["seed"].as_i64().ok_or("missing biome seed")?);
+        blend_radius = int(&field["radius"])?;
+        let default = biomes.id(field["default"].as_str().ok_or("missing default biome")?);
+        for chunk in &mut chunks {
+            for qy in 0..96 {
+                for cell in 0..16 {
+                    chunk.set_biome_cell(cell & 3, qy, cell >> 2, default);
+                }
+            }
+        }
+        for cell in field["cells"].as_array().ok_or("missing biome cells")? {
+            let (qx, qy, qz) = (int(&cell[0])?, int(&cell[1])?, int(&cell[2])?);
+            let i = chunk_index(qx * 4, qz * 4)?;
+            chunks[i].set_biome_cell(
+                qx,
+                qy - MIN_Y / 4,
+                qz,
+                biomes.id(cell[3].as_str().ok_or("biome name")?),
+            );
+        }
+    }
     let region: [[Option<&Chunk>; 3]; 3] =
         std::array::from_fn(|z| std::array::from_fn(|x| Some(&chunks[z * 3 + x])));
     let mut mesher = Mesher {
@@ -97,6 +129,10 @@ fn scene(
         tables,
         biomes: &*biomes,
         visibility: tables.visibility.clone(),
+        zoom,
+        blend_radius,
+        smooth_lighting,
+        cutout_leaves,
     };
     let section_y = int(&row["section_y"])?;
     let started = Instant::now();
@@ -109,7 +145,9 @@ fn scene(
             return Err("partial quad".into());
         }
         for quad in vertices {
-            let sprite = names.get(&quad[0].layer).ok_or("unknown sprite layer")?;
+            let sprite = names
+                .get(&(quad[0].layer & !OPAQUE_LAYER))
+                .ok_or("unknown sprite layer")?;
             if quad.iter().any(|v: &Vertex| v.layer != quad[0].layer) {
                 return Err("quad mixes sprite layers".into());
             }
@@ -150,6 +188,7 @@ fn main() -> Result<()> {
         .iter()
         .map(|(name, layer)| (*layer, name.as_str()))
         .collect();
+    let pristine = biomes.list.clone();
     let mut output = BufWriter::new(fs::File::create(&args[2])?);
     if args[1] == "facts" {
         // The per-state facts the mesher derives, in the oracle's order and positions.
@@ -175,7 +214,15 @@ fn main() -> Result<()> {
     let (mut elapsed, mut sections) = (Duration::ZERO, 0u32);
     for line in BufReader::new(fs::File::open(&args[1])?).lines() {
         let row: Value = serde_json::from_str(&line?)?;
-        let result = scene(&row, &assets, &tables, &mut biomes, &names, &mut elapsed)?;
+        let result = scene(
+            &row,
+            &assets,
+            &tables,
+            &mut biomes,
+            &pristine,
+            &names,
+            &mut elapsed,
+        )?;
         serde_json::to_writer(&mut output, &result)?;
         output.write_all(b"\n")?;
         sections += 1;

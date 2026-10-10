@@ -1,0 +1,196 @@
+package dev.horizonlab.parity;
+
+import com.google.gson.*;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.*;
+import net.minecraft.SharedConstants;
+import net.minecraft.client.model.EntityModel;
+import net.minecraft.client.model.geom.LayerDefinitions;
+import net.minecraft.client.model.geom.ModelLayerLocation;
+import net.minecraft.client.model.geom.ModelPart;
+import net.minecraft.client.renderer.entity.state.EntityRenderState;
+import net.minecraft.server.Bootstrap;
+
+/**
+ * Original oracle for the client's entity model animation: bakes each vanilla model layer, builds
+ * its own render state class with the given walk/age/head/attack values plus optional extra
+ * fields, runs the real setupAnim and writes every part's pose.
+ *
+ * Input lines: "layer-key ModelClass|case-json" where case-json is an object of state field
+ * name to value. Output lines: {layer, case, parts:{path:[x,y,z,xRot,yRot,zRot,xScale,yScale,zScale,visible]}}.
+ */
+public final class VanillaEntityAnimOracle {
+    private static Field cubes;
+    private static Field children;
+
+    @SuppressWarnings("unchecked")
+    private static void dump(String path, ModelPart part, JsonObject out) throws Exception {
+        var pose = new JsonArray();
+        for (float f : new float[] {part.x, part.y, part.z, part.xRot, part.yRot, part.zRot, part.xScale, part.yScale, part.zScale})
+            pose.add(f);
+        pose.add(part.visible && !part.skipDraw ? 1 : 0);
+        int polys = 0;
+        double sum = 0;
+        for (ModelPart.Cube cube : (List<ModelPart.Cube>) cubes.get(part)) {
+            for (ModelPart.Polygon polygon : cube.polygons) {
+                polys++;
+                for (ModelPart.Vertex v : polygon.vertices()) {
+                    float u = Float.isFinite(v.u()) ? v.u() : 0.0F, w = Float.isFinite(v.v()) ? v.v() : 0.0F;
+                    sum += v.x() + 2.0 * v.y() + 3.0 * v.z() + 5.0 * u + 7.0 * w;
+                }
+            }
+        }
+        pose.add(polys);
+        pose.add(sum);
+        out.add(path, pose);
+        for (var entry : ((Map<String, ModelPart>) children.get(part)).entrySet())
+            dump(path.isEmpty() ? entry.getKey() : path + "/" + entry.getKey(), entry.getValue(), out);
+    }
+
+    private static Class<?> findClass(String simple) throws Exception {
+        for (String pkg : new String[] {"net.minecraft.client.model"}) {
+            // Search subpackages by trying every known class location through the jar index.
+            for (String name : CLASS_NAMES) {
+                if (name.endsWith("." + simple) || name.equals(simple)) return Class.forName(name);
+            }
+        }
+        throw new ClassNotFoundException(simple);
+    }
+
+    private static final List<String> CLASS_NAMES = new ArrayList<>();
+
+    private static Class<?> raw(java.lang.reflect.Type t, Map<java.lang.reflect.TypeVariable<?>, java.lang.reflect.Type> env) {
+        if (t instanceof Class<?> c) return c;
+        if (t instanceof java.lang.reflect.ParameterizedType p) return raw(p.getRawType(), env);
+        if (t instanceof java.lang.reflect.TypeVariable<?> v) {
+            var bound = env.get(v);
+            return raw(bound != null ? bound : v.getBounds()[0], env);
+        }
+        throw new IllegalArgumentException("cannot resolve " + t);
+    }
+
+    /** The render state class: the model's `S`, resolved through its generic superclasses. */
+    private static Class<?> stateClass(Class<?> model) {
+        var env = new HashMap<java.lang.reflect.TypeVariable<?>, java.lang.reflect.Type>();
+        Class<?> current = model;
+        for (var v : current.getTypeParameters()) env.put(v, raw(v.getBounds()[0], env));
+        while (current != net.minecraft.client.model.Model.class) {
+            var sup = current.getGenericSuperclass();
+            if (sup instanceof java.lang.reflect.ParameterizedType p) {
+                var params = ((Class<?>) p.getRawType()).getTypeParameters();
+                for (int i = 0; i < params.length; i++) env.put(params[i], raw(p.getActualTypeArguments()[i], env));
+                current = (Class<?>) p.getRawType();
+            } else {
+                current = (Class<?>) sup;
+            }
+        }
+        return raw(net.minecraft.client.model.Model.class.getTypeParameters()[0], env);
+    }
+
+    private static Field field(Class<?> type, String name) {
+        for (Class<?> c = type; c != null; c = c.getSuperclass()) {
+            try {
+                return c.getDeclaredField(name);
+            } catch (NoSuchFieldException e) {
+            }
+        }
+        return null;
+    }
+
+    private static void set(Object state, String name, JsonElement value) throws Exception {
+        boolean optional = name.startsWith("?") || Set.of("walkAnimationPos", "walkAnimationSpeed", "yRot", "xRot", "isBaby", "swingAnimation", "ageScale", "ageInTicks", "entityId", "yHeadRot", "yBodyRot", "eatTick", "flapOffset", "interest").contains(name);
+        if (name.startsWith("?")) name = name.substring(1);
+        Field f = field(state.getClass(), name);
+        if (f == null && optional) return;
+        if (f == null) throw new IllegalArgumentException("no field " + name + " on " + state.getClass());
+        f.setAccessible(true);
+        Class<?> t = f.getType();
+        if (t == float.class) f.setFloat(state, value.getAsFloat());
+        else if (t == int.class) f.setInt(state, value.getAsInt());
+        else if (t == double.class) f.setDouble(state, value.getAsDouble());
+        else if (t == boolean.class) f.setBoolean(state, value.getAsBoolean());
+        else if (t.isEnum()) {
+            for (Object c : t.getEnumConstants()) if (((Enum<?>) c).name().equals(value.getAsString())) f.set(state, c);
+        } else if (t.getSimpleName().equals("AnimationState")) {
+            // value = age in ticks since start (negative = stopped)
+            var a = (net.minecraft.world.entity.AnimationState) f.get(state);
+            a.stop();
+            if (value.getAsJsonPrimitive().isNumber()) a.start(value.getAsInt());
+        } else throw new IllegalArgumentException("unsupported type " + t + " for " + name);
+    }
+
+    /** Render-state values vanilla derives from entity state; the case gives the entity-side input. */
+    private static void hooks(EntityRenderState state, JsonObject kase) {
+        if (state instanceof net.minecraft.client.renderer.entity.state.SheepRenderState sheep && kase.has("eatTick")) {
+            // Sheep.getHeadEatPositionScale / getHeadEatAngleScale at partial tick 0.
+            int t = kase.get("eatTick").getAsInt();
+            float a = 0.0F;
+            sheep.headEatPositionScale = t <= 0 ? 0.0F : t >= 4 && t <= 36 ? 1.0F : t < 4 ? (t - a) / 4.0F : -(t - 40 - a) / 4.0F;
+            if (t > 4 && t <= 36) {
+                float scale = (t - 4 - a) / 32.0F;
+                sheep.headEatAngleScale = (float) (Math.PI / 5) + 0.21991149F * net.minecraft.util.Mth.sin(scale * 28.7F);
+            } else {
+                sheep.headEatAngleScale = t > 0 ? (float) (Math.PI / 5) : sheep.xRot * (float) (Math.PI / 180.0);
+            }
+        }
+        if (state instanceof net.minecraft.client.renderer.entity.state.WolfRenderState wolf && kase.has("interest"))
+            wolf.headRollAngle = kase.get("interest").getAsFloat() * 0.15F * (float) Math.PI;
+        if (state instanceof net.minecraft.client.renderer.entity.state.PhantomRenderState phantom && kase.has("flapOffset"))
+            phantom.flapTime = kase.get("flapOffset").getAsFloat() + phantom.ageInTicks;
+    }
+
+    public static void main(String[] args) throws Exception {
+        SharedConstants.tryDetectVersion();
+        Bootstrap.bootStrap();
+        cubes = ModelPart.class.getDeclaredField("cubes");
+        cubes.setAccessible(true);
+        children = ModelPart.class.getDeclaredField("children");
+        children.setAccessible(true);
+        try (var zip = new java.util.zip.ZipFile(args[2])) {
+            zip.stream().map(e -> e.getName()).filter(n -> n.startsWith("net/minecraft/client/model/") && n.endsWith(".class"))
+                .forEach(n -> CLASS_NAMES.add(n.substring(0, n.length() - 6).replace('/', '.')));
+        }
+        var roots = LayerDefinitions.createRoots();
+        var byName = new HashMap<String, ModelLayerLocation>();
+        for (var key : roots.keySet()) byName.put(key.toString(), key);
+        var gson = new Gson();
+        var out = new StringBuilder();
+        for (String line : Files.readAllLines(Path.of(args[0]))) {
+            if (line.isBlank()) continue;
+            var halves = line.split("\\|", 2);
+            var head = halves[0].split(" ");
+            var layer = head[0];
+            var kase = JsonParser.parseString(halves[1]).getAsJsonObject();
+            var result = new JsonObject();
+            result.addProperty("layer", layer);
+            result.add("case", kase);
+            try {
+                var location = byName.get(layer);
+                if (location == null) throw new IllegalArgumentException("no layer " + layer);
+                var cls = findClass(head[1]);
+                var baked = roots.get(location).bakeRoot();
+                var model = (net.minecraft.client.model.Model<EntityRenderState>) cls.getConstructor(ModelPart.class).newInstance(baked);
+                var type = stateClass(cls);
+                var state = (EntityRenderState) type.getDeclaredConstructor().newInstance();
+                state.getClass();
+                for (var entry : kase.entrySet()) set(state, entry.getKey(), entry.getValue());
+                hooks(state, kase);
+                if (state instanceof net.minecraft.client.renderer.entity.state.ArmedEntityRenderState armed && armed.swingAnimation > 0)
+                    armed.currentSwing = new net.minecraft.world.entity.LivingEntity.SwingDescription(net.minecraft.world.InteractionHand.MAIN_HAND, net.minecraft.world.item.component.SwingAnimation.DEFAULT, 6);
+                model.setupAnim(state);
+                var parts = new JsonObject();
+                dump("", baked, parts);
+                result.add("parts", parts);
+            } catch (Throwable error) {
+                var cause = error.getCause() != null ? error.getCause() : error;
+                result.addProperty("error", cause.toString());
+            }
+            out.append(gson.toJson(result)).append('\n');
+        }
+        Files.writeString(Path.of(args[1]), out.toString(), StandardCharsets.UTF_8);
+    }
+}

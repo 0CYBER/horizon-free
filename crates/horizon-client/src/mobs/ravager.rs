@@ -7,6 +7,7 @@ use super::{
     goals::{Float, HurtByTarget, LookAtPlayer, MeleeAttack, NearestTarget, Stroll},
     path::PathType,
 };
+use horizon_core::geometry::trig::Mth;
 use horizon_core::random::RandomSource;
 use std::f32::consts::PI;
 
@@ -25,6 +26,7 @@ pub fn register(m: &mut Mob) {
         Species::Pillager,
         Species::Vindicator,
         Species::Evoker,
+        Species::Illusioner,
         Species::Witch,
         Species::Ravager,
     ];
@@ -134,9 +136,9 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             events.push(MobEvent::Particles {
                 kind: "entity_effect",
                 at: [
-                    m.position.x - width * f64::from(yaw.sin()),
+                    m.position.x - width * f64::from(yaw.msin()),
                     m.position.y + f64::from(m.height()) - 0.3,
-                    m.position.z + width * f64::from(yaw.cos()),
+                    m.position.z + width * f64::from(yaw.mcos()),
                 ],
                 count: 0,
             });
@@ -180,7 +182,7 @@ fn roar(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         let illager = matches!(
             s.species,
-            Species::Pillager | Species::Vindicator | Species::Evoker
+            Species::Pillager | Species::Vindicator | Species::Evoker | Species::Illusioner
         );
         if !illager {
             events.push(MobEvent::AttackMob {
@@ -225,34 +227,35 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         let neck_x_rot = p.get("neck")[3];
         let neck = p.get("neck");
         neck[2] = -6.5 + head;
-        neck[1] = -7.0 - head * neck_x_rot.sin();
+        neck[1] = -7.0 - head * neck_x_rot.msin();
         let mouth = if attack > 5.0 {
-            ((-4.0 + attack) / 4.0).sin() * PI * 0.4
+            ((-4.0 + attack) / 4.0).msin() * PI * 0.4
         } else {
-            PI / 20.0 * (PI * attack / 10.0).sin()
+            PI / 20.0 * (PI * attack / 10.0).msin()
         };
         p.xrot("mouth", mouth);
     } else {
         let is_stunned = stunned > 0.0;
         let x_rot: f32 = if is_stunned { 0.219_911_49 } else { 0.0 };
         let neck = p.get("neck");
+        let y_offset = -neck[3].msin();
         neck[0] = 0.0;
-        neck[1] = -7.0 + x_rot.sin();
+        neck[1] = -7.0 - y_offset;
         neck[2] = 5.5;
         neck[3] = x_rot;
         p.xrot("mouth", PI * if is_stunned { 0.05 } else { 0.01 });
         if is_stunned {
-            p.get("neck")[0] = ((stunned / 40.0) * 10.0).sin() * 3.0;
+            p.get("neck")[0] = ((f64::from(stunned) / 40.0) * 10.0).sin() as f32 * 3.0;
         } else if m.extra.anim_ticks > 0 {
             let roar = (20.0 - m.extra.anim_ticks as f32 + s.partial) / 20.0;
-            p.xrot("mouth", PI / 2.0 * (roar * PI * 0.25).sin());
+            p.xrot("mouth", PI / 2.0 * (roar * PI * 0.25).msin());
         }
     }
     p.xrot("head", s.x_rot.to_radians());
     p.yrot("head", s.y_rot.to_radians());
     let (pos, leg) = (s.pos, 0.4 * s.speed);
-    p.xrot("right_hind_leg", (pos * 0.6662).cos() * leg);
-    p.xrot("left_hind_leg", (pos * 0.6662 + PI).cos() * leg);
-    p.xrot("right_front_leg", (pos * 0.6662 + PI).cos() * leg);
-    p.xrot("left_front_leg", (pos * 0.6662).cos() * leg);
+    p.xrot("right_hind_leg", (pos * 0.6662).mcos() * leg);
+    p.xrot("left_hind_leg", (pos * 0.6662 + PI).mcos() * leg);
+    p.xrot("right_front_leg", (pos * 0.6662 + PI).mcos() * leg);
+    p.xrot("left_front_leg", (pos * 0.6662).mcos() * leg);
 }

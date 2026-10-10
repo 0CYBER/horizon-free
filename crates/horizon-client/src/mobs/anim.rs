@@ -2,6 +2,7 @@
 //! (quadrupeds, humanoids, creepers, spiders, chickens...) applied to a map of
 //! part poses before the model is drawn.
 use super::{Mob, Part, keyframes::AnimationState, living::wrap};
+use horizon_core::geometry::trig::Mth;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 
@@ -102,6 +103,10 @@ impl AnimState {
 pub struct Poses {
     map: HashMap<String, [f32; 9]>,
     dummy: [f32; 9],
+    /// Parts with `skipDraw` set: their own cubes are not drawn, children are.
+    skipped: std::collections::HashSet<String>,
+    /// Parts with `visible` cleared: neither they nor their children draw.
+    hidden: std::collections::HashSet<String>,
 }
 impl Poses {
     pub fn new(model: &Part) -> Self {
@@ -116,6 +121,8 @@ impl Poses {
         Self {
             map,
             dummy: [0.0; 9],
+            skipped: Default::default(),
+            hidden: Default::default(),
         }
     }
     pub fn get(&mut self, name: &str) -> &mut [f32; 9] {
@@ -126,6 +133,12 @@ impl Poses {
     }
     pub fn pose(&self, part: &Part) -> [f32; 9] {
         self.map.get(&part.name).copied().unwrap_or(part.pose)
+    }
+    pub fn skip_draw(&mut self, name: &str) {
+        self.skipped.insert(name.to_owned());
+    }
+    pub fn skips(&self, part: &Part) -> bool {
+        self.skipped.contains(&part.name)
     }
     pub fn has(&self, name: &str) -> bool {
         self.map.contains_key(name)
@@ -139,13 +152,16 @@ impl Poses {
     pub fn zrot(&mut self, n: &str, v: f32) {
         self.get(n)[5] = v;
     }
+    /// `ModelPart.visible = v`; a hidden part and its children do not draw.
     pub fn visible(&mut self, n: &str, v: bool) {
-        if !v {
-            let p = self.get(n);
-            p[6] = 0.0;
-            p[7] = 0.0;
-            p[8] = 0.0;
+        if v {
+            self.hidden.remove(n);
+        } else if self.map.contains_key(n) {
+            self.hidden.insert(n.to_owned());
         }
+    }
+    pub fn is_hidden(&self, part: &Part) -> bool {
+        self.hidden.contains(&part.name)
     }
 }
 /// The LivingEntityRenderState values setupAnim reads.
@@ -198,18 +214,18 @@ fn head(p: &mut Poses, s: &State) {
 pub(super) fn quadruped(p: &mut Poses, s: &State) {
     head(p, s);
     let (pos, sp) = (s.pos, s.speed);
-    p.xrot("right_hind_leg", (pos * 0.6662).cos() * 1.4 * sp);
-    p.xrot("left_hind_leg", (pos * 0.6662 + PI).cos() * 1.4 * sp);
-    p.xrot("right_front_leg", (pos * 0.6662 + PI).cos() * 1.4 * sp);
-    p.xrot("left_front_leg", (pos * 0.6662).cos() * 1.4 * sp);
+    p.xrot("right_hind_leg", (pos * 0.6662).mcos() * 1.4 * sp);
+    p.xrot("left_hind_leg", (pos * 0.6662 + PI).mcos() * 1.4 * sp);
+    p.xrot("right_front_leg", (pos * 0.6662 + PI).mcos() * 1.4 * sp);
+    p.xrot("left_front_leg", (pos * 0.6662).mcos() * 1.4 * sp);
 }
 /// AnimationUtils.bobModelPart
 fn bob(p: &mut Poses, n: &str, age: f32, scale: f32) {
     let q = p.get(n);
-    q[5] += scale * ((age * 0.09).cos() * 0.05 + 0.05);
-    q[3] += scale * ((age * 0.067).sin() * 0.05);
+    q[5] += scale * ((age * 0.09).mcos() * 0.05 + 0.05);
+    q[3] += scale * ((age * 0.067).msin() * 0.05);
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ArmPose {
     Empty,
     Item,
@@ -217,118 +233,196 @@ pub enum ArmPose {
     CrossbowHold,
     CrossbowCharge,
 }
-/// HumanoidModel.setupAnim holding an item or not (piglins).
-pub fn humanoid_item(p: &mut Poses, s: &State, holding: bool) {
-    let right = if holding {
-        ArmPose::Item
-    } else {
-        ArmPose::Empty
-    };
-    humanoid(p, s, right, ArmPose::Empty, None, holding);
+/// HumanoidModel.setupAnim for piglins: `PiglinModel` poses the arms itself.
+pub fn humanoid_item(p: &mut Poses, s: &State, _holding: bool) {
+    humanoid(p, s, &Hum::new(ArmPose::Empty, ArmPose::Empty));
 }
 /// HumanoidModel.setupAnim with empty hands (endermen).
 pub fn humanoid_pub(p: &mut Poses, s: &State, _m: &Mob) {
-    humanoid(p, s, ArmPose::Empty, ArmPose::Empty, None, false);
+    humanoid(p, s, &Hum::new(ArmPose::Empty, ArmPose::Empty));
 }
-/// HumanoidModel.setupAnim up to (and including) the attack animation hook.
-fn humanoid(
-    p: &mut Poses,
-    s: &State,
-    right: ArmPose,
-    left: ArmPose,
-    zombie: Option<bool>,
-    holding: bool,
-) {
+/// `AnimationUtils.swingWeaponDown` with the right arm as the main arm.
+pub(super) fn swing_weapon_down(p: &mut Poses, swing: f32, age: f32) {
+    let attack2 = (swing * PI).msin();
+    let attack = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).msin();
+    p.zrot("right_arm", 0.0);
+    p.zrot("left_arm", 0.0);
+    p.yrot("right_arm", PI / 20.0);
+    p.yrot("left_arm", -PI / 20.0);
+    p.xrot("right_arm", -1.884_955_8 + (age * 0.09).mcos() * 0.15);
+    p.xrot("left_arm", -0.0 + (age * 0.19).mcos() * 0.5);
+    p.get("right_arm")[3] += attack2 * 2.2 - attack * 0.4;
+    p.get("left_arm")[3] += attack2 * 1.2 - attack * 0.4;
+    bob(p, "right_arm", age, 1.0);
+    bob(p, "left_arm", age, -1.0);
+}
+/// What `HumanoidModel.setupAnim` reads besides the walk and head inputs.
+#[derive(Clone, Copy, Debug)]
+pub struct Hum {
+    pub right: ArmPose,
+    pub left: ArmPose,
+    pub crouching: bool,
+    pub passenger: bool,
+    /// `Some(aggressive)` for `ZombieModel`-style `animateZombieArms`.
+    pub zombie: Option<bool>,
+    /// The main hand holds something (`getMainHandItemStack() != EMPTY`).
+    pub holding: bool,
+    /// `maxCrossbowChargeDuration`, `ticksUsingItem`.
+    pub charge: (f32, f32),
+    /// `PiglinModel.setupAttackAnimation`: swing a held weapon down.
+    pub weapon_swing: bool,
+}
+impl Hum {
+    pub fn new(right: ArmPose, left: ArmPose) -> Self {
+        Self {
+            right,
+            left,
+            crouching: false,
+            passenger: false,
+            zombie: None,
+            holding: false,
+            charge: (0.0, 0.0),
+            weapon_swing: false,
+        }
+    }
+}
+impl ArmPose {
+    fn two_handed(self) -> bool {
+        matches!(self, Self::Bow | Self::CrossbowHold | Self::CrossbowCharge)
+    }
+    fn affects_offhand(self) -> bool {
+        self.two_handed()
+    }
+}
+/// `AnimationUtils.animateCrossbowHold`.
+fn crossbow_hold(p: &mut Poses, hx: f32, hy: f32, in_right: bool) {
+    let (hold, shoot) = if in_right {
+        ("right_arm", "left_arm")
+    } else {
+        ("left_arm", "right_arm")
+    };
+    p.yrot(hold, if in_right { -0.3 } else { 0.3 } + hy);
+    p.yrot(shoot, if in_right { 0.6 } else { -0.6 } + hy);
+    p.xrot(hold, -PI / 2.0 + hx + 0.1);
+    p.xrot(shoot, -1.5 + hx);
+}
+/// `AnimationUtils.animateCrossbowCharge`.
+fn crossbow_charge(p: &mut Poses, max: f32, ticks: f32, in_right: bool) {
+    let (hold, pull) = if in_right {
+        ("right_arm", "left_arm")
+    } else {
+        ("left_arm", "right_arm")
+    };
+    p.yrot(hold, if in_right { -0.8 } else { 0.8 });
+    p.xrot(hold, -0.970_796_35);
+    p.xrot(pull, -0.970_796_35);
+    let use_ticks = ticks.clamp(0.0, max);
+    let alpha = use_ticks / max;
+    let lerp = |a: f32, p0: f32, p1: f32| p0 + a * (p1 - p0);
+    p.yrot(
+        pull,
+        lerp(alpha, 0.4, 0.85) * if in_right { 1.0 } else { -1.0 },
+    );
+    let x = lerp(alpha, p.get(pull)[3], -PI / 2.0);
+    p.xrot(pull, x);
+}
+/// `HumanoidModel.poseRightArm` / `poseLeftArm`.
+fn pose_arm(p: &mut Poses, pose: ArmPose, right: bool, h: &Hum) {
+    let arm = if right { "right_arm" } else { "left_arm" };
+    let (hx, hy) = (p.get("head")[3], p.get("head")[4]);
+    match pose {
+        ArmPose::Empty => p.yrot(arm, 0.0),
+        ArmPose::Item => {
+            let x = p.get(arm)[3];
+            p.xrot(arm, x * 0.5 - PI / 10.0);
+            p.yrot(arm, 0.0);
+        }
+        ArmPose::Bow => {
+            p.yrot("right_arm", -0.1 + hy - if right { 0.0 } else { 0.4 });
+            p.yrot("left_arm", 0.1 + hy + if right { 0.4 } else { 0.0 });
+            p.xrot("right_arm", -PI / 2.0 + hx);
+            p.xrot("left_arm", -PI / 2.0 + hx);
+        }
+        ArmPose::CrossbowHold => crossbow_hold(p, hx, hy, right),
+        ArmPose::CrossbowCharge => crossbow_charge(p, h.charge.0, h.charge.1, right),
+    }
+}
+/// `HumanoidModel.setupAnim` (and `ZombieModel.setupAttackAnimation`).
+pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
     head(p, s);
     let (pos, sp) = (s.pos, s.speed);
-    p.xrot("right_arm", (pos * 0.6662 + PI).cos() * 2.0 * sp * 0.5);
-    p.xrot("left_arm", (pos * 0.6662).cos() * 2.0 * sp * 0.5);
-    p.xrot("right_leg", (pos * 0.6662).cos() * 1.4 * sp);
-    p.xrot("left_leg", (pos * 0.6662 + PI).cos() * 1.4 * sp);
+    p.xrot("right_arm", (pos * 0.6662 + PI).mcos() * 2.0 * sp * 0.5);
+    p.xrot("left_arm", (pos * 0.6662).mcos() * 2.0 * sp * 0.5);
+    p.xrot("right_leg", (pos * 0.6662).mcos() * 1.4 * sp);
+    p.xrot("left_leg", (pos * 0.6662 + PI).mcos() * 1.4 * sp);
     p.yrot("right_leg", 0.005);
     p.yrot("left_leg", -0.005);
     p.zrot("right_leg", 0.005);
     p.zrot("left_leg", -0.005);
-    let (hx, hy) = (p.get("head")[3], p.get("head")[4]);
-    for (arm, pose) in [("right_arm", right), ("left_arm", left)] {
-        match pose {
-            ArmPose::Empty => p.yrot(arm, 0.0),
-            ArmPose::Item => {
-                let x = p.get(arm)[3];
-                p.xrot(arm, x * 0.5 - PI / 10.0);
-                p.yrot(arm, 0.0);
-            }
-            ArmPose::Bow => {
-                let right_main = arm == "right_arm";
-                p.yrot("right_arm", -0.1 + hy - if right_main { 0.0 } else { 0.4 });
-                p.yrot("left_arm", 0.1 + hy + if right_main { 0.4 } else { 0.0 });
-                p.xrot("right_arm", -PI / 2.0 + hx);
-                p.xrot("left_arm", -PI / 2.0 + hx);
-            }
-            ArmPose::CrossbowHold => {
-                let r = arm == "right_arm";
-                let (hold, shoot) = if r {
-                    ("right_arm", "left_arm")
-                } else {
-                    ("left_arm", "right_arm")
-                };
-                p.yrot(hold, if r { -0.3 } else { 0.3 } + hy);
-                p.yrot(shoot, if r { 0.6 } else { -0.6 } + hy);
-                p.xrot(hold, -PI / 2.0 + hx + 0.1);
-                p.xrot(shoot, -1.5 + hx);
-            }
-            ArmPose::CrossbowCharge => {
-                let r = arm == "right_arm";
-                let (hold, pull) = if r {
-                    ("right_arm", "left_arm")
-                } else {
-                    ("left_arm", "right_arm")
-                };
-                p.yrot(hold, if r { -0.8 } else { 0.8 });
-                p.xrot(hold, -0.970_796_35);
-                p.xrot(pull, -0.970_796_35);
-                p.yrot(pull, 0.6 * if r { 1.0 } else { -1.0 });
-                p.xrot(pull, -PI / 2.0);
-            }
+    if h.passenger {
+        p.get("right_arm")[3] += -PI / 5.0;
+        p.get("left_arm")[3] += -PI / 5.0;
+        p.xrot("right_leg", -1.413_716_7);
+        p.yrot("right_leg", PI / 10.0);
+        p.zrot("right_leg", 0.078_539_82);
+        p.xrot("left_leg", -1.413_716_7);
+        p.yrot("left_leg", -PI / 10.0);
+        p.zrot("left_leg", -0.078_539_82);
+    }
+    // The main arm is the right one: the off-hand pose goes first unless it
+    // needs both hands.
+    if h.left.two_handed() {
+        pose_arm(p, h.right, true, h);
+        if !h.right.affects_offhand() {
+            pose_arm(p, h.left, false, h);
+        }
+    } else {
+        pose_arm(p, h.left, false, h);
+        if !h.left.affects_offhand() {
+            pose_arm(p, h.right, true, h);
         }
     }
     // setupAttackAnimation (WHACK swing with the right arm).
+    let hx = p.get("head")[3];
     let swing = s.swing;
-    if swing > 0.0 {
-        let body_y = (swing.sqrt() * PI * 2.0).sin() * 0.2;
+    if swing > 0.0 && h.weapon_swing {
+        swing_weapon_down(p, swing, s.age);
+    } else if swing > 0.0 {
+        let body_y = (swing.sqrt() * PI * 2.0).msin() * 0.2;
         p.yrot("body", body_y);
         let age_scale = if s.baby { 0.5 } else { 1.0 };
         {
             let r = p.get("right_arm");
-            r[2] = body_y.sin() * 5.0 * age_scale;
-            r[0] = -body_y.cos() * 5.0 * age_scale;
+            r[2] = body_y.msin() * 5.0 * age_scale;
+            r[0] = -body_y.mcos() * 5.0 * age_scale;
         }
         {
             let l = p.get("left_arm");
-            l[2] = -body_y.sin() * 5.0 * age_scale;
-            l[0] = body_y.cos() * 5.0 * age_scale;
+            l[2] = -body_y.msin() * 5.0 * age_scale;
+            l[0] = body_y.mcos() * 5.0 * age_scale;
         }
         p.get("right_arm")[4] += body_y;
         p.get("left_arm")[4] += body_y;
         p.get("left_arm")[3] += body_y;
+        // Ease.outQuart
         let eased = 1.0 - (1.0 - swing).powi(4);
-        let aa = (eased * PI).sin();
-        let bb = (swing * PI).sin() * -(hx - 0.7) * 0.75;
+        let aa = (eased * PI).msin();
+        let bb = (swing * PI).msin() * -(hx - 0.7) * 0.75;
         let r = p.get("right_arm");
         r[3] -= aa * 1.2 + bb;
         r[4] += body_y * 2.0;
-        r[5] += (swing * PI).sin() * -0.4;
+        r[5] += (swing * PI).msin() * -0.4;
     }
-    if let Some(aggressive) = zombie {
+    if let Some(aggressive) = h.zombie {
         // AnimationUtils.animateZombieArms
-        let raise = !s.baby || !holding;
+        let raise = !s.baby || !h.holding;
         let drop = if raise {
             -PI / if aggressive { 1.5 } else { 2.25 }
         } else {
             0.0
         };
-        let ym = if raise { 1.0 } else { -1.0 } * (swing * PI).sin();
-        let xm = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).sin();
+        let ym = if raise { 1.0 } else { -1.0 } * (swing * PI).msin();
+        let xm = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).msin();
         let x = drop + ym * 1.2 - xm * 0.4;
         let y = 0.1 - ym * 0.6;
         p.xrot("right_arm", x);
@@ -337,6 +431,17 @@ fn humanoid(
         p.xrot("left_arm", x);
         p.yrot("left_arm", if raise { y } else { -y });
         p.zrot("left_arm", 0.0);
+    }
+    if h.crouching {
+        p.xrot("body", 0.5);
+        p.get("right_arm")[3] += 0.4;
+        p.get("left_arm")[3] += 0.4;
+        p.get("right_leg")[2] += 4.0;
+        p.get("left_leg")[2] += 4.0;
+        p.get("head")[1] += 4.2;
+        p.get("body")[1] += 3.2;
+        p.get("left_arm")[1] += 3.2;
+        p.get("right_arm")[1] += 3.2;
     }
     bob(p, "right_arm", s.age, 1.0);
     bob(p, "left_arm", s.age, -1.0);
@@ -348,6 +453,9 @@ pub fn setup(
     p: &mut Poses,
     w_anims: &HashMap<String, super::keyframes::Animation>,
 ) {
+    if super::body_anim::anim(m, s, p, w_anims) {
+        return;
+    }
     match m.kind.anim {
         Anim::Camel => super::camel::anim(m, s, p, w_anims),
         Anim::Breeze => super::breeze::anim(m, s, p, w_anims),
@@ -377,7 +485,7 @@ pub fn setup(
             };
             let angle = if t > 4 && t <= 36 {
                 let f = ((t - 4) as f32 - partial) / 32.0;
-                PI / 5.0 + 0.219_911_49 * (f * 28.7).sin()
+                PI / 5.0 + 0.219_911_49 * (f * 28.7).msin()
             } else if t > 0 {
                 PI / 5.0
             } else {
@@ -391,9 +499,9 @@ pub fn setup(
             let flap = m.anim.flap_o + (m.anim.flap - m.anim.flap_o) * s.partial;
             let flap_speed =
                 m.anim.flap_speed_o + (m.anim.flap_speed - m.anim.flap_speed_o) * s.partial;
-            let angle = (flap.sin() + 1.0) * flap_speed;
-            p.xrot("right_leg", (s.pos * 0.6662).cos() * 1.4 * s.speed);
-            p.xrot("left_leg", (s.pos * 0.6662 + PI).cos() * 1.4 * s.speed);
+            let angle = (flap.msin() + 1.0) * flap_speed;
+            p.xrot("right_leg", (s.pos * 0.6662).mcos() * 1.4 * s.speed);
+            p.xrot("left_leg", (s.pos * 0.6662 + PI).mcos() * 1.4 * s.speed);
             p.zrot("right_wing", angle);
             p.zrot("left_wing", -angle);
             if !s.baby {
@@ -405,57 +513,35 @@ pub fn setup(
         | Anim::ZombieVillager
         | Anim::ZombifiedPiglin
         | Anim::Humanoid { zombie_arms: true } => {
-            let holding = m.extra.main_hand.is_some();
-            let right = if holding {
-                ArmPose::Item
-            } else {
-                ArmPose::Empty
-            };
-            humanoid(p, s, right, ArmPose::Empty, Some(m.ai.aggressive), holding);
+            let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
+            h.zombie = Some(m.ai.aggressive);
+            h.holding = m.extra.main_hand.is_some();
+            h.crouching = m.extra.crouching;
+            h.passenger = m.extra.passenger;
+            humanoid(p, s, &h);
+            if m.kind.anim == Anim::ZombifiedPiglin {
+                super::piglin::ears(p, s);
+            }
         }
         Anim::Skeleton | Anim::Humanoid { zombie_arms: false } => {
             let bow = m.extra.main_hand.as_deref() == Some("minecraft:bow");
+            let player = matches!(m.kind.anim, Anim::Humanoid { .. });
             let right = if bow && m.ai.aggressive {
                 ArmPose::Bow
-            } else if m.extra.main_hand.is_some() {
+            } else if player && m.extra.main_hand.is_some() {
                 ArmPose::Item
             } else {
                 ArmPose::Empty
             };
-            humanoid(
-                p,
-                s,
-                right,
-                ArmPose::Empty,
-                None,
-                m.extra.main_hand.is_some(),
-            );
-            if m.extra.passenger {
-                // HumanoidModel.setupAnim: riding.
-                p.get("right_arm")[3] -= PI / 5.0;
-                p.get("left_arm")[3] -= PI / 5.0;
-                for (leg, side) in [("right_leg", 1.0), ("left_leg", -1.0)] {
-                    p.xrot(leg, -1.413_716_7);
-                    p.yrot(leg, side * PI / 10.0);
-                    p.zrot(leg, side * 0.078_539_82);
-                }
-            }
-            if m.extra.crouching {
-                p.xrot("body", 0.5);
-                p.get("right_arm")[3] += 0.4;
-                p.get("left_arm")[3] += 0.4;
-                p.get("right_leg")[2] += 4.0;
-                p.get("left_leg")[2] += 4.0;
-                p.get("head")[1] += 4.2;
-                p.get("body")[1] += 3.2;
-                p.get("left_arm")[1] += 3.2;
-                p.get("right_arm")[1] += 3.2;
-            }
+            let mut h = Hum::new(right, ArmPose::Empty);
+            h.crouching = m.extra.crouching;
+            h.passenger = m.extra.passenger;
+            humanoid(p, s, &h);
             if m.ai.aggressive && !bow {
                 // SkeletonModel melee pose.
                 let sw = s.swing;
-                let s2 = (sw * PI).sin();
-                let s1 = ((1.0 - (1.0 - sw) * (1.0 - sw)) * PI).sin();
+                let s2 = (sw * PI).msin();
+                let s1 = ((1.0 - (1.0 - sw) * (1.0 - sw)) * PI).msin();
                 p.zrot("right_arm", 0.0);
                 p.zrot("left_arm", 0.0);
                 p.yrot("right_arm", -(0.1 - s2 * 0.6));
@@ -483,37 +569,37 @@ pub fn setup(
             // DonkeyModel: the chests show once fitted.
             if !m.extra.chested {
                 for part in ["left_chest", "right_chest"] {
-                    if p.has(part) {
-                        let v = p.get(part);
-                        v[6] = 0.0;
-                        v[7] = 0.0;
-                        v[8] = 0.0;
-                    }
+                    p.visible(part, false);
                 }
             }
         }
         Anim::Hoglin => super::piglin::hoglin_anim(m, s, p),
         Anim::Blaze => super::nether::blaze_anim(s, p),
         Anim::Ghast => super::nether::ghast_anim(s, p),
-        Anim::Feline if m.species() == super::Species::Cat => super::tame::cat_anim(m, s, p),
+        Anim::Feline => super::tame::cat_anim(m, s, p),
         Anim::Enderman => super::enderman::anim(m, s, p),
         Anim::Slime | Anim::MagmaCube => super::cube::anim(m, s, p),
         Anim::Creeper => {
             head(p, s);
-            p.xrot("right_hind_leg", (s.pos * 0.6662).cos() * 1.4 * s.speed);
-            p.xrot("left_hind_leg", (s.pos * 0.6662 + PI).cos() * 1.4 * s.speed);
+            // CreeperModel binds its fields to the opposite-side parts, so the
+            // left formulas drive the right parts and the reverse.
+            p.xrot("left_hind_leg", (s.pos * 0.6662).mcos() * 1.4 * s.speed);
             p.xrot(
-                "right_front_leg",
-                (s.pos * 0.6662 + PI).cos() * 1.4 * s.speed,
+                "right_hind_leg",
+                (s.pos * 0.6662 + PI).mcos() * 1.4 * s.speed,
             );
-            p.xrot("left_front_leg", (s.pos * 0.6662).cos() * 1.4 * s.speed);
+            p.xrot(
+                "left_front_leg",
+                (s.pos * 0.6662 + PI).mcos() * 1.4 * s.speed,
+            );
+            p.xrot("right_front_leg", (s.pos * 0.6662).mcos() * 1.4 * s.speed);
         }
         Anim::Spider => {
             head(p, s);
             let pos = s.pos * 0.6662;
             let sp = s.speed;
-            let swing = |o: f32| -((pos * 2.0 + o).cos() * 0.4) * sp;
-            let step = |o: f32| ((pos + o).sin() * 0.4).abs() * sp;
+            let swing = |o: f32| -((pos * 2.0 + o).mcos() * 0.4) * sp;
+            let step = |o: f32| ((pos + o).msin() * 0.4).abs() * sp;
             let legs = [
                 ("hind", 0.0f32, 0.0f32),
                 ("middle_hind", PI, PI),

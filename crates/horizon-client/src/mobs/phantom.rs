@@ -5,6 +5,7 @@ use super::{
     control::MoveKind,
     goals::{Cx, Goal, MOVE, TARGET, goal_clone, reduced},
 };
+use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
 
 /// Phantom state in `Extra`: `flag` swooping, `home` the anchor,
@@ -151,9 +152,9 @@ impl CircleAroundAnchor {
         ]);
         self.angle += self.clockwise * 15.0f32.to_radians();
         m.extra.vector = [
-            f64::from(a[0]) + f64::from(self.distance * self.angle.cos()),
+            f64::from(a[0]) + f64::from(self.distance * self.angle.mcos()),
             f64::from(a[1]) + f64::from(-4.0 + self.height),
-            f64::from(a[2]) + f64::from(self.distance * self.angle.sin()),
+            f64::from(a[2]) + f64::from(self.distance * self.angle.msin()),
         ];
     }
 }
@@ -319,9 +320,9 @@ pub fn move_control(m: &mut Mob) {
         let x_rot = -((-dy).atan2(sd) as f32).to_degrees();
         m.head_pitch = x_rot;
         let move_angle = (m.yaw + 90.0).to_radians();
-        let tx = f64::from(speed * move_angle.cos()) * (dx / sd2).abs();
-        let tz = f64::from(speed * move_angle.sin()) * (dz / sd2).abs();
-        let ty = f64::from(speed * x_rot.to_radians().sin()) * (dy / sd2).abs();
+        let tx = f64::from(speed * move_angle.mcos()) * (dx / sd2).abs();
+        let tz = f64::from(speed * move_angle.msin()) * (dz / sd2).abs();
+        let ty = f64::from(speed * x_rot.to_radians().msin()) * (dy / sd2).abs();
         let v = m.velocity;
         m.velocity = Vec3::new(
             v.x + (tx - v.x) * 0.2,
@@ -336,20 +337,20 @@ pub fn move_control(m: &mut Mob) {
 /// `PhantomModel.setupAnim` (flap time offset by the id).
 pub fn anim(m: &Mob, s: &super::anim::State, p: &mut super::anim::Poses) {
     let flap = (m.id as f32 * 3.0 + s.age) * 7.448_451_f32.to_radians();
-    let wing = flap.cos() * 16.0f32.to_radians();
+    let wing = flap.mcos() * 16.0f32.to_radians();
     p.zrot("left_wing_base", wing);
     p.zrot("left_wing_tip", wing);
     p.zrot("right_wing_base", -wing);
     p.zrot("right_wing_tip", -wing);
-    let tail = -(5.0 + (flap * 2.0).cos() * 5.0f32).to_radians();
+    let tail = -(5.0 + (flap * 2.0).mcos() * 5.0f32).to_radians();
     p.xrot("tail_base", tail);
     p.xrot("tail_tip", tail);
 }
 /// The flap sound when a wingbeat begins (`Phantom.isFlapping`).
 pub fn flap_sound(m: &Mob, events: &mut Vec<MobEvent>) {
     let t = m.id as f32 * 3.0 + m.age as f32;
-    let a = (t * 7.448_451_f32.to_radians() + std::f32::consts::PI).cos();
-    let b = ((t + 1.0) * 7.448_451_f32.to_radians() + std::f32::consts::PI).cos();
+    let a = (t * 7.448_451_f32.to_radians() + std::f32::consts::PI).mcos();
+    let b = ((t + 1.0) * 7.448_451_f32.to_radians() + std::f32::consts::PI).mcos();
     if a > 0.0 && b <= 0.0 {
         events.push(MobEvent::Sound(
             "entity.phantom.flap",

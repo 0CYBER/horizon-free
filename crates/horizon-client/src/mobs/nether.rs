@@ -10,6 +10,7 @@ use super::{
     },
 };
 use crate::projectiles::{Projectile, ProjectileKind};
+use horizon_core::geometry::trig::Mth;
 use horizon_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
@@ -181,25 +182,25 @@ pub fn blaze_anim(s: &State, p: &mut Poses) {
     let mut angle = age * PI * -0.1;
     for i in 0..4 {
         let part = p.get(&format!("part{i}"));
-        part[1] = -2.0 + ((i * 2) as f32 + age).mul_add(0.25, 0.0).cos();
-        part[0] = angle.cos() * 9.0;
-        part[2] = angle.sin() * 9.0;
+        part[1] = -2.0 + ((i * 2) as f32 + age).mul_add(0.25, 0.0).mcos();
+        part[0] = angle.mcos() * 9.0;
+        part[2] = angle.msin() * 9.0;
         angle += PI / 2.0;
     }
     angle = PI / 4.0 + age * PI * 0.03;
     for i in 4..8 {
         let part = p.get(&format!("part{i}"));
-        part[1] = 2.0 + (((i * 2) as f32 + age) * 0.25).cos();
-        part[0] = angle.cos() * 7.0;
-        part[2] = angle.sin() * 7.0;
+        part[1] = 2.0 + (((i * 2) as f32 + age) * 0.25).mcos();
+        part[0] = angle.mcos() * 7.0;
+        part[2] = angle.msin() * 7.0;
         angle += PI / 2.0;
     }
     angle = 0.471_238_94 + age * PI * -0.05;
     for i in 8..12 {
         let part = p.get(&format!("part{i}"));
-        part[1] = 11.0 + ((i as f32 * 1.5 + age) * 0.5).cos();
-        part[0] = angle.cos() * 5.0;
-        part[2] = angle.sin() * 5.0;
+        part[1] = 11.0 + ((i as f32 * 1.5 + age) * 0.5).mcos();
+        part[0] = angle.mcos() * 5.0;
+        part[2] = angle.msin() * 5.0;
         angle += PI / 2.0;
     }
     p.yrot("head", s.y_rot.to_radians());
@@ -365,7 +366,7 @@ impl Goal for GhastShoot {
             }
             if self.charge == 20 {
                 let yaw = m.yaw.to_radians();
-                let view = [-f64::from(yaw.sin()), f64::from(yaw.cos())];
+                let view = [-f64::from(yaw.msin()), f64::from(yaw.mcos())];
                 let half = f64::from(m.height()) * 0.5;
                 let ty = (t.bounds.min_position().y + t.bounds.max_position().y) * 0.5;
                 let dir = [
@@ -404,7 +405,7 @@ pub fn ghast_anim(s: &State, p: &mut Poses) {
     for i in 0..9 {
         let name = format!("tentacle{i}");
         if p.has(&name) {
-            p.xrot(&name, 0.2 * (s.age * 0.3 + i as f32).sin() + 0.4);
+            p.xrot(&name, 0.2 * (s.age * 0.3 + i as f32).msin() + 0.4);
         }
     }
 }

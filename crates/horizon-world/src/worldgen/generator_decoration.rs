@@ -560,8 +560,17 @@ impl FeatureWorld for World<'_> {
         {
             return Ok(false);
         }
+        let old = self.region.block(position)?;
         self.region.set_block_worldgen(position, state)?;
-        self.block_entities.retain(|(p, _)| *p != position);
+        // ProtoChunk keeps a block entity that already exists when the same kind
+        // of block is set again (a chest turning waterlogged); other changes drop it.
+        let registry = self.decoration.bindings.registry();
+        let same_block = old == state
+            || registry.state(old).map(|s| s.name.as_str())
+                == registry.state(state).map(|s| s.name.as_str());
+        if !same_block {
+            self.block_entities.retain(|(p, _)| *p != position);
+        }
         // WorldGenRegion.setBlock: BlockState.getPostProcessPos unless UPDATE_KNOWN_SHAPE.
         if flags & 16 == 0 {
             let [x, y, z] = position;
@@ -634,14 +643,55 @@ impl PlacementContext for World<'_> {
             .map(|shape| shape.is_empty())
             .map_err(query)
     }
-    /// Block entities are not stored in proto chunks; loot tables are no-ops.
+    /// RandomizableContainer.setBlockEntityLootTable: only a container block that
+    /// is actually there takes the table, and then it draws the loot seed.
     fn set_block_entity_loot_table(
         &mut self,
-        _: [i32; 3],
-        _: &str,
-        _: &mut impl horizon_core::random::RandomSource,
+        position: [i32; 3],
+        table: &str,
+        random: &mut impl horizon_core::random::RandomSource,
     ) -> Result<(), PlacementQueryError> {
-        Ok(())
+        use crate::nbt::Tag;
+        let chunk = self.region.chunk(position[0] >> 4, position[2] >> 4)?;
+        let state = chunk.block(position[0], position[1], position[2]);
+        let registry = self.decoration.bindings.registry();
+        let Some(name) = registry.state(state).map(|s| s.name.to_string()) else {
+            return Ok(());
+        };
+        if !matches!(
+            name.as_str(),
+            "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel"
+        ) {
+            return Ok(());
+        }
+        let mut nbt = crate::nbt::Compound::new();
+        nbt.insert("id".into(), Tag::String(name.as_str().into()));
+        nbt.insert("LootTable".into(), Tag::String(table.into()));
+        nbt.insert("LootTableSeed".into(), Tag::Long(random.next_long()));
+        self.set_block_entity(position, nbt)
+    }
+    /// SpawnerBlockEntity.setEntityId: the next spawn data and no potentials.
+    fn configure_spawner(
+        &mut self,
+        position: [i32; 3],
+        entity: &str,
+    ) -> Result<(), PlacementQueryError> {
+        use crate::nbt::Tag;
+        let chunk = self.region.chunk(position[0] >> 4, position[2] >> 4)?;
+        let state = chunk.block(position[0], position[1], position[2]);
+        let registry = self.decoration.bindings.registry();
+        if registry.state(state).map(|s| s.name.as_str()) != Some("minecraft:spawner") {
+            return Ok(());
+        }
+        let mut mob = crate::nbt::Compound::new();
+        mob.insert("id".into(), Tag::String(entity.into()));
+        let mut data = crate::nbt::Compound::new();
+        data.insert("entity".into(), Tag::Compound(mob));
+        let mut nbt = crate::nbt::Compound::new();
+        nbt.insert("id".into(), Tag::String("minecraft:mob_spawner".into()));
+        nbt.insert("SpawnData".into(), Tag::Compound(data));
+        nbt.insert("SpawnPotentials".into(), Tag::List(Vec::new()));
+        self.set_block_entity(position, nbt)
     }
     fn attachment_at(
         &mut self,

@@ -278,6 +278,14 @@ impl HudBatch {
     /// Clip the quads drawn since `start` to `[x0, x1) x [y0, y1)` (the
     /// GUI scissor): axis-aligned quads are cut with their UVs, others are
     /// kept or dropped by their centre.
+    /// Scale the vertices pushed since `start` about `(cx, cy)` (a GUI pose
+    /// matrix of translate, scale, translate back).
+    pub fn scale_since(&mut self, start: usize, cx: f32, cy: f32, sx: f32, sy: f32) {
+        for v in &mut self.vertices[start..] {
+            v.pos[0] = cx + (v.pos[0] - cx) * sx;
+            v.pos[1] = cy + (v.pos[1] - cy) * sy;
+        }
+    }
     pub fn clip_since(&mut self, start: usize, x0: f32, y0: f32, x1: f32, y1: f32) {
         let quads: Vec<[HudVertex; 6]> = self.vertices[start..].as_chunks::<6>().0.to_vec();
         self.vertices.truncate(start);

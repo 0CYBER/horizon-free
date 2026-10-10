@@ -10,6 +10,7 @@ use super::{
 };
 use horizon_core::{density::Beardifier, position::ChunkPos};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::{
     collections::{BTreeSet, HashMap},
     sync::{Arc, Mutex, OnceLock},
@@ -250,6 +251,26 @@ impl StructureState {
                         out.push(start.clone());
                     }
                 }
+            }
+        }
+        // Vanilla keeps each structure's references in a LongOpenHashSet and
+        // places the starts in its iteration order; reorder each structure's
+        // starts within the slots they already occupy.
+        let mut slots: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (i, start) in out.iter().enumerate() {
+            slots.entry(start.structure).or_default().push(i);
+        }
+        let original = out.clone();
+        for slots in slots.values().filter(|s| s.len() > 1) {
+            let keys: Vec<i64> = slots
+                .iter()
+                .map(|&i| {
+                    let c = original[i].chunk;
+                    i64::from(c.x as u32) | (i64::from(c.z as u32) << 32)
+                })
+                .collect();
+            for (&slot, &from) in slots.iter().zip(&super::long_set::iteration_order(&keys)) {
+                out[slot] = original[slots[from]].clone();
             }
         }
         out

@@ -40,6 +40,7 @@ pub struct Registries {
     /// Boss bar ids and datapack predicate ids.
     pub bossbars: Vec<String>,
     pub predicates: Vec<String>,
+    pub item_modifiers: Vec<String>,
     pub schedules: Vec<String>,
     pub stopwatches: Vec<String>,
     pub recipes: Vec<String>,
@@ -1936,6 +1937,7 @@ impl ArgType {
                     "templates" => reg.templates.clone(),
                     "random_sequences" => reg.random_sequences.clone(),
                     "predicates" => reg.predicates.clone(),
+                    "item_modifiers" => reg.item_modifiers.clone(),
                     "time_markers" => reg.time_markers.clone(),
                     "advancements" => reg.advancements.clone(),
                     _ => Vec::new(),

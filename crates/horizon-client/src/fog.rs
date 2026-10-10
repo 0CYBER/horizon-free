@@ -68,8 +68,30 @@ pub struct FogState {
     pub water_vision_time: i32,
     /// `AtmosphericFogEnvironment.rainFogMultiplier`.
     pub rain_fog_multiplier: f32,
+    /// `LightmapRenderStateExtractor.blockLightFlicker`.
+    pub block_light_flicker: f32,
+    flicker_seed: u64,
 }
 impl FogState {
+    fn next_float(&mut self) -> f32 {
+        // splitmix64: the vanilla source is unseeded `RandomSource.create()`.
+        self.flicker_seed = self.flicker_seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.flicker_seed;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) >> 40) as f32 / (1u32 << 24) as f32
+    }
+    /// `LightmapRenderStateExtractor.tick`: the torch light flickers.
+    pub fn tick_flicker(&mut self) {
+        let (a, b, c, d) = (
+            self.next_float(),
+            self.next_float(),
+            self.next_float(),
+            self.next_float(),
+        );
+        self.block_light_flicker += (a - b) * c * d * 0.1;
+        self.block_light_flicker *= 0.9;
+    }
     /// `LocalPlayer.aiStep`: water vision ramps up while the eye is in water.
     pub fn tick(&mut self, eye_in_water: bool) {
         self.water_vision_time = if eye_in_water {

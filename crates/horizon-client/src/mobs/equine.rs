@@ -9,6 +9,7 @@ use super::{
         Tempt, goal_clone,
     },
 };
+use horizon_core::geometry::trig::Mth;
 use horizon_core::random::RandomSource;
 use std::f32::consts::PI;
 
@@ -24,9 +25,9 @@ pub const COLORS: [&str; 7] = [
 pub const MARKINGS: [&str; 5] = ["", "white", "whitefield", "whitedots", "blackdots"];
 
 // AnimState slots.
-const EAT: usize = 0;
-const STAND: usize = 1;
-const MOUTH: usize = 2;
+pub const EAT: usize = 0;
+pub const STAND: usize = 1;
+pub const MOUTH: usize = 2;
 
 /// What a rider asks of its mount this tick.
 #[derive(Clone, Copy, Debug, Default)]
@@ -180,7 +181,7 @@ fn boost_factor(m: &mut Mob) -> f32 {
         m.extra.counter2 = 0;
         return 1.0;
     }
-    1.0 + 1.15 * (m.extra.counter as f32 / m.extra.counter2 as f32 * PI).sin()
+    1.0 + 1.15 * (m.extra.counter as f32 / m.extra.counter2 as f32 * PI).msin()
 }
 /// `AbstractHorse.MountPanicGoal`: only without a rider.
 #[derive(Clone, Debug)]
@@ -381,7 +382,7 @@ pub fn ridden_step(m: &mut Mob) {
         let impulse = m.extra.vector[0] as f32 * r.jump;
         m.velocity.y = f64::from(impulse);
         if forward > 0.0 {
-            let (s, c) = (m.yaw.to_radians().sin(), m.yaw.to_radians().cos());
+            let (s, c) = (m.yaw.to_radians().msin(), m.yaw.to_radians().mcos());
             m.velocity.x += f64::from(-0.4 * s * r.jump);
             m.velocity.z += f64::from(0.4 * c * r.jump);
         }
@@ -506,19 +507,19 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     let mut head_x = s.x_rot.to_radians();
     let (speed, pos) = (s.speed, s.pos);
     if speed > 0.2 {
-        head_x += (pos * 0.8).cos() * 0.15 * speed;
+        head_x += (pos * 0.8).mcos() * 0.15 * speed;
     }
     let eating = m.anim.lerp(EAT, s.partial);
     let standing = m.anim.lerp(STAND, s.partial);
     let istand = 1.0 - standing;
     let feeding = m.anim.lerp(MOUTH, s.partial);
     let in_water = if m.fluids.in_water { 0.2 } else { 1.0 };
-    let leg1 = (in_water * pos * 0.6662 + PI).cos();
+    let leg1 = (in_water * pos * 0.6662 + PI).mcos();
     let leg_x = leg1 * 0.8 * speed;
-    let base = (1.0 - standing.max(eating)) * (PI / 6.0 + head_x + feeding * s.age.sin() * 0.05);
+    let base = (1.0 - standing.max(eating)) * (PI / 6.0 + head_x + feeding * s.age.msin() * 0.05);
     p.xrot(
         "head_parts",
-        standing * (PI / 12.0 + head_x) + eating * (2.181_661_6 + s.age.sin() * 0.05) + base,
+        standing * (PI / 12.0 + head_x) + eating * (2.181_661_6 + s.age.msin() * 0.05) + base,
     );
     p.yrot(
         "head_parts",
@@ -551,7 +552,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         rf[2] = z;
     }
     let stand = stand_angle * standing;
-    let bob = (s.age * 0.6 + PI).cos();
+    let bob = (s.age * 0.6 + PI).mcos();
     let rleg = (stand_x_off + bob) * standing + leg_x * istand;
     let lleg = (stand_x_off - bob) * standing - leg_x * istand;
     p.xrot("left_hind_leg", stand - leg1 * 0.5 * speed * istand);
@@ -560,9 +561,10 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     p.xrot("right_front_leg", lleg);
     if baby && donkey {
         let lerp = |t: f32, a: f32, b: f32| a + (b - a) * t;
+        // BabyDonkeyModel lerps the right leg from the left leg's new height.
         let y = lerp(standing, p.get("left_hind_leg")[1], -0.3);
         p.get("left_hind_leg")[1] = y;
-        p.get("right_hind_leg")[1] = y;
+        p.get("right_hind_leg")[1] = lerp(standing, y, -0.3);
     }
     let age = if baby { 0.5 } else { 1.0 };
     p.xrot("tail", tail_off + PI / 6.0 + speed * 0.75);
@@ -572,4 +574,15 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         t[2] += speed * 2.0 * age;
     }
     p.yrot("tail", 0.0);
+    if baby && donkey {
+        // BabyDonkeyModel overrides the state's pitch with -30 degrees and
+        // sets the head parts again.
+        let head_x = -30.0f32 * horizon_core::geometry::trig::DEG_TO_RAD;
+        let base =
+            (1.0 - standing.max(eating)) * (PI / 6.0 + head_x + feeding * s.age.msin() * 0.05);
+        p.xrot(
+            "head_parts",
+            standing * (PI / 12.0 + head_x) + eating * (PI / 2.0 + s.age.msin() * 0.05) + base,
+        );
+    }
 }

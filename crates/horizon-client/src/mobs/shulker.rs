@@ -11,6 +11,7 @@ use super::{
     },
 };
 use crate::projectiles::{Projectile, ProjectileWorld, STEPS};
+use horizon_core::geometry::trig::Mth;
 use horizon_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
@@ -20,7 +21,7 @@ use std::f32::consts::PI;
 // Shulker state: `variant3` the attach face (3D data value), `counter` the
 // raw peek (0..100), `color` the shell colour (16 none). AnimState slot 0
 // the current peek amount.
-const PEEK: usize = 0;
+pub const PEEK: usize = 0;
 pub const NO_COLOR: u8 = 16;
 
 pub fn register(m: &mut Mob) {
@@ -335,14 +336,14 @@ pub fn rotations(m: &Mob) -> glam::Mat4 {
 pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     let peek = m.anim.lerp(PEEK, s.partial);
     let bs = (0.5 + peek) * PI;
-    let q = -1.0 + bs.sin();
+    let q = -1.0 + bs.msin();
     let extra = if bs > PI {
-        (s.age * 0.1).sin() * 0.7
+        (s.age * 0.1).msin() * 0.7
     } else {
         0.0
     };
     let lid = p.get("lid");
-    lid[1] = 16.0 + bs.sin() * 8.0 + extra;
+    lid[1] = 16.0 + bs.msin() * 8.0 + extra;
     lid[4] = if peek > 0.3 {
         q * q * q * q * PI * 0.125
     } else {

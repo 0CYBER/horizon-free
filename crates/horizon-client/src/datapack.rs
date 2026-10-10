@@ -280,6 +280,8 @@ pub struct DataStore {
     /// Function tag id -> entries (`ns:f`, `#ns:tag`), with `required` flags.
     pub function_tags: BTreeMap<String, Vec<(String, bool)>>,
     pub predicates: BTreeMap<String, serde_json::Value>,
+    /// `item_modifier` files, for `/item modify`.
+    pub item_modifiers: BTreeMap<String, serde_json::Value>,
     /// Functions that failed to parse (id, message), for logging.
     pub errors: Vec<(String, String)>,
 }
@@ -322,6 +324,11 @@ impl DataStore {
                     && let Ok(v) = serde_json::from_slice(&bytes)
                 {
                     s.predicates.insert(id, v);
+                } else if let Some(id) = resource_id(&f, "item_modifier", ".json")
+                    && let Some(bytes) = pack.read(&f)
+                    && let Ok(v) = serde_json::from_slice(&bytes)
+                {
+                    s.item_modifiers.insert(id, v);
                 }
             }
         }

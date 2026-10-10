@@ -78,6 +78,7 @@ pub enum Species {
     ElderGuardian,
     Shulker,
     Evoker,
+    Illusioner,
     Vex,
     Ravager,
     Wither,
@@ -906,6 +907,20 @@ pub const ALL: &[Def] = &[
         Baby::None
     ),
     def!(
+        Illusioner,
+        "illusioner",
+        "illusioner#main",
+        "entity/illager/illusioner",
+        A::Illager,
+        [
+            "entity.illusioner.ambient",
+            "entity.illusioner.hurt",
+            "entity.illusioner.death"
+        ],
+        None,
+        Baby::None
+    ),
+    def!(
         Allay,
         "allay",
         "allay#main",
@@ -1287,6 +1302,9 @@ impl Def {
             Species::Hoglin => &["hoglin_baby"],
             Species::Zoglin => &["zoglin_baby"],
             Species::Strider => &["strider_baby"],
+            Species::Camel => &["camel_baby"],
+            Species::ZombieHorse => &["zombie_horse_baby"],
+            Species::SkeletonHorse => &["skeleton_horse_baby"],
             _ => &[],
         };
         v.extend_from_slice(extra);
@@ -1435,6 +1453,7 @@ impl Def {
                 | S::ElderGuardian
                 | S::Shulker
                 | S::Evoker
+                | S::Illusioner
                 | S::Vex
                 | S::Ravager
                 | S::Wither

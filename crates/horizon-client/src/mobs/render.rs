@@ -8,6 +8,7 @@ use super::{
     living::wrap,
 };
 use crate::mesher::Vertex;
+use horizon_core::geometry::trig::Mth;
 use std::f32::consts::PI;
 
 /// A texture lookup into the shared atlas (name without namespace -> uv rect).
@@ -743,7 +744,7 @@ fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
             let s = ((m.previous_swell as f32 + (m.swell - m.previous_swell) as f32 * alpha)
                 / 28.0)
                 .clamp(0.0, 1.0);
-            let wobble = 1.0 + (s * 100.0).sin() * s * 0.01;
+            let wobble = 1.0 + (s * 100.0).msin() * s * 0.01;
             let s4 = s * s * s * s;
             let xz = (1.0 + s4 * 0.4) * wobble;
             let y = (1.0 + s4 * 0.1) / wobble;
@@ -775,10 +776,10 @@ pub fn draw(
             p[3],
         ))
         * glam::Mat4::from_scale(glam::Vec3::new(p[6], p[7], p[8]));
-    if p[6] == 0.0 && p[7] == 0.0 && p[8] == 0.0 {
+    if poses.is_hidden(part) || p[6] == 0.0 && p[7] == 0.0 && p[8] == 0.0 {
         return;
     }
-    for poly in &part.polygons {
+    for poly in part.polygons.iter().filter(|_| !poses.skips(part)) {
         for v in poly.vertices {
             let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
             out.push(Vertex {
@@ -822,10 +823,33 @@ pub fn render_with(
     extra: &[(&Part, [f32; 4], u32)],
     out: &mut Vec<Vertex>,
 ) {
-    // The invisibility effect hides the model (a drinking wandering trader).
+    // The invisibility effect hides the model (a drinking wandering trader);
+    // an illusioner shows its four mirror images instead.
     if super::trader::is_invisible(m) {
+        if m.species() == Species::Illusioner {
+            let age = m.age as f32 + alpha;
+            for (i, off) in super::illusioner::offsets(m, alpha).iter().enumerate() {
+                let w = super::illusioner::wobble(i, age);
+                let shifted =
+                    camera - glam::DVec3::new(off[0] + w[0], off[1] + w[1], off[2] + w[2]);
+                render_visible(m, alpha, shifted, atlas, light, data, extra, out);
+            }
+        }
         return;
     }
+    render_visible(m, alpha, camera, atlas, light, data, extra, out);
+}
+#[allow(clippy::too_many_arguments)]
+fn render_visible(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    atlas: Atlas,
+    light: u32,
+    data: &MobData,
+    extra: &[(&Part, [f32; 4], u32)],
+    out: &mut Vec<Vertex>,
+) {
     let base = base_transform(m, alpha, camera);
     let overlay =
         u32::from(m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m)));

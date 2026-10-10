@@ -60,7 +60,22 @@ pub struct ItemInfo {
     pub equip_sound: Option<String>,
     /// `jukebox_playable`: the jukebox song it plays.
     pub jukebox_song: Option<String>,
+    /// `crafting_remainder`: what stays in the grid when the item is used in a recipe.
+    pub crafting_remainder: Option<String>,
+    /// `dye`: the dye colour name (dyes, and anything else with the component).
+    pub dye: Option<String>,
+    /// `block_transformer`: the registry entry an axe, hoe or shovel uses on blocks.
+    pub block_transformer: Option<String>,
 }
+/// `Item.Properties.craftRemainder` (not a data component, so not in the
+/// default-component report): what an item leaves in the grid when crafted with.
+pub const CRAFT_REMAINDERS: [(&str, &str); 5] = [
+    ("minecraft:water_bucket", "minecraft:bucket"),
+    ("minecraft:lava_bucket", "minecraft:bucket"),
+    ("minecraft:milk_bucket", "minecraft:bucket"),
+    ("minecraft:dragon_breath", "minecraft:glass_bottle"),
+    ("minecraft:honey_bottle", "minecraft:glass_bottle"),
+];
 /// A reduction of `blocks_attacks.damage_reductions`.
 #[derive(Clone, Debug)]
 pub struct BlockReduction {
@@ -264,8 +279,6 @@ fn entity_spec(tags: &HashMap<String, HashSet<String>>, spec: &str) -> HashSet<S
 }
 impl Items {
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> Result<Self> {
-        let raw: BTreeMap<String, Value> =
-            serde_json::from_slice(&fs::read(root.join("items.json"))?)?;
         let mut block_for_item: HashMap<&str, BlockStateId> = HashMap::new();
         for (i, s) in facts.states.iter().enumerate() {
             let default = registry.default_state(&s.name);
@@ -275,6 +288,16 @@ impl Items {
                     .or_insert(BlockStateId(i as u32));
             }
         }
+        Self::load_with(root, &block_for_item)
+    }
+    /// Every item's default components and the tags, without the block <->
+    /// item mapping (for headless tools that never place blocks).
+    pub fn catalog(root: &Path) -> Result<Self> {
+        Self::load_with(root, &HashMap::new())
+    }
+    fn load_with(root: &Path, block_for_item: &HashMap<&str, BlockStateId>) -> Result<Self> {
+        let raw: BTreeMap<String, Value> =
+            serde_json::from_slice(&fs::read(root.join("items.json"))?)?;
         let entity_tags = load_tags(root, "entity_type")?;
         let mut items = HashMap::new();
         let mut order = Vec::new();
@@ -352,6 +375,12 @@ impl Items {
                         .as_str()
                         .map(str::to_owned),
                     jukebox_song: c["minecraft:jukebox_playable"].as_str().map(str::to_owned),
+                    dye: c["minecraft:dye"].as_str().map(str::to_owned),
+                    block_transformer: c["minecraft:block_transformer"].as_str().map(str::to_owned),
+                    crafting_remainder: CRAFT_REMAINDERS
+                        .iter()
+                        .find(|(item, _)| *item == name)
+                        .map(|(_, rest)| (*rest).to_owned()),
                     use_speed: c["minecraft:use_effects"]["speed_multiplier"]
                         .as_f64()
                         .unwrap_or(0.2) as f32,

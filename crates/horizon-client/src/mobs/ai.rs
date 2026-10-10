@@ -122,7 +122,7 @@ pub fn family(s: Species) -> Family {
         S::Wolf | S::Cat => Family::Tame,
         S::Blaze | S::Ghast => Family::Nether,
         S::IronGolem | S::SnowGolem => Family::Golem,
-        S::Pillager | S::Vindicator | S::Evoker => Family::Illager,
+        S::Pillager | S::Vindicator | S::Evoker | S::Illusioner => Family::Illager,
         S::Vex => Family::Vex,
         S::Ravager => Family::Ravager,
         S::Wither => Family::Wither,
@@ -168,6 +168,7 @@ pub fn register(m: &mut Mob) {
         Family::Golem => super::golem::register_snow(m),
         Family::Illager if m.species() == Species::Pillager => super::illager::register_pillager(m),
         Family::Illager if m.species() == Species::Evoker => super::illager::register_evoker(m),
+        Family::Illager if m.species() == Species::Illusioner => super::illusioner::register(m),
         Family::Illager => super::illager::register_vindicator(m),
         Family::Equine => super::equine::register(m),
         Family::Phantom => super::phantom::register(m),
@@ -383,6 +384,9 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
     }
     tick_effects(m);
+    if m.species() == Species::Illusioner {
+        super::illusioner::tick(m, events);
+    }
     if m.hurt_time > 0 {
         m.hurt_time -= 1;
     }

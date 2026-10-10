@@ -147,7 +147,7 @@ fn launch(socket: &Path, args: &[String]) -> Result<bool, String> {
         .stderr(file)
         .spawn()
         .map_err(|e| format!("{}: {e}", game.display()))?;
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(300);
     while Instant::now() < deadline {
         if UnixStream::connect(socket).is_ok() {
             println!(
@@ -160,7 +160,7 @@ fn launch(socket: &Path, args: &[String]) -> Result<bool, String> {
     }
     println!(
         "{}",
-        serde_json::json!({ "error": "control socket did not open within 60 seconds", "log": log })
+        serde_json::json!({ "error": "control socket did not open within 300 seconds", "log": log })
     );
     Ok(false)
 }

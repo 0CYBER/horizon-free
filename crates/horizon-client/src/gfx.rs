@@ -80,6 +80,10 @@ pub struct Frame<'a> {
     /// The darkness effect on the lightmap: the brightness it takes off the
     /// gamma option and the pulsing scale subtracted from the light.
     pub darkness: (f32, f32),
+    /// Night vision (or conduit water vision) intensity on the lightmap.
+    pub night_vision: f32,
+    /// Torch flicker added to the block light factor of 1.4.
+    pub block_flicker: f32,
 }
 pub struct Renderer {
     instance: wgpu::Instance,
@@ -919,16 +923,21 @@ impl Renderer {
     }
     /// VSync on: tear-free presentation (Mailbox, else Fifo); off: Immediate when available.
     pub fn set_vsync(&mut self, vsync: bool) {
-        let has = |m| self.present_modes.contains(&m);
-        let mode = match (
-            vsync,
-            has(wgpu::PresentMode::Mailbox),
-            has(wgpu::PresentMode::Immediate),
-        ) {
-            (true, true, _) => wgpu::PresentMode::Mailbox,
-            (true, false, _) => wgpu::PresentMode::Fifo,
-            (false, _, true) => wgpu::PresentMode::Immediate,
-            (false, true, false) => wgpu::PresentMode::Mailbox,
+        use crate::window::{PresentMode, vsync_present_mode};
+        let supported: Vec<PresentMode> = self
+            .present_modes
+            .iter()
+            .filter_map(|m| match m {
+                wgpu::PresentMode::Fifo => Some(PresentMode::Fifo),
+                wgpu::PresentMode::Mailbox => Some(PresentMode::Mailbox),
+                wgpu::PresentMode::Immediate => Some(PresentMode::Immediate),
+                _ => None,
+            })
+            .collect();
+        // GpuSurface.PresentMode.getSupportedVsyncMode.
+        let mode = match vsync_present_mode(&supported, vsync) {
+            Some(PresentMode::Mailbox) => wgpu::PresentMode::Mailbox,
+            Some(PresentMode::Immediate) => wgpu::PresentMode::Immediate,
             _ => wgpu::PresentMode::Fifo,
         };
         if self.config.present_mode != mode {
@@ -1077,7 +1086,14 @@ impl Renderer {
             * bob
             * Mat4::look_to_rh(Vec3::ZERO, forward, Vec3::Y)
     }
-    fn update_lightmap(&self, sky: &Sky, darkness: f32, gamma: f32) {
+    fn update_lightmap(
+        &self,
+        sky: &Sky,
+        darkness: f32,
+        gamma: f32,
+        night_vision: f32,
+        flicker: f32,
+    ) {
         // lightmap.fsh: per (block, sky) level.
         let brightness = |level: f32| level / (4.0 - 3.0 * level);
         let mut pixels = [0u8; 16 * 16 * 4];
@@ -1085,9 +1101,11 @@ impl Renderer {
             for b in 0..16 {
                 let block_level = b as f32 / 15.0;
                 let sky_level = s as f32 / 15.0;
-                let block_brightness = brightness(block_level) * 1.4;
+                let block_brightness = brightness(block_level) * (1.4 + flicker);
                 let sky_brightness = brightness(sky_level) * sky.sky_light_factor;
-                let mut color = Vec3::from(sky.ambient_light_color);
+                // NightVisionColor defaults to 0x999999.
+                let mut color =
+                    Vec3::from(sky.ambient_light_color).max(Vec3::splat(0.6 * night_vision));
                 color += Vec3::from(sky.sky_light_color) * sky_brightness;
                 let parabolic = (2.0 * block_level - 1.0).powi(2);
                 let block_color = Vec3::from(sky.block_light_tint).lerp(Vec3::ONE, 0.9 * parabolic);
@@ -1193,6 +1211,8 @@ impl Renderer {
             &frame.sky,
             frame.darkness.1,
             (self.gamma - frame.darkness.0).max(0.0),
+            frame.night_vision,
+            frame.block_flicker,
         );
         let view_proj = self.view_projection(frame);
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;

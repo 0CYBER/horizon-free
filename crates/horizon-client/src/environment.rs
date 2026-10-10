@@ -229,7 +229,7 @@ impl Environment {
         self.base.get(name).copied().unwrap_or([0.0, 0.0, 0.0, 1.0])
     }
     /// Sky state for a time of day, with the biome's sky and fog colours as base values.
-    pub fn sample(&self, ticks: i64, biome_sky: u32, biome_fog: u32) -> Sky {
+    pub fn sample(&self, ticks: i64, biome_sky: Option<u32>, biome_fog: Option<u32>) -> Sky {
         let rgb = |c: u32| {
             [
                 (c >> 16 & 255) as f32 / 255.0,
@@ -260,8 +260,14 @@ impl Environment {
                 .map_or(0.0, |t| t.sample(ticks, self.period)[0])
         };
         Sky {
-            sky_color: three(v("minecraft:visual/sky_color", rgb(biome_sky))),
-            fog_color: three(v("minecraft:visual/fog_color", rgb(biome_fog))),
+            sky_color: three(v(
+                "minecraft:visual/sky_color",
+                biome_sky.map_or_else(|| self.base("minecraft:visual/sky_color"), rgb),
+            )),
+            fog_color: three(v(
+                "minecraft:visual/fog_color",
+                biome_fog.map_or_else(|| self.base("minecraft:visual/fog_color"), rgb),
+            )),
             sky_light_factor: scalar("minecraft:visual/sky_light_factor"),
             sky_light_color: three(v(
                 "minecraft:visual/sky_light_color",
@@ -279,7 +285,10 @@ impl Environment {
                 .map_or([0.0; 4], |t| t.sample(ticks, self.period)),
             cloud_color: v(
                 "minecraft:visual/cloud_color",
-                self.base("minecraft:visual/cloud_color"),
+                self.base
+                    .get("minecraft:visual/cloud_color")
+                    .copied()
+                    .unwrap_or([0.0; 4]),
             ),
             sky_light_level: scalar("minecraft:gameplay/sky_light_level") / 15.0,
             fog_start: self
@@ -304,24 +313,26 @@ pub fn apply_weather(sky: &mut Sky, rain: f32, thunder: f32) {
         std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
     };
     let lerp = |t: f32, a: f32, b: f32| a + (b - a) * t;
-    let night = [0.48, 0.48, 1.0];
+    // Vanilla stores these colours as 8-bit ARGB (`ARGB.colorFromFloat` floors).
+    let q = |v: f32| (v * 255.0).floor() / 255.0;
+    let night = [q(0.48), q(0.48), 1.0];
     // (level, sky gray (brightness, factor), fog multiplier, cloud gray, alpha, sunrise multiplier)
     let layers = [
         (
             rain - thunder,
             (0.6, 0.75),
-            [0.5, 0.5, 0.6],
+            [q(0.5), q(0.5), q(0.6)],
             (0.24, 0.5),
             0.3125,
-            [0.5, 0.5, 0.6],
+            [q(0.5), q(0.5), q(0.6)],
         ),
         (
             thunder,
             (0.24, 0.94),
-            [0.25, 0.25, 0.3],
+            [q(0.25), q(0.25), q(0.3)],
             (0.095, 0.94),
             0.527_343_75,
-            [0.25, 0.25, 0.3],
+            [q(0.25), q(0.25), q(0.3)],
         ),
     ];
     for (level, (sb, sf), fog, (cb, cf), alpha, sunrise) in layers {
@@ -347,7 +358,7 @@ pub fn apply_weather(sky: &mut Sky, rain: f32, thunder: f32) {
         sky.sky_light_color = lerp3(
             level,
             sky.sky_light_color,
-            lerp3(alpha, sky.sky_light_color, night),
+            lerp3(q(alpha), sky.sky_light_color, night),
         );
         sky.sky_light_factor = lerp(
             level,

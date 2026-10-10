@@ -336,30 +336,28 @@ impl Game<'_> {
         }
     }
     fn sculk_scan_chunk(&mut self, key: (i32, i32)) {
-        use horizon_client::chunk::{Blocks, MIN_Y};
+        use horizon_client::chunk::MIN_Y;
         let Some(chunk) = self.world.chunks.get(&key).cloned() else {
             return;
         };
         let mut found = Vec::new();
         for (s, section) in chunk.sections.iter().enumerate() {
             let y0 = MIN_Y + s as i32 * 16;
-            match &section.blocks {
-                Blocks::Uniform(v) => {
-                    // A uniform section of sculk blocks does not exist.
-                    let _ = v;
-                }
-                Blocks::Full(a) => {
-                    for (i, v) in a.iter().enumerate() {
-                        if self.kind_of_state(*v) != 0 {
-                            let (x, z, y) = (i & 15, (i >> 4) & 15, i >> 8);
-                            found.push((
-                                key.0 * 16 + x as i32,
-                                y0 + y as i32,
-                                key.1 * 16 + z as i32,
-                                *v,
-                            ));
-                        }
-                    }
+            if section.blocks.uniform().is_some() {
+                // A uniform section of sculk blocks does not exist.
+                continue;
+            }
+            let mut a = [0u16; 4096];
+            section.unpack(&mut a);
+            for (i, v) in a.iter().enumerate() {
+                if self.kind_of_state(*v) != 0 {
+                    let (x, z, y) = (i & 15, (i >> 4) & 15, i >> 8);
+                    found.push((
+                        key.0 * 16 + x as i32,
+                        y0 + y as i32,
+                        key.1 * 16 + z as i32,
+                        *v,
+                    ));
                 }
             }
         }
@@ -1094,6 +1092,29 @@ impl Game<'_> {
         let pulse =
             ((self.ticks as f32 - partial) * std::f32::consts::PI * 0.025).cos() * 0.45 * modifier;
         (modifier, pulse.max(0.0))
+    }
+
+    /// `LightmapRenderStateExtractor`: the night vision effect's intensity
+    /// (`GameRenderer.nightVisionScale`), or conduit power's water vision.
+    pub(super) fn night_vision_intensity(&self) -> f32 {
+        use horizon_client::fog::FogType;
+        if let Some(e) = self.potions.effects.get("night_vision") {
+            // MobEffectInstance.endsWithin(200); -1 is infinite.
+            return if e.duration < 0 || e.duration > 200 {
+                1.0
+            } else {
+                0.7 + (e.duration as f32 * std::f32::consts::PI * 0.2).sin() * 0.3
+            };
+        }
+        if self.potions.effects.get("conduit_power").is_some()
+            && let Some(eye) = self.eye_position()
+        {
+            let in_water =
+                horizon_client::fog::fog_type(&self.world, &self.res.facts, eye, self.forward())
+                    == FogType::Water;
+            return self.res.fog.state.water_vision(in_water);
+        }
+        0.0
     }
 
     /// `Warden.applyDarknessAround` / `MobEffectUtil.addEffectToPlayersAround`.

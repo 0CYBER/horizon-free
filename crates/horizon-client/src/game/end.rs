@@ -933,9 +933,14 @@ impl Game<'_> {
         };
         let mut found = Vec::new();
         for (s, section) in chunk.sections.iter().enumerate() {
-            let horizon_client::chunk::Blocks::Full(blocks) = &section.blocks else {
+            if !section
+                .blocks
+                .maybe_has(|v| v == u32::from(portal) || v == u32::from(gateway))
+            {
                 continue;
-            };
+            }
+            let mut blocks = Box::new([0u16; 4096]);
+            section.unpack(&mut blocks);
             for (i, &b) in blocks.iter().enumerate() {
                 if b == portal || b == gateway {
                     let y = horizon_client::chunk::MIN_Y + s as i32 * 16 + (i >> 8) as i32;

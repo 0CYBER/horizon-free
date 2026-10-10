@@ -578,7 +578,7 @@ impl Game<'_> {
                         (_, Some(1)) => m.extra.chest = Some(item.clone()),
                         (_, Some(2)) => m.extra.legs = Some(item.clone()),
                         (_, Some(3)) => m.extra.feet = Some(item.clone()),
-                        ("saddle", _) => m.extra.saddled = true,
+                        ("saddle", _) => m.set_saddle(Some(one.clone())),
                         _ => m.extra.head = Some(item.clone()),
                     }
                     // setGuaranteedDrop / setPersistenceRequired.
@@ -1155,6 +1155,7 @@ impl Game<'_> {
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
             self.world.block_entities.insert(target, entity);
             self.fill_placed_box([target.0, target.1, target.2], &stack);
+            self.name_placed_container([target.0, target.1, target.2], &stack);
         }
         let sounds = self.res.facts.get(state).sounds.clone();
         self.audio.play(

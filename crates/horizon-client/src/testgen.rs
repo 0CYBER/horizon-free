@@ -76,7 +76,12 @@ impl ChunkGenerator for TestTerrain {
 impl TestTerrain {
     fn generate(&self, _: &mut (), cx: i32, cz: i32) -> Chunk {
         let mut chunk = Chunk::empty(cx, cz);
-        chunk.biomes = std::sync::Arc::new(vec![self.plains; chunk.biomes.len()]);
+        for s in &mut chunk.sections {
+            std::sync::Arc::make_mut(s).biomes = horizon_core::paletted::PalettedContainer::new(
+                crate::chunk::BIOME_STRATEGY,
+                u32::from(self.plains),
+            );
+        }
         for z in 0..16 {
             for x in 0..16 {
                 let (wx, wz) = (cx * 16 + x, cz * 16 + z);

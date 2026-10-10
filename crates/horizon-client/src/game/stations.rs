@@ -1305,7 +1305,13 @@ impl Game<'_> {
                     );
                 }
             }
-            let title = self.translate("container.brewing", "Brewing Stand");
+            let default = self.translate("container.brewing", "Brewing Stand");
+            let title = self
+                .station
+                .as_ref()
+                .and_then(|s| self.world.block_names.get(&(s.pos[0], s.pos[1], s.pos[2])))
+                .cloned()
+                .unwrap_or(default);
             let tw = HudBatch::text_width(atlas, &title);
             batch.text(
                 atlas,

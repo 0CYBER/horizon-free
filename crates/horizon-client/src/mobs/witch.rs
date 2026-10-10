@@ -9,6 +9,7 @@ use super::{
     },
 };
 use crate::projectiles::{Projectile, ProjectileKind};
+use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
 
 pub fn register(m: &mut Mob) {
@@ -258,20 +259,15 @@ pub fn ai_step(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
 pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     p.yrot("head", s.y_rot.to_radians());
     p.xrot("head", s.x_rot.to_radians());
-    p.xrot("right_leg", (s.pos * 0.6662).cos() * 1.4 * s.speed * 0.5);
+    p.xrot("right_leg", (s.pos * 0.6662).mcos() * 1.4 * s.speed * 0.5);
     p.xrot(
         "left_leg",
-        (s.pos * 0.6662 + std::f32::consts::PI).cos() * 1.4 * s.speed * 0.5,
+        (s.pos * 0.6662 + std::f32::consts::PI).mcos() * 1.4 * s.speed * 0.5,
     );
     let speed = 0.01 * (m.id % 10) as f32;
-    p.xrot(
-        "nose",
-        (s.age * speed).sin() * 4.5 * std::f32::consts::PI / 180.0,
-    );
-    p.zrot(
-        "nose",
-        (s.age * speed).cos() * 2.5 * std::f32::consts::PI / 180.0,
-    );
+    let deg = horizon_core::geometry::trig::DEG_TO_RAD;
+    p.xrot("nose", (s.age * speed).msin() * 4.5 * deg);
+    p.zrot("nose", (s.age * speed).mcos() * 2.5 * deg);
     if m.extra.main_hand.is_some() {
         let n = p.get("nose");
         n[0] = 0.0;
