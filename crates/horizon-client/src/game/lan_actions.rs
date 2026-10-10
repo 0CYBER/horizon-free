@@ -519,7 +519,12 @@ impl Game<'_> {
         let lines = self.as_guest(host, conn, |g| {
             g.chat_capture = Some(Vec::new());
             g.run_command(&command);
-            g.chat_capture.take().unwrap_or_default()
+            g.chat_capture
+                .take()
+                .unwrap_or_default()
+                .iter()
+                .map(horizon_client::text::Text::plain)
+                .collect::<Vec<String>>()
         });
         for line in lines.unwrap_or_default() {
             host.hub.send_to(

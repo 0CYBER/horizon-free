@@ -324,6 +324,15 @@ impl Game<'_> {
                 );
             }
         }
+        // Vanilla's built-in registries (mob effects, components, dialogs...).
+        for dir in [&self.options.resources, &self.ui.vanilla_root] {
+            if let Ok(bytes) = std::fs::read(dir.join("command-registries.json"))
+                && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            {
+                self.ui.registries.fill_from_export(&v);
+                break;
+            }
+        }
         let reg = &mut self.ui.registries;
         reg.timelines = self.ui.timelines.keys().cloned().collect();
         reg.time_markers = self
@@ -368,7 +377,7 @@ impl Game<'_> {
     /// A chat message from the game (ChatComponent.addServerSystemMessage).
     pub(super) fn system_message(&mut self, text: Text) {
         if let Some(capture) = self.chat_capture.as_mut() {
-            capture.push(text.plain());
+            capture.push(text);
             return;
         }
         let focused = self.screen == Screen::Chat;

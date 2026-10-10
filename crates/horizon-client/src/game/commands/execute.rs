@@ -189,6 +189,12 @@ impl Game<'_> {
     }
     /// `CommandResultCallback`s of a source's `store` chain, oldest first.
     fn deliver(&mut self, store: Option<u32>, success: bool, value: i32) {
+        // The outermost source's own CommandResultCallback (harness record).
+        if self.exec.function_depth == 0
+            && let Some(results) = self.cmds.results.as_mut()
+        {
+            results.push((success, value));
+        }
         let mut chain = Vec::new();
         let mut at = store;
         while let Some(i) = at {

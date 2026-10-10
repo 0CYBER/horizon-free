@@ -14,6 +14,7 @@ mod breezes;
 mod cartography;
 mod chat;
 mod combat;
+mod command_harness;
 mod commands;
 mod control;
 mod creaking;
@@ -733,7 +734,9 @@ struct Game<'a> {
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     lan_acting: Option<u32>,
     /// Command feedback to forward to a guest.
-    chat_capture: Option<Vec<String>>,
+    chat_capture: Option<Vec<horizon_client::text::Text>>,
+    /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
+    cmds: commands::extra::CommandExtras,
     /// Allow Cheats: whether guests may be given commands.
     cheats: bool,
     ui: chat::UiState,
@@ -2470,6 +2473,8 @@ impl Game<'_> {
         }
         self.apply_totem();
         self.update_totem_ready();
+        self.tick_command_extras();
+        let camera_eye = self.camera_eye_height();
         if self.riding.is_some() && self.player.is_some() {
             let playing = self.screen == Screen::Playing;
             let held = |k| playing && self.keys.contains(&k);
@@ -2560,7 +2565,7 @@ impl Game<'_> {
         }
         let feet = [player.position.x, player.position.y, player.position.z];
         self.previous_eye = self.eye;
-        self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
+        self.eye += (camera_eye.unwrap_or(player.dimensions.eye_height) - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         self.record_combat(&events);
         for event in events {
@@ -8611,6 +8616,7 @@ pub fn run() -> Result<()> {
         lan_events: Vec::new(),
         lan_acting: None,
         chat_capture: None,
+        cmds: Default::default(),
         cheats: true,
         ui: Default::default(),
         combat: Default::default(),
@@ -8654,6 +8660,12 @@ pub fn run() -> Result<()> {
             game.open_world(&folder, None, Some(seed), creative)?;
         }
         None => game.title = Some(Title::new(std::env::current_dir()?.join("saves"))),
+    }
+    if let (Some(script), Some(output)) = (
+        std::env::var_os("HORIZON_COMMAND_SCRIPT"),
+        std::env::var_os("HORIZON_COMMAND_OUTPUT"),
+    ) {
+        return game.run_command_harness(script.as_ref(), output.as_ref());
     }
     EventLoop::new()?.run_app(&mut game)?;
     if let Some(path) = &game.options.report {

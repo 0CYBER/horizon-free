@@ -83,6 +83,67 @@ pub struct RegistryIds {
 }
 const EMPTY: &[String] = &[];
 impl Registries {
+    /// Fill what the game did not build itself from vanilla's exported
+    /// registries (`command-registries.json`, written by
+    /// `VanillaCommandParseOracle registries`): built-in registries such as
+    /// mob effects, data component types and dialogs, block entities and tag
+    /// members. Registries that data packs reload stay with the game.
+    pub fn fill_from_export(&mut self, r: &serde_json::Value) {
+        fn strings(v: &serde_json::Value) -> Vec<String> {
+            v.as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default()
+        }
+        let fill = |field: &mut Vec<String>, key: &str| {
+            if field.is_empty() {
+                *field = strings(&r[key]);
+            }
+        };
+        fill(&mut self.effects, "effects");
+        fill(&mut self.enchantments, "enchantments");
+        fill(&mut self.attributes, "attributes");
+        fill(&mut self.damage_types, "damage_types");
+        fill(&mut self.templates, "templates");
+        fill(&mut self.persistent_components, "persistent_components");
+        fill(&mut self.learnable_recipes, "learnable_recipes");
+        const RELOADED: [&str; 5] = [
+            "minecraft:advancement",
+            "minecraft:recipe",
+            "minecraft:loot_table",
+            "minecraft:predicate",
+            "minecraft:item_modifier",
+        ];
+        for (name, entry) in r["by_registry"].as_object().into_iter().flatten() {
+            if RELOADED.contains(&name.as_str()) || self.by_registry.contains_key(name) {
+                continue;
+            }
+            self.by_registry.insert(
+                name.clone(),
+                RegistryIds {
+                    ids: strings(&entry["ids"]),
+                    tags: strings(&entry["tags"]),
+                },
+            );
+        }
+        if self.block_entities.is_empty() {
+            self.block_entities = strings(&r["block_entities"]).into_iter().collect();
+        }
+        if self.block_tag_members.is_empty() {
+            for (tag, members) in r["block_tag_members"].as_object().into_iter().flatten() {
+                self.block_tag_members.insert(tag.clone(), strings(members));
+            }
+        }
+        if self.clock_time_markers.is_empty() {
+            for (clock, markers) in r["clock_time_markers"].as_object().into_iter().flatten() {
+                self.clock_time_markers.insert(clock.clone(), strings(markers));
+            }
+        }
+        if self.advancement_criteria.is_empty() {
+            for (id, criteria) in r["advancement_criteria"].as_object().into_iter().flatten() {
+                self.advancement_criteria.insert(id.clone(), strings(criteria));
+            }
+        }
+    }
     /// The element ids of a registry (sorted).
     pub fn ids(&self, registry: &str) -> &[String] {
         if let Some(r) = self.by_registry.get(registry) {
@@ -1539,7 +1600,8 @@ impl ArgType {
                     if block {
                         parse_coord_int(reader)
                     } else {
-                        parse_coord_double(reader, false)
+                        // Vec2Argument.vec2(): integers are centred on the block.
+                        parse_coord_double(reader, true)
                     }
                 };
                 let x = one(reader)?;

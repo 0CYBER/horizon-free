@@ -35,6 +35,7 @@ pub mod entities;
 pub mod entity_nbt;
 pub mod environment;
 pub mod fog;
+pub mod fastutil_order;
 pub mod font;
 pub mod gamerules;
 pub mod gfx;

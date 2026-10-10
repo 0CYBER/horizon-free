@@ -147,6 +147,16 @@ impl Game<'_> {
     }
 
     pub(super) fn lan_open(&mut self, settings: LanSettings) -> Result<()> {
+        self.lan_start(settings)?;
+        let port = self.lan.as_ref().map_or(0, |l| l.settings.port);
+        self.system_message(Text::translate(
+            "menu.multiplayerOptions.publish.started.lan",
+            &[Text::literal(port.to_string())],
+        ));
+        Ok(())
+    }
+    /// IntegratedServer.publishServer without the screen's announcement.
+    pub(super) fn lan_start(&mut self, settings: LanSettings) -> Result<()> {
         if self.lan.is_some() || self.remote.is_some() || self.title.is_some() {
             return Err("already open".into());
         }
@@ -221,10 +231,6 @@ impl Game<'_> {
             mob_state: HashMap::new(),
         });
         self.audio.capture = Some(Vec::new());
-        self.system_message(Text::translate(
-            "menu.multiplayerOptions.publish.started.lan",
-            &[Text::literal(port.to_string())],
-        ));
         Ok(())
     }
 

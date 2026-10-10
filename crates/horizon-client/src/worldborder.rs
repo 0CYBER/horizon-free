@@ -1,7 +1,7 @@
 //! The world border (`WorldBorder`): its size lerp, centre, damage and
 //! warning settings, and how far a point is from its edge.
 
-pub const MAX_SIZE: f64 = 5.999_997e7;
+pub const MAX_SIZE: f64 = 5.999_996_8e7;
 pub const MAX_CENTER: f64 = 2.999_998_4e7;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,7 +19,7 @@ impl Default for WorldBorder {
     fn default() -> Self {
         Self {
             center: [0.0, 0.0],
-            size: 5.999_997e7,
+            size: MAX_SIZE,
             lerp: None,
             damage_per_block: 0.2,
             safe_zone: 5.0,

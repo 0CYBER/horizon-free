@@ -3,6 +3,7 @@
 mod data;
 mod effects;
 pub(super) mod execute;
+pub(super) mod extra;
 mod items;
 mod misc;
 mod place;
@@ -283,7 +284,11 @@ impl Game<'_> {
     /// Entity.getDisplayName.
     pub(super) fn target_name(&self, t: Target) -> Text {
         match t {
-            Target::Player => Text::literal(PLAYER_NAME),
+            Target::Player => match self.score.board.players_team(PLAYER_NAME) {
+                // PlayerTeam.formatNameForTeam.
+                Some(team) => team.formatted_name(Text::literal(PLAYER_NAME)),
+                None => Text::literal(PLAYER_NAME),
+            },
             Target::Item(id) => {
                 let item = self
                     .dropped
@@ -537,6 +542,17 @@ impl Game<'_> {
             "clear" => self.cmd_clear(ctx),
             "item" => self.cmd_item(ctx),
             "item.modify" => self.cmd_item_modify(ctx),
+            "spectate" => self.cmd_spectate(ctx),
+            id if id.starts_with("waypoint.") => self.cmd_waypoint(id, ctx),
+            id if id.starts_with("dialog.") => self.cmd_dialog(id, ctx),
+            id if id.starts_with("posteffect.") => self.cmd_posteffect(id, ctx),
+            "kick" => self.cmd_kick(ctx),
+            "fetchprofile" => self.cmd_fetchprofile(ctx),
+            "publish" => self.cmd_publish(ctx),
+            "unpublish" => self.cmd_unpublish(),
+            "debug" => self.cmd_debug(ctx),
+            "jfr" => self.cmd_jfr(ctx),
+            "version" => self.cmd_version(),
             "place" => self.cmd_place(ctx),
             "recipe.give" | "recipe.take" => self.cmd_recipe(id, ctx),
             "damage" => self.cmd_damage(ctx),
@@ -583,7 +599,7 @@ impl Game<'_> {
                         "commands.list.nameAndId",
                         &[
                             Text::literal(PLAYER_NAME),
-                            Text::literal("00000000-0000-0000-0000-000000000000"),
+                            Text::literal(self.player_uuid_string()),
                         ],
                     )
                 } else {
@@ -655,16 +671,23 @@ impl Game<'_> {
             }
             count += 1;
             let mode_name = Text::translate(&format!("gameMode.{}", mode.name()), &[]);
-            if ctx.get("target").is_none() {
+            // GameModeCommand.logGamemodeChange: the source's own entity.
+            let own = match self.command_source {
+                None => true,
+                Some(s) => s.entity == Some(t),
+            };
+            if own {
                 self.feedback(Text::translate(
                     "commands.gamemode.success.self",
                     &[mode_name],
                 ));
             } else {
-                self.system_message(Text::translate(
-                    "gameMode.changed",
-                    std::slice::from_ref(&mode_name),
-                ));
+                if self.ui.rules.bool("send_command_feedback") {
+                    self.system_message(Text::translate(
+                        "gameMode.changed",
+                        std::slice::from_ref(&mode_name),
+                    ));
+                }
                 self.feedback(Text::translate(
                     "commands.gamemode.success.other",
                     &[Text::literal(PLAYER_NAME), mode_name],
@@ -686,6 +709,15 @@ impl Game<'_> {
             .append(Text::literal(self.res.names.item(item)))
             .append("]")
             .with_color(color)
+    }
+    /// ItemStack.getDisplayName of a renamed stack: the name in italics.
+    pub(super) fn item_display_name_custom(&self, item: &str, custom: &str) -> Text {
+        let color = self.item_display_name(item).spans.first().and_then(|s| s.style.color);
+        let mut t = Text::translate("chat.square_brackets", &[Text::literal(custom).italic()]);
+        if let Some(c) = color {
+            t = t.with_color(c);
+        }
+        t
     }
     fn item_rarity(&self, item: &str) -> String {
         static RARITY: std::sync::OnceLock<std::collections::HashMap<String, String>> =
@@ -757,7 +789,10 @@ impl Game<'_> {
                 }
             }
         }
-        let name = self.item_display_name(&id);
+        let name = match extra.as_ref().and_then(|e| e.custom_name.clone()) {
+            Some(custom) => self.item_display_name_custom(&id, &custom),
+            None => self.item_display_name(&id),
+        };
         let message = if targets.len() == 1 {
             Text::translate(
                 "commands.give.success.single",
@@ -1119,7 +1154,7 @@ impl Game<'_> {
         w.raining = raining;
         w.thundering = thundering;
         self.feedback(Text::translate(key, &[]));
-        Ok(duration.unwrap_or(0))
+        Ok(duration.unwrap_or(-1))
     }
     fn kill_target(&mut self, t: Target) {
         match t {
@@ -1499,20 +1534,28 @@ impl Game<'_> {
                             dest[2] + z - min[2],
                         ],
                         s,
+                        self.world.block_entities.get(&(x, y, z)).cloned(),
                     ));
                 }
             }
         }
         if moving {
-            for (from, _, _) in &copies {
+            for (from, _, _, _) in &copies {
                 self.place_state(*from, air, true)?;
             }
         }
         let strict = ctx.has("strict");
+        // CloneCommands.clone sets every destination to a barrier first, so
+        // each copied state but a barrier counts as placed.
+        let barrier = self.res.assets.registry.default_state("minecraft:barrier");
         let mut count = 0;
-        for (_, to, s) in copies {
-            if self.place_state(to, s, strict)? {
+        for (_, to, s, entity) in copies {
+            self.place_state(to, s, strict)?;
+            if Some(s) != barrier {
                 count += 1;
+            }
+            if let Some(e) = entity {
+                self.world.block_entities.insert((to[0], to[1], to[2]), e);
             }
         }
         if count == 0 {
@@ -1760,7 +1803,7 @@ impl Game<'_> {
         if self.ui.difficulty == i {
             return Err(CommandError::new(Text::translate(
                 "commands.difficulty.failure",
-                &[Text::literal(DIFFICULTIES[i as usize])],
+                &[name(i)],
             )));
         }
         self.ui.difficulty = i;
@@ -1810,7 +1853,7 @@ impl Game<'_> {
             dim,
         ];
         let key = if targets.len() == 1 {
-            args.push(Text::literal(PLAYER_NAME));
+            args.push(self.target_name(targets[0]));
             "commands.spawnpoint.success.single"
         } else {
             args.push(Text::literal(targets.len().to_string()));
@@ -1830,9 +1873,6 @@ impl Game<'_> {
                 p[2].floor() as i32,
             ]
         };
-        if self.dim != Dim::Overworld {
-            return Err(err("commands.setworldspawn.failure.not_overworld", &[]));
-        }
         let rot = match ctx.get("rotation") {
             Some(Arg::Coords(c)) => c.rotation(self.source_rotation()),
             _ => [0.0, 0.0],
@@ -2128,6 +2168,9 @@ impl Game<'_> {
                 .italic()
             }
         };
+        if let Some(capture) = self.chat_capture.as_mut() {
+            capture.push(line.clone());
+        }
         let focused = self.screen == Screen::Chat;
         self.ui
             .chat

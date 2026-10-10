@@ -578,8 +578,12 @@ impl ScoreEntry {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scoreboard {
-    /// In creation order.
+    /// In the iteration order of vanilla's objectivesByName map.
     pub objectives: Vec<Objective>,
+    /// `objectivesByName` (`Object2ObjectOpenHashMap(16, 0.5)`) and
+    /// `teamsByName` key orders.
+    objective_order: Option<crate::fastutil_order::OpenOrder>,
+    team_order: crate::fastutil_order::OpenOrder,
     pub scores: BTreeMap<String, BTreeMap<String, Score>>,
     pub display: BTreeMap<String, String>,
     pub teams: Vec<Team>,
@@ -612,10 +616,36 @@ impl Scoreboard {
             display_auto_update,
             number_format,
         });
+        self.objective_order
+            .get_or_insert_with(|| crate::fastutil_order::OpenOrder::new(16, 0.5))
+            .insert(name);
+        self.sort_objectives();
         true
+    }
+    /// Objectives and teams in vanilla's hash map iteration order.
+    fn sort_objectives(&mut self) {
+        let order = self
+            .objective_order
+            .get_or_insert_with(|| crate::fastutil_order::OpenOrder::new(16, 0.5));
+        for o in &self.objectives {
+            order.insert(&o.name);
+        }
+        let rank: BTreeMap<&str, usize> = order.keys().enumerate().map(|(i, k)| (k, i)).collect();
+        self.objectives
+            .sort_by_key(|o| rank.get(o.name.as_str()).copied().unwrap_or(usize::MAX));
+        for t in &self.teams {
+            self.team_order.insert(&t.name);
+        }
+        let rank: BTreeMap<&str, usize> =
+            self.team_order.keys().enumerate().map(|(i, k)| (k, i)).collect();
+        self.teams
+            .sort_by_key(|t| rank.get(t.name.as_str()).copied().unwrap_or(usize::MAX));
     }
     pub fn remove_objective(&mut self, name: &str) {
         self.objectives.retain(|o| o.name != name);
+        if let Some(order) = self.objective_order.as_mut() {
+            order.remove(name);
+        }
         self.display.retain(|_, o| o != name);
         for s in self.scores.values_mut() {
             s.remove(name);
@@ -739,12 +769,15 @@ impl Scoreboard {
     pub fn add_team(&mut self, name: &str) -> &mut Team {
         if self.team(name).is_none() {
             self.teams.push(Team::new(name));
+            self.team_order.insert(name);
+            self.sort_objectives();
         }
         self.team_mut(name).expect("just added")
     }
     pub fn remove_team(&mut self, name: &str) {
         self.team_of.retain(|_, t| t != name);
         self.teams.retain(|t| t.name != name);
+        self.team_order.remove(name);
     }
     pub fn players_team(&self, player: &str) -> Option<&Team> {
         self.team(self.team_of.get(player)?)
