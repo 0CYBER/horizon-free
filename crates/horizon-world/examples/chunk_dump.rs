@@ -128,6 +128,21 @@ fn main() -> Result<(), Error> {
             for z in z0..=z1 {
                 for s in worker.structure_starts(ChunkPos::new(x, z)) {
                     if s.chunk == ChunkPos::new(x, z) {
+                        if std::env::var_os("HORIZON_PIECES").is_some() {
+                            for piece in &s.pieces {
+                                let b = piece.bounding_box();
+                                println!(
+                                    "piece {x} {z} {} {} {} {} {} {} {}",
+                                    piece.type_name(),
+                                    b.min[0],
+                                    b.min[1],
+                                    b.min[2],
+                                    b.max[0],
+                                    b.max[1],
+                                    b.max[2]
+                                );
+                            }
+                        }
                         println!(
                             "start {} {x} {z} {} {} {} {} {} {}",
                             s.name,

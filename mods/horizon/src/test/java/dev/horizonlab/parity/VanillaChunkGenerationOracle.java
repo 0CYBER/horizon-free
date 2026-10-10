@@ -282,6 +282,22 @@ public final class VanillaChunkGenerationOracle {
         };
         Runnable noop = () -> {};
         try (var w = new PrintWriter(Files.newBufferedWriter(out, StandardCharsets.UTF_8))) {
+            if (mode.equals("random")) {
+                // diagnostics: first floats after setFeatureSeed for chunk X0,Z0 (args 4..) index step
+                int cx = Integer.parseInt(args[4]), cz = Integer.parseInt(args[5]), idx = Integer.parseInt(args[6]), step = Integer.parseInt(args[7]);
+                WorldgenRandom r = new WorldgenRandom(new XoroshiroRandomSource(0L));
+                long ds = r.setDecorationSeed(seed, cx << 4, cz << 4);
+                r.setFeatureSeed(ds, idx, step);
+                w.println("random " + ds + " " + r.nextFloat() + " " + r.nextFloat() + " " + r.nextFloat());
+                return;
+            }
+            if (mode.equals("order")) {
+                var byStep = new TreeMap<Integer, List<String>>();
+                var registry = access.lookupOrThrow(Registries.STRUCTURE);
+                registry.stream().forEach(st -> byStep.computeIfAbsent(st.step().ordinal(), k -> new ArrayList<>()).add(registry.getKey(st).toString()));
+                byStep.forEach((step, names) -> { for (int i = 0; i < names.size(); i++) w.println("order " + step + " " + i + " " + names.get(i)); });
+                return;
+            }
             if (mode.equals("scan")) {
                 int x0 = Integer.parseInt(args[4]), z0 = Integer.parseInt(args[5]), x1 = Integer.parseInt(args[6]), z1 = Integer.parseInt(args[7]);
                 for (int x = x0; x <= x1; x++) for (int z = z0; z <= z1; z++) {
@@ -291,6 +307,10 @@ public final class VanillaChunkGenerationOracle {
                         if (!start.isValid()) continue;
                         var box = start.getBoundingBox();
                         var id = access.lookupOrThrow(Registries.STRUCTURE).getKey(start.getStructure());
+                        if (System.getenv("HORIZON_PIECES") != null) for (var piece : start.getPieces()) {
+                            var pb = piece.getBoundingBox();
+                            w.println("piece " + x + " " + z + " " + net.minecraft.core.registries.BuiltInRegistries.STRUCTURE_PIECE.getKey(piece.getType()) + " " + pb.minX() + " " + pb.minY() + " " + pb.minZ() + " " + pb.maxX() + " " + pb.maxY() + " " + pb.maxZ());
+                        }
                         w.println("start " + id + " " + x + " " + z + " " + box.minX() + " " + box.minY() + " " + box.minZ() + " " + box.maxX() + " " + box.maxY() + " " + box.maxZ());
                     }
                 }
