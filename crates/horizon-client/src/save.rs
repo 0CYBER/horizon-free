@@ -199,6 +199,9 @@ pub struct ChunkExtras {
     pub root: Compound,
     /// Block entities Horizon does not model.
     pub block_entities: Vec<Tag>,
+    /// The NBT of the modelled block entities as loaded, to restore the fields and
+    /// detail Horizon does not model when it saves them (`block_entity_nbt::overlay`).
+    pub block_entity_sources: Vec<((i32, i32, i32), Tag)>,
     /// Scheduled ticks (`block_ticks`/`fluid_ticks`): delays relative to the
     /// save time. Registered with the level's tick scheduler on arrival and
     /// replaced with the scheduler's pending ticks when saving.
@@ -408,6 +411,17 @@ fn encode_block_entity(p: (i32, i32, i32), e: &crate::containers::BlockEntity, b
     }
     Tag::compound(entries)
 }
+/// `block_entity_nbt::overlay`, then a container that now holds items loses its
+/// loot table (vanilla clears it when the loot is generated into the container).
+fn merge_block_entity(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
+    let mut merged = crate::block_entity_nbt::overlay(original, loaded, current);
+    let has_items = matches!(current.get("Items"), Some(Tag::List(items)) if !items.is_empty());
+    if has_items && let Tag::Compound(map) = &mut merged {
+        map.remove(&"LootTable".into());
+        map.remove(&"LootTableSeed".into());
+    }
+    merged
+}
 fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
@@ -459,7 +473,7 @@ fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers:
             f.lit_remaining = int("lit_time_remaining").unwrap_or(0);
             f.lit_total = int("lit_total_time").unwrap_or(0);
             f.cooking_timer = int("cooking_time_spent").unwrap_or(0);
-            f.cooking_total = int("cooking_total_time").unwrap_or(200);
+            f.cooking_total = int("cooking_total_time").unwrap_or(0);
             if let Some(speed) = float(tag.get("speed_multiplier")) {
                 f.speed = speed as f32;
             }
@@ -684,7 +698,27 @@ pub fn encode_with(
     let mut block_entities: Vec<Tag> = chunk
         .block_entities
         .iter()
-        .map(|(p, e)| encode_block_entity(*p, e, &block_name(p)))
+        .map(|(p, e)| {
+            let block = block_name(p);
+            let current = encode_block_entity(*p, e, &block);
+            let source = extras
+                .and_then(|x| x.block_entity_sources.iter().find(|(q, _)| q == p))
+                .map(|(_, tag)| tag)
+                .filter(|tag| {
+                    crate::block_entity_nbt::id(tag) == crate::block_entity_nbt::id(&current)
+                });
+            let merged = match source {
+                Some(original) => {
+                    let loaded = decode_block_entity(original).map_or_else(
+                        || current.clone(),
+                        |(q, e)| encode_block_entity(q, &e, &block),
+                    );
+                    merge_block_entity(original, &loaded, &current)
+                }
+                None => current,
+            };
+            crate::block_entity_nbt::canonical(&merged).unwrap_or(merged)
+        })
         .collect();
     if let Some(extras) = extras {
         for raw in &extras.block_entities {
@@ -697,7 +731,8 @@ pub fn encode_with(
             let still_there =
                 tables.is_none_or(|t| t.block_entity.get(state).copied().unwrap_or(true));
             if still_there && !chunk.block_entities.iter().any(|(p, _)| *p == pos) {
-                block_entities.push(raw.clone());
+                block_entities
+                    .push(crate::block_entity_nbt::canonical(raw).unwrap_or_else(|| raw.clone()));
             }
         }
     }
@@ -894,7 +929,10 @@ pub fn decode_with(
     if let Some(Tag::List(entities)) = tag.get("block_entities") {
         for e in entities {
             match decode_block_entity(e) {
-                Some(be) => chunk.block_entities.push(be),
+                Some(be) => {
+                    extras.block_entity_sources.push((be.0, e.clone()));
+                    chunk.block_entities.push(be);
+                }
                 None => extras.block_entities.push(e.clone()),
             }
         }
@@ -1723,8 +1761,10 @@ impl Level {
                 }),
             ),
         ];
-        if !equipment.is_empty() {
-            entries.push(("equipment", Tag::compound(equipment)));
+        // Vanilla writes `equipment` even when empty and omits an empty effect list.
+        entries.push(("equipment", Tag::compound(equipment)));
+        if self.active_effects.is_empty() {
+            entries.retain(|(key, _)| *key != "active_effects");
         }
         if let Some(pos) = self.position {
             entries.push(("Pos", doubles(&pos)));

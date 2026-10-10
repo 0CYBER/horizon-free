@@ -498,28 +498,47 @@ impl Game<'_> {
         if let Err(e) = self.ui.rules.save(&self.world_root) {
             eprintln!("Horizon: failed to save game rules: {e}");
         }
-        use horizon_world::nbt::{Limits, NamedTag, Tag};
+        use horizon_world::nbt::Tag;
         let c = self.ui.clock;
-        let clock = Tag::compound([
-            ("total_ticks", Tag::Long(self.world.day_time)),
-            ("partial_tick", Tag::Float(c.partial.to_bits())),
-            ("rate", Tag::Float(c.rate.to_bits())),
-            ("paused", Tag::Byte(i8::from(c.paused))),
-        ]);
-        let root = NamedTag {
-            name: "".into(),
-            tag: Tag::compound([
-                ("data", Tag::compound([("minecraft:overworld", clock)])),
-                ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
-            ]),
+        // The other clocks stay as saved; the overworld one keeps the fields Horizon
+        // does not model, and (like vanilla's codec) omits rate, partial tick and
+        // pause while they have their defaults.
+        let path = self.world_root.join("data/minecraft/world_clocks.dat");
+        let existing = horizon_client::save::read_dat(&path);
+        let mut data = match existing.as_ref().and_then(|r| r.get("data")) {
+            Some(d @ Tag::Compound(_)) => d.clone(),
+            _ => Tag::Compound(Default::default()),
         };
-        if let Ok(bytes) = horizon_world::nbt::write_named(&root, Limits::default())
-            && let Ok(gz) = horizon_world::compression::Compression::Gzip.encode(&bytes)
-        {
-            let dir = self.world_root.join("data/minecraft");
-            let _ = std::fs::create_dir_all(&dir);
-            let _ = std::fs::write(dir.join("world_clocks.dat"), gz);
+        let mut clock = match data.get("minecraft:overworld") {
+            Some(c @ Tag::Compound(_)) => c.clone(),
+            _ => Tag::Compound(Default::default()),
+        };
+        if let Tag::Compound(map) = &mut clock {
+            map.insert("total_ticks".into(), Tag::Long(self.world.day_time));
+            for (key, value, default) in [
+                (
+                    "partial_tick",
+                    Tag::Float(c.partial.to_bits()),
+                    c.partial == 0.0,
+                ),
+                ("rate", Tag::Float(c.rate.to_bits()), c.rate == 1.0),
+                ("paused", Tag::Byte(i8::from(c.paused)), !c.paused),
+            ] {
+                if default {
+                    map.remove(&key.into());
+                } else {
+                    map.insert(key.into(), value);
+                }
+            }
         }
+        if let Tag::Compound(map) = &mut data {
+            map.insert("minecraft:overworld".into(), clock);
+        }
+        let root = Tag::compound([
+            ("data", data),
+            ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
+        ]);
+        let _ = horizon_client::save::write_dat(&path, root);
         let _ = write_difficulty(&self.world_root, self.ui.difficulty);
     }
     /// Death message in chat (CombatTracker.getDeathMessage, as far as the

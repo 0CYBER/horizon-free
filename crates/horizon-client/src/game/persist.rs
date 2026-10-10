@@ -25,6 +25,36 @@ pub struct EntityMemory {
     /// Entities of types Horizon does not simulate, kept per chunk and
     /// written back unchanged.
     unknown: HashMap<(i32, i32), Vec<Tag>>,
+    /// Entities without a Horizon entity ID (orbs, arrows, falling blocks, crystals,
+    /// the dragon): the UUID and compound they were loaded with, found again by
+    /// type and position (an entity that has moved since loading is saved afresh).
+    anon: HashMap<(String, [u64; 3]), (Vec3, Option<[i32; 4]>, Tag)>,
+}
+
+fn anon_key(kind: &str, p: Vec3) -> (String, [u64; 3]) {
+    (
+        kind.to_owned(),
+        [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()],
+    )
+}
+/// The loaded compound underneath the fields Horizon models: what the entity was
+/// loaded with, with every key of `modelled` replacing its loaded value.
+fn with_raw(modelled: Tag, raw: Option<&Tag>) -> Tag {
+    let (Some(Tag::Compound(raw)), Tag::Compound(modelled)) = (raw, &modelled) else {
+        return modelled;
+    };
+    let mut out = raw.clone();
+    for (k, v) in modelled {
+        // Defaults Horizon invents for fields it does not simulate give way to the save.
+        let invented = matches!(
+            k.to_string_lossy().as_str(),
+            "Fire" | "Air" | "Invulnerable" | "PortalCooldown" | "HasBeenShot"
+        );
+        if !(invented && out.contains_key(k)) {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    Tag::Compound(out)
 }
 
 fn painting_center(p: &horizon_client::entities::Painting) -> Vec3 {
@@ -111,6 +141,19 @@ impl Game<'_> {
             for tag in tags {
                 let kind = entity_nbt::kind(&tag).unwrap_or_default();
                 let uuid = entity_nbt::uuid(&tag);
+                if matches!(
+                    kind.as_str(),
+                    "minecraft:experience_orb"
+                        | "minecraft:arrow"
+                        | "minecraft:falling_block"
+                        | "minecraft:end_crystal"
+                        | "minecraft:ender_dragon"
+                ) && let Some(at) = entity_nbt::position(&tag)
+                {
+                    self.persist
+                        .anon
+                        .insert(anon_key(&kind, at), (at, uuid, tag.clone()));
+                }
                 match kind.as_str() {
                     "minecraft:item" => {
                         self.next_entity += 1;
@@ -347,31 +390,44 @@ impl Game<'_> {
                 .or_default()
                 .push(tag);
         }
+        let anon = |persist: &EntityMemory, kind: &str, at: Vec3| {
+            persist
+                .anon
+                .get(&anon_key(kind, at))
+                .map(|(_, uuid, raw)| (uuid.unwrap_or_else(random_uuid), Some(raw.clone())))
+                .unwrap_or_else(|| (random_uuid(), None))
+        };
         for o in &self.orbs {
             if keys.contains(&chunk_of(o.position)) {
+                let (uuid, raw) = anon(&self.persist, "minecraft:experience_orb", o.position);
                 out.entry(chunk_of(o.position))
                     .or_default()
-                    .push(entity_nbt::orb_to_nbt(o, random_uuid()));
+                    .push(with_raw(entity_nbt::orb_to_nbt(o, uuid), raw.as_ref()));
             }
         }
         for a in &self.arrows {
             if keys.contains(&chunk_of(a.position)) {
                 let owner = if a.from_player { player_uuid } else { None };
-                out.entry(chunk_of(a.position))
-                    .or_default()
-                    .push(entity_nbt::arrow_to_nbt(a, random_uuid(), owner));
+                let (uuid, raw) = anon(&self.persist, "minecraft:arrow", a.position);
+                out.entry(chunk_of(a.position)).or_default().push(with_raw(
+                    entity_nbt::arrow_to_nbt(a, uuid, owner),
+                    raw.as_ref(),
+                ));
             }
         }
         for f in &self.falling {
             if keys.contains(&chunk_of(f.position)) {
+                let (uuid, raw) = anon(&self.persist, "minecraft:falling_block", f.position);
                 let tag = entity_nbt::falling_block_to_nbt(
                     self.state_to_nbt(f.state),
                     f.position,
                     f.velocity,
                     f.age,
-                    random_uuid(),
+                    uuid,
                 );
-                out.entry(chunk_of(f.position)).or_default().push(tag);
+                out.entry(chunk_of(f.position))
+                    .or_default()
+                    .push(with_raw(tag, raw.as_ref()));
             }
         }
         for b in &self.boats {
@@ -396,15 +452,17 @@ impl Game<'_> {
         if let Some(d) = &self.dragon
             && keys.contains(&chunk_of(d.position))
         {
+            let (uuid, raw) = anon(&self.persist, "minecraft:ender_dragon", d.position);
             out.entry(chunk_of(d.position))
                 .or_default()
-                .push(d.to_nbt(random_uuid(), None));
+                .push(d.to_nbt(uuid, raw.as_ref()));
         }
         for c in &self.crystals {
             if keys.contains(&chunk_of(c.position)) {
+                let (uuid, raw) = anon(&self.persist, "minecraft:end_crystal", c.position);
                 out.entry(chunk_of(c.position))
                     .or_default()
-                    .push(c.to_nbt(random_uuid(), None));
+                    .push(c.to_nbt(uuid, raw.as_ref()));
             }
         }
         for c in &self.carts {
@@ -537,6 +595,9 @@ impl Game<'_> {
             self.orbs.retain(|o| !gone(o.position));
             self.arrows.retain(|a| !gone(a.position));
             self.falling.retain(|f| !gone(f.position));
+            self.persist
+                .anon
+                .retain(|_, (at, _, _)| !keys.contains(&chunk_of(*at)));
             for id in removed {
                 self.persist.uuids.remove(&id);
                 self.persist.raw.remove(&id);
@@ -555,6 +616,11 @@ impl Game<'_> {
             .iter()
             .map(|m| m.id)
             .chain(self.dropped.iter().map(|e| e.id))
+            .chain(self.boats.iter().map(|e| e.id))
+            .chain(self.carts.iter().map(|e| e.id))
+            .chain(self.armor_stands.iter().map(|e| e.id))
+            .chain(self.item_frames.iter().map(|e| e.id))
+            .chain(self.paintings.iter().map(|e| e.id))
             .collect();
         self.persist.uuids.retain(|id, _| alive.contains(id));
         self.persist.raw.retain(|id, _| alive.contains(id));

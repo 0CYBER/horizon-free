@@ -34,6 +34,7 @@ const HELP: &[&str] = &[
     "bench SECONDS                  reset stats, wait, then reply with the summary",
     "open WORLD [SEED] [creative]   open or create a world from the title screen",
     "save                           save the world",
+    "save-all                       save the world, rewriting every resident chunk",
     "connect HOST[:PORT] [NAME]     join a multiplayer server (offline mode) from the title screen",
     "chat MESSAGE                   send chat or a /command to the server",
     "disconnect                     leave the server for the server list",
@@ -383,6 +384,15 @@ impl Game<'_> {
             }
             "save" => {
                 self.require_world()?;
+                self.save_game()?;
+                ok()
+            }
+            "save-all" => {
+                // Like `save-all flush`: also rewrite chunks that were not modified
+                // (the save round-trip harness compares them with vanilla's files).
+                self.require_world()?;
+                let keys: Vec<_> = self.world.chunks.keys().copied().collect();
+                self.world.modified.extend(keys);
                 self.save_game()?;
                 ok()
             }
