@@ -529,6 +529,7 @@ struct Game<'a> {
     message: Option<(String, Instant)>,
     save: Arc<SaveDir>,
     level: Level,
+    session_lock: Option<horizon_client::save::SessionLock>,
     audio: Audio,
     music: horizon_client::music::MusicManager,
     ambience: horizon_client::ambience::Ambience,
@@ -4691,6 +4692,8 @@ impl Game<'_> {
     ) -> Result<()> {
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         horizon_client::save::migrate_legacy(&save_root)?;
+        self.session_lock = None;
+        self.session_lock = Some(horizon_client::save::SessionLock::acquire(&save_root)?);
         self.persist = Default::default();
         self.score = Default::default();
         self.fns = Default::default();
@@ -7760,6 +7763,7 @@ pub fn run() -> Result<()> {
         message: None,
         save,
         level,
+        session_lock: None,
         audio,
         music: Default::default(),
         ambience: Default::default(),

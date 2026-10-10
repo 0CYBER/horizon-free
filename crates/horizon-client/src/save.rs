@@ -113,6 +113,26 @@ pub fn dimension_dir(world: &Path, dimension: &str) -> PathBuf {
         .unwrap_or(("minecraft", dimension));
     world.join("dimensions").join(namespace).join(path)
 }
+/// `DirectoryLock`: `session.lock` holds "\u{2603}" (UTF-16BE) under an exclusive
+/// file lock for as long as the world is open, so two instances cannot share it.
+pub struct SessionLock(#[allow(dead_code)] fs::File);
+impl SessionLock {
+    pub fn acquire(world: &Path) -> Result<Self> {
+        use std::io::Write;
+        fs::create_dir_all(world)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(world.join("session.lock"))?;
+        file.try_lock()
+            .map_err(|_| format!("{} is already open in another instance", world.display()))?;
+        file.set_len(0)?;
+        file.write_all(&[0x26, 0x03])?;
+        file.flush()?;
+        Ok(Self(file))
+    }
+}
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
 pub fn migrate_legacy(world: &Path) -> Result<()> {
@@ -2167,6 +2187,19 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn session_lock_is_exclusive() {
+        let dir = std::env::temp_dir().join(format!("horizon-lock-{}", std::process::id()));
+        let first = super::SessionLock::acquire(&dir).expect("first lock");
+        assert!(super::SessionLock::acquire(&dir).is_err());
+        assert_eq!(
+            std::fs::read(dir.join("session.lock")).unwrap(),
+            [0x26, 0x03]
+        );
+        drop(first);
+        assert!(super::SessionLock::acquire(&dir).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[test]
     fn crafter_block_entity_round_trips() {
         let mut crafter = crate::containers::Crafter::default();
