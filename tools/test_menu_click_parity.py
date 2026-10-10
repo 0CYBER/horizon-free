@@ -19,8 +19,8 @@ except ImportError:
     import lab
 
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
-         'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41}
-DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4}
+         'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46}
+DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10}
 COMMON = ['stone', 'dirt', 'cobblestone', 'oak_planks', 'stick', 'coal', 'iron_ingot', 'diamond', 'apple', 'bread',
           'oak_log', 'sand', 'bucket', 'water_bucket', 'lava_bucket', 'ender_pearl', 'snowball', 'egg', 'white_wool',
           'iron_helmet', 'diamond_chestplate', 'leather_leggings', 'iron_boots', 'shield', 'carved_pumpkin',
@@ -132,7 +132,7 @@ def main():
         if menu in ('inventory', 'crafting') and rng.random() < 0.6:
             g.recipe(slots, 2 if menu == 'inventory' else 3)
         cases.append({'menu': menu, 'creative': rng.random() < 0.25, 'slots': slots,
-                      'carried': g.stack() if rng.random() < 0.5 else '-', 'data': [0] * DATA.get(menu, 0),
+                      'carried': g.stack() if rng.random() < 0.5 else '-', 'data': [rng.choice([0, 0, 1]) if menu == 'crafter' else 0 for _ in range(DATA.get(menu, 0))],
                       'ops': g.ops(size)})
     (work / 'cases.jsonl').write_text(''.join(json.dumps(c) + '\n' for c in cases))
     vanilla.run('VanillaMenuOracle', work / 'cases.jsonl', work / 'native.txt')

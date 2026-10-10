@@ -54,6 +54,7 @@ pub enum Kind {
     /// The cooking recipe type: smelting, blasting or smoking.
     Furnace(&'static str),
     Brewing,
+    Crafter,
 }
 
 impl Kind {
@@ -71,6 +72,7 @@ impl Kind {
             "blast_furnace" => Self::Furnace("blasting"),
             "smoker" => Self::Furnace("smoking"),
             "brewing" => Self::Brewing,
+            "crafter" => Self::Crafter,
             _ => return None,
         })
     }
@@ -88,6 +90,10 @@ enum Role {
     Output,
     /// `ResultSlot` of a crafting grid.
     CraftResult,
+    /// `CrafterSlot`: refuses items while its disabled flag (data slot) is set.
+    CrafterIn,
+    /// `NonInteractiveResultSlot`.
+    Inert,
     /// `BrewingStandMenu.PotionSlot`.
     Potion,
     /// `BrewingStandMenu.IngredientsSlot`.
@@ -229,6 +235,17 @@ impl Menu {
                 containers[MAIN] = vec![None; 27];
                 slots.extend(main(27, Role::Shulker));
                 player(&mut slots);
+            }
+            Kind::Crafter => {
+                containers[MAIN] = vec![None; 9];
+                slots.extend(main(9, Role::CrafterIn));
+                player(&mut slots);
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::Inert,
+                });
+                data = 10;
             }
             Kind::Brewing => {
                 containers[MAIN] = vec![None; 5];
@@ -379,7 +396,8 @@ impl Menu {
                 .unwrap_or(false),
             Role::Shulker => Self::fits_inside(stack),
             Role::Fuel => Self::is_fuel(env, stack) || Self::is_bucket(stack),
-            Role::Output | Role::CraftResult => false,
+            Role::Output | Role::CraftResult | Role::Inert => false,
+            Role::CrafterIn => self.data.get(self.slots[s].index) != Some(&1),
             Role::Potion => {
                 env.brewing.is_bottle(stack)
                     || env
@@ -398,6 +416,7 @@ impl Menu {
 
     fn may_pickup(&self, s: usize) -> bool {
         match self.slots[s].role {
+            Role::Inert => false,
             Role::Armor(_) => match self.slot(s) {
                 Some(stack) => {
                     self.creative || stack.enchantment_level("minecraft:binding_curse") == 0
@@ -833,6 +852,16 @@ impl Menu {
                         return None;
                     }
                 } else if !self.move_to(env, &mut stack, 5, 41, false) {
+                    return None;
+                }
+            }
+            Kind::Crafter => {
+                after_take = true;
+                if index < 9 {
+                    if !self.move_to(env, &mut stack, 9, 45, true) {
+                        return None;
+                    }
+                } else if !self.move_to(env, &mut stack, 0, 9, false) {
                     return None;
                 }
             }
