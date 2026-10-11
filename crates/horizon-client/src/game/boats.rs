@@ -48,7 +48,12 @@ pub(super) struct Boat {
     /// left, right, up, down
     pub input: [bool; 4],
     pub on_ground: bool,
+    /// `ChestBoat`: a chest with 27 slots in the back seat.
+    pub chest: bool,
+    pub items: Vec<Option<ItemStack>>,
 }
+/// `ChestBoat.CONTAINER_SIZE`.
+pub(super) const CHEST_SLOTS: usize = 27;
 const WIDTH: f64 = 1.375;
 const HEIGHT: f64 = 0.5625;
 /// Player.DEFAULT_VEHICLE_ATTACHMENT minus the boat's passenger attachment.
@@ -76,7 +81,15 @@ impl Boat {
             paddling: [false; 2],
             input: [false; 4],
             on_ground: false,
+            chest: false,
+            items: Vec::new(),
         }
+    }
+    /// A chest boat or chest raft.
+    pub fn with_chest(mut self) -> Self {
+        self.chest = true;
+        self.items = vec![None; CHEST_SLOTS];
+        self
     }
     pub fn bounds(&self) -> Aabb {
         let (w, p) = (WIDTH / 2.0, self.position);
@@ -96,14 +109,28 @@ impl Boat {
 }
 /// Item id -> (boat entity id, wood).
 impl Boat {
-    /// The vanilla entity type id (`oak_boat`, `bamboo_raft`).
+    /// The vanilla entity type id (`oak_boat`, `bamboo_chest_raft`), also
+    /// the item it drops.
     pub(super) fn entity_type(&self) -> String {
+        let chest = if self.chest { "chest_" } else { "" };
         if &*self.wood == "bamboo" {
-            "minecraft:bamboo_raft".to_owned()
+            format!("minecraft:bamboo_{chest}raft")
         } else {
-            format!("minecraft:{}_boat", self.wood)
+            format!("minecraft:{}_{chest}boat", self.wood)
         }
     }
+}
+/// The wood of a boat or chest boat item or entity type, and whether it
+/// carries a chest.
+pub(super) fn any_boat_wood(item: &str) -> Option<(&str, bool)> {
+    let name = item.strip_prefix("minecraft:")?;
+    if let Some(wood) = name
+        .strip_suffix("_chest_boat")
+        .or_else(|| name.strip_suffix("_chest_raft"))
+    {
+        return Some((wood, true));
+    }
+    boat_wood(item).map(|w| (w, false))
 }
 pub(super) fn boat_wood(item: &str) -> Option<&str> {
     let name = item.strip_prefix("minecraft:")?;
@@ -113,10 +140,20 @@ pub(super) fn boat_wood(item: &str) -> Option<&str> {
 }
 pub(super) struct BoatModels {
     pub models: HashMap<String, Part>,
+    pub chest_models: HashMap<String, Part>,
 }
 impl BoatModels {
+    /// Whether a boat of this wood (with or without a chest) can be drawn.
+    pub fn has(&self, wood: &str, chest: bool) -> bool {
+        if chest {
+            self.chest_models.contains_key(wood)
+        } else {
+            self.models.contains_key(wood)
+        }
+    }
     pub fn load(root: &std::path::Path) -> Self {
         let mut models = HashMap::new();
+        let mut chest_models = HashMap::new();
         if let Ok(bytes) = std::fs::read(root.join("entity-models.json"))
             && let Ok(serde_json::Value::Object(all)) =
                 serde_json::from_slice::<serde_json::Value>(&bytes)
@@ -129,9 +166,16 @@ impl BoatModels {
                 {
                     models.insert(wood.to_owned(), part);
                 }
+                if let Some(wood) = key
+                    .strip_prefix("minecraft:chest_boat/")
+                    .and_then(|k| k.strip_suffix("#main"))
+                    && let Some(part) = horizon_client::mobs::load_model(root, key)
+                {
+                    chest_models.insert(wood.to_owned(), part);
+                }
             }
         }
-        Self { models }
+        Self { models, chest_models }
     }
 }
 impl Game<'_> {
@@ -467,10 +511,10 @@ impl Game<'_> {
     }
     /// `BoatItem.use`: aim at a block or the water surface.
     pub(super) fn place_boat(&mut self, stack: &ItemStack) -> bool {
-        let Some(wood) = boat_wood(&stack.item) else {
+        let Some((wood, chest)) = any_boat_wood(&stack.item) else {
             return false;
         };
-        if !self.boat_models.models.contains_key(wood) {
+        if !self.boat_models.has(wood, chest) {
             return false;
         }
         let Some(eye) = self.eye_position() else {
@@ -517,12 +561,15 @@ impl Game<'_> {
             (None, Some(w)) => w.0,
             (None, None) => return false,
         };
-        let boat = Boat::new(
+        let mut boat = Boat::new(
             self.next_entity + 1,
             Arc::from(wood),
             Vec3::new(hit[0], hit[1], hit[2]),
             self.yaw,
         );
+        if chest {
+            boat = boat.with_chest();
+        }
         let bb = boat.bounds();
         let (lo, hi) = (bb.min_position(), bb.max_position());
         let e = 1.0e-7;
@@ -585,11 +632,23 @@ impl Game<'_> {
             return false;
         };
         let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
-        if !self.before_block(d)
-            || sneaking
-            || self.boats[i].out_of_control >= 60.0
-            || self.riding.is_some()
-        {
+        if !self.before_block(d) {
+            return false;
+        }
+        // ChestBoat.interact: sneaking (or a full seat) opens the chest.
+        if self.boats[i].chest && (sneaking || self.riding.is_some()) {
+            let b = &self.boats[i];
+            let key = (i32::MAX - 15, super::minecarts::CART_KEY_Y, b.id as i32);
+            self.world
+                .block_entities
+                .insert(key, horizon_client::containers::BlockEntity::Chest(b.items.clone()));
+            self.container = Some(key);
+            self.screen = super::Screen::Inventory;
+            self.capture(false);
+            self.right = false;
+            return true;
+        }
+        if sneaking || self.boats[i].out_of_control >= 60.0 || self.riding.is_some() {
             return false;
         }
         self.riding = Some(self.boats[i].id);
@@ -611,13 +670,13 @@ impl Game<'_> {
         let destroyed = self.creative || b.damage > 40.0;
         if destroyed {
             let b = self.boats.remove(i);
+            let at = [b.position.x, b.position.y, b.position.z];
             if !self.creative && self.ui.rules.bool("entity_drops") {
-                let item = if &*b.wood == "bamboo" {
-                    "minecraft:bamboo_raft".to_owned()
-                } else {
-                    format!("minecraft:{}_boat", b.wood)
-                };
-                let at = [b.position.x, b.position.y, b.position.z];
+                // ChestBoat.destroy: chestVehicleDestroyed spills the contents.
+                for stack in b.items.iter().flatten() {
+                    self.spawn_item(stack.clone(), at, super::dispenser::new_item_motion(), 10);
+                }
+                let item = b.entity_type();
                 self.spawn_item(
                     ItemStack {
                         item: Arc::from(item.as_str()),
@@ -638,14 +697,20 @@ impl Game<'_> {
     pub(super) fn boat_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let a = alpha as f32;
         for b in &self.boats {
-            let Some(model) = self.boat_models.models.get(&*b.wood) else {
+            let models = if b.chest {
+                &self.boat_models.chest_models
+            } else {
+                &self.boat_models.models
+            };
+            let Some(model) = models.get(&*b.wood) else {
                 continue;
             };
+            let folder = if b.chest { "chest_boat" } else { "boat" };
             let Some(uv) = self
                 .res
                 .atlas
                 .sprites
-                .get(&format!("entity/boat/{}", b.wood))
+                .get(&format!("entity/{folder}/{}", b.wood))
                 .map(|r| [r.u0, r.v0, r.u1, r.v1])
             else {
                 continue;

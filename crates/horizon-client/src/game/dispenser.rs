@@ -603,12 +603,7 @@ impl Game<'_> {
             "minecraft:honeycomb" => self.dispense_honeycomb(pos, facing, stack)?,
             "minecraft:potion" => self.dispense_potion(pos, facing, stack)?,
             _ if item.ends_with("shulker_box") => self.dispense_shulker_box(pos, facing, stack)?,
-            _ if super::boats::boat_wood(&item).is_some() => self.dispense_boat(pos, facing, stack),
-            // BoatDispenseItemBehavior for chest boats: Horizon has no chest boat
-            // entity, so they always take its fallback (an inner default dispense).
-            _ if item.ends_with("_chest_boat") || item.ends_with("_chest_raft") => {
-                self.dispense_boat(pos, facing, stack)
-            }
+            _ if super::boats::any_boat_wood(&item).is_some() => self.dispense_boat(pos, facing, stack),
             _ if super::minecarts::CartKind::from_id(&item).is_some() => {
                 self.dispense_minecart(pos, facing, stack)
             }
@@ -1004,7 +999,9 @@ impl Game<'_> {
     }
     /// `BoatDispenseItemBehavior`.
     fn dispense_boat(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Dispensed {
-        let Some(wood) = super::boats::boat_wood(&stack.item).map(str::to_owned) else {
+        let Some((wood, chest)) =
+            super::boats::any_boat_wood(&stack.item).map(|(w, c)| (w.to_owned(), c))
+        else {
             return (self.dispense_default(pos, facing, stack), CLICK);
         };
         let front = offset(pos, facing);
@@ -1025,16 +1022,19 @@ impl Game<'_> {
         } else {
             return (self.dispense_default(pos, facing, stack), CLICK);
         };
-        if !self.boat_models.models.contains_key(&wood) {
+        if !self.boat_models.has(&wood, chest) {
             return (self.dispense_default(pos, facing, stack), CLICK);
         }
         self.next_entity += 1;
-        let boat = super::boats::Boat::new(
+        let mut boat = super::boats::Boat::new(
             self.next_entity,
             wood.as_str().into(),
             Vec3::new(x, y + y_offset, z),
             y_rot(facing),
         );
+        if chest {
+            boat = boat.with_chest();
+        }
         self.world.modified.insert((front.0 >> 4, front.2 >> 4));
         self.boats.push(boat);
         (shrink(stack), CLICK)

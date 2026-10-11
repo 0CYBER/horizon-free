@@ -150,6 +150,11 @@ public final class VanillaDispenserOracle {
         public net.minecraft.world.level.chunk.ChunkGenerator getGenerator() {
             return generator;
         }
+
+        /** Leads send entity link packets; nobody is tracking. */
+        @Override
+        public void sendToTrackingPlayers(final Entity entity, final net.minecraft.network.protocol.Packet<? super net.minecraft.network.protocol.game.ClientGamePacketListener> packet) {
+        }
     }
 
     static Method dispenseFrom(Class<?> type) throws Exception {
@@ -225,7 +230,19 @@ public final class VanillaDispenserOracle {
             }
         }
         if (f.has("entities")) {
-            for (var e : f.getAsJsonArray("entities")) w.entities.add(target(w, e.getAsJsonObject()));
+            List<Entity> created = new ArrayList<>();
+            for (var e : f.getAsJsonArray("entities")) {
+                Entity ent = target(w, e.getAsJsonObject());
+                created.add(ent);
+                w.entities.add(ent);
+            }
+            var list = f.getAsJsonArray("entities");
+            for (int i = 0; i < list.size(); i++) {
+                var e = list.get(i).getAsJsonObject();
+                if (e.has("leash") && created.get(i) instanceof Leashable leashable) {
+                    leashable.setLeashedTo(created.get(e.get("leash").getAsInt()), true);
+                }
+            }
         }
         // Creating the targets must not move the stream the dispenser draws from.
         w.rng = new LegacyRandomSource(f.get("seed").getAsLong());
@@ -286,6 +303,7 @@ public final class VanillaDispenserOracle {
             || e instanceof net.minecraft.world.entity.monster.skeleton.Bogged || e instanceof net.minecraft.world.entity.animal.golem.SnowGolem;
         if (listed && e instanceof Shearable shearable) line.append(shearable.readyForShearing() ? " ready" : " unready");
         if (e instanceof net.minecraft.world.entity.animal.equine.AbstractChestedHorse chested && chested.hasChest()) line.append(" chest");
+        if (e instanceof Leashable leashable && leashable.isLeashed()) line.append(" leashed");
         return line.toString();
     }
 }

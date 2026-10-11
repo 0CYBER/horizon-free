@@ -168,6 +168,19 @@ impl Game<'_> {
         for e in case["entities"].as_array().into_iter().flatten() {
             targets.push(self.fixture_target(e)?);
         }
+        // Leashable.setLeashedTo: a lead from a target to an earlier one.
+        for (e, t) in case["entities"].as_array().into_iter().flatten().zip(&targets) {
+            let (Some(holder), Target::Mob(id)) = (e["leash"].as_u64(), t) else {
+                continue;
+            };
+            let holder = match targets.get(holder as usize) {
+                Some(Target::Mob(h)) => horizon_client::mobs::leash::Holder::Mob(*h),
+                _ => continue,
+            };
+            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == *id) {
+                m.extra.leash = Some(holder);
+            }
+        }
         // Creating the targets must not move the stream the dispenser draws from.
         self.world.random = LegacyRandom::new(seed);
         self.world.block_log = Some(Vec::new());
@@ -364,6 +377,9 @@ impl Game<'_> {
                 }
                 if x.chested && matches!(s, Species::Donkey | Species::Mule | Species::Llama | Species::TraderLlama) {
                     line.push_str(" chest");
+                }
+                if x.leash.is_some() {
+                    line.push_str(" leashed");
                 }
             }
         }
