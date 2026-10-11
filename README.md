@@ -37,7 +37,7 @@ round-trip harness has not been rerun.
 | Rendering | 0.75 | Entity models match over 150 layers; block entity renderers and HUD overlays not compared |
 | Lighting | 1 | None: saved and relit light matches vanilla, slabs and stairs included |
 | World generation | 1 | None: 2,352 whole chunks over 225 structure sites, in all three dimensions, identical to vanilla |
-| Region files and saves | 0.75 | Save round-trip harness fails; older DataVersions are not upgraded |
+| Region files and saves | 0.75 | Saves round-trip with vanilla, and worlds from 1.18.2 to 26.2 upgrade as vanilla's DataFixers do over 22 sample worlds; worlds older than 1.18.2 are not upgraded |
 | Entities and physics | 0.75 | Attributes and dimensions match; AI, loot and spawn rules not compared; drowned, villagers, traders and the wither unverified |
 | Interaction and inventory | 1 | None: menu clicks match over 6,000 click sequences |
 | Menus, HUD and chat | 0.75 | Commands parse as vanilla over 39,685 inputs, but /item modify, /spectate, /waypoint and /dialog do not run; no tab list or world border rendering |
@@ -46,7 +46,7 @@ round-trip harness has not been rerun.
 
 ### Next steps
 
-1. Rerun the save round-trip harness and upgrade saves from older DataVersions.
+1. Upgrade saves older than 1.18.2 (the DataFixers before DataVersion 2970).
 2. Draw every item through the item model pipeline, and add the resource pack screen.
 3. An audio harness: sound engine attenuation, weighted sound events, music and ambience.
 4. Mob AI, loot and spawn-rule harnesses, and an oracle for drowned, villagers, traders and the wither.
