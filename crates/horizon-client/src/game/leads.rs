@@ -66,13 +66,10 @@ impl Game<'_> {
             })
             .collect()
     }
+    /// `Entity.spawnAtLocation(level, Items.LEAD)`: the item entity draws its
+    /// motion from its own random, not the level's.
     fn drop_lead_item(&mut self, at: [f64; 3]) {
-        let r = &mut self.world.random;
-        let v = [
-            f64::from(r.next_float()) * 0.2 - 0.1,
-            0.2,
-            f64::from(r.next_float()) * 0.2 - 0.1,
-        ];
+        let v = super::dispenser::new_item_motion();
         self.spawn_item(ItemStack::new("minecraft:lead", 1), at, v, 10);
     }
     /// `Leashable.dropLeash` / `removeLeash`: the lead falls as an item.

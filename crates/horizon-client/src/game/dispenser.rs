@@ -217,11 +217,19 @@ pub(super) fn body_in_head(s: Species) -> bool {
         || matches!(s, Species::Wolf | Species::HappyGhast | Species::SulfurCube)
         || horizon_client::mobs::nautilus::is_nautilus(s)
 }
+/// Mobs whose saddle slot Horizon keeps in `extra.legs` (the copper
+/// golem's antenna, `EQUIPMENT_SLOT_ANTENNA`).
+fn saddle_in_legs(s: Species) -> bool {
+    s == Species::CopperGolem
+}
 /// What a mob holds in a slot.
 pub(super) fn mob_slot_item(m: &Mob, slot: Slot) -> Option<Arc<str>> {
     let x = &m.extra;
     let body = body_in_head(m.species());
+    let antenna = saddle_in_legs(m.species());
     match slot {
+        Slot::Saddle if antenna => x.legs.clone(),
+        Slot::Legs if antenna => None,
         Slot::MainHand => x.main_hand.clone(),
         Slot::OffHand => x.off_hand.clone(),
         Slot::Feet => x.feet.clone(),
@@ -293,8 +301,10 @@ fn equip_sound(m: &Mob, slot: Slot, default: Option<String>) -> Option<String> {
 }
 pub(super) fn mob_set_slot(m: &mut Mob, slot: Slot, stack: ItemStack) {
     let item: Arc<str> = stack.item.clone();
+    let antenna = saddle_in_legs(m.species());
     let x = &mut m.extra;
     match slot {
+        Slot::Saddle if antenna => x.legs = Some(item),
         Slot::MainHand => x.main_hand = Some(item),
         Slot::OffHand => x.off_hand = Some(item),
         Slot::Feet => x.feet = Some(item),
@@ -1238,29 +1248,15 @@ impl Game<'_> {
             }
             return Ok((self.hurt_and_break(stack, 1), CLICK));
         }
-        if self.res.facts.is_air(state) {
-            // BaseFireBlock.canBePlacedAt: a fire that survives, or a portal.
-            let below = self.dispenser_block_name((target.0, target.1 - 1, target.2));
-            let fire_name = if matches!(&*below, "minecraft:soul_sand" | "minecraft:soul_soil") {
-                "minecraft:soul_fire"
-            } else {
-                "minecraft:fire"
-            };
-            let fire = self.res.assets.registry.default_state(fire_name);
-            if let Some(fire) = fire
-                && self.with_level(|b, level, ticks| b.can_survive(level, ticks, target_pos, fire))
-            {
-                self.level_set([target.0, target.1, target.2], fire)?;
-            } else if !self.try_light_portal([target.0, target.1, target.2])? {
-                // Nothing to light; vanilla still counts it as a success.
-            }
-        } else if self.prop(state, "lit").as_deref() == Some("false")
-            && (name.contains("campfire") || name.contains("candle"))
-            && self.prop(state, "waterlogged").as_deref() != Some("true")
-        {
+        if self.with_level(|b, level, ticks| b.fire_can_be_placed_at(level, ticks, target_pos, facing)) {
+            let fire = self.with_level(|b, level, ticks| b.fire_state_for(level, ticks, target_pos));
+            self.level_set([target.0, target.1, target.2], fire)?;
+            self.post_block_game_event("minecraft:block_place", [target.0, target.1, target.2], None, None);
+        } else if self.can_light(state, &name) {
             if let Some(lit) = self.with_props(state, &[("lit", "true")]) {
                 self.level_set([target.0, target.1, target.2], lit)?;
             }
+            self.post_block_game_event("minecraft:block_change", [target.0, target.1, target.2], None, None);
         } else if &*name == "minecraft:tnt" {
             if self.ui.rules.bool("tnt_explodes") {
                 self.spawn_primed_tnt(target_pos, false);
@@ -1275,6 +1271,14 @@ impl Game<'_> {
             return Ok((self.hurt_and_break(stack, 1), event));
         }
         Ok((Some(stack), event))
+    }
+    /// `CampfireBlock.canLight || CandleBlock.canLight || CandleCakeBlock.canLight`.
+    fn can_light(&self, state: BlockStateId, name: &str) -> bool {
+        let lit = self.prop(state, "lit");
+        let waterlogged = self.prop(state, "waterlogged");
+        let dry_unlit = lit.as_deref() == Some("false") && waterlogged.as_deref() == Some("false");
+        ((self.in_block_tag("minecraft:campfires", name) || self.in_block_tag("minecraft:candles", name)) && dry_unlit)
+            || (self.in_block_tag("minecraft:candle_cakes", name) && lit.as_deref() == Some("false"))
     }
     fn dispense_bone_meal(
         &mut self,
@@ -1536,6 +1540,13 @@ impl Game<'_> {
                     self.with_props(state, &[("charges", &(charge + 1).to_string())])
                 {
                     self.level_set([target.0, target.1, target.2], next)?;
+                    // RespawnAnchorBlock.charge: Context.of(null, newState).
+                    self.post_block_game_event(
+                        "minecraft:block_change",
+                        [target.0, target.1, target.2],
+                        None,
+                        Some(next),
+                    );
                 }
                 self.audio.play(
                     "minecraft:block.respawn_anchor.charge",
@@ -1657,6 +1668,10 @@ impl Game<'_> {
     fn shear_entity(&mut self, target: Pos) -> Result<bool> {
         let shears = ItemStack::new("minecraft:shears", 1);
         for t in self.targets_at(target) {
+            // Entity.shearOffAllLeashConnections comes first, for any entity.
+            if self.shear_off_leashes(t) {
+                return Ok(true);
+            }
             let Target::Mob(i) = t else { continue };
             let m = &self.mobs[i];
             if !m.alive() {
@@ -1665,6 +1680,29 @@ impl Game<'_> {
             let at = m.position;
             let sound_at = Some([at.x, at.y, at.z]);
             match m.species() {
+                Species::CopperGolem if self.golem_shearable(i) => {
+                    // CopperGolem.shear: the antenna (the saddle slot) drops 1.5 up.
+                    self.audio
+                        .play("minecraft:entity.copper_golem.shear", sound_at, 1.0, 1.0);
+                    if let Some(antenna) = self.mobs[i].extra.legs.take() {
+                        self.spawn_at_location(at, 1.5, ItemStack::new(&antenna, 1));
+                    }
+                }
+                Species::SulfurCube if sulfur_cube::has_body(m) => {
+                    // SulfurCube.shear: the swallowed block comes out at the
+                    // passenger attachment, and nothing is swallowed for 5 s.
+                    let height = f64::from(m.height());
+                    let id = m.id;
+                    if let Some(body) = self.mobs[i].extra.head.take() {
+                        self.spawn_at_location(at, height, ItemStack::new(&body, 1));
+                    }
+                    // setItemSlot(BODY, EMPTY): an unequip.
+                    let ctx = self.who_context(Some(horizon_client::mobs::Who::Mob(id)), None);
+                    self.post_game_event("minecraft:unequip", [at.x, at.y, at.z], ctx);
+                    self.mobs[i].extra.ints[3] = sulfur_cube::PICKUP_TIMER;
+                    self.audio
+                        .play("minecraft:entity.sulfur_cube.eject", sound_at, 1.0, 1.0);
+                }
                 Species::Sheep if !m.extra.sheared && !m.is_baby() => {
                     let color = horizon_client::mobs::render::DYE_NAMES[m.extra.color as usize & 15];
                     self.audio
@@ -1755,6 +1793,66 @@ impl Game<'_> {
             return Ok(true);
         }
         Ok(false)
+    }
+    /// `Entity.shearOffAllLeashConnections(null)`: the entity's own lead and
+    /// every lead held by it (within a 32 block box around its centre) drop;
+    /// a shear game event at the entity and a snip at its block follow.
+    fn shear_off_leashes(&mut self, t: Target) -> bool {
+        use horizon_client::mobs::{Who, leash::Holder};
+        let (holder, centre, own) = match t {
+            Target::Mob(i) => {
+                let m = &self.mobs[i];
+                let b = m.bounds();
+                (Holder::Mob(m.id), (b.min + b.max) * 0.5, Some(i))
+            }
+            Target::Player => {
+                let Some(v) = self.player_view() else { return false };
+                (Holder::Player, (v.bounds.min + v.bounds.max) * 0.5, None)
+            }
+            Target::Stand(_) => return false,
+        };
+        let area = Aabb::new(centre - Vec3::new(16.0, 16.0, 16.0), centre + Vec3::new(16.0, 16.0, 16.0));
+        let mut leashed: Vec<(u32, usize)> = self
+            .mobs
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| !m.removed && m.extra.leash == Some(holder) && overlaps(m.bounds(), area))
+            .map(|(j, m)| (m.id, j))
+            .collect();
+        leashed.sort_unstable();
+        let own_leashed = own.is_some_and(|i| self.mobs[i].extra.leash.is_some());
+        if leashed.is_empty() && !own_leashed {
+            return false;
+        }
+        // Leashable.dropLeash: a lead item at the leashed entity's feet.
+        let mut drop = |game: &mut Self, j: usize| {
+            if game.mobs[j].extra.leash.take().is_some() {
+                let at = game.mobs[j].position;
+                game.spawn_at_location(at, 0.0, ItemStack::new("minecraft:lead", 1));
+            }
+        };
+        if let Some(i) = own.filter(|_| own_leashed) {
+            drop(self, i);
+        }
+        for (_, j) in leashed {
+            drop(self, j);
+        }
+        let (at, who) = match t {
+            Target::Mob(i) => {
+                let m = &self.mobs[i];
+                (m.position, Who::Mob(m.id))
+            }
+            _ => (
+                self.player.as_ref().map_or(Vec3::ZERO, |p| p.position),
+                Who::Player,
+            ),
+        };
+        let ctx = self.who_context(Some(who), None);
+        self.post_game_event("minecraft:shear", [at.x, at.y, at.z], ctx);
+        let block = [at.x.floor() + 0.5, at.y.floor() + 0.5, at.z.floor() + 0.5];
+        self.audio
+            .play("minecraft:item.shears.snip", Some(block), 1.0, 1.0);
+        true
     }
     /// The brush behaviour: the first armadillo in front that `brushOffScute`s.
     fn dispense_brush(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Dispensed {

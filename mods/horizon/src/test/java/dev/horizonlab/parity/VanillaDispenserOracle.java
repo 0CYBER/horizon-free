@@ -134,6 +134,24 @@ public final class VanillaDispenserOracle {
         throw new IllegalStateException("no slots in " + be);
     }
 
+    /**
+     * The chunk source bone meal reaches for: saplings, grass and moss place
+     * their features with `getChunkSource().getGenerator()`, which none of
+     * them reads beyond passing it along.
+     */
+    static final class Chunks extends net.minecraft.server.level.ServerChunkCache {
+        static net.minecraft.world.level.chunk.ChunkGenerator generator;
+
+        private Chunks() {
+            super(null, null, null, null, null, null, 0, 0, false, null);
+        }
+
+        @Override
+        public net.minecraft.world.level.chunk.ChunkGenerator getGenerator() {
+            return generator;
+        }
+    }
+
     static Method dispenseFrom(Class<?> type) throws Exception {
         for (Class<?> c = type; c != null; c = c.getSuperclass()) {
             try {
@@ -191,6 +209,8 @@ public final class VanillaDispenserOracle {
         w.entities = new ArrayList<>();
         w.registries = ParityData.access;
         w.server.loot.delegate = ParityData.loot;
+        if (Chunks.generator == null) Chunks.generator = VanillaBlockUpdateOracle.make(net.minecraft.world.level.levelgen.FlatLevelSource.class);
+        VanillaBlockUpdateOracle.set(ServerLevel.class, w, "chunkSource", VanillaBlockUpdateOracle.make(Chunks.class));
         VanillaBlockUpdateOracle.set(Level.class, w, "damageSources", new net.minecraft.world.damagesource.DamageSources(ParityData.access));
         if (f.has("rules")) {
             for (var rule : f.getAsJsonObject("rules").entrySet()) {
