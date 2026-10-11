@@ -467,6 +467,8 @@ impl Game<'_> {
             block_tags: &self.res.items.block_tags,
             biomes: &self.res.biomes,
             mob_griefing: self.ui.rules.bool("mob_griefing"),
+            end: self.dim == Dim::End,
+            world_seed: self.level.seed,
             difficulty: self.local_difficulty(
                 self.player
                     .as_ref()
@@ -744,13 +746,14 @@ impl Game<'_> {
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
         let by_player = self.last_hurt_by_player.remove(&m.id) || m.ai.last_hurt_by_player > 0;
+        let mut dying = m.clone();
         // LivingEntity.die: the death is heard, and a sculk catalyst nearby
-        // takes the experience.
+        // takes the experience (before the loot is dropped).
         self.sculk_mob_died(m);
         let consumed =
-            self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |game| {
+            self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |_| {
                 if by_player {
-                    experience_reward(m, &mut game.world.random)
+                    horizon_client::mobs::drops::base_experience(&mut dying).max(0) as u32
                 } else {
                     0
                 }
@@ -765,103 +768,8 @@ impl Game<'_> {
         self.score_entity_removed(m.id);
         self.raider_died(m, by_player);
         self.villager_murdered(m, by_player);
-        let held = self.held().cloned();
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
-        if !m.is_baby() {
-            let mut drops = self.res.items.entity_drops(
-                &m.kind.id,
-                by_player,
-                held.as_ref(),
-                &mut self.world.random,
-            );
-            if m.species() == Species::Sheep && !m.extra.sheared {
-                let color = horizon_client::mobs::render::DYE_NAMES[m.extra.color as usize & 15];
-                drops.extend(self.res.items.loot_table(
-                    &format!("minecraft:entities/sheep/{color}"),
-                    by_player,
-                    held.as_ref(),
-                    &mut self.world.random,
-                ));
-            }
-            for d in drops {
-                if d.count > 0 && &*d.item != "minecraft:air" {
-                    self.spawn_item(d, pos, [0.0, 0.2, 0.0], 10);
-                }
-            }
-            // Saddles, horse armour and chests always drop.
-            let mut gear: Vec<&str> = Vec::new();
-            if let Some(saddle) = m.saddle_item() {
-                self.spawn_item(saddle, pos, [0.0, 0.2, 0.0], 10);
-            }
-            // WitherBoss.dropCustomDeathLoot.
-            if m.species() == Species::Wither {
-                gear.push("minecraft:nether_star");
-            }
-            if species_drops_harness(m)
-                && let Some(h) = m.extra.head.as_deref()
-            {
-                gear.push(h);
-            }
-            if m.extra.chested && horizon_client::mobs::equine::is_equine(m.species()) {
-                gear.push("minecraft:chest");
-            }
-            if horizon_client::mobs::equine::is_equine(m.species())
-                && let Some(armor) = m.extra.head.as_deref()
-            {
-                gear.push(armor);
-            }
-            for item in gear {
-                self.spawn_item(ItemStack::new(item, 1), pos, [0.0, 0.2, 0.0], 10);
-            }
-            // AbstractChestedHorse.dropEquipment: the chest contents.
-            for stack in m.extra.items.clone().into_iter().flatten() {
-                self.spawn_item(stack, pos, [0.0, 0.2, 0.0], 10);
-            }
-            self.raider_death_loot(m, pos);
-            let worn = if horizon_client::mobs::equine::is_equine(m.species()) {
-                [None, None, None, None]
-            } else {
-                [
-                    m.extra.head.clone(),
-                    m.extra.chest.clone(),
-                    m.extra.legs.clone(),
-                    m.extra.feet.clone(),
-                ]
-            };
-            for (index, item) in std::iter::once(m.extra.main_hand.clone())
-                .chain(worn)
-                .enumerate()
-            {
-                // Main hand, then head to feet (the enchantment slots).
-                let slot = if index == 0 {
-                    horizon_client::mobs::gear::MAIN
-                } else {
-                    horizon_client::mobs::gear::HEAD + index - 1
-                };
-                // Equipment drop chance 8.5% (+ player kill only).
-                // Vexes never drop their sword.
-                if let Some(item) = &item
-                    && by_player
-                    && &**item != horizon_client::mobs::raider::BANNER
-                    && m.species() != Species::Vex
-                    && self.world.random.next_float() < 0.085
-                {
-                    let mut stack = ItemStack::new(item, 1);
-                    if let Some(g) = horizon_client::mobs::gear::gear(m) {
-                        for (e, l) in &g.slots[slot] {
-                            stack.enchant(e, *l);
-                        }
-                    }
-                    self.spawn_item(stack, pos, [0.0, 0.2, 0.0], 10);
-                }
-            }
-        }
-        if by_player && !consumed {
-            let xp = experience_reward(m, &mut self.world.random);
-            if xp > 0 {
-                self.spawn_orbs(pos, xp);
-            }
-        }
+        self.drop_death_loot(&mut dying, by_player, consumed, pos);
         if m.species() == Species::SulfurCube {
             self.split_sulfur_cube(m);
         }
@@ -883,6 +791,88 @@ impl Game<'_> {
                         horizon_client::mobs::cube::set_size(c, size / 2);
                     }
                 }
+            }
+        }
+    }
+    /// `dropAllDeathLoot` through `mobs::drops`: the entity loot table from the
+    /// world's random sequence, equipment by drop chance, species extras and
+    /// the experience orbs, spawned in order.
+    fn drop_death_loot(&mut self, m: &mut Mob, by_player: bool, consumed: bool, pos: [f64; 3]) {
+        use horizon_client::mobs::{DamageKind, Who, drops};
+        use horizon_world::loot::{LootDamage, LootEntity};
+        let Some(loot) = horizon_client::structure_blocks::loot_data(&self.options.resources) else {
+            return;
+        };
+        let player = || {
+            let mut e = LootEntity::new("minecraft:player");
+            if let Some(held) = self.held() {
+                e.equipment.push(("mainhand".into(), to_loot(held)));
+            }
+            e
+        };
+        let damage = m.last_damage.map(|(d, _)| {
+            let source = match d.attacker {
+                Some(Who::Player) => Some(player()),
+                Some(Who::Mob(id)) => self
+                    .mobs
+                    .iter()
+                    .find(|o| o.id == id)
+                    .map(|o| drops::loot_entity(o, None)),
+                None => None,
+            };
+            let direct = match d.kind {
+                DamageKind::Arrow => Some(LootEntity {
+                    kind: "minecraft:arrow".into(),
+                    ..LootEntity::default()
+                }),
+                DamageKind::Fireball => Some(LootEntity {
+                    kind: "minecraft:fireball".into(),
+                    ..LootEntity::default()
+                }),
+                _ => source.clone(),
+            };
+            let player_source = matches!(d.attacker, Some(Who::Player));
+            LootDamage {
+                kind: damage_type(d.kind, player_source).into(),
+                source,
+                direct,
+            }
+        });
+        let vehicle = m
+            .extra
+            .mount
+            .and_then(|id| self.mobs.iter().find(|o| o.id == id))
+            .map(|o| LootEntity::new(&o.kind.id));
+        let death = drops::Death {
+            loot: &loot,
+            damage,
+            player: by_player.then(player),
+            luck: 0.0,
+            vehicle,
+            mob_drops: self.ui.rules.bool("mob_drops"),
+            world_seed: self.level.seed,
+        };
+        let (items, skulls) = drops::die(m, &death, &mut self.rand_sequences);
+        if skulls
+            && let Some(Who::Mob(id)) = m.last_damage.and_then(|(d, _)| d.attacker)
+            && let Some(creeper) = self.mobs.iter_mut().find(|o| o.id == id)
+        {
+            // Creeper.droppedSkulls: one head per charged explosion.
+            creeper.extra.charged = false;
+        }
+        let raider = horizon_client::mobs::raider::is_raider(m.species());
+        for d in items {
+            match d {
+                drops::Drop::Item(stack) => {
+                    let item = if raider && stack.item == horizon_client::mobs::raider::BANNER {
+                        horizon_client::mobs::raider::ominous_banner()
+                    } else {
+                        from_loot(&stack)
+                    };
+                    self.spawn_item(item, pos, [0.0, 0.2, 0.0], 10);
+                }
+                drops::Drop::Orb(value) if !consumed => self.spawn_orbs(pos, value as u32),
+                drops::Drop::Orb(_) => {}
             }
         }
     }
@@ -2613,11 +2603,6 @@ impl Game<'_> {
         }
     }
 }
-fn species_drops_harness(m: &Mob) -> bool {
-    // Body equipment set to drop when killed: a harness, nautilus armour, a
-    // sulfur cube's swallowed block.
-    horizon_client::mobs::species::body_slot(m.species())
-}
 fn eat_sound(s: Species) -> &'static str {
     match s {
         Species::Pig => "entity.pig.eat",
@@ -2632,36 +2617,65 @@ fn eat_sound(s: Species) -> &'static str {
     }
 }
 /// Mob.getBaseExperienceReward
-fn experience_reward(m: &Mob, random: &mut impl RandomSource) -> u32 {
-    use Species as S;
-    match m.species() {
-        S::Blaze | S::Ghast | S::Hoglin | S::Zoglin | S::PiglinBrute | S::Breeze => 10,
-        S::Slime | S::MagmaCube => m.extra.size.max(1) as u32,
-        S::Endermite => 3,
-        S::Bat
-        | S::Squid
-        | S::GlowSquid
-        | S::Cod
-        | S::Salmon
-        | S::TropicalFish
-        | S::Pufferfish
-        | S::Dolphin => 1 + random.next_int_bound(3).unwrap_or(0) as u32,
-        S::IronGolem | S::SnowGolem | S::Villager | S::WanderingTrader => 0,
-        // SulfurCube.getBaseExperienceReward.
-        S::SulfurCube if m.is_baby() => 0,
-        S::SulfurCube => 1 + random.next_int_bound(2).unwrap_or(0) as u32,
-        // Animals in the monster category (Animal.getBaseExperienceReward).
-        S::CamelHusk | S::ZombieNautilus => 1 + random.next_int_bound(3).unwrap_or(0) as u32,
-        _ if m.hostile() => {
-            5 + if m.extra.main_hand.is_some() {
-                1 + random.next_int_bound(3).unwrap_or(0) as u32
-            } else {
-                0
-            }
-        }
-        _ if m.is_baby() => 0,
-        _ => 1 + random.next_int_bound(3).unwrap_or(0) as u32,
+/// The damage type id of a Horizon damage kind.
+fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) -> &'static str {
+    use horizon_client::mobs::DamageKind as K;
+    match kind {
+        K::PlayerAttack => "minecraft:player_attack",
+        K::MobAttack => "minecraft:mob_attack",
+        K::Arrow => "minecraft:arrow",
+        K::Thrown => "minecraft:thrown",
+        K::Fireball => "minecraft:fireball",
+        K::Explosion if player => "minecraft:player_explosion",
+        K::Explosion => "minecraft:explosion",
+        K::Fall => "minecraft:fall",
+        K::OnFire => "minecraft:on_fire",
+        K::InFire => "minecraft:in_fire",
+        K::Lava => "minecraft:lava",
+        K::Drown => "minecraft:drown",
+        K::Magic => "minecraft:magic",
+        K::Sting => "minecraft:sting",
+        K::Cactus => "minecraft:cactus",
+        K::Generic => "minecraft:generic",
+        K::InWall => "minecraft:in_wall",
+        K::Thorns => "minecraft:thorns",
+        K::SonicBoom => "minecraft:sonic_boom",
     }
+}
+/// A Horizon item stack as a loot stack (id, count, damage, enchantments).
+fn to_loot(stack: &ItemStack) -> horizon_world::loot::LootStack {
+    horizon_world::loot::LootStack {
+        item: stack.item.to_string(),
+        count: stack.count as i32,
+        damage: stack.damage as i32,
+        enchantments: stack
+            .enchantments()
+            .iter()
+            .map(|(e, l)| (e.to_string(), *l as i32))
+            .collect(),
+        potion: None,
+        map: false,
+        ominous_amplifier: None,
+    }
+}
+/// A generated loot stack as a Horizon item stack.
+fn from_loot(stack: &horizon_world::loot::LootStack) -> ItemStack {
+    let mut item = ItemStack {
+        item: Arc::from(stack.item.as_str()),
+        count: stack.count.max(1) as u32,
+        damage: stack.damage.max(0) as u32,
+        extra: None,
+    };
+    for (id, level) in &stack.enchantments {
+        item.enchant(id, (*level).max(0) as u32);
+    }
+    if let Some(potion) = &stack.potion {
+        item = item.with_potion(potion);
+    }
+    if let Some(amplifier) = stack.ominous_amplifier.filter(|a| *a > 0) {
+        item.data_mut().ominous_amplifier = Some(amplifier as u8);
+    }
+    item
 }
 /// Entity.push between overlapping mobs (LivingEntity.pushEntities).
 fn push_apart(mobs: &mut [Mob]) {

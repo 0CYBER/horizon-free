@@ -18,6 +18,7 @@ pub mod control;
 pub mod creaking;
 pub mod cube;
 pub mod data;
+pub mod drops;
 pub mod enderman;
 pub mod equine;
 pub mod farm;
@@ -46,6 +47,7 @@ pub mod riders;
 pub mod shulker;
 pub mod sniffer;
 pub mod spawning;
+pub mod spawn_rules;
 pub mod species;
 pub mod sulfur_cube;
 pub mod tame;
@@ -544,6 +546,9 @@ pub struct Extra {
     pub trap_time: i32,
     /// Enchantments on the equipment above.
     pub gear: Option<Box<gear::Gear>>,
+    /// `Mob.dropChances` by `EquipmentSlot` (`drops::SLOTS` order) when set
+    /// explicitly; None uses the defaults of `drops::drop_chance`.
+    pub drop_chances: Option<Box<[f32; 8]>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -919,6 +924,10 @@ pub struct MobWorld<'a> {
     pub mob_griefing: bool,
     /// `getCurrentDifficultyAt` near the player.
     pub difficulty: spawning::LocalDifficulty,
+    /// The End (its dimension type's monster spawn light rules).
+    pub end: bool,
+    /// The world seed (slime chunks).
+    pub world_seed: i64,
 }
 impl Mob {
     pub fn new(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {
