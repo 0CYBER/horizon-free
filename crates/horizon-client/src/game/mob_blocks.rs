@@ -1,8 +1,9 @@
 //! Blocks mobs carry: block items in a hand (`ItemInHandLayer`) and the
 //! block an enderman holds (`CarriedBlockLayer`), drawn as shaded cubes like
 //! dropped block items.
-use super::{Game, Icon};
+use super::Game;
 use horizon_client::{
+    items::ItemStack,
     mesher::Vertex,
     mobs::{Mob, Species, render},
 };
@@ -176,22 +177,6 @@ impl Game<'_> {
             render::draw(flag, m, &flag_poses, r, color, light, 0, out);
         }
     }
-    /// Resolve the icons of the items mobs hold, so drawing can look them up.
-    pub(super) fn cache_mob_icons(&mut self) {
-        let items: Vec<String> = self
-            .mobs
-            .iter()
-            .filter(|m| m.extra.main_hand.is_some() || m.extra.off_hand.is_some())
-            .flat_map(|m| [m.extra.main_hand.clone(), m.extra.off_hand.clone()])
-            .flatten()
-            .map(|i| i.to_string())
-            .collect();
-        for item in items {
-            if !self.res.icons.contains_key(&item) {
-                let _ = self.icon(&item);
-            }
-        }
-    }
     fn push_cube(
         &self,
         t: glam::Mat4,
@@ -232,40 +217,7 @@ impl Game<'_> {
     ) {
         let overlay = u32::from(mob.hurt_time > 0);
         self.captain_banner_geometry(mob, camera, alpha, light, out);
-        for (item, left) in [(&mob.extra.main_hand, false), (&mob.extra.off_hand, true)] {
-            let Some(item) = item else { continue };
-            let Some(Icon::Cube {
-                top,
-                left: z,
-                right: x,
-                tint,
-            }) = self.res.icons.get(&**item).cloned().flatten()
-            else {
-                continue;
-            };
-            let Some(t) =
-                render::held_block_transform(mob, alpha as f32, camera, &self.res.mob_data, left)
-            else {
-                continue;
-            };
-            let slot = if left {
-                horizon_client::mobs::gear::OFF
-            } else {
-                horizon_client::mobs::gear::MAIN
-            };
-            let glint = horizon_client::mobs::gear::enchanted(mob, slot);
-            let overlay = if glint { 7 } else { overlay };
-            self.push_cube(
-                t,
-                &Cube {
-                    sprites: [&top, &z, &x],
-                    tint,
-                },
-                light,
-                overlay,
-                out,
-            );
-        }
+        self.held_item_geometry(mob, camera, alpha, light, true, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
             && let Some((sprite, tint)) = self.particle_sprite(state)
@@ -290,6 +242,73 @@ impl Game<'_> {
                 overlay,
                 out,
             );
+        }
+    }
+    /// `ItemInHandLayer`: both hands through the item model pipeline; `lit`
+    /// applies the level's diffuse lighting (off for GUI previews, which
+    /// light the projected quads themselves).
+    pub(super) fn held_item_geometry(
+        &self,
+        mob: &Mob,
+        camera: glam::DVec3,
+        alpha: f64,
+        light: u32,
+        lit: bool,
+        out: &mut Vec<Vertex>,
+    ) {
+        let overlay = u32::from(mob.hurt_time > 0);
+        for (item, left) in [(&mob.extra.main_hand, false), (&mob.extra.off_hand, true)] {
+            let Some(item) = item else { continue };
+            let Some(t) =
+                render::held_item_transform(mob, alpha as f32, camera, &self.res.mob_data, left)
+            else {
+                continue;
+            };
+            let slot = if left {
+                horizon_client::mobs::gear::OFF
+            } else {
+                horizon_client::mobs::gear::MAIN
+            };
+            let mut stack = ItemStack::new(item, 1);
+            if horizon_client::mobs::gear::enchanted(mob, slot) {
+                // The gear's enchantments are not tracked, only that it has some.
+                stack.enchant("minecraft:unbreaking", 1);
+            }
+            if &**item == "minecraft:crossbow" && mob.extra.flag2 {
+                stack.data_mut().charged = vec![ItemStack::new("minecraft:arrow", 1)];
+            }
+            let mut owner = super::item_draw::owner_at(
+                [mob.position.x, mob.position.y, mob.position.z],
+                mob.body_yaw,
+                &mob.kind.id,
+            );
+            if !left && mob.extra.using_item > 0 {
+                owner.using_this_item = true;
+                owner.use_duration = 72_000;
+                owner.use_item_remaining_ticks = 72_000 - mob.extra.using_item;
+                owner.crossbow_charge_duration = 25;
+            }
+            let context = if left {
+                horizon_assets::item_model::DisplayContext::ThirdPersonLeftHand
+            } else {
+                horizon_assets::item_model::DisplayContext::ThirdPersonRightHand
+            };
+            // `updateForLiving`: seeded by the entity id plus the context ordinal.
+            let seed = mob.id as i32 + if left { 1 } else { 2 };
+            let state = self.resolve_item(&stack, context, Some(&owner), seed);
+            let start = out.len();
+            if lit {
+                self.submit_item_world(&state, t, light, out);
+            } else {
+                self.submit_item_unlit(&state, t, light, out);
+            }
+            if overlay != 0 {
+                for v in &mut out[start..] {
+                    if v.layer == 0 {
+                        v.layer = overlay;
+                    }
+                }
+            }
         }
     }
 }

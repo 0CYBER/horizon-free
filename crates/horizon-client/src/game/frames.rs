@@ -2,7 +2,7 @@
 //! `ItemFrame.survives`, `interact` (put an item in, then rotate it),
 //! `hurtServer` (take the item out, then break the frame) and
 //! `ItemFrameRenderer` (the frame model and the item at a 45 degree step).
-use super::{Game, Hit, Icon, view_vector};
+use super::{Game, Hit, view_vector};
 use horizon_assets::{bake::bake_model, model::CuboidModel, resolve::ModelLibrary};
 use horizon_client::{entities::ItemFrame, items::ItemStack, mesher::Vertex};
 use horizon_core::{
@@ -300,17 +300,10 @@ impl Game<'_> {
     }
     /// ItemFrameRenderer: the frame model, then the item half size on its face.
     pub(super) fn frame_geometry(&mut self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let icons: Vec<Option<Icon>> = (0..self.item_frames.len())
-            .map(|i| {
-                self.item_frames[i]
-                    .item
-                    .clone()
-                    .and_then(|s| self.icon(&s.item))
-            })
-            .collect();
         let sprites = &self.res.atlas.sprites;
         let mut maps: Vec<(i32, glam::Mat4, u32)> = Vec::new();
-        for (f, icon) in self.item_frames.iter().zip(icons) {
+        let mut items: Vec<(ItemStack, u32, glam::Mat4, u8)> = Vec::new();
+        for f in &self.item_frames {
             let map = f.item.as_ref().and_then(super::maps::map_id);
             let s = f.step();
             // Pose: to the block centre, then X/Y rotation by facing.
@@ -391,89 +384,33 @@ impl Game<'_> {
                 maps.push((id, m.as_mat4(), item_light));
                 continue;
             }
-            let Some(icon) = icon else { continue };
-            // GlowItemFrame items render full bright.
-            let item_light = if f.glow { 240 | 240 << 8 } else { packed };
+            let Some(stack) = f.item.clone() else {
+                continue;
+            };
+            // `GlowItemFrame` items render full bright (15728880).
+            let item_light = if f.glow { 0xFF } else { light };
             let depth = if f.invisible { 0.5 } else { 0.4375 };
             let m = pose
                 * glam::DMat4::from_translation(glam::DVec3::new(0.0, 0.0, depth))
                 * glam::DMat4::from_rotation_z((f64::from(f.rotation) * 45.0).to_radians())
                 * glam::DMat4::from_scale(glam::DVec3::splat(0.5));
-            let full = |r: &horizon_client::hud::Rect| {
-                [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]]
-            };
-            match icon {
-                // A flat item faces out of the frame (towards -z here).
-                Icon::Flat(sprite) => {
-                    if let Some(r) = sprites.get(&sprite) {
-                        let z = -0.03125;
-                        quad(
-                            &m,
-                            [
-                                [0.5, -0.5, z],
-                                [-0.5, -0.5, z],
-                                [-0.5, 0.5, z],
-                                [0.5, 0.5, z],
-                            ],
-                            full(r),
-                            item_light,
-                        );
-                    }
-                }
-                Icon::Cube {
-                    top, left, right, ..
-                } => {
-                    let h = 0.25;
-                    let face = |name: &str| sprites.get(name).copied();
-                    if let (Some(t), Some(l), Some(r)) = (face(&top), face(&left), face(&right)) {
-                        let c = |x: f64, y: f64, z: f64| [x * h, y * h, z * h - h];
-                        quad(
-                            &m,
-                            [
-                                c(-1., 1., -1.),
-                                c(1., 1., -1.),
-                                c(1., 1., 1.),
-                                c(-1., 1., 1.),
-                            ],
-                            full(&t),
-                            item_light,
-                        );
-                        quad(
-                            &m,
-                            [
-                                c(1., -1., -1.),
-                                c(-1., -1., -1.),
-                                c(-1., 1., -1.),
-                                c(1., 1., -1.),
-                            ],
-                            full(&l),
-                            item_light,
-                        );
-                        quad(
-                            &m,
-                            [
-                                c(-1., -1., -1.),
-                                c(-1., -1., 1.),
-                                c(-1., 1., 1.),
-                                c(-1., 1., -1.),
-                            ],
-                            full(&r),
-                            item_light,
-                        );
-                        quad(
-                            &m,
-                            [
-                                c(1., -1., 1.),
-                                c(1., -1., -1.),
-                                c(1., 1., -1.),
-                                c(1., 1., 1.),
-                            ],
-                            full(&r),
-                            item_light,
-                        );
-                    }
-                }
-            }
+            items.push((stack, f.id, m.as_mat4(), item_light));
+        }
+        // `extractRenderState`: FIXED, seeded by the frame entity.
+        for (stack, id, m, light) in items {
+            let owner = super::item_draw::owner_at([0.0; 3], 0.0, "minecraft:item_frame");
+            let state = self.resolve_item(
+                &stack,
+                horizon_assets::item_model::DisplayContext::Fixed,
+                Some(&owner),
+                id as i32,
+            );
+            self.submit_item_world(
+                &state,
+                m,
+                horizon_client::block_entity_render::vertex_light(light),
+                out,
+            );
         }
         for (id, m, light) in maps {
             self.map_vertices(id, m, light, out);

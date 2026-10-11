@@ -395,6 +395,7 @@ impl Game<'_> {
             &self.player_armor_layers(),
             out,
         );
+        self.held_item_geometry(m, camera, alpha, packed, true, out);
     }
     /// `extractEntityInInventoryFollowsMouse`: the player in the box
     /// `[x0, x1) x [y0, y1)`, `size` pixels per block, turned toward the
@@ -448,6 +449,7 @@ impl Game<'_> {
             &self.player_armor_layers(),
             &mut verts,
         );
+        self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
         // then the translation and Rz(pi) * Rx(y_angle * 20 degrees).
