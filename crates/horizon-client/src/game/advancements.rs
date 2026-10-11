@@ -511,6 +511,17 @@ impl Game<'_> {
             return;
         }
         self.check_inventory_trigger();
+        // ServerPlayer.tick: PlayerTrigger.TICK every tick.
+        let me = self.player_entity();
+        self.trigger("minecraft:tick", |c, w| {
+            let ctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &ctx, w)
+        });
         if self.ticks.is_multiple_of(20) {
             let me = self.player_entity();
             self.trigger("minecraft:location", |c, w| {

@@ -98,6 +98,10 @@ impl Game<'_> {
                 self.command_failure(e.message);
             }
         }
+        // InventoryChangeTrigger fires as slots change, not on the next tick.
+        if self.player.is_some() {
+            self.check_inventory_trigger();
+        }
     }
     fn syntax_failure(&mut self, e: &CommandError, command: &str) {
         self.command_failure(e.message.clone());

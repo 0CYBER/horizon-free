@@ -554,6 +554,18 @@ impl Items {
         held: Option<&ItemStack>,
         random: &mut R,
     ) -> Vec<ItemStack> {
+        self.block_drops_in(registry, state, held, random, None)
+    }
+    /// `block_drops` drawing from the table's random sequence when it has one
+    /// (`sequences`: the world's sequences and seed), as BlockState.getDrops.
+    pub fn block_drops_in<R: RandomSource>(
+        &self,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+        held: Option<&ItemStack>,
+        random: &mut R,
+        sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
+    ) -> Vec<ItemStack> {
         let Some(block) = registry.state(state) else {
             return vec![];
         };
@@ -570,6 +582,21 @@ impl Items {
         let Some(table) = table else {
             return vec![];
         };
+        // LootTable.getRandomItems draws from the table's random sequence.
+        if let (Some(seq), Some(sequences)) = (
+            table.get("random_sequence").and_then(Value::as_str),
+            sequences,
+        ) {
+            let random = sequences.0.get(seq, sequences.1);
+            let ctx = LootContext {
+                items: self,
+                block: &block.name,
+                properties: &block.properties,
+                held,
+                killed_by_player: false,
+            };
+            return ctx.evaluate(table, random);
+        }
         let ctx = LootContext {
             items: self,
             block: &block.name,

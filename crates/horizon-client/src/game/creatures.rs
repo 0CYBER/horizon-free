@@ -1061,11 +1061,12 @@ impl Game<'_> {
                     let old = self.world.block(pos[0], pos[1], pos[2]);
                     self.destroy_particles(pos, old);
                     if drop {
-                        let drops = self.res.items.block_drops(
+                        let drops = self.res.items.block_drops_in(
                             self.res.assets.registry,
                             old,
                             None,
                             &mut self.world.random,
+                            Some((&mut self.rand_sequences, self.level.seed)),
                         );
                         for d in drops {
                             self.pop_resource(pos, d);

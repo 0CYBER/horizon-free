@@ -1443,11 +1443,12 @@ impl Game<'_> {
                         let name = self.res.facts.get(state).name.clone();
                         self.release_contents([pos.x, pos.y, pos.z], entity, &name);
                     }
-                    let drops = self.res.items.block_drops(
+                    let drops = self.res.items.block_drops_in(
                         self.res.assets.registry,
                         state,
                         None,
                         &mut self.world.random,
+                        Some((&mut self.rand_sequences, self.level.seed)),
                     );
                     for d in drops {
                         if &*d.item != "minecraft:air" {
@@ -1794,11 +1795,12 @@ impl Game<'_> {
             let harvest = !facts.requires_tool
                 || self.res.items.correct_for_drops(held.as_ref(), &facts.name);
             if harvest {
-                let drops = self.res.items.block_drops(
+                let drops = self.res.items.block_drops_in(
                     self.res.assets.registry,
                     state,
                     held.as_ref(),
                     &mut self.world.random,
+                    Some((&mut self.rand_sequences, self.level.seed)),
                 );
                 let silk = held
                     .as_ref()
