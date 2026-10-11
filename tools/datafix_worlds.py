@@ -33,7 +33,8 @@ import datafix_scene as scene  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local' / 'datafix'
-VERSIONS = ['1.20.1', '1.20.4', '1.20.6', '1.21.1', '1.21.4', '1.21.5', '1.21.8', '1.21.10', '1.21.11', '26.1.2', '26.2']
+VERSIONS = ['1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.8',
+            '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.2', '26.2']
 MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 BOT = 'Upgrader'
 UUID_BASE = 0x6000
@@ -56,12 +57,14 @@ def server_jar(version):
 
 
 class Server:
-    def __init__(self, directory, jar, port):
+    def __init__(self, directory, jar, port, packs=()):
         directory.mkdir(parents=True, exist_ok=True)
         (directory / 'eula.txt').write_text('eula=true\n')
         props = {'server-port': port, 'online-mode': 'false', 'level-name': 'world', 'level-seed': '4242',
                  'view-distance': '4', 'simulation-distance': '4', 'spawn-protection': '0', 'sync-chunk-writes': 'true',
                  'enable-rcon': 'false', 'enable-query': 'false', 'max-tick-time': '-1'}
+        if packs:
+            props['initial-enabled-packs'] = ','.join(['vanilla', *packs])
         (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
         self.process = subprocess.Popen(['java', '-Xmx2G', '-jar', str(jar), 'nogui'], cwd=directory,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -270,7 +273,7 @@ def build(version, force=False):
     work = LOCAL / 'gen' / version
     shutil.rmtree(work, ignore_errors=True)
     port = 30000 + (os.getpid() + data_version) % 20000
-    server = Server(work, jar, port)
+    server = Server(work, jar, port, scene.experiments(data_version))
     problems = []
 
     def run(command):
@@ -293,7 +296,7 @@ def build(version, force=False):
     run('setworldspawn 20 101 20')
     bot = Bot(port, protocol, BOT)
     time.sleep(3)
-    for command in scene.player_commands(era, BOT):
+    for command in scene.player_commands(era, BOT, data_version):
         run(command)
     time.sleep(3)
     run('save-all flush')

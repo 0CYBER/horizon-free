@@ -119,8 +119,45 @@ ITEMS_C = [
 ]
 
 
-def items(e):
-    return ITEMS_A if e == A else ITEMS_B if e == B else ITEMS_C
+def experiments(version):
+    """Experimental data packs a world of `version` turns on, so that the blocks behind
+    them exist and the feature-flag fixes have flags to remove."""
+    packs = []
+    if 3698 <= version < 3939:
+        packs.append('update_1_21')
+    if 3700 <= version < 4067:
+        packs.append('bundle')
+    if 4080 <= version < 4180:
+        packs.append('winter_drop')
+    return packs
+
+
+def items(e, version=None):
+    """The sample stacks of an era, in the exact component formats `version` accepts."""
+    stacks = ITEMS_A if e == A else ITEMS_B if e == B else ITEMS_C
+    if version is None:
+        return stacks
+    return [versioned(s, version) for s in stacks]
+
+
+def versioned(stack, version):
+    """Rewrite the components whose format changed inside an era."""
+    if version >= 4541:  # chain renamed to iron_chain
+        stack = stack.replace('"minecraft:chain"', '"minecraft:iron_chain"')
+    if '"minecraft:attribute_modifiers"' in stack:
+        if version < 3945:  # 1.20.5: modifiers are named and carry a UUID
+            stack = stack.replace('id:"minecraft:x",', 'uuid:[I;1,2,3,4],name:"x",')
+        if version >= 4055:  # 1.21.2: attribute ids lose their generic. prefix
+            stack = stack.replace('minecraft:generic.attack_damage', 'minecraft:attack_damage')
+    if version >= 4068:  # 1.21.2: a lock is an item predicate
+        stack = stack.replace('"minecraft:lock":"key"', '"minecraft:lock":{items:"minecraft:stick"}')
+    if version >= 4064:  # 1.21.2: fire_resistant became damage_resistant
+        stack = stack.replace('"minecraft:fire_resistant":{}', '"minecraft:damage_resistant":{types:"#minecraft:is_fire"}')
+    if version >= 4059:  # 1.21.2: food lost eat_seconds (now in consumable)
+        stack = stack.replace(',eat_seconds:1.0f', '')
+    if version >= 4175:  # 1.21.4: custom model data holds lists
+        stack = stack.replace('"minecraft:custom_model_data":5', '"minecraft:custom_model_data":{floats:[5.0f]}')
+    return stack
 
 
 def slotted(stacks):
@@ -130,9 +167,9 @@ def slotted(stacks):
     return '[' + ','.join(out) + ']'
 
 
-def chests(e):
+def chests(e, version=None):
     """Chests holding every sample item (27 per chest)."""
-    st = items(e)
+    st = items(e, version)
     return [st[i:i + 27] for i in range(0, len(st), 27)]
 
 
@@ -140,7 +177,7 @@ def chests(e):
 def block_entities(e, version):
     name = lambda s: text(e, s)
     out = []
-    for group in chests(e):
+    for group in chests(e, version):
         out.append(('chest', f'{{Items:{slotted(group)},CustomName:{name("Stash")}}}'))
     sign_a = ('{front_text:{messages:[\'{"text":"one"}\',\'"two"\',\'""\',\'""\'],color:"red",has_glowing_text:1b},'
               'back_text:{messages:[\'"b"\',\'""\',\'""\',\'""\'],filtered_messages:[\'"x"\',\'""\',\'""\',\'""\']},'
@@ -284,12 +321,13 @@ def entities(e, version):
     return out
 
 
-def player_commands(e, name):
+def player_commands(e, name, version=None):
     """Give the joined bot a varied inventory and ender chest."""
     out = []
-    for i, stack in enumerate(items(e)[:30]):
+    stacks = items(e, version)
+    for i, stack in enumerate(stacks[:30]):
         out.append(f'item replace entity {name} container.{i} with {give_form(e, stack)}')
-    out.append(f'item replace entity {name} enderchest.0 with {give_form(e, items(e)[0])}')
+    out.append(f'item replace entity {name} enderchest.0 with {give_form(e, stacks[0])}')
     out.append(f'item replace entity {name} armor.head with minecraft:iron_helmet')
     out.append(f'xp set {name} 5 levels')
     return out
