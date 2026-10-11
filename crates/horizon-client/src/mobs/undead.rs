@@ -15,6 +15,7 @@ pub fn register(m: &mut Mob) {
     match m.species() {
         S::Zombie | S::Husk | S::ZombieVillager => {
             let g = &mut m.ai.goals;
+            g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
             g.add(3, MeleeAttack::new(1.0, false).zombie());
@@ -474,5 +475,150 @@ impl Goal for DrownedGoToWater {
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.nav_move_to(cx.w, self.wanted, 1.0);
+    }
+}
+
+/// `Zombie.ZombieAttackTurtleEggGoal` (a `RemoveBlockGoal` on turtle eggs):
+/// walk to a turtle egg within 24 blocks and trample it.
+#[derive(Clone, Debug)]
+pub struct AttackTurtleEgg {
+    base: super::goals::MoveToBlock,
+    since_reached: i32,
+}
+impl Default for AttackTurtleEgg {
+    fn default() -> Self {
+        Self {
+            base: super::goals::MoveToBlock::new(1.0, 24, 3),
+            since_reached: 0,
+        }
+    }
+}
+/// RemoveBlockGoal.isValidTarget: the block with two air blocks above, in a loaded chunk.
+fn turtle_egg_target(w: &super::MobWorld, p: [i32; 3]) -> bool {
+    w.world.loaded(p[0], p[2])
+        && w.block_name(p[0], p[1], p[2]) == "minecraft:turtle_egg"
+        && w.facts.is_air(w.world.block(p[0], p[1] + 1, p[2]))
+        && w.facts.is_air(w.world.block(p[0], p[1] + 2, p[2]))
+}
+impl Goal for AttackTurtleEgg {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | super::goals::JUMP
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    /// RemoveBlockGoal.canUse
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !cx.w.mob_griefing {
+            return false;
+        }
+        if self.base.next_start > 0 {
+            self.base.next_start -= 1;
+            return false;
+        }
+        if self.base.find_nearest(m, cx.w, turtle_egg_target) {
+            self.base.next_start = super::goals::reduced(20);
+            return true;
+        }
+        // MoveToBlockGoal.nextStartTick
+        self.base.next_start =
+            super::goals::reduced(200 + m.random.next_int_bound(200).unwrap_or(0));
+        false
+    }
+    fn can_continue(&mut self, _m: &mut Mob, cx: &mut Cx) -> bool {
+        self.base.can_continue(cx.w, turtle_egg_target)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.base.start(m, cx.w);
+        self.since_reached = 0;
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.fall_distance = 1.0;
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.base.tick_within(m, cx.w, 1.14);
+        let at = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        ];
+        let egg = |p: [i32; 3]| cx.w.block_name(p[0], p[1], p[2]) == "minecraft:turtle_egg";
+        let eat = [
+            at,
+            [at[0], at[1] - 1, at[2]],
+            [at[0] - 1, at[1], at[2]],
+            [at[0] + 1, at[1], at[2]],
+            [at[0], at[1], at[2] - 1],
+            [at[0], at[1], at[2] + 1],
+            [at[0], at[1] - 2, at[2]],
+        ]
+        .into_iter()
+        .find(|p| egg(*p));
+        let Some(eat) = eat.filter(|_| self.base.reached) else {
+            return;
+        };
+        let center = [
+            f64::from(eat[0]) + 0.5,
+            f64::from(eat[1]) + 0.7,
+            f64::from(eat[2]) + 0.5,
+        ];
+        if self.since_reached > 0 {
+            m.velocity.y = 0.3;
+            // The egg crumb particles' spread.
+            for _ in 0..3 {
+                m.random.next_float();
+            }
+            cx.events.push(MobEvent::Particles {
+                kind: "item_egg",
+                at: center,
+                count: 3,
+            });
+        }
+        if self.since_reached % 2 == 0 {
+            m.velocity.y = -0.3;
+            if self.since_reached % 6 == 0 {
+                let pitch = 0.9 + m.random.next_float() * 0.2;
+                let b = self.base.block;
+                cx.events.push(MobEvent::Sound(
+                    "entity.zombie.destroy_egg",
+                    [
+                        f64::from(b[0]) + 0.5,
+                        f64::from(b[1]) + 0.5,
+                        f64::from(b[2]) + 0.5,
+                    ],
+                    0.5,
+                    pitch,
+                ));
+            }
+        }
+        if self.since_reached > 60 {
+            cx.events.push(MobEvent::BreakBlock {
+                pos: eat,
+                drop: false,
+            });
+            for _ in 0..20 {
+                m.random.next_gaussian();
+                m.random.next_gaussian();
+                m.random.next_gaussian();
+            }
+            cx.events.push(MobEvent::Particles {
+                kind: "poof",
+                at: [center[0], f64::from(eat[1]), center[2]],
+                count: 20,
+            });
+            // The break sound's pitch draws from the level random.
+            cx.events.push(MobEvent::Sound(
+                "block.turtle_egg.break",
+                [
+                    f64::from(eat[0]) + 0.5,
+                    f64::from(eat[1]) + 0.5,
+                    f64::from(eat[2]) + 0.5,
+                ],
+                0.7,
+                1.0,
+            ));
+        }
+        self.since_reached += 1;
     }
 }

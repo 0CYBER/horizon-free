@@ -158,6 +158,8 @@ pub fn family(s: Species) -> Family {
     }
 }
 pub fn register(m: &mut Mob) {
+    // Raider subclasses call super.registerGoals() first.
+    super::raider::register(m);
     match family(m.species()) {
         Family::Farm => farm::register(m),
         Family::Undead => undead::register(m),
@@ -201,7 +203,6 @@ pub fn register(m: &mut Mob) {
         Family::Creaking => super::creaking::register(m),
         Family::Nautilus => super::nautilus::register(m),
     }
-    super::raider::register(m);
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
 fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
@@ -486,6 +487,13 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 /// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
 fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    // Witch.aiStep runs before super.aiStep().
+    if m.species() == Species::Witch {
+        let far = m
+            .target_info(w)
+            .is_some_and(|t| t.position.distance_squared(m.position) > 121.0);
+        super::witch::ai_step(m, events, far);
+    }
     if super::creaking::is_creaking(m) {
         super::creaking::update(m, w, events);
     }
@@ -518,6 +526,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         f64::from(m.ai.zza),
     );
     m.travel(w, input, events);
+    push_entities(m, w, events);
     // Spider.tick: climbing while pressed against a wall.
     if m.kind.flags.climber {
         m.climbing = m.horizontal_collision;
@@ -553,6 +562,82 @@ fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         m.fire_ticks = m.fire_ticks.max(160);
     }
     species_ai_step(m, w, events);
+}
+impl Mob {
+    /// LivingEntity.isPushable (and the push it takes from `Entity.push(Entity)`):
+    /// bats and shulkers are never moved by others.
+    pub fn pushable(&self) -> bool {
+        self.alive()
+            && !matches!(self.species(), Species::Bat | Species::Shulker)
+            && !(self.kind.flags.climber && self.climbing)
+            && !(self.species() == Species::Creaking && !super::creaking::can_move(self))
+    }
+}
+/// LivingEntity.onClimbable for the pusher (Spider.onClimbable: climbing a wall).
+fn on_climbable(m: &Mob, w: &MobWorld) -> bool {
+    if m.kind.flags.climber {
+        return m.climbing;
+    }
+    let (x, y, z) = (
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    );
+    w.has_tag("minecraft:climbable", w.block_name(x, y, z))
+}
+/// LivingEntity.pushEntities: every pushable entity overlapping the box is
+/// pushed apart from this one (`doPush(e)` = `e.push(this)`); pushes of other
+/// mobs are `Push` events their tick picks up.
+fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if m.species() == Species::Bat {
+        return;
+    }
+    let bounds = m.bounds();
+    // The pusher's own isPushable, checked by `e.push(this)` before moving it.
+    let self_pushable = m.alive()
+        && m.species() != Species::Shulker
+        && !on_climbable(m, w)
+        && !(m.species() == Species::Creaking && !super::creaking::can_move(m));
+    let mut targets: Vec<(Who, Vec3)> = Vec::new();
+    if let Some(p) = &w.player
+        && p.alive
+        && !p.spectator
+        && p.bounds.intersects(bounds)
+    {
+        targets.push((Who::Player, p.position));
+    }
+    for o in w.others {
+        if o.id != m.id && o.alive && o.pushable && o.bounds.intersects(bounds) {
+            targets.push((Who::Mob(o.id), o.position));
+        }
+    }
+    // Cramming (maxEntityCramming 24).
+    if targets.len() > 23 {
+        let _ = m.random.next_int_bound(4);
+    }
+    for (who, at) in targets {
+        // Entity.push(Entity) with `this` the other entity.
+        let (mut xa, mut za) = (m.position.x - at.x, m.position.z - at.z);
+        let mut dd = xa.abs().max(za.abs());
+        if dd < f64::from(0.01_f32) {
+            continue;
+        }
+        dd = dd.sqrt();
+        xa /= dd;
+        za /= dd;
+        let pow = (1.0 / dd).min(1.0);
+        xa *= pow;
+        za *= pow;
+        xa *= f64::from(0.05_f32);
+        za *= f64::from(0.05_f32);
+        events.push(MobEvent::Push {
+            target: who,
+            velocity: [-xa, 0.0, -za],
+        });
+        if self_pushable {
+            m.velocity = Vec3::new(m.velocity.x + xa, m.velocity.y, m.velocity.z + za);
+        }
+    }
 }
 fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
     if !w.daylight || w.nether {
@@ -632,12 +717,6 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         aquatic::ai_step(m, w, events);
     }
     match m.species() {
-        Species::Witch => {
-            let far = m
-                .target_info(w)
-                .is_some_and(|t| t.position.distance_squared(m.position) > 121.0);
-            super::witch::ai_step(m, events, far)
-        }
         Species::Enderman => super::enderman::ai_step(m, w, events),
         Species::Wolf => super::tame::ai_step(m, w, events),
         Species::Cat => super::tame::cat_ai_step(m, events),

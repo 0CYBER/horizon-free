@@ -80,24 +80,18 @@ pub fn is_captain(m: &Mob) -> bool {
     m.extra.head.as_deref() == Some(BANNER) && state(m).is_some_and(|s| s.patrol_leader)
 }
 
+/// `PatrollingMonster.registerGoals` then `Raider.registerGoals`: the goals
+/// every raider registers before its own.
 pub fn register(m: &mut Mob) {
     if !is_raider(m.species()) {
         return;
     }
     m.extra.raider = Some(Box::default());
-    let species = m.species();
+    m.ai.goals.add(4, LongDistancePatrol::new(0.7, 0.595));
     m.ai.goals.add(1, ObtainBanner);
     m.ai.goals.add(3, PathfindToRaid);
     m.ai.goals.add(4, MoveThroughVillage::new(1.05, 1.0));
     m.ai.goals.add(5, Celebration);
-    m.ai.goals.add(4, LongDistancePatrol::new(0.7, 0.595));
-    // The illagers hold their ground in a patrol (Witch and Ravager do not).
-    if matches!(species, Species::Pillager | Species::Vindicator) {
-        m.ai.goals.add(
-            if species == Species::Pillager { 2 } else { 4 },
-            HoldGroundAttack::new(10.0),
-        );
-    }
 }
 
 /// `Raid.getOminousBannerInstance`.

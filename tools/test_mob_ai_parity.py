@@ -200,6 +200,9 @@ def compare(vanilla, rust, fields=None):
                                   f'horizon {draws(prev_r, (b or {}).get("rng"))})')
                     for line in [x for x in v.get('trace', {}).get(t, []) if x.split(' ', 1)[0] == str(mob)][:40]:
                         report.append('      vanilla ' + line)
+                    # Present when the probe is built with the rng-trace feature (see --trace).
+                    for line in [x for x in r.get('trace', {}).get(t, []) if x.split(' ', 1)[0] == str(mob)][:40]:
+                        report.append('      horizon ' + line)
                     report.extend('    ' + d for d in diffs[:12])
             if first is not None:
                 clean = False
@@ -221,6 +224,8 @@ def main():
     parser.add_argument('--java-only', action='store_true')
     parser.add_argument('--rust-only', action='store_true', help='reuse the last vanilla output')
     parser.add_argument('--report-only', action='store_true', help='print divergences without failing')
+    parser.add_argument('--trace', action='store_true',
+                        help="also trace Horizon's mob random draws (rng-trace probe with line tables)")
     args = parser.parse_args()
     build = lab.LOCAL / 'mob-ai-parity'
     build.mkdir(parents=True, exist_ok=True)
@@ -235,9 +240,15 @@ def main():
                                    'dev.horizonlab.parity.VanillaMobAiOracle', inputs, build / 'vanilla.txt'],
                                   build, 'vanilla', timeout=3600)
     if not args.java_only:
-        oracle_harness.run_logged(['cargo', 'build', '--locked', '--release', '-p', 'horizon-client', '--example', 'mob_ai_probe'],
-                                  build, 'compile-rust')
-        binary = lab.cargo_target() / 'release/examples/mob_ai_probe'
+        command = ['cargo', 'build', '--locked', '--release', '-p', 'horizon-client', '--example', 'mob_ai_probe']
+        target, env = lab.cargo_target(), None
+        if args.trace:
+            target = lab.LOCAL / 'mob-ai-trace-target'
+            command += ['--features', 'rng-trace']
+            env = dict(os.environ, CARGO_TARGET_DIR=str(target), CARGO_PROFILE_RELEASE_DEBUG='line-tables-only',
+                       CARGO_PROFILE_RELEASE_LTO='false', CARGO_PROFILE_RELEASE_CODEGEN_UNITS='16')
+        oracle_harness.run_logged(command, build, 'compile-rust', env=env)
+        binary = target / 'release/examples/mob_ai_probe'
         oracle_harness.run_logged([binary, lab.ROOT / '.local/horizon-client/26.3', inputs, build / 'horizon.txt'], build, 'horizon')
     if args.java_only:
         return

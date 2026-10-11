@@ -48,17 +48,30 @@ fn targets(m: &mut Mob, villagers_seen: bool) {
     m.ai.targets
         .add(3, NearestTarget::species(&[Species::IronGolem], true));
 }
+/// `AvoidEntityGoal<>(this, Creaking.class, 8.0F, walk, sprint)`.
+fn avoid_creaking(walk: f64, sprint: f64) -> super::goals::AvoidEntity {
+    super::goals::AvoidEntity::new(
+        super::goals::Avoid::Species(vec![Species::Creaking]),
+        8.0,
+        walk,
+        sprint,
+    )
+}
 pub fn register_pillager(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
+    g.add(1, avoid_creaking(1.0, 1.2));
+    g.add(2, super::raider::HoldGroundAttack::new(10.0));
     g.add(3, CrossbowAttack::new(1.0, 8.0));
     g.add(8, Stroll::new(0.6));
-    g.add(9, LookAtPlayer::new(15.0));
+    g.add(9, LookAtPlayer::new(15.0).probability(1.0));
     targets(m, false);
 }
 pub fn register_vindicator(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
+    g.add(1, avoid_creaking(1.0, 1.2));
+    g.add(4, super::raider::HoldGroundAttack::new(10.0));
     g.add(5, MeleeAttack::new(1.0, false));
     g.add(8, Stroll::new(0.6));
     g.add(9, LookAtPlayer::new(3.0));

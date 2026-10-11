@@ -397,9 +397,22 @@ impl Mob {
     /// creative, within range scaled by visibility, optionally visible.
     pub fn can_target_player(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
         let Some(p) = &w.player else { return false };
-        if !p.alive || p.creative {
+        if p.creative {
             return false;
         }
+        self.player_in_range(w, range, check_sight)
+    }
+    /// TargetingConditions.forNonCombat().range(range).test for the player
+    /// (seen by anyone, within range scaled by visibility, in sight).
+    pub fn can_see_player(&mut self, w: &MobWorld, range: f64) -> bool {
+        self.player_in_range(w, range, true)
+    }
+    fn player_in_range(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
+        let Some(p) = &w.player else { return false };
+        if !p.alive || p.spectator {
+            return false;
+        }
+        // LivingEntity.getVisibilityPercent
         let mut visibility = 1.0;
         if p.sneaking {
             visibility *= 0.8;
@@ -660,8 +673,8 @@ impl Goal for LookAtPlayer {
         if m.random.next_float() >= self.probability {
             return false;
         }
-        let Some(p) = &cx.w.player else { return false };
-        p.alive && m.distance_sqr(p.position) <= f64::from(self.range * self.range)
+        // level.getNearestPlayer(forNonCombat().range(lookDistance)).
+        m.can_see_player(cx.w, f64::from(self.range))
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         let Some(p) = &cx.w.player else { return false };
@@ -918,8 +931,11 @@ pub struct NearestTarget {
     pub must_see: bool,
     pub must_reach: bool,
     pub interval: i32,
-    /// Extra condition on the attacker (e.g. spiders only at night).
+    /// Extra condition on the attacker, checked after the random interval.
     pub when: Option<fn(&Mob, &MobWorld) -> bool>,
+    /// A condition checked before anything else, by subclasses overriding
+    /// `canUse` (SpiderTargetGoal: only in the dark).
+    pub gate: Option<fn(&Mob, &MobWorld) -> bool>,
     found: Option<Who>,
     target_goal: TargetState,
 }
@@ -947,6 +963,7 @@ impl NearestTarget {
             must_reach: false,
             interval: reduced(10),
             when: None,
+            gate: None,
             found: None,
             target_goal: TargetState {
                 unseen_memory: 60,
@@ -975,6 +992,10 @@ impl NearestTarget {
     }
     pub fn when(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
         self.when = Some(f);
+        self
+    }
+    pub fn gate(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
+        self.gate = Some(f);
         self
     }
 }
@@ -1009,6 +1030,11 @@ impl Goal for NearestTarget {
         TARGET
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if let Some(f) = self.gate
+            && !f(m, cx.w)
+        {
+            return false;
+        }
         if self.interval > 0 && m.random.next_int_bound(self.interval).unwrap_or(1) != 0 {
             return false;
         }
@@ -1828,7 +1854,7 @@ impl MoveToBlock {
         self.find_nearest(m, w, valid)
     }
     /// `MoveToBlockGoal.findNearestBlock`: rings outward, alternating heights.
-    fn find_nearest(
+    pub fn find_nearest(
         &mut self,
         m: &Mob,
         w: &MobWorld,
@@ -1881,6 +1907,10 @@ impl MoveToBlock {
     }
     /// `MoveToBlockGoal.tick` (accepted distance 1 from the block above).
     pub fn tick(&mut self, m: &mut Mob, w: &MobWorld) {
+        self.tick_within(m, w, 1.0);
+    }
+    /// `MoveToBlockGoal.tick` with the goal's `acceptedDistance`.
+    pub fn tick_within(&mut self, m: &mut Mob, w: &MobWorld, accepted: f64) {
         let t = [
             f64::from(self.block[0]) + 0.5,
             f64::from(self.block[1] + 1) + 0.5,
@@ -1889,7 +1919,7 @@ impl MoveToBlock {
         let d2 = (m.position.x - t[0]).powi(2)
             + (m.position.y - t[1]).powi(2)
             + (m.position.z - t[2]).powi(2);
-        if d2 >= 1.0 {
+        if d2 >= accepted * accepted {
             self.reached = false;
             self.try_ticks += 1;
             if self.try_ticks % 40 == 0 {

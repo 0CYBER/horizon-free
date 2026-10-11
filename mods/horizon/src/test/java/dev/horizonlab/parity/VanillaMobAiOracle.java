@@ -420,6 +420,10 @@ public final class VanillaMobAiOracle {
                     Connection connection = new Connection(PacketFlow.SERVERBOUND);
                     new EmbeddedChannel(connection);
                     this.getPlayerList().placeNewPlayer(connection, player, cookie);
+                    // A client that has finished loading: otherwise the player stays invulnerable
+                    // until 60 of the server ticks between scenarios have passed, so whether mobs can
+                    // hurt it would depend on the scenario order.
+                    method(player.connection.getClass(), "markClientLoaded").invoke(player.connection);
                 }
                 player.setGameMode(s.creative ? GameType.CREATIVE : GameType.SURVIVAL);
                 player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
@@ -467,6 +471,8 @@ public final class VanillaMobAiOracle {
                 if (player != null && s.player != null) {
                     player.setHealth(player.getMaxHealth());
                     player.setInvulnerableTime(0);
+                    // The hurt cooldown (only ServerPlayer.tick counts it down).
+                    field(LivingEntity.class, "damageCooldownTime").setInt(player, 0);
                     player.hurtTime = 0;
                     player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
                     player.setDeltaMovement(Vec3.ZERO);

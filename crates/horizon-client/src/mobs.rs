@@ -876,6 +876,37 @@ pub struct Seen {
     pub active_raid: bool,
     /// A villager's reputation of the player (`getPlayerReputation`).
     pub player_rep: i32,
+    /// `isPushable` and pushed by others (`Entity.push(Entity)` moves it).
+    pub pushable: bool,
+}
+/// `Entity.push` on other mobs acts at once in vanilla: a mob ticking later
+/// moves with it this tick. Takes the `Push` events aimed at mobs out of
+/// `events[from..]` into `pending`, which the caller adds to each mob's
+/// velocity before its tick (and to every mob once all have ticked).
+pub fn take_mob_pushes(events: &mut Vec<MobEvent>, from: usize, pending: &mut Vec<(u32, Vec3)>) {
+    let mut i = from;
+    while i < events.len() {
+        if let MobEvent::Push {
+            target: Who::Mob(id),
+            velocity,
+        } = events[i]
+        {
+            pending.push((id, Vec3::new(velocity[0], velocity[1], velocity[2])));
+            events.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+/// Adds the pending pushes aimed at `m` to its velocity, in push order.
+pub fn apply_mob_pushes(m: &mut Mob, pending: &mut Vec<(u32, Vec3)>) {
+    pending.retain(|(id, v)| {
+        if *id != m.id {
+            return true;
+        }
+        m.velocity = Vec3::new(m.velocity.x + v.x, m.velocity.y + v.y, m.velocity.z + v.z);
+        false
+    });
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]

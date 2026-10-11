@@ -221,6 +221,27 @@ fn seen(m: &Mob) -> Seen {
         hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
         active_raid: horizon_client::mobs::raider::has_active_raid(m),
         player_rep: 0,
+        pushable: m.pushable(),
+    }
+}
+
+/// Whether an event hurts the scenario's player (survival, normal difficulty,
+/// no armour, made hurtable again every tick by the oracle).
+fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
+    let Some(p) = player.filter(|p| !p.creative) else {
+        return false;
+    };
+    match e {
+        MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
+        // ServerExplosion.hurtEntities: within twice the radius every hit does damage.
+        MobEvent::Explode(at, radius) => {
+            let d = Vec3::new(at[0], at[1], at[2])
+                .distance_squared(p.position)
+                .sqrt();
+            let r = 2.0 * f64::from(*radius);
+            d / r <= 1.0 && d != 0.0
+        }
+        _ => false,
     }
 }
 
@@ -487,13 +508,33 @@ fn main() -> horizon_client::Result<()> {
                 world_seed: 0,
             };
             let mut events = Vec::new();
-            for m in &mut mobs {
+            #[allow(unused_mut)] // filled only with the rng-trace feature
+            let mut traces: Vec<String> = Vec::new();
+            let mut pushes = Vec::new();
+            for (i, m) in mobs.iter_mut().enumerate() {
                 if m.removed {
                     continue;
                 }
-                if !m.tick(&w, &mut scratch, &mut events) {
+                horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
+                let from = events.len();
+                #[cfg(feature = "rng-trace")]
+                horizon_core::random::trace::set(true);
+                let alive = m.tick(&w, &mut scratch, &mut events);
+                #[cfg(feature = "rng-trace")]
+                {
+                    horizon_core::random::trace::set(false);
+                    for line in horizon_core::random::trace::take() {
+                        traces.push(format!("{t} trace {i} {line}"));
+                    }
+                }
+                horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
+                let _ = i;
+                if !alive {
                     m.removed = true;
                 }
+            }
+            for m in &mut mobs {
+                horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
             }
             for (i, m) in mobs.iter().enumerate() {
                 print(&mut out, t, i, m);
@@ -508,7 +549,17 @@ fn main() -> horizon_client::Result<()> {
                     );
                 } else if let MobEvent::SoundId(name, _, volume, pitch) = e {
                     let _ = writeln!(out, "{t} sound {name} {} {}", f(*volume), f(*pitch));
+                } else if player_hurt(player.as_ref(), e) {
+                    // The oracle's survival player, healed and made hurtable every tick,
+                    // takes the damage (LivingEntity.playHurtSound).
+                    let _ = writeln!(
+                        out,
+                        "{t} sound minecraft:entity.player.hurt 3f800000 3f800000"
+                    );
                 }
+            }
+            for line in traces {
+                let _ = writeln!(out, "{line}");
             }
         }
     }
