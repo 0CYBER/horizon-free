@@ -31,8 +31,8 @@ import net.minecraft.world.level.levelgen.LegacyRandomSource;
  * result lists block changes, container contents, spawned entities with their
  * position and motion, the targets' state afterwards, level events, sounds
  * (those the client plays for level events included), game events and the
- * level random. Every case runs twice: numbers that differ between the runs
- * come from an entity's own unseeded random and are marked with "~".
+ * level random. Every case runs three times: numbers that differ between the
+ * runs come from an entity's own unseeded random and are marked with "~".
  * Used by tools/test_dispenser_parity.py.
  */
 public final class VanillaDispenserOracle {
@@ -71,9 +71,10 @@ public final class VanillaDispenserOracle {
             int index = 0;
             for (var line : (Iterable<String>) lines::iterator) {
                 var f = JsonParser.parseString(line).getAsJsonObject();
-                List<String> a = attempt(f), b = attempt(f);
+                // Three runs: a value from an unseeded random rarely repeats thrice.
+                List<String> a = attempt(f), b = attempt(f), c = attempt(f);
                 out.print("case " + index++ + "\n");
-                for (String s : merge(a, b)) out.print(s + "\n");
+                for (String s : merge(merge(a, b), c)) out.print(s + "\n");
             }
         }
     }
@@ -108,7 +109,8 @@ public final class VanillaDispenserOracle {
                 out.add(x);
                 continue;
             }
-            for (int j = 0; j < p.length; j++) if (!p[j].equals(q[j])) p[j] = "~" + p[j];
+            // A token already marked in an earlier merge stays marked.
+            for (int j = 0; j < p.length; j++) if (!p[j].equals(q[j]) && !p[j].startsWith("~")) p[j] = "~" + p[j];
             out.add(String.join(" ", p));
         }
         return out;

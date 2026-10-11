@@ -107,6 +107,11 @@ FRONT_FOR = {
 }
 # Structures a behaviour completes (golems, the wither, a nether portal).
 SCENES = {'carved_pumpkin': ['snow_golem', 'iron_golem'], 'wither_skeleton_skull': ['wither'], 'flint_and_steel': ['portal']}
+# Plants that need soil (or a log) under them to exist at all.
+ROOTED = {'wheat', 'carrots', 'potatoes', 'beetroots', 'oak_sapling', 'birch_sapling', 'spruce_sapling', 'cherry_sapling',
+          'mangrove_propagule', 'sweet_berry_bush', 'cocoa', 'bamboo_sapling', 'bamboo', 'pumpkin_stem', 'melon_stem',
+          'torchflower_crop', 'pitcher_crop', 'small_dripleaf', 'big_dripleaf', 'warped_fungus', 'brown_mushroom', 'kelp',
+          'sea_pickle', 'seagrass', 'short_grass', 'fern', 'dandelion', 'pink_petals', 'twisting_vines', 'azalea'}
 BELOW = ['air', 'stone', 'water', 'rail', 'grass_block', 'soul_sand', 'dirt', 'farmland', 'netherrack']
 
 TARGETS = {
@@ -246,12 +251,17 @@ def cases(facts, count, seed, only):
         below = (dx, dy - 1, dz)
         palette = FRONT_FOR[bare] if bare in FRONT_FOR and rng.random() < 0.8 else FRONT[kind]
         front_name = rng.choice(palette)
+        if facing == 'up' and front_name in ROOTED:
+            # Nothing grows out of a dispenser: vanilla never lets these stand on one.
+            front_name = 'air'
         above = (dx, dy + 1, dz)
         if halves(states, front_name) and front_name != 'pitcher_crop':
             if above == (0, 0, 0):
                 front_name = 'air'
             else:
-                h.put(cells, above, states.get(front_name, half='upper'))
+                # The upper half matches the lower one in everything but its half.
+                lower = states.facts.states[states.get(front_name)][4].get('properties', {})
+                h.put(cells, above, states.get(front_name, **{**lower, 'half': 'upper'}))
         if front_name != 'air':
             h.put(cells, front, front_state(states, rng, front_name))
         if below != (0, 0, 0) and rng.random() < 0.8:
@@ -312,6 +322,16 @@ FINALIZED = ('_spawn_egg', 'salmon_bucket', 'cod_bucket', 'pufferfish_bucket', '
 
 def finalizes(case):
     return any(any(tag in i[4] for tag in FINALIZED) for i in case['items'] if i[:3] == [0, 0, 0])
+
+def spawned_type(case):
+    item = next(i[4] for i in case['items'] if i[:3] == [0, 0, 0]).split('"')[1].split(':')[1]
+    return 'minecraft:' + item.removesuffix('_spawn_egg').removesuffix('_bucket')
+
+
+def rider(line, spawned):
+    parts = line.split(' ')
+    return parts[0] == 'N' and parts[1] not in (spawned, 'minecraft:item')
+
 
 def voice(line):
     parts = line.split(' ')
@@ -403,6 +423,12 @@ def main():
             continue
         if finalizes(case):
             unseeded += 1
+            # Riders finalizeSpawn adds (a baby zombie's chicken, a spider's
+            # skeleton) depend on whether the mob came out a baby and on the
+            # jockey odds, both finalization draws: only the egg's own mob is compared.
+            spawned = spawned_type(case)
+            a = [line for line in a if not rider(line, spawned)]
+            b = [line for line in b if not rider(line, spawned)]
             # EntityType.spawn plays the new mob's ambient sound: which one (a
             # wolf pants or barks, in its sound variant) comes from the mob's
             # own unseeded random, so only that a voice plays, and where, is compared.

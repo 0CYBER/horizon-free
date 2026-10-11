@@ -729,7 +729,11 @@ impl Game<'_> {
             f64::from(p.1) + y_off,
             f64::from(p.2) + 0.5,
         ];
-        self.spawn_mob(&name, at, true)
+        let id = self.spawn_mob(&name, at, true)?;
+        // finalizeSpawn's riders (chicken jockeys, spider jockeys...) come
+        // with a dispensed mob as with any spawn that is not natural.
+        self.spawn_jockeys(id, false);
+        Some(id)
     }
     /// `EquipmentDispenseItemBehavior.dispenseEquipment`: the first living
     /// entity in front that `canEquipWithDispenser` gets one of the item.
