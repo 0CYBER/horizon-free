@@ -682,23 +682,34 @@ impl Game<'_> {
         }
         out
     }
-    /// The Y offset `EntityType.getYOffset` finds for a box set down into a block.
+    /// `EntityType.getYOffset(level, pos, false, box)`: the entity box set on
+    /// top of the block (`setPos(x + 0.5, y + 1, z + 0.5)`) falls one block
+    /// against the collision shapes overlapping that block alone.
     fn drop_offset(&self, width: f64, height: f64, p: Pos) -> f64 {
+        use horizon_world::{block_collision_scan::BlockCollisionScan, collision_context::CollisionContext};
         let h = width / 2.0;
         let (x, z) = (f64::from(p.0) + 0.5, f64::from(p.2) + 0.5);
         let y = f64::from(p.1) + 1.0;
-        let bounds = Aabb::new(
+        let entity = Aabb::new(
             Vec3::new(x - h, y, z - h),
             Vec3::new(x + h, y + height, z + h),
+        );
+        let cell = Aabb::new(
+            Vec3::new(f64::from(p.0), f64::from(p.1), f64::from(p.2)),
+            Vec3::new(f64::from(p.0) + 1.0, f64::from(p.1) + 1.0, f64::from(p.2) + 1.0),
         );
         let mut scene = SceneCollisions {
             world: &self.world,
             binding: self.collision,
         };
-        match scene.resolve(bounds, Vec3::new(0.0, -1.0, 0.0), 0.0, false) {
-            Ok(moved) => 1.0 + moved.y,
-            Err(_) => 0.0,
+        let mut amount = -1.0;
+        // Level.getCollisions(null, aabb): CollisionContext.empty().
+        if let Ok(scan) = BlockCollisionScan::new(&mut scene, CollisionContext::empty(false), cell, false, 1_000_000) {
+            for hit in scan.flatten() {
+                amount = hit.shape.collide(horizon_core::geometry::Axis::Y, entity, amount);
+            }
         }
+        1.0 + amount
     }
     /// `EntityType.spawn(.., pos, reason, tryMoveDown, false)` for a mob.
     fn spawn_mob_at(&mut self, kind: &str, p: Pos, try_move_down: bool) -> Option<u32> {

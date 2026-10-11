@@ -297,6 +297,13 @@ FINALIZED = ('_spawn_egg', 'salmon_bucket', 'cod_bucket', 'pufferfish_bucket', '
 def finalizes(case):
     return any(any(tag in i[4] for tag in FINALIZED) for i in case['items'] if i[:3] == [0, 0, 0])
 
+def voice(line):
+    parts = line.split(' ')
+    if parts[0] == 'S' and len(parts) == 3 and parts[2].lstrip('~').startswith('minecraft:entity.'):
+        parts[2] = 'entity-voice'
+    return ' '.join(parts)
+
+
 def run(command, **kwargs):
     done = subprocess.run(command, capture_output=True, text=True, **kwargs)
     if done.returncode:
@@ -378,9 +385,11 @@ def main():
             continue
         if finalizes(case):
             unseeded += 1
-            # The spawned mob's variant (and so its voice) is chosen in finalizeSpawn too.
-            a = [line for line in a if not line.startswith('rng ') and not line.endswith('.ambient')]
-            b = [line for line in b if not line.startswith('rng ') and not line.endswith('.ambient')]
+            # EntityType.spawn plays the new mob's ambient sound: which one (a
+            # wolf pants or barks, in its sound variant) comes from the mob's
+            # own unseeded random, so only that a voice plays, and where, is compared.
+            a = [voice(line) for line in a if not line.startswith('rng ')]
+            b = [voice(line) for line in b if not line.startswith('rng ')]
         if not same(a, b):
             item = next(i[4] for i in case['items'] if i[:3] == [0, 0, 0])
             block = facts.states[case['cells'][0][3]][0].split(':')[1]
