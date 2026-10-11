@@ -415,6 +415,8 @@ impl Game<'_> {
                     pose[5] = deg(rot[2]);
                 }
             }
+            // Item layers pose from the hidden arms too (`visible` only skips drawing).
+            let posed = poses.clone();
             let mut hide = |name: &str| {
                 if poses.has(name) {
                     let pose = poses.get(name);
@@ -446,6 +448,7 @@ impl Game<'_> {
                 0,
                 out,
             );
+            self.armor_stand_items(a, model, base, &posed, packed, out);
             // HumanoidArmorLayer: head, chest, legs, feet.
             for (slot, layer) in [
                 (5usize, "helmet"),
@@ -561,4 +564,121 @@ impl Game<'_> {
         self.swing_arm();
         true
     }
+}
+impl Game<'_> {
+    /// `ItemInHandLayer` and `CustomHeadLayer` of an armour stand: the hand
+    /// items in the third-person contexts, and a non-armour head item on the
+    /// head (`translateToHead`: down a quarter, turned, 0.625 scale).
+    fn armor_stand_items(
+        &self,
+        a: &ArmorStand,
+        model: &Part,
+        base: glam::Mat4,
+        poses: &Poses,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        use horizon_assets::item_model::DisplayContext;
+        use horizon_client::mobs::render::part_matrix;
+        let owner = super::item_draw::owner_at(
+            [a.position.x, a.position.y, a.position.z],
+            a.yaw,
+            "minecraft:armor_stand",
+        );
+        // `useBabyOffset`: small stands use the baby hand offsets.
+        let (ox, oy, oz) = if a.small {
+            (0.0, 1.0, -4.5)
+        } else {
+            (1.0, 2.0, -10.0)
+        };
+        for (slot, left, context) in [
+            (0usize, false, DisplayContext::ThirdPersonRightHand),
+            (1, true, DisplayContext::ThirdPersonLeftHand),
+        ] {
+            let Some(stack) = &a.equipment[slot] else {
+                continue;
+            };
+            let arm = if left { "left_arm" } else { "right_arm" };
+            let Some(hand) = part_matrix(model, base, poses, arm, 0.0) else {
+                continue;
+            };
+            let pose = hand
+                * glam::Mat4::from_rotation_x((-90.0f32).to_radians())
+                * glam::Mat4::from_rotation_y(std::f32::consts::PI)
+                * glam::Mat4::from_translation(glam::Vec3::new(
+                    if left { -ox } else { ox } / 16.0,
+                    oy / 16.0,
+                    oz / 16.0,
+                ));
+            let seed = a.id as i32 + if left { 1 } else { 2 };
+            let state = self.resolve_item(stack, context, Some(&owner), seed);
+            self.submit_item_world(&state, pose, light, out);
+        }
+        // `CustomHeadLayer`: a worn skull draws the skull model.
+        if let Some(stack) = &a.equipment[5]
+            && let Some(kind) = skull_kind(&stack.item)
+            && let Some(head) = part_matrix(model, base, poses, "head", 0.0)
+        {
+            let pose = head * glam::Mat4::from_scale(glam::Vec3::splat(1.1875));
+            let special = horizon_assets::item_model::SpecialModel {
+                kind: if kind == "player" {
+                    horizon_assets::item_model::SpecialKind::PlayerHead
+                } else {
+                    horizon_assets::item_model::SpecialKind::Head {
+                        kind: kind.to_owned(),
+                        texture: None,
+                        animation: 0.0,
+                    }
+                },
+            };
+            let mut sink = horizon_client::item_render::WorldSink {
+                out,
+                light,
+                lights: Some(horizon_client::block_entity_render::diffuse_lights(
+                    self.dim == super::Dim::Nether,
+                )),
+            };
+            self.res.item_renderer.submit_special(
+                &special,
+                &serde_json::Value::Null,
+                false,
+                pose,
+                &self.res.atlas.sprites,
+                &self.item_host(),
+                &mut sink,
+            );
+            return;
+        }
+        // A head item that is not worn armour.
+        if let Some(stack) = &a.equipment[5]
+            && self
+                .res
+                .items
+                .get(&stack.item)
+                .is_none_or(|i| i.equip_asset.is_none())
+            && let Some(head) = part_matrix(model, base, poses, "head", 0.0)
+        {
+            let pose = head
+                * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.25, 0.0))
+                * glam::Mat4::from_rotation_y(std::f32::consts::PI)
+                * glam::Mat4::from_scale(glam::Vec3::new(0.625, -0.625, -0.625));
+            // `updateForLiving`: seeded by the entity id plus HEAD's ordinal.
+            let state =
+                self.resolve_item(stack, DisplayContext::Head, Some(&owner), a.id as i32 + 5);
+            self.submit_item_world(&state, pose, light, out);
+        }
+    }
+}
+/// `AbstractSkullBlock.getType` of a skull item.
+fn skull_kind(item: &str) -> Option<&'static str> {
+    Some(match item {
+        "minecraft:skeleton_skull" => "skeleton",
+        "minecraft:wither_skeleton_skull" => "wither_skeleton",
+        "minecraft:zombie_head" => "zombie",
+        "minecraft:creeper_head" => "creeper",
+        "minecraft:dragon_head" => "dragon",
+        "minecraft:piglin_head" => "piglin",
+        "minecraft:player_head" => "player",
+        _ => return None,
+    })
 }

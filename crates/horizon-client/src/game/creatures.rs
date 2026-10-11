@@ -518,9 +518,18 @@ impl Game<'_> {
             let j = self.world.random.next_int_bound(i as i32 + 1).unwrap_or(0) as usize;
             chunks.swap(i, j);
         }
+        // ServerChunkCache.tickChunks: the chunks are shuffled every tick, but
+        // no category spawns without spawn_mobs, and only friendly ones
+        // unless the level is spawning monsters (ServerLevel.isSpawningMonsters).
+        let spawn_mobs = self.ui.rules.bool("spawn_mobs");
+        let spawn_enemies = spawn_mobs && self.ui.rules.bool("spawn_monsters");
         for (cx, cz) in chunks {
             for (ci, (category, cap)) in CATEGORIES.iter().enumerate() {
-                if counts[ci] >= *cap || *category == "creature" && !creature_tick {
+                if !spawn_mobs
+                    || counts[ci] >= *cap
+                    || *category == "creature" && !creature_tick
+                    || *category == "monster" && !spawn_enemies
+                {
                     continue;
                 }
                 counts[ci] += self.spawn_category_for_chunk(category, cx, cz, p);
@@ -666,9 +675,12 @@ impl Game<'_> {
         }
         self.tick_inhabited();
         self.tick_leads();
-        self.tick_wandering_trader();
         self.spawn_natural();
-        self.tick_patrol_spawner();
+        // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
+        if self.ui.rules.bool("spawn_mobs") {
+            self.tick_wandering_trader();
+            self.tick_patrol_spawner();
+        }
         self.tick_raids();
         let uuid = self.level.player_uuid;
         let snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
@@ -696,7 +708,6 @@ impl Game<'_> {
         self.mobs.append(&mut mobs);
         self.sync_riders();
         self.tick_skeleton_traps();
-        self.cache_mob_icons();
         self.tick_apparition();
         self.villager_reputation_tick();
         self.villager_pickups();
@@ -712,6 +723,12 @@ impl Game<'_> {
         self.tick_player_effects();
         self.piglin_pickups();
         self.sulfur_cube_pickups();
+        // Hurt and death sounds of damage dealt outside the mob ticks.
+        let mut queued = Vec::new();
+        for m in &mut self.mobs {
+            queued.append(&mut m.outbox);
+        }
+        self.handle_mob_events(queued)?;
         Ok(())
     }
     /// LivingEntity.die / dropAllDeathLoot.
@@ -771,7 +788,8 @@ impl Game<'_> {
     fn drop_death_loot(&mut self, m: &mut Mob, by_player: bool, consumed: bool, pos: [f64; 3]) {
         use horizon_client::mobs::{DamageKind, Who, drops};
         use horizon_world::loot::{LootDamage, LootEntity};
-        let Some(loot) = horizon_client::structure_blocks::loot_data(&self.options.resources) else {
+        let Some(loot) = horizon_client::structure_blocks::loot_data(&self.options.resources)
+        else {
             return;
         };
         let player = || {
@@ -916,24 +934,18 @@ impl Game<'_> {
                     if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
                         let hit = t.damage(amount, source);
                         if hit {
-                            let (voice, center, dead) = (
-                                horizon_client::mobs::ai::voice_sounds(t),
-                                t.center(),
-                                !t.alive(),
-                            );
-                            killed = dead;
-                            let pitch = (self.world.random.next_float()
-                                - self.world.random.next_float())
-                                * 0.2
-                                + 1.0;
-                            let s = voice[if dead { 2 } else { 1 }];
-                            if !s.is_empty() {
-                                self.audio.play(
-                                    &format!("minecraft:{s}"),
-                                    Some(center),
-                                    1.0,
-                                    pitch,
-                                );
+                            killed = !t.alive();
+                            // The hurt or death sound the mob raised.
+                            let center = t.center();
+                            for event in std::mem::take(&mut t.outbox) {
+                                if let MobEvent::Sound(s, _, volume, pitch) = event {
+                                    self.audio.play(
+                                        &format!("minecraft:{s}"),
+                                        Some(center),
+                                        volume,
+                                        pitch,
+                                    );
+                                }
                             }
                         }
                     }
@@ -2697,7 +2709,10 @@ impl Game<'_> {
     pub(super) fn portal_spawn(&mut self, pos: [i32; 3]) {
         // ChunkMap.anyPlayerCloseEnoughForSpawning: a non-spectator within 128
         // blocks of the chunk centre.
-        let centre = [f64::from((pos[0] >> 4) * 16 + 8), f64::from((pos[2] >> 4) * 16 + 8)];
+        let centre = [
+            f64::from((pos[0] >> 4) * 16 + 8),
+            f64::from((pos[2] >> 4) * 16 + 8),
+        ];
         let spectator = self.spectator();
         let Some(close) = self.player.as_ref().filter(|_| !spectator).map(|p| {
             let (dx, dz) = (p.position.x - centre[0], p.position.z - centre[1]);
@@ -2709,7 +2724,9 @@ impl Game<'_> {
             return;
         }
         let mut y = pos[1];
-        while &*self.res.facts.get(self.world.block(pos[0], y, pos[2])).name == "minecraft:nether_portal" {
+        while &*self.res.facts.get(self.world.block(pos[0], y, pos[2])).name
+            == "minecraft:nether_portal"
+        {
             y -= 1;
         }
         // isValidSpawn: a sturdy top face (portal frames emit no light).
@@ -2717,7 +2734,11 @@ impl Game<'_> {
         if below.sturdy_full & (1 << 1) == 0 {
             return;
         }
-        let at = [f64::from(pos[0]) + 0.5, f64::from(y + 1), f64::from(pos[2]) + 0.5];
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(y + 1),
+            f64::from(pos[2]) + 0.5,
+        ];
         let _ = self.spawn_mob("minecraft:zombified_piglin", at, false);
     }
 }

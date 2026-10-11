@@ -26,7 +26,8 @@ TRIM_MATERIALS = ['quartz', 'iron', 'netherite', 'redstone', 'copper', 'gold', '
                   'amethyst', 'resin']
 NEEDED = ('assets/minecraft/items/', 'assets/minecraft/models/', 'assets/minecraft/textures/item/',
           'assets/minecraft/textures/block/', 'assets/minecraft/textures/trims/',
-          'assets/minecraft/textures/colormap/')
+          'assets/minecraft/textures/colormap/', 'assets/minecraft/textures/palettes/',
+          'assets/minecraft/atlases/')
 
 
 def extract(jar, destination):
@@ -293,6 +294,12 @@ def matrix(bits):
     return [0 if b == 0x80000000 else b for b in bits]
 
 
+def rows_of(path):
+    with path.open('rb') as rows:
+        for line in rows:
+            yield json.loads(line)
+
+
 def main():
     lock, jars, libraries = base.verify_artifacts()
     build = lab.LOCAL / 'item-model-parity'; build.mkdir(parents=True, exist_ok=True)
@@ -324,8 +331,11 @@ def main():
     run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaItemModelOracle',
          resources, inputs, build / 'client.jsonl', prototypes_path], 'client')
     # The host inputs vanilla derives from the stack (use duration, charge time).
-    client = [json.loads(line) for line in (build / 'client.jsonl').read_text().splitlines()]
-    derived = {r['id']: r['derived'] for r in client if r.get('row') == 'case' and 'derived' in r}
+    # Both outputs are gigabytes of quads, so rows are streamed one at a time.
+    derived = {}
+    for r in rows_of(build / 'client.jsonl'):
+        if r.get('row') == 'case' and 'derived' in r:
+            derived[r['id']] = r['derived']
     rust_cases = []
     for case in cases:
         case = dict(case)
@@ -335,35 +345,60 @@ def main():
     rust_inputs.write_text(''.join(json.dumps(c) + '\n' for c in rust_cases))
     (build / 'rust-cases.jsonl.definitions').write_text((build / 'cases.jsonl.definitions').read_text())
     run([binary, resources, prototypes_path, rust_inputs, build / 'rust.jsonl'], 'rust')
-    rust = [json.loads(line) for line in (build / 'rust.jsonl').read_text().splitlines()]
-    mismatches, compared, skipped, decoded = [], 0, 0, 0
-    vanilla_by_key = {(r['row'], r.get('id') or r.get('name')): r for r in client if r['row'] in ('case', 'decode', 'components')}
-    rust_by_key = {(r['row'], r.get('id') or r.get('name')): r for r in rust}
-    assert vanilla_by_key.keys() == rust_by_key.keys(), 'The two sides produced different rows'
-    assert vanilla_by_key[('components', None)]['names'] == rust_by_key[('components', None)]['names'], 'Data component registry differs'
-    unbaked = [r['name'] for r in client if r['row'] == 'unbaked']
-    for key, left in vanilla_by_key.items():
-        right = rust_by_key[key]
-        if key[0] == 'components': continue
+    mismatches, mismatch_count, compared, skipped, decoded = [], 0, 0, 0, 0
+    rust_offsets = {}
+    with (build / 'rust.jsonl').open('rb') as rust_file:
+        offset = 0
+        for line in rust_file:
+            r = json.loads(line)
+            rust_offsets[(r['row'], r.get('id') or r.get('name'))] = offset
+            offset += len(line)
+    vanilla_keys, unbaked = set(), []
+    rust_file = (build / 'rust.jsonl').open('rb')
+
+    def rust_row(key):
+        rust_file.seek(rust_offsets[key])
+        return json.loads(rust_file.readline())
+
+    for left in rows_of(build / 'client.jsonl'):
+        if left['row'] == 'unbaked':
+            unbaked.append(left['name'])
+        if left['row'] not in ('case', 'decode', 'components'):
+            continue
+        key = (left['row'], left.get('id') or left.get('name'))
+        vanilla_keys.add(key)
+        assert key in rust_offsets, f'Horizon produced no row for {key}'
+        right = rust_row(key)
+        if key[0] == 'components':
+            assert left['names'] == right['names'], 'Data component registry differs'
+            continue
         if key[0] == 'decode':
             decoded += 1
-            if left['ok'] != right['ok']: mismatches.append(('decode', key[1], left, right))
+            if left['ok'] != right['ok']:
+                mismatch_count += 1
+                if len(mismatches) < 5:
+                    mismatches.append(('decode', key[1], left, right))
             continue
         if 'error' in left:
             skipped += 1
             continue
         compared += 1
+        left.pop('derived', None)  # an input Horizon received, not an output
         for side in (left, right):
             for layer in side['layers']:
                 layer['matrix'] = matrix(layer['matrix'])
                 layer.pop('has_transform', None)
                 if layer.get('quads') is not None: layer['quads'] = canonical_quads(layer['quads'])
         if left != right:
-            mismatches.append(('case', key[1], left, right))
-    if mismatches:
-        for kind, name, left, right in mismatches[:5]:
+            mismatch_count += 1
+            if len(mismatches) < 5:
+                mismatches.append(('case', key[1], left, right))
+    rust_file.close()
+    assert vanilla_keys == rust_offsets.keys(), 'The two sides produced different rows'
+    if mismatch_count:
+        for kind, name, left, right in mismatches:
             print(kind, name, '\nvanilla:', json.dumps(left)[:1500], '\nrust:   ', json.dumps(right)[:1500])
-        raise AssertionError(f'{len(mismatches)} item model mismatches')
+        raise AssertionError(f'{mismatch_count} item model mismatches')
     base.ensure_sources_unchanged(sources, tested)
     assert compared > 1000, 'Too few cases compared'
     assert skipped * 20 < len(cases), f'Too many cases rejected by vanilla: {skipped}'

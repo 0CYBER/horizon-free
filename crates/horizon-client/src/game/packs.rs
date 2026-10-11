@@ -123,8 +123,10 @@ impl Game<'_> {
                         );
                     }
                     self.res.atlas = atlas;
-                    self.res.icons.clear();
-                    self.res.displays.clear();
+                    match horizon_client::item_render::ItemRenderer::load(&root) {
+                        Ok(r) => self.res.item_renderer = std::sync::Arc::new(r),
+                        Err(e) => eprintln!("Horizon: item model reload failed: {e}"),
+                    }
                 } else {
                     eprintln!(
                         "Horizon: resource pack atlas size changed; restart to apply GUI textures"
