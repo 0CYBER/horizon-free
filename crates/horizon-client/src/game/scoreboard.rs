@@ -166,9 +166,16 @@ impl Game<'_> {
     /// `Entity.getTags` (the `Tags` list of the saved entity).
     pub(super) fn tags_of(&self, t: Target) -> Vec<String> {
         let raw = match t {
-            Target::Mob(id) | Target::Item(id) => self.persist.raw.get(&id),
+            Target::Mob(id)
+            | Target::Item(id)
+            | Target::Stand(id)
+            | Target::Frame(id)
+            | Target::Painting(id)
+            | Target::Boat(id)
+            | Target::Cart(id)
+            | Target::Other(id) => self.persist.raw.get(&id),
             Target::Player => self.level.player_extra.as_ref(),
-            _ => None,
+            Target::Orb(_) | Target::Arrow(_) => None,
         };
         match raw.and_then(|r| r.get("Tags")) {
             Some(Tag::List(l)) => l

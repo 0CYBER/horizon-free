@@ -41,6 +41,19 @@ pub(super) enum Target {
     Painting(u32),
     Boat(u32),
     Cart(u32),
+    /// An entity of a type Horizon does not simulate (markers, displays,
+    /// interactions...): kept as its saved data at a position.
+    Other(u32),
+}
+/// An entity of a type Horizon does not simulate: its compound lives in the
+/// entity memory (`persist.raw`), its position and rotation here.
+#[derive(Clone, Debug)]
+pub(in crate::game) struct OtherEntity {
+    pub id: u32,
+    pub kind: String,
+    pub position: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
 }
 pub(super) fn err(key: &str, args: &[&dyn std::fmt::Display]) -> CommandError {
     CommandError::tr(key, args)
@@ -243,6 +256,11 @@ impl Game<'_> {
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| [c.position.x, c.position.y, c.position.z]),
+            Target::Other(id) => self
+                .others
+                .iter()
+                .find(|o| o.id == id)
+                .map(|o| [o.position.x, o.position.y, o.position.z]),
         }
     }
     pub(super) fn target_type(&self, t: Target) -> String {
@@ -279,6 +297,11 @@ impl Game<'_> {
                 .iter()
                 .find(|c| c.id == id)
                 .map_or_else(|| "minecraft:minecart".into(), |c| c.kind.id().into()),
+            Target::Other(id) => self
+                .others
+                .iter()
+                .find(|o| o.id == id)
+                .map_or_else(String::new, |o| o.kind.clone()),
         }
     }
     /// Entity.getDisplayName.
@@ -356,6 +379,7 @@ impl Game<'_> {
             candidates.extend(self.paintings.iter().map(|p| Target::Painting(p.id)));
             candidates.extend(self.boats.iter().map(|b| Target::Boat(b.id)));
             candidates.extend(self.carts.iter().map(|c| Target::Cart(c.id)));
+            candidates.extend(self.others.iter().map(|o| Target::Other(o.id)));
         }
         let level = self.experience.level;
         let creative = self.creative;
@@ -885,6 +909,15 @@ impl Game<'_> {
                     }
                 }
             }
+            Target::Other(id) => {
+                if let Some(o) = self.others.iter_mut().find(|o| o.id == id) {
+                    o.position = v;
+                    if let Some([yaw, pitch]) = rotation {
+                        o.yaw = yaw;
+                        o.pitch = pitch;
+                    }
+                }
+            }
             // Wall-mounted entities do not move.
             Target::Frame(_) | Target::Painting(_) => {}
         }
@@ -1188,6 +1221,7 @@ impl Game<'_> {
             Target::Painting(id) => self.paintings.retain(|p| p.id != id),
             Target::Boat(id) => self.boats.retain(|b| b.id != id),
             Target::Cart(id) => self.carts.retain(|c| c.id != id),
+            Target::Other(id) => self.others.retain(|o| o.id != id),
         }
     }
     fn cmd_kill(&mut self, ctx: &Context) -> R<i32> {

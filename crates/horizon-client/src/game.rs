@@ -678,6 +678,8 @@ struct Game<'a> {
     map_frame_model: frames::FrameModel,
     glow_map_frame_model: frames::FrameModel,
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
+    /// Entities of types Horizon does not simulate.
+    others: Vec<commands::OtherEntity>,
     armor_stand_assets: armor_stands::ArmorStandAssets,
     boats: Vec<boats::Boat>,
     boat_models: boats::BoatModels,
@@ -8078,6 +8080,7 @@ pub fn run() -> Result<()> {
         map_frame_model: frames::bake_frame(&root, "item_frame_map"),
         glow_map_frame_model: frames::bake_frame(&root, "glow_item_frame_map"),
         armor_stands: Vec::new(),
+        others: Vec::new(),
         armor_stand_assets: armor_stands::ArmorStandAssets::load(&root),
         boats: Vec::new(),
         boat_models: boats::BoatModels::load(&root),

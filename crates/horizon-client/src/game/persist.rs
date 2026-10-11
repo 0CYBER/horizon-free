@@ -275,6 +275,9 @@ impl Game<'_> {
                     _ if self.res.mob_types.contains_key(&kind) => {
                         self.load_mob(tag, None);
                     }
+                    _ if !kind.is_empty() && entity_nbt::position(&tag).is_some() => {
+                        self.load_other(tag, &kind);
+                    }
                     _ => self.persist.unknown.entry(key).or_default().push(tag),
                 }
             }
@@ -346,6 +349,62 @@ impl Game<'_> {
             }
         }
         Some(id)
+    }
+    /// An entity of a type Horizon does not simulate, kept as its compound.
+    fn load_other(&mut self, tag: Tag, kind: &str) -> Option<u32> {
+        let position = entity_nbt::position(&tag)?;
+        let rotation = match tag.get("Rotation") {
+            Some(Tag::List(l)) => {
+                let f = |i: usize| match l.get(i) {
+                    Some(Tag::Float(v)) => f32::from_bits(*v),
+                    _ => 0.0,
+                };
+                [f(0), f(1)]
+            }
+            _ => [0.0, 0.0],
+        };
+        self.next_entity += 1;
+        let id = self.next_entity;
+        let uuid = entity_nbt::uuid(&tag);
+        self.remember(id, uuid, tag);
+        self.others.push(super::commands::OtherEntity {
+            id,
+            kind: kind.to_owned(),
+            position,
+            yaw: rotation[0],
+            pitch: rotation[1],
+        });
+        Some(id)
+    }
+    /// The compound of an entity Horizon does not simulate, with its current
+    /// position, rotation and UUID.
+    pub(super) fn other_to_nbt(&self, o: &super::commands::OtherEntity, uuid: [i32; 4]) -> Tag {
+        let mut tag = self
+            .persist
+            .raw
+            .get(&o.id)
+            .cloned()
+            .unwrap_or_else(|| Tag::Compound(Default::default()));
+        if let Tag::Compound(c) = &mut tag {
+            c.insert("id".into(), Tag::String(o.kind.as_str().into()));
+            c.insert(
+                "Pos".into(),
+                Tag::List(
+                    [o.position.x, o.position.y, o.position.z]
+                        .map(|v| Tag::Double(v.to_bits()))
+                        .to_vec(),
+                ),
+            );
+            c.insert(
+                "Rotation".into(),
+                Tag::List(vec![
+                    Tag::Float(o.yaw.to_bits()),
+                    Tag::Float(o.pitch.to_bits()),
+                ]),
+            );
+            c.insert("UUID".into(), Tag::IntArray(uuid.to_vec()));
+        }
+        tag
     }
     /// The root of a stack of riders (`Entity.getRootVehicle`).
     fn mob_root(&self, mut i: usize) -> usize {
@@ -617,6 +676,18 @@ impl Game<'_> {
                 out.entry(chunk_of(at)).or_default().push(tag);
             }
         }
+        for o in &self.others {
+            if keys.contains(&chunk_of(o.position)) {
+                let uuid = self
+                    .persist
+                    .uuids
+                    .get(&o.id)
+                    .copied()
+                    .unwrap_or_else(random_uuid);
+                let tag = self.other_to_nbt(o, uuid);
+                out.entry(chunk_of(o.position)).or_default().push(tag);
+            }
+        }
         for key in keys {
             let unknown = if remove {
                 self.persist.unknown.remove(key)
@@ -646,6 +717,13 @@ impl Game<'_> {
                 let keep = !gone(c.position) || Some(c.id) == riding;
                 if !keep {
                     removed.push(c.id);
+                }
+                keep
+            });
+            self.others.retain(|o| {
+                let keep = !gone(o.position);
+                if !keep {
+                    removed.push(o.id);
                 }
                 keep
             });

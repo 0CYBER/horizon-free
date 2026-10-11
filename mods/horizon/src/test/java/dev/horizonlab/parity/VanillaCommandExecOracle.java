@@ -267,7 +267,11 @@ public final class VanillaCommandExecOracle {
             int cx = player.chunkPosition().x(), cz = player.chunkPosition().z();
             for (int dz = -2; dz <= 2; dz++) {
                 for (int dx = -2; dx <= 2; dx++) {
-                    level.setChunkForced(cx + dx, cz + dz, true);
+                    // An entity-ticking ticket that, unlike setChunkForced,
+                    // is not a force-load /forceload would report.
+                    level.getChunkSource().addTicket(
+                        new net.minecraft.server.level.Ticket(net.minecraft.server.level.TicketType.DRAGON, net.minecraft.server.level.ChunkMap.FORCED_TICKET_LEVEL),
+                        new net.minecraft.world.level.ChunkPos(cx + dx, cz + dz));
                     level.getChunk(cx + dx, cz + dz);
                 }
             }

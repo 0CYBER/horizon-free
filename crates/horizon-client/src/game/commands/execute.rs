@@ -106,6 +106,11 @@ impl Game<'_> {
                 .iter()
                 .find(|c| c.id == id)
                 .map_or([0.0; 2], |c| [c.yaw, 0.0]),
+            Target::Other(id) => self
+                .others
+                .iter()
+                .find(|o| o.id == id)
+                .map_or([0.0; 2], |o| [o.yaw, o.pitch]),
             _ => [0.0; 2],
         }
     }

@@ -86,6 +86,11 @@ impl Game<'_> {
                 let c = self.carts.iter().find(|c| c.id == id)?;
                 c.to_nbt(uuid, self.persist.raw.get(&id))
             }
+            Target::Other(id) => {
+                let uuid = self.uuid_for(id);
+                let o = self.others.iter().find(|o| o.id == id)?.clone();
+                self.other_to_nbt(&o, uuid)
+            }
             Target::Orb(i) => entity_nbt::orb_to_nbt(self.orbs.get(i)?, random_uuid()),
             Target::Arrow(i) => {
                 let a = self.arrows.get(i)?;
@@ -165,7 +170,8 @@ impl Game<'_> {
             | Target::Frame(id)
             | Target::Painting(id)
             | Target::Boat(id)
-            | Target::Cart(id) => Some(self.persist.raw.entry(id).or_insert_with(empty)),
+            | Target::Cart(id)
+            | Target::Other(id) => Some(self.persist.raw.entry(id).or_insert_with(empty)),
             _ => None,
         }
     }
@@ -643,6 +649,8 @@ impl Game<'_> {
             Some(Target::Boat(id))
         } else if self.carts.iter().any(|c| c.id == id) {
             Some(Target::Cart(id))
+        } else if self.others.iter().any(|o| o.id == id) {
+            Some(Target::Other(id))
         } else {
             None
         }
