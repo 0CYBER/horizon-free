@@ -601,6 +601,9 @@ impl Game<'_> {
             id if id.starts_with("test.") => self.cmd_test(id, ctx),
             "compute" => self.cmd_compute(ctx),
             "place" => self.cmd_place(ctx),
+            "place.feature" | "place.jigsaw" | "place.structure" => {
+                self.cmd_place_generated(id, ctx)
+            }
             "recipe.give" | "recipe.take" => self.cmd_recipe(id, ctx),
             "damage" => self.cmd_damage(ctx),
             "rotate" => self.cmd_rotate(ctx),
@@ -645,6 +648,7 @@ impl Game<'_> {
                 self.cmd_scoreboard(id, ctx)
             }
             "locate.structure" | "locate.biome" => self.cmd_locate(id, ctx),
+            "locate.poi" => self.cmd_locate_poi(ctx),
             "warden_spawn_tracker.clear" | "warden_spawn_tracker.set" => {
                 let level = Self::int(ctx, "warning_level");
                 self.cmd_warden_spawn_tracker(level);
@@ -2243,34 +2247,178 @@ impl Game<'_> {
         ));
         Ok(removed)
     }
+    /// `PoiTypes`: the point of interest type of a block state.
+    fn poi_type(&self, state: horizon_world::registry::BlockStateId) -> Option<&'static str> {
+        let s = self.res.assets.registry.state(state)?;
+        let name = s.name.strip_prefix("minecraft:")?;
+        Some(match name {
+            "blast_furnace" => "minecraft:armorer",
+            "smoker" => "minecraft:butcher",
+            "cartography_table" => "minecraft:cartographer",
+            "brewing_stand" => "minecraft:cleric",
+            "composter" => "minecraft:farmer",
+            "barrel" => "minecraft:fisherman",
+            "fletching_table" => "minecraft:fletcher",
+            "cauldron" | "lava_cauldron" | "water_cauldron" | "powder_snow_cauldron" => {
+                "minecraft:leatherworker"
+            }
+            "lectern" => "minecraft:librarian",
+            "stonecutter" => "minecraft:mason",
+            "loom" => "minecraft:shepherd",
+            "smithing_table" => "minecraft:toolsmith",
+            "grindstone" => "minecraft:weaponsmith",
+            "bell" => "minecraft:meeting",
+            "beehive" => "minecraft:beehive",
+            "bee_nest" => "minecraft:bee_nest",
+            "nether_portal" => "minecraft:nether_portal",
+            "lodestone" => "minecraft:lodestone",
+            "test_instance_block" => "minecraft:test_instance",
+            n if n.ends_with("_bed") => {
+                if s.properties.get("part").map(String::as_str) != Some("head") {
+                    return None;
+                }
+                "minecraft:home"
+            }
+            n if n.ends_with("lightning_rod") => "minecraft:lightning_rod",
+            _ => return None,
+        })
+    }
+    /// `LocateCommand.locatePoi`: `PoiManager.findClosestWithType` within
+    /// 256 blocks of the source, over the loaded chunks.
+    fn cmd_locate_poi(&mut self, ctx: &Context) -> R<i32> {
+        let Some(Arg::Resource(poi)) = ctx.get("poi").cloned() else {
+            return Ok(0);
+        };
+        let wanted: Vec<String> = match poi.strip_prefix('#') {
+            Some(tag) => self.tag_entries("point_of_interest_type", tag),
+            None => vec![poi.clone()],
+        };
+        let from = self.source_position().map(|v| v.floor() as i32);
+        const RANGE: i32 = 256;
+        let mut cache: std::collections::HashMap<u16, Option<&'static str>> =
+            std::collections::HashMap::new();
+        let mut best: Option<(i64, [i32; 3], &'static str)> = None;
+        let (cx0, cz0) = ((from[0] - RANGE) >> 4, (from[2] - RANGE) >> 4);
+        let (cx1, cz1) = ((from[0] + RANGE) >> 4, (from[2] + RANGE) >> 4);
+        for cx in cx0..=cx1 {
+            for cz in cz0..=cz1 {
+                let Some(chunk) = self.world.chunks.get(&(cx, cz)) else {
+                    continue;
+                };
+                for (i, section) in chunk.sections.iter().enumerate() {
+                    let mut wanted_state = |v: u32| {
+                        let state = v as u16;
+                        cache
+                            .entry(state)
+                            .or_insert_with(|| {
+                                self.poi_type(horizon_world::registry::BlockStateId(
+                                    u32::from(state),
+                                ))
+                                .filter(|t| wanted.iter().any(|w| w == t))
+                            })
+                            .is_some()
+                    };
+                    if !section.blocks.maybe_has(&mut wanted_state) {
+                        continue;
+                    }
+                    let base_y = horizon_client::chunk::MIN_Y + 16 * i as i32;
+                    for j in 0..4096 {
+                        let state = section.get(j);
+                        let Some(kind) = cache.get(&state).copied().flatten() else {
+                            continue;
+                        };
+                        let p = [
+                            cx * 16 + (j & 15) as i32,
+                            base_y + (j >> 8) as i32,
+                            cz * 16 + ((j >> 4) & 15) as i32,
+                        ];
+                        let d = [p[0] - from[0], p[1] - from[1], p[2] - from[2]]
+                            .map(|d| i64::from(d) * i64::from(d))
+                            .iter()
+                            .sum::<i64>();
+                        if d <= i64::from(RANGE * RANGE) && best.is_none_or(|(b, _, _)| d < b) {
+                            best = Some((d, p, kind));
+                        }
+                    }
+                }
+            }
+        }
+        let Some((_, p, kind)) = best else {
+            return Err(CommandError::new(Text::tr(
+                "commands.locate.poi.not_found",
+                &[&poi],
+            )));
+        };
+        let coords = Text::translate(
+            "chat.coordinates",
+            &[
+                Text::literal(p[0].to_string()),
+                Text::literal("~"),
+                Text::literal(p[2].to_string()),
+            ],
+        );
+        let link = Text::literal("[")
+            .append(coords)
+            .append("]")
+            .with_style(&Style {
+                color: Some(text::GREEN),
+                suggest: Some(format!("/tp @s {} ~ {}", p[0], p[2])),
+                ..Style::default()
+            });
+        let (dx, dz) = (p[0] - from[0], p[2] - from[2]);
+        let distance = ((dx * dx + dz * dz) as f32).sqrt().floor() as i32;
+        let shown = if poi.starts_with('#') {
+            format!("{poi} ({kind})")
+        } else {
+            poi
+        };
+        self.feedback(Text::translate(
+            "commands.locate.poi.success",
+            &[
+                Text::literal(shown),
+                link,
+                Text::literal(distance.to_string()),
+            ],
+        ));
+        Ok(distance)
+    }
     fn cmd_locate(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let origin = self.source_position();
         if id == "locate.biome" {
             let Some(Arg::Resource(biome)) = ctx.get("biome").cloned() else {
                 return Ok(0);
             };
-            // Search loaded chunks around the player (BiomeSource.findClosestBiome3d
-            // samples a 6400-block radius; Horizon searches what is generated).
-            let (px, pz) = (origin[0].floor() as i32, origin[2].floor() as i32);
-            let mut best: Option<([i32; 3], f64)> = None;
-            for (&(cx, cz), chunk) in &self.world.chunks {
-                for (dx, dz) in [(0, 0), (8, 8)] {
-                    let (x, z) = (cx * 16 + dx, cz * 16 + dz);
-                    let y = origin[1].floor() as i32;
-                    let b = self.res.biomes.get(chunk.biome(x, y, z));
-                    if b.name == biome {
-                        let d = f64::from((x - px).pow(2) + (z - pz).pow(2));
-                        if best.is_none_or(|(_, bd)| d < bd) {
-                            best = Some(([x, y, z], d));
-                        }
-                    }
-                }
-            }
-            let Some((p, d2)) = best else {
+            // LocateCommand.locateBiome: BiomeSource.findClosestBiome3d with
+            // a 6400-block radius, 32-block columns and 64-block layers.
+            let from = origin.map(|v| v.floor() as i32);
+            let allowed = |name: &str| self.biome_matches(&biome, name);
+            let search = horizon_world::worldgen::generator::BiomeSearch {
+                allowed: &allowed,
+                origin: from,
+                radius: 6400,
+                horizontal: 32,
+                vertical: 64,
+                min_y: horizon_client::chunk::MIN_Y,
+                max_y: horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT - 1,
+            };
+            let found = self
+                .end
+                .locator()
+                .and_then(|t| t.find_closest_biome(&search));
+            let Some((name, p)) = found else {
                 return Err(CommandError::new(Text::tr(
                     "commands.locate.biome.not_found",
                     &[&biome],
                 )));
+            };
+            let d2 = [p[0] - from[0], p[1] - from[1], p[2] - from[2]]
+                .map(|d| f64::from(d) * f64::from(d))
+                .iter()
+                .sum::<f64>();
+            let shown = if biome.starts_with('#') {
+                format!("{biome} ({name})")
+            } else {
+                biome.clone()
             };
             let coords = Text::tr("chat.coordinates", &[&p[0], &p[1], &p[2]]);
             let link = Text::literal("[")
@@ -2281,11 +2429,11 @@ impl Game<'_> {
                     suggest: Some(format!("/tp @s {} {} {}", p[0], p[1], p[2])),
                     ..Style::default()
                 });
-            let distance = d2.sqrt().floor() as i32;
-            self.system_message(Text::translate(
+            let distance = (d2 as f32).sqrt().floor() as i32;
+            self.feedback(Text::translate(
                 "commands.locate.biome.success",
                 &[
-                    Text::literal(biome),
+                    Text::literal(shown),
                     link,
                     Text::literal(distance.to_string()),
                 ],
@@ -2343,6 +2491,10 @@ impl Game<'_> {
     }
     /// The structures of a `worldgen/structure` tag, nested tags expanded.
     pub(super) fn structure_tag(&self, tag: &str) -> Vec<String> {
+        self.tag_entries("worldgen/structure", tag)
+    }
+    /// The entries of a data pack tag of `registry`, nested tags expanded.
+    pub(super) fn tag_entries(&self, registry: &str, tag: &str) -> Vec<String> {
         let mut out = Vec::new();
         let mut pending = vec![tag.to_owned()];
         let mut seen = std::collections::HashSet::new();
@@ -2354,7 +2506,7 @@ impl Game<'_> {
             let file = self
                 .options
                 .resources
-                .join(format!("data/{ns}/tags/worldgen/structure/{path}.json"));
+                .join(format!("data/{ns}/tags/{registry}/{path}.json"));
             let Ok(v) = std::fs::read(file)
                 .map_err(|_| ())
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).map_err(|_| ()))

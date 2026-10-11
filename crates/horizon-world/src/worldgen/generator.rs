@@ -1370,6 +1370,17 @@ trait SeededPipeline: Send + Sync {
         from: [i32; 3],
         radius: i32,
     ) -> Option<(String, [i32; 3])>;
+    fn find_closest_biome(
+        &self,
+        worker: &mut WorkerState,
+        search: &BiomeSearch<'_>,
+    ) -> Option<(String, [i32; 3])>;
+    fn jigsaw_pieces(
+        &self,
+        worker: &mut WorkerState,
+        query: &JigsawQuery<'_>,
+        random: &mut horizon_core::random::LegacyRandom,
+    ) -> Option<JigsawPieces>;
 }
 impl<R: RandomSource + 'static> SeededPipeline for Pipeline<R>
 where
@@ -1470,6 +1481,159 @@ where
             radius,
         )
     }
+    fn find_closest_biome(
+        &self,
+        worker: &mut WorkerState,
+        search: &BiomeSearch<'_>,
+    ) -> Option<(String, [i32; 3])> {
+        // BiomeSource.findClosestBiome3d.
+        let candidates: BTreeSet<&str> = self
+            .source
+            .possible_biomes()
+            .into_iter()
+            .filter(|name| (search.allowed)(name))
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let mut resolver = self.source.resolver(
+            &self.climate,
+            self.router.get(RouterField::Erosion).as_ref(),
+        );
+        let ys = out_from_origin(
+            search.origin[1],
+            search.min_y + 1,
+            search.max_y + 1,
+            search.vertical,
+        );
+        let radius = search.radius.div_euclid(search.horizontal);
+        for [sx, sz] in spiral_around(radius) {
+            let x = search.origin[0].wrapping_add(sx.wrapping_mul(search.horizontal));
+            let z = search.origin[2].wrapping_add(sz.wrapping_mul(search.horizontal));
+            for &y in &ys {
+                let quart = [x >> 2, y >> 2, z >> 2];
+                let Ok(name) = resolver.sample(&mut worker.carver_context, quart) else {
+                    continue;
+                };
+                if candidates.contains(name) {
+                    return Some((name.to_owned(), [x, y, z]));
+                }
+            }
+        }
+        None
+    }
+    fn jigsaw_pieces(
+        &self,
+        worker: &mut WorkerState,
+        query: &JigsawQuery<'_>,
+        random: &mut horizon_core::random::LegacyRandom,
+    ) -> Option<JigsawPieces> {
+        // JigsawPlacement.generateJigsaw: addPieces with no heightmap
+        // projection, MaxDistance(128), no aliases, no padding and
+        // waterlogging applied.
+        let structures = self.structures.as_ref()?;
+        let aliases = BTreeMap::new();
+        let config = super::structure::jigsaw::JigsawConfig {
+            start_pool: query.pool,
+            start_jigsaw: Some(query.target),
+            max_depth: query.max_depth,
+            use_expansion_hack: false,
+            project_to: None,
+            max_distance: [128, 128],
+            aliases: &aliases,
+            padding: [0, 0],
+            waterlogging: true,
+        };
+        let (_, pieces) = super::structure::jigsaw::assemble(
+            &config,
+            &mut StructureQueries {
+                pipeline: self,
+                worker,
+                valid: BTreeSet::new(),
+            },
+            &structures.registry.pools,
+            &structures.resources,
+            &structures.bindings,
+            random,
+            query.position,
+        )?;
+        Some(JigsawPieces {
+            pieces,
+            resources: structures.resources.clone(),
+        })
+    }
+}
+
+/// A `JigsawPlacement.generateJigsaw` request (`/place jigsaw`).
+pub struct JigsawQuery<'a> {
+    pub pool: &'a str,
+    pub target: &'a str,
+    pub max_depth: i32,
+    pub position: [i32; 3],
+}
+/// The assembled pieces of a jigsaw and the templates they place.
+pub struct JigsawPieces {
+    pub pieces: Vec<super::structure::jigsaw::PoolPiece>,
+    pub resources: Arc<super::structure::StructureResources>,
+}
+
+/// A `findClosestBiome3d` query.
+pub struct BiomeSearch<'a> {
+    pub allowed: &'a dyn Fn(&str) -> bool,
+    pub origin: [i32; 3],
+    pub radius: i32,
+    pub horizontal: i32,
+    pub vertical: i32,
+    /// `level.getMinY()` and `level.getMaxY()`.
+    pub min_y: i32,
+    pub max_y: i32,
+}
+
+/// `Mth.outFromOrigin(origin, lower, upper, step)`.
+pub fn out_from_origin(origin: i32, lower: i32, upper: i32, step: i32) -> Vec<i32> {
+    let center = origin.clamp(lower, upper);
+    let mut out = Vec::new();
+    let mut cursor = center;
+    loop {
+        let distance = (center - cursor).abs();
+        if !(center - distance >= lower || center + distance <= upper) {
+            return out;
+        }
+        out.push(cursor);
+        let negative = cursor <= center;
+        let can_move_positive = center + distance + step <= upper;
+        let mut next = center + distance + step;
+        if !negative || !can_move_positive {
+            let attempt = center - distance - if negative { step } else { 0 };
+            if attempt >= lower {
+                next = attempt;
+            }
+        }
+        cursor = next;
+    }
+}
+
+/// `BlockPos.spiralAround(ZERO, radius, EAST, SOUTH)` as (x, z) offsets.
+pub fn spiral_around(radius: i32) -> impl Iterator<Item = [i32; 2]> {
+    const DIRS: [[i32; 2]; 4] = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+    let legs = 4 * radius;
+    let (mut leg, mut leg_size, mut leg_index) = (-1i32, 0i32, 0i32);
+    let mut last = [0, 1];
+    std::iter::from_fn(move || {
+        let d = DIRS[((leg + 4) % 4) as usize];
+        let cursor = [last[0] + d[0], last[1] + d[1]];
+        last = cursor;
+        if leg_index >= leg_size {
+            if leg >= legs {
+                return None;
+            }
+            leg += 1;
+            leg_index = 0;
+            leg_size = leg / 2 + 1;
+        }
+        leg_index += 1;
+        Some(cursor)
+    })
 }
 
 /// Counters from one FEATURES pass.
@@ -1621,6 +1785,19 @@ impl GeneratorWorker {
         radius: i32,
     ) -> Option<(String, [i32; 3])> {
         self.pipeline.locate(&mut self.state, names, from, radius)
+    }
+    /// `BiomeSource.findClosestBiome3d`: the first sampled position whose
+    /// noise biome passes `allowed`, spiralling out from the origin.
+    pub fn find_closest_biome(&mut self, search: &BiomeSearch<'_>) -> Option<(String, [i32; 3])> {
+        self.pipeline.find_closest_biome(&mut self.state, search)
+    }
+    /// `JigsawPlacement.addPieces` for `/place jigsaw`, drawing from `random`.
+    pub fn jigsaw_pieces(
+        &mut self,
+        query: &JigsawQuery<'_>,
+        random: &mut horizon_core::random::LegacyRandom,
+    ) -> Option<JigsawPieces> {
+        self.pipeline.jigsaw_pieces(&mut self.state, query, random)
     }
     /// STRUCTURE_STARTS: the structure starts owned by a chunk (cached).
     pub fn structure_starts(

@@ -91,6 +91,25 @@ impl VanillaTerrain {
     ) -> Option<(String, [i32; 3])> {
         self.generator.worker().locate(names, from, radius)
     }
+    /// `/locate biome`: `BiomeSource.findClosestBiome3d`.
+    pub fn find_closest_biome(
+        &self,
+        search: &horizon_world::worldgen::generator::BiomeSearch<'_>,
+    ) -> Option<(String, [i32; 3])> {
+        let mut worker = self.query.lock().unwrap_or_else(|e| e.into_inner());
+        let worker = worker.get_or_insert_with(|| self.generator.worker());
+        worker.find_closest_biome(search)
+    }
+    /// `/place jigsaw`: `JigsawPlacement.addPieces` drawing from `random`.
+    pub fn jigsaw_pieces(
+        &self,
+        query: &horizon_world::worldgen::generator::JigsawQuery<'_>,
+        random: &mut horizon_core::random::LegacyRandom,
+    ) -> Option<horizon_world::worldgen::generator::JigsawPieces> {
+        let mut worker = self.query.lock().unwrap_or_else(|e| e.into_inner());
+        let worker = worker.get_or_insert_with(|| self.generator.worker());
+        worker.jigsaw_pieces(query, random)
+    }
     /// Concentric ring positions of a structure set (strongholds), once known.
     pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
         self.generator.ring_positions(set)
