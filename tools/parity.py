@@ -54,6 +54,11 @@ PROFILE = {
     "CARGO_PROFILE_DEV_OPT_LEVEL": "3",
 }
 SHIM = STATE_DIR / "shim"
+# Results shared by every worktree using the same vanilla data (.local/minecraft
+# links to a shared directory in parallel worktrees): passes keyed by content,
+# so a harness whose inputs match one that passed elsewhere doesn't run again.
+SHARED = Path(os.environ.get("PARITY_SHARED") or (LOCAL / "minecraft").resolve().parent / "parity-shared")
+MACHINE_JOBS = int(os.environ.get("PARITY_MACHINE_JOBS") or max(1, (os.cpu_count() or 4) // 2))
 DEFAULT_MEMORY = 3 << 30  # assumed peak for a harness that never ran here
 
 
@@ -231,6 +236,33 @@ def prebuild(artifacts, jobs):
     return not errors, errors
 
 
+def publish(name, record):
+    """Share a pass, so any worktree with the same inputs can reuse it."""
+    if record["status"] != "pass" or "key" not in record:
+        return
+    for path, data in ((SHARED / "passes" / name / f"{record['key']}.json", record),
+                       (SHARED / "dependencies" / f"{name}.json", {k: record[k] for k in ("dependencies", "artifacts")})):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(data))
+        temporary.replace(path)
+
+
+def machine_slot():
+    """One of MACHINE_JOBS lock files shared by every runner on this machine, or None if all are taken."""
+    import fcntl
+    slots = SHARED / "slots"
+    slots.mkdir(parents=True, exist_ok=True)
+    for index in range(MACHINE_JOBS):
+        handle = open(slots / f"{index}.lock", "w")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except OSError:
+            handle.close()
+    return None
+
+
 def memory_available():
     for line in Path("/proc/meminfo").read_text().splitlines():
         if line.startswith("MemAvailable:"):
@@ -258,6 +290,9 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
             expected = records.get(name, {}).get("peak_bytes", DEFAULT_MEMORY)
             if running and in_use + expected > memory_budget:
                 continue
+            slot = machine_slot()
+            if slot is None:
+                break  # other runners on this machine hold every slot
             queue.remove(name)
             reuse = reuse_oracles and records.get(name, {}).get("oracle_reuse", True) and name not in retried
             trace = traces / f"{name}.json"
@@ -266,10 +301,10 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
             process = subprocess.Popen(
                 [sys.executable, str(Path(__file__)), "--trace", str(trace), str(selected[name])],
                 cwd=ROOT, env=run_environment(reuse), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            running[name] = (process, time.monotonic(), log, expected, reuse)
+            running[name] = (process, time.monotonic(), log, expected, reuse, slot)
             in_use += expected
         time.sleep(0.2)
-        for name, (process, started, log, _, reused) in list(running.items()):
+        for name, (process, started, log, _, reused, slot) in list(running.items()):
             elapsed = time.monotonic() - started
             if process.poll() is None and elapsed < timeout:
                 continue
@@ -278,6 +313,7 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
                 process.wait()
                 print(f"--- {name}: timed out after {timeout}s", file=log)
             log.close()
+            slot.close()
             del running[name]
             passed = process.returncode == 0
             if not passed and reused and records.get(name, {}).get("status") != "fail":
@@ -301,6 +337,7 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
             records[name] = record
             results[name] = record
             save_state(state)
+            publish(name, record)
             tail = "" if passed else f"  ({logs / (name + '.log')})"
             print(f"{'PASS' if passed else 'FAIL'} {name} {elapsed:.0f}s{tail}", flush=True)
     return results, time.monotonic() - started_all
@@ -308,9 +345,19 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
 
 def stale(name, state, hasher, environment):
     record = state["harnesses"].get(name)
-    if not record or record.get("status") != "pass" or "key" not in record:
-        return True
-    return key(record, hasher, environment) != record["key"]
+    if record and record.get("status") == "pass" and "key" in record and key(record, hasher, environment) == record["key"]:
+        return False
+    # Passed elsewhere with the same inputs? Try this worktree's and the shared dependency lists.
+    candidates = [record] if record and record.get("dependencies") else []
+    template = SHARED / "dependencies" / f"{name}.json"
+    if template.exists():
+        candidates.append(json.loads(template.read_text()))
+    for candidate in candidates:
+        shared = SHARED / "passes" / name / f"{key(candidate, hasher, environment)}.json"
+        if shared.exists():
+            state["harnesses"][name] = dict(json.loads(shared.read_text()), shared=True)
+            return False
+    return True
 
 
 def trace_main(output, script, arguments):
@@ -357,7 +404,8 @@ def main():
     parser.add_argument("--failed", action="store_true", help="rerun the harnesses that failed last time")
     parser.add_argument("--list", action="store_true", help="print what would run, then stop")
     parser.add_argument("--status", action="store_true", help="print each harness's last result")
-    parser.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 3))
+    parser.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 3),
+                        help="harnesses at once in this run; every runner on the machine shares PARITY_MACHINE_JOBS slots")
     parser.add_argument("--timeout", type=int, default=3600, help="seconds per harness")
     args = parser.parse_args()
 
