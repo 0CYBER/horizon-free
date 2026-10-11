@@ -183,3 +183,91 @@ impl PowderSnowWorld for SceneCollisions<'_, '_> {
         Ok(false)
     }
 }
+
+/// Collision queries over any block lookup (test worlds without chunks):
+/// every chunk is present, nothing is suffocating, no entities collide.
+pub struct LookupCollisions<'w, 'r> {
+    pub block: &'w dyn Fn(i32, i32, i32) -> horizon_world::registry::BlockStateId,
+    pub binding: &'w BlockCollisionRegistry<'r>,
+}
+impl BlockCollisionWorld for LookupCollisions<'_, '_> {
+    type Error = io::Error;
+    type Chunk = ChunkPos;
+    fn collision_chunk(&mut self, p: ChunkPos) -> io::Result<Option<ChunkPos>> {
+        Ok(Some(p))
+    }
+    fn collision_block(&mut self, _: ChunkPos, p: BlockPos) -> io::Result<CollisionBlock> {
+        self.binding.collision_block((self.block)(p.x, p.y, p.z))
+    }
+    fn is_suffocating(&mut self, _: ChunkPos, _: CollisionBlock, _: BlockPos) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn context_shape(
+        &mut self,
+        block: CollisionBlock,
+        p: BlockPos,
+        context: &CollisionContext<'_>,
+    ) -> io::Result<VoxelShape> {
+        self.binding
+            .collision_shape_with_context(self, block.state, p, context)
+            .map_err(io::Error::other)
+    }
+}
+impl EntityMovementWorld for LookupCollisions<'_, '_> {
+    type Error = io::Error;
+    fn entity_collisions(&mut self, _: EntityIdentity, _: Aabb) -> io::Result<Vec<VoxelShape>> {
+        Ok(Vec::new())
+    }
+    fn movement_border(&mut self, _: EntityIdentity, _: Aabb) -> io::Result<Option<VoxelShape>> {
+        Ok(None)
+    }
+}
+impl DynamicSupportWorld for LookupCollisions<'_, '_> {
+    type Error = io::Error;
+    fn shulker_is_closed(&mut self, _: [i32; 3]) -> io::Result<Option<bool>> {
+        Ok(None)
+    }
+    fn moving_piston_shape(&mut self, _: [i32; 3]) -> io::Result<Option<VoxelShape>> {
+        Ok(None)
+    }
+}
+impl DynamicCollisionWorld for LookupCollisions<'_, '_> {
+    fn shulker_collision_state(
+        &mut self,
+        _: [i32; 3],
+    ) -> io::Result<Option<ShulkerCollisionState>> {
+        Ok(None)
+    }
+}
+impl LiquidCollisionWorld for LookupCollisions<'_, '_> {
+    type Error = io::Error;
+    fn entity_liquid_shape(&mut self, _: EntityIdentity) -> io::Result<VoxelShape> {
+        Ok(VoxelShape::empty())
+    }
+    fn fluid(&mut self, p: BlockPos) -> io::Result<FluidState> {
+        FluidState::from_block(
+            self.binding
+                .registry()
+                .state((self.block)(p.x, p.y, p.z))
+                .ok_or_else(|| io::Error::other("fluid state outside registry"))?,
+        )
+    }
+    fn entity_can_stand(&mut self, _: EntityIdentity, _: FluidState) -> io::Result<bool> {
+        Ok(false)
+    }
+}
+impl PowderSnowWorld for LookupCollisions<'_, '_> {
+    type Error = io::Error;
+    fn powder_snow_entity(&mut self, _: EntityIdentity) -> io::Result<PowderSnowEntity> {
+        Ok(PowderSnowEntity {
+            fall_distance: 0.0,
+            falling_block: false,
+        })
+    }
+    fn powder_snow_walkable_tag(&mut self, _: EntityIdentity) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn feet_are_leather_boots(&mut self, _: EntityIdentity) -> io::Result<bool> {
+        Ok(false)
+    }
+}

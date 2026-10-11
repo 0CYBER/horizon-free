@@ -1174,10 +1174,8 @@ fn valid_position_for_type<L: NaturalLevel, R: RandomSource>(
 /// What chunk generation spawning did (for differential tests).
 #[derive(Clone, Debug, PartialEq)]
 pub enum GenEvent {
-    /// A pack: its type and count.
-    Pack(String, u32),
-    /// An attempt at the top non-colliding position of a column.
-    Try([i32; 3]),
+    /// An attempt at a column (the heightmap lookup).
+    Column(i32, i32),
     Spawn(String, [f64; 3], f32),
 }
 /// `NaturalSpawner.spawnMobsForChunkGeneration`: creature packs placed on
@@ -1212,7 +1210,6 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
             continue;
         };
         let count = sample_count(&entry, random);
-        trace(GenEvent::Pack(entry.entity.clone(), count));
         let mut group_index = 0u32;
         let mut spawned: Vec<Aabb> = Vec::new();
         let mut x = xo + random.next_int_bound(16).unwrap_or(0);
@@ -1228,7 +1225,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
                     break;
                 };
                 let pos = top_non_colliding(l, &entry.entity, x, z);
-                trace(GenEvent::Try(pos));
+                trace(GenEvent::Column(x, z));
                 if spawn_rules::is_spawn_position_ok(species, l, pos[0], pos[1], pos[2]) {
                     let fx = f64::from(x).clamp(
                         f64::from(xo) + f64::from(width),
