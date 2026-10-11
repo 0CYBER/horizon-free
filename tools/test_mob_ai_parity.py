@@ -9,7 +9,7 @@ motion, rotations, running goals and target goals, attack target, navigation pat
 controls, movement input, brain activities and memories) and the sounds played; this harness
 reports, per scenario and mob, how many ticks match before the first divergence and what differs.
 
-  python3 tools/test_mob_ai_parity.py [--only NAME ...] [--rust-only] [--java-only] [--strict]
+  python3 tools/test_mob_ai_parity.py [--only NAME ...] [--rust-only] [--java-only] [--report-only]
 """
 import argparse
 import os
@@ -220,7 +220,7 @@ def main():
     parser.add_argument('--only', nargs='*')
     parser.add_argument('--java-only', action='store_true')
     parser.add_argument('--rust-only', action='store_true', help='reuse the last vanilla output')
-    parser.add_argument('--strict', action='store_true', help='fail on any divergence')
+    parser.add_argument('--report-only', action='store_true', help='print divergences without failing')
     args = parser.parse_args()
     build = lab.LOCAL / 'mob-ai-parity'
     build.mkdir(parents=True, exist_ok=True)
@@ -237,7 +237,7 @@ def main():
     if not args.java_only:
         oracle_harness.run_logged(['cargo', 'build', '--locked', '--release', '-p', 'horizon-client', '--example', 'mob_ai_probe'],
                                   build, 'compile-rust')
-        binary = lab.ROOT / 'target/release/examples/mob_ai_probe'
+        binary = lab.cargo_target() / 'release/examples/mob_ai_probe'
         oracle_harness.run_logged([binary, lab.ROOT / '.local/horizon-client/26.3', inputs, build / 'horizon.txt'], build, 'horizon')
     if args.java_only:
         return
@@ -248,7 +248,7 @@ def main():
     print('\n'.join(report))
     print(f"{totals['clean']}/{totals['scenarios']} scenarios match entirely; "
           f"{totals['matched']}/{totals['mob_ticks']} mob-ticks match before each mob's first divergence")
-    if args.strict and totals['clean'] != totals['scenarios']:
+    if not args.report_only and totals['clean'] != totals['scenarios']:
         raise SystemExit(1)
 
 
