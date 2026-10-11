@@ -280,8 +280,8 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
             log.close()
             del running[name]
             passed = process.returncode == 0
-            if not passed and reused:
-                # Maybe a reused oracle result was wrong for it: run it again from scratch.
+            if not passed and reused and records.get(name, {}).get("status") != "fail":
+                # A new failure might come from a reused oracle result: run it again from scratch.
                 retried.add(name)
                 queue.insert(0, name)
                 print(f"retry {name} without reused oracle results", flush=True)
