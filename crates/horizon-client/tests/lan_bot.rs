@@ -333,10 +333,9 @@ fn status_and_join() {
                     }));
                     teleported = true;
                 }
-                C::SetTime(t) => {
-                    assert!(!t.clocks.is_empty());
-                    time = true;
-                }
+                // The join's full clock sync; MinecraftServer's 20-tick
+                // forceGameTimeSynchronization sends no clocks and may come first.
+                C::SetTime(t) if !t.clocks.is_empty() => time = true,
                 C::PlayerInfoUpdate(u) => {
                     info |= u.entries.iter().any(|e| e.name.as_deref() == Some("Host"));
                 }
