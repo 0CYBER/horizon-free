@@ -501,7 +501,7 @@ def summarize(report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--keep', action='store_true')
-    parser.add_argument('--bin-dir', default=str(ROOT / 'target' / 'fast'))
+    parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build them with the fast profile)')
     parser.add_argument('--vanilla', help='an existing vanilla world folder (skips generation)')
     parser.add_argument('--horizon', help='an existing Horizon-saved world folder (skips the Horizon run)')
     parser.add_argument('--skip-vanilla-load', action='store_true')
@@ -524,7 +524,11 @@ def main():
     if args.horizon:
         h = Path(args.horizon)
     else:
-        h = horizon_resave(v0, RUN / 'h', Path(args.bin_dir))
+        bin_dir = Path(args.bin_dir) if args.bin_dir else None
+        if bin_dir is None:
+            subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '--bins'], cwd=ROOT, check=True)
+            bin_dir = ROOT / os.environ.get('CARGO_TARGET_DIR', 'target') / 'fast'
+        h = horizon_resave(v0, RUN / 'h', bin_dir)
     print('comparing', v0, 'with', h)
     report = compare_worlds(v0, h)
     failures += summarize(report)

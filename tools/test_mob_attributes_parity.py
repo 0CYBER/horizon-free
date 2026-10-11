@@ -63,7 +63,7 @@ def main():
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp', str(jars['server']) + os.pathsep + deps, '-d', classes, oracle], 'compile-java')
     run(['java', '-Xmx1G', '-cp', os.pathsep.join([str(classes), str(jars['server']), deps]), 'dev.horizonlab.parity.VanillaMobAttributesOracle', build / 'vanilla.txt'], 'java')
     run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'mob_attributes_fixture'], 'compile-rust')
-    binary = lab.ROOT / 'target/release/examples/mob_attributes_fixture'
+    binary = lab.cargo_target() / 'release/examples/mob_attributes_fixture'
     resources = lab.ROOT / '.local/horizon-client/26.3'
     run([binary, resources, build / 'rust.txt'], 'rust')
     vanilla, rust = parse(build / 'vanilla.txt'), parse(build / 'rust.txt')
