@@ -585,6 +585,15 @@ impl Stroll {
 }
 impl Goal for Stroll {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        if self.water_avoiding.is_some() {
+            "Stroll"
+        } else if self.swim {
+            "RandomSwimming"
+        } else {
+            "RandomStroll"
+        }
+    }
     fn flags(&self) -> u8 {
         MOVE
     }
@@ -648,6 +657,11 @@ pub struct LookAtPlayer {
     pub range: f32,
     pub probability: f32,
     pub only_horizontal: bool,
+    /// `LookAtPlayerGoal(Mob.class, ...)`: the nearest mob, not the player.
+    pub mobs: bool,
+    /// InteractGoal: LOOK and MOVE.
+    pub interact: bool,
+    look_at: Option<Who>,
     look_time: i32,
 }
 impl LookAtPlayer {
@@ -656,45 +670,110 @@ impl LookAtPlayer {
             range,
             probability: 0.02,
             only_horizontal: false,
+            mobs: false,
+            interact: false,
+            look_at: None,
             look_time: 0,
+        }
+    }
+    /// `LookAtPlayerGoal(this, Mob.class, range)`.
+    pub fn mobs(range: f32) -> Self {
+        Self {
+            mobs: true,
+            ..Self::new(range)
+        }
+    }
+    /// `InteractGoal(this, Player.class, range, probability)`.
+    pub fn interact(range: f32, probability: f32) -> Self {
+        Self {
+            interact: true,
+            ..Self::new(range).probability(probability)
         }
     }
     pub fn probability(mut self, p: f32) -> Self {
         self.probability = p;
         self
     }
+    /// The goal's look target, alive, with its position and eye height.
+    fn look_target(&self, w: &MobWorld) -> Option<(Vec3, f64)> {
+        match self.look_at? {
+            Who::Player => w
+                .player
+                .as_ref()
+                .filter(|p| p.alive)
+                .map(|p| (p.position, p.eye[1])),
+            Who::Mob(id) => w
+                .seen(id)
+                .filter(|s| s.alive)
+                .map(|s| (s.position, s.eye_y)),
+        }
+    }
 }
 impl Goal for LookAtPlayer {
     goal_clone!();
     fn flags(&self) -> u8 {
-        LOOK
+        if self.interact { LOOK | MOVE } else { LOOK }
+    }
+    fn name(&self) -> &'static str {
+        if self.interact {
+            "InteractGoal"
+        } else {
+            "LookAtPlayer"
+        }
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if m.random.next_float() >= self.probability {
             return false;
         }
-        // level.getNearestPlayer(forNonCombat().range(lookDistance)).
-        m.can_see_player(cx.w, f64::from(self.range))
+        self.look_at = None;
+        let range = f64::from(self.range);
+        if !self.mobs {
+            // level.getNearestPlayer(forNonCombat().range(lookDistance)).
+            if m.can_see_player(cx.w, range) {
+                self.look_at = Some(Who::Player);
+            }
+            return self.look_at.is_some();
+        }
+        // level.getNearestEntity(mobs in the box inflated by (range, 3, range)).
+        let area = m.bounds().inflate(Vec3::new(range, 3.0, range));
+        let id = m.id;
+        let at = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+        let candidates: Vec<(u32, Vec3)> =
+            cx.w.others
+                .iter()
+                .filter(|s| s.id != id && s.alive && s.bounds.intersects(area))
+                .map(|s| (s.id, s.position))
+                .collect();
+        let mut best: Option<(u32, f64)> = None;
+        for (cid, pos) in candidates {
+            let reach = range.max(2.0);
+            if m.distance_sqr(pos) > reach * reach || !m.sees(cx.w, Who::Mob(cid)) {
+                continue;
+            }
+            let d = pos.distance_squared(at);
+            if best.is_none_or(|(_, b)| d < b) {
+                best = Some((cid, d));
+            }
+        }
+        self.look_at = best.map(|(cid, _)| Who::Mob(cid));
+        self.look_at.is_some()
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        let Some(p) = &cx.w.player else { return false };
-        p.alive
-            && m.distance_sqr(p.position) <= f64::from(self.range * self.range)
-            && self.look_time > 0
+        let Some((pos, _)) = self.look_target(cx.w) else {
+            return false;
+        };
+        m.distance_sqr(pos) <= f64::from(self.range * self.range) && self.look_time > 0
     }
     fn start(&mut self, m: &mut Mob, _: &mut Cx) {
         self.look_time = reduced(40 + m.random.next_int_bound(40).unwrap_or(0));
     }
+    fn stop(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.look_at = None;
+    }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some(p) = &cx.w.player
-            && p.alive
-        {
-            let y = if self.only_horizontal {
-                m.eye_y()
-            } else {
-                p.eye[1]
-            };
-            m.look_at([p.position.x, y, p.position.z]);
+        if let Some((pos, eye)) = self.look_target(cx.w) {
+            let y = if self.only_horizontal { m.eye_y() } else { eye };
+            m.look_at([pos.x, y, pos.z]);
             self.look_time -= 1;
         }
     }

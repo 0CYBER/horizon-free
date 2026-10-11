@@ -142,6 +142,8 @@ fn goal_name(m: &Mob, name: &str) -> String {
     let vanilla = match name {
         "Float" => "FloatGoal",
         "Stroll" => "WaterAvoidingRandomStrollGoal",
+        "RandomStroll" => "RandomStrollGoal",
+        "RandomSwimming" => "RandomSwimmingGoal",
         "LookAtPlayer" => "LookAtPlayerGoal",
         "RandomLookAround" => "RandomLookAroundGoal",
         "HurtByTarget" => "HurtByTargetGoal",
@@ -248,7 +250,9 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
 fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
     let _ = write!(out, "{t} {i}");
     if m.removed {
-        let _ = writeln!(out, " removed DISCARDED");
+        // Entity.RemovalReason: the end of the death animation, else a discard.
+        let reason = if m.alive() { "DISCARDED" } else { "KILLED" };
+        let _ = writeln!(out, " removed {reason}");
         return;
     }
     let p = m.position;
@@ -506,6 +510,8 @@ fn main() -> horizon_client::Result<()> {
                 difficulty: LocalDifficulty::new(2, world.day_time, 0, 0.0),
                 end: false,
                 world_seed: 0,
+                // FlatLevelSource.getSeaLevel.
+                sea_level: -63,
             };
             let mut events = Vec::new();
             #[allow(unused_mut)] // filled only with the rng-trace feature

@@ -474,7 +474,11 @@ impl Mob {
             if self.horizontal_collision && self.kind.flags.climber {
                 m.y = 0.2;
             }
-            m = Vec3::new(m.x * f64::from(slow), m.y * 0.8, m.z * f64::from(slow));
+            m = Vec3::new(
+                m.x * f64::from(slow),
+                m.y * f64::from(0.8_f32),
+                m.z * f64::from(slow),
+            );
             self.velocity = fluid_falling(gravity, falling, m);
         } else {
             self.move_relative(0.02, input);
@@ -482,7 +486,7 @@ impl Mob {
             if self.fluids.lava <= self.fluid_jump_threshold() {
                 self.velocity = Vec3::new(
                     self.velocity.x * 0.5,
-                    self.velocity.y * 0.8,
+                    self.velocity.y * f64::from(0.8_f32),
                     self.velocity.z * 0.5,
                 );
                 self.velocity = fluid_falling(gravity, falling, self.velocity);
@@ -502,11 +506,11 @@ impl Mob {
         if self.horizontal_collision
             && w.no_collision(self.bounds().move_by(Vec3::new(
                 m.x,
-                m.y + 0.6 - self.position.y + old_y,
+                m.y + f64::from(0.6_f32) - self.position.y + old_y,
                 m.z,
             )))
         {
-            self.velocity.y = 0.3;
+            self.velocity.y = f64::from(0.3_f32);
         }
     }
     /// The jump part of LivingEntity.aiStep.

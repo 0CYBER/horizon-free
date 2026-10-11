@@ -221,6 +221,9 @@ fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
 }
 /// Move controls implemented by the species (MoveKind::Custom).
 pub fn custom_move_control(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if m.species() == Species::Drowned {
+        return undead::drowned_move_control(m, w);
+    }
     if m.species() == Species::Ghast {
         return super::nether::ghast_move_control(m, w);
     }
@@ -263,6 +266,47 @@ fn generic(m: &mut Mob) {
         g.add(6, LookAtPlayer::new(6.0));
         g.add(7, RandomLookAround::default());
     }
+}
+/// Subclasses of `net.minecraft.world.entity.monster.Monster`.
+pub fn is_monster(s: Species) -> bool {
+    use Species as S;
+    matches!(
+        s,
+        S::Zombie
+            | S::Husk
+            | S::Drowned
+            | S::ZombieVillager
+            | S::ZombifiedPiglin
+            | S::Giant
+            | S::Skeleton
+            | S::Stray
+            | S::Bogged
+            | S::Parched
+            | S::WitherSkeleton
+            | S::Creeper
+            | S::Spider
+            | S::CaveSpider
+            | S::Enderman
+            | S::Endermite
+            | S::Silverfish
+            | S::Witch
+            | S::Pillager
+            | S::Vindicator
+            | S::Evoker
+            | S::Illusioner
+            | S::Ravager
+            | S::Vex
+            | S::Piglin
+            | S::PiglinBrute
+            | S::Zoglin
+            | S::Blaze
+            | S::Guardian
+            | S::ElderGuardian
+            | S::Breeze
+            | S::Creaking
+            | S::Warden
+            | S::Wither
+    )
 }
 /// One full entity tick. Returns false when the mob is gone.
 pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
@@ -310,7 +354,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
     m.update_walk_animation();
     m.anim.end_tick(m.ai.swinging);
     tick_swing(m);
-    m.position.y > -128.0
+    true
 }
 /// LivingEntity.updateSwingTime (6-tick swing duration).
 fn tick_swing(m: &mut Mob) {
@@ -354,6 +398,10 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             }
             m.fire_ticks -= 1;
         }
+    }
+    // Entity.checkBelowWorld: LivingEntity.onBelowWorld hurts 4 a tick.
+    if m.position.y < f64::from(crate::chunk::MIN_Y - 64) {
+        m.damage(4.0, Damage::of(DamageKind::OutOfWorld));
     }
     if m.alive() {
         // LivingEntity.baseTick: suffocation inside full blocks.
@@ -493,6 +541,12 @@ fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             .target_info(w)
             .is_some_and(|t| t.position.distance_squared(m.position) > 121.0);
         super::witch::ai_step(m, events, far);
+    }
+    // Monster.aiStep: updateNoActionTime (Raider: always +2).
+    if is_monster(m.species())
+        && (super::raider::is_raider(m.species()) || super::hostile::mob_brightness(m, w) > 0.5)
+    {
+        m.ai.no_action_time += 2;
     }
     if super::creaking::is_creaking(m) {
         super::creaking::update(m, w, events);
@@ -1014,6 +1068,9 @@ pub fn ate(m: &mut Mob) {
 }
 /// Species-specific travel (fish, squid, dolphins swim with their own rules).
 pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
+    if m.species() == Species::Drowned {
+        return undead::drowned_travel(m, w, input, events);
+    }
     match family(m.species()) {
         Family::Aquatic => aquatic::travel(m, w, input, events),
         Family::Guardian => super::guardian::travel(m, w, input, events),

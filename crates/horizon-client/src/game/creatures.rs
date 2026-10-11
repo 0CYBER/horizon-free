@@ -366,6 +366,7 @@ impl Game<'_> {
             mob_griefing: self.ui.rules.bool("mob_griefing"),
             end: self.dim == Dim::End,
             world_seed: self.level.seed,
+            sea_level: if self.dim == Dim::Nether { 32 } else { 63 },
             difficulty: self.local_difficulty(
                 self.player
                     .as_ref()
@@ -2391,6 +2392,7 @@ fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) -> &'static
         K::InWall => "minecraft:in_wall",
         K::Thorns => "minecraft:thorns",
         K::SonicBoom => "minecraft:sonic_boom",
+        K::OutOfWorld => "minecraft:out_of_world",
     }
 }
 /// A Horizon item stack as a loot stack (id, count, damage, enchantments).

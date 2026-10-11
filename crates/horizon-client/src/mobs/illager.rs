@@ -65,6 +65,7 @@ pub fn register_pillager(m: &mut Mob) {
     g.add(3, CrossbowAttack::new(1.0, 8.0));
     g.add(8, Stroll::new(0.6));
     g.add(9, LookAtPlayer::new(15.0).probability(1.0));
+    g.add(10, LookAtPlayer::mobs(15.0));
     targets(m, false);
 }
 pub fn register_vindicator(m: &mut Mob) {
@@ -74,7 +75,8 @@ pub fn register_vindicator(m: &mut Mob) {
     g.add(4, super::raider::HoldGroundAttack::new(10.0));
     g.add(5, MeleeAttack::new(1.0, false));
     g.add(8, Stroll::new(0.6));
-    g.add(9, LookAtPlayer::new(3.0));
+    g.add(9, LookAtPlayer::new(3.0).probability(1.0));
+    g.add(10, LookAtPlayer::mobs(8.0));
     targets(m, true);
     // VindicatorJohnnyAttackGoal: a vindicator named Johnny attacks anything.
     m.ai.targets.add(
@@ -95,11 +97,13 @@ pub fn register_evoker(m: &mut Mob) {
         2,
         super::goals::AvoidEntity::new(super::goals::Avoid::Player, 8.0, 0.6, 1.0),
     );
+    g.add(3, avoid_creaking(0.6, 1.0));
     g.add(4, UseSpell::new(Spell::Vexes));
     g.add(5, UseSpell::new(Spell::Fangs));
     g.add(6, UseSpell::new(Spell::Wololo));
     g.add(8, Stroll::new(0.6));
     g.add(9, LookAtPlayer::new(3.0).probability(1.0));
+    g.add(10, LookAtPlayer::mobs(8.0));
     targets(m, false);
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

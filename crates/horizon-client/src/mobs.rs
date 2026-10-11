@@ -359,6 +359,8 @@ pub enum DamageKind {
     InWall,
     Thorns,
     SonicBoom,
+    /// `fell_out_of_world`: below the world's floor.
+    OutOfWorld,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -414,6 +416,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Generic
                 | DamageKind::SonicBoom
+                | DamageKind::OutOfWorld
         )
     }
     pub fn is_fire(&self) -> bool {
@@ -436,6 +439,7 @@ impl Damage {
                 | DamageKind::Cactus
                 | DamageKind::Generic
                 | DamageKind::InWall
+                | DamageKind::OutOfWorld
         )
     }
     pub fn is_projectile(&self) -> bool {
@@ -960,6 +964,8 @@ pub struct MobWorld<'a> {
     pub end: bool,
     /// The world seed (slime chunks).
     pub world_seed: i64,
+    /// `Level.getSeaLevel` (63 in the overworld, -63 in a flat world).
+    pub sea_level: i32,
 }
 impl Mob {
     pub fn new(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {

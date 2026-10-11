@@ -13,6 +13,7 @@ reports, per scenario and mob, how many ticks match before the first divergence 
 """
 import argparse
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -236,8 +237,11 @@ def main():
     if not args.rust_only:
         classes, dependencies, _ = oracle_harness.compile_oracle(build, 'VanillaMobAiOracle', jars, baking.client_libraries(),
                                                                 lock['minecraft']['java_major'])
+        # The oracle's server world: cleared before each run, never left in /tmp.
+        world = build / 'world'
+        shutil.rmtree(world, ignore_errors=True)
         oracle_harness.run_logged(['java', '-Xmx3g', '-Djava.awt.headless=true', '-cp', str(classes) + os.pathsep + dependencies,
-                                   'dev.horizonlab.parity.VanillaMobAiOracle', inputs, build / 'vanilla.txt'],
+                                   'dev.horizonlab.parity.VanillaMobAiOracle', inputs, build / 'vanilla.txt', world],
                                   build, 'vanilla', timeout=3600)
     if not args.java_only:
         command = ['cargo', 'build', '--locked', '--release', '-p', 'horizon-client', '--example', 'mob_ai_probe']

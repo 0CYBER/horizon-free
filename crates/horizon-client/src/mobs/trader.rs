@@ -44,10 +44,10 @@ pub fn register(m: &mut Mob) {
     for (species, distance) in [
         (Species::Zombie, 8.0),
         (Species::Evoker, 12.0),
-        (Species::Illusioner, 12.0),
         (Species::Vindicator, 8.0),
         (Species::Vex, 8.0),
         (Species::Pillager, 15.0),
+        (Species::Illusioner, 12.0),
         (Species::Zoglin, 10.0),
     ] {
         // `Zombie.class` covers the zombie family.
@@ -78,8 +78,8 @@ pub fn register(m: &mut Mob) {
     );
     g.add(4, MoveTowardsRestriction::new(0.35));
     g.add(8, Stroll::avoiding_water(0.35));
-    g.add(9, LookAtPlayer::new(3.0).probability(1.0));
-    g.add(10, LookAtPlayer::new(8.0));
+    g.add(9, LookAtPlayer::interact(3.0, 1.0));
+    g.add(10, LookAtPlayer::mobs(8.0));
 }
 fn invisible(m: &Mob) -> bool {
     m.extra.effects.iter().any(|e| e.0 == INVISIBILITY)

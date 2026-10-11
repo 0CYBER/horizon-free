@@ -105,6 +105,8 @@ import net.minecraft.world.phys.Vec3;
 public final class VanillaMobAiOracle {
     static final List<Scenario> SCENARIOS = new ArrayList<>();
     static PrintWriter out;
+    /** The temporary world directory, deleted before the oracle halts. */
+    static Path UNIVERSE;
     static final List<String> SOUNDS = new ArrayList<>();
 
     /** Draws of a traced mob random: the caller frames of each draw (AI_TRACE=scenario:from-to). */
@@ -208,7 +210,10 @@ public final class VanillaMobAiOracle {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
         Util.startTimerHackThread();
-        Path universe = Files.createTempDirectory("horizon-mob-ai");
+        // The harness passes an empty world directory under its build directory.
+        Path universe = args.length > 2 ? Path.of(args[2]) : Files.createTempDirectory("horizon-mob-ai");
+        Files.createDirectories(universe);
+        UNIVERSE = universe;
         LevelStorageSource.LevelStorageAccess access = LevelStorageSource.createDefault(universe).createAccess("aiworld");
         PackRepository packs = ServerPacksSource.createPackRepository(access);
         MinecraftServer.spin(thread -> Server.create(thread, access, packs));
@@ -344,7 +349,12 @@ public final class VanillaMobAiOracle {
         void step(BooleanSupplier haveTime) throws Exception {
             if (scenario >= SCENARIOS.size()) {
                 out.close();
-                // Nothing to save: skip the shutdown.
+                // Nothing to save: skip the shutdown, but leave no world behind.
+                try (var paths = Files.walk(UNIVERSE)) {
+                    paths.sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+                } catch (Exception e) {
+                    // best effort
+                }
                 Runtime.getRuntime().halt(0);
                 return;
             }
@@ -427,6 +437,9 @@ public final class VanillaMobAiOracle {
                 }
                 player.setGameMode(s.creative ? GameType.CREATIVE : GameType.SURVIVAL);
                 player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
+                // The player is never ticked during a scenario: give it the water state of
+                // where it stands (isInWater), not the previous scenario's.
+                method(Entity.class, "updateFluidInteraction").invoke(player);
                 player.setDeltaMovement(Vec3.ZERO);
             } else if (player != null) {
                 player.snapTo(s.originX + 5000, -60, s.originZ, 0.0F, 0.0F);
