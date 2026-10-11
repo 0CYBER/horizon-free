@@ -517,8 +517,34 @@ public final class VanillaBlockUpdateOracle {
         return new BlockPos(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt());
     }
 
+    /**
+     * The chunk source bone meal reaches for: saplings, grass and moss place
+     * their features with `getChunkSource().getGenerator()`, which none of
+     * them reads beyond passing it along.
+     */
+    static final class Chunks extends net.minecraft.server.level.ServerChunkCache {
+        static net.minecraft.world.level.chunk.ChunkGenerator generator;
+
+        private Chunks() {
+            super(null, null, null, null, null, null, 0, 0, false, null);
+        }
+
+        @Override
+        public net.minecraft.world.level.chunk.ChunkGenerator getGenerator() {
+            return generator;
+        }
+
+        /** Leads send entity link packets; nobody is tracking. */
+        @Override
+        public void sendToTrackingPlayers(final net.minecraft.world.entity.Entity entity, final net.minecraft.network.protocol.Packet<? super net.minecraft.network.protocol.game.ClientGamePacketListener> packet) {
+        }
+    }
+
     static World build(JsonObject f) throws Exception {
         World w = make(World.class);
+        // Saplings, grass and moss place features through the chunk source's generator.
+        if (Chunks.generator == null) Chunks.generator = make(net.minecraft.world.level.levelgen.FlatLevelSource.class);
+        set(net.minecraft.server.level.ServerLevel.class, w, "chunkSource", make(Chunks.class));
         w.cells = new HashMap<>();
         w.log = new StringBuilder();
         w.blockEvents = new java.util.LinkedHashSet<>();
