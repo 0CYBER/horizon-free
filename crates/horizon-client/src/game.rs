@@ -4491,9 +4491,6 @@ impl Game<'_> {
                 );
             }
             self.last_hurt_by_player.insert(mob.id);
-            // getHurtSound / getDeathSound (by species state).
-            let voice = horizon_client::mobs::ai::voice_sounds(mob);
-            let dead = !mob.alive();
             let sound = if crit {
                 "minecraft:entity.player.attack.crit"
             } else if scale > 0.9 {
@@ -4502,10 +4499,15 @@ impl Game<'_> {
                 "minecraft:entity.player.attack.weak"
             };
             self.audio.play(sound, Some(center), 1.0, 1.0);
-            let event = format!("minecraft:{}", voice[if dead { 2 } else { 1 }]);
-            let pitch =
-                (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
-            self.audio.play(&event, Some(center), 1.0, pitch);
+            // The hurt or death sound the mob raised (getHurtSound / getDeathSound,
+            // its voice pitch from its own random).
+            let queued = std::mem::take(&mut self.mobs[index].outbox);
+            for event in queued {
+                if let horizon_client::mobs::MobEvent::Sound(s, _, volume, pitch) = event {
+                    self.audio
+                        .play(&format!("minecraft:{s}"), Some(center), volume, pitch);
+                }
+            }
             self.post_attack(index);
             if let Some(stack) = self.inventory[self.selected].clone()
                 && let Some(max) = self

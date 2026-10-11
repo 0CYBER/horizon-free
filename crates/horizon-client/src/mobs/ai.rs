@@ -47,6 +47,8 @@ pub struct Ai {
     /// Swing animation progress (attackAnim) and ticks.
     pub swing_time: i32,
     pub swinging: bool,
+    /// Walked distance and the next footstep.
+    pub steps: super::living::Steps,
 }
 impl Mob {
     /// LivingEntity.swing
@@ -266,6 +268,11 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
     if m.removed {
         return false;
     }
+    // ServerLevel.tick checks despawning before ticking the entity.
+    if !check_despawn(m, w) {
+        m.removed = true;
+        return false;
+    }
     m.previous = m.position;
     m.previous_yaw = m.yaw;
     m.previous_body_yaw = m.body_yaw;
@@ -298,16 +305,10 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
     if m.alive() {
         m.body_rotation_tick();
     }
+    events.append(&mut m.outbox);
     m.update_walk_animation();
     m.anim.end_tick(m.ai.swinging);
     tick_swing(m);
-    if !m.alive() {
-        return true;
-    }
-    if !check_despawn(m, w) {
-        m.removed = true;
-        return false;
-    }
     m.position.y > -128.0
 }
 /// LivingEntity.updateSwingTime (6-tick swing duration).
@@ -326,6 +327,9 @@ fn tick_swing(m: &mut Mob) {
 /// Entity.baseTick + LivingEntity.baseTick + Mob.baseTick.
 fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.fluids = w.fluids(m.bounds(), m.eye_y());
+    if m.fluids.in_water {
+        m.fall_distance = 0.0;
+    }
     // Fire: water extinguishes, lava ignites, burning hurts every second.
     if m.fluids.in_water && m.fire_ticks > 0 {
         m.fire_ticks = 0;
@@ -401,6 +405,8 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if !m.alive() {
         m.death_time += 1;
     }
+    // Hurt sounds of the damage above come before the ambient sound.
+    events.append(&mut m.outbox);
     // Mob.baseTick: ambient sounds.
     if m.alive() {
         let roll = m.random.next_int_bound(1000).unwrap_or(999);
@@ -675,42 +681,39 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         _ => {}
     }
 }
-/// Mob.checkDespawn (players are the only despawn reference).
+/// Mob.checkDespawn, before the tick (players are the only despawn
+/// reference). Returns false when the mob is discarded.
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
-    let creature = m.kind.category == "creature";
-    // Warden.removeWhenFarAway is false; a jockey's chicken despawns like a monster.
-    if m.persistent
-        || m.species() == Species::Warden
-        || creature && m.kind.flags.animal && !m.extra.jockey
-    {
-        m.ai.no_action_time = 0;
-        return true;
-    }
     let Some(p) = &w.player else { return true };
     let d = m.distance_sqr(p.position);
-    // Patrols and raiders (`removeWhenFarAway`, `requiresCustomPersistence`).
-    if super::raider::keeps_alive(m, d)
-        || super::zombie_villager::keeps_alive(m)
-        || super::riders::keeps_alive(m)
-        // requiresCustomPersistence: a tame nautilus, a sulfur cube holding a
-        // block or let out of a bucket.
+    // requiresCustomPersistence: raiders in a raid, a tame nautilus, a sulfur
+    // cube holding a block or let out of a bucket.
+    let persistent = m.persistent
         || super::nautilus::is_nautilus(m.species()) && m.extra.tame
         || m.species() == Species::SulfurCube
-            && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0)
-    {
-        return true;
-    }
+            && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0);
+    // removeWhenFarAway: animals, wardens, patrols and raiders, zombie
+    // villagers being cured and ridden mobs stay.
+    let creature = m.kind.category == "creature";
+    let removable = !(m.species() == Species::Warden
+        || creature && m.kind.flags.animal && !m.extra.jockey
+        || super::raider::keeps_alive(m, d)
+        || super::zombie_villager::keeps_alive(m)
+        || super::riders::keeps_alive(m));
+    // MobCategory.getDespawnDistance / getNoDespawnDistance
     let despawn = if m.kind.category == "water_ambient" {
         64.0
     } else {
         128.0
     };
-    if d > despawn * despawn {
+    if !persistent && d > despawn * despawn && removable {
         return false;
     }
-    if m.ai.no_action_time > 600
+    if !persistent
+        && m.ai.no_action_time > 600
         && m.random.next_int_bound(800).unwrap_or(1) == 0
         && d > 32.0 * 32.0
+        && removable
     {
         return false;
     }
@@ -752,17 +755,15 @@ pub fn sound_volume(m: &Mob) -> f32 {
         Species::Slime | Species::MagmaCube | Species::SulfurCube => {
             0.4 * m.extra.size.max(1) as f32
         }
-        Species::Cod
-        | Species::Salmon
-        | Species::TropicalFish
-        | Species::Pufferfish
-        | Species::Bat => 0.1,
-        Species::Squid | Species::GlowSquid => 0.4,
-        Species::Horse
-        | Species::Donkey
-        | Species::Mule
-        | Species::Llama
-        | Species::TraderLlama => 0.8,
+        Species::Bat => 0.1,
+        Species::Squid
+        | Species::GlowSquid
+        | Species::Cow
+        | Species::Mooshroom
+        | Species::Bee
+        | Species::Allay
+        | Species::Wolf => 0.4,
+        s if super::equine::is_equine(s) => 0.8,
         _ => 1.0,
     }
 }
@@ -971,4 +972,128 @@ fn tick_effects(m: &mut Mob) {
     }
     effects.retain(|e| e.1 > 0);
     m.extra.effects = effects;
+}
+
+/// `Entity.getMovementEmission` is not NONE (silverfish, endermites,
+/// shulkers, guardians and breezes emit only events, no step sounds).
+pub fn emits_movement(m: &Mob) -> bool {
+    !matches!(m.species(), Species::Shulker)
+}
+/// The movement emission includes sounds.
+pub fn movement_sounds(m: &Mob) -> bool {
+    !matches!(
+        m.species(),
+        Species::Silverfish
+            | Species::Endermite
+            | Species::Guardian
+            | Species::ElderGuardian
+            | Species::Breeze
+    )
+}
+/// `playStepSound`: the species' footstep, or the block's step sound at 15%.
+pub fn step_sound(
+    m: &Mob,
+    w: &MobWorld,
+    pos: [i32; 3],
+    state: horizon_world::registry::BlockStateId,
+) -> Option<(&'static str, f32, f32)> {
+    use Species as S;
+    let baby = m.is_baby();
+    let quiet = |s: &'static str| Some((s, 0.15, 1.0));
+    match m.species() {
+        // Silent footsteps, or only movement events.
+        S::Allay
+        | S::Bee
+        | S::Cod
+        | S::Salmon
+        | S::TropicalFish
+        | S::Pufferfish
+        | S::Tadpole
+        | S::HappyGhast
+        | S::Nautilus
+        | S::ZombieNautilus
+        | S::Silverfish
+        | S::Endermite
+        | S::Guardian
+        | S::ElderGuardian
+        | S::Breeze => None,
+        S::Armadillo => quiet("entity.armadillo.step"),
+        S::Chicken if baby => quiet("entity.baby_chicken.step"),
+        S::Chicken => quiet("entity.chicken.step"),
+        S::Cow | S::Mooshroom => quiet("entity.cow.step"),
+        S::Pig if baby => quiet("entity.baby_pig.step"),
+        S::Pig => quiet("entity.pig.step"),
+        S::Wolf => quiet("entity.wolf.step"),
+        S::Llama | S::TraderLlama => quiet("entity.llama.step"),
+        S::Frog => quiet("entity.frog.step"),
+        S::Goat => quiet("entity.goat.step"),
+        S::Panda => quiet("entity.panda.step"),
+        S::Parrot => quiet("entity.parrot.step"),
+        S::PolarBear => quiet("entity.polar_bear.step"),
+        S::Sheep => quiet("entity.sheep.step"),
+        S::Sniffer => quiet("entity.sniffer.step"),
+        S::Turtle if baby => quiet("entity.turtle.shamble_baby"),
+        S::Turtle => quiet("entity.turtle.shamble"),
+        S::Creaking => quiet("entity.creaking.step"),
+        S::Hoglin => quiet("entity.hoglin.step"),
+        S::Zoglin => quiet("entity.zoglin.step"),
+        S::Piglin => quiet("entity.piglin.step"),
+        S::PiglinBrute => quiet("entity.piglin_brute.step"),
+        S::Ravager => quiet("entity.ravager.step"),
+        S::Skeleton => quiet("entity.skeleton.step"),
+        S::Stray => quiet("entity.stray.step"),
+        S::Bogged => quiet("entity.bogged.step"),
+        S::Parched => quiet("entity.parched.step"),
+        S::WitherSkeleton => quiet("entity.wither_skeleton.step"),
+        S::Spider | S::CaveSpider => quiet("entity.spider.step"),
+        S::Zombie | S::ZombifiedPiglin => quiet("entity.zombie.step"),
+        S::Husk => quiet("entity.husk.step"),
+        S::Drowned => quiet("entity.drowned.step"),
+        S::ZombieVillager => quiet("entity.zombie_villager.step"),
+        S::CamelHusk => Some(("entity.camel_husk.step", 0.4, 1.0)),
+        S::Camel => Some(("entity.camel.step", 1.0, 1.0)),
+        S::IronGolem => Some(("entity.iron_golem.step", 1.0, 1.0)),
+        S::Strider if m.fluids.in_lava => Some(("entity.strider.step_lava", 1.0, 1.0)),
+        S::Strider => Some(("entity.strider.step", 1.0, 1.0)),
+        S::Warden => Some(("entity.warden.step", 10.0, 1.0)),
+        _ => {
+            // Entity.playStepSound: the block's sound type.
+            let _ = pos;
+            let sounds = &w.facts.get(state).sounds;
+            let step: &'static str = super::ai::intern_sound(&sounds.step);
+            Some((step, sounds.volume * 0.15, sounds.pitch))
+        }
+    }
+}
+/// A block sound id as a static string (the block facts intern them).
+pub fn intern_sound(s: &std::sync::Arc<str>) -> &'static str {
+    use std::{collections::HashSet, sync::Mutex};
+    static NAMES: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    let set = names.get_or_insert_with(HashSet::new);
+    let key = s.strip_prefix("minecraft:").unwrap_or(s);
+    if let Some(found) = set.get(key) {
+        return found;
+    }
+    let leaked: &'static str = Box::leak(key.to_owned().into_boxed_str());
+    set.insert(leaked);
+    leaked
+}
+/// `getSwimSound`.
+pub fn swim_sound(m: &Mob) -> &'static str {
+    match m.species() {
+        Species::Drowned => "entity.drowned.swim",
+        Species::Axolotl => "entity.axolotl.swim",
+        Species::Dolphin => "entity.dolphin.swim",
+        Species::Cod
+        | Species::Salmon
+        | Species::TropicalFish
+        | Species::Pufferfish
+        | Species::Tadpole => "entity.fish.swim",
+        Species::Nautilus if m.is_baby() => "entity.baby_nautilus.swim",
+        Species::Nautilus => "entity.nautilus.swim",
+        Species::ZombieNautilus => "entity.zombie_nautilus.swim",
+        Species::Turtle => "entity.turtle.swim",
+        _ => "entity.generic.swim",
+    }
 }
