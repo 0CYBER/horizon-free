@@ -1038,7 +1038,7 @@ pub fn spawn_category_for_chunk<L: NaturalLevel, R: RandomSource>(
     let min = l.min_y();
     let y = min + random.next_int_bound(top - min + 1).unwrap_or(0);
     trace(Event::Start(category, [x, y, z]));
-    if y >= min + 1 {
+    if y > min {
         spawn_category_for_position(l, random, state, category, chunk, [x, y, z], spawn, trace);
     }
 }
