@@ -173,6 +173,11 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "TryFindWater" => "TryFindWaterGoal",
         "RangedAttack" => "RangedAttackGoal",
         "MoveTowardsTarget" => "MoveTowardsTargetGoal",
+        "TakeBlock" => "EndermanTakeBlockGoal",
+        "LeaveBlock" => "EndermanLeaveBlockGoal",
+        "FreezeWhenLookedAt" => "EndermanFreezeWhenLookedAt",
+        "LookForPlayer" => "EndermanLookForPlayerGoal",
+        "HealRaiders" => "NearestHealableRaiderTargetGoal",
         other => return other.to_owned(),
     };
     vanilla.to_owned()

@@ -1015,6 +1015,8 @@ pub struct NearestTarget {
     /// A condition checked before anything else, by subclasses overriding
     /// `canUse` (SpiderTargetGoal: only in the dark).
     pub gate: Option<fn(&Mob, &MobWorld) -> bool>,
+    /// The vanilla class name of a subclass (`Goal::name`).
+    pub label: Option<&'static str>,
     found: Option<Who>,
     target_goal: TargetState,
 }
@@ -1043,6 +1045,7 @@ impl NearestTarget {
             interval: reduced(10),
             when: None,
             gate: None,
+            label: None,
             found: None,
             target_goal: TargetState {
                 unseen_memory: 60,
@@ -1077,6 +1080,11 @@ impl NearestTarget {
         self.gate = Some(f);
         self
     }
+    /// A subclass's name, e.g. `NearestAttackableWitchTargetGoal`.
+    pub fn named(mut self, label: &'static str) -> Self {
+        self.label = Some(label);
+        self
+    }
 }
 /// TargetGoal.canContinueToUse
 pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &mut Cx) -> bool {
@@ -1105,6 +1113,9 @@ pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &m
 }
 impl Goal for NearestTarget {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        self.label.unwrap_or("NearestTarget")
+    }
     fn flags(&self) -> u8 {
         TARGET
     }

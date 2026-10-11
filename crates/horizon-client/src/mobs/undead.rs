@@ -236,10 +236,8 @@ fn drowned_throw(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         start,
         Some(Who::Mob(m.id)),
     );
-    // The spread draws from the new projectile's own random.
-    let mut spread = horizon_core::random::LegacyRandom::new(i64::from(m.id) ^ m.age as i64);
     p.shoot(
-        &mut spread,
+        &mut crate::projectiles::own_random(m),
         [xd, yd + dist * f64::from(0.2_f32), zd],
         1.6,
         (14 - 2 * 4) as f32,
@@ -739,7 +737,8 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
     let zd = t.position.z - m.position.z;
     let dist = (xd * xd + zd * zd).sqrt();
     // AbstractArrow.setBaseDamageFromMob: power * 2 + triangle(difficulty * 0.11, 0.57425).
-    let base = f64::from(power) * 2.0 + m.random.triangle(2.0 * 0.11, 0.574_25);
+    let mut arrow_random = crate::projectiles::own_random(m);
+    let base = f64::from(power) * 2.0 + arrow_random.triangle(2.0 * 0.11, 0.574_25);
     let effect = match m.species() {
         Species::Stray => Some(("minecraft:slowness", 600)),
         Species::Bogged => Some(("minecraft:poison", 100)),
@@ -757,7 +756,7 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
     );
     p.bonus = super::gear::arrow_bonus(m);
     p.shoot(
-        &mut m.random,
+        &mut arrow_random,
         [xd, yd + dist * 0.2, zd],
         1.6,
         (14 - 2 * 4) as f32,

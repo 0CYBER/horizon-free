@@ -26,7 +26,8 @@ pub fn register(m: &mut Mob) {
         3,
         NearestTarget::player(true)
             .interval(10)
-            .gate(|m, _| m.extra.counter2 <= 0),
+            .gate(|m, _| m.extra.counter2 <= 0)
+            .named("NearestAttackableWitchTargetGoal"),
     );
 }
 /// `NearestHealableRaiderTargetGoal`: in a raid, target another raider to
@@ -221,7 +222,7 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     );
     // Splash potions throw with gravity 0.05.
     p.shoot(
-        &mut m.random,
+        &mut crate::projectiles::own_random(m),
         [xd, yd + dist * 0.2, zd],
         if dist <= 2.0 { 0.45 } else { 0.75 },
         8.0,
