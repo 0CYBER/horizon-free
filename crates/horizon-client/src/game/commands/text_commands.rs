@@ -11,6 +11,34 @@ impl Game<'_> {
         };
         let value: serde_json::Value =
             serde_json::from_str(json).map_err(|e| err("argument.component.invalid", &[&e]))?;
+        // NbtContents.resolve: the path's values in the entity, block or
+        // storage data, rich-styled (or plain, or interpreted), ", "-joined.
+        let nbt_values = std::cell::RefCell::new(Vec::new());
+        {
+            let mut collect = |o: &serde_json::Map<String, serde_json::Value>| {
+                if o.contains_key("nbt") {
+                    nbt_values.borrow_mut().push(o.clone());
+                }
+            };
+            fn walk(v: &serde_json::Value, f: &mut dyn FnMut(&serde_json::Map<String, serde_json::Value>)) {
+                match v {
+                    serde_json::Value::Object(o) => {
+                        f(o);
+                        for (_, x) in o {
+                            walk(x, f);
+                        }
+                    }
+                    serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, f)),
+                    _ => {}
+                }
+            }
+            walk(&value, &mut collect);
+        }
+        let mut resolved: Vec<(serde_json::Map<String, serde_json::Value>, Text)> = Vec::new();
+        for o in nbt_values.into_inner() {
+            let t = self.resolve_nbt_component(&o);
+            resolved.push((o, t));
+        }
         let mut resolve = |raw: &str| -> Text {
             let mut reader = horizon_client::command::Reader::new(raw);
             let entities = horizon_client::command::args::ArgType::Entity {
@@ -30,7 +58,77 @@ impl Game<'_> {
             }
             out
         };
-        Ok(horizon_client::component::to_text(&value, &mut resolve))
+        Ok(horizon_client::component::to_text_with(
+            &value,
+            &mut resolve,
+            &mut |o| {
+                resolved
+                    .iter()
+                    .find(|(k, _)| k == o)
+                    .map(|(_, t)| t.clone())
+            },
+        ))
+    }
+    /// The text of an `nbt` component.
+    fn resolve_nbt_component(&mut self, o: &serde_json::Map<String, serde_json::Value>) -> Text {
+        use horizon_world::nbt::Tag;
+        let path = o.get("nbt").and_then(|v| v.as_str()).unwrap_or("");
+        let mut sources: Vec<Tag> = Vec::new();
+        if let Some(sel) = o.get("entity").and_then(|v| v.as_str()) {
+            let mut reader = horizon_client::command::Reader::new(sel);
+            let ty = horizon_client::command::args::ArgType::Entity {
+                single: false,
+                players: false,
+            };
+            if let Ok(Arg::Entity(s)) = ty.parse(&mut reader, &self.ui.registries) {
+                for t in self.select(&s) {
+                    if let Ok(tag) = self.data_of(&super::data::DataRef::Entity(t)) {
+                        sources.push(tag);
+                    }
+                }
+            }
+        } else if let Some(id) = o.get("storage").and_then(|v| v.as_str()) {
+            let id = if id.contains(':') {
+                id.to_owned()
+            } else {
+                format!("minecraft:{id}")
+            };
+            sources.push(self.score.storage.get(&id));
+        } else if let Some(pos) = o.get("block").and_then(|v| v.as_str()) {
+            let p: Vec<i32> = pos
+                .split_whitespace()
+                .filter_map(|v| v.parse().ok())
+                .collect();
+            if let [x, y, z] = p[..]
+                && let Ok(tag) = self.data_of(&super::data::DataRef::Block([x, y, z]))
+            {
+                sources.push(tag);
+            }
+        }
+        let Ok(compiled) = horizon_client::nbt_path::NbtPath::parse(path) else {
+            return Text::empty();
+        };
+        let plain = o.get("plain").and_then(|v| v.as_bool()) == Some(true);
+        let interpret = o.get("interpret").and_then(|v| v.as_bool()) == Some(true);
+        let mut out = Text::empty();
+        let mut first = true;
+        for data in &sources {
+            for tag in compiled.get(data).unwrap_or_default() {
+                if !first {
+                    out.push(Text::literal(", "));
+                }
+                first = false;
+                let piece = if interpret {
+                    horizon_client::scoreboard::comp_text(&horizon_client::scoreboard::tag_to_json(&tag))
+                } else if plain {
+                    Text::literal(horizon_client::snbt::pretty(&tag).plain())
+                } else {
+                    horizon_client::snbt::pretty(&tag)
+                };
+                out.push(piece);
+            }
+        }
+        out
     }
     fn player_targets(&mut self, ctx: &Context) -> R<usize> {
         // Only the local player can receive messages and titles.

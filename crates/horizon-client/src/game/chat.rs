@@ -286,7 +286,11 @@ impl Game<'_> {
         reg.structures = list("data/minecraft/worldgen/structure");
         reg.biomes = list("data/minecraft/worldgen/biome");
         reg.clocks = list("data/minecraft/world_clock");
-        reg.dimensions = vec!["minecraft:overworld".into(), "minecraft:the_nether".into()];
+        reg.dimensions = vec![
+            "minecraft:overworld".into(),
+            "minecraft:the_nether".into(),
+            "minecraft:the_end".into(),
+        ];
         reg.players = vec![PLAYER_NAME.into()];
         // Timelines of the overworld clock and their time markers.
         self.ui.markers.clear();

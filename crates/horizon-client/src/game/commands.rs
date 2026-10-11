@@ -183,7 +183,8 @@ impl Game<'_> {
             .ok_or_else(|| err("argument.pos.missing.int", &[]))?;
         // BlockPos.containing(getPosition)
         let p = self.resolve_coords(&c).map(|v| v.floor() as i32);
-        if !self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4)) {
+        let elsewhere = self.command_source.is_some_and(|s| s.elsewhere);
+        if elsewhere || !self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4)) {
             return Err(err("argument.pos.unloaded", &[]));
         }
         if p[1] < horizon_client::chunk::MIN_Y

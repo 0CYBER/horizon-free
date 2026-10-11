@@ -94,11 +94,17 @@ impl Game<'_> {
         }
     }
     fn rebuild_store(&mut self) {
-        let packs: Vec<&DataPack> = self
-            .fns
-            .enabled
-            .iter()
-            .filter_map(|id| self.fns.packs.iter().find(|p| &p.id == id))
+        // The built-in pack first (lowest priority), unless disabled.
+        let vanilla = DataPack::builtin(&self.options.resources);
+        let packs: Vec<&DataPack> = (!self.cmds.vanilla_disabled)
+            .then_some(&vanilla)
+            .into_iter()
+            .chain(
+                self.fns
+                    .enabled
+                    .iter()
+                    .filter_map(|id| self.fns.packs.iter().find(|p| &p.id == id)),
+            )
             .collect();
         let store = DataStore::load(&packs);
         for (id, e) in &store.errors {

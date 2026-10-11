@@ -155,6 +155,14 @@ impl Parser<'_> {
 /// `ComponentSerialization.CODEC` decoding into text. `selector` components
 /// are resolved by `resolve` (ComponentUtils.updateForEntity).
 pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
+    to_text_with(v, resolve, &mut |_| None)
+}
+/// `to_text` with a hook resolving other contents (`nbt`) from the object.
+pub fn to_text_with(
+    v: &Value,
+    resolve: &mut dyn FnMut(&str) -> Text,
+    contents: &mut dyn FnMut(&serde_json::Map<String, Value>) -> Option<Text>,
+) -> Text {
     match v {
         Value::String(s) => Text::literal(s.clone()),
         Value::Number(n) => Text::literal(n.to_string()),
@@ -164,14 +172,14 @@ pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
             let Some((first, rest)) = list.split_first() else {
                 return Text::empty();
             };
-            let mut base = to_text(first, resolve);
+            let mut base = to_text_with(first, resolve, contents);
             let style = base
                 .spans
                 .first()
                 .map(|s| s.style.clone())
                 .unwrap_or_default();
             for sibling in rest {
-                base.push(to_text(sibling, resolve).with_style(&style));
+                base.push(to_text_with(sibling, resolve, contents).with_style(&style));
             }
             base
         }
@@ -189,7 +197,9 @@ pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
             style.underlined = flag("underlined");
             style.strikethrough = flag("strikethrough");
             style.obfuscated = flag("obfuscated");
-            let content = if let Some(t) = o.get("text") {
+            let content = if let Some(t) = contents(o) {
+                t
+            } else if let Some(t) = o.get("text") {
                 match t {
                     Value::String(s) => Text::literal(s.clone()),
                     other => Text::literal(other.to_string()),
@@ -198,7 +208,7 @@ pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
                 let args: Vec<Text> = o
                     .get("with")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().map(|x| to_text(x, resolve)).collect())
+                    .map(|a| a.iter().map(|x| to_text_with(x, resolve, contents)).collect())
                     .unwrap_or_default();
                 let translated = Text::translate(key, &args);
                 match o.get("fallback").and_then(Value::as_str) {
@@ -219,7 +229,7 @@ pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
                 .into_iter()
                 .flatten()
             {
-                out.push(to_text(extra, resolve).with_style(&style));
+                out.push(to_text_with(extra, resolve, contents).with_style(&style));
             }
             out
         }

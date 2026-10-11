@@ -1934,7 +1934,17 @@ impl Level {
                 map.remove(&JavaString::from(key));
             }
         }
-        let uuid = *self.player_uuid.get_or_insert_with(random_uuid);
+        // A new world's player has the offline profile id of its name
+        // (UUIDUtil.createOfflinePlayerUUID), as in an offline single-player game.
+        let uuid = *self.player_uuid.get_or_insert_with(|| {
+            let u = horizon_protocol::crypto::offline_uuid("Player");
+            [
+                (u >> 96) as u32 as i32,
+                (u >> 64) as u32 as i32,
+                (u >> 32) as u32 as i32,
+                u as u32 as i32,
+            ]
+        });
         // A new world's first spawn point is its world spawn.
         if self.world_spawn.is_none() {
             self.world_spawn = self.spawn.map(|s| {

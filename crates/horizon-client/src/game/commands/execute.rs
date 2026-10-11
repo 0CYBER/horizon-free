@@ -23,6 +23,9 @@ pub(in crate::game) struct Source {
     pub silent: bool,
     /// Index of the newest `store` in `ExecState::stores`.
     pub store: Option<u32>,
+    /// `execute in` another dimension than the one Horizon has loaded: none
+    /// of its chunks are loaded.
+    pub elsewhere: bool,
 }
 
 /// Where `execute store` writes.
@@ -70,6 +73,7 @@ impl Game<'_> {
             eyes: false,
             silent: false,
             store: None,
+            elsewhere: false,
         }
     }
     /// The server as a source (function ticks and schedules): the world spawn.
@@ -81,6 +85,7 @@ impl Game<'_> {
             eyes: false,
             silent: true,
             store: None,
+            elsewhere: false,
         }
     }
     pub(super) fn target_rotation(&self, t: Target) -> [f32; 2] {
@@ -418,6 +423,7 @@ impl Game<'_> {
                     Some(Source {
                         pos: self.target_position(t)?,
                         rot: self.target_rotation(t),
+                        elsewhere: false,
                         ..s
                     })
                 })
@@ -508,14 +514,21 @@ impl Game<'_> {
                 ..s
             }],
             "in" => {
-                // Horizon keeps one dimension loaded; others cannot be a source.
+                // Horizon keeps one dimension loaded: in another one, no
+                // chunk is loaded (as in vanilla without a player there).
                 let Some(Arg::Resource(dim)) = c.get("dimension") else {
                     return Ok(vec![s]);
                 };
-                if dim != self.dim.id() {
+                if !matches!(
+                    dim.as_str(),
+                    "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
+                ) {
                     return Err(err("argument.dimension.invalid", &[dim]));
                 }
-                vec![s]
+                vec![Source {
+                    elsewhere: dim != self.dim.id(),
+                    ..s
+                }]
             }
             "summon" => {
                 let Some(Arg::Resource(kind)) = c.get("entity").cloned() else {

@@ -647,10 +647,10 @@ impl Scoreboard {
             order.remove(name);
         }
         self.display.retain(|_, o| o != name);
+        // Scoreboard.removeObjective: holders left without scores stay tracked.
         for s in self.scores.values_mut() {
             s.remove(name);
         }
-        self.scores.retain(|_, s| !s.is_empty());
     }
     pub fn display_objective(&self, slot: &str) -> Option<&Objective> {
         self.objective(self.display.get(slot)?)

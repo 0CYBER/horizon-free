@@ -67,6 +67,15 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
         }
     }
 }
+impl DataPack {
+    /// The built-in `vanilla` pack: the game's own data directory.
+    pub fn builtin(root: &Path) -> Self {
+        DataPack {
+            id: "vanilla".into(),
+            source: Source::Dir(root.to_path_buf()),
+        }
+    }
+}
 /// The packs in `<world>/datapacks`, sorted by name.
 pub fn discover(world: &Path) -> Vec<DataPack> {
     let Ok(entries) = std::fs::read_dir(world.join("datapacks")) else {
