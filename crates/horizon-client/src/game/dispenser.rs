@@ -1463,10 +1463,6 @@ impl Game<'_> {
             .facts
             .is_air(self.block_at((front.0, front.1 - 1, front.2)));
         let clicked_face = if below_empty { facing } else { Direction::Up };
-        let front_state = self.block_at(front);
-        if !(self.res.facts.is_air(front_state) || self.res.facts.get(front_state).replaceable) {
-            return Ok((Some(stack), FAIL));
-        }
         let ctx = PlaceContext {
             clicked_pos: Self::pos_of(front),
             face: clicked_face,
@@ -1482,6 +1478,10 @@ impl Game<'_> {
             item: stack.item.to_string(),
             can_use_game_master_blocks: false,
         };
+        // DirectionalPlaceContext places at the front block or nowhere.
+        if !self.with_level(|b, level, ticks| b.directional_can_place(level, ticks, &ctx)) {
+            return Ok((Some(stack), FAIL));
+        }
         let outcome = self.with_level(|b, level, ticks| b.place_block(level, ticks, &ctx));
         let PlaceOutcome::Placed { pos: placed, state } = outcome else {
             self.process_level_events()?;
