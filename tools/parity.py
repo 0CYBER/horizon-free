@@ -236,6 +236,46 @@ def prebuild(artifacts, jobs):
     return not errors, errors
 
 
+LARGE_OUTPUT = 64 << 20
+OWN_DIRECTORIES = {"parity-target", "parity-runner", "rea", "logs", "gate"}
+
+
+def outputs_listing(name, fresh=False):
+    path = STATE_DIR / "oracle-outputs" / f"{name}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if fresh:
+        path.write_text("")
+    return path
+
+
+def clear_large_outputs(name, trace):
+    """After a pass, delete the large files a harness regenerates on every run.
+
+    Harness outputs reach gigabytes and used to stay in every worktree. Vanilla
+    oracle outputs are kept, since reusing an oracle run needs them in place;
+    everything else large under the harness's .local directories is rebuilt on
+    its next run."""
+    local = LOCAL.resolve()
+    keep = {os.path.realpath(line) for line in outputs_listing(name).read_text().splitlines() if line}
+    directories = set()
+    for command in trace["commands"]:
+        for argument in command[1:]:
+            path = Path(os.path.realpath(argument if os.path.isabs(argument) else ROOT / argument))
+            try:
+                top = path.relative_to(local).parts[0]
+            except (ValueError, IndexError):
+                continue
+            if top not in OWN_DIRECTORIES:
+                directories.add(local / top)
+    for directory in directories:
+        for file in (directory.rglob("*") if directory.is_dir() else []):
+            try:
+                if file.is_file() and not file.is_symlink() and file.stat().st_size >= LARGE_OUTPUT and str(file) not in keep:
+                    file.unlink()
+            except OSError:
+                pass
+
+
 def publish(name, record):
     """Share a pass, so any worktree with the same inputs can reuse it."""
     if record["status"] != "pass" or "key" not in record:
@@ -298,9 +338,11 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
             trace = traces / f"{name}.json"
             trace.unlink(missing_ok=True)
             log = (logs / f"{name}.log").open("w")
+            environment = run_environment(reuse)
+            environment["PARITY_SHIM_OUTPUTS"] = str(outputs_listing(name, fresh=True))
             process = subprocess.Popen(
                 [sys.executable, str(Path(__file__)), "--trace", str(trace), str(selected[name])],
-                cwd=ROOT, env=run_environment(reuse), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             running[name] = (process, time.monotonic(), log, expected, reuse, slot)
             in_use += expected
         time.sleep(0.2)
@@ -327,11 +369,16 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
                       "finished": time.strftime("%Y-%m-%dT%H:%M:%S")}
             # A harness that only passes fresh no longer reuses oracle results.
             record["oracle_reuse"] = records.get(name, {}).get("oracle_reuse", True) and not (passed and name in retried)
-            if trace_path.exists():
+            try:
                 trace = json.loads(trace_path.read_text())
+            except (OSError, ValueError):
+                trace = None  # killed before writing it, or the disk was full: the pass can't be keyed
+            if trace:
                 record["dependencies"], record["artifacts"] = dependencies(trace)
                 record["peak_bytes"] = trace["peak_bytes"]
                 record["key"] = key(record, hasher, environment_digest)
+                if passed:
+                    clear_large_outputs(name, trace)
             else:
                 record["dependencies"], record["artifacts"] = [], []
             records[name] = record
@@ -394,6 +441,12 @@ def trace_main(output, script, arguments):
     runpy.run_path(script, run_name="__main__")
 
 
+def finished_run(failed):
+    """Record that this run completed, for tools/gate.py: a crashed runner never writes it."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (STATE_DIR / "last-run.json").write_text(json.dumps({"run": os.environ.get("PARITY_RUN_ID"), "failed": failed}))
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--trace":
         return trace_main(sys.argv[2], sys.argv[3], sys.argv[4:])
@@ -439,6 +492,8 @@ def main():
             print(name)
         print(f"{len(selected)} of {len(found)} harnesses would run" if args.list else "Nothing to run: every harness passed with its current inputs.")
         save_state(state)
+        if not args.list:
+            finished_run([])
         return 0
 
     jobs = max(1, args.jobs)
@@ -460,6 +515,7 @@ def main():
                            reuse_oracles)
     save_state(state)
     failed = sorted(name for name, record in results.items() if record["status"] != "pass")
+    finished_run(failed)
     print(f"\n{len(results) - len(failed)} passed, {len(failed)} failed in {elapsed / 60:.1f} min.")
     for name in failed:
         print(f"  {name}: {STATE_DIR / 'logs' / (name + '.log')}")
