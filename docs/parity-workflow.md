@@ -10,14 +10,17 @@ How parity work is run, checked and merged. The harnesses themselves are describ
 python3 tools/parity.py              # harnesses whose inputs changed, or that never passed
 python3 tools/parity.py food light   # these harnesses, whatever their state
 python3 tools/parity.py --failed     # the ones that failed last time
-python3 tools/parity.py --all        # everything (about 20 minutes on ludodesktop)
+python3 tools/parity.py --all        # everything, from scratch: the audit (about 20 minutes on ludodesktop)
+python3 tools/parity.py --fresh food # don't reuse vanilla oracle results
 python3 tools/parity.py --list       # what would run
 python3 tools/parity.py --status     # last result of each harness
 ```
 
 Each harness runs unmodified under a tracer that records the files it depended on: its Python modules, its Java oracle and the oracle sources javac pulled in, other repository files it read, and the Rust sources of the probes it ran (from Cargo's `.d` dep-info files). A pass stands until one of those files, the pinned vanilla artifacts, `Cargo.lock` or the Rust/Java toolchains change. State and logs are in `.local/parity-runner/`; each harness's own outputs stay in its `.local/<name>/` directory.
 
-Probes build into `.local/parity-target/` with release optimisation but no LTO and 16 codegen units. On ludodesktop that rebuilds every `horizon-world` probe in 3 seconds after a one-line change, against 122 seconds with the release profile. Rust gives these settings identical results (no fast-math; overflow checks as in release), and the full harness suite passes under them. Harnesses must locate binaries through `cargo metadata` or `lab.cargo_target()`, never a hard-coded `target/`.
+Vanilla oracle runs are reused as well. `tools/parity_shim.py` stands in for `java` and `javac`: it records each oracle run's outputs and the content of every file under the paths its arguments name, and replays the run while those are unchanged. After a Rust-only change a harness pays only for its Rust side (`block_update`: 53 s to 5 s). Files an oracle writes outside its named paths aren't tracked, so a harness that fails while reusing oracle results is rerun fresh, and stops reusing them if it then passes. `--all` and `--fresh` never reuse them.
+
+Probes build into `.local/parity-target/` with release optimisation but no LTO and 16 codegen units. On ludodesktop that rebuilds every `horizon-world` probe in 3 seconds after a one-line change, against 122 seconds with the release profile. Rust gives these settings identical results (no fast-math; overflow checks as in release), and the full harness suite passes under them. Probes that harnesses build in the dev profile get `opt-level = 3` too, keeping their overflow checks and debug assertions. Harnesses must locate binaries through `cargo metadata` or `lab.cargo_target()`, never a hard-coded `target/`.
 
 Parallel harnesses are admitted by memory: each harness's recorded peak is reserved, within three quarters of the memory available at the start. `-j` caps the count (default: a third of the CPU threads).
 
