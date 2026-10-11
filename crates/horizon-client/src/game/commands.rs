@@ -1520,10 +1520,7 @@ impl Game<'_> {
             return Err(err("commands.setblock.failed", &[]));
         }
         if ctx.has("destroy") && current != self.world.air {
-            let creative = self.creative;
-            self.creative = false;
-            let _ = self.break_block(pos);
-            self.creative = creative;
+            self.destroy_block_dropping(pos)?;
         }
         let placed = self.place_state(pos, state, ctx.has("strict"))?;
         let loaded = match &b.nbt {
@@ -1538,6 +1535,32 @@ impl Game<'_> {
             &[&pos[0], &pos[1], &pos[2]],
         ));
         Ok(1)
+    }
+    /// `Level.destroyBlock(pos, true)`: the block's drops without a tool or
+    /// breaker (its loot table, contents of a container), then air.
+    pub(super) fn destroy_block_dropping(&mut self, pos: [i32; 3]) -> R<()> {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        self.destroy_particles(pos, state);
+        self.jukebox_removed(pos);
+        if let Some(entity) = self.world.block_entities.remove(&(pos[0], pos[1], pos[2])) {
+            let name = self.res.facts.get(state).name.clone();
+            self.release_contents(pos, entity, &name);
+        }
+        let drops = self.res.items.block_drops_in(
+            self.res.assets.registry,
+            state,
+            None,
+            &mut self.world.random,
+            Some((&mut self.rand_sequences, self.level.seed)),
+        );
+        for d in drops {
+            if &*d.item != "minecraft:air" {
+                self.pop_resource(pos, d);
+            }
+        }
+        let air = self.world.air;
+        self.place_state(pos, air, false)?;
+        Ok(())
     }
     /// The block entity part of `BlockInput.place`: load the block entity
     /// from the argument's tag; true when its saved data changed.
@@ -1620,10 +1643,7 @@ impl Game<'_> {
                         || z == max[2];
                     let mut affected = false;
                     if destroy && current != air {
-                        let creative = self.creative;
-                        self.creative = false;
-                        let _ = self.break_block([x, y, z]);
-                        self.creative = creative;
+                        self.destroy_block_dropping([x, y, z])?;
                         affected = true;
                     }
                     let target = if (outline || hollow) && !edge {
