@@ -92,11 +92,16 @@ impl Game<'_> {
 
     fn fixture_reset(&mut self, seed: i64) {
         self.world = World::new(self.res.facts.air, seed);
+        // The oracle level is plains everywhere (bone meal's flowers, freezing).
+        let plains = u32::from(self.res.biomes.id("minecraft:plains"));
         for cx in -2..=2 {
             for cz in -2..=2 {
-                self.world
-                    .chunks
-                    .insert((cx, cz), Arc::new(Chunk::empty(cx, cz)));
+                let mut chunk = Chunk::empty(cx, cz);
+                for section in &mut chunk.sections {
+                    Arc::make_mut(section).biomes =
+                        horizon_core::paletted::PalettedContainer::new(horizon_client::chunk::BIOME_STRATEGY, plains);
+                }
+                self.world.chunks.insert((cx, cz), Arc::new(chunk));
             }
         }
         self.block_ticks = Ticks::new(0);
@@ -125,6 +130,17 @@ impl Game<'_> {
     fn dispense_case(&mut self, case: &Value) -> Result<Vec<String>> {
         let seed = case["seed"].as_i64().unwrap_or(0);
         self.fixture_reset(seed);
+        // The oracle level answers one sky and one block light everywhere.
+        let light = case["light"].as_array();
+        let level = |i: usize, default: i64| {
+            light.and_then(|l| l.get(i)).and_then(Value::as_i64).unwrap_or(default) as u8
+        };
+        let packed = (level(0, 15) << 4) | level(1, 0);
+        for chunk in self.world.chunks.values_mut() {
+            for section in &mut Arc::make_mut(chunk).sections {
+                Arc::make_mut(section).light = horizon_client::chunk::Light::Uniform(packed);
+            }
+        }
         self.world.game_time = case["time"].as_i64().unwrap_or(0);
         // The oracle level's clock stands at day time 6000.
         self.world.day_time = 6000;

@@ -211,8 +211,17 @@ def build_scene(cells, states, rng, scene, front, facing):
                         h.put(cells, at, states.get('air'))
 
 
+def halves(states, name):
+    """Whether a block comes in an upper and a lower half (tall plants, dripleaves, pitchers)."""
+    name = name if ':' in name else 'minecraft:' + name
+    return any(states.facts.states[i][4].get('properties', {}).get('half') == 'upper' for i in states.facts.by_block[name])
+
+
 def front_state(states, rng, name):
     """Mostly the default state, sometimes a random one (charges, honey, ages, lit...)."""
+    if halves(states, name):
+        # A lone half is not a world vanilla makes; the pair is placed by put_front.
+        return states.get(name)
     if name in ('respawn_anchor', 'beehive', 'bee_nest', 'campfire', 'candle', 'wheat', 'sweet_berry_bush', 'rail', 'powered_rail',
                 'candle_cake', 'soul_campfire') or rng.random() < 0.3:
         return states.any(rng, name)
@@ -237,6 +246,12 @@ def cases(facts, count, seed, only):
         below = (dx, dy - 1, dz)
         palette = FRONT_FOR[bare] if bare in FRONT_FOR and rng.random() < 0.8 else FRONT[kind]
         front_name = rng.choice(palette)
+        above = (dx, dy + 1, dz)
+        if halves(states, front_name) and front_name != 'pitcher_crop':
+            if above == (0, 0, 0):
+                front_name = 'air'
+            else:
+                h.put(cells, above, states.get(front_name, half='upper'))
         if front_name != 'air':
             h.put(cells, front, front_state(states, rng, front_name))
         if below != (0, 0, 0) and rng.random() < 0.8:

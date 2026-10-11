@@ -46,6 +46,7 @@ public final class VanillaDispenserOracle {
             case 1018 -> "minecraft:entity.blaze.shoot";
             case 1051 -> "minecraft:entity.wind_charge.throw";
             case 1505 -> "minecraft:item.bone_meal.use";
+            case 1501 -> "minecraft:block.lava.extinguish";
             case 1009 -> data == 0 ? "minecraft:block.fire.extinguish" : data == 1 ? "minecraft:block.generic.extinguish_fire" : null;
             case 2001 -> {
                 BlockState state = Block.stateById(data);
