@@ -354,7 +354,6 @@ public final class VanillaNaturalSpawnOracle {
             @Override public Holder<Biome> getBiome(BlockPos pos) { return level.biomeAt(pos.getX(), pos.getY(), pos.getZ()); }
             @Override public Holder<Biome> getBiome(int x, int y, int z) { return level.biomeAt(x, y, z); }
         };
-        put(level, Level.class, "isClientSide", false);
         Source source = (Source) alloc(Source.class);
         source.generator = (ChunkGenerator) alloc(FlatLevelSource.class);
         level.chunkSource = source;
@@ -456,6 +455,7 @@ public final class VanillaNaturalSpawnOracle {
                         String[] p = c.get("e" + i).split("/");
                         String[] v = p[1].split(",");
                         Entity e = BuiltInRegistries.ENTITY_TYPE.getValue(Identifier.parse(p[0])).create(level, EntitySpawnReason.LOAD);
+                        if (e == null) continue; // monsters do not exist in peaceful
                         e.setPos(Double.parseDouble(v[0]), Double.parseDouble(v[1]), Double.parseDouble(v[2]));
                         if (p.length > 2 && p[2].equals("p") && e instanceof Mob mob) mob.setPersistenceRequired();
                         level.entities.add(e);

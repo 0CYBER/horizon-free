@@ -565,6 +565,24 @@ pub fn spawn_box(x: f64, y: f64, z: f64, width: f32, height: f32) -> Aabb {
         Vec3::new(x + half, y + f64::from(height), z + half),
     )
 }
+/// `EntityType.spawnDimensionsScale`: cube mobs are checked for room at
+/// their largest spawn size.
+fn spawn_dimensions_scale(s: Species) -> f32 {
+    match s {
+        Species::Slime | Species::MagmaCube => 4.0,
+        Species::SulfurCube => 2.0,
+        _ => 1.0,
+    }
+}
+/// `EntityType.getSpawnAABB`.
+pub fn spawn_aabb(s: Species, x: f64, y: f64, z: f64, width: f32, height: f32) -> Aabb {
+    let scale = spawn_dimensions_scale(s);
+    let half = f64::from(scale * width / 2.0);
+    Aabb::new(
+        Vec3::new(x - half, y, z - half),
+        Vec3::new(x + half, y + f64::from(scale * height), z + half),
+    )
+}
 /// `checkSpawnObstruction` of a freshly created mob with the given box.
 fn spawn_obstruction<L: NaturalLevel>(
     s: Species,
@@ -1062,7 +1080,7 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
                 continue;
             }
             if current.is_none() {
-                let reduced = l.biome_tag("minecraft:reduced_water_ambient_spawns", x, y, z);
+                let reduced = l.biome_tag("minecraft:reduce_water_ambient_spawns", x, y, z);
                 let list = if category == Category::WaterAmbient
                     && reduced
                     && random.next_float() < 0.98
@@ -1180,7 +1198,8 @@ fn valid_position_for_type<L: NaturalLevel, R: RandomSource>(
     if !spawn_rules::check_spawn_rules(species, l, Reason::Natural, random, x, y, z) {
         return false;
     }
-    l.no_collision(spawn_box(
+    l.no_collision(spawn_aabb(
+        species,
         f64::from(x) + 0.5,
         f64::from(y),
         f64::from(z) + 0.5,
@@ -1255,7 +1274,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
                     );
                     let fy = f64::from(pos[1]);
                     let (bx, bz) = (fx.floor() as i32, fz.floor() as i32);
-                    if !l.no_collision(spawn_box(fx, fy, fz, width, height))
+                    if !l.no_collision(spawn_aabb(species, fx, fy, fz, width, height))
                         || !spawn_rules::check_spawn_rules(
                             species,
                             l,

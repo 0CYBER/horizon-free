@@ -496,6 +496,14 @@ fn main() -> horizon_client::Result<()> {
                 .split(',')
                 .map(|n| n.parse().unwrap_or(0.0))
                 .collect();
+            // EntityType.create makes no monsters in peaceful.
+            if get("difficulty", "normal") == "peaceful"
+                && types.types.get(parts[0]).is_some_and(|t| {
+                    !horizon_client::mobs::spawn_rules::allowed_in_peaceful(t.species)
+                })
+            {
+                continue;
+            }
             case_entities.push((
                 parts[0].to_owned(),
                 [v[0], v[1], v[2]],
