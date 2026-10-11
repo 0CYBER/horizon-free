@@ -244,6 +244,12 @@ public final class VanillaCommandExecOracle {
             }
             drain();
             super.tickServer(() -> false);
+            // The player's network listener ticks it each server tick
+            // (ServerGamePacketListenerImpl.tickPlayer); this one has no
+            // listening connection, so tick the player here.
+            if (player != null) {
+                player.doTick();
+            }
             drain();
         }
 

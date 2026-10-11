@@ -376,8 +376,8 @@ pub fn java_hash_order(
     // Keys sharing a bucket iterate in insertion order: the order vanilla's
     // savers write them, as far as it is known here.
     const WRITE_ORDER: &[&str] = &[
-        // ItemStack.CODEC, block entities.
-        "id", "count", "components", "x", "y", "z",
+        // ItemStack.CODEC.
+        "id", "count", "components",
         // Entity.saveWithoutId.
         "Pos", "Motion", "Rotation", "fall_distance", "Fire", "Air", "OnGround",
         "Invulnerable", "PortalCooldown", "UUID", "CustomName", "CustomNameVisible",
@@ -392,11 +392,19 @@ pub fn java_hash_order(
         "Invisible", "Small", "ShowArms", "DisabledSlots", "NoBasePlate", "Marker",
         "Pose",
     ];
+    // BlockEntity.saveMetadata writes the position after the entity's data.
+    const AFTER: &[&str] = &["x", "y", "z"];
     let rank = |k: &horizon_world::nbt::JavaString| {
         let k = string_of(k);
         WRITE_ORDER
             .iter()
             .position(|w| *w == k)
+            .or_else(|| {
+                AFTER
+                    .iter()
+                    .position(|w| *w == k)
+                    .map(|i| WRITE_ORDER.len() + 1 + i)
+            })
             .unwrap_or(WRITE_ORDER.len())
     };
     let mut entries: Vec<_> = c.iter().collect();
