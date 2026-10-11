@@ -860,7 +860,13 @@ def test_command():
         cmd('/test locate *'),
         cmd('/test run minecraft:nothing*'),
         cmd('/test locate nothing'),
-        cmd('/execute as @e[type=!minecraft:player,limit=1] run test pos'),
+        *setup('/summon minecraft:marker 8 230 8 {Tags:["tp"]}'),
+        cmd('/execute as @e[tag=tp] run test pos'),
+        cmd('/execute positioned 0 230 0 run test pos'),
+        cmd('/execute as @e[tag=tp] run kill @e[tag=nothing]'),
+        cmd('/execute as @e[tag=tp] at @s run kill @e[tag=nothing]'),
+        cmd('/execute positioned 1 2 3 run kill @e[tag=nothing]'),
+        *setup('/kill @e[tag=tp]'),
     ]
 
 

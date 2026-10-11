@@ -251,6 +251,10 @@ impl Game<'_> {
     pub(in crate::game) fn run_execute(&mut self, ctx: &Context) -> R<i32> {
         let mut sources = vec![self.command_source.unwrap_or_else(|| self.player_source())];
         let mut c = ctx;
+        // A fork modifier (as, at, positioned as, rotated as, facing entity,
+        // on, a non-terminal if/unless) makes later errors silent
+        // (CommandSourceStack.handleError with `forked`).
+        let mut forked = false;
         loop {
             let word = c
                 .literals
@@ -273,7 +277,8 @@ impl Game<'_> {
                     for s in sources {
                         match self.with_source(s, |g| g.run_chain(command, last)) {
                             Ok(n) => total += n,
-                            // Forked executions report failures and carry on.
+                            Err(_) if forked => {}
+                            // Several sources: report each failure and carry on.
                             Err(e) if many => self.command_failure(e.message),
                             Err(e) => failure = Some(e),
                         }
@@ -291,6 +296,7 @@ impl Game<'_> {
                     if c.child.is_none() {
                         return self.run_conditional_terminal(c, sources, want);
                     }
+                    forked = true;
                     let mut kept = Vec::new();
                     for s in sources {
                         let (keep, _) = self.with_source(s, |g| g.condition(c, want))?;
@@ -301,6 +307,12 @@ impl Game<'_> {
                     sources = kept;
                 }
                 _ => {
+                    forked |= match word {
+                        "as" | "at" | "on" => true,
+                        "positioned" | "rotated" => c.has("as"),
+                        "facing" => c.has("entity"),
+                        _ => false,
+                    };
                     let mut next = Vec::new();
                     for s in sources {
                         next.extend(self.with_source(s, |g| g.modify(word, c, s))?);

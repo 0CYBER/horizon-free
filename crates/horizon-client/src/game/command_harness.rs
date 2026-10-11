@@ -98,9 +98,17 @@ impl Game<'_> {
                 }
                 "tick" => {
                     self.chat_capture = Some(Vec::new());
+                    // The oracle's player has no client moving it: hold the
+                    // player where commands put it while the game ticks.
+                    let held = self.player.as_ref().map(|p| p.position);
                     for _ in 0..op["n"].as_u64().unwrap_or(1) {
                         self.update_world();
                         self.tick()?;
+                        if let (Some(p), Some(at)) = (self.player.as_mut(), held) {
+                            p.position = at;
+                            p.velocity = horizon_core::geometry::Vec3::new(0.0, 0.0, 0.0);
+                            p.fall_distance = 0.0;
+                        }
                     }
                     let messages = self.chat_capture.take().unwrap_or_default();
                     if op["record"].as_bool() == Some(true) {
