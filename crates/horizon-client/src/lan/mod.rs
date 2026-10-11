@@ -5,6 +5,8 @@
 //! ever exchanges decoded packets with these threads through channels, so a
 //! world that is not open to the network pays nothing.
 pub mod chunks;
+pub mod command_suggestions;
+pub mod commands;
 pub mod conn;
 pub mod containers;
 pub mod data;
@@ -14,6 +16,7 @@ pub mod guest;
 pub mod hub;
 pub mod menu;
 pub mod playerdata;
+pub mod tracking;
 
 pub use conn::PlayerSender;
 use horizon_protocol::packets::play;
@@ -86,6 +89,9 @@ impl Shared {
         }
         online.insert(uuid);
         None
+    }
+    pub fn motd(&self) -> String {
+        self.motd.lock().unwrap().clone()
     }
     pub fn release(&self, uuid: u128) {
         self.online.lock().unwrap().remove(&uuid);

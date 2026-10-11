@@ -87,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dimension: "minecraft:overworld".into(),
             seed: 0,
             max_players: 8,
+            dedicated: false,
         },
     );
     let mut next_entity = 100u32;
@@ -110,13 +111,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         world.day_time += 1;
         let mut ctx = TickCtx {
             world: &mut world,
-            host: &host,
+            host: Some(&host),
             entities: &[],
             next_entity: &mut next_entity,
             spawn: [8.5, 60.0, 8.5],
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
+            tick_rate: 20.0,
+            tick_frozen: false,
         };
         for event in hub.tick(&mut ctx) {
             match event {
