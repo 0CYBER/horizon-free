@@ -315,6 +315,45 @@ pub enum ArgType {
     SlotSource,
     /// ResourceOrIdArgument over a registry: an id or an inline SNBT value.
     ResourceOrId(&'static str),
+    /// ResourceSelectorArgument: a `*`/`?` pattern over a registry's ids.
+    ResourceSelector(&'static str),
+}
+
+/// FilenameUtils.wildcardMatch (case-sensitive) of `*` and `?` patterns.
+pub fn wildcard_match(text: &str, pattern: &str) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
+    let (mut ti, mut pi) = (0, 0);
+    let (mut star, mut mark) = (None, 0);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            ti += 1;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+/// ResourceSelectorArgument: the registry ids a pattern selects.
+pub fn select_resources<'a>(ids: &'a [String], pattern: &str) -> Vec<&'a String> {
+    let pattern = if pattern.contains(':') {
+        pattern.to_owned()
+    } else {
+        format!("minecraft:{pattern}")
+    };
+    ids.iter().filter(|id| wildcard_match(id, &pattern)).collect()
 }
 
 /// SlotRanges.SLOTS: every slot range name and its size, in vanilla order.
@@ -1409,6 +1448,29 @@ impl ArgType {
                 }
                 Arg::Str(name.to_owned())
             }
+            ArgType::ResourceSelector(registry) => {
+                let start = reader.cursor;
+                while reader.can_read() && {
+                    let c = reader.peek();
+                    is_id_char(c) || c == '*' || c == '?'
+                } {
+                    reader.skip();
+                }
+                let raw = reader.string[start..reader.cursor].to_owned();
+                let pattern = if raw.contains(':') {
+                    raw
+                } else {
+                    format!("minecraft:{raw}")
+                };
+                if select_resources(reg.ids(registry), &pattern).is_empty() {
+                    return Err(CommandError::tr_at(
+                        "argument.resource_selector.not_found",
+                        &[&pattern, registry],
+                        reader,
+                    ));
+                }
+                Arg::Str(pattern)
+            }
             ArgType::HexColor => {
                 let text = reader.read_unquoted_string();
                 if !matches!(text.len(), 3 | 6) {
@@ -1803,6 +1865,9 @@ impl ArgType {
             }
             ArgType::StrEnum(values, _) => builder.suggest_matching(values.iter().copied()),
             ArgType::HexColor => builder.suggest_matching(["F00", "FF0000"]),
+            ArgType::ResourceSelector(registry) => {
+                suggest_resources(builder, reg.ids(registry), "")
+            }
             ArgType::GameProfile => {
                 let players = reg.players.clone();
                 super::selector::suggest(builder, reg, &|b| {

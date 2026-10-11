@@ -132,8 +132,14 @@ MASKS = [
 ]
 
 
+GAMERULES = re.compile(r'/gamerule \(([^)]*)\)')
+
+
 def masked(record):
     text = json.dumps(record['messages'], ensure_ascii=False)
+    # GameRuleCommand registers the rules in identity-hash order, different
+    # in every JVM: compare /help's gamerule alternatives as a set.
+    text = GAMERULES.sub(lambda m: '/gamerule (' + '|'.join(sorted(m.group(1).split('|'))) + ')', text)
     for pattern, replacement in MASKS:
         text = pattern.sub(replacement, text)
     return text

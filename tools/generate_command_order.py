@@ -27,6 +27,10 @@ def main():
 
     def walk(v, r, path):
         names = list(v.get("children", {}))
+        # GameRuleCommand registers the rules in a Reference2ObjectOpenHashMap's
+        # (identity hash) order, which changes from run to run.
+        if path == ["gamerule"]:
+            return
         order = r.get("order", [])
         shared = [n for n in names if n in order]
         if shared != [n for n in order if n in names]:

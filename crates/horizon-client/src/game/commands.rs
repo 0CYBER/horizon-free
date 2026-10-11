@@ -593,6 +593,7 @@ impl Game<'_> {
             "debug" => self.cmd_debug(ctx),
             "jfr" => self.cmd_jfr(ctx),
             "version" => self.cmd_version(),
+            id if id.starts_with("test.") => self.cmd_test(id, ctx),
             "place" => self.cmd_place(ctx),
             "recipe.give" | "recipe.take" => self.cmd_recipe(id, ctx),
             "damage" => self.cmd_damage(ctx),

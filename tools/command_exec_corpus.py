@@ -838,6 +838,8 @@ def social():
 
 
 def test_command():
+    # Horizon has no game test runner: `/test run|runmultiple|verify` of an
+    # existing instance and `/test create` are not compared.
     return [
         cmd('/test clearall'),
         cmd('/test stop'),
@@ -847,7 +849,18 @@ def test_command():
         cmd('/test resetclosest'),
         cmd('/test runfailed'),
         cmd('/test clearthese'),
-        cmd('/test verify minecraft:always_pass'),
+        cmd('/test runthese'),
+        cmd('/test runthat 2 true'),
+        cmd('/test runfailed true'),
+        cmd('/test resetthese'),
+        cmd('/test resetthat'),
+        cmd('/test clearthat'),
+        cmd('/test clearall 10'),
+        cmd('/test pos myPos'),
+        cmd('/test locate *'),
+        cmd('/test run minecraft:nothing*'),
+        cmd('/test locate nothing'),
+        cmd('/execute as @e[type=!minecraft:player,limit=1] run test pos'),
     ]
 
 

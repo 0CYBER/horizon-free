@@ -61,6 +61,7 @@ fn parser_id(ty: &ArgType) -> String {
             _ => "minecraft:template_rotation".into(),
         },
         ArgType::HexColor => "minecraft:hex_color".into(),
+        ArgType::ResourceSelector(_) => "minecraft:resource_selector".into(),
         ArgType::Uuid => "minecraft:uuid".into(),
         ArgType::GameProfile => "minecraft:game_profile".into(),
         ArgType::Style => "minecraft:style".into(),

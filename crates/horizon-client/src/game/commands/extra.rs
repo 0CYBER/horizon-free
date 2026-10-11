@@ -491,6 +491,77 @@ impl Game<'_> {
         Ok(n)
     }
 
+    // ---- /test ----------------------------------------------------------
+
+    /// `TestCommand`. Horizon has no game test instances or test runner: every
+    /// finder comes back empty, as in a world without test instance blocks.
+    pub(super) fn cmd_test(&mut self, id: &str, ctx: &Context) -> R<i32> {
+        match id {
+            // run <tests>, runmultiple, verify: GameTestRunner.
+            "test.run" | "test.verify" | "test.create" => Err(err("command.failed", &[])),
+            // runthese/runclosest/runthat/runfailed: TestFinder finds nothing.
+            "test.run.found" => {
+                if ctx.literals.iter().any(|l| l == "runthat") {
+                    self.source_player()?;
+                }
+                self.feedback(Text::translate("commands.test.no_tests", &[]));
+                Ok(0)
+            }
+            // reset*/clear*: TestCommand.reset throws CLEAR_NO_TESTS too.
+            "test.clear" => {
+                if ctx.literals.iter().any(|l| l == "resetthat" || l == "clearthat") {
+                    self.source_player()?;
+                }
+                Err(err("commands.test.clear.error.no_tests", &[]))
+            }
+            "test.stop" => Ok(1),
+            "test.locate" => {
+                // CommandSourceStack.sendSystemMessage: no feedback rule.
+                if !self.command_source.is_some_and(|s| s.silent) {
+                    self.system_message(Text::translate("commands.test.locate.started", &[]));
+                }
+                Err(err("commands.test.error.no_test_instances", &[]))
+            }
+            _ => {
+                // TestCommand.showPos: the block the player looks at (10 blocks).
+                self.source_player()?;
+                let p = self.test_pick_block();
+                Err(err(
+                    "commands.test.error.no_test_containing_pos",
+                    &[&p[0], &p[1], &p[2]],
+                ))
+            }
+        }
+    }
+    /// `Entity.pick(10, 1, false)`: the first non-air block on the view ray,
+    /// else the block at the ray's end.
+    fn test_pick_block(&self) -> [i32; 3] {
+        use horizon_core::{
+            geometry::{Vec3, traverse_blocks},
+            position::BlockPos,
+        };
+        let Some(p) = self.player.as_ref() else {
+            return [0; 3];
+        };
+        let eye = Vec3::new(
+            p.position.x,
+            p.position.y + f64::from(p.dimensions.eye_height),
+            p.position.z,
+        );
+        let (yaw, pitch) = (f64::from(self.yaw).to_radians(), f64::from(self.pitch).to_radians());
+        let dir = [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()];
+        let end = Vec3::new(eye.x + dir[0] * 10.0, eye.y + dir[1] * 10.0, eye.z + dir[2] * 10.0);
+        let hit = traverse_blocks(eye, end, 256, |b: BlockPos| {
+            let state = self.world.block(b.x, b.y, b.z);
+            (!self.res.facts.is_air(state)).then_some([b.x, b.y, b.z])
+        });
+        hit.ok().flatten().unwrap_or([
+            end.x.floor() as i32,
+            end.y.floor() as i32,
+            end.z.floor() as i32,
+        ])
+    }
+
     // ---- /kick ----------------------------------------------------------
 
     /// `KickCommand.kickPlayers`: only guests of a published world can be
