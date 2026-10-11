@@ -1517,7 +1517,12 @@ impl Game<'_> {
             let _ = self.break_block(pos);
             self.creative = creative;
         }
-        if !self.place_state(pos, state, ctx.has("strict"))? {
+        let placed = self.place_state(pos, state, ctx.has("strict"))?;
+        let loaded = match &b.nbt {
+            Some(nbt) => self.load_block_entity_nbt(pos, nbt),
+            None => false,
+        };
+        if !placed && !loaded {
             return Err(err("commands.setblock.failed", &[]));
         }
         self.feedback(Text::tr(
@@ -1525,6 +1530,38 @@ impl Game<'_> {
             &[&pos[0], &pos[1], &pos[2]],
         ));
         Ok(1)
+    }
+    /// The block entity part of `BlockInput.place`: load the block entity
+    /// from the argument's tag; true when its saved data changed.
+    pub(super) fn load_block_entity_nbt(&mut self, pos: [i32; 3], nbt: &str) -> bool {
+        use horizon_world::nbt::Tag;
+        let key = (pos[0], pos[1], pos[2]);
+        let Some(e) = self.world.block_entities.get(&key) else {
+            return false;
+        };
+        let name = self.data_block_name(pos);
+        let before = horizon_client::save::encode_block_entity(key, e, &name);
+        let Ok((mut tag, _)) = horizon_world::nbt::parse_snbt(nbt) else {
+            return false;
+        };
+        if let Tag::Compound(c) = &mut tag {
+            for k in ["id", "x", "y", "z"] {
+                if let Some(v) = before.get(k) {
+                    c.insert(k.into(), v.clone());
+                }
+            }
+        }
+        let Some((_, new)) = horizon_client::save::decode_block_entity(&tag) else {
+            return false;
+        };
+        let after = horizon_client::save::encode_block_entity(key, &new, &name);
+        if after == before {
+            return false;
+        }
+        self.world.block_entities.insert(key, new);
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let _ = self.world.set(pos[0], pos[1], pos[2], state);
+        true
     }
     fn cmd_fill(&mut self, ctx: &Context) -> R<i32> {
         let a = self.block_pos_arg(ctx, "from")?;
@@ -2027,6 +2064,86 @@ impl Game<'_> {
         }
         predicate.id == item
     }
+    /// `ItemPredicateArgument`: the item test and its `[...]` component
+    /// tests (presence, `=` equality, `!` negation, `|` alternatives).
+    pub(super) fn stack_matches(&self, predicate: &ItemInput, stack: &ItemStack) -> bool {
+        if !self.item_matches(predicate, &stack.item) {
+            return false;
+        }
+        let Some(tests) = predicate.components.as_deref() else {
+            return true;
+        };
+        let inner = tests
+            .trim()
+            .strip_prefix('[')
+            .and_then(|t| t.strip_suffix(']'))
+            .unwrap_or("");
+        let components = match horizon_client::item_data::encode_components(stack) {
+            Some(horizon_world::nbt::Tag::Compound(c)) => c,
+            _ => Default::default(),
+        };
+        let test = |term: &str| -> bool {
+            let term = term.trim();
+            let (negated, term) = match term.strip_prefix('!') {
+                Some(t) => (true, t.trim()),
+                None => (false, term),
+            };
+            let split = term.find(['=', '~']).unwrap_or(term.len());
+            let id = term[..split].trim();
+            let id = if id.contains(':') {
+                id.to_owned()
+            } else {
+                format!("minecraft:{id}")
+            };
+            let present = components.get(&id.as_str().into());
+            let result = match term[split..].chars().next() {
+                Some('=') => {
+                    let value = horizon_world::nbt::parse_snbt(term[split + 1..].trim())
+                        .ok()
+                        .map(|(t, _)| t);
+                    match (present, value) {
+                        (Some(have), Some(want)) => {
+                            horizon_client::nbt_path::compare_nbt(&want, Some(have))
+                                && horizon_client::nbt_path::compare_nbt(have, Some(&want))
+                        }
+                        _ => false,
+                    }
+                }
+                Some('~') => {
+                    // Sub-predicates: `count` and component predicates.
+                    let value = horizon_world::nbt::parse_snbt(term[split + 1..].trim())
+                        .ok()
+                        .map(|(t, _)| t);
+                    match (id.as_str(), value) {
+                        ("minecraft:count", Some(v)) => {
+                            let n = i64::from(stack.count);
+                            match &v {
+                                horizon_world::nbt::Tag::Compound(_) => {
+                                    let get = |k: &str| match v.get(k) {
+                                        Some(horizon_world::nbt::Tag::Int(i)) => Some(i64::from(*i)),
+                                        _ => None,
+                                    };
+                                    get("min").is_none_or(|m| n >= m)
+                                        && get("max").is_none_or(|m| n <= m)
+                                }
+                                horizon_world::nbt::Tag::Int(i) => n == i64::from(*i),
+                                _ => false,
+                            }
+                        }
+                        (_, Some(v)) => present
+                            .is_some_and(|have| horizon_client::nbt_path::compare_nbt(&v, Some(have))),
+                        _ => false,
+                    }
+                }
+                _ => present.is_some(),
+            };
+            result != negated
+        };
+        split_top_level(inner, ',')
+            .iter()
+            .filter(|t| !t.trim().is_empty())
+            .all(|term| split_top_level(term, '|').iter().any(|alt| test(alt)))
+    }
     fn cmd_clear(&mut self, ctx: &Context) -> R<i32> {
         let targets = if ctx.get("targets").is_some() {
             self.entities(ctx, "targets", true)?
@@ -2047,19 +2164,27 @@ impl Game<'_> {
         // Inventory.clearOrCountMatchingItems: main, armor, crafting grid, carried.
         let mut removed = 0i32;
         let mut budget = if max < 0 { i32::MAX } else { max };
+        let all = |g: &Self| -> Vec<Option<ItemStack>> {
+            let mut v: Vec<Option<ItemStack>> = g.inventory.clone();
+            v.extend(g.armor.iter().cloned());
+            v.extend(g.craft_grid.iter().cloned());
+            v.push(g.carried.clone());
+            v
+        };
+        let matching: Vec<bool> = all(self)
+            .iter()
+            .map(|s| s.as_ref().is_some_and(|s| self.stack_matches(&predicate, s)))
+            .collect();
         let mut slots: Vec<&mut Option<ItemStack>> = Vec::new();
         slots.extend(self.inventory.iter_mut());
         slots.extend(self.armor.iter_mut());
         slots.extend(self.craft_grid.iter_mut());
         slots.push(&mut self.carried);
-        for slot in slots {
+        for (slot, matches) in slots.into_iter().zip(matching) {
+            if !matches {
+                continue;
+            }
             let Some(stack) = slot.as_mut() else { continue };
-            if !(predicate.any || predicate.tag || predicate.id == *stack.item) && !predicate.tag {
-                continue;
-            }
-            if predicate.tag {
-                continue;
-            }
             let take = if counting {
                 stack.count as i32
             } else {
@@ -2074,35 +2199,6 @@ impl Game<'_> {
                 }
                 if budget == 0 {
                     break;
-                }
-            }
-        }
-        if predicate.tag {
-            // Tag predicates: match against item tags.
-            let pred = predicate.clone();
-            let mut budget = if max < 0 { i32::MAX } else { max };
-            let items: Vec<(usize, String, u32)> = self
-                .inventory
-                .iter()
-                .enumerate()
-                .filter_map(|(i, s)| s.as_ref().map(|s| (i, s.item.to_string(), s.count)))
-                .collect();
-            for (i, item, count) in items {
-                if !self.item_matches(&pred, &item) {
-                    continue;
-                }
-                let take = if counting {
-                    count as i32
-                } else {
-                    (count as i32).min(budget)
-                };
-                removed += take;
-                if !counting && let Some(s) = self.inventory[i].as_mut() {
-                    budget -= take;
-                    s.count -= take as u32;
-                    if s.count == 0 {
-                        self.inventory[i] = None;
-                    }
                 }
             }
         }
@@ -2329,4 +2425,34 @@ impl Game<'_> {
         out.push(rest);
         out
     }
+}
+
+/// Split at a separator outside brackets, braces and quotes.
+fn split_top_level(s: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut quote, mut escaped, mut start) = (0i32, None::<char>, false, 0);
+    for (i, ch) in s.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '[' | '{' => depth += 1,
+            ']' | '}' => depth -= 1,
+            c if c == sep && depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
 }

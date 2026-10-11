@@ -202,7 +202,7 @@ public final class VanillaCommandExecOracle {
                         messages.clear();
                         // Answers computed off-thread (profile lookups) reach the
                         // server's task queue before the next tick.
-                        for (int wait = 0; wait < 100 && this.getPendingTasksCount() == 0 && op.has("record"); wait++) {
+                        for (int wait = 0; wait < 2000 && this.getPendingTasksCount() == 0 && op.has("record"); wait++) {
                             try { Thread.sleep(5); } catch (InterruptedException e) { throw new RuntimeException(e); }
                         }
                         for (int i = 0; i < n; i++) {

@@ -147,18 +147,11 @@ impl Game<'_> {
     // ---- /fillbiome ----------------------------------------------------------------
 
     pub(super) fn cmd_fillbiome(&mut self, ctx: &Context) -> R<i32> {
-        let (Some(Arg::Resource(biome)), from, to) = (
-            ctx.get("biome").cloned(),
-            self.coords(ctx, "from"),
-            self.coords(ctx, "to"),
-        ) else {
+        let Some(Arg::Resource(biome)) = ctx.get("biome").cloned() else {
             return Ok(0);
         };
-        let (Some(from), Some(to)) = (from, to) else {
-            return Ok(0);
-        };
-        let (src_pos, src_rot) = (self.source_position(), self.source_rotation());
-        let (a, b) = (from.block(src_pos, src_rot), to.block(src_pos, src_rot));
+        // BlockPosArgument.getLoadedBlockPos on both corners first.
+        let (a, b) = (self.block_pos_arg(ctx, "from")?, self.block_pos_arg(ctx, "to")?);
         // Quantize to biome cells (`QuartPos`), then work with the box.
         let q = |v: i32| (v >> 2) << 2;
         let lo = [

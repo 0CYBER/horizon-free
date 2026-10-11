@@ -889,7 +889,7 @@ impl Game<'_> {
                 if let Some(stack) = self.slot_get(&s)
                     && predicate
                         .as_ref()
-                        .is_some_and(|p| self.item_matches(p, &stack.item))
+                        .is_some_and(|p| self.stack_matches(p, &stack))
                 {
                     count += stack.count as i32;
                 }

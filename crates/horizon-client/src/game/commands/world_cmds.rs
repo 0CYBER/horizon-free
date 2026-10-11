@@ -492,6 +492,27 @@ impl Game<'_> {
             Some(Arg::Int(c)) => *c,
             _ => 0,
         };
+        // ParticleCommand.sendParticles: the viewers it reached, each within
+        // 32 blocks (512 with `force`) of the particle's block centre.
+        let viewers = if ctx.get("viewers").is_some() {
+            self.entities(ctx, "viewers", true)?
+        } else {
+            vec![Target::Player]
+        };
+        let limit = if ctx.has("force") { 512.0 } else { 32.0 };
+        let reached = viewers
+            .iter()
+            .filter(|&&t| {
+                self.target_position(t).is_some_and(|p| {
+                    let c = p.map(|v| v.floor() + 0.5);
+                    (c[0] - pos[0]).powi(2) + (c[1] - pos[1]).powi(2) + (c[2] - pos[2]).powi(2)
+                        < limit * limit
+                })
+            })
+            .count() as i32;
+        if reached == 0 {
+            return Err(err("commands.particle.failed", &[]));
+        }
         // `ServerLevel.sendParticles`: no count means one particle with the delta as velocity.
         if count <= 0 {
             self.particles.create(&options, pos, delta);
@@ -515,7 +536,7 @@ impl Game<'_> {
             "commands.particle.success",
             &[Text::literal(name.to_owned())],
         ));
-        Ok(count.max(1))
+        Ok(reached)
     }
 
     // ---- /attribute ---------------------------------------------------------------------
