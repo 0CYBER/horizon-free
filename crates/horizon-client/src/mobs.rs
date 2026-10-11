@@ -18,6 +18,7 @@ pub mod control;
 pub mod creaking;
 pub mod cube;
 pub mod data;
+pub mod drops;
 pub mod enderman;
 pub mod equine;
 pub mod farm;
@@ -45,6 +46,7 @@ pub mod render;
 pub mod riders;
 pub mod shulker;
 pub mod sniffer;
+pub mod spawn_rules;
 pub mod spawning;
 pub mod species;
 pub mod sulfur_cube;
@@ -419,6 +421,22 @@ impl Damage {
             DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava | DamageKind::Fireball
         )
     }
+    /// DamageTypeTags.NO_KNOCKBACK
+    pub fn no_knockback(&self) -> bool {
+        matches!(
+            self.kind,
+            DamageKind::Explosion
+                | DamageKind::Fall
+                | DamageKind::OnFire
+                | DamageKind::InFire
+                | DamageKind::Lava
+                | DamageKind::Drown
+                | DamageKind::Magic
+                | DamageKind::Cactus
+                | DamageKind::Generic
+                | DamageKind::InWall
+        )
+    }
     pub fn is_projectile(&self) -> bool {
         matches!(
             self.kind,
@@ -528,6 +546,9 @@ pub struct Extra {
     pub trap_time: i32,
     /// Enchantments on the equipment above.
     pub gear: Option<Box<gear::Gear>>,
+    /// `Mob.dropChances` by `EquipmentSlot` (`drops::SLOTS` order) when set
+    /// explicitly; None uses the defaults of `drops::drop_chance`.
+    pub drop_chances: Option<Box<[f32; 8]>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -589,6 +610,10 @@ pub struct Mob {
     pub attrs: Attrs,
     /// The player riding this mob and its input.
     pub rider: Option<equine::Rider>,
+    /// Events raised outside a tick (hurt and death sounds of damage taken
+    /// from the game), handed over with the next tick's events or drained
+    /// by the game.
+    pub outbox: Vec<MobEvent>,
 }
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
@@ -899,6 +924,10 @@ pub struct MobWorld<'a> {
     pub mob_griefing: bool,
     /// `getCurrentDifficultyAt` near the player.
     pub difficulty: spawning::LocalDifficulty,
+    /// The End (its dimension type's monster spawn light rules).
+    pub end: bool,
+    /// The world seed (slime chunks).
+    pub world_seed: i64,
 }
 impl Mob {
     pub fn new(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {
@@ -934,7 +963,8 @@ impl Mob {
             previous_limb_speed: 0.0,
             swell: 0,
             previous_swell: 0,
-            ambient_timer: -kind.ambient_interval,
+            // Mob.ambientSoundTime starts at 0.
+            ambient_timer: 0,
             fall_distance: 0.0,
             persistent: false,
             random,
@@ -955,6 +985,7 @@ impl Mob {
             name_visible: false,
             anim: anim::AnimState::default(),
             rider: None,
+            outbox: Vec::new(),
             attrs: Attrs {
                 speed: kind.speed,
                 attack_damage: kind.attack_damage,
@@ -1063,16 +1094,34 @@ impl Mob {
                 self.ai.last_hurt_by_player = 100;
             }
         }
-        if knock
-            && let Some(f) = source.from
-            && !matches!(source.kind, DamageKind::Explosion)
-        {
-            let (dx, dz) = (f[0] - self.position.x, f[2] - self.position.z);
+        // dealDefaultKnockback, unless the damage type is tagged no_knockback;
+        // a source without a position knocks in a random direction.
+        if knock && !source.no_knockback() {
+            let (dx, dz) = source.from.map_or((0.0, 0.0), |f| {
+                (f[0] - self.position.x, f[2] - self.position.z)
+            });
             self.knockback(0.4, dx, dz);
         }
         ai::after_hurt(self, &source);
         if self.health <= 0.0 {
             self.health = 0.0;
+        }
+        if knock {
+            // playHurtSound (Mob: also resets the ambient sound clock) or the
+            // death sound: makeSound draws the voice pitch whenever there is a sound.
+            let dead = !self.alive();
+            let sound = ai::voice_sounds(self)[if dead { 2 } else { 1 }];
+            if !dead {
+                self.ambient_timer = -self.kind.ambient_interval;
+            }
+            if !sound.is_empty() {
+                let pitch = self.voice_pitch();
+                if !self.silent {
+                    let at = [self.position.x, self.position.y, self.position.z];
+                    self.outbox
+                        .push(MobEvent::Sound(sound, at, ai::sound_volume(self), pitch));
+                }
+            }
         }
         true
     }
@@ -1082,7 +1131,7 @@ impl Mob {
         if power <= 0.0 {
             return;
         }
-        while xd * xd + zd * zd < 1.0e-5 {
+        while xd * xd + zd * zd < f64::from(1.0e-5_f32) {
             xd = (self.random.next_double() - self.random.next_double()) * 0.01;
             zd = (self.random.next_double() - self.random.next_double()) * 0.01;
         }
@@ -1158,10 +1207,14 @@ impl Mob {
         let at = [self.position.x, self.eye_y(), self.position.z];
         events.push(MobEvent::Sound(event, at, 1.0, 1.0));
     }
+    /// LivingEntity.getVoicePitch.
+    pub fn voice_pitch(&mut self) -> f32 {
+        (self.random.next_float() - self.random.next_float()) * 0.2
+            + if self.is_baby() { 1.5 } else { 1.0 }
+    }
     /// Mob.playSound with LivingEntity.getVoicePitch.
     pub fn voice(&mut self, event: &'static str, events: &mut Vec<MobEvent>) {
-        let pitch = (self.random.next_float() - self.random.next_float()) * 0.2
-            + if self.is_baby() { 1.5 } else { 1.0 };
+        let pitch = self.voice_pitch();
         let at = [self.position.x, self.eye_y(), self.position.z];
         events.push(MobEvent::Sound(event, at, ai::sound_volume(self), pitch));
     }

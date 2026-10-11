@@ -160,6 +160,9 @@ fn main() -> Result<(), Error> {
         return Ok(());
     }
     for [x0, z0, x1, z1] in rects {
+        // Each rectangle starts from scratch, like the oracle's fresh chunks:
+        // structure pieces keep placement state (a shipwreck's adjusted height).
+        worker.forget_structure_starts();
         let mut chunks: HashMap<(i32, i32), ProtoChunk> = HashMap::new();
         for z in z0 - 2..=z1 + 2 {
             for x in x0 - 2..=x1 + 2 {

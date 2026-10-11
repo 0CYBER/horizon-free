@@ -54,7 +54,9 @@ fn parser_id(ty: &ArgType) -> String {
         ArgType::ResOrTagKey(_) => "minecraft:resource_or_tag_key".into(),
         ArgType::StrEnum(values, _) => match values.first().copied() {
             Some("world_surface") => "minecraft:heightmap".into(),
-            Some("none") if values.len() == 3 && values[1] == "left_right" => "minecraft:template_mirror".into(),
+            Some("none") if values.len() == 3 && values[1] == "left_right" => {
+                "minecraft:template_mirror".into()
+            }
             Some("none") if values.len() == 3 => "minecraft:swing_animation".into(),
             _ => "minecraft:template_rotation".into(),
         },
@@ -194,10 +196,12 @@ fn main() -> horizon_client::Result<()> {
     reg.persistent_components = strings(&r["persistent_components"]);
     reg.learnable_recipes = strings(&r["learnable_recipes"]);
     for (clock, markers) in r["clock_time_markers"].as_object().into_iter().flatten() {
-        reg.clock_time_markers.insert(clock.clone(), strings(markers));
+        reg.clock_time_markers
+            .insert(clock.clone(), strings(markers));
     }
     for (id, criteria) in r["advancement_criteria"].as_object().into_iter().flatten() {
-        reg.advancement_criteria.insert(id.clone(), strings(criteria));
+        reg.advancement_criteria
+            .insert(id.clone(), strings(criteria));
     }
     reg.datapacks_enabled = strings(&r["datapacks_selected"]);
     let enabled = reg.datapacks_enabled.clone();

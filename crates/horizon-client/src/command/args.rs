@@ -540,9 +540,9 @@ pub fn parse_identifier(raw: &str) -> Option<String> {
         && ns
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'));
-    let path_ok = path
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-' | '/'));
+    let path_ok = path.chars().all(|c| {
+        c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-' | '/')
+    });
     (ns_ok && path_ok).then(|| format!("{ns}:{path}"))
 }
 pub fn normalize(id: &str) -> String {
@@ -690,7 +690,11 @@ pub fn read_double_bounds(reader: &mut Reader) -> CmdResult<DoubleRange> {
 }
 /// MinMaxBounds.FloatDegrees.fromReader (no swap check).
 pub fn read_float_bounds(reader: &mut Reader) -> CmdResult<(Option<f32>, Option<f32>)> {
-    read_bounds(reader, |s| java_parse_double(s).map(|v| v as f32), "parsing.float.invalid")
+    read_bounds(
+        reader,
+        |s| java_parse_double(s).map(|v| v as f32),
+        "parsing.float.invalid",
+    )
 }
 /// Integer.parseInt over number characters.
 pub fn java_parse_int(s: &str) -> Option<i32> {
@@ -886,7 +890,12 @@ fn java_split(s: &str) -> Vec<&str> {
 }
 /// SharedSuggestionProvider.suggestCoordinates / suggest2DCoordinates: the
 /// candidates `ty` parses completely.
-fn suggest_coordinates(builder: &mut SuggestionsBuilder, reg: &Registries, ty: &ArgType, relevant: bool) {
+fn suggest_coordinates(
+    builder: &mut SuggestionsBuilder,
+    reg: &Registries,
+    ty: &ArgType,
+    relevant: bool,
+) {
     let remaining = builder.remaining().to_owned();
     let three = matches!(ty, ArgType::BlockPos | ArgType::Vec3 { .. });
     let coords: [String; 3] = if remaining.starts_with('^') {
@@ -903,7 +912,11 @@ fn suggest_coordinates(builder: &mut SuggestionsBuilder, reg: &Registries, ty: &
     let mut result: Vec<String> = Vec::new();
     let [x, y, z] = &coords;
     if remaining.is_empty() {
-        let full = if three { format!("{x} {y} {z}") } else { format!("{x} {z}") };
+        let full = if three {
+            format!("{x} {y} {z}")
+        } else {
+            format!("{x} {z}")
+        };
         if valid(&full) {
             result.push(x.clone());
             if three {
@@ -965,7 +978,11 @@ fn parse_nbt_path(reader: &mut Reader) -> CmdResult<()> {
                     // StringReader.peek past the end (StringIndexOutOfBoundsException).
                     let len = reader.string.encode_utf16().count();
                     let message = format!("Index {len} out of bounds for length {len}");
-                    return Err(CommandError::tr_at("command.exception", &[&message], reader));
+                    return Err(CommandError::tr_at(
+                        "command.exception",
+                        &[&message],
+                        reader,
+                    ));
                 }
                 match reader.peek() {
                     '{' => {
@@ -988,7 +1005,10 @@ fn parse_nbt_path(reader: &mut Reader) -> CmdResult<()> {
             _ => {
                 let s = reader.cursor;
                 while reader.can_read()
-                    && !matches!(reader.peek(), ' ' | '"' | '\'' | '[' | ']' | '.' | '{' | '}')
+                    && !matches!(
+                        reader.peek(),
+                        ' ' | '"' | '\'' | '[' | ']' | '.' | '{' | '}'
+                    )
                 {
                     reader.skip();
                 }
@@ -1049,10 +1069,9 @@ fn particle_options(id: &str, t: &horizon_world::nbt::Tag) -> Result<(), String>
     {
         // withAlternative(BlockState.CODEC, the block id codec).
         let first = match state {
-            horizon_world::nbt::Tag::Compound(_) => super::codec::either(
-                "Not a string".into(),
-                no_key("id", state),
-            ),
+            horizon_world::nbt::Tag::Compound(_) => {
+                super::codec::either("Not a string".into(), no_key("id", state))
+            }
             _ => not_map(state),
         };
         let _ = snbt;
@@ -1121,7 +1140,10 @@ impl ArgType {
                     reader.cursor = start;
                     return Err(CommandError::tr_at(
                         "argument.double.low",
-                        &[&crate::snbt::java_double(*min), &crate::snbt::java_double(v)],
+                        &[
+                            &crate::snbt::java_double(*min),
+                            &crate::snbt::java_double(v),
+                        ],
                         reader,
                     ));
                 }
@@ -1129,7 +1151,10 @@ impl ArgType {
                     reader.cursor = start;
                     return Err(CommandError::tr_at(
                         "argument.double.big",
-                        &[&crate::snbt::java_double(*max), &crate::snbt::java_double(v)],
+                        &[
+                            &crate::snbt::java_double(*max),
+                            &crate::snbt::java_double(v),
+                        ],
                         reader,
                     ));
                 }
@@ -1146,10 +1171,7 @@ impl ArgType {
                 // MessageArgument.Message.parseText.
                 let len = reader.remaining().encode_utf16().count();
                 if len > 256 {
-                    return Err(CommandError::tr(
-                        "argument.message.too_long",
-                        &[&len, &256],
-                    ));
+                    return Err(CommandError::tr("argument.message.too_long", &[&len, &256]));
                 }
                 let s = reader.remaining().to_owned();
                 if reg.permission >= 2 {
@@ -1329,7 +1351,11 @@ impl ArgType {
             ArgType::HexColor => {
                 let text = reader.read_unquoted_string();
                 if !matches!(text.len(), 3 | 6) {
-                    return Err(CommandError::tr_at("argument.hexcolor.invalid", &[&text], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.hexcolor.invalid",
+                        &[&text],
+                        reader,
+                    ));
                 }
                 // Integer.parseInt(s, begin, end, 16) per channel: a bad digit
                 // escapes Brigadier as a dispatcher parse exception.
@@ -1341,7 +1367,11 @@ impl ArgType {
                     if let Some(i) = digits.find(|ch: char| !ch.is_ascii_hexdigit()) {
                         let index = i + usize::from(signed);
                         let message = format!("Error at index {index} in: \"{c}\"");
-                        return Err(CommandError::tr_at("command.exception", &[&message], reader));
+                        return Err(CommandError::tr_at(
+                            "command.exception",
+                            &[&message],
+                            reader,
+                        ));
                     }
                 }
                 let v = i64::from_str_radix(text, 16).unwrap_or(0);
@@ -1361,7 +1391,10 @@ impl ArgType {
                     .take_while(|c| c.is_ascii_hexdigit() || *c == '-')
                     .map(char::len_utf8)
                     .sum();
-                match (run > 0).then(|| super::selector::java_uuid(&rest[..run])).flatten() {
+                match (run > 0)
+                    .then(|| super::selector::java_uuid(&rest[..run]))
+                    .flatten()
+                {
                     Some(_) => {
                         let text = rest[..run].to_owned();
                         reader.cursor += run;
@@ -1391,7 +1424,11 @@ impl ArgType {
                 let v = reader.read_float()?;
                 let unit = reader.read_unquoted_string();
                 let Some(m) = time_unit(unit) else {
-                    return Err(CommandError::tr_at("argument.time.invalid_unit", &[], reader));
+                    return Err(CommandError::tr_at(
+                        "argument.time.invalid_unit",
+                        &[],
+                        reader,
+                    ));
                 };
                 // Math.round(float): floor(x + 0.5).
                 let ticks = (v * m as f32 + 0.5).floor() as i32;
@@ -1425,7 +1462,10 @@ impl ArgType {
                 // ParserBasedArgument.withCodec: SNBT, then the codec (errors at the start).
                 let tag = super::snbt::parse_tag_argument(reader)?;
                 let (decoded, key) = if matches!(self, ArgType::Style) {
-                    (super::component::decode_style(&tag), "argument.style.invalid")
+                    (
+                        super::component::decode_style(&tag),
+                        "argument.style.invalid",
+                    )
                 } else {
                     (super::component::decode(&tag), "argument.component.invalid")
                 };

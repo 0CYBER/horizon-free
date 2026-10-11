@@ -64,6 +64,8 @@ pub struct SyncData {
     registries: Vec<(String, Entries)>,
     pub tags: UpdateTags,
     pub features: Vec<String>,
+    /// Vanilla's command tree (the commands report), when found.
+    pub commands: Option<super::commands::CommandTree>,
 }
 
 /// Every `*.json` under `dir`, as (path without extension relative to dir, value), sorted.
@@ -133,6 +135,7 @@ impl SyncData {
             registries,
             tags,
             features: vec!["minecraft:vanilla".to_owned()],
+            commands: super::commands::CommandTree::load(resources),
         })
     }
 

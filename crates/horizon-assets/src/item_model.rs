@@ -342,9 +342,11 @@ fn optional_transformation(m: &Map<String, Value>) -> Result<Option<Mat4>> {
     get(m, "transformation").map(transformation).transpose()
 }
 /// `Mth.floor(float)` as `ARGB.as8BitChannel` uses it.
+/// `ARGB.as8BitChannel`: `Mth.floor(value * 255.0F)`.
 fn channel(v: f32) -> i32 {
-    let i = v as i32;
-    if (i as f32) > v { i - 1 } else { i }
+    let scaled = v * 255.0;
+    let i = scaled as i32;
+    if (i as f32) > scaled { i - 1 } else { i }
 }
 
 // ---------------------------------------------------------------------------

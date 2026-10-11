@@ -1231,6 +1231,9 @@ impl Game<'_> {
         let lid = |_: [i32; 3]| 0.0;
         let scene = horizon_client::block_entity_render::Scene {
             camera: glam::DVec3::ZERO,
+            orientation: glam::Quat::IDENTITY,
+            anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
+            texts: None,
             partial: 0.0,
             game_time: self.world.game_time,
             world: &self.world,
@@ -1239,7 +1242,7 @@ impl Game<'_> {
             lid: &lid,
             sign: &|_| None,
             banner: &|_| Vec::new(),
-            glyph: &|c| self.res.atlas.glyph(c),
+            glyph: &|c| self.res.atlas.glyph_cell(c),
         };
         self.res
             .block_entity_render

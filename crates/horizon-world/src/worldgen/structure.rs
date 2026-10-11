@@ -296,7 +296,12 @@ impl StructureResources {
             {
                 sources.insert(id);
             }
-            if state.properties.get("waterlogged").map(String::as_str) == Some("false") {
+            // SlabBlock.placeLiquid refuses double slabs.
+            let double_slab = state.name.ends_with("_slab")
+                && state.properties.get("type").map(String::as_str) == Some("double");
+            if !double_slab
+                && state.properties.get("waterlogged").map(String::as_str) == Some("false")
+            {
                 let mut wet = state.clone();
                 wet.properties.insert("waterlogged".into(), "true".into());
                 if let Some(wet) = registry.id(&wet) {

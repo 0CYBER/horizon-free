@@ -1443,7 +1443,6 @@ impl Def {
                         | S::WitherSkeleton
                         | S::ZombifiedPiglin
                         | S::Zoglin
-                        | S::Hoglin
                         | S::Wither
                 ),
             burns_in_day: matches!(

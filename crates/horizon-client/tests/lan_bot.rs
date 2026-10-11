@@ -184,13 +184,15 @@ impl Server {
         };
         let mut ctx = TickCtx {
             world: &mut self.world,
-            host: &host,
+            host: Some(&host),
             entities,
             next_entity: &mut self.next_entity,
             spawn: [8.5, f64::from(MIN_Y + 5), 8.5],
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
+            tick_rate: 20.0,
+            tick_frozen: false,
         };
         let events = self.hub.tick(&mut ctx);
         for event in events {
@@ -238,6 +240,7 @@ fn server(resources: &Path) -> Server {
             hardcore: false,
             view_distance: 3,
             simulation_distance: 3,
+            dedicated: false,
             dimension: "minecraft:overworld".into(),
             seed: 1234,
             max_players: 8,
@@ -419,7 +422,6 @@ fn guests_see_each_other_and_the_world_entities() {
         data: 0,
         meta: Vec::new(),
         equipment: Vec::new(),
-        send_velocity: false,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;

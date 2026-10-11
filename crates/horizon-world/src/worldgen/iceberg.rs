@@ -277,7 +277,8 @@ impl IcebergFeature {
             let off = 10.0f32 * random.next_float().clamp(0.2, 0.8) / radius as f32;
             f64::from(off) + pow2(xo) + pow2(zo) - pow2(radius)
         };
-        if signed >= 0.0 {
+        // `signedDist < 0.0` fails for NaN too (a zero-width ellipse layer at its centre).
+        if signed.is_nan() || signed >= 0.0 {
             return Ok(());
         }
         let p = tb::offset(origin, xo, y, zo);

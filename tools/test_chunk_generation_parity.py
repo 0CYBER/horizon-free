@@ -141,7 +141,8 @@ def parse_nbt(text, i=0):
 
 def nbt_matches(vanilla, rust, default):
     """Horizon stores the placed data only; vanilla saves defaults too. Every key
-    Horizon sets must match, and every other vanilla key must be the fresh default."""
+    Horizon sets must match, and every other vanilla key must be what vanilla
+    loads for an absent key (the oracle's second form)."""
     if isinstance(vanilla, dict) and isinstance(rust, dict):
         default = default if isinstance(default, dict) else {}
         if 'LootTableSeed' in rust and 'LootTable' not in rust:
@@ -154,13 +155,25 @@ def nbt_matches(vanilla, rust, default):
                     return False
             elif value != default.get(key):
                 return False
-        return all(key in vanilla or key in ('x', 'y', 'z') or nbt_matches(default.get(key), rust[key], None) or (key, rust[key]) == VAULT_REWARD for key in rust)
+        return all(key in vanilla or key in ('x', 'y', 'z') or nbt_matches(default.get(key), rust[key], None) or (key, rust[key]) == VAULT_REWARD
+                   or omitted_on_save(key, rust) for key in rust)
+    if isinstance(vanilla, tuple) and vanilla[0] == 'str' and isinstance(rust, dict) and set(rust) == {'text'}:
+        # A literal text component saves as its plain string: {text:"a"} is "a".
+        return vanilla == rust['text']
     if isinstance(vanilla, list) and isinstance(rust, list):
         return len(vanilla) == len(rust) and all(nbt_matches(a, b, None) for a, b in zip(vanilla, rust))
     if isinstance(vanilla, tuple) and isinstance(rust, tuple) and vanilla[0] in 'bsil' and rust[0] in 'bsil':
         # Structure templates keep their stored integer width; vanilla re-saves block entities with its own.
         return vanilla[1] == rust[1]
     return vanilla == rust
+
+
+def omitted_on_save(key, rust):
+    """Template keys that vanilla's codecs leave out when re-saving the loaded block entity."""
+    if key == 'patterns' and rust[key] == []:
+        return True  # BannerBlockEntity saves its patterns only when there are some
+    # SignText saves filtered_messages only when some line differs from messages.
+    return key == 'filtered_messages' and rust[key] == rust.get('messages')
 
 
 def entity_matches(vanilla, rust):
@@ -258,6 +271,7 @@ def pick_structures(starts, per_kind, rng):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--seeds', type=int, default=3)
+    parser.add_argument('--seed', type=int, action='append', help='run only this seed (repeatable)')
     parser.add_argument('--per-structure', type=int, default=2)
     parser.add_argument('--sites', type=int, default=6, help='terrain sites per overworld seed')
     parser.add_argument('--radius', type=int, default=1, help='chunk radius around each site')
@@ -281,7 +295,7 @@ def main():
     biome_seen = set()
     structure_seen = Counter()
     started = time.time()
-    for seed in SEEDS[:args.seeds]:
+    for seed in args.seed or SEEDS[:args.seeds]:
         rng = random.Random(seed)
         for dimension in dimensions:
             rects, labels = [], []

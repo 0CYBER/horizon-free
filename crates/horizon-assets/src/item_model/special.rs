@@ -207,9 +207,7 @@ impl SpecialModel {
             }
             SpecialKind::PlayerHead => "player_head",
             SpecialKind::ShulkerBox { texture, openness } => {
-                if texture != "minecraft:shulker" {
-                    put("texture", json!(texture));
-                }
+                put("texture", json!(texture));
                 if *openness != 0.0 {
                     put("openness", json!(openness));
                 }
