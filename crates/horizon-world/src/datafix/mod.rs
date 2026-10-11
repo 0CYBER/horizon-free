@@ -105,7 +105,7 @@ impl Cx<'_> {
 /// writing lays the typed fields over it. A typed field that a fix drops (by
 /// casting to a type without it) therefore comes back on write with its value
 /// from that read. Each entity keeps that map under this key while fixes run.
-const LAST_READ: &str = "\u{0}last_read";
+pub(crate) const LAST_READ: &str = "\u{0}last_read";
 
 /// Remember a record's current fields as the map it was read from.
 pub fn mark_read(e: &mut Tag) {

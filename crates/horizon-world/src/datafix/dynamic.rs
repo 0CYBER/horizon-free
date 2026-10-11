@@ -214,8 +214,10 @@ pub fn copy_field(from: &Tag, field: &str, to: &mut Tag, to_field: &str) {
         set(to, to_field, v.clone());
     }
 }
+/// `Dynamic.equals(emptyMap())`: the map a record remembers it was read from
+/// (see `datafix::mark_read`) is not part of the value.
 pub fn is_empty_map(tag: &Tag) -> bool {
-    matches!(tag, Tag::Compound(c) if c.is_empty())
+    matches!(tag, Tag::Compound(c) if c.keys().all(|k| *k == key(super::LAST_READ)))
 }
 /// `Dynamic.orElseEmptyMap` of an optional field.
 pub fn or_empty_map(tag: Option<&Tag>) -> Tag {
