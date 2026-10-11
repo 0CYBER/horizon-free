@@ -116,7 +116,7 @@ impl SessionLock {
 /// (`FileFixerUpper`), then the DataFixers upgrades of every chunk, entity chunk,
 /// POI chunk, player, saved data, advancements and statistics file. Vanilla runs
 /// the latter as it reads each file; Horizon runs them all on opening, which reads
-/// the same data. Worlds older than the ported fixes (1.20) are refused.
+/// the same data. Worlds older than the ported fixes (1.18.2) are refused.
 pub fn upgrade_older_world(world: &Path) -> Result<()> {
     let Some(root) = read_dat(&world.join("level.dat")) else {
         return Ok(());
@@ -130,7 +130,7 @@ pub fn upgrade_older_world(world: &Path) -> Result<()> {
     }
     if version < i64::from(horizon_world::datafix::OLDEST_SUPPORTED) {
         return Err(format!(
-            "{} was saved with DataVersion {version}; worlds older than DataVersion {} (1.20) \
+            "{} was saved with DataVersion {version}; worlds older than DataVersion {} (1.18.2) \
              cannot be upgraded yet (tools/upgrade_world.py runs vanilla's own upgrader)",
             world.display(),
             horizon_world::datafix::OLDEST_SUPPORTED
@@ -2199,10 +2199,10 @@ mod tests {
             super::read_dat(&dir.join("level.dat"))
                 .and_then(|r| super::number(r.get("Data")?.get("DataVersion")))
         };
-        // Older than the ported fixes: refused, left as it is.
-        super::write_dat(&dir.join("level.dat"), level(3000)).unwrap();
+        // 1.18, older than the ported fixes: refused, left as it is.
+        super::write_dat(&dir.join("level.dat"), level(2860)).unwrap();
         assert!(super::upgrade_older_world(&dir).is_err());
-        assert_eq!(version(&dir), Some(3000));
+        assert_eq!(version(&dir), Some(2860));
         // 1.21.1: upgraded to the current version.
         super::write_dat(&dir.join("level.dat"), level(3955)).unwrap();
         super::upgrade_older_world(&dir).unwrap();
