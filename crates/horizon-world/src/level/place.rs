@@ -1595,6 +1595,29 @@ impl Behaviours {
     ) -> PlaceOutcome {
         self.sim(level, ticks).place(ctx)
     }
+    /// `DirectionalPlaceContext.canPlace`: whether the block at the clicked
+    /// position can be replaced by the item (a dispenser places only there).
+    pub fn directional_can_place<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        ctx: &PlaceContext,
+    ) -> bool {
+        let sim = self.sim(level, ticks);
+        let inner = Ctx {
+            pos: ctx.clicked_pos,
+            hit_pos: ctx.clicked_pos,
+            face: ctx.face,
+            hit: ctx.hit,
+            inside: ctx.inside,
+            yaw: ctx.yaw,
+            pitch: ctx.pitch,
+            sneaking: ctx.sneaking,
+            item: ctx.item.clone(),
+            replace_clicked: true,
+        };
+        sim.can_be_replaced(sim.state(ctx.clicked_pos), &inner)
+    }
     /// The position and state `BlockItem.place` would place for `ctx`, without
     /// writing anything (None when vanilla's placement fails).
     pub fn placement_state<L: LevelAccess + ?Sized>(

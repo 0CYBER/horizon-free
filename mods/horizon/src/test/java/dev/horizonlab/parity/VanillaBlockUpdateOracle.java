@@ -91,6 +91,12 @@ public final class VanillaBlockUpdateOracle {
             return old;
         }
         @Override
+        public void markUnsaved() { }
+        @Override
+        public BlockState getBlockState(BlockPos pos) { return world.getBlockState(pos); }
+        @Override
+        public FluidState getFluidState(BlockPos pos) { return world.getFluidState(pos); }
+        @Override
         public net.minecraft.world.level.chunk.status.ChunkStatus getPersistedStatus() {
             return net.minecraft.world.level.chunk.status.ChunkStatus.FULL;
         }
@@ -145,6 +151,23 @@ public final class VanillaBlockUpdateOracle {
         }
         @Override public LevelChunk getChunkAt(BlockPos p) { return chunk; }
         @Override public LevelChunk getChunk(int x, int z) { return chunk; }
+        @Override public net.minecraft.world.level.chunk.ChunkAccess getChunk(int x, int z, net.minecraft.world.level.chunk.status.ChunkStatus status, boolean load) { return chunk; }
+        net.minecraft.server.waypoints.ServerWaypointManager waypoints;
+        @Override public net.minecraft.server.waypoints.ServerWaypointManager getWaypointManager() {
+            if (waypoints == null) waypoints = new net.minecraft.server.waypoints.ServerWaypointManager();
+            return waypoints;
+        }
+        net.minecraft.server.ServerScoreboard scoreboard;
+        @Override public net.minecraft.server.ServerScoreboard getScoreboard() {
+            if (scoreboard == null) scoreboard = new net.minecraft.server.ServerScoreboard(server);
+            return scoreboard;
+        }
+        /** The biome every position reads (plains), for the oracles that load the world registries. */
+        net.minecraft.core.Holder<net.minecraft.world.level.biome.Biome> biome;
+        @Override public net.minecraft.core.Holder<net.minecraft.world.level.biome.Biome> getBiome(BlockPos p) {
+            if (biome == null) biome = registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.BIOME).getOrThrow(net.minecraft.world.level.biome.Biomes.PLAINS);
+            return biome;
+        }
         @Override public boolean isLoaded(BlockPos p) { return true; }
         @Override public boolean hasChunkAt(BlockPos p) { return true; }
         @Override public boolean hasChunksAt(int x0, int z0, int x1, int z1) { return true; }
@@ -160,7 +183,7 @@ public final class VanillaBlockUpdateOracle {
         @Override public LevelTicks<Fluid> getFluidTicks() { return fluidTicks; }
         @Override public void sendBlockUpdated(BlockPos p, BlockState a, BlockState b, int f) { }
         @Override public void setBlocksDirty(BlockPos p, BlockState a, BlockState b) { }
-        @Override public net.minecraft.core.RegistryAccess registryAccess() { return RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY); }
+        @Override public net.minecraft.core.RegistryAccess registryAccess() { return registries != null ? registries : RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY); }
         @Override public net.minecraft.world.flag.FeatureFlagSet enabledFeatures() { return FeatureFlags.DEFAULT_FLAGS; }
         @Override public GameRules getGameRules() { return rules; }
         @Override public net.minecraft.server.MinecraftServer getServer() { return server; }
@@ -174,12 +197,51 @@ public final class VanillaBlockUpdateOracle {
         @Override public boolean isRainingAt(BlockPos p) { return raining; }
         @Override public boolean isUnobstructed(BlockState state, BlockPos pos, net.minecraft.world.phys.shapes.CollisionContext c) { return true; }
         @Override public boolean isUnobstructed(Entity entity) { return true; }
-        @Override public List<Entity> getEntities(Entity except, AABB box, java.util.function.Predicate<? super Entity> filter) { return List.of(); }
-        @Override public <T extends Entity> List<T> getEntitiesOfClass(Class<T> type, AABB box, java.util.function.Predicate<? super T> filter) { return List.of(); }
+        // Entities exist only when a harness opts in (the dispenser oracle);
+        // they are searched in the order they were added, as within one entity section.
+        List<Entity> entities;
+        net.minecraft.core.RegistryAccess registries;
+        @Override public List<Entity> getEntities(Entity except, AABB box, java.util.function.Predicate<? super Entity> filter) {
+            if (entities == null) return List.of();
+            List<Entity> out = new ArrayList<>();
+            for (Entity e : List.copyOf(entities)) if (e != except && !e.isRemoved() && e.getBoundingBox().intersects(box) && filter.test(e)) out.add(e);
+            return out;
+        }
+        @Override public <T extends Entity> void getEntities(net.minecraft.world.level.entity.EntityTypeTest<Entity, T> type, AABB box, java.util.function.Predicate<? super T> filter, List<? super T> out, int max) {
+            if (entities == null) return;
+            for (Entity e : List.copyOf(entities)) {
+                T t = type.tryCast(e);
+                if (t != null && !e.isRemoved() && e.getBoundingBox().intersects(box) && filter.test(t)) {
+                    out.add(t);
+                    if (out.size() >= max) return;
+                }
+            }
+        }
+        /** ServerLevel.getEntity(id) over the level's entities. */
+        @Override public Entity getEntity(int id) {
+            if (entities == null) return null;
+            for (Entity e : entities) if (e.getId() == id && !e.isRemoved()) return e;
+            return null;
+        }
+        /** Every entity of the level (no area), as ServerLevel's entity getter would. */
+        @Override public <T extends Entity> void getEntities(net.minecraft.world.level.entity.EntityTypeTest<Entity, T> type, java.util.function.Predicate<? super T> filter, List<? super T> out, int max) {
+            if (entities == null) return;
+            for (Entity e : List.copyOf(entities)) {
+                T t = type.tryCast(e);
+                if (t != null && !e.isRemoved() && filter.test(t)) {
+                    out.add(t);
+                    if (out.size() >= max) return;
+                }
+            }
+        }
+        @Override public <T extends Entity> List<T> getEntitiesOfClass(Class<T> type, AABB box, java.util.function.Predicate<? super T> filter) {
+            return getEntities(net.minecraft.world.level.entity.EntityTypeTest.forClass(type), box, filter);
+        }
         @Override public List<net.minecraft.server.level.ServerPlayer> players() { return List.of(); }
         @Override public net.minecraft.world.entity.player.Player getNearestPlayer(double x, double y, double z, double d, boolean b) { return null; }
         @Override public boolean addFreshEntity(Entity entity) {
             emit("E " + BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()));
+            if (entities != null) entities.add(entity);
             return true;
         }
         @Override public void levelEvent(Entity source, int type, BlockPos p, int data) { emit("L " + type + " " + pos(p) + " " + data); }
@@ -187,7 +249,7 @@ public final class VanillaBlockUpdateOracle {
             emit("S " + pos(BlockPos.containing(x, y, z)) + " " + sound.value().location());
         }
         @Override public void playSeededSound(Entity except, Entity src, net.minecraft.core.Holder<SoundEvent> sound, SoundSource source, float volume, float pitch, long seed) {
-            emit("S entity " + sound.value().location());
+            emit("S " + (entities != null ? pos(BlockPos.containing(src.position())) : "entity") + " " + sound.value().location());
         }
         @Override public void gameEvent(net.minecraft.core.Holder<net.minecraft.world.level.gameevent.GameEvent> e, Vec3 p, net.minecraft.world.level.gameevent.GameEvent.Context c) {
             emit("G " + pos(BlockPos.containing(p)) + " " + e.getRegisteredName());
@@ -252,6 +314,12 @@ public final class VanillaBlockUpdateOracle {
             return attributes;
         }
         @Override public net.minecraft.world.level.dimension.DimensionType dimensionType() { return OVERWORLD_TYPE; }
+        /** The overworld (fire in an obsidian frame lights a portal here). */
+        @Override public net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension() { return net.minecraft.world.level.Level.OVERWORLD; }
+        @Override public long getOverworldClockTime() { return DAY.totalTicks(); }
+        @Override public float getMoonBrightness(BlockPos p) {
+            return net.minecraft.world.level.dimension.DimensionType.MOON_BRIGHTNESS_PER_PHASE[environmentAttributes().getValue(net.minecraft.world.attribute.EnvironmentAttributes.MOON_PHASE, p).index()];
+        }
         @Override public net.minecraft.world.level.storage.ServerLevelData getLevelData() { return LEVEL_DATA; }
         @Override public boolean anyPlayerCloseEnoughForSpawning(BlockPos p) { return false; }
         @Override public void playSound(Entity except, double x, double y, double z, SoundEvent sound, SoundSource source, float volume, float pitch) {
@@ -339,13 +407,15 @@ public final class VanillaBlockUpdateOracle {
 
     static final class Loot extends net.minecraft.server.ReloadableServerRegistries.Holder {
         World world;
+        /** The real loot tables, for the oracles that compare drops (the dispenser's). */
+        net.minecraft.server.ReloadableServerRegistries.Holder delegate;
         Loot() {
             super(null);
         }
         @Override
         public net.minecraft.world.level.storage.loot.LootTable getLootTable(net.minecraft.resources.ResourceKey<net.minecraft.world.level.storage.loot.LootTable> id) {
             world.emit("D " + id.identifier());
-            return net.minecraft.world.level.storage.loot.LootTable.EMPTY;
+            return delegate != null ? delegate.getLootTable(id) : net.minecraft.world.level.storage.loot.LootTable.EMPTY;
         }
     }
 
@@ -371,6 +441,12 @@ public final class VanillaBlockUpdateOracle {
         @Override public boolean isPublished() { return false; }
         @Override public boolean shouldInformAdmins() { return false; }
         @Override public boolean isSingleplayerOwner(net.minecraft.server.players.NameAndId id) { return false; }
+        net.minecraft.world.RandomSequences sequences;
+        /** Loot tables with a random_sequence draw from the server's sequences (world seed 0). */
+        @Override public RandomSource getRandomSequence(net.minecraft.resources.Identifier key) {
+            if (sequences == null) sequences = new net.minecraft.world.RandomSequences();
+            return sequences.get(key, 0L);
+        }
     }
 
     static List<String> summary(World w, Map<BlockPos, BlockState> before) {
@@ -441,8 +517,34 @@ public final class VanillaBlockUpdateOracle {
         return new BlockPos(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt());
     }
 
+    /**
+     * The chunk source bone meal reaches for: saplings, grass and moss place
+     * their features with `getChunkSource().getGenerator()`, which none of
+     * them reads beyond passing it along.
+     */
+    static final class Chunks extends net.minecraft.server.level.ServerChunkCache {
+        static net.minecraft.world.level.chunk.ChunkGenerator generator;
+
+        private Chunks() {
+            super(null, null, null, null, null, null, 0, 0, false, null);
+        }
+
+        @Override
+        public net.minecraft.world.level.chunk.ChunkGenerator getGenerator() {
+            return generator;
+        }
+
+        /** Leads send entity link packets; nobody is tracking. */
+        @Override
+        public void sendToTrackingPlayers(final net.minecraft.world.entity.Entity entity, final net.minecraft.network.protocol.Packet<? super net.minecraft.network.protocol.game.ClientGamePacketListener> packet) {
+        }
+    }
+
     static World build(JsonObject f) throws Exception {
         World w = make(World.class);
+        // Saplings, grass and moss place features through the chunk source's generator.
+        if (Chunks.generator == null) Chunks.generator = make(net.minecraft.world.level.levelgen.FlatLevelSource.class);
+        set(net.minecraft.server.level.ServerLevel.class, w, "chunkSource", make(Chunks.class));
         w.cells = new HashMap<>();
         w.log = new StringBuilder();
         w.blockEvents = new java.util.LinkedHashSet<>();

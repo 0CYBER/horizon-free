@@ -1,7 +1,7 @@
 //! `PortalShape`: the obsidian frame search used by nether portal blocks.
 use super::{LevelAccess, Sim, update::rel};
 use crate::registry::BlockStateId;
-use horizon_core::{geometry::Direction, position::BlockPos};
+use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource};
 
 const MIN_WIDTH: i32 = 2;
 const MAX_WIDTH: i32 = 21;
@@ -125,5 +125,60 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             0
         };
         shape
+    }
+    /// `PortalShape.findEmptyPortalShape`: a valid frame holding no portal
+    /// block yet, on the preferred axis first.
+    pub fn find_empty_portal_shape(&self, pos: BlockPos, x_axis: bool) -> Option<PortalShape> {
+        [x_axis, !x_axis]
+            .into_iter()
+            .map(|axis| self.find_portal_shape(pos, axis))
+            .find(|shape| shape.is_valid() && shape.portal_blocks == 0)
+    }
+    /// `PortalShape.createPortalBlocks`: fill the frame (flags 18).
+    pub fn create_portal_blocks(&mut self, shape: &PortalShape) {
+        let b = self.b;
+        let base = b.default_of(b.named.nether_portal);
+        let state = b
+            .table
+            .with_text(base, b.props.axis, if shape.x_axis { "x" } else { "z" })
+            .unwrap_or(base);
+        for h in 0..shape.height {
+            for w in 0..shape.width {
+                let at = step(step(shape.bottom_left, Direction::Up, h), shape.right, w);
+                self.set_block(at, state, 18);
+            }
+        }
+    }
+    /// `BaseFireBlock.canBePlacedAt(level, pos, forwardDirection)`: air where
+    /// fire would survive, or the inside of an empty portal frame (vertical
+    /// directions pick the frame axis with the level random).
+    pub fn fire_can_be_placed_at(&mut self, pos: BlockPos, forward: Direction) -> bool {
+        if !self.b.is_air(self.state(pos)) {
+            return false;
+        }
+        if self.can_survive(self.fire_state_for(pos), pos) {
+            return true;
+        }
+        // isPortal
+        if !matches!(
+            self.level.dimension(),
+            super::Dimension::Overworld | super::Dimension::Nether
+        ) {
+            return false;
+        }
+        for face in Direction::ALL {
+            if self.portal_frame(self.state(rel(pos, face))) {
+                // getCounterClockWise().getAxis(): north/south turn to X.
+                let x_axis = match forward {
+                    Direction::North | Direction::South => true,
+                    Direction::West | Direction::East => false,
+                    Direction::Up | Direction::Down => {
+                        self.random().next_int_bound(2).unwrap_or(0) == 0
+                    }
+                };
+                return self.find_empty_portal_shape(pos, x_axis).is_some();
+            }
+        }
+        false
     }
 }

@@ -291,13 +291,11 @@ impl Game<'_> {
                 }
             }
             Target::Painting(_) => "minecraft:painting".into(),
-            Target::Boat(id) => self.boats.iter().find(|b| b.id == id).map_or_else(
-                || "minecraft:oak_boat".into(),
-                |b| {
-                    let kind = if &*b.wood == "bamboo" { "raft" } else { "boat" };
-                    format!("minecraft:{}_{kind}", b.wood)
-                },
-            ),
+            Target::Boat(id) => self
+                .boats
+                .iter()
+                .find(|b| b.id == id)
+                .map_or_else(|| "minecraft:oak_boat".into(), |b| b.entity_type()),
             Target::Cart(id) => self
                 .carts
                 .iter()

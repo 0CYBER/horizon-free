@@ -40,35 +40,30 @@ impl Game<'_> {
                 if !ok {
                     continue;
                 }
-                for row in 0..3 {
-                    for c in 0..3 {
-                        let p = at(c, row);
-                        let state = self.world.block(p[0], p[1], p[2]);
-                        if !self.res.facts.is_air(state) {
-                            self.destroy_particles(p, state);
-                            self.world.set(p[0], p[1], p[2], self.world.air)?;
-                        }
-                    }
-                }
+                // WitherSkullBlock.checkSpawn: clear the pattern, the wither
+                // appears on the middle of the bottom row, then neighbours update.
+                let cells: Vec<[i32; 3]> = (0..3)
+                    .flat_map(|c| (0..3).map(move |row| (c, row)))
+                    .map(|(c, row)| at(c, row))
+                    .collect();
+                self.clear_pattern_blocks(&cells)?;
                 let base = at(1, 2);
                 let at = [
                     f64::from(base[0]) + 0.5,
                     f64::from(base[1]) + 0.55,
                     f64::from(base[2]) + 0.5,
                 ];
-                if let Some(id) = self.spawn_mob("minecraft:wither", at, true)
+                let yaw = if ax == 1 { 0.0 } else { 90.0 };
+                if let Some(id) = self.create_triggered("minecraft:wither", at, yaw)
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
                 {
-                    let yaw = if ax == 1 { 0.0 } else { 90.0 };
-                    m.yaw = yaw;
-                    m.body_yaw = yaw;
-                    m.previous_body_yaw = yaw;
-                    m.head_yaw = yaw;
+                    m.persistent = true;
                     horizon_client::mobs::wither::make_invulnerable(m);
                     let view =
                         self.mob_entity(&self.mobs.iter().find(|m| m.id == id).cloned().unwrap());
                     self.trigger_entity("minecraft:summoned_entity", "entity", &view);
                 }
+                self.update_pattern_blocks(&cells)?;
                 return Ok(());
             }
         }

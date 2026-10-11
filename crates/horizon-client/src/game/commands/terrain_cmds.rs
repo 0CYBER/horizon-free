@@ -486,7 +486,7 @@ impl Game<'_> {
                     } else {
                         None
                     };
-                    let drops = match self.res.items.loot_random_sequence(&table) {
+                    let drops = match self.res.items.loot_sequence(&table) {
                         Some(seq) => {
                             let random = self.rand_sequences.get(&seq, self.level.seed);
                             self.res
@@ -521,7 +521,7 @@ impl Game<'_> {
                     None | Some(Some(Target::Player))
                 );
                 let held = self.slot_get(&super::items::Slot::Inv(self.selected));
-                let drops = match self.res.items.loot_random_sequence(&table) {
+                let drops = match self.res.items.loot_sequence(&table) {
                     Some(seq) => {
                         let random = self.rand_sequences.get(&seq, self.level.seed);
                         self.res
@@ -547,7 +547,7 @@ impl Game<'_> {
                     return Err(err("commands.drop.no_loot_table.block", &[&name]));
                 }
                 let tool = self.tool_stack(ctx)?;
-                let drops = match self.res.items.loot_random_sequence(&table) {
+                let drops = match self.res.items.loot_sequence(&table) {
                     Some(seq) => {
                         let random = self.rand_sequences.get(&seq, self.level.seed);
                         self.res.items.block_drops(

@@ -526,14 +526,6 @@ impl Items {
     pub fn has_loot_table(&self, id: &str) -> bool {
         self.loot.contains_key(id)
     }
-    /// A loot table's `random_sequence`.
-    pub fn loot_random_sequence(&self, id: &str) -> Option<String> {
-        self.loot
-            .get(id)?
-            .get("random_sequence")?
-            .as_str()
-            .map(str::to_owned)
-    }
     /// `LootTable.getRandomItems` of an inline table.
     pub fn inline_loot_table<R: RandomSource>(
         &self,
@@ -549,6 +541,20 @@ impl Items {
             killed_by_player: false,
         };
         ctx.evaluate(table, random)
+    }
+    /// The server random sequence the block's loot table draws from.
+    pub fn block_loot_sequence(
+        &self,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+    ) -> Option<String> {
+        let block = registry.state(state)?;
+        let name = block.name.trim_start_matches("minecraft:");
+        let standing = name.replacen("_wall_", "_", 1);
+        let standing = standing.strip_prefix("wall_").unwrap_or(&standing);
+        let standing = standing.replacen("wall_", "", 1);
+        self.loot_sequence(&format!("minecraft:blocks/{name}"))
+            .or_else(|| self.loot_sequence(&format!("minecraft:blocks/{standing}")))
     }
     /// Evaluate the block's loot table for a player break without explosions.
     pub fn block_drops<R: RandomSource>(
@@ -632,6 +638,34 @@ impl Items {
         };
         ctx.evaluate(table, random)
     }
+    /// The server random sequence a loot table draws from (`random_sequence`):
+    /// vanilla's `LootContext.Builder.create` uses it instead of the level random.
+    pub fn loot_sequence(&self, id: &str) -> Option<String> {
+        self.loot.get(id)?["random_sequence"]
+            .as_str()
+            .map(str::to_owned)
+    }
+    /// `loot_table` drawing from any random (a random sequence).
+    pub fn loot_table_from(
+        &self,
+        id: &str,
+        killed_by_player: bool,
+        held: Option<&ItemStack>,
+        random: &mut impl RandomSource,
+    ) -> Vec<ItemStack> {
+        let Some(table) = self.loot.get(id) else {
+            return vec![];
+        };
+        let empty = BTreeMap::new();
+        let ctx = LootContext {
+            items: self,
+            block: "",
+            properties: &empty,
+            held,
+            killed_by_player,
+        };
+        ctx.evaluate(table, random)
+    }
     pub fn entity_drops<R: RandomSource>(
         &self,
         entity: &str,
@@ -662,7 +696,8 @@ impl LootContext<'_> {
             if !ctx.conditions(pool, random) {
                 continue;
             }
-            let rolls = ctx.number(&pool["rolls"], random).max(0.0) as u32;
+            // LootPool: rolls.getInt (Mth.randomBetweenInclusive for uniform rolls).
+            let rolls = ctx.int_number(&pool["rolls"], random).max(0) as u32;
             for _ in 0..rolls {
                 let mut produced = Vec::new();
                 ctx.choose(
