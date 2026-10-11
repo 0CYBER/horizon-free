@@ -75,11 +75,13 @@ OVERWORLD = {
     'minecraft:pale_garden': ('minecraft:grass_block', 'minecraft:dirt'),
     'minecraft:grove': ('minecraft:snow_block', 'minecraft:dirt'),
     'minecraft:snowy_slopes': ('minecraft:snow_block', 'minecraft:stone'),
+    'minecraft:savanna_plateau': ('minecraft:grass_block', 'minecraft:dirt'),
+    'minecraft:eroded_badlands': ('minecraft:red_sand', 'minecraft:terracotta'),
 }
 OCEANS = ['minecraft:ocean', 'minecraft:deep_ocean', 'minecraft:warm_ocean', 'minecraft:lukewarm_ocean',
           'minecraft:deep_lukewarm_ocean', 'minecraft:cold_ocean', 'minecraft:deep_cold_ocean',
           'minecraft:frozen_ocean', 'minecraft:deep_frozen_ocean', 'minecraft:river', 'minecraft:frozen_river']
-CAVES = ['minecraft:lush_caves', 'minecraft:dripstone_caves', 'minecraft:deep_dark']
+CAVES = ['minecraft:lush_caves', 'minecraft:dripstone_caves', 'minecraft:deep_dark', 'minecraft:sulfur_caves']
 NETHER = {
     'minecraft:nether_wastes': 'minecraft:netherrack',
     'minecraft:crimson_forest': 'minecraft:crimson_nylium',
@@ -105,6 +107,26 @@ MOBS = {
 CATEGORIES = ['monster', 'creature', 'ambient', 'axolotls', 'underground_water_creature', 'water_creature',
               'water_ambient']
 TORCH_LIGHT = [0, 0, 0, 1, 4, 7, 8, 9, 12, 14]
+
+
+def java_next_int(seed, bound):
+    """java.util.Random(seed).nextInt(bound)."""
+    mask = (1 << 48) - 1
+    state = (seed ^ 0x5DEECE66D) & mask
+    while True:
+        state = (state * 0x5DEECE66D + 0xB) & mask
+        bits = state >> 17
+        value = bits % bound
+        if bits - value + bound - 1 < 2**31:
+            return value
+
+
+def slime_chunk(world_seed, cx, cz):
+    """WorldgenRandom.seedSlimeChunk(cx, cz, seed, 987234911).nextInt(10) == 0."""
+    def i32(v):
+        return (v + 2**31) % 2**32 - 2**31
+    seed = (world_seed + i32(cx * cx * 4987142) + i32(cx * 5947611) + i32(cz * cz) * 4392871 + i32(cz * 389711)) ^ 987234911
+    return java_next_int(seed & (2**64 - 1), 10) == 0
 
 
 def box(x0, y0, z0, x1, y1, z1):
@@ -396,14 +418,14 @@ def common(w, rng, seed):
         w.kv['unloaded'] = ';'.join(f'{rng.choice([-1, 0, 1])},{rng.choice([-1, 0, 1])}' for _ in range(rng.randrange(1, 5)))
 
 
-def make_world(rng, seed, dim=None):
+def make_world(rng, seed, dim=None, biome=None, ocean=None):
     w = World(rng)
     dim = dim or rng.choices(['overworld', 'nether', 'end'], [70, 22, 8])[0]
     if dim == 'overworld':
-        overworld(w, rng)
+        overworld(w, rng, biome=biome, ocean=ocean)
     elif dim == 'nether':
         w.min_y = 0
-        nether(w, rng)
+        nether(w, rng, biome=biome)
     else:
         w.min_y = 0
         end(w, rng)
@@ -449,6 +471,52 @@ def corpus():
         if rng.random() < 0.05:
             category = rng.choice(CATEGORIES)
         cases.append(f'pos/{k} mode=pos cat={category} start={x},{y},{z} {w.tokens()}')
+    # Targeted nights and places for the rarer types.
+    targets = [
+        ('minecraft:desert', False, 'surface', 'monster'), ('minecraft:desert', False, 'surface', 'creature'),
+        ('minecraft:snowy_plains', False, 'surface', 'monster'), ('minecraft:ice_spikes', False, 'surface', 'creature'),
+        ('minecraft:swamp', False, 'surface', 'monster'), ('minecraft:mangrove_swamp', False, 'surface', 'monster'),
+        ('minecraft:jungle', False, 'surface', 'monster'), ('minecraft:bamboo_jungle', False, 'surface', 'monster'),
+        ('minecraft:plains', False, 'surface', 'monster'), ('minecraft:savanna', False, 'surface', 'creature'),
+        ('minecraft:badlands', False, 'surface', 'creature'), ('minecraft:warm_ocean', True, 'water', 'water_ambient'),
+        ('minecraft:lukewarm_ocean', True, 'water', 'water_creature'), ('minecraft:deep_ocean', True, 'water', 'monster'),
+        ('minecraft:frozen_ocean', True, 'water', 'creature'), ('minecraft:lush_caves', None, 'cave', 'axolotls'),
+        ('minecraft:sulfur_caves', None, 'cave', 'monster'), ('minecraft:dripstone_caves', None, 'cave', 'monster'),
+        ('minecraft:crimson_forest', 'nether', 'surface', 'monster'), ('slime', None, 'cave', 'monster'),
+        ('minecraft:river', True, 'water', 'monster'),
+    ]
+    for k in range(4000):
+        biome, ocean, kind, category = rng.choice(targets)
+        if ocean == 'nether':
+            w = make_world(rng, rng.randrange(-2**47, 2**47), dim='nether', biome=biome)
+        elif kind == 'cave':
+            w = make_world(rng, rng.randrange(-2**47, 2**47), dim='overworld', ocean=False)
+        else:
+            w = make_world(rng, rng.randrange(-2**47, 2**47), dim='overworld', biome=biome, ocean=ocean)
+        w.kv['darken'] = 11 if category == 'monster' else rng.choice([0, 0, 4, 11])
+        w.kv.pop('thunder', None)
+        sites = [t for t in w.sites if t[3] == kind] or w.sites
+        x, y, z, _ = rng.choice(sites)
+        if kind == 'cave':
+            # A dark room under the start, in the cave biome (or a slime chunk).
+            w.block(box(x - 6, y, z - 6, x + 6, y + 4, z + 6), 'minecraft:cave_air')
+            floor = 'minecraft:clay' if category == 'axolotls' else rng.choice(['minecraft:stone', 'minecraft:deepslate'])
+            w.block(box(x - 6, y - 1, z - 6, x + 6, y - 1, z + 6), floor)
+            if category == 'axolotls' or biome == 'minecraft:dripstone_caves' and rng.random() < 0.5:
+                w.block(box(x - 6, y, z - 6, x + 6, y + 2, z + 6), 'minecraft:water')
+            w.light(box(x - 6, y, z - 6, x + 6, y + 4, z + 6), 0, rng.choice([0, 0, 0, 3]))
+            if biome == 'slime':
+                y = min(y, rng.randrange(-50, 38))
+                w.block(box(x - 6, y, z - 6, x + 6, y + 4, z + 6), 'minecraft:cave_air')
+                w.block(box(x - 6, y - 1, z - 6, x + 6, y - 1, z + 6), 'minecraft:stone')
+                w.light(box(x - 6, y, z - 6, x + 6, y + 4, z + 6), 0, 0)
+                while not slime_chunk(w.kv['wseed'], 0, 0):
+                    w.kv['wseed'] = rng.randrange(-2**63, 2**63)
+            else:
+                w.biomes.append(f'{box(x - 8, y - 3, z - 8, x + 8, y + 6, z + 8)}/{biome}')
+        if biome in ('minecraft:swamp', 'minecraft:mangrove_swamp'):
+            w.kv['slime'] = rng.choice([0.0, 0.25, 0.5])
+        cases.append(f'target/{k} mode=pos cat={category} start={x},{y},{z} {w.tokens()}')
     # Chunk generation: creature packs placed on the surface.
     for k in range(1500):
         w = World(rng)

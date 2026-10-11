@@ -302,6 +302,15 @@ public final class VanillaNaturalSpawnOracle {
     }
 
     static String bits(double v) { return Long.toHexString(Double.doubleToRawLongBits(v)); }
+    /**
+     * A spawned mob's yaw. A cube mob whose size finalizeSpawn changed took its
+     * constructor's head rotation (AbstractCubeMob.onSyncedDataUpdated), drawn
+     * from the entity's own unseeded random: not reproducible, so not compared.
+     */
+    static String yaw(Entity e) {
+        if (e instanceof net.minecraft.world.entity.monster.cubemob.AbstractCubeMob cube && cube.getSize() != 1) return "head";
+        return bits(e.getYRot());
+    }
     static String bits(float v) { return Integer.toHexString(Float.floatToRawIntBits(v)); }
 
     public static void main(String[] args) throws Exception {
@@ -476,7 +485,7 @@ public final class VanillaNaturalSpawnOracle {
                         level.logColumns = false;
                         for (Entity e : level.entities.subList(n, level.entities.size()))
                             if (e.getVehicle() == null)
-                                log.add("spawn " + BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()) + " " + bits(e.getX()) + " " + bits(e.getY()) + " " + bits(e.getZ()) + " " + bits(e.getYRot()));
+                                log.add("spawn " + BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()) + " " + bits(e.getX()) + " " + bits(e.getY()) + " " + bits(e.getZ()) + " " + yaw(e));
                         log.add("next " + random.nextInt(1000));
                     } else {
                         Map<Long, Chunk> chunks = new HashMap<>();
@@ -501,7 +510,7 @@ public final class VanillaNaturalSpawnOracle {
                             } catch (Exception ex) { throw new RuntimeException(ex); }
                         };
                         NaturalSpawner.AfterSpawnCallback after = (mob, ch) -> {
-                            log.add("spawn " + BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()) + " " + bits(mob.getX()) + " " + bits(mob.getY()) + " " + bits(mob.getZ()) + " " + bits(mob.getYRot()));
+                            log.add("spawn " + BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()) + " " + bits(mob.getX()) + " " + bits(mob.getY()) + " " + bits(mob.getZ()) + " " + yaw(mob));
                             try { afterSpawn.invoke(state, mob, ch); } catch (Exception ex) { throw new RuntimeException(ex); }
                         };
                         if (mode.equals("pos")) {

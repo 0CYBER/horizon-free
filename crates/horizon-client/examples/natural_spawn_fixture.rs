@@ -342,8 +342,15 @@ fn parse_state(spec: &str) -> BlockState {
 fn bits(v: f64) -> String {
     format!("{:x}", v.to_bits())
 }
-fn fbits(v: f32) -> String {
-    format!("{:x}", v.to_bits())
+/// The yaw as the oracle prints it: a cube mob grown by `finalizeSpawn`
+/// (sulfur cubes, size 2 under the fixed random) takes its constructor's
+/// head rotation from the entity's unseeded random.
+fn yaw_text(entity: &str, v: f32) -> String {
+    if entity == "minecraft:sulfur_cube" {
+        "head".to_owned()
+    } else {
+        format!("{:x}", v.to_bits())
+    }
 }
 
 fn main() -> horizon_client::Result<()> {
@@ -581,7 +588,7 @@ fn main() -> horizon_client::Result<()> {
                         bits(p[0]),
                         bits(p[1]),
                         bits(p[2]),
-                        fbits(yaw)
+                        yaw_text(&t, yaw)
                     )),
                 },
             );
@@ -638,7 +645,7 @@ fn main() -> horizon_client::Result<()> {
                         bits(p[0]),
                         bits(p[1]),
                         bits(p[2]),
-                        fbits(yaw)
+                        yaw_text(&t, yaw)
                     ),
                 })
             };
