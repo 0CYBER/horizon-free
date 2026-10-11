@@ -21,7 +21,10 @@ pub struct PortalShape {
 
 impl PortalShape {
     pub const fn is_valid(&self) -> bool {
-        self.width >= MIN_WIDTH && self.width <= MAX_WIDTH && self.height >= MIN_HEIGHT && self.height <= MAX_HEIGHT
+        self.width >= MIN_WIDTH
+            && self.width <= MAX_WIDTH
+            && self.height >= MIN_HEIGHT
+            && self.height <= MAX_HEIGHT
     }
     pub const fn is_complete(&self) -> bool {
         self.is_valid() && self.portal_blocks == self.width * self.height
@@ -36,13 +39,15 @@ fn step(pos: BlockPos, dir: Direction, n: i32) -> BlockPos {
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn portal_frame(&self, state: BlockStateId) -> bool {
         let b = self.b;
-        b.tag("minecraft:nether_portal_frame").is_some_and(|tag| b.in_set(state, tag))
+        b.tag("minecraft:nether_portal_frame")
+            .is_some_and(|tag| b.in_set(state, tag))
     }
     /// `PortalShape.isEmpty`: air, fire or a portal block.
     fn portal_empty(&self, state: BlockStateId) -> bool {
         let b = self.b;
         b.is_air(state)
-            || b.tag("minecraft:fire").is_some_and(|tag| b.in_set(state, tag))
+            || b.tag("minecraft:fire")
+                .is_some_and(|tag| b.in_set(state, tag))
             || b.is_block(state, b.named.nether_portal)
     }
     fn portal_distance_until_edge_above_frame(&self, pos: BlockPos, dir: Direction) -> i32 {
@@ -60,8 +65,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `PortalShape.findAnyShape`.
     pub fn find_portal_shape(&self, pos: BlockPos, x_axis: bool) -> PortalShape {
-        let right = if x_axis { Direction::West } else { Direction::South };
-        let mut shape = PortalShape { x_axis, right, bottom_left: pos, width: 0, height: 0, portal_blocks: 0 };
+        let right = if x_axis {
+            Direction::West
+        } else {
+            Direction::South
+        };
+        let mut shape = PortalShape {
+            x_axis,
+            right,
+            bottom_left: pos,
+            width: 0,
+            height: 0,
+            portal_blocks: 0,
+        };
         // calculateBottomLeft
         let min_y = self.level.min_y().max(pos.y - MAX_HEIGHT);
         let mut start = pos;
@@ -103,7 +119,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         let top = step(shape.bottom_left, Direction::Up, height);
         let has_top = (0..width).all(|i| self.portal_frame(self.state(step(top, right, i))));
-        shape.height = if (MIN_HEIGHT..=MAX_HEIGHT).contains(&height) && has_top { height } else { 0 };
+        shape.height = if (MIN_HEIGHT..=MAX_HEIGHT).contains(&height) && has_top {
+            height
+        } else {
+            0
+        };
         shape
     }
 }

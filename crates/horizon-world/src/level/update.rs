@@ -188,7 +188,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub fn prime_tnt(&mut self, pos: BlockPos) {
         let rot = self.random().next_double() * f64::from(std::f32::consts::TAU);
         self.emit(LevelEvent::PrimeTnt { pos, rot });
-        self.sound(pos, &std::sync::Arc::from("minecraft:entity.tnt.primed"), 1.0, 1.0);
+        self.sound(
+            pos,
+            &std::sync::Arc::from("minecraft:entity.tnt.primed"),
+            1.0,
+            1.0,
+        );
         self.game_event(pos, "minecraft:prime_fuse");
     }
     pub fn level_event(&mut self, id: i32, pos: BlockPos, data: i32) {

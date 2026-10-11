@@ -1,16 +1,18 @@
 //! Field of view (`Camera.tickFov`, `calculateFov`,
-//! `AbstractClientPlayer.getFieldOfViewModifier`) and the spyglass
-//! (`SpyglassItem`, `Hud.extractSpyglassOverlay`).
+//! `AbstractClientPlayer.getFieldOfViewModifier`), view and hurt bobbing
+//! (`GameRenderer.bobHurt`, `bobView`) and the spyglass (`SpyglassItem`,
+//! `Hud.extractSpyglassOverlay`). The arithmetic is `horizon_client::camera`.
 use super::Game;
 use horizon_client::{
+    camera::{
+        BobState, CameraFluid, FovPlayer, HurtBob, UseItem, bob_matrix, field_of_view_modifier,
+    },
     fog::{FogType, fog_type},
     hud::{HudBatch, rgba},
 };
 
 /// `Abilities.walkingSpeed`.
 const WALKING_SPEED: f32 = 0.1;
-/// `options.fovEffectScale` (vanilla default 1).
-const FOV_EFFECT_SCALE: f32 = 1.0;
 
 impl Game<'_> {
     /// `Player.isScoping`: using a spyglass.
@@ -19,54 +21,115 @@ impl Game<'_> {
             .and_then(|(slot, _)| self.stack_in(slot))
             .is_some_and(|s| &*s.item == "minecraft:spyglass")
     }
-    /// `AbstractClientPlayer.getFieldOfViewModifier` (first person).
-    fn fov_target(&self) -> f32 {
-        let Some(p) = &self.player else { return 1.0 };
-        let mut modifier = 1.0f32;
-        // Movement speed (sprinting, speed and slowness) relative to walking.
-        modifier *= (p.speed / WALKING_SPEED + 1.0) / 2.0;
-        if let Some((slot, ticks)) = self.using
-            && let Some(stack) = self.stack_in(slot)
-        {
-            match &*stack.item {
-                "minecraft:bow" => {
-                    let scale = (ticks as f32 / 20.0).min(1.0);
-                    modifier *= 1.0 - scale * scale * 0.15;
-                }
-                "minecraft:spyglass" => return 0.1,
-                _ => {}
-            }
-        }
-        1.0 + (modifier - 1.0) * FOV_EFFECT_SCALE
+    /// `options.fovEffectScale`.
+    pub(super) fn fov_effect_scale(&self) -> f32 {
+        self.settings.file.double("fovEffectScale") as f32
     }
-    /// `Camera.tickFov`.
+    /// What `AbstractClientPlayer.getFieldOfViewModifier` reads.
+    fn fov_player(&self) -> Option<FovPlayer> {
+        let p = self.player.as_ref()?;
+        let using = self.using.and_then(|(slot, ticks)| {
+            let stack = self.stack_in(slot)?;
+            let item = match &*stack.item {
+                "minecraft:bow" => UseItem::Bow,
+                "minecraft:spyglass" => UseItem::Spyglass,
+                _ => UseItem::Other,
+            };
+            Some((item, ticks as i32))
+        });
+        Some(FovPlayer {
+            flying: p.flying,
+            walking_speed: WALKING_SPEED,
+            // Player.aiStep keeps `speed` as the float movement speed attribute.
+            movement_speed: f64::from(p.speed),
+            using,
+        })
+    }
+    /// `Camera.tick`: the eye height and the field-of-view modifier ease
+    /// halfway toward the player's each tick.
     pub(super) fn tick_fov(&mut self) {
-        let target = self.fov_target();
-        let [_, current] = self.fov_modifier;
-        let next = (current + (target - current) * 0.5).clamp(0.1, 1.5);
-        self.fov_modifier = [current, next];
+        let first_person = self.camera_type.first_person();
+        let effect = self.fov_effect_scale();
+        let target = self
+            .fov_player()
+            .map_or(1.0, |p| field_of_view_modifier(&p, first_person, effect));
+        let eye = self.player.as_ref().map(|p| p.dimensions.eye_height);
+        self.view.tick(eye, target);
+    }
+    /// The player's `deathTime` while dead or dying.
+    fn death_time(&self) -> Option<i32> {
+        let p = self.player.as_ref()?;
+        p.health.dead_or_dying().then(|| {
+            self.ui
+                .died_at
+                .map_or(0, |t| (t.elapsed().as_secs_f32() * 20.0) as i32)
+        })
+    }
+    /// The fluid at the camera, as `Camera.getFluidInCamera` reports it.
+    fn camera_fluid(&self, camera: [f64; 3]) -> CameraFluid {
+        match fog_type(&self.world, &self.res.facts, camera, self.forward()) {
+            FogType::Water => CameraFluid::Water,
+            FogType::Lava => CameraFluid::Lava,
+            FogType::PowderSnow => CameraFluid::PowderSnow,
+            FogType::Atmospheric => CameraFluid::None,
+        }
     }
     /// `Camera.calculateFov` with `modifyFovBasedOnDeathOrFluid`.
     pub(super) fn fov_degrees(&self, partial: f32, camera: [f64; 3]) -> f32 {
-        let [old, new] = self.fov_modifier;
-        let mut fov = self.settings.fov * (old + (new - old) * partial);
-        if let Some(p) = &self.player
-            && p.health.dead_or_dying()
-        {
-            let ticks = self
-                .ui
-                .died_at
-                .map_or(0.0, |t| t.elapsed().as_secs_f32() * 20.0);
-            let duration = (ticks + partial).min(20.0);
-            fov /= (1.0 - 500.0 / (duration + 500.0)) * 2.0 + 1.0;
+        self.view.calculate_fov(
+            partial,
+            self.settings.fov as i32,
+            self.fov_effect_scale(),
+            self.death_time(),
+            self.camera_fluid(camera),
+            false,
+        )
+    }
+    /// The pose `GameRenderer.renderLevel` multiplies into the projection:
+    /// `bobHurt`, then `bobView` with the View Bobbing option.
+    pub(super) fn bob_matrix(&self, partial: f32) -> glam::Mat4 {
+        let Some(p) = self.player.as_ref() else {
+            return glam::Mat4::IDENTITY;
+        };
+        let hurt = &p.health.hurt;
+        let state = BobState {
+            living: Some(HurtBob {
+                hurt_time: hurt.hurt_time as f32 - partial,
+                hurt_duration: hurt.hurt_duration,
+                hurt_dir: 0.0,
+                death_time: self.death_time().map(|t| t as f32 + partial),
+            }),
+            player: Some((
+                self.avatar.backwards_interpolated_walk_distance(partial),
+                self.avatar.interpolated_bob(partial),
+            )),
+        };
+        let tilt = self.settings.file.double("damageTiltStrength");
+        glam::Mat4::from_cols_array(&bob_matrix(&state, tilt, self.settings.view_bobbing).m)
+    }
+    /// `AbstractClientPlayer.tick` and `aiStep` (`ClientAvatarState.tick`,
+    /// `updateBob`), `rideTick`'s `resetBob` and `LocalPlayer.move`'s walked
+    /// distance, after the player's movement this tick. `before` is the
+    /// ground state, velocity and position at the start of the tick.
+    pub(super) fn tick_avatar(&mut self, before: (bool, [f64; 3], [f64; 3]), riding: bool) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let (ground, velocity, start) = before;
+        let swimming = p.pose == horizon_client::pose::Pose::Swimming;
+        let alive = !p.health.dead_or_dying();
+        let (dx, dz) = (
+            (p.position.x - start[0]) as f32,
+            (p.position.z - start[2]) as f32,
+        );
+        self.avatar.tick();
+        self.avatar
+            .update_bob(ground && alive && !swimming, velocity);
+        if riding {
+            self.avatar.reset_bob();
+        } else {
+            self.avatar.add_walked(dx, dz);
         }
-        if matches!(
-            fog_type(&self.world, &self.res.facts, camera, self.forward()),
-            FogType::Water | FogType::Lava
-        ) {
-            fov *= 1.0 + (0.857_142_87 - 1.0) * FOV_EFFECT_SCALE;
-        }
-        fov
     }
     /// `SpyglassItem.use`: start scoping.
     pub(super) fn use_spyglass(&mut self) {

@@ -995,7 +995,10 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
                 .unwrap_or(false),
             // `WeatheringCopper.getAge`: copper golem statues name the field
             // `weatheringState`.
-            weather: match field("weatherState").or_else(|| field("weatheringState")).and_then(Value::as_str) {
+            weather: match field("weatherState")
+                .or_else(|| field("weatheringState"))
+                .and_then(Value::as_str)
+            {
                 Some("EXPOSED") => 1,
                 Some("WEATHERED") => 2,
                 Some("OXIDIZED") => 3,

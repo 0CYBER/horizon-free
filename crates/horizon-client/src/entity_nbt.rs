@@ -253,17 +253,37 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             } else {
                 map.insert("equipment".into(), Tag::compound(equipment));
             }
-            let attr = |id: &str, v: f64| {
-                Tag::compound([("id", string(id)), ("base", Tag::Double(v.to_bits()))])
+            let modelled = [
+                ("minecraft:max_health", f64::from(m.attrs.max_health)),
+                ("minecraft:movement_speed", m.attrs.speed),
+                ("minecraft:jump_strength", m.extra.vector[0]),
+            ];
+            // AttributeMap.pack writes the instances that exist: the ones the
+            // entity was loaded with, or all three randomized by finalizeSpawn.
+            let attributes = match map.get(&"attributes".into()) {
+                Some(Tag::List(list)) => list
+                    .iter()
+                    .map(|a| {
+                        let id = text(a.get("id"));
+                        let value = modelled.iter().find(|(m, _)| Some(*m) == id.as_deref());
+                        match (a, value) {
+                            (Tag::Compound(c), Some((_, v))) => {
+                                let mut c = c.clone();
+                                c.insert("base".into(), Tag::Double(v.to_bits()));
+                                Tag::Compound(c)
+                            }
+                            _ => a.clone(),
+                        }
+                    })
+                    .collect(),
+                _ => modelled
+                    .iter()
+                    .map(|(id, v)| {
+                        Tag::compound([("id", string(id)), ("base", Tag::Double(v.to_bits()))])
+                    })
+                    .collect(),
             };
-            map.insert(
-                "attributes".into(),
-                Tag::List(vec![
-                    attr("minecraft:max_health", f64::from(m.attrs.max_health)),
-                    attr("minecraft:movement_speed", m.attrs.speed),
-                    attr("minecraft:jump_strength", m.extra.vector[0]),
-                ]),
-            );
+            map.insert("attributes".into(), Tag::List(attributes));
         }
         "minecraft:pig" | "minecraft:strider" => {
             let mut equipment = match map.get(&"equipment".into()) {
@@ -926,7 +946,8 @@ pub fn falling_block_to_nbt(
     state: Tag,
     position: Vec3,
     motion: Vec3,
-    time: u32,
+    time: i32,
+    drop_item: bool,
     uuid: [i32; 4],
 ) -> Tag {
     let base = Base {
@@ -941,8 +962,8 @@ pub fn falling_block_to_nbt(
     let mut tag = base.tag(None);
     for (key, value) in [
         ("BlockState", state),
-        ("Time", Tag::Int(time as i32)),
-        ("DropItem", Tag::Byte(1)),
+        ("Time", Tag::Int(time)),
+        ("DropItem", Tag::Byte(i8::from(drop_item))),
         ("HurtEntities", Tag::Byte(0)),
         ("CancelDrop", Tag::Byte(0)),
         ("FallHurtAmount", Tag::Float(0)),
@@ -953,13 +974,21 @@ pub fn falling_block_to_nbt(
     tag
 }
 /// (block state tag, position, motion, time)
-pub fn falling_block_from_nbt(tag: &Tag) -> Option<(Tag, Vec3, Vec3, u32)> {
+pub fn falling_block_from_nbt(tag: &Tag) -> Option<(Tag, Vec3, Vec3, i32)> {
     Some((
         tag.get("BlockState")?.clone(),
         position(tag)?,
         motion(tag),
-        number(tag.get("Time")).unwrap_or(0).max(0) as u32,
+        number(tag.get("Time")).unwrap_or(0) as i32,
     ))
+}
+
+/// `NoGravity` and `DropItem` (true when absent) of a saved falling block.
+pub fn falling_block_flags(tag: &Tag) -> (bool, bool) {
+    (
+        flag(tag, "NoGravity"),
+        number(tag.get("DropItem")).is_none_or(|v| v != 0),
+    )
 }
 
 /// Painting.addAdditionalSaveData: `facing`, `variant` and `block_pos`.

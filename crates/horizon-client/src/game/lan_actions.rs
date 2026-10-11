@@ -7,6 +7,7 @@
 //! block log, the level events and the entity tracker.
 use super::{Game, Hit, Mining, Screen, lan::LanHost};
 use horizon_client::{
+    command::vanilla,
     containers::BlockEntity,
     entities::Experience,
     items::ItemStack,
@@ -405,6 +406,11 @@ impl Game<'_> {
                     self.guest_command(host, conn, &text);
                 }
             }
+            S::Unknown(id, payload)
+                if id == horizon_protocol::ids::play::serverbound::COMMAND_SUGGESTION =>
+            {
+                self.guest_suggestions(host, conn, &payload);
+            }
             S::ClientCommand(c) if c.action == 0 => self.guest_respawn(host, conn),
             S::PickItemFromBlock(p) => {
                 let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
@@ -535,6 +541,46 @@ impl Game<'_> {
                 }),
             );
         }
+    }
+
+    /// ServerGamePacketListenerImpl.handleCustomCommandSuggestions: the
+    /// completions of the command typed so far (after an optional slash), for
+    /// the nodes the tree marks `ask_server`.
+    fn guest_suggestions(&mut self, host: &mut LanHost, conn: u32, payload: &[u8]) {
+        let mut r = horizon_protocol::buf::Reader::new(payload);
+        let (Ok(id), Ok(text)) = (r.varint(), r.string(32500)) else {
+            return;
+        };
+        let Some(permission) = host.hub.guest(conn).map(|g| g.permission) else {
+            return;
+        };
+        let skip = usize::from(text.starts_with('/'));
+        let command = &text[skip..];
+        let d = vanilla::dispatcher();
+        let level = std::mem::replace(&mut self.ui.registries.permission, permission);
+        let parse = d.parse(command, &self.ui.registries);
+        let ((start, end), suggestions) = d.suggestions(&parse, command.len(), &self.ui.registries);
+        self.ui.registries.permission = level;
+        let utf16 = |byte: usize| command[..byte.min(command.len())].encode_utf16().count() as i32;
+        let mut w = horizon_protocol::buf::Writer::new();
+        w.varint(id);
+        w.varint(utf16(start) + skip as i32);
+        w.varint(utf16(end) - utf16(start));
+        w.varint(suggestions.len() as i32);
+        for s in &suggestions {
+            w.string(&s.text);
+            w.bool(s.tooltip.is_some());
+            if let Some(tip) = &s.tooltip {
+                w.nbt(&literal(tip));
+            }
+        }
+        host.hub.send_to(
+            conn,
+            &C::Unknown(
+                horizon_protocol::ids::play::clientbound::COMMAND_SUGGESTIONS,
+                w.data,
+            ),
+        );
     }
 
     fn guest_respawn(&mut self, host: &mut LanHost, conn: u32) {

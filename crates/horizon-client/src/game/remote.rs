@@ -1309,6 +1309,11 @@ impl Game<'_> {
             | u8::from(keys.shift) << 5
             | u8::from(keys.sprint) << 6;
         self.previous_position = player.position;
+        let before = (
+            player.ground.on_ground,
+            [player.velocity.x, player.velocity.y, player.velocity.z],
+            [player.position.x, player.position.y, player.position.z],
+        );
         player.yaw = self.yaw;
         let dead = self.screen == Screen::Dead;
         if !dead {
@@ -1337,18 +1342,7 @@ impl Game<'_> {
         }
         // The server owns health and hunger: undo local food/fall changes.
         self.apply_remote_health();
-        if let Some(p) = &self.player {
-            let (dx, dz) = (
-                p.position.x - self.previous_position.x,
-                p.position.z - self.previous_position.z,
-            );
-            let speed = ((dx * dx + dz * dz).sqrt() as f32).min(0.1);
-            self.walk.0 = self.walk.1;
-            self.walk.1 += (dx * dx + dz * dz).sqrt() as f32 * 0.6;
-            self.bob.0 = self.bob.1;
-            let target = if p.ground.on_ground { speed } else { 0.0 };
-            self.bob.1 += (target - self.bob.1) * 0.4;
-        }
+        self.tick_avatar(before, false);
         if !dead {
             self.remote_mining();
             if self.right && self.use_delay == 0 && playing {

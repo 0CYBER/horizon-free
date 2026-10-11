@@ -84,7 +84,11 @@ public final class VanillaItemModelOracle {
     static TextureAtlasSprite load(Identifier id, Identifier atlas) {
         try {
             var png = root.resolve("assets").resolve(id.getNamespace()).resolve("textures").resolve(id.getPath() + ".png");
-            if (!Files.isRegularFile(png)) return null;
+            if (!Files.isRegularFile(png)) {
+                // Armour trim textures come from the atlas's paletted_permutations source.
+                var generated = generatedSprites(atlas).get(id);
+                return generated == null ? null : new Sprite(atlas, generated.get(null));
+            }
             NativeImage image;
             try (var in = Files.newInputStream(png)) { image = NativeImage.read(in); }
             var mcmeta = png.resolveSibling(png.getFileName() + ".mcmeta");
@@ -99,6 +103,40 @@ public final class VanillaItemModelOracle {
             return new Sprite(atlas, new SpriteContents(id, size, image, animation, List.of(), Optional.empty()));
         } catch (IOException e) { throw new UncheckedIOException(e); }
     }
+
+    static final Map<Identifier, Map<Identifier, net.minecraft.client.renderer.texture.atlas.SpriteSource.DiscardableLoader>> GENERATED = new HashMap<>();
+    /** The atlas's paletted_permutations sprites, run by vanilla's own source over the extracted resources. */
+    static Map<Identifier, net.minecraft.client.renderer.texture.atlas.SpriteSource.DiscardableLoader> generatedSprites(Identifier atlas) {
+        return GENERATED.computeIfAbsent(atlas, a -> {
+            Map<Identifier, net.minecraft.client.renderer.texture.atlas.SpriteSource.DiscardableLoader> out = new HashMap<>();
+            var file = "/assets/" + a.getNamespace() + "/atlases/" + a.getPath().replaceFirst("^textures/atlas/", "").replaceFirst("\\.png$", "") + ".json";
+            try (var in = VanillaItemModelOracle.class.getResourceAsStream(file)) {
+                if (in == null) return out;
+                var json = JsonParser.parseString(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+                var sources = net.minecraft.client.renderer.texture.atlas.SpriteSources.FILE_CODEC.parse(JsonOps.INSTANCE, json).getOrThrow();
+                var output = new net.minecraft.client.renderer.texture.atlas.SpriteSource.Output() {
+                    @Override public void add(Identifier id, net.minecraft.client.renderer.texture.atlas.SpriteSource.DiscardableLoader sprite) { out.put(id, sprite); }
+                    @Override public void removeAll(java.util.function.Predicate<Identifier> predicate) { out.keySet().removeIf(predicate); }
+                };
+                for (var source : sources)
+                    if (source instanceof net.minecraft.client.renderer.texture.atlas.sources.PalettedPermutations) source.run(FILES, output);
+            } catch (IOException e) { throw new UncheckedIOException(e); }
+            return out;
+        });
+    }
+    /** The extracted resources as a single-pack resource manager. */
+    static final net.minecraft.server.packs.resources.ResourceManager FILES = new net.minecraft.server.packs.resources.ResourceManager() {
+        Path path(Identifier id) { return root.resolve("assets").resolve(id.getNamespace()).resolve(id.getPath()); }
+        @Override public Optional<net.minecraft.server.packs.resources.Resource> getResource(Identifier id) {
+            var file = path(id);
+            return Files.isRegularFile(file) ? Optional.of(new net.minecraft.server.packs.resources.Resource(null, () -> Files.newInputStream(file))) : Optional.empty();
+        }
+        @Override public java.util.Set<String> getNamespaces() { return java.util.Set.of("minecraft"); }
+        @Override public List<net.minecraft.server.packs.resources.Resource> getResourceStack(Identifier id) { return getResource(id).stream().toList(); }
+        @Override public Map<Identifier, net.minecraft.server.packs.resources.Resource> listResources(String directory, net.minecraft.server.packs.resources.ResourceManager.Selector selector) { throw new UnsupportedOperationException(); }
+        @Override public Map<Identifier, List<net.minecraft.server.packs.resources.Resource>> listResourceStacks(String directory, net.minecraft.server.packs.resources.ResourceManager.Selector selector) { throw new UnsupportedOperationException(); }
+        @Override public java.util.stream.Stream<net.minecraft.server.packs.PackResources> listPacks() { return java.util.stream.Stream.empty(); }
+    };
 
     // --- Tagging of special renderers so the layer carries its codec form. ---
     static final class Tagged implements SpecialModelRenderer.Unbaked<Object> {
@@ -196,6 +234,15 @@ public final class VanillaItemModelOracle {
                 models.getOrDefault(id, missing).update(output, item, this, context, level instanceof ClientLevel c ? c : null, owner, seed);
             }
         }
+        // ModelManager.getItemProperties, from the same baked properties.
+        @Override public boolean shouldPlaySwapAnimation(ItemStack stack) {
+            Identifier id = stack.get(DataComponents.ITEM_MODEL);
+            return id == null || properties.getOrDefault(id, ClientItem.Properties.DEFAULT).handAnimationOnSwap();
+        }
+        @Override public float swapAnimationScale(ItemStack stack) {
+            Identifier id = stack.get(DataComponents.ITEM_MODEL);
+            return id == null ? 1.0F : properties.getOrDefault(id, ClientItem.Properties.DEFAULT).swapAnimationScale();
+        }
     }
 
     static Object field(Object target, Class<?> type, String name) throws Exception {
@@ -251,12 +298,22 @@ public final class VanillaItemModelOracle {
     public static void main(String[] args) throws Exception {
         net.minecraft.SharedConstants.tryDetectVersion();
         net.minecraft.server.Bootstrap.bootStrap();
+        // Item tags (compasses get the special foil) come from the vanilla data pack.
+        var repo = net.minecraft.server.packs.repository.ServerPacksSource.createVanillaTrustedRepository();
+        repo.reload();
+        repo.setSelected(List.of("vanilla"));
+        try (var data = new net.minecraft.server.packs.resources.MultiPackResourceManager(net.minecraft.server.packs.PackType.SERVER_DATA, repo.openAllSelected())) {
+            var layers = net.minecraft.server.RegistryLayer.createRegistryAccess();
+            net.minecraft.tags.TagLoader.loadTagsForExistingRegistries(data, layers.getLayer(net.minecraft.server.RegistryLayer.STATIC))
+                .forEach(net.minecraft.core.Registry.PendingTags::apply);
+        }
         ItemModels.bootstrap();
         SpecialModelRenderers.bootstrap();
         net.minecraft.client.color.item.ItemTintSources.bootstrap();
         net.minecraft.client.renderer.item.properties.select.SelectItemModelProperties.bootstrap();
         net.minecraft.client.renderer.item.properties.conditional.ConditionalItemModelProperties.bootstrap();
         net.minecraft.client.renderer.item.properties.numeric.RangeSelectItemModelProperties.bootstrap();
+        net.minecraft.client.renderer.texture.atlas.SpriteSources.bootstrap();
         var u = Class.forName("sun.misc.Unsafe");
         var uf = u.getDeclaredField("theUnsafe"); uf.setAccessible(true); unsafe = uf.get(null);
         allocate = u.getMethod("allocateInstance", Class.class);

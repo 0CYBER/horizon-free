@@ -72,7 +72,12 @@ impl Game<'_> {
             let triggered = self.containers().prop(state, "triggered") == Some("true");
             let mut finished = false;
             if let Some(BlockEntity::Crafter(c)) = self.world.block_entities.get_mut(&pos) {
-                c.triggered = triggered;
+                // CrafterBlock.neighborChanged sets the flag with the state; a
+                // loaded crafter keeps its saved flag until then.
+                if c.state_triggered.is_some_and(|t| t != triggered) {
+                    c.triggered = triggered;
+                }
+                c.state_triggered = Some(triggered);
                 let remaining = c.crafting_ticks - 1;
                 if remaining >= 0 {
                     c.crafting_ticks = remaining;

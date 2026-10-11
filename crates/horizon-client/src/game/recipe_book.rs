@@ -490,7 +490,8 @@ impl Game<'_> {
             if !open {
                 self.recipe_ui.overlay = None;
             }
-            self.audio.play("minecraft:ui.button.click", None, 1.0, 1.0);
+            self.audio
+                .play("minecraft:ui.button.click", None, 0.25, 1.0);
             return true;
         }
         if !self.book_open(book_type) || self.spectator() {
@@ -518,12 +519,14 @@ impl Game<'_> {
             if self.recipe_ui.page + 1 < pages && inside(cursor, xo + 93.0, yo + 137.0, 12.0, 17.0)
             {
                 self.recipe_ui.page += 1;
-                self.audio.play("minecraft:ui.button.click", None, 1.0, 1.0);
+                self.audio
+                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
                 return true;
             }
             if self.recipe_ui.page > 0 && inside(cursor, xo + 38.0, yo + 137.0, 12.0, 17.0) {
                 self.recipe_ui.page -= 1;
-                self.audio.play("minecraft:ui.button.click", None, 1.0, 1.0);
+                self.audio
+                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
                 return true;
             }
         }
@@ -570,7 +573,8 @@ impl Game<'_> {
             let filtering = !self.book_filtering(book_type);
             self.level.recipe_book.filtering[book_type.index()] = filtering;
             self.recipe_ui.page = 0;
-            self.audio.play("minecraft:ui.button.click", None, 1.0, 1.0);
+            self.audio
+                .play("minecraft:ui.button.click", None, 0.25, 1.0);
             return true;
         }
         // Tabs.
@@ -581,7 +585,8 @@ impl Game<'_> {
                     self.recipe_ui.tab = Some(tab);
                     self.recipe_ui.page = 0;
                 }
-                self.audio.play("minecraft:ui.button.click", None, 1.0, 1.0);
+                self.audio
+                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
                 return true;
             }
         }
