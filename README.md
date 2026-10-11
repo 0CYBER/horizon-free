@@ -38,7 +38,7 @@ round-trip harness has not been rerun.
 | Lighting | 1 | None: saved and relit light matches vanilla, slabs and stairs included |
 | World generation | 1 | None: 2,352 whole chunks over 225 structure sites, in all three dimensions, identical to vanilla |
 | Region files and saves | 0.75 | Save round-trip harness fails; older DataVersions are not upgraded |
-| Entities and physics | 0.75 | Attributes and dimensions match; AI, loot and spawn rules not compared; drowned, villagers, traders and the wither unverified |
+| Entities and physics | 0.75 | Attributes, dimensions, death loot, spawn rules and natural spawning (15,500 NaturalSpawner cases) match; AI not compared; drowned, villagers, traders and the wither unverified |
 | Interaction and inventory | 1 | None: menu clicks match over 6,000 click sequences |
 | Menus, HUD and chat | 0.75 | Commands parse as vanilla over 39,685 inputs, but /item modify, /spectate, /waypoint and /dialog do not run; no tab list or world border rendering |
 | Audio | 0.75 | Sound engine, music and ambience not compared with vanilla |
@@ -49,7 +49,7 @@ round-trip harness has not been rerun.
 1. Rerun the save round-trip harness and upgrade saves from older DataVersions.
 2. Draw every item through the item model pipeline, and add the resource pack screen.
 3. An audio harness: sound engine attenuation, weighted sound events, music and ambience.
-4. Mob AI, loot and spawn-rule harnesses, and an oracle for drowned, villagers, traders and the wither.
+4. A mob AI harness, and an oracle for drowned, villagers, traders and the wither.
 5. The missing commands and dispenser behaviours, the tab list and world border rendering.
 6. Test LAN hosting with a vanilla client, and add a dedicated server mode.
 
