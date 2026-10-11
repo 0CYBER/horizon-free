@@ -151,7 +151,10 @@ impl Game<'_> {
             return Ok(0);
         };
         // BlockPosArgument.getLoadedBlockPos on both corners first.
-        let (a, b) = (self.block_pos_arg(ctx, "from")?, self.block_pos_arg(ctx, "to")?);
+        let (a, b) = (
+            self.block_pos_arg(ctx, "from")?,
+            self.block_pos_arg(ctx, "to")?,
+        );
         // Quantize to biome cells (`QuartPos`), then work with the box.
         let q = |v: i32| (v >> 2) << 2;
         let lo = [
@@ -486,7 +489,9 @@ impl Game<'_> {
                     let drops = match self.res.items.loot_random_sequence(&table) {
                         Some(seq) => {
                             let random = self.rand_sequences.get(&seq, self.level.seed);
-                            self.res.items.loot_table(&table, false, held.as_ref(), random)
+                            self.res
+                                .items
+                                .loot_table(&table, false, held.as_ref(), random)
                         }
                         None => self.res.items.loot_table(
                             &table,

@@ -2145,7 +2145,9 @@ impl Game<'_> {
                             match &v {
                                 horizon_world::nbt::Tag::Compound(_) => {
                                     let get = |k: &str| match v.get(k) {
-                                        Some(horizon_world::nbt::Tag::Int(i)) => Some(i64::from(*i)),
+                                        Some(horizon_world::nbt::Tag::Int(i)) => {
+                                            Some(i64::from(*i))
+                                        }
                                         _ => None,
                                     };
                                     get("min").is_none_or(|m| n >= m)
@@ -2155,8 +2157,9 @@ impl Game<'_> {
                                 _ => false,
                             }
                         }
-                        (_, Some(v)) => present
-                            .is_some_and(|have| horizon_client::nbt_path::compare_nbt(&v, Some(have))),
+                        (_, Some(v)) => present.is_some_and(|have| {
+                            horizon_client::nbt_path::compare_nbt(&v, Some(have))
+                        }),
                         _ => false,
                     }
                 }
@@ -2198,7 +2201,10 @@ impl Game<'_> {
         };
         let matching: Vec<bool> = all(self)
             .iter()
-            .map(|s| s.as_ref().is_some_and(|s| self.stack_matches(&predicate, s)))
+            .map(|s| {
+                s.as_ref()
+                    .is_some_and(|s| self.stack_matches(&predicate, s))
+            })
             .collect();
         let mut slots: Vec<&mut Option<ItemStack>> = Vec::new();
         slots.extend(self.inventory.iter_mut());
@@ -2311,9 +2317,9 @@ impl Game<'_> {
                         cache
                             .entry(state)
                             .or_insert_with(|| {
-                                self.poi_type(horizon_world::registry::BlockStateId(
-                                    u32::from(state),
-                                ))
+                                self.poi_type(horizon_world::registry::BlockStateId(u32::from(
+                                    state,
+                                )))
                                 .filter(|t| wanted.iter().any(|w| w == t))
                             })
                             .is_some()

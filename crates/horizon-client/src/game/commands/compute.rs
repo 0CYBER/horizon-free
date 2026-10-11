@@ -115,7 +115,7 @@ impl Game<'_> {
             Some(Arg::Float(s)) => *s,
             _ => 1.0,
         };
-        let original = self.provider_float(&provider, &c, 0).map_err(&invalid)?;
+        let original = self.provider_float(&provider, &c, 0).map_err(invalid)?;
         if !original.is_finite() {
             return Err(invalid(java_float(original)));
         }
@@ -128,7 +128,11 @@ impl Game<'_> {
             let message = match &id {
                 Some(id) => Text::translate(
                     "command.compute.result.named.rounded",
-                    &[Text::literal(id.clone()), original_text, Text::literal(result.to_string())],
+                    &[
+                        Text::literal(id.clone()),
+                        original_text,
+                        Text::literal(result.to_string()),
+                    ],
                 ),
                 None => Text::translate(
                     "command.compute.result.unnamed.rounded",
@@ -154,7 +158,9 @@ impl Game<'_> {
         }
         let d = depth + 1;
         match v {
-            Value::Number(n) => Ok(n.as_i64().map_or_else(|| n.as_f64().unwrap_or(0.0) as i32, |i| i as i32)),
+            Value::Number(n) => Ok(n
+                .as_i64()
+                .map_or_else(|| n.as_f64().unwrap_or(0.0) as i32, |i| i as i32)),
             Value::Bool(b) => Ok(i32::from(*b)),
             Value::String(id) => match self.provider_file("minecraft:context_int_provider", id) {
                 Some(def) => self.provider_int(&def, c, d),
@@ -183,7 +189,8 @@ impl Game<'_> {
                 };
                 let overflow = || "integer overflow".to_owned();
                 let long_to_int = |v: i64| -> Result<i32, Arith> {
-                    i32::try_from(v).map_err(|_| format!("Value {v} can't be safely converted to int"))
+                    i32::try_from(v)
+                        .map_err(|_| format!("Value {v} can't be safely converted to int"))
                 };
                 Ok(match ty.as_str() {
                     "constant" => field(self, "value")?,
@@ -215,13 +222,14 @@ impl Game<'_> {
                         match ty.as_str() {
                             "div" => a.wrapping_div(b),
                             "mod" => a.wrapping_rem(b),
-                            "floor_mod" => a.rem_euclid(b) + if b < 0 && a.rem_euclid(b) != 0 { b } else { 0 },
+                            "floor_mod" => {
+                                a.rem_euclid(b) + if b < 0 && a.rem_euclid(b) != 0 { b } else { 0 }
+                            }
                             _ => {
                                 if a == i32::MIN && b == -1 {
                                     return Err(overflow());
                                 }
-                                a.div_euclid(b)
-                                    - if b < 0 && a.rem_euclid(b) != 0 { 1 } else { 0 }
+                                a.div_euclid(b) - if b < 0 && a.rem_euclid(b) != 0 { 1 } else { 0 }
                             }
                         }
                     }
@@ -391,9 +399,15 @@ impl Game<'_> {
         o: &serde_json::Map<String, Value>,
         c: &ComputeContext,
     ) -> Result<Option<Value>, Arith> {
-        match o.get("type").and_then(Value::as_str).map(|t| t.trim_start_matches("minecraft:")) {
+        match o
+            .get("type")
+            .and_then(Value::as_str)
+            .map(|t| t.trim_start_matches("minecraft:"))
+        {
             Some("conditional") => {
-                let holds = o.get("condition").is_some_and(|x| self.compute_condition(x, c));
+                let holds = o
+                    .get("condition")
+                    .is_some_and(|x| self.compute_condition(x, c));
                 Ok(if holds {
                     o.get("on_true").cloned()
                 } else {
@@ -401,8 +415,16 @@ impl Game<'_> {
                 })
             }
             Some("number_dispatcher") => {
-                for case in o.get("cases").and_then(Value::as_array).into_iter().flatten() {
-                    if case.get("condition").is_some_and(|x| self.compute_condition(x, c)) {
+                for case in o
+                    .get("cases")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if case
+                        .get("condition")
+                        .is_some_and(|x| self.compute_condition(x, c))
+                    {
                         return Ok(case.get("value").cloned());
                     }
                 }
@@ -489,7 +511,9 @@ impl Game<'_> {
                                     }),
                                 None => *b == name,
                             },
-                            Some(Value::Array(list)) => list.iter().any(|b| b.as_str() == Some(&name)),
+                            Some(Value::Array(list)) => {
+                                list.iter().any(|b| b.as_str() == Some(&name))
+                            }
                             _ => true,
                         };
                         let props_ok = o
@@ -498,9 +522,7 @@ impl Game<'_> {
                             .and_then(Value::as_object)
                             .into_iter()
                             .flatten()
-                            .all(|(k, v)| {
-                                s.properties.get(k).map(String::as_str) == v.as_str()
-                            });
+                            .all(|(k, v)| s.properties.get(k).map(String::as_str) == v.as_str());
                         blocks_ok && props_ok
                     }
                     "random_chance" => {

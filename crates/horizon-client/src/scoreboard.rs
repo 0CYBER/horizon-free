@@ -636,8 +636,12 @@ impl Scoreboard {
         for t in &self.teams {
             self.team_order.insert(&t.name);
         }
-        let rank: BTreeMap<&str, usize> =
-            self.team_order.keys().enumerate().map(|(i, k)| (k, i)).collect();
+        let rank: BTreeMap<&str, usize> = self
+            .team_order
+            .keys()
+            .enumerate()
+            .map(|(i, k)| (k, i))
+            .collect();
         self.teams
             .sort_by_key(|t| rank.get(t.name.as_str()).copied().unwrap_or(usize::MAX));
     }
@@ -1079,7 +1083,9 @@ mod tests {
         sb.set_display_objective("sidebar", Some("kills"));
         sb.remove_objective("kills");
         assert!(sb.display_objective("sidebar").is_none());
-        assert!(sb.tracked().is_empty());
+        // Scoreboard.removeObjective keeps the holder, now without scores.
+        assert_eq!(sb.tracked(), vec!["Steve".to_owned()]);
+        assert!(sb.holder_scores("Steve").is_empty());
     }
 
     #[test]

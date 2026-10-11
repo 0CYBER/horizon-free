@@ -20,7 +20,10 @@ impl Game<'_> {
                     nbt_values.borrow_mut().push(o.clone());
                 }
             };
-            fn walk(v: &serde_json::Value, f: &mut dyn FnMut(&serde_json::Map<String, serde_json::Value>)) {
+            fn walk(
+                v: &serde_json::Value,
+                f: &mut dyn FnMut(&serde_json::Map<String, serde_json::Value>),
+            ) {
                 match v {
                     serde_json::Value::Object(o) => {
                         f(o);
@@ -119,7 +122,9 @@ impl Game<'_> {
                 }
                 first = false;
                 let piece = if interpret {
-                    horizon_client::scoreboard::comp_text(&horizon_client::scoreboard::tag_to_json(&tag))
+                    horizon_client::scoreboard::comp_text(&horizon_client::scoreboard::tag_to_json(
+                        &tag,
+                    ))
                 } else if plain {
                     Text::literal(horizon_client::snbt::pretty(&tag).plain())
                 } else {

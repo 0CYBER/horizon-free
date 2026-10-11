@@ -54,7 +54,7 @@ impl Game<'_> {
                     return Ok(());
                 }
             }
-            if std::env::var_os("HORIZON_HARNESS_DEBUG").is_some() && self.ticks % 1 == 0 {
+            if std::env::var_os("HORIZON_HARNESS_DEBUG").is_some() {
                 eprintln!(
                     "settle: player {:?} center {:?} chunks {} pending {}",
                     self.player.as_ref().map(|p| p.position),
@@ -70,7 +70,13 @@ impl Game<'_> {
         }
     }
     pub(super) fn run_command_harness(&mut self, script: &Path, output: &Path) -> Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(std::env::var("HORIZON_HARNESS_TIMEOUT").ok().and_then(|v| v.parse().ok()).unwrap_or(600));
+        let deadline = Instant::now()
+            + Duration::from_secs(
+                std::env::var("HORIZON_HARNESS_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(600),
+            );
         self.harness_settle(deadline)?;
         let mut out = String::new();
         for line in std::fs::read_to_string(script)?.lines() {

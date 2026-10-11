@@ -149,7 +149,10 @@ impl Game<'_> {
         match target {
             Some(t) => {
                 let name = self.target_name(t);
-                self.feedback(Text::translate("commands.spectate.success.started", &[name]));
+                self.feedback(Text::translate(
+                    "commands.spectate.success.started",
+                    &[name],
+                ));
             }
             None => self.feedback(Text::translate("commands.spectate.success.stopped", &[])),
         }
@@ -209,9 +212,7 @@ impl Game<'_> {
     }
     /// The eye height the camera follows (`Camera.tick`'s entity).
     pub(in crate::game) fn camera_eye_height(&self) -> Option<f32> {
-        self.cmds
-            .camera
-            .map(|t| self.target_eye_height(t) as f32)
+        self.cmds.camera.map(|t| self.target_eye_height(t) as f32)
     }
 
     // ---- /waypoint ------------------------------------------------------
@@ -279,7 +280,11 @@ impl Game<'_> {
         }
     }
     fn waypoint_icon(&self, t: Target) -> WaypointIcon {
-        self.cmds.waypoint_icons.get(&t).cloned().unwrap_or_default()
+        self.cmds
+            .waypoint_icons
+            .get(&t)
+            .cloned()
+            .unwrap_or_default()
     }
     /// `WaypointArgument.getWaypoint`.
     fn waypoint_arg(&mut self, ctx: &Context) -> R<Target> {
@@ -324,7 +329,12 @@ impl Game<'_> {
                 };
                 // getFeedbackDisplayName().copy().withStyle(color): the
                 // waypoint colour replaces the team colour of the name.
-                let name = match (*t, self.score.board.players_team(super::super::chat::PLAYER_NAME)) {
+                let name = match (
+                    *t,
+                    self.score
+                        .board
+                        .players_team(super::super::chat::PLAYER_NAME),
+                ) {
                     (Target::Player, Some(team)) => {
                         let mut n = Text::empty();
                         n.push(horizon_client::scoreboard::comp_text(&team.prefix));
@@ -407,9 +417,15 @@ impl Game<'_> {
             self.close_dialog();
         }
         let (single, multiple) = if id == "dialog.show" {
-            ("commands.dialog.show.single", "commands.dialog.show.multiple")
+            (
+                "commands.dialog.show.single",
+                "commands.dialog.show.multiple",
+            )
         } else {
-            ("commands.dialog.clear.single", "commands.dialog.clear.multiple")
+            (
+                "commands.dialog.clear.single",
+                "commands.dialog.clear.multiple",
+            )
         };
         let message = if n == 1 {
             Text::translate(single, &[self.target_name(targets[0])])
@@ -477,7 +493,9 @@ impl Game<'_> {
                 "commands.posteffect.clear.success.single",
                 &[self.target_name(changed[0])],
             ),
-            ("clear", _) => Text::translate("commands.posteffect.clear.success.multiple", &[num(n)]),
+            ("clear", _) => {
+                Text::translate("commands.posteffect.clear.success.multiple", &[num(n)])
+            }
             (_, 1) => Text::translate(
                 &format!("commands.posteffect.{key}.success.single"),
                 &[effect_text, self.target_name(changed[0])],
@@ -509,7 +527,11 @@ impl Game<'_> {
             }
             // reset*/clear*: TestCommand.reset throws CLEAR_NO_TESTS too.
             "test.clear" => {
-                if ctx.literals.iter().any(|l| l == "resetthat" || l == "clearthat") {
+                if ctx
+                    .literals
+                    .iter()
+                    .any(|l| l == "resetthat" || l == "clearthat")
+                {
                     self.source_player()?;
                 }
                 Err(err("commands.test.clear.error.no_tests", &[]))
@@ -548,9 +570,20 @@ impl Game<'_> {
             p.position.y + f64::from(p.dimensions.eye_height),
             p.position.z,
         );
-        let (yaw, pitch) = (f64::from(self.yaw).to_radians(), f64::from(self.pitch).to_radians());
-        let dir = [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()];
-        let end = Vec3::new(eye.x + dir[0] * 10.0, eye.y + dir[1] * 10.0, eye.z + dir[2] * 10.0);
+        let (yaw, pitch) = (
+            f64::from(self.yaw).to_radians(),
+            f64::from(self.pitch).to_radians(),
+        );
+        let dir = [
+            -yaw.sin() * pitch.cos(),
+            -pitch.sin(),
+            yaw.cos() * pitch.cos(),
+        ];
+        let end = Vec3::new(
+            eye.x + dir[0] * 10.0,
+            eye.y + dir[1] * 10.0,
+            eye.z + dir[2] * 10.0,
+        );
         let hit = traverse_blocks(eye, end, 256, |b: BlockPos| {
             let state = self.world.block(b.x, b.y, b.z);
             (!self.res.facts.is_air(state)).then_some([b.x, b.y, b.z])
@@ -687,10 +720,16 @@ impl Game<'_> {
         clickable.push(item(
             "commands.fetchprofile.summon_mannequin",
             &[],
-            Some(format!("summon minecraft:mannequin ~ ~ ~ {{profile:{profile}}}")),
+            Some(format!(
+                "summon minecraft:mannequin ~ ~ ~ {{profile:{profile}}}"
+            )),
         ));
         clickable.push(" ");
-        clickable.push(item("commands.fetchprofile.copy_text", &[placeholder], None));
+        clickable.push(item(
+            "commands.fetchprofile.copy_text",
+            &[placeholder],
+            None,
+        ));
         let _ = head;
         self.feedback(Text::translate(
             "commands.fetchprofile.entity.success",
@@ -837,7 +876,11 @@ impl Game<'_> {
         let message = if traced.len() == 1 {
             Text::translate(
                 "commands.debug.function.success.single",
-                &[num(total), Text::literal(traced[0].clone()), Text::literal(output)],
+                &[
+                    num(total),
+                    Text::literal(traced[0].clone()),
+                    Text::literal(output),
+                ],
             )
         } else {
             Text::translate(
@@ -898,7 +941,10 @@ impl Game<'_> {
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|()| std::fs::write(&path, report.to_string()));
         if let Err(e) = written {
-            return Err(tr_error("commands.jfr.dump.failed", &[Text::literal(e.to_string())]));
+            return Err(tr_error(
+                "commands.jfr.dump.failed",
+                &[Text::literal(e.to_string())],
+            ));
         }
         let file = Text::literal(relative).underlined().with_style(&Style {
             hover: Some(Box::new(Text::translate("chat.copy.click", &[]))),
@@ -926,8 +972,14 @@ impl Game<'_> {
                 "commands.version.protocol",
                 vec![num(protocol), Text::literal(format!("0x{protocol:x}"))],
             ),
-            ("commands.version.build_time", vec![Text::literal(BUILD_TIME)]),
-            ("commands.version.pack.resource", vec![Text::literal("97.1")]),
+            (
+                "commands.version.build_time",
+                vec![Text::literal(BUILD_TIME)],
+            ),
+            (
+                "commands.version.pack.resource",
+                vec![Text::literal("97.1")],
+            ),
             ("commands.version.pack.data", vec![Text::literal("121.0")]),
         ] {
             send(self, Text::translate(key, &args));
@@ -973,6 +1025,13 @@ impl Game<'_> {
             },
         );
         let h = format!("{id:032x}");
-        format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
+        format!(
+            "{}-{}-{}-{}-{}",
+            &h[..8],
+            &h[8..12],
+            &h[12..16],
+            &h[16..20],
+            &h[20..]
+        )
     }
 }

@@ -150,7 +150,9 @@ pub fn decode(registry: &str, t: &Tag, reg: &Registries) -> Result<(), String> {
                 "minecraft:dialog_list" => &["dialogs"],
                 _ => &[],
             };
-            let keys: Vec<&str> = std::iter::once("title").chain(own.iter().copied()).collect();
+            let keys: Vec<&str> = std::iter::once("title")
+                .chain(own.iter().copied())
+                .collect();
             require(map, t, &keys)
         }),
         "minecraft:worldgen/feature" | "minecraft:loot_table" => match t {

@@ -535,7 +535,11 @@ impl Items {
             .map(str::to_owned)
     }
     /// `LootTable.getRandomItems` of an inline table.
-    pub fn inline_loot_table<R: RandomSource>(&self, table: &Value, random: &mut R) -> Vec<ItemStack> {
+    pub fn inline_loot_table<R: RandomSource>(
+        &self,
+        table: &Value,
+        random: &mut R,
+    ) -> Vec<ItemStack> {
         let empty = BTreeMap::new();
         let ctx = LootContext {
             items: self,
@@ -921,7 +925,12 @@ impl LootContext<'_> {
             _ => false,
         }
     }
-    fn choose<R: RandomSource>(&self, entries: &[Value], random: &mut R, produced: &mut Vec<ItemStack>) {
+    fn choose<R: RandomSource>(
+        &self,
+        entries: &[Value],
+        random: &mut R,
+        produced: &mut Vec<ItemStack>,
+    ) {
         let mut candidates = Vec::new();
         for e in entries {
             self.expand(e, random, &mut candidates);

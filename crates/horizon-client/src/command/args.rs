@@ -91,7 +91,11 @@ impl Registries {
     pub fn fill_from_export(&mut self, r: &serde_json::Value) {
         fn strings(v: &serde_json::Value) -> Vec<String> {
             v.as_array()
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(str::to_owned))
+                        .collect()
+                })
                 .unwrap_or_default()
         }
         let fill = |field: &mut Vec<String>, key: &str| {
@@ -135,12 +139,14 @@ impl Registries {
         }
         if self.clock_time_markers.is_empty() {
             for (clock, markers) in r["clock_time_markers"].as_object().into_iter().flatten() {
-                self.clock_time_markers.insert(clock.clone(), strings(markers));
+                self.clock_time_markers
+                    .insert(clock.clone(), strings(markers));
             }
         }
         if self.advancement_criteria.is_empty() {
             for (id, criteria) in r["advancement_criteria"].as_object().into_iter().flatten() {
-                self.advancement_criteria.insert(id.clone(), strings(criteria));
+                self.advancement_criteria
+                    .insert(id.clone(), strings(criteria));
             }
         }
     }
@@ -353,7 +359,9 @@ pub fn select_resources<'a>(ids: &'a [String], pattern: &str) -> Vec<&'a String>
     } else {
         format!("minecraft:{pattern}")
     };
-    ids.iter().filter(|id| wildcard_match(id, &pattern)).collect()
+    ids.iter()
+        .filter(|id| wildcard_match(id, &pattern))
+        .collect()
 }
 
 /// SlotRanges.SLOTS: every slot range name and its size, in vanilla order.

@@ -48,17 +48,14 @@ impl Behaviours {
                 sim: &mut sim,
                 features,
             };
-            let unbounded = crate::worldgen::structure::BoundingBox::new(
-                [i32::MIN; 3],
-                [i32::MAX; 3],
-            );
+            let unbounded =
+                crate::worldgen::structure::BoundingBox::new([i32::MIN; 3], [i32::MAX; 3]);
             for piece in &jigsaw.pieces {
-                let mut place_feature = |w: &mut LevelFeatureWorld<'_, '_, L>,
-                                         r: &mut horizon_core::random::LegacyRandom,
-                                         name: &str,
-                                         p: [i32; 3]| {
-                    Ok(features.place_placed(name, w, r, p))
-                };
+                let mut place_feature =
+                    |w: &mut LevelFeatureWorld<'_, '_, L>,
+                     r: &mut horizon_core::random::LegacyRandom,
+                     name: &str,
+                     p: [i32; 3]| { Ok(features.place_placed(name, w, r, p)) };
                 if let Err(e) = piece.place(
                     &mut world,
                     &jigsaw.resources,

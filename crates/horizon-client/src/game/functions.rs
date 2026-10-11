@@ -638,7 +638,10 @@ impl Game<'_> {
                     return Err(err("commands.datapack.enable.failed", &[&name]));
                 }
                 if let Some((_, flag)) = FEATURE_PACKS.iter().find(|(p, _)| *p == name) {
-                    return Err(err("commands.datapack.enable.failed.no_flags", &[&name, flag]));
+                    return Err(err(
+                        "commands.datapack.enable.failed.no_flags",
+                        &[&name, flag],
+                    ));
                 }
                 if name == "vanilla" {
                     self.cmds.vanilla_disabled = false;

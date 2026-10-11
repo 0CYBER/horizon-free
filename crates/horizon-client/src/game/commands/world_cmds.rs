@@ -54,7 +54,10 @@ impl Game<'_> {
                 let n = n.as_i64().unwrap_or(1);
                 (n, n)
             }
-            b => (b["min"].as_i64().unwrap_or(1), b["max"].as_i64().unwrap_or(8)),
+            b => (
+                b["min"].as_i64().unwrap_or(1),
+                b["max"].as_i64().unwrap_or(8),
+            ),
         };
         (max - min + 1).max(0) as i32
     }
@@ -690,7 +693,14 @@ impl Game<'_> {
                             .has_modifier(Some(key), &modifier_id)
                             .unwrap_or(false)
                         {
-                            return Err(text_error("commands.attribute.failed.modifier_already_present", &[Text::literal(modifier_id.clone()), description.clone(), name.clone()]));
+                            return Err(text_error(
+                                "commands.attribute.failed.modifier_already_present",
+                                &[
+                                    Text::literal(modifier_id.clone()),
+                                    description.clone(),
+                                    name.clone(),
+                                ],
+                            ));
                         }
                         let op = ctx
                             .literals
@@ -712,7 +722,14 @@ impl Game<'_> {
                             .has_modifier(Some(key), &modifier_id)
                             .unwrap_or(false)
                         {
-                            return Err(text_error("commands.attribute.failed.no_modifier", &[description.clone(), name.clone(), Text::literal(modifier_id.clone())]));
+                            return Err(text_error(
+                                "commands.attribute.failed.no_modifier",
+                                &[
+                                    description.clone(),
+                                    name.clone(),
+                                    Text::literal(modifier_id.clone()),
+                                ],
+                            ));
                         }
                         let _ =
                             player.set_modifier(&attribute, &modifier_id, 0.0, "add_value", false);
@@ -739,7 +756,14 @@ impl Game<'_> {
                             .ok()
                             .flatten();
                         let Some(v) = found else {
-                            return Err(text_error("commands.attribute.failed.no_modifier", &[description.clone(), name.clone(), Text::literal(modifier_id.clone())]));
+                            return Err(text_error(
+                                "commands.attribute.failed.no_modifier",
+                                &[
+                                    description.clone(),
+                                    name.clone(),
+                                    Text::literal(modifier_id.clone()),
+                                ],
+                            ));
                         };
                         self.feedback(Text::translate(
                             "commands.attribute.modifier.value.get.success",
@@ -833,10 +857,20 @@ impl Game<'_> {
                         ));
                         Ok(1)
                     }
-                    _ => Err(text_error("commands.attribute.failed.no_modifier", &[description.clone(), name.clone(), Text::literal(modifier_id.clone())])),
+                    _ => Err(text_error(
+                        "commands.attribute.failed.no_modifier",
+                        &[
+                            description.clone(),
+                            name.clone(),
+                            Text::literal(modifier_id.clone()),
+                        ],
+                    )),
                 }
             }
-            _ => Err(text_error("commands.attribute.failed.entity", &[name.clone()])),
+            _ => Err(text_error(
+                "commands.attribute.failed.entity",
+                std::slice::from_ref(&name),
+            )),
         }
     }
 
@@ -872,7 +906,11 @@ impl Game<'_> {
         let no_modifier = || {
             text_error(
                 "commands.attribute.failed.no_modifier",
-                &[description.clone(), name.clone(), Text::literal(modifier_id)],
+                &[
+                    description.clone(),
+                    name.clone(),
+                    Text::literal(modifier_id),
+                ],
             )
         };
         let catalog = self.motion.attributes.clone();
@@ -893,7 +931,11 @@ impl Game<'_> {
                 } else {
                     "commands.attribute.base_value.get.success"
                 };
-                (k, vec![description.clone(), name.clone(), java_double_text(v)], (v * scale) as i32)
+                (
+                    k,
+                    vec![description.clone(), name.clone(), java_double_text(v)],
+                    (v * scale) as i32,
+                )
             }
             "attribute.base.set" => {
                 map.edit(key, |a, o| {
@@ -901,7 +943,11 @@ impl Game<'_> {
                 });
                 (
                     "commands.attribute.base_value.set.success",
-                    vec![description.clone(), name.clone(), java_double_text(value_arg)],
+                    vec![
+                        description.clone(),
+                        name.clone(),
+                        java_double_text(value_arg),
+                    ],
                     1,
                 )
             }
@@ -918,7 +964,11 @@ impl Game<'_> {
                 if map.has_modifier(key, modifier_id) {
                     return Err(text_error(
                         "commands.attribute.failed.modifier_already_present",
-                        &[Text::literal(modifier_id), description.clone(), name.clone()],
+                        &[
+                            Text::literal(modifier_id),
+                            description.clone(),
+                            name.clone(),
+                        ],
                     ));
                 }
                 let operation = match op {
@@ -926,14 +976,18 @@ impl Game<'_> {
                     "add_multiplied_total" => Operation::AddMultipliedTotal,
                     _ => Operation::AddValue,
                 };
-                let m = Modifier::new(modifier_id, value_arg, operation)
-                    .map_err(|_| no_attribute())?;
+                let m =
+                    Modifier::new(modifier_id, value_arg, operation).map_err(|_| no_attribute())?;
                 map.edit(key, |a, o| {
                     let _ = a.add_permanent(m, o);
                 });
                 (
                     "commands.attribute.modifier.add.success",
-                    vec![Text::literal(modifier_id), description.clone(), name.clone()],
+                    vec![
+                        Text::literal(modifier_id),
+                        description.clone(),
+                        name.clone(),
+                    ],
                     1,
                 )
             }
@@ -946,7 +1000,11 @@ impl Game<'_> {
                 });
                 (
                     "commands.attribute.modifier.remove.success",
-                    vec![Text::literal(modifier_id), description.clone(), name.clone()],
+                    vec![
+                        Text::literal(modifier_id),
+                        description.clone(),
+                        name.clone(),
+                    ],
                     1,
                 )
             }
@@ -1145,8 +1203,20 @@ impl Game<'_> {
                 }
                 let p = &mut points[i];
                 let before = *p;
-                p[0] = if p[0] < min_x { min_x } else if p[0] > max_x { max_x } else { p[0] };
-                p[1] = if p[1] < min_z { min_z } else if p[1] > max_z { max_z } else { p[1] };
+                p[0] = if p[0] < min_x {
+                    min_x
+                } else if p[0] > max_x {
+                    max_x
+                } else {
+                    p[0]
+                };
+                p[1] = if p[1] < min_z {
+                    min_z
+                } else if p[1] > max_z {
+                    max_z
+                } else {
+                    p[1]
+                };
                 if before != *p {
                     collisions = true;
                 }
@@ -1273,7 +1343,12 @@ impl Game<'_> {
             .items
             .block_tags
             .get("entities_can_teleport_to")
-            .or_else(|| self.res.items.block_tags.get("minecraft:entities_can_teleport_to"))
+            .or_else(|| {
+                self.res
+                    .items
+                    .block_tags
+                    .get("minecraft:entities_can_teleport_to")
+            })
             .is_some_and(|set| {
                 set.contains(&*name) || set.contains(name.trim_start_matches("minecraft:"))
             });

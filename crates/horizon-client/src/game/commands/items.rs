@@ -353,8 +353,7 @@ impl Game<'_> {
             Value::Object(_) => {
                 let mut stack = stack?;
                 // 26.3 item modifiers: a single `condition`, dispatched on `type`.
-                if !m["condition"].is_null()
-                    && !self.conditions_hold(&m["condition"], this, origin)
+                if !m["condition"].is_null() && !self.conditions_hold(&m["condition"], this, origin)
                 {
                     return Some(stack);
                 }
@@ -464,7 +463,7 @@ impl Game<'_> {
                                 Some(Tag::List(l)) => l.clone(),
                                 _ => Vec::new(),
                             };
-                            let new = list_operation(&m, old, lines);
+                            let new = list_operation(m, old, lines);
                             c.insert("minecraft:lore".into(), Tag::List(new));
                         });
                     }
@@ -549,7 +548,10 @@ impl Game<'_> {
                                 display.push((
                                     "hidden_components",
                                     Tag::List(
-                                        hidden.iter().map(|h| Tag::String(h.as_str().into())).collect(),
+                                        hidden
+                                            .iter()
+                                            .map(|h| Tag::String(h.as_str().into()))
+                                            .collect(),
                                     ),
                                 ));
                             }

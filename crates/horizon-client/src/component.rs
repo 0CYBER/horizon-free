@@ -208,7 +208,11 @@ pub fn to_text_with(
                 let args: Vec<Text> = o
                     .get("with")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().map(|x| to_text_with(x, resolve, contents)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .map(|x| to_text_with(x, resolve, contents))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let translated = Text::translate(key, &args);
                 match o.get("fallback").and_then(Value::as_str) {

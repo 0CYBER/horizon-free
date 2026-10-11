@@ -127,7 +127,12 @@ mod tests {
 
     #[test]
     fn hash_and_order() {
-        assert_eq!(java_hash("harness"), "harness".chars().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)));
+        assert_eq!(
+            java_hash("harness"),
+            "harness"
+                .chars()
+                .fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32))
+        );
         let mut o = OpenOrder::new(16, 0.5);
         for k in ["harness", "harness_h"] {
             o.insert(k);
