@@ -547,7 +547,10 @@ def main():
                 failures += 1
         volatile = re.compile(r'(cooking_time_spent|lit_time_remaining|ticks_since_song_started|Age|BrewTime|'
                               r'ticks_in_hive|triggered|state_updating_resumes_at|LastExecution|last_vibration_frequency|warning_level): -?[0-9]+[a-zA-Z]?')
-        volatile2 = re.compile(r'(RecipesUsed: \{[^}]*\}|listener: \{.*\}(?=, x))')
+        # A lit campfire keeps cooking while each server runs before `data get`: its
+        # progress counters advance by however many ticks that took (stage 3 checks
+        # that Horizon saves them exactly as loaded).
+        volatile2 = re.compile(r'(RecipesUsed: \{[^}]*\}|listener: \{.*\}(?=, x)|CookingTimes: \[I;[^\]]*\])')
         # The lit furnace keeps smelting while each game runs: its slots move on.
         volatile_items = re.compile(r'Items: \[[^\]]*\]')
         for label in views0:

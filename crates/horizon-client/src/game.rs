@@ -4856,8 +4856,8 @@ impl Game<'_> {
         creative: bool,
     ) -> Result<()> {
         let save_root = std::env::current_dir()?.join("saves").join(folder);
+        horizon_client::save::upgrade_older_world(&save_root)?;
         horizon_client::save::migrate_legacy(&save_root)?;
-        horizon_client::save::check_data_version(&save_root)?;
         self.session_lock = None;
         self.session_lock = Some(horizon_client::save::SessionLock::acquire(&save_root)?);
         self.persist = Default::default();
