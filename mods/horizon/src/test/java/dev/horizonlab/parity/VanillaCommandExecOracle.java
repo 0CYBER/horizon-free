@@ -202,8 +202,11 @@ public final class VanillaCommandExecOracle {
                         messages.clear();
                         // Answers computed off-thread (profile lookups) reach the
                         // server's task queue before the next tick.
-                        for (int wait = 0; wait < 2000 && this.getPendingTasksCount() == 0 && op.has("record"); wait++) {
-                            try { Thread.sleep(5); } catch (InterruptedException e) { throw new RuntimeException(e); }
+                        // (Other queued tasks may be pending already, so give
+                        // the stub resolvers a fixed moment rather than
+                        // waiting for the queue to fill.)
+                        if (op.has("record")) {
+                            try { Thread.sleep(300); } catch (InterruptedException e) { throw new RuntimeException(e); }
                         }
                         for (int i = 0; i < n; i++) {
                             tick();
@@ -246,9 +249,16 @@ public final class VanillaCommandExecOracle {
             super.tickServer(() -> false);
             // The player's network listener ticks it each server tick
             // (ServerGamePacketListenerImpl.tickPlayer); this one has no
-            // listening connection, so tick the player here.
+            // listening connection. Its movement is the client's, so of
+            // that tick only apply changed attributes (waypoint range...).
             if (player != null) {
-                player.doTick();
+                try {
+                    var refresh = net.minecraft.world.entity.LivingEntity.class.getDeclaredMethod("refreshDirtyAttributes");
+                    refresh.setAccessible(true);
+                    refresh.invoke(player);
+                } catch (ReflectiveOperationException e) {
+                    throw new RuntimeException(e);
+                }
             }
             drain();
         }

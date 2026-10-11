@@ -2,7 +2,7 @@
 //! tool mining rules and block loot tables (`LootTable`/`LootPool` semantics
 //! for the condition, entry and modifier types used by block drops).
 use crate::{Result, blocks::BlockFacts};
-use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_core::random::RandomSource;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
 use serde_json::Value;
 use std::{
@@ -1001,6 +1001,7 @@ impl LootContext<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_core::random::LegacyRandom;
     use serde_json::json;
 
     fn ctx<'a>(

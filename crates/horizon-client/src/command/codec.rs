@@ -130,7 +130,17 @@ pub fn decode(registry: &str, t: &Tag, reg: &Registries) -> Result<(), String> {
         "minecraft:slot_source" => element_or_list(t, &|x| {
             dispatch(x, reg, "minecraft:slot_source_type", &|_, _, _| Ok(()))
         }),
-        "minecraft:dialog" => dispatch(t, reg, "minecraft:dialog_type", &|_, _, _| Ok(())),
+        // Dialog types: CommonDialogData's title, then each type's own.
+        "minecraft:dialog" => dispatch(t, reg, "minecraft:dialog_type", &|id, map, t| {
+            let own: &[&str] = match id {
+                "minecraft:confirmation" => &["yes", "no"],
+                "minecraft:multi_action" => &["actions"],
+                "minecraft:dialog_list" => &["dialogs"],
+                _ => &[],
+            };
+            let keys: Vec<&str> = std::iter::once("title").chain(own.iter().copied()).collect();
+            require(map, t, &keys)
+        }),
         "minecraft:worldgen/feature" | "minecraft:loot_table" => match t {
             Tag::Compound(_) => Ok(()),
             _ => Err(not_map(t)),

@@ -655,7 +655,14 @@ def functions_and_packs():
         cmd('/datapack list available'),
         cmd('/datapack list enabled'),
         cmd('/datapack enable vanilla'),
+        # Disabling vanilla reloads without its data; enable it again before
+        # anything observes the empty registries.
         cmd('/datapack disable vanilla'),
+        {'op': 'tick', 'n': 20},
+        cmd('/datapack list enabled'),
+        cmd('/datapack enable vanilla'),
+        {'op': 'tick', 'n': 20},
+        cmd('/datapack list'),
         cmd('/datapack enable "file/missing"'),
         cmd('/datapack enable trade_rebalance'),
         cmd('/datapack disable trade_rebalance'),

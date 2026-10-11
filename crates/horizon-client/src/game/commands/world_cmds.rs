@@ -1025,145 +1025,215 @@ impl Game<'_> {
         if targets.is_empty() {
             return Err(err("argument.entity.notfound.entity", &[]));
         }
-        // Units: each entity, or each team together with `respectTeams`.
-        let mut units: Vec<Vec<Target>> = Vec::new();
-        let mut teams: Vec<(String, usize)> = Vec::new();
-        for &t in &targets {
-            let team = if respect {
-                self.holder_name(t)
-                    .and_then(|h| self.score.board.players_team(&h).map(|x| x.name.clone()))
-            } else {
-                None
-            };
-            match team {
-                Some(name) => match teams.iter().find(|(n, _)| *n == name) {
-                    Some((_, i)) => units[*i].push(t),
-                    None => {
-                        teams.push((name, units.len()));
-                        units.push(vec![t]);
-                    }
-                },
-                None => units.push(vec![t]),
+        // SpreadPlayersCommand: one position per entity, or per team (every
+        // non-player and team-less player sharing one) with respectTeams.
+        let team_of = |g: &mut Self, t: Target| -> Option<String> {
+            if t != Target::Player {
+                return None;
             }
+            g.holder_name(t)
+                .and_then(|h| g.score.board.players_team(&h).map(|x| x.name.clone()))
+        };
+        let count = if respect {
+            let mut seen: Vec<Option<String>> = Vec::new();
+            for &t in &targets {
+                let team = team_of(self, t);
+                if !seen.contains(&team) {
+                    seen.push(team);
+                }
+            }
+            seen.len()
+        } else {
+            targets.len()
+        };
+        let centre_f = [centre[0] as f32, centre[2] as f32];
+        let (cx, cz) = (f64::from(centre_f[0]), f64::from(centre_f[1]));
+        let (min_x, max_x) = (cx - range, cx + range);
+        let (min_z, max_z) = (cz - range, cz + range);
+        // Mth.nextDouble.
+        let next = |g: &mut Self, lo: f64, hi: f64| {
+            if lo >= hi {
+                lo
+            } else {
+                g.world.random.next_double() * (hi - lo) + lo
+            }
+        };
+        let mut points: Vec<[f64; 2]> = Vec::with_capacity(count);
+        for _ in 0..count {
+            let x = next(self, min_x, max_x);
+            let z = next(self, min_z, max_z);
+            points.push([x, z]);
         }
-        let (min_x, max_x) = (centre[0] - range, centre[0] + range);
-        let (min_z, max_z) = (centre[2] - range, centre[2] + range);
-        let mut points: Vec<[f64; 2]> = units
-            .iter()
-            .map(|_| {
-                let r = &mut self.world.random;
-                [
-                    min_x + r.next_double() * (max_x - min_x),
-                    min_z + r.next_double() * (max_z - min_z),
-                ]
-            })
-            .collect();
-        let n = points.len();
-        let mut ok = false;
-        for _ in 0..10_000 {
-            let mut moved = false;
-            let mut crowded = 0;
-            for i in 0..n {
-                let mut push = [0.0, 0.0];
-                let mut near = 0;
-                for j in 0..n {
+        let mut collisions = true;
+        let mut min_distance = f64::from(f32::MAX);
+        let mut iteration = 0;
+        while iteration < 10_000 && collisions {
+            collisions = false;
+            min_distance = f64::from(f32::MAX);
+            for i in 0..points.len() {
+                let mut neighbours = 0;
+                let mut avg = [0.0f64, 0.0f64];
+                for j in 0..points.len() {
                     if i == j {
                         continue;
                     }
-                    let (dx, dz) = (points[j][0] - points[i][0], points[j][1] - points[i][1]);
-                    let d = (dx * dx + dz * dz).sqrt();
-                    if d < spread {
-                        near += 1;
-                        if d > 1.0e-6 {
-                            push[0] -= dx / d;
-                            push[1] -= dz / d;
-                        } else {
-                            let r = &mut self.world.random;
-                            push[0] += r.next_double() - 0.5;
-                            push[1] += r.next_double() - 0.5;
-                        }
+                    let (dx, dz) = (points[i][0] - points[j][0], points[i][1] - points[j][1]);
+                    let dist = (dx * dx + dz * dz).sqrt();
+                    min_distance = min_distance.min(dist);
+                    if dist < spread {
+                        neighbours += 1;
+                        avg[0] += points[j][0] - points[i][0];
+                        avg[1] += points[j][1] - points[i][1];
                     }
                 }
-                if near > 0 {
-                    crowded += 1;
-                    let len = (push[0] * push[0] + push[1] * push[1]).sqrt().max(1.0e-6);
-                    points[i][0] += push[0] / len;
-                    points[i][1] += push[1] / len;
-                    moved = true;
+                if neighbours > 0 {
+                    avg[0] /= f64::from(neighbours);
+                    avg[1] /= f64::from(neighbours);
+                    let length = (avg[0] * avg[0] + avg[1] * avg[1]).sqrt();
+                    if length > 0.0 {
+                        points[i][0] -= avg[0] / length;
+                        points[i][1] -= avg[1] / length;
+                    } else {
+                        points[i][0] = next(self, min_x, max_x);
+                        points[i][1] = next(self, min_z, max_z);
+                    }
+                    collisions = true;
                 }
-                let before = points[i];
-                points[i][0] = points[i][0].clamp(min_x, max_x);
-                points[i][1] = points[i][1].clamp(min_z, max_z);
-                moved |= before != points[i];
+                let p = &mut points[i];
+                let before = *p;
+                p[0] = if p[0] < min_x { min_x } else if p[0] > max_x { max_x } else { p[0] };
+                p[1] = if p[1] < min_z { min_z } else if p[1] > max_z { max_z } else { p[1] };
+                if before != *p {
+                    collisions = true;
+                }
             }
-            if !moved || crowded == 0 {
-                ok = true;
-                break;
+            if !collisions {
+                for i in 0..points.len() {
+                    if !self.spread_safe(points[i], max_y) {
+                        points[i][0] = next(self, min_x, max_x);
+                        points[i][1] = next(self, min_z, max_z);
+                        collisions = true;
+                    }
+                }
             }
+            iteration += 1;
         }
-        if !ok {
-            let key = if teams.is_empty() {
-                "commands.spreadplayers.failed.entities"
-            } else {
+        if min_distance == f64::from(f32::MAX) {
+            min_distance = 0.0;
+        }
+        let float = |v: f32| Text::literal(horizon_client::snbt::java_float(v));
+        if iteration >= 10_000 {
+            let key = if respect {
                 "commands.spreadplayers.failed.teams"
+            } else {
+                "commands.spreadplayers.failed.entities"
             };
-            return Err(err(
+            return Err(text_error(
                 key,
                 &[
-                    &n,
-                    &format!("{:.2}", centre[0]),
-                    &format!("{:.2}", centre[2]),
-                    &format!("{:.2}", spread),
+                    num(points.len()),
+                    float(centre_f[0]),
+                    float(centre_f[1]),
+                    Text::literal(format!("{min_distance:.2}")),
                 ],
             ));
         }
-        // Stand each unit on the ground under `max_y`.
+        // setPlayerPositions.
         let mut total = 0.0;
-        for (unit, p) in units.iter().zip(&points) {
-            let (bx, bz) = (p[0].floor() as i32, p[1].floor() as i32);
-            let mut y = None;
-            for yy in (horizon_client::chunk::MIN_Y
-                ..max_y.min(horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT))
-                .rev()
-            {
-                let solid = |dy: i32| {
-                    self.res
-                        .facts
-                        .get(self.world.block(bx, yy + dy, bz))
-                        .full_collision
-                };
-                if solid(-1) && !solid(0) && !solid(1) {
-                    y = Some(yy);
-                    break;
+        let mut index = 0;
+        let mut team_points: Vec<(Option<String>, usize)> = Vec::new();
+        for &t in &targets {
+            let i = if respect {
+                let team = team_of(self, t);
+                match team_points.iter().find(|(k, _)| *k == team) {
+                    Some((_, i)) => *i,
+                    None => {
+                        team_points.push((team, index));
+                        index += 1;
+                        index - 1
+                    }
                 }
-            }
-            let y = y.unwrap_or(max_y);
-            for &t in unit {
-                self.teleport_to(
-                    t,
-                    [f64::from(bx) + 0.5, f64::from(y), f64::from(bz) + 0.5],
-                    None,
-                );
-            }
-            let (dx, dz) = (p[0] - centre[0], p[1] - centre[2]);
-            total += (dx * dx + dz * dz).sqrt();
+            } else {
+                index += 1;
+                index - 1
+            };
+            let p = points[i];
+            let y = self.spread_spawn_y(p, max_y);
+            self.teleport_to(
+                t,
+                [p[0].floor() + 0.5, f64::from(y), p[1].floor() + 0.5],
+                None,
+            );
+            let closest = points
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt())
+                .fold(f64::MAX, f64::min);
+            total += closest;
         }
-        let average = if n == 0 { 0.0 } else { total / n as f64 };
-        let key = if teams.is_empty() {
-            "commands.spreadplayers.success.entities"
+        let average = if targets.len() < 2 {
+            0.0
         } else {
+            total / targets.len() as f64
+        };
+        let key = if respect {
             "commands.spreadplayers.success.teams"
+        } else {
+            "commands.spreadplayers.success.entities"
         };
         self.feedback(Text::translate(
             key,
             &[
-                num(n),
-                Text::literal(format!("{:.2}", centre[0])),
-                Text::literal(format!("{:.2}", centre[2])),
+                num(points.len()),
+                float(centre_f[0]),
+                float(centre_f[1]),
                 Text::literal(format!("{average:.2}")),
             ],
         ));
-        Ok(n as i32)
+        Ok(points.len() as i32)
+    }
+    /// `SpreadPlayersCommand.Position.getSpawnY`.
+    fn spread_spawn_y(&self, p: [f64; 2], max_y: i32) -> i32 {
+        let (x, z) = (p[0].floor() as i32, p[1].floor() as i32);
+        let air = |y: i32| {
+            let name: &str = &self.res.facts.get(self.world.block(x, y, z)).name;
+            matches!(
+                name,
+                "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+            )
+        };
+        let mut y = max_y + 1;
+        let mut air2 = air(y);
+        y -= 1;
+        let mut air1 = air(y);
+        while y > horizon_client::chunk::MIN_Y {
+            y -= 1;
+            let current = air(y);
+            if !current && air1 && air2 {
+                return y + 1;
+            }
+            air2 = air1;
+            air1 = current;
+        }
+        max_y + 1
+    }
+    /// `SpreadPlayersCommand.Position.isSafe`.
+    fn spread_safe(&self, p: [f64; 2], max_y: i32) -> bool {
+        let y = self.spread_spawn_y(p, max_y) - 1;
+        let (x, z) = (p[0].floor() as i32, p[1].floor() as i32);
+        let name = self.res.facts.get(self.world.block(x, y, z)).name.clone();
+        let liquid = matches!(&*name, "minecraft:water" | "minecraft:lava");
+        let teleportable = self
+            .res
+            .items
+            .block_tags
+            .get("entities_can_teleport_to")
+            .or_else(|| self.res.items.block_tags.get("minecraft:entities_can_teleport_to"))
+            .is_some_and(|set| {
+                set.contains(&*name) || set.contains(name.trim_start_matches("minecraft:"))
+            });
+        y < max_y && !liquid && teleportable
     }
 }
 

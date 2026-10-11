@@ -45,6 +45,8 @@ pub(in crate::game) struct CommandExtras {
     pub waypoint_icons: HashMap<Target, WaypointIcon>,
     /// The dialog `/dialog show` opened (its id or inline definition).
     pub dialog: Option<String>,
+    /// `/datapack disable vanilla` took the built-in pack out of the selection.
+    pub vanilla_disabled: bool,
     /// The waypoint manager's tracked transmitters (None until first used).
     pub waypoints: Option<Vec<Target>>,
     /// Entities whose waypoint transmit range changed since they last ticked.

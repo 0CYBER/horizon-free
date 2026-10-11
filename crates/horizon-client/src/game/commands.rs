@@ -866,7 +866,9 @@ impl Game<'_> {
                 ],
             )));
         }
-        for _ in &targets {
+        // An air stack is empty: nothing is given (but the message still is).
+        let empty = id == "minecraft:air";
+        for _ in targets.iter().filter(|_| !empty) {
             let mut remaining = count;
             while remaining > 0 {
                 let size = remaining.min(max_stack);

@@ -298,9 +298,10 @@ impl Game<'_> {
     pub(in crate::game) fn functions_named(&mut self, name: &str) -> R<Vec<Function>> {
         self.ensure_datapacks();
         match name.strip_prefix('#') {
+            // ServerFunctionLibrary.getTag: an unknown tag is empty.
             Some(tag) => {
                 if !self.fns.store.function_tags.contains_key(tag) {
-                    return Err(err("arguments.function.tag.unknown", &[&tag]));
+                    return Ok(Vec::new());
                 }
                 Ok(self
                     .fns
@@ -347,7 +348,8 @@ impl Game<'_> {
         };
         let functions = self.functions_named(&name)?;
         if functions.is_empty() {
-            return Err(err("commands.function.scheduled.no_functions", &[&name]));
+            let id = name.trim_start_matches('#');
+            return Err(err("commands.function.scheduled.no_functions", &[&id]));
         }
         let args = if ctx.has("with") {
             let r = self.data_ref_named(ctx, 0, "source")?;
@@ -470,12 +472,8 @@ impl Game<'_> {
         let replace = !ctx.has("append");
         let tick_time = self.world.game_time + i64::from(time);
         let schedule_id = match name.strip_prefix('#') {
-            Some(tag) => {
-                if !self.fns.store.function_tags.contains_key(tag) {
-                    return Err(err("arguments.function.tag.unknown", &[&tag]));
-                }
-                name.clone()
-            }
+            // An unknown tag is empty, and scheduling it is allowed.
+            Some(_) => name.clone(),
             None => {
                 let Some(f) = self.fns.store.functions.get(&name) else {
                     return Err(err("arguments.function.unknown", &[&name]));
@@ -519,11 +517,14 @@ impl Game<'_> {
         self.sync_function_registries();
         Ok((tick_time.rem_euclid(i64::from(i32::MAX))) as i32)
     }
+    /// ReloadCommand: the message, then the (asynchronous) reload; returns 0.
     pub(super) fn cmd_reload(&mut self) -> R<i32> {
-        self.reload_datapacks(true);
         self.feedback(Text::translate("commands.reload.success", &[]));
-        Ok(1)
+        self.reload_datapacks(true);
+        Ok(0)
     }
+    /// `PackLocationInfo.createChatLink`: the id decorated with its source
+    /// (`pack.nameAndSource`, grey) in brackets, green when enabled.
     fn pack_link(&self, id: &str, enabled: bool) -> Text {
         let hint = if enabled { "disable" } else { "enable" };
         let style = text::Style {
@@ -541,7 +542,27 @@ impl Game<'_> {
             hover: Some(Box::new(Text::literal(format!("{id}\n{description}")))),
             ..style
         };
-        bracketed(Text::literal(id).with_style(&style))
+        let source = if id == "vanilla" {
+            "pack.source.builtin"
+        } else if FEATURE_PACKS.iter().any(|(p, _)| *p == id) {
+            "pack.source.feature"
+        } else {
+            "pack.source.world"
+        };
+        let name = Text::translate(
+            "pack.nameAndSource",
+            &[Text::literal(id), Text::translate(source, &[])],
+        )
+        .with_color(text::GRAY);
+        bracketed(name).with_style(&style)
+    }
+    /// The selected packs, lowest priority first.
+    fn selected_packs(&self) -> Vec<String> {
+        let vanilla = (!self.cmds.vanilla_disabled).then(|| "vanilla".to_owned());
+        vanilla
+            .into_iter()
+            .chain(self.fns.enabled.iter().cloned())
+            .collect()
     }
     pub(super) fn cmd_datapack(&mut self, id: &str, ctx: &Context) -> R<i32> {
         self.ensure_datapacks();
@@ -549,34 +570,37 @@ impl Game<'_> {
             Some(Arg::Str(n)) => Some(n.clone()),
             _ => None,
         };
-        let enabled_ids: Vec<String> = std::iter::once("vanilla".to_owned())
-            .chain(self.fns.enabled.iter().cloned())
+        let selected = self.selected_packs();
+        // Feature packs need features this world lacks: never available.
+        let available: Vec<String> = std::iter::once("vanilla".to_owned())
+            .chain(self.fns.packs.iter().map(|p| p.id.clone()))
+            .filter(|p| !selected.contains(p))
             .collect();
-        let available: Vec<String> = self
-            .fns
-            .packs
-            .iter()
-            .map(|p| p.id.clone())
-            .filter(|p| !enabled_ids.contains(p))
-            .collect();
+        let known = |g: &Self, n: &str| {
+            n == "vanilla"
+                || FEATURE_PACKS.iter().any(|(p, _)| *p == n)
+                || g.fns.packs.iter().any(|p| p.id == n)
+        };
         match id {
             "datapack.list" => {
                 let want_enabled = ctx.has("enabled") || (!ctx.has("available"));
                 let want_available = ctx.has("available") || (!ctx.has("enabled"));
                 let mut total = 0;
                 if want_enabled {
-                    let links: Vec<Text> = enabled_ids
-                        .iter()
-                        .map(|p| self.pack_link(p, true))
-                        .collect();
-                    total += links.len();
-                    self.feedback(Text::translate(
-                        "commands.datapack.list.enabled.success",
-                        &[
-                            Text::literal(links.len().to_string()),
-                            horizon_client::scoreboard_cmd::format_list(links),
-                        ],
-                    ));
+                    if selected.is_empty() {
+                        self.feedback(Text::translate("commands.datapack.list.enabled.none", &[]));
+                    } else {
+                        let links: Vec<Text> =
+                            selected.iter().map(|p| self.pack_link(p, true)).collect();
+                        total += links.len();
+                        self.feedback(Text::translate(
+                            "commands.datapack.list.enabled.success",
+                            &[
+                                Text::literal(links.len().to_string()),
+                                horizon_client::scoreboard_cmd::format_list(links),
+                            ],
+                        ));
+                    }
                 }
                 if want_available {
                     if available.is_empty() {
@@ -601,57 +625,68 @@ impl Game<'_> {
             }
             "datapack.enable" => {
                 let name = name.unwrap_or_default();
-                if !self.fns.packs.iter().any(|p| p.id == name) && name != "vanilla" {
+                if !known(self, &name) {
                     return Err(err("commands.datapack.unknown", &[&name]));
                 }
-                if enabled_ids.contains(&name) {
+                if selected.contains(&name) {
                     return Err(err("commands.datapack.enable.failed", &[&name]));
                 }
-                let existing = match ctx.get("existing") {
-                    Some(Arg::Str(e)) => Some(e.clone()),
-                    _ => None,
-                };
-                let position = if ctx.has("first") {
-                    0
-                } else if let Some(e) = &existing {
-                    let Some(i) = self.fns.enabled.iter().position(|p| p == e) else {
-                        return Err(err("commands.datapack.unknown", &[e]));
-                    };
-                    if ctx.has("before") { i } else { i + 1 }
+                if let Some((_, flag)) = FEATURE_PACKS.iter().find(|(p, _)| *p == name) {
+                    return Err(err("commands.datapack.enable.failed.no_flags", &[&name, flag]));
+                }
+                if name == "vanilla" {
+                    self.cmds.vanilla_disabled = false;
                 } else {
-                    self.fns.enabled.len()
-                };
-                self.fns.enabled.insert(position, name.clone());
+                    let existing = match ctx.get("existing") {
+                        Some(Arg::Str(e)) => Some(e.clone()),
+                        _ => None,
+                    };
+                    let position = if ctx.has("first") {
+                        0
+                    } else if let Some(e) = &existing {
+                        let Some(i) = self.fns.enabled.iter().position(|p| p == e) else {
+                            return Err(err("commands.datapack.unknown", &[e]));
+                        };
+                        if ctx.has("before") { i } else { i + 1 }
+                    } else {
+                        self.fns.enabled.len()
+                    };
+                    self.fns.enabled.insert(position, name.clone());
+                }
                 self.feedback(Text::translate(
                     "commands.datapack.modify.enable",
                     &[self.pack_link(&name, true)],
                 ));
                 self.apply_pack_change();
-                Ok(self.fns.enabled.len() as i32)
+                Ok(self.selected_packs().len() as i32)
             }
             _ => {
                 let name = name.unwrap_or_default();
-                if !self.fns.packs.iter().any(|p| p.id == name) && name != "vanilla" {
+                if !known(self, &name) {
                     return Err(err("commands.datapack.unknown", &[&name]));
                 }
-                let Some(i) = self.fns.enabled.iter().position(|p| p == &name) else {
+                if !selected.contains(&name) {
                     return Err(err("commands.datapack.disable.failed", &[&name]));
-                };
-                self.fns.enabled.remove(i);
+                }
+                if name == "vanilla" {
+                    self.cmds.vanilla_disabled = true;
+                } else {
+                    self.fns.enabled.retain(|p| p != &name);
+                }
                 self.feedback(Text::translate(
                     "commands.datapack.modify.disable",
-                    &[self.pack_link(&name, false)],
+                    &[self.pack_link(&name, true)],
                 ));
                 self.apply_pack_change();
-                Ok(self.fns.enabled.len() as i32)
+                Ok(self.selected_packs().len() as i32)
             }
         }
     }
+    /// `ReloadCommand.reloadPacks`: no message of its own.
     fn apply_pack_change(&mut self) {
         self.save_datapack_settings();
         self.rebuild_store();
         self.fns.load_pending = true;
-        self.feedback(Text::translate("commands.reload.success", &[]));
     }
 
     // ---- predicates -------------------------------------------------------------------
@@ -667,3 +702,11 @@ impl Game<'_> {
         Ok(self.conditions_hold(&json, view.as_ref(), source.pos))
     }
 }
+
+/// The built-in feature packs and the feature flag each needs (none of them
+/// enabled in a world created without experiments).
+const FEATURE_PACKS: &[(&str, &str)] = &[
+    ("minecart_improvements", "minecraft:minecart_improvements"),
+    ("redstone_experiments", "minecraft:redstone_experiments"),
+    ("trade_rebalance", "minecraft:trade_rebalance"),
+];
