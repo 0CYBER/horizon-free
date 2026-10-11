@@ -272,8 +272,9 @@ def cases(facts, count, seed, only):
                 if target['type'] == 'minecraft:sulfur_cube' and rng.random() < 0.5:
                     target['equip'] = {'body': plain(rng.choice(SWALLOWED))}
                 # Leads: tied to an earlier target, or that target holds this one's.
-                if entities and rng.random() < 0.3:
-                    target['leash'] = rng.randrange(len(entities))
+                holders = [i for i, e in enumerate(entities) if e['type'] != 'minecraft:armor_stand']
+                if holders and rng.random() < 0.3:
+                    target['leash'] = rng.choice(holders)
                 entities.append(target)
             if bare == 'shears' and len(entities) == 1 and rng.random() < 0.3:
                 # A holder out of the dispenser's reach whose lead runs to the target.
@@ -320,7 +321,9 @@ def numbers_close(java, rust):
     for x, y in zip(a, b):
         if x.startswith('~'):
             try:
-                if abs(float(x[1:]) - float(y)) > 0.25:
+                # An item's own motion spans 0.2 per axis, and a shearing
+                # sheep pushes each wool with its own random by up to 0.1 more.
+                if abs(float(x[1:]) - float(y)) > 0.4:
                     return False
             except ValueError:
                 return False

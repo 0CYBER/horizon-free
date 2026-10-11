@@ -994,6 +994,18 @@ impl Mob {
             },
             kind,
         };
+        // setCanPickUpLoot(true) in the Villager, AbstractPiglin, Allay,
+        // Dolphin, Fox and Panda constructors.
+        mob.extra.pick_up_loot = matches!(
+            mob.species(),
+            Species::Villager
+                | Species::Piglin
+                | Species::PiglinBrute
+                | Species::Allay
+                | Species::Dolphin
+                | Species::Fox
+                | Species::Panda
+        );
         ai::register(&mut mob);
         mob
     }

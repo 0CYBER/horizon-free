@@ -217,6 +217,23 @@ public final class VanillaBlockUpdateOracle {
                 }
             }
         }
+        /** ServerLevel.getEntity(id) over the level's entities. */
+        @Override public Entity getEntity(int id) {
+            if (entities == null) return null;
+            for (Entity e : entities) if (e.getId() == id && !e.isRemoved()) return e;
+            return null;
+        }
+        /** Every entity of the level (no area), as ServerLevel's entity getter would. */
+        @Override public <T extends Entity> void getEntities(net.minecraft.world.level.entity.EntityTypeTest<Entity, T> type, java.util.function.Predicate<? super T> filter, List<? super T> out, int max) {
+            if (entities == null) return;
+            for (Entity e : List.copyOf(entities)) {
+                T t = type.tryCast(e);
+                if (t != null && !e.isRemoved() && filter.test(t)) {
+                    out.add(t);
+                    if (out.size() >= max) return;
+                }
+            }
+        }
         @Override public <T extends Entity> List<T> getEntitiesOfClass(Class<T> type, AABB box, java.util.function.Predicate<? super T> filter) {
             return getEntities(net.minecraft.world.level.entity.EntityTypeTest.forClass(type), box, filter);
         }
@@ -297,6 +314,8 @@ public final class VanillaBlockUpdateOracle {
             return attributes;
         }
         @Override public net.minecraft.world.level.dimension.DimensionType dimensionType() { return OVERWORLD_TYPE; }
+        /** The overworld (fire in an obsidian frame lights a portal here). */
+        @Override public net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension() { return net.minecraft.world.level.Level.OVERWORLD; }
         @Override public long getOverworldClockTime() { return DAY.totalTicks(); }
         @Override public float getMoonBrightness(BlockPos p) {
             return net.minecraft.world.level.dimension.DimensionType.MOON_BRIGHTNESS_PER_PHASE[environmentAttributes().getValue(net.minecraft.world.attribute.EnvironmentAttributes.MOON_PHASE, p).index()];

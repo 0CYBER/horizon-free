@@ -283,9 +283,9 @@ fn equip_sound(m: &Mob, slot: Slot, default: Option<String>) -> Option<String> {
         _ if equine(s) => "minecraft:entity.horse.saddle".into(),
         _ if horizon_client::mobs::nautilus::is_nautilus(s) => {
             if m.fluids.eye_in_water {
-                "minecraft:entity.nautilus.saddle_underwater_equip".into()
+                "minecraft:item.nautilus_saddle_underwater_equip".into()
             } else {
-                "minecraft:entity.nautilus.saddle_equip".into()
+                "minecraft:item.nautilus_saddle_equip".into()
             }
         }
         _ => return default,

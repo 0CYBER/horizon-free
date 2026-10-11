@@ -84,6 +84,7 @@ public final class VanillaDispenserOracle {
         } catch (Throwable e) {
             Throwable c = e;
             while (c.getCause() != null) c = c.getCause();
+            if (System.getenv("ORACLE_TRACE") != null) c.printStackTrace();
             StackTraceElement[] st = c.getStackTrace();
             result.clear();
             result.add("error " + c.getClass().getSimpleName() + " " + (st.length > 0 ? st[0].toString() : "") + " " + c.getMessage());
