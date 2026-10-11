@@ -45,5 +45,52 @@ class ParityRunnerTests(unittest.TestCase):
             self.assertTrue(parity.stale("x", state, hasher, "env"))
 
 
+class OracleReuseTests(unittest.TestCase):
+    """tools/parity_shim.py replays a run only when its inputs and outputs are as recorded."""
+
+    def setUp(self):
+        import os, subprocess, sys
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.bin, self.shim = root / "bin", root / "shim"
+        self.bin.mkdir(); self.shim.mkdir()
+        # A fake oracle: copies its input to its output and counts its runs.
+        fake = self.bin / "java"
+        fake.write_text(f"#!{sys.executable}\nimport sys, pathlib\n"
+                        "runs = pathlib.Path(sys.argv[1]).parent / 'runs'\n"
+                        "runs.write_text(str(int(runs.read_text() or 0) + 1) if runs.exists() else '1')\n"
+                        "pathlib.Path(sys.argv[2]).write_text(pathlib.Path(sys.argv[1]).read_text())\nprint('done')\n")
+        fake.chmod(0o755)
+        (self.shim / "java").symlink_to(Path(parity.__file__).with_name("parity_shim.py"))
+        self.input, self.output = root / "work" / "in.txt", root / "work" / "out.txt"
+        self.input.parent.mkdir()
+        self.input.write_text("a")
+        python = Path(sys.executable).parent
+        self.env = dict(os.environ, PATH=f"{self.shim}:{self.bin}:{python}", PARITY_SHIM_REAL_PATH=str(self.bin),
+                        PARITY_SHIM_CACHE=str(root / "cache"))
+        self.subprocess = subprocess
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def oracle(self):
+        result = self.subprocess.run(["java", str(self.input), str(self.output)], env=self.env, capture_output=True, text=True,
+                                     stdin=self.subprocess.DEVNULL, check=True)
+        self.assertEqual(result.stdout, "done\n")
+        return int((self.input.parent / "runs").read_text())
+
+    def test_reuses_until_an_input_or_output_changes(self):
+        self.assertEqual(self.oracle(), 1)
+        self.assertEqual(self.oracle(), 1)  # replayed, stdout included
+        self.input.write_text("a")  # same content, new mtime: still reusable
+        self.assertEqual(self.oracle(), 1)
+        self.input.write_text("b")
+        self.assertEqual(self.oracle(), 2)
+        self.assertEqual(self.output.read_text(), "b")
+        self.output.write_text("tampered")
+        self.assertEqual(self.oracle(), 3)
+        self.assertEqual(self.output.read_text(), "b")
+
+
 if __name__ == "__main__":
     unittest.main()
