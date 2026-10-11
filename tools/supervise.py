@@ -87,8 +87,10 @@ def new(args):
     git("worktree", "add", "-b", branch, str(path), args.base)
     shared = base_tree.parent / "shared-local"
     (path / ".local").mkdir()
+    # Link the vanilla data, not the shared runner and datafix state beside it.
     for entry in sorted(shared.iterdir()) if shared.is_dir() else []:
-        (path / ".local" / entry.name).symlink_to(entry)
+        if entry.is_dir() and entry.name not in {"parity-shared", "datafix"}:
+            (path / ".local" / entry.name).symlink_to(entry)
     print(f"{path} on {branch}, from {args.base} at {git('rev-parse', '--short', 'HEAD', cwd=path)}")
 
 
