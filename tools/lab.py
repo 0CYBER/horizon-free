@@ -6,6 +6,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -19,6 +20,11 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / ".local"
 LOCK = ROOT / "research-lock.json"
+
+
+def cargo_target():
+    """Cargo's target directory, honouring CARGO_TARGET_DIR (tools/parity.py sets it)."""
+    return ROOT / os.environ.get("CARGO_TARGET_DIR", "target")
 
 
 def write_json(path, data):

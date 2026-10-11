@@ -77,7 +77,7 @@ def main():
     vanilla = parse(out.read_text().splitlines())
     subprocess.run(['cargo', 'build', '--profile', 'fast', '-q', '-p', 'horizon-world', '--example', 'structure_blocks'],
                    check=True, cwd=lab.ROOT)
-    rust_out = subprocess.run([str(lab.ROOT/'target/fast/examples/structure_blocks'), resources, seed, dimension, *targets],
+    rust_out = subprocess.run([str(lab.cargo_target()/'fast/examples/structure_blocks'), resources, seed, dimension, *targets],
                               check=True, capture_output=True, text=True).stdout
     (build_dir()/'rust.txt').write_text(rust_out)
     rust = parse(rust_out.splitlines())
