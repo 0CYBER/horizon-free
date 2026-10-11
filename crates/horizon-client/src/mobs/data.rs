@@ -43,6 +43,8 @@ pub enum Placement {
 pub struct MobData {
     pub states: Vec<StateData>,
     pub placements: HashMap<String, Placement>,
+    /// Each entity type's `SpawnPlacements.getHeightmapType`.
+    pub heightmaps: HashMap<String, String>,
     pub animations: HashMap<String, Animation>,
     /// Biome tags (spawns_warm_variant_farm_animals, is_ocean...) by tag id.
     pub biome_tags: HashMap<String, std::collections::HashSet<String>>,
@@ -109,6 +111,12 @@ impl MobData {
                 (k.clone(), placement)
             })
             .collect();
+        let heightmaps = v["placements"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(k, p)| Some((k.clone(), p["heightmap"].as_str()?.to_owned())))
+            .collect();
         let animations = v["animations"]
             .as_object()
             .into_iter()
@@ -118,6 +126,7 @@ impl MobData {
         Self {
             states,
             placements,
+            heightmaps,
             animations,
             biome_tags: HashMap::new(),
             entity_tags: HashMap::new(),
@@ -171,6 +180,7 @@ impl MobData {
         Self {
             states,
             placements: HashMap::new(),
+            heightmaps: HashMap::new(),
             animations: HashMap::new(),
             biome_tags: HashMap::new(),
             entity_tags: HashMap::new(),
@@ -185,6 +195,12 @@ impl MobData {
                 flags: 0,
                 top: 1.0,
             })
+    }
+    /// `SpawnPlacements.getHeightmapType` (MOTION_BLOCKING_NO_LEAVES unless registered).
+    pub fn heightmap(&self, entity: &str) -> &str {
+        self.heightmaps
+            .get(entity)
+            .map_or("MOTION_BLOCKING_NO_LEAVES", String::as_str)
     }
     pub fn placement(&self, entity: &str) -> Placement {
         self.placements

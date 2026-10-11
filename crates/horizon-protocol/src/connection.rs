@@ -82,7 +82,10 @@ impl Connection {
     }
     /// Connection.setEncryptionKey: both directions keyed with the shared secret.
     pub fn enable_encryption(&mut self, secret: &[u8; 16]) {
-        self.reader.decrypt = Some(Cfb8::new(secret, secret));
+        let mut decrypt = Cfb8::new(secret, secret);
+        // Bytes already read past the last packet were sent encrypted.
+        decrypt.decrypt(&mut self.reader.buffer);
+        self.reader.decrypt = Some(decrypt);
         self.writer.encrypt = Some(Cfb8::new(secret, secret));
     }
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
@@ -179,5 +182,28 @@ mod tests {
         let (id, payload) = c.recv().unwrap();
         assert_eq!((id, payload.as_slice()), (9, &b"reply"[..]));
         server.join().unwrap();
+    }
+
+    /// Encrypted bytes that arrive in the same read as the last plain packet
+    /// are decrypted once encryption is enabled.
+    #[test]
+    fn encrypted_bytes_read_before_enabling_encryption() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (sent, both_sent) = std::sync::mpsc::channel();
+        let client = std::thread::spawn(move || {
+            let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5)).unwrap();
+            c.send(&[0, 1, 2]).unwrap();
+            c.enable_encryption(&[7; 16]);
+            c.send(&[5, 4, 3]).unwrap();
+            sent.send(c).unwrap();
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let mut c = Connection::from_stream(stream).unwrap();
+        let _keep_open = both_sent.recv().unwrap();
+        assert_eq!(c.recv().unwrap(), (0, vec![1, 2]));
+        c.enable_encryption(&[7; 16]);
+        assert_eq!(c.recv().unwrap(), (5, vec![4, 3]));
+        client.join().unwrap();
     }
 }
