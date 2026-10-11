@@ -360,6 +360,11 @@ impl Audio {
         }
     }
     fn open(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
+        // Test runs (harnesses, agents) launch the game on a virtual screen;
+        // keep them off the user's speakers.
+        if std::env::var_os("HORIZON_NO_AUDIO").is_some() {
+            return Err("audio output disabled by HORIZON_NO_AUDIO".into());
+        }
         let host = cpal::default_host();
         let device = host
             .default_output_device()

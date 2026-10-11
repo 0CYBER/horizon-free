@@ -2,7 +2,8 @@
 """Run the vanilla differential harnesses (tools/test_*_parity.py) quickly.
 
     python3 tools/parity.py                 # harnesses whose inputs changed, or that never passed
-    python3 tools/parity.py --all           # every harness
+    python3 tools/parity.py --all           # every harness, from scratch (the audit)
+    python3 tools/parity.py --fresh ...     # don't reuse vanilla oracle results
     python3 tools/parity.py food light      # these harnesses (names without test_/_parity.py)
     python3 tools/parity.py --failed        # the ones that failed last time
     python3 tools/parity.py --list          # what would run, without running it
@@ -14,10 +15,17 @@ Rust sources of every probe it executed (from Cargo's dep-info). A harness
 reruns only when one of those files, the pinned vanilla artifacts or the
 toolchains change; otherwise its last pass stands.
 
+Vanilla oracles are reused too: tools/parity_shim.py stands in for java and
+javac and replays an oracle run whose inputs are unchanged, so a Rust-only
+change costs only the Rust side. A harness that fails while reusing oracle
+results is rerun fresh, and stops reusing them if it then passes. --all and
+--fresh never reuse them.
+
 Harness probes build into .local/parity-target with release optimisations but
 without LTO and with 16 codegen units (`PROFILE` below), which builds in
 seconds instead of minutes. Rust does not let those settings change results:
-there is no fast-math, and overflow checks stay as in release. Probes the
+there is no fast-math, and overflow checks stay as in release. Probes built in
+the dev profile are optimised too, keeping their overflow checks. Probes the
 recorded harnesses need are built in one Cargo run before the harnesses start,
 so parallel harnesses don't queue on Cargo's lock.
 """
@@ -41,7 +49,11 @@ PROFILE = {
     "CARGO_PROFILE_RELEASE_LTO": "false",
     "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "16",
     "CARGO_PROFILE_RELEASE_INCREMENTAL": "true",
+    # Probes built in the dev profile keep its overflow checks and debug
+    # assertions, but run optimised.
+    "CARGO_PROFILE_DEV_OPT_LEVEL": "3",
 }
+SHIM = STATE_DIR / "shim"
 DEFAULT_MEMORY = 3 << 30  # assumed peak for a harness that never ran here
 
 
@@ -189,9 +201,18 @@ def java_sources(arguments):
     return sources
 
 
-def run_environment():
-    environment = dict(os.environ, CARGO_TARGET_DIR=str(TARGET), PYTHONDONTWRITEBYTECODE="1", **PROFILE)
+def run_environment(reuse_oracles=False):
+    environment = dict(os.environ, CARGO_TARGET_DIR=str(TARGET), PYTHONDONTWRITEBYTECODE="1", HORIZON_NO_AUDIO="1", **PROFILE)
     environment.pop("CARGO_BUILD_JOBS", None)
+    if reuse_oracles:
+        # tools/parity_shim.py stands in for java and javac and replays unchanged oracle runs.
+        SHIM.mkdir(parents=True, exist_ok=True)
+        for name in ("java", "javac"):
+            link = SHIM / name
+            if not link.is_symlink():
+                link.symlink_to(ROOT / "tools" / "parity_shim.py")
+        environment.update(PARITY_SHIM_REAL_PATH=os.environ.get("PATH", ""), PARITY_SHIM_CACHE=str(STATE_DIR / "oracle-cache"),
+                           PATH=f"{SHIM}{os.pathsep}{os.environ.get('PATH', '')}")
     return environment
 
 
@@ -217,7 +238,7 @@ def memory_available():
     return 16 << 30
 
 
-def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budget):
+def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budget, reuse_oracles):
     logs = STATE_DIR / "logs"
     traces = STATE_DIR / "traces"
     logs.mkdir(parents=True, exist_ok=True)
@@ -227,6 +248,7 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
     queue = sorted(selected, key=lambda name: -records.get(name, {}).get("seconds", 1e9))
     running = {}
     results = {}
+    retried = set()
     started_all = time.monotonic()
     while queue or running:
         in_use = sum(item[3] for item in running.values())
@@ -237,16 +259,17 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
             if running and in_use + expected > memory_budget:
                 continue
             queue.remove(name)
+            reuse = reuse_oracles and records.get(name, {}).get("oracle_reuse", True) and name not in retried
             trace = traces / f"{name}.json"
             trace.unlink(missing_ok=True)
             log = (logs / f"{name}.log").open("w")
             process = subprocess.Popen(
                 [sys.executable, str(Path(__file__)), "--trace", str(trace), str(selected[name])],
-                cwd=ROOT, env=run_environment(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            running[name] = (process, time.monotonic(), log, expected)
+                cwd=ROOT, env=run_environment(reuse), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            running[name] = (process, time.monotonic(), log, expected, reuse)
             in_use += expected
         time.sleep(0.2)
-        for name, (process, started, log, _) in list(running.items()):
+        for name, (process, started, log, _, reused) in list(running.items()):
             elapsed = time.monotonic() - started
             if process.poll() is None and elapsed < timeout:
                 continue
@@ -257,9 +280,17 @@ def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budge
             log.close()
             del running[name]
             passed = process.returncode == 0
+            if not passed and reused:
+                # Maybe a reused oracle result was wrong for it: run it again from scratch.
+                retried.add(name)
+                queue.insert(0, name)
+                print(f"retry {name} without reused oracle results", flush=True)
+                continue
             trace_path = traces / f"{name}.json"
             record = {"status": "pass" if passed else "fail", "seconds": round(elapsed, 1),
                       "finished": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            # A harness that only passes fresh no longer reuses oracle results.
+            record["oracle_reuse"] = records.get(name, {}).get("oracle_reuse", True) and not (passed and name in retried)
             if trace_path.exists():
                 trace = json.loads(trace_path.read_text())
                 record["dependencies"], record["artifacts"] = dependencies(trace)
@@ -321,7 +352,8 @@ def main():
         return trace_main(sys.argv[2], sys.argv[3], sys.argv[4:])
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("names", nargs="*", help="harness names, e.g. food or block_update")
-    parser.add_argument("--all", action="store_true", help="run every harness, ignoring earlier passes")
+    parser.add_argument("--all", action="store_true", help="run every harness from scratch, ignoring earlier passes")
+    parser.add_argument("--fresh", action="store_true", help="run the vanilla oracles even if their inputs are unchanged")
     parser.add_argument("--failed", action="store_true", help="rerun the harnesses that failed last time")
     parser.add_argument("--list", action="store_true", help="print what would run, then stop")
     parser.add_argument("--status", action="store_true", help="print each harness's last result")
@@ -375,7 +407,9 @@ def main():
         print(errors[-4000:])
         print("Probe build failed; harnesses will report their own build errors.", flush=True)
     print(f"Probes built in {time.monotonic() - started:.0f}s. Running {len(selected)} harnesses, {jobs} at a time...", flush=True)
-    results, elapsed = run(selected, state, hasher, environment_key(hasher), jobs, args.timeout, int(memory_available() * 0.75))
+    reuse_oracles = not (args.fresh or args.all)
+    results, elapsed = run(selected, state, hasher, environment_key(hasher), jobs, args.timeout, int(memory_available() * 0.75),
+                           reuse_oracles)
     save_state(state)
     failed = sorted(name for name, record in results.items() if record["status"] != "pass")
     print(f"\n{len(results) - len(failed)} passed, {len(failed)} failed in {elapsed / 60:.1f} min.")

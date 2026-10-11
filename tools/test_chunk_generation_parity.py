@@ -17,6 +17,7 @@ usage: test_chunk_generation_parity.py [--seeds N] [--per-structure K]
        [--filter REGEX] [--dimension overworld|the_nether|the_end] [--keep]
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import random
@@ -321,10 +322,13 @@ def main():
             tag = f'{dimension}-{seed}-{args.phase}' + ('-iso' if os.environ.get('HORIZON_ISOLATED') else '') + ('-rect' if args.rect else '')
             vanilla_path, rust_path = build / f'vanilla-{tag}.txt', build / f'rust-{tag}.txt'
             t0 = time.time()
-            if not (os.environ.get('REUSE_VANILLA') and vanilla_path.exists()):
-                oracle.run(vanilla_path, ['dump', seed, dimension, *rects])
-            t1 = time.time()
-            stderr = run_rust(binary, rust_path, seed, dimension, rects)
+            # Vanilla and Horizon generate the same chunks independently: run them side by side.
+            with ThreadPoolExecutor(2) as pool:
+                rust_run = pool.submit(run_rust, binary, rust_path, seed, dimension, rects)
+                if not (os.environ.get('REUSE_VANILLA') and vanilla_path.exists()):
+                    oracle.run(vanilla_path, ['dump', seed, dimension, *rects])
+                t1 = time.time()
+                stderr = rust_run.result()
             t2 = time.time()
             vanilla, rust = parse(vanilla_path), parse(rust_path)
             for line in stderr.splitlines()[:5]:
@@ -342,7 +346,7 @@ def main():
             for chunk in vanilla.values():
                 for row in chunk['q'].values():
                     biome_seen.update(row)
-            print(f'{tag}: {len(rects)} sites, {len(vanilla)} chunks, differing chunks {counts[0]} (blocks {counts[1]}, biome cells {counts[2]}, block entities {counts[3]}); vanilla {t1 - t0:.0f}s, horizon {t2 - t1:.0f}s', flush=True)
+            print(f'{tag}: {len(rects)} sites, {len(vanilla)} chunks, differing chunks {counts[0]} (blocks {counts[1]}, biome cells {counts[2]}, block entities {counts[3]}); vanilla {t1 - t0:.0f}s, both sides {t2 - t0:.0f}s', flush=True)
     print(f'Compared {totals["compared"]} chunks across {len(biome_seen)} biomes and {sum(structure_seen.values())} structure sites in {time.time() - started:.0f}s')
     print('structure sites:', dict(sorted(structure_seen.items())))
     print(f'Differences: {totals["chunks"]} chunks, {totals["blocks"]} blocks, {totals["biomes"]} biome cells, {totals["entities"]} block entities')
