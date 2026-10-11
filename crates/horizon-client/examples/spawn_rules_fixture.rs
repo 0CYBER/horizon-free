@@ -164,7 +164,8 @@ fn main() -> horizon_client::Result<()> {
                 None => name = token,
             }
         }
-        let get = |k: &str, d: &'static str| -> String { c.get(k).copied().unwrap_or(d).to_owned() };
+        let get =
+            |k: &str, d: &'static str| -> String { c.get(k).copied().unwrap_or(d).to_owned() };
         let Some(kind) = types.types.get(c["type"]) else {
             let _ = writeln!(out, "{name} error unsupported {}", c["type"]);
             continue;

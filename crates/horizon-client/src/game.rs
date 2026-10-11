@@ -1304,7 +1304,10 @@ impl Game<'_> {
                 .sections
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| s.blocks.maybe_has(|id| facts.get(BlockStateId(id)).random_ticks))
+                .filter(|(_, s)| {
+                    s.blocks
+                        .maybe_has(|id| facts.get(BlockStateId(id)).random_ticks)
+                })
                 .map(|(i, _)| MIN_Y + i as i32 * 16)
                 .collect();
             ticking.push((x, z, sections));
@@ -1692,7 +1695,8 @@ impl Game<'_> {
             // FallingBlockEntity.tick: off the ground, it gives up after 600
             // ticks (100 outside the world) and drops itself as an item.
             let y = next.y.floor() as i32;
-            let outside = y <= horizon_client::chunk::MIN_Y || y >= horizon_client::chunk::MIN_Y + 384;
+            let outside =
+                y <= horizon_client::chunk::MIN_Y || y >= horizon_client::chunk::MIN_Y + 384;
             if !solid && (f.age > 100 && outside || f.age > 600) {
                 if f.drop_item && entity_drops {
                     dropped.push((f.state, next));
@@ -7204,7 +7208,8 @@ impl Game<'_> {
                 }
             }
             MouseButton::Right => {
-                self.toggles.button(3, pressed, false, self.settings.toggle_use);
+                self.toggles
+                    .button(3, pressed, false, self.settings.toggle_use);
                 self.right = self.toggles.is_down(3);
                 if pressed {
                     self.use_item()?;

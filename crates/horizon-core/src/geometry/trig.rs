@@ -102,6 +102,7 @@ impl Mth for f32 {
 }
 
 /// fdlibm `__ieee754_asin`, as `StrictMath.asin` (and so `Math.asin`) computes it.
+#[allow(clippy::excessive_precision, clippy::approx_constant, clippy::eq_op)] // fdlibm's constants and NaN, verbatim.
 pub fn fdlibm_asin(x: f64) -> f64 {
     const PIO2_HI: f64 = 1.570_796_326_794_896_558_00e+00;
     const PIO2_LO: f64 = 6.123_233_995_736_766_035_87e-17;
@@ -160,9 +161,21 @@ mod tests {
     #[test]
     fn atan2_matches_the_client_tables() {
         for (y, x, r) in [
-            (0x402f_3b4b_8041_4df1_u64, 0xc018_53ca_369b_9e91_u64, 0x3fff_1334_9f9d_e798_u64),
-            (0xc025_d316_35f2_9de8, 0xc018_fb4a_7ec4_3ba8, 0xc000_b996_6547_a498),
-            (0xc026_5d9c_2b5a_472d, 0xc030_954d_c2dc_3d10, 0xc004_62e7_82d4_c97e),
+            (
+                0x402f_3b4b_8041_4df1_u64,
+                0xc018_53ca_369b_9e91_u64,
+                0x3fff_1334_9f9d_e798_u64,
+            ),
+            (
+                0xc025_d316_35f2_9de8,
+                0xc018_fb4a_7ec4_3ba8,
+                0xc000_b996_6547_a498,
+            ),
+            (
+                0xc026_5d9c_2b5a_472d,
+                0xc030_954d_c2dc_3d10,
+                0xc004_62e7_82d4_c97e,
+            ),
         ] {
             assert_eq!(atan2(f64::from_bits(y), f64::from_bits(x)).to_bits(), r);
         }

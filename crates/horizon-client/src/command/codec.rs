@@ -86,10 +86,7 @@ fn provider_fields(id: &str, map: &Compound, t: &Tag) -> Result<(), String> {
     }
 }
 /// A holder list codec: a single element, a `#tag`, or a list.
-fn element_or_list(
-    t: &Tag,
-    element: &dyn Fn(&Tag) -> Result<(), String>,
-) -> Result<(), String> {
+fn element_or_list(t: &Tag, element: &dyn Fn(&Tag) -> Result<(), String>) -> Result<(), String> {
     let first = match element(t) {
         Ok(()) => return Ok(()),
         Err(e) => e,
@@ -179,7 +176,6 @@ pub fn resource_or_id(reader: &mut Reader, reg: &Registries, registry: &str) -> 
     }
     reader.cursor = start;
     let tag = super::snbt::parse_tag_argument(reader)?;
-    decode(registry, &tag, reg).map_err(|m| {
-        CommandError::tr_at("argument.resource_or_id.failed_to_parse", &[&m], reader)
-    })
+    decode(registry, &tag, reg)
+        .map_err(|m| CommandError::tr_at("argument.resource_or_id.failed_to_parse", &[&m], reader))
 }

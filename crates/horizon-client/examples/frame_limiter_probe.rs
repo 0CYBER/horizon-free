@@ -62,15 +62,26 @@ fn main() -> Result<()> {
             now: i("now"),
             call: i("call"),
             spin: i("spin"),
-            overshoot: c["overshoot"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect(),
+            overshoot: c["overshoot"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap())
+                .collect(),
             next_overshoot: 0,
-            interrupts: c["interrupts"].as_array().unwrap().iter().map(|v| v.as_bool().unwrap()).collect(),
+            interrupts: c["interrupts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_bool().unwrap())
+                .collect(),
             next_interrupt: 0,
             parks: Vec::new(),
             spins: 0,
             queries: 0,
         };
-        let mut limiter = FramerateLimiter::with_state(i("last"), i("average"), i("last_limit") as i32);
+        let mut limiter =
+            FramerateLimiter::with_state(i("last"), i("average"), i("last_limit") as i32);
         for frame in c["frames"].as_array().unwrap() {
             clock.now = clock.now.wrapping_add(frame[0].as_i64().unwrap());
             clock.parks.clear();

@@ -57,7 +57,11 @@ pub fn wrap_degrees(angle: f32) -> f32 {
 }
 /// `Mth.clamp(float, float, float)`.
 pub fn clamp(value: f32, min: f32, max: f32) -> f32 {
-    if value < min { min } else { java_min(value, max) }
+    if value < min {
+        min
+    } else {
+        java_min(value, max)
+    }
 }
 
 /// JOML's float trigonometry (`org.joml.Math` without fast math).
@@ -130,12 +134,9 @@ pub mod joml {
             let yw = self.y * self.w;
             let k = 1.0 / (xx + yy + zz + ww);
             [
-                (xx - yy - zz + ww) * k * x
-                    + (2.0 * (xy - zw) * k * y + 2.0 * (xz + yw) * k * z),
-                2.0 * (xy + zw) * k * x
-                    + ((yy - xx - zz + ww) * k * y + 2.0 * (yz - xw) * k * z),
-                2.0 * (xz - yw) * k * x
-                    + (2.0 * (yz + xw) * k * y + (zz - xx - yy + ww) * k * z),
+                (xx - yy - zz + ww) * k * x + (2.0 * (xy - zw) * k * y + 2.0 * (xz + yw) * k * z),
+                2.0 * (xy + zw) * k * x + ((yy - xx - zz + ww) * k * y + 2.0 * (yz - xw) * k * z),
+                2.0 * (xz - yw) * k * x + (2.0 * (yz + xw) * k * y + (zz - xx - yy + ww) * k * z),
             ]
         }
     }
@@ -568,8 +569,7 @@ impl Camera {
         if panoramic {
             return 90.0;
         }
-        let fov =
-            fov_option as f32 * lerp(partial, self.old_fov_modifier, self.fov_modifier);
+        let fov = fov_option as f32 * lerp(partial, self.old_fov_modifier, self.fov_modifier);
         modify_fov_based_on_death_or_fluid(partial, fov, effect_scale, dead, fluid)
     }
     /// `Camera.calculateHudFov`.
@@ -704,7 +704,11 @@ pub fn bob_view(state: &BobState, pose: &mut Mat4) {
         0.0,
     );
     rotate_degrees(pose, 2, trig::sin(f64::from(walk * PI)) * bob * 3.0);
-    rotate_degrees(pose, 0, (trig::cos(f64::from(walk * PI - 0.2)) * bob).abs() * 5.0);
+    rotate_degrees(
+        pose,
+        0,
+        (trig::cos(f64::from(walk * PI - 0.2)) * bob).abs() * 5.0,
+    );
 }
 /// The bob matrix `GameRenderer.renderLevel` multiplies into the projection
 /// (and `renderItemInHand` into the hand's pose).
@@ -767,7 +771,10 @@ mod tests {
             movement_speed: 0.13,
             using: None,
         };
-        assert_eq!(field_of_view_modifier(&p, true, 1.0), (0.13f32 / 0.1 + 1.0) / 2.0);
+        assert_eq!(
+            field_of_view_modifier(&p, true, 1.0),
+            (0.13f32 / 0.1 + 1.0) / 2.0
+        );
         assert_eq!(field_of_view_modifier(&p, true, 0.0), 1.0);
         p.using = Some((UseItem::Spyglass, 3));
         assert_eq!(field_of_view_modifier(&p, true, 1.0), 0.1);

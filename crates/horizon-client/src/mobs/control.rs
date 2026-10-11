@@ -363,10 +363,9 @@ impl Mob {
             at[2] - self.position.z,
         );
         let sd = (xd * xd + zd * zd).sqrt();
-        let x =
-            (yd.abs() > EPSILON || sd.abs() > EPSILON).then(|| -trig::atan2_degrees(yd, sd));
-        let y = (zd.abs() > EPSILON || xd.abs() > EPSILON)
-            .then(|| trig::atan2_degrees(zd, xd) - 90.0);
+        let x = (yd.abs() > EPSILON || sd.abs() > EPSILON).then(|| -trig::atan2_degrees(yd, sd));
+        let y =
+            (zd.abs() > EPSILON || xd.abs() > EPSILON).then(|| trig::atan2_degrees(zd, xd) - 90.0);
         (x, y)
     }
     /// JumpControl.tick.

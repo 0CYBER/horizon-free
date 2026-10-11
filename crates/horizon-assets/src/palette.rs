@@ -25,7 +25,11 @@ pub struct Permutation<'a> {
 }
 
 fn qualified(id: &str) -> String {
-    if id.contains(':') { id.to_owned() } else { format!("minecraft:{id}") }
+    if id.contains(':') {
+        id.to_owned()
+    } else {
+        format!("minecraft:{id}")
+    }
 }
 
 impl PalettedPermutations {
@@ -34,13 +38,29 @@ impl PalettedPermutations {
         let Ok(json) = serde_json::from_str::<Value>(atlas) else {
             return Vec::new();
         };
-        let sources = json.get("sources").and_then(Value::as_array).cloned().unwrap_or_default();
+        let sources = json
+            .get("sources")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         sources
             .iter()
-            .filter(|s| s.get("type").and_then(Value::as_str).map(qualified).as_deref() == Some("minecraft:paletted_permutations"))
+            .filter(|s| {
+                s.get("type")
+                    .and_then(Value::as_str)
+                    .map(qualified)
+                    .as_deref()
+                    == Some("minecraft:paletted_permutations")
+            })
             .filter_map(|s| {
                 Some(Self {
-                    textures: s.get("textures")?.as_array()?.iter().filter_map(Value::as_str).map(qualified).collect(),
+                    textures: s
+                        .get("textures")?
+                        .as_array()?
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(qualified)
+                        .collect(),
                     palette_key: qualified(s.get("palette_key")?.as_str()?),
                     permutations: s
                         .get("permutations")?
@@ -48,7 +68,11 @@ impl PalettedPermutations {
                         .iter()
                         .filter_map(|(k, v)| Some((k.clone(), qualified(v.as_str()?))))
                         .collect(),
-                    separator: s.get("separator").and_then(Value::as_str).unwrap_or("_").to_owned(),
+                    separator: s
+                        .get("separator")
+                        .and_then(Value::as_str)
+                        .unwrap_or("_")
+                        .to_owned(),
                 })
             })
             .collect()
@@ -57,8 +81,14 @@ impl PalettedPermutations {
     pub fn find(&self, sprite: &str) -> Option<Permutation<'_>> {
         let sprite = qualified(sprite);
         self.textures.iter().find_map(|base| {
-            let suffix = sprite.strip_prefix(base.as_str())?.strip_prefix(self.separator.as_str())?;
-            Some(Permutation { base, palette_key: &self.palette_key, palette: self.permutations.get(suffix)? })
+            let suffix = sprite
+                .strip_prefix(base.as_str())?
+                .strip_prefix(self.separator.as_str())?;
+            Some(Permutation {
+                base,
+                palette_key: &self.palette_key,
+                palette: self.permutations.get(suffix)?,
+            })
         })
     }
 }
@@ -95,9 +125,18 @@ mod tests {
         let atlas = r#"{"sources":[{"type":"minecraft:paletted_permutations","palette_key":"minecraft:trim_base",
             "permutations":{"quartz":"minecraft:trim/quartz"},"textures":["minecraft:trims/items/boots_trim"]}]}"#;
         let sources = PalettedPermutations::from_atlas(atlas);
-        let p = sources[0].find("minecraft:trims/items/boots_trim_quartz").unwrap();
-        assert_eq!((p.base, p.palette), ("minecraft:trims/items/boots_trim", "minecraft:trim/quartz"));
-        assert!(sources[0].find("minecraft:trims/items/boots_trim_gold").is_none());
+        let p = sources[0]
+            .find("minecraft:trims/items/boots_trim_quartz")
+            .unwrap();
+        assert_eq!(
+            (p.base, p.palette),
+            ("minecraft:trims/items/boots_trim", "minecraft:trim/quartz")
+        );
+        assert!(
+            sources[0]
+                .find("minecraft:trims/items/boots_trim_gold")
+                .is_none()
+        );
         let mut pixels = [0xFF11_2233, 0x8011_2233, 0x0011_2233, 0xFF44_5566];
         apply_palette(&mut pixels, &[0xFF11_2233], &[0xFFAA_BBCC]).unwrap();
         assert_eq!(pixels, [0xFFAA_BBCC, 0x80AA_BBCC, 0x0011_2233, 0xFF44_5566]);

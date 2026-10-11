@@ -12,12 +12,12 @@ use super::{
     guest::{Guest, stack_to_network},
 };
 use crate::{items::ItemStack, world::World};
+use horizon_protocol::ids::play::clientbound as ids;
 use horizon_protocol::{
     entity_data::{Value, serializer},
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::{literal, translatable},
 };
-use horizon_protocol::ids::play::clientbound as ids;
 use horizon_world::nbt::{JavaString, Tag};
 use std::sync::{Arc, atomic::Ordering};
 
@@ -439,7 +439,6 @@ impl Hub {
         };
         g.send(&C::Commands(packet));
     }
-
 
     /// ServerGamePacketListenerImpl.teleport: move the client and wait for its confirmation.
     pub fn teleport(&mut self, i: usize, position: Option<[f64; 3]>) {

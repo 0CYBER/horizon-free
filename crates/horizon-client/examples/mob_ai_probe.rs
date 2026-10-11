@@ -483,6 +483,8 @@ fn main() -> horizon_client::Result<()> {
                 biomes: &biomes,
                 mob_griefing: true,
                 difficulty: LocalDifficulty::new(2, world.day_time, 0, 0.0),
+                end: false,
+                world_seed: 0,
             };
             let mut events = Vec::new();
             for m in &mut mobs {
@@ -498,7 +500,12 @@ fn main() -> horizon_client::Result<()> {
             }
             for e in &events {
                 if let MobEvent::Sound(name, _, volume, pitch) = e {
-                    let _ = writeln!(out, "{t} sound minecraft:{name} {} {}", f(*volume), f(*pitch));
+                    let _ = writeln!(
+                        out,
+                        "{t} sound minecraft:{name} {} {}",
+                        f(*volume),
+                        f(*pitch)
+                    );
                 } else if let MobEvent::SoundId(name, _, volume, pitch) = e {
                     let _ = writeln!(out, "{t} sound {name} {} {}", f(*volume), f(*pitch));
                 }

@@ -399,7 +399,10 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
     }
     let drops_loot = d.mob_drops && (is_monster(s) || !m.is_baby());
     if drops_loot {
-        let table = format!("minecraft:entities/{}", m.kind.id.trim_start_matches("minecraft:"));
+        let table = format!(
+            "minecraft:entities/{}",
+            m.kind.id.trim_start_matches("minecraft:")
+        );
         let params = EntityLootParams {
             this: this.clone(),
             damage: d.damage.clone(),
@@ -517,7 +520,10 @@ pub fn base_experience(m: &mut Mob) -> i32 {
                 let mut result = reward;
                 for slot in SLOTS {
                     // EquipmentSlot.canIncreaseExperience: all but the saddle.
-                    if slot != "saddle" && slot_item(m, slot).is_some() && drop_chance(m, slot) <= 1.0 {
+                    if slot != "saddle"
+                        && slot_item(m, slot).is_some()
+                        && drop_chance(m, slot) <= 1.0
+                    {
                         result += 1 + m.random.next_int_bound(3).unwrap_or(0);
                     }
                 }

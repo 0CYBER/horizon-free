@@ -64,7 +64,10 @@ fn main() -> Result<()> {
                         .properties
                         .insert(name.clone(), value.as_str().unwrap().into());
                 }
-                state = assets.registry.id(&definition).ok_or("missing fixture state")?;
+                state = assets
+                    .registry
+                    .id(&definition)
+                    .ok_or("missing fixture state")?;
             }
             restore.push((x, y, z, scene.block(x, y, z)));
             scene.set(x, y, z, state)?;
@@ -76,7 +79,10 @@ fn main() -> Result<()> {
         player.shift_key_down = p["shift"].as_bool().unwrap();
         player.yaw = fl(&p["yr"]);
         player.pitch = fl(&p["xr"]);
-        let key = player.attributes.key("minecraft:movement_speed").ok_or("speed")?;
+        let key = player
+            .attributes
+            .key("minecraft:movement_speed")
+            .ok_or("speed")?;
         let handle = player
             .attributes
             .get_instance(Some(key))

@@ -48,7 +48,11 @@ impl Game<'_> {
         } else {
             self.audio.play(
                 "minecraft:entity.tnt.primed",
-                Some([f64::from(pos.x) + 0.5, f64::from(pos.y), f64::from(pos.z) + 0.5]),
+                Some([
+                    f64::from(pos.x) + 0.5,
+                    f64::from(pos.y),
+                    f64::from(pos.z) + 0.5,
+                ]),
                 1.0,
                 1.0,
             );

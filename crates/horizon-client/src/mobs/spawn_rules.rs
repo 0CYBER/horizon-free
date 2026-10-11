@@ -252,14 +252,21 @@ pub fn is_spawn_position_ok<L: SpawnLevel>(s: Species, l: &L, x: i32, y: i32, z:
                 && is_valid_empty_spawn(s, l, x, y + 1, z)
         }
         data::Placement::InWater => {
-            fluid(l, x, y, z) == Fluid::Water && flags(l, x, y + 1, z) & data::REDSTONE_CONDUCTOR == 0
+            fluid(l, x, y, z) == Fluid::Water
+                && flags(l, x, y + 1, z) & data::REDSTONE_CONDUCTOR == 0
         }
         data::Placement::InLava => fluid(l, x, y, z) == Fluid::Lava,
         data::Placement::NoRestrictions => true,
     }
 }
 /// `Monster.isDarkEnoughToSpawn`.
-pub fn is_dark_enough<L: SpawnLevel>(l: &L, random: &mut impl RandomSource, x: i32, y: i32, z: i32) -> bool {
+pub fn is_dark_enough<L: SpawnLevel>(
+    l: &L,
+    random: &mut impl RandomSource,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> bool {
     if l.sky_light(x, y, z) > random.next_int_bound(32).unwrap_or(0) {
         return false;
     }
@@ -290,7 +297,8 @@ fn monster_rules<L: SpawnLevel>(
     y: i32,
     z: i32,
 ) -> bool {
-    (reason.ignores_light() || is_dark_enough(l, random, x, y, z)) && mob_rules(s, l, reason, x, y, z)
+    (reason.ignores_light() || is_dark_enough(l, random, x, y, z))
+        && mob_rules(s, l, reason, x, y, z)
 }
 /// `Animal.checkAnimalSpawnRules` with the given spawnable-on tag.
 fn animal_rules<L: SpawnLevel>(l: &L, reason: Reason, on: &str, x: i32, y: i32, z: i32) -> bool {
@@ -336,14 +344,17 @@ pub fn check_spawn_rules<L: SpawnLevel>(
                 if frequent {
                     random.next_int_bound(15).unwrap_or(1) == 0 && can_spawn
                 } else {
-                    random.next_int_bound(40).unwrap_or(1) == 0 && y < l.sea_level() - 5 && can_spawn
+                    random.next_int_bound(40).unwrap_or(1) == 0
+                        && y < l.sea_level() - 5
+                        && can_spawn
                 }
             } else {
                 true
             }
         }
         S::Guardian | S::ElderGuardian => {
-            (random.next_int_bound(20).unwrap_or(1) == 0 || !can_see_sky_from_below_water(l, x, y, z))
+            (random.next_int_bound(20).unwrap_or(1) == 0
+                || !can_see_sky_from_below_water(l, x, y, z))
                 && !l.peaceful()
                 && (reason.is_spawner() || fluid(l, x, y, z) == Fluid::Water)
                 && fluid(l, x, y - 1, z) == Fluid::Water
@@ -351,10 +362,16 @@ pub fn check_spawn_rules<L: SpawnLevel>(
         S::TropicalFish => {
             fluid(l, x, y - 1, z) == Fluid::Water
                 && name(l, x, y + 1, z) == "minecraft:water"
-                && (l.biome_tag("minecraft:allows_tropical_fish_spawns_at_any_height", x, y, z)
-                    || surface_water(l, x, y, z))
+                && (l.biome_tag(
+                    "minecraft:allows_tropical_fish_spawns_at_any_height",
+                    x,
+                    y,
+                    z,
+                ) || surface_water(l, x, y, z))
         }
-        S::Armadillo => tag(l, "minecraft:armadillo_spawnable_on", x, y - 1, z) && bright(l, x, y, z),
+        S::Armadillo => {
+            tag(l, "minecraft:armadillo_spawnable_on", x, y - 1, z) && bright(l, x, y, z)
+        }
         S::Bat => {
             if y >= l.world_surface(x, z) || random.next_boolean() {
                 return false;
@@ -387,9 +404,18 @@ pub fn check_spawn_rules<L: SpawnLevel>(
                 return false;
             }
             reason.is_spawner()
-                || !l.player_near(f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5, 5.0)
+                || !l.player_near(
+                    f64::from(x) + 0.5,
+                    f64::from(y) + 0.5,
+                    f64::from(z) + 0.5,
+                    5.0,
+                )
         }
-        S::IronGolem | S::SnowGolem | S::Villager | S::Phantom | S::Shulker
+        S::IronGolem
+        | S::SnowGolem
+        | S::Villager
+        | S::Phantom
+        | S::Shulker
         | S::WanderingTrader => mob_rules(s, l, reason, x, y, z),
         S::Frog => tag(l, "minecraft:frogs_spawnable_on", x, y - 1, z) && bright(l, x, y, z),
         S::Ghast => {
@@ -405,7 +431,9 @@ pub fn check_spawn_rules<L: SpawnLevel>(
         S::Goat => tag(l, "minecraft:goats_spawnable_on", x, y - 1, z) && bright(l, x, y, z),
         S::MagmaCube => !l.peaceful(),
         S::SulfurCube => true,
-        S::Mooshroom => tag(l, "minecraft:mooshrooms_spawnable_on", x, y - 1, z) && bright(l, x, y, z),
+        S::Mooshroom => {
+            tag(l, "minecraft:mooshrooms_spawnable_on", x, y - 1, z) && bright(l, x, y, z)
+        }
         S::Nautilus => {
             let sea = l.sea_level();
             y >= sea - 25
@@ -420,7 +448,13 @@ pub fn check_spawn_rules<L: SpawnLevel>(
         S::PolarBear => {
             if l.biome_tag("minecraft:polar_bears_spawn_on_alternate_blocks", x, y, z) {
                 bright(l, x, y, z)
-                    && tag(l, "minecraft:polar_bears_spawnable_on_alternate", x, y - 1, z)
+                    && tag(
+                        l,
+                        "minecraft:polar_bears_spawnable_on_alternate",
+                        x,
+                        y - 1,
+                        z,
+                    )
             } else {
                 animal_rules(l, reason, "minecraft:animals_spawnable_on", x, y, z)
             }
@@ -582,7 +616,9 @@ impl SpawnLevel for super::MobWorld<'_> {
     }
     fn player_near(&self, x: f64, y: f64, z: f64, distance: f64) -> bool {
         self.player.as_ref().is_some_and(|p| {
-            let d = (p.position.x - x).powi(2) + (p.position.y - y).powi(2) + (p.position.z - z).powi(2);
+            let d = (p.position.x - x).powi(2)
+                + (p.position.y - y).powi(2)
+                + (p.position.z - z).powi(2);
             p.alive && !p.creative && !p.spectator && d < distance * distance
         })
     }

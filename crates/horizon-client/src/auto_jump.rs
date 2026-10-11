@@ -148,7 +148,8 @@ pub fn update_auto_jump<W: AutoJumpWorld>(
     let right_end = seg_end.add_vector(right_offset);
     let mut obstacle = NO_OBSTACLE;
     for b in world.collision_boxes(test_box)? {
-        if intersects_segment(b, left_begin, left_end) || intersects_segment(b, right_begin, right_end)
+        if intersects_segment(b, left_begin, left_end)
+            || intersects_segment(b, right_begin, right_end)
         {
             obstacle = b.max_position().y as f32;
             let obstacle_pos = BlockPos::containing(b.center());
@@ -175,7 +176,10 @@ pub fn update_auto_jump<W: AutoJumpWorld>(
     }
     if obstacle != NO_OBSTACLE {
         let y_delta = (f64::from(obstacle) - p.position.y) as f32;
-        if !(y_delta <= 0.5) && !(y_delta > jump_height) {
+        // Negated as in LocalPlayer.updateAutoJump, so a NaN delta still jumps.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        let jumps = !(y_delta <= 0.5) && !(y_delta > jump_height);
+        if jumps {
             return Ok(true);
         }
     }
@@ -197,7 +201,11 @@ mod tests {
         }
         fn collision_boxes(&mut self, bounds: Aabb) -> Result<Vec<Aabb>, ()> {
             let b = Aabb::new(Vec3::new(1.0, 0.0, -5.0), Vec3::new(2.0, 1.0, 5.0));
-            Ok(if b.intersects(bounds) { vec![b] } else { Vec::new() })
+            Ok(if b.intersects(bounds) {
+                vec![b]
+            } else {
+                Vec::new()
+            })
         }
     }
     #[test]

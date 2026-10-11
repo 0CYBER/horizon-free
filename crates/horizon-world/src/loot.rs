@@ -683,7 +683,8 @@ impl<R: RandomSource> Context<'_, R> {
                     {
                         continue;
                     }
-                    if !effect["requirements"].is_null() && !self.condition(&effect["requirements"]) {
+                    if !effect["requirements"].is_null() && !self.condition(&effect["requirements"])
+                    {
                         continue;
                     }
                     let value = level_value(&effect["effect"]["value"], *level);
@@ -731,21 +732,22 @@ impl<R: RandomSource> Context<'_, R> {
                             .is_some_and(|stack| self.item_matches(item, stack))
                     })
             }
-            "minecraft:components" => v.as_object().into_iter().flatten().all(|(c, want)| {
-                match c.as_str() {
-                    "minecraft:sheep/color" => e
-                        .sheep
-                        .as_ref()
-                        .is_some_and(|(color, _)| want.as_str() == Some(color)),
-                    "minecraft:frog/variant" => {
-                        e.frog_variant.is_some() && want.as_str() == e.frog_variant.as_deref()
-                    }
-                    _ => false,
+            "minecraft:components" => v.as_object().into_iter().flatten().all(|(c, want)| match c
+                .as_str()
+            {
+                "minecraft:sheep/color" => e
+                    .sheep
+                    .as_ref()
+                    .is_some_and(|(color, _)| want.as_str() == Some(color)),
+                "minecraft:frog/variant" => {
+                    e.frog_variant.is_some() && want.as_str() == e.frog_variant.as_deref()
                 }
+                _ => false,
             }),
-            "minecraft:type_specific/sheep" => e.sheep.as_ref().is_some_and(|(_, sheared)| {
-                v["sheared"].as_bool().is_none_or(|w| w == *sheared)
-            }),
+            "minecraft:type_specific/sheep" => e
+                .sheep
+                .as_ref()
+                .is_some_and(|(_, sheared)| v["sheared"].as_bool().is_none_or(|w| w == *sheared)),
             "minecraft:type_specific/cube_mob" => {
                 e.cube_size.is_some_and(|size| int_bounds(&v["size"], size))
             }
@@ -1237,7 +1239,7 @@ impl<R: RandomSource> Context<'_, R> {
                 + e["quality"].as_i64().unwrap_or(0) as f32 * luck;
             w.floor().max(0.0) as i32
         };
-        let total: i32 = valid.iter().map(|e| weight(e)).sum();
+        let total: i32 = valid.iter().map(&weight).sum();
         if total == 0 || valid.is_empty() {
             return;
         }
@@ -1289,7 +1291,10 @@ impl<R: RandomSource> Context<'_, R> {
                     let items = self.data.holder_set("item", &entry["items"]);
                     for item in items {
                         if entry["weight"].as_i64().unwrap_or(1) > 0 {
-                            out.push(Choice { entry, item: Some(item) });
+                            out.push(Choice {
+                                entry,
+                                item: Some(item),
+                            });
                         }
                     }
                     true

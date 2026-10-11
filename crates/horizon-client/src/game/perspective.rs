@@ -4,14 +4,14 @@
 //! and in the inventory (`InventoryScreen.extractEntityInInventoryFollowsMouse`).
 use super::{Game, Screen};
 use horizon_client::{
-    hud::HudBatch,
-    mobs::{Anim, Brain, Mob, MobType},
-    pose::Pose,
-};
-use horizon_client::{
     blocks::BlockFacts,
     camera::{CameraEntity, LivingCamera},
     collisions::SceneCollisions,
+};
+use horizon_client::{
+    hud::HudBatch,
+    mobs::{Anim, Brain, Mob, MobType},
+    pose::Pose,
 };
 use horizon_core::{
     geometry::{Aabb, ShapeOp, Vec3, VoxelShape},
@@ -272,10 +272,14 @@ impl Game<'_> {
                 4096,
             )
             .ok()?;
-            (!hit.miss).then(|| [hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])
+            (!hit.miss).then_some([hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])
         });
         self.view = view;
-        Some((glam::DVec3::from_array(view.position), view.y_rot, view.x_rot))
+        Some((
+            glam::DVec3::from_array(view.position),
+            view.y_rot,
+            view.x_rot,
+        ))
     }
     /// Keep the player's model in step with the player (`LivingEntity.tick`
     /// body turning, `WalkAnimationState`, the swing and the pose).

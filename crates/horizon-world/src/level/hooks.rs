@@ -34,7 +34,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Command => {
                     // CommandBlock.setPoweredAndUpdate
                     let signal = self.has_neighbor_signal(pos);
-                    if let Some((was_powered, automatic)) = self.level.set_command_block_powered(pos, signal)
+                    if let Some((was_powered, automatic)) =
+                        self.level.set_command_block_powered(pos, signal)
                         && signal
                         && !was_powered
                         && !automatic

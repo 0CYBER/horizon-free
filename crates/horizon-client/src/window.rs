@@ -176,7 +176,11 @@ impl LimiterClock for SystemClock {
 
 /// `Minecraft.runTick`'s frame-limiter step: only limits below 260
 /// (the "unlimited" setting) pace frames.
-pub fn end_frame(limiter: &mut FramerateLimiter, framerate_limit: i32, clock: &mut impl LimiterClock) {
+pub fn end_frame(
+    limiter: &mut FramerateLimiter,
+    framerate_limit: i32,
+    clock: &mut impl LimiterClock,
+) {
     if framerate_limit < 260 {
         limiter.limit_display_fps(framerate_limit, clock);
     }
@@ -188,7 +192,11 @@ impl FramerateLimiter {
     }
     /// The limiter's static state: `lastFrameTime`, `averageOvershootNs`
     /// and `lastFramerateLimit`.
-    pub fn with_state(last_frame_time: i64, average_overshoot_ns: i64, last_framerate_limit: i32) -> Self {
+    pub fn with_state(
+        last_frame_time: i64,
+        average_overshoot_ns: i64,
+        last_framerate_limit: i32,
+    ) -> Self {
         Self {
             last_frame_time,
             average_overshoot_ns,

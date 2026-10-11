@@ -153,7 +153,9 @@ fn parse_small(s: &str, radix: u32, lo: i32, hi: i32) -> Result<i32, String> {
 }
 fn parse_unsigned_int(s: &str, radix: u32) -> Result<i32, String> {
     if s.starts_with('-') {
-        return Err(format!("Illegal leading minus sign on unsigned string {s}."));
+        return Err(format!(
+            "Illegal leading minus sign on unsigned string {s}."
+        ));
     }
     let len = s.chars().count();
     if len <= 5 || (radix == 10 && len <= 9) {
@@ -168,7 +170,9 @@ fn parse_unsigned_int(s: &str, radix: u32) -> Result<i32, String> {
 }
 fn parse_unsigned_long(s: &str, radix: u32) -> Result<i64, String> {
     if s.starts_with('-') {
-        return Err(format!("Illegal leading minus sign on unsigned string {s}."));
+        return Err(format!(
+            "Illegal leading minus sign on unsigned string {s}."
+        ));
     }
     let digits = s.strip_prefix('+').unwrap_or(s);
     match u64::from_str_radix(digits, radix) {
@@ -338,7 +342,11 @@ pub fn grammar() -> Grammar<SV> {
         |s| s.scope.get("integer_suffix"),
     );
     g.put_custom("binary_numeral", |s| {
-        number_run(s, |c| matches!(c, '0' | '1' | '_'), "snbt.parser.expected_binary_numeral")
+        number_run(
+            s,
+            |c| matches!(c, '0' | '1' | '_'),
+            "snbt.parser.expected_binary_numeral",
+        )
     });
     g.put_custom("decimal_numeral", |s| {
         number_run(
@@ -394,7 +402,10 @@ pub fn grammar() -> Grammar<SV> {
             } else if let Some(h) = get_str(s, "hex_numeral") {
                 (Base::Hex, h)
             } else {
-                (Base::Binary, get_str(s, "binary_numeral").unwrap_or_default())
+                (
+                    Base::Binary,
+                    get_str(s, "binary_numeral").unwrap_or_default(),
+                )
             };
             Some(SV::Int(IntLit {
                 minus,
@@ -408,8 +419,14 @@ pub fn grammar() -> Grammar<SV> {
     g.put_term(
         "float_type_suffix",
         alt(vec![
-            seq(vec![chs('f', 'F'), Term::Marker("float_type_suffix", SV::Type(TypeSuffix::Float))]),
-            seq(vec![chs('d', 'D'), Term::Marker("float_type_suffix", SV::Type(TypeSuffix::Double))]),
+            seq(vec![
+                chs('f', 'F'),
+                Term::Marker("float_type_suffix", SV::Type(TypeSuffix::Float)),
+            ]),
+            seq(vec![
+                chs('d', 'D'),
+                Term::Marker("float_type_suffix", SV::Type(TypeSuffix::Double)),
+            ]),
         ]),
         |s| s.scope.get("float_type_suffix"),
     );
@@ -420,7 +437,10 @@ pub fn grammar() -> Grammar<SV> {
         seq(vec![chs('e', 'E'), opt(sign), decimal]),
         |s| {
             let minus = matches!(s.scope.get("sign"), Some(SV::Sign(true)));
-            Some(SV::Exp(minus, get_str(s, "decimal_numeral").unwrap_or_default()))
+            Some(SV::Exp(
+                minus,
+                get_str(s, "decimal_numeral").unwrap_or_default(),
+            ))
         },
     );
     let sign = g.named("sign");
@@ -470,7 +490,11 @@ pub fn grammar() -> Grammar<SV> {
             float_tag(&text, ty, s).map(SV::Tag)
         },
     );
-    for (name, n) in [("string_hex_2", 2), ("string_hex_4", 4), ("string_hex_8", 8)] {
+    for (name, n) in [
+        ("string_hex_2", 2),
+        ("string_hex_4", 4),
+        ("string_hex_8", 8),
+    ] {
         g.put_custom(name, move |s| {
             greedy(
                 s,
@@ -521,7 +545,9 @@ pub fn grammar() -> Grammar<SV> {
             if let Some(SV::Str(plain)) = s.scope.get_any(&["string_escape_sequence"]) {
                 return Some(SV::Str(plain));
             }
-            if let Some(SV::Str(h)) = s.scope.get_any(&["string_hex_2", "string_hex_4", "string_hex_8"])
+            if let Some(SV::Str(h)) =
+                s.scope
+                    .get_any(&["string_hex_2", "string_hex_4", "string_hex_8"])
             {
                 let cp = u32::from_str_radix(&h, 16).unwrap_or(u32::MAX);
                 if cp > 0x10ffff {
@@ -531,7 +557,9 @@ pub fn grammar() -> Grammar<SV> {
                     ));
                     return None;
                 }
-                return Some(SV::Str(char::from_u32(cp).unwrap_or('\u{fffd}').to_string()));
+                return Some(SV::Str(
+                    char::from_u32(cp).unwrap_or('\u{fffd}').to_string(),
+                ));
             }
             // Character.codePointOf: Unicode names are not tabulated here.
             s.store_at_mark(delayed("snbt.parser.invalid_character_name"));
@@ -663,7 +691,8 @@ pub fn grammar() -> Grammar<SV> {
     let qs = g.named("quoted_string_literal");
     let uq = g.named("unquoted_string");
     g.put_term("map_key", alt(vec![qs, uq]), |s| {
-        s.scope.get_any(&["quoted_string_literal", "unquoted_string"])
+        s.scope
+            .get_any(&["quoted_string_literal", "unquoted_string"])
     });
     let key = g.named("map_key");
     let lit = g.named("literal");
@@ -712,9 +741,18 @@ pub fn grammar() -> Grammar<SV> {
     g.put_term(
         "array_prefix",
         alt(vec![
-            seq(vec![ch('B'), Term::Marker("array_prefix", SV::Prefix(ArrayPrefix::Byte))]),
-            seq(vec![ch('L'), Term::Marker("array_prefix", SV::Prefix(ArrayPrefix::Long))]),
-            seq(vec![ch('I'), Term::Marker("array_prefix", SV::Prefix(ArrayPrefix::Int))]),
+            seq(vec![
+                ch('B'),
+                Term::Marker("array_prefix", SV::Prefix(ArrayPrefix::Byte)),
+            ]),
+            seq(vec![
+                ch('L'),
+                Term::Marker("array_prefix", SV::Prefix(ArrayPrefix::Long)),
+            ]),
+            seq(vec![
+                ch('I'),
+                Term::Marker("array_prefix", SV::Prefix(ArrayPrefix::Int)),
+            ]),
         ]),
         |s| s.scope.get("array_prefix"),
     );
@@ -890,7 +928,11 @@ thread_local! {
 pub fn parse_tag_argument(reader: &mut Reader) -> CmdResult<Tag> {
     GRAMMAR.with(|g| match g.parse_for_commands(reader)? {
         SV::Tag(t) => Ok(t),
-        _ => Err(CommandError::tr_at("argument.nbt.expected.compound", &[], reader)),
+        _ => Err(CommandError::tr_at(
+            "argument.nbt.expected.compound",
+            &[],
+            reader,
+        )),
     })
 }
 /// TagParser.parseCompoundAsArgument.

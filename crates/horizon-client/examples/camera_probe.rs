@@ -86,7 +86,11 @@ impl RayWorld for Cells {
     ) -> std::result::Result<VoxelShape, Infallible> {
         Ok(self.shapes[s].clone())
     }
-    fn interaction_shape(&mut self, _: usize, _: BlockPos) -> std::result::Result<VoxelShape, Infallible> {
+    fn interaction_shape(
+        &mut self,
+        _: usize,
+        _: BlockPos,
+    ) -> std::result::Result<VoxelShape, Infallible> {
         Ok(VoxelShape::empty())
     }
     fn fluid_is_source(&mut self, _: ()) -> std::result::Result<bool, Infallible> {
@@ -120,7 +124,9 @@ fn cells(c: &Value) -> Result<Cells> {
                 ShapeOp::OR,
             )?;
         }
-        world.index.insert(BlockPos::new(at[0], at[1], at[2]), world.shapes.len());
+        world
+            .index
+            .insert(BlockPos::new(at[0], at[1], at[2]), world.shapes.len());
         world.shapes.push(shape);
     }
     Ok(world)
@@ -147,9 +153,7 @@ fn entity(s: &Value) -> (CameraEntity, Option<FovPlayer>) {
         dead: s["dead"].as_i64().map(|t| t as i32),
     });
     let mount = if player {
-        s["mount"]
-            .as_array()
-            .map(|a| (db(&a[0]) as f32, db(&a[1])))
+        s["mount"].as_array().map(|a| (db(&a[0]) as f32, db(&a[1])))
     } else {
         None
     };

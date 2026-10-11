@@ -46,8 +46,8 @@ pub mod render;
 pub mod riders;
 pub mod shulker;
 pub mod sniffer;
-pub mod spawning;
 pub mod spawn_rules;
+pub mod spawning;
 pub mod species;
 pub mod sulfur_cube;
 pub mod tame;
@@ -1097,9 +1097,9 @@ impl Mob {
         // dealDefaultKnockback, unless the damage type is tagged no_knockback;
         // a source without a position knocks in a random direction.
         if knock && !source.no_knockback() {
-            let (dx, dz) = source
-                .from
-                .map_or((0.0, 0.0), |f| (f[0] - self.position.x, f[2] - self.position.z));
+            let (dx, dz) = source.from.map_or((0.0, 0.0), |f| {
+                (f[0] - self.position.x, f[2] - self.position.z)
+            });
             self.knockback(0.4, dx, dz);
         }
         ai::after_hurt(self, &source);

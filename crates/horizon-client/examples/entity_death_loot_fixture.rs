@@ -4,9 +4,7 @@
 //!
 //! usage: entity_death_loot_fixture RESOURCES INPUT OUTPUT
 use horizon_client::{
-    mobs::{
-        Mob, MobTypes, Species, cube, drops, gear, raider, render::DYE_NAMES, sulfur_cube,
-    },
+    mobs::{Mob, MobTypes, Species, cube, drops, gear, raider, render::DYE_NAMES, sulfur_cube},
     random_sequences::RandomSequences,
 };
 use horizon_core::{geometry::Vec3, random::LegacyRandom};
@@ -78,7 +76,8 @@ fn main() -> horizon_client::Result<()> {
                 None => name = token,
             }
         }
-        let get = |k: &str, d: &'static str| -> String { c.get(k).copied().unwrap_or(d).to_owned() };
+        let get =
+            |k: &str, d: &'static str| -> String { c.get(k).copied().unwrap_or(d).to_owned() };
         let _ = writeln!(out, "== {name}");
         let Some(kind) = types.types.get(c["type"]) else {
             let _ = writeln!(out, "error unsupported {}", c["type"]);
@@ -213,11 +212,12 @@ fn main() -> horizon_client::Result<()> {
                 kind: kind.to_owned(),
                 ..LootEntity::default()
             };
-            let damage = |kind: &str, source: Option<LootEntity>, direct: Option<LootEntity>| LootDamage {
-                kind: kind.to_owned(),
-                source,
-                direct,
-            };
+            let damage =
+                |kind: &str, source: Option<LootEntity>, direct: Option<LootEntity>| LootDamage {
+                    kind: kind.to_owned(),
+                    source,
+                    direct,
+                };
             let source = match get("source", "attack").as_str() {
                 "attack" => match &killer {
                     None => damage("minecraft:generic", None, None),
@@ -226,9 +226,17 @@ fn main() -> horizon_client::Result<()> {
                     }
                     Some(k) => damage("minecraft:mob_attack", Some(k.clone()), Some(k.clone())),
                 },
-                "arrow" => damage("minecraft:arrow", killer.clone(), Some(projectile("minecraft:arrow"))),
+                "arrow" => damage(
+                    "minecraft:arrow",
+                    killer.clone(),
+                    Some(projectile("minecraft:arrow")),
+                ),
                 "fireball" => match &killer {
-                    Some(k) => damage("minecraft:fireball", Some(k.clone()), Some(projectile("minecraft:fireball"))),
+                    Some(k) => damage(
+                        "minecraft:fireball",
+                        Some(k.clone()),
+                        Some(projectile("minecraft:fireball")),
+                    ),
                     None => damage(
                         "minecraft:unattributed_fireball",
                         Some(projectile("minecraft:fireball")),
@@ -236,7 +244,11 @@ fn main() -> horizon_client::Result<()> {
                     ),
                 },
                 "explosion" => match &killer {
-                    Some(k) => damage("minecraft:player_explosion", Some(k.clone()), Some(k.clone())),
+                    Some(k) => damage(
+                        "minecraft:player_explosion",
+                        Some(k.clone()),
+                        Some(k.clone()),
+                    ),
                     None => damage("minecraft:explosion", None, None),
                 },
                 "lightning" => damage("minecraft:lightning_bolt", None, None),

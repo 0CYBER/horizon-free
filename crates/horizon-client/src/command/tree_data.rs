@@ -52,7 +52,11 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     d.requires(compute, GAMEMASTERS);
     context_sources(d, compute, &mut |d, node| {
         let f = d.literal(node, "float");
-        let p = d.argument(f, "provider", ArgType::ResourceOrId("minecraft:context_float_provider"));
+        let p = d.argument(
+            f,
+            "provider",
+            ArgType::ResourceOrId("minecraft:context_float_provider"),
+        );
         d.executes(p, "compute");
         let scale = d.argument(
             p,
@@ -64,7 +68,11 @@ pub fn register(d: &mut Dispatcher, root: usize) {
         );
         d.executes(scale, "compute");
         let i = d.literal(node, "integer");
-        let p = d.argument(i, "provider", ArgType::ResourceOrId("minecraft:context_int_provider"));
+        let p = d.argument(
+            i,
+            "provider",
+            ArgType::ResourceOrId("minecraft:context_int_provider"),
+        );
         d.executes(p, "compute");
     });
 

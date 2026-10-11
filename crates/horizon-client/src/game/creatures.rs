@@ -812,7 +812,8 @@ impl Game<'_> {
     fn drop_death_loot(&mut self, m: &mut Mob, by_player: bool, consumed: bool, pos: [f64; 3]) {
         use horizon_client::mobs::{DamageKind, Who, drops};
         use horizon_world::loot::{LootDamage, LootEntity};
-        let Some(loot) = horizon_client::structure_blocks::loot_data(&self.options.resources) else {
+        let Some(loot) = horizon_client::structure_blocks::loot_data(&self.options.resources)
+        else {
             return;
         };
         let player = || {
@@ -2732,7 +2733,10 @@ impl Game<'_> {
     pub(super) fn portal_spawn(&mut self, pos: [i32; 3]) {
         // ChunkMap.anyPlayerCloseEnoughForSpawning: a non-spectator within 128
         // blocks of the chunk centre.
-        let centre = [f64::from((pos[0] >> 4) * 16 + 8), f64::from((pos[2] >> 4) * 16 + 8)];
+        let centre = [
+            f64::from((pos[0] >> 4) * 16 + 8),
+            f64::from((pos[2] >> 4) * 16 + 8),
+        ];
         let spectator = self.spectator();
         let Some(close) = self.player.as_ref().filter(|_| !spectator).map(|p| {
             let (dx, dz) = (p.position.x - centre[0], p.position.z - centre[1]);
@@ -2744,7 +2748,9 @@ impl Game<'_> {
             return;
         }
         let mut y = pos[1];
-        while &*self.res.facts.get(self.world.block(pos[0], y, pos[2])).name == "minecraft:nether_portal" {
+        while &*self.res.facts.get(self.world.block(pos[0], y, pos[2])).name
+            == "minecraft:nether_portal"
+        {
             y -= 1;
         }
         // isValidSpawn: a sturdy top face (portal frames emit no light).
@@ -2752,7 +2758,11 @@ impl Game<'_> {
         if below.sturdy_full & (1 << 1) == 0 {
             return;
         }
-        let at = [f64::from(pos[0]) + 0.5, f64::from(y + 1), f64::from(pos[2]) + 0.5];
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(y + 1),
+            f64::from(pos[2]) + 0.5,
+        ];
         let _ = self.spawn_mob("minecraft:zombified_piglin", at, false);
     }
 }

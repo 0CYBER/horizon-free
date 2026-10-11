@@ -188,17 +188,21 @@ impl Tracker {
                     })
                 }
             } else if rotate {
-                Some(play::Clientbound::MoveEntityRot(MoveEntityRot(MoveEntity {
-                    id: e.id,
-                    delta: None,
-                    rotation: Some((rotation.1, rotation.0)),
-                    on_ground: e.on_ground,
-                })))
+                Some(play::Clientbound::MoveEntityRot(MoveEntityRot(
+                    MoveEntity {
+                        id: e.id,
+                        delta: None,
+                        rotation: Some((rotation.1, rotation.0)),
+                        on_ground: e.on_ground,
+                    },
+                )))
             } else {
                 None
             };
             if s.track_deltas {
-                let diff: f64 = (0..3).map(|k| (e.velocity[k] - s.velocity[k]).powi(2)).sum();
+                let diff: f64 = (0..3)
+                    .map(|k| (e.velocity[k] - s.velocity[k]).powi(2))
+                    .sum();
                 let still = e.velocity.iter().all(|v| *v == 0.0);
                 if diff > 1.0e-7 || diff > 0.0 && still {
                     s.velocity = e.velocity;

@@ -143,7 +143,12 @@ pub fn java_uuid(name: &str) -> Option<u128> {
     Some((u128::from(msb) << 64) | u128::from(lsb))
 }
 
-fn rollback(reader: &mut Reader, start: usize, key: &str, args: &[&dyn std::fmt::Display]) -> CommandError {
+fn rollback(
+    reader: &mut Reader,
+    start: usize,
+    key: &str,
+    args: &[&dyn std::fmt::Display],
+) -> CommandError {
     reader.cursor = start;
     CommandError::tr_at(key, args, reader)
 }

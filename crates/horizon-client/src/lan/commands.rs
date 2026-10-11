@@ -172,13 +172,16 @@ fn fill(
     names.sort();
     for name in names {
         let child = &children[name];
-        let required = if path.is_empty() && !dedicated && OPEN_WHEN_INTEGRATED.contains(&name.as_str()) {
-            0
-        } else {
-            required_level(child)
-        };
+        let required =
+            if path.is_empty() && !dedicated && OPEN_WHEN_INTEGRATED.contains(&name.as_str()) {
+                0
+            } else {
+                required_level(child)
+            };
         if required > level
-            || path.len() == 1 && path[0] == "gamerule" && EXPERIMENTAL_RULES.contains(&name.as_str())
+            || path.len() == 1
+                && path[0] == "gamerule"
+                && EXPERIMENTAL_RULES.contains(&name.as_str())
         {
             continue;
         }
@@ -212,7 +215,16 @@ fn fill(
         });
         nodes[target].children.push(index);
         paths.insert(path.clone(), index);
-        fill(child, index, path, level, dedicated, suggestions, nodes, paths);
+        fill(
+            child,
+            index,
+            path,
+            level,
+            dedicated,
+            suggestions,
+            nodes,
+            paths,
+        );
         path.pop();
     }
 }
@@ -331,7 +343,10 @@ mod tests {
         assert_eq!(guest.nodes[2].redirect, Some(1));
         let op = tree.packet(2, true, &builtin);
         let names: Vec<_> = op.nodes.iter().map(|n| n.name.as_str()).collect();
-        assert_eq!(names, ["", "me", "say", "stop", "tell", "action", "message"]);
+        assert_eq!(
+            names,
+            ["", "me", "say", "stop", "tell", "action", "message"]
+        );
         assert!(op.nodes[2].restricted);
     }
 }

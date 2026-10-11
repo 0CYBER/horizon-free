@@ -48,7 +48,11 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     let t = d.argument(as_, "targets", ENTITIES);
     d.redirect(t, ex);
     let over = d.literal(positioned, "over");
-    let hm = d.argument(over, "heightmap", ArgType::StrEnum(HEIGHTMAPS, "argument.enum.invalid"));
+    let hm = d.argument(
+        over,
+        "heightmap",
+        ArgType::StrEnum(HEIGHTMAPS, "argument.enum.invalid"),
+    );
     d.redirect(hm, ex);
     let rotated = d.literal(ex, "rotated");
     let rot = d.argument(rotated, "rot", ArgType::Rotation);
@@ -179,7 +183,11 @@ fn conditionals(d: &mut Dispatcher, m: usize, ex: usize) {
     conditional(d, targets, ex);
 
     let predicate = d.literal(m, "predicate");
-    let p = d.argument(predicate, "predicate", ArgType::ResourceOrId("minecraft:predicate"));
+    let p = d.argument(
+        predicate,
+        "predicate",
+        ArgType::ResourceOrId("minecraft:predicate"),
+    );
     conditional(d, p, ex);
 
     let stopwatch = d.literal(m, "stopwatch");

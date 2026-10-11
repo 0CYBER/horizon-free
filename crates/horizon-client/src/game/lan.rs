@@ -186,7 +186,11 @@ fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
                 if e.chested {
                     meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
                 }
-                meta.push((20, serializer::INT, Value::Int(i32::from(e.variant2.max(1)))));
+                meta.push((
+                    20,
+                    serializer::INT,
+                    Value::Int(i32::from(e.variant2.max(1))),
+                ));
                 if e.variant != 0 {
                     meta.push((21, serializer::INT, Value::Int(i32::from(e.variant))));
                 }
@@ -205,7 +209,11 @@ fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
             ) {
                 let index = if kind == "minecraft:villager" { 19 } else { 20 };
                 let level = i32::from(e.variant3.max(1));
-                meta.push((index, serializer::VILLAGER_DATA, Value::Ids(vec![t, p, level])));
+                meta.push((
+                    index,
+                    serializer::VILLAGER_DATA,
+                    Value::Ids(vec![t, p, level]),
+                ));
             }
         }
         // AbstractCubeMob.ID_SIZE.

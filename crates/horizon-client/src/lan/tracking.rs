@@ -172,5 +172,7 @@ pub const TRACKING: &[(&str, u8, u32, bool)] = &[
 pub fn settings(kind: &str) -> (u8, u32, bool) {
     TRACKING
         .binary_search_by(|row| row.0.cmp(kind))
-        .map_or((5, 3, true), |i| (TRACKING[i].1, TRACKING[i].2, TRACKING[i].3))
+        .map_or((5, 3, true), |i| {
+            (TRACKING[i].1, TRACKING[i].2, TRACKING[i].3)
+        })
 }
