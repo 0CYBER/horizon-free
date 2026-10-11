@@ -254,6 +254,8 @@ impl Game<'_> {
                         m.ai.swing_time = -1;
                     }
                 }
+                // An armor stand is a LivingEntity: it swings (invisibly).
+                Target::Stand(_) => {}
                 _ => continue,
             }
             let h = holder(self.target_name(t));
@@ -623,10 +625,7 @@ impl Game<'_> {
                             .has_modifier(Some(key), &modifier_id)
                             .unwrap_or(false)
                         {
-                            return Err(err(
-                                "commands.attribute.failed.modifier_already_present",
-                                &[&modifier_id, &description.plain(), &name.plain()],
-                            ));
+                            return Err(text_error("commands.attribute.failed.modifier_already_present", &[Text::literal(modifier_id.clone()), description.clone(), name.clone()]));
                         }
                         let op = ctx
                             .literals
@@ -648,10 +647,7 @@ impl Game<'_> {
                             .has_modifier(Some(key), &modifier_id)
                             .unwrap_or(false)
                         {
-                            return Err(err(
-                                "commands.attribute.failed.no_modifier",
-                                &[&description.plain(), &name.plain(), &modifier_id],
-                            ));
+                            return Err(text_error("commands.attribute.failed.no_modifier", &[description.clone(), name.clone(), Text::literal(modifier_id.clone())]));
                         }
                         let _ =
                             player.set_modifier(&attribute, &modifier_id, 0.0, "add_value", false);
@@ -678,10 +674,7 @@ impl Game<'_> {
                             .ok()
                             .flatten();
                         let Some(v) = found else {
-                            return Err(err(
-                                "commands.attribute.failed.no_modifier",
-                                &[&description.plain(), &name.plain(), &modifier_id],
-                            ));
+                            return Err(text_error("commands.attribute.failed.no_modifier", &[description.clone(), name.clone(), Text::literal(modifier_id.clone())]));
                         };
                         self.feedback(Text::translate(
                             "commands.attribute.modifier.value.get.success",
@@ -695,6 +688,26 @@ impl Game<'_> {
                         Ok((v * scale) as i32)
                     }
                 }
+            }
+            Target::Mob(_) | Target::Stand(_)
+                if !(matches!(target, Target::Mob(_))
+                    && matches!(
+                        short.as_str(),
+                        "max_health" | "movement_speed" | "attack_damage"
+                    )) =>
+            {
+                let op = ctx
+                    .literals
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| "add_value".into());
+                self.generic_attribute(
+                    target,
+                    id,
+                    &attribute,
+                    (&name, &description),
+                    (value_arg, scale, &modifier_id, &op),
+                )
             }
             Target::Mob(mob_id) => {
                 let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id) else {
@@ -755,14 +768,141 @@ impl Game<'_> {
                         ));
                         Ok(1)
                     }
-                    _ => Err(err(
-                        "commands.attribute.failed.no_modifier",
-                        &[&description.plain(), &name.plain(), &modifier_id],
-                    )),
+                    _ => Err(text_error("commands.attribute.failed.no_modifier", &[description.clone(), name.clone(), Text::literal(modifier_id.clone())])),
                 }
             }
-            _ => Err(err("commands.attribute.failed.entity", &[&name.plain()])),
+            _ => Err(text_error("commands.attribute.failed.entity", &[name.clone()])),
         }
+    }
+
+    /// The attribute map of a living entity whose attributes Horizon does
+    /// not model, created from its type's defaults on first use.
+    pub(in crate::game) fn generic_attributes(
+        &mut self,
+        t: Target,
+    ) -> Option<&mut horizon_world::attributes::entity::EntityAttributes> {
+        if !self.cmds.attributes.contains_key(&t) {
+            let ty = self.target_type(t);
+            let map = self.motion.attributes.create(&ty)?;
+            self.cmds.attributes.insert(t, map);
+        }
+        self.cmds.attributes.get_mut(&t)
+    }
+    /// AttributeCommand on a living entity through its generic attribute map.
+    fn generic_attribute(
+        &mut self,
+        target: Target,
+        id: &str,
+        attribute: &str,
+        (name, description): (&Text, &Text),
+        (value_arg, scale, modifier_id, op): (f64, f64, &str, &str),
+    ) -> R<i32> {
+        use horizon_world::attributes::{Modifier, Operation};
+        let no_attribute = || {
+            text_error(
+                "commands.attribute.failed.no_attribute",
+                &[name.clone(), description.clone()],
+            )
+        };
+        let no_modifier = || {
+            text_error(
+                "commands.attribute.failed.no_modifier",
+                &[description.clone(), name.clone(), Text::literal(modifier_id)],
+            )
+        };
+        let catalog = self.motion.attributes.clone();
+        let key = catalog.id(attribute).ok_or_else(no_attribute)?;
+        let map = self.generic_attributes(target).ok_or_else(no_attribute)?;
+        if !map.has(key) {
+            return Err(no_attribute());
+        }
+        let (message, args, result) = match id {
+            "attribute.get" | "attribute.base.get" => {
+                let v = if id == "attribute.get" {
+                    map.value(key).map_err(|_| no_attribute())?
+                } else {
+                    map.base_value(key).map_err(|_| no_attribute())?
+                };
+                let k = if id == "attribute.get" {
+                    "commands.attribute.value.get.success"
+                } else {
+                    "commands.attribute.base_value.get.success"
+                };
+                (k, vec![description.clone(), name.clone(), java_double_text(v)], (v * scale) as i32)
+            }
+            "attribute.base.set" => {
+                map.edit(key, |a, o| {
+                    let _ = a.set_base_value(value_arg, o);
+                });
+                (
+                    "commands.attribute.base_value.set.success",
+                    vec![description.clone(), name.clone(), java_double_text(value_arg)],
+                    1,
+                )
+            }
+            "attribute.base.reset" => {
+                map.reset_base(key);
+                let v = map.base_value(key).unwrap_or(0.0);
+                (
+                    "commands.attribute.base_value.reset.success",
+                    vec![description.clone(), name.clone(), java_double_text(v)],
+                    1,
+                )
+            }
+            "attribute.modifier.add" => {
+                if map.has_modifier(key, modifier_id) {
+                    return Err(text_error(
+                        "commands.attribute.failed.modifier_already_present",
+                        &[Text::literal(modifier_id), description.clone(), name.clone()],
+                    ));
+                }
+                let operation = match op {
+                    "add_multiplied_base" => Operation::AddMultipliedBase,
+                    "add_multiplied_total" => Operation::AddMultipliedTotal,
+                    _ => Operation::AddValue,
+                };
+                let m = Modifier::new(modifier_id, value_arg, operation)
+                    .map_err(|_| no_attribute())?;
+                map.edit(key, |a, o| {
+                    let _ = a.add_permanent(m, o);
+                });
+                (
+                    "commands.attribute.modifier.add.success",
+                    vec![Text::literal(modifier_id), description.clone(), name.clone()],
+                    1,
+                )
+            }
+            "attribute.modifier.remove" => {
+                if !map.has_modifier(key, modifier_id) {
+                    return Err(no_modifier());
+                }
+                map.edit(key, |a, o| {
+                    let _ = a.remove(modifier_id, o);
+                });
+                (
+                    "commands.attribute.modifier.remove.success",
+                    vec![Text::literal(modifier_id), description.clone(), name.clone()],
+                    1,
+                )
+            }
+            _ => {
+                let v = map
+                    .modifier_value(key, modifier_id)
+                    .map_err(|_| no_modifier())?;
+                (
+                    "commands.attribute.modifier.value.get.success",
+                    vec![
+                        Text::literal(modifier_id),
+                        description.clone(),
+                        name.clone(),
+                        java_double_text(v),
+                    ],
+                    (v * scale) as i32,
+                )
+            }
+        };
+        self.feedback(Text::translate(message, &args));
+        Ok(result)
     }
 
     // ---- /ride ----------------------------------------------------------------------------

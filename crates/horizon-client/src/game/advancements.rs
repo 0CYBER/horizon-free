@@ -168,6 +168,12 @@ fn now_text() -> String {
         rem % 60
     )
 }
+impl Game<'_> {
+    /// `ItemPredicate.test` (the `item_filter` of a filtered item modifier).
+    pub(super) fn loot_item_filter(&self, predicate: &Value, s: &ItemStack) -> bool {
+        adv::item(predicate, &item_view(s), &View(self))
+    }
+}
 pub(super) fn item_view(s: &ItemStack) -> ItemView {
     ItemView {
         id: s.item.to_string(),

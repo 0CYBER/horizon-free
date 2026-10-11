@@ -335,6 +335,21 @@ impl Game<'_> {
                 Text::literal(name.unwrap_or_default())
             }
             other => {
+                // Entity.getDisplayName: the CustomName component, else the type.
+                let custom = match other {
+                    Target::Stand(id)
+                    | Target::Frame(id)
+                    | Target::Painting(id)
+                    | Target::Boat(id)
+                    | Target::Cart(id)
+                    | Target::Other(id) => self.persist_raw(id).and_then(|r| r.get("CustomName")),
+                    _ => None,
+                };
+                if let Some(c) = custom {
+                    return horizon_client::scoreboard::comp_text(
+                        &horizon_client::scoreboard::tag_to_json(c),
+                    );
+                }
                 let ty = self.target_type(other);
                 Text::translate(&format!("entity.{}", ty.replace(':', ".")), &[])
             }
@@ -585,7 +600,18 @@ impl Game<'_> {
             "playsound" => self.cmd_playsound(ctx),
             "stopsound" => self.cmd_stopsound(ctx),
             "particle" => self.cmd_particle(ctx),
-            id if id.starts_with("attribute.") => self.cmd_attribute(id, ctx),
+            id if id.starts_with("attribute.") => {
+                let result = self.cmd_attribute(id, ctx);
+                // AttributeInstance.setDirty: the entity reacts when it ticks.
+                if result.is_ok()
+                    && matches!(ctx.get("attribute"), Some(Arg::Resource(a)) if a == "minecraft:waypoint_transmit_range")
+                    && !id.ends_with("get")
+                    && let Ok(t) = self.entities(ctx, "target", false)
+                {
+                    self.cmds.waypoint_dirty.push(t[0]);
+                }
+                result
+            }
             "ride.mount" | "ride.dismount" => self.cmd_ride(id, ctx),
             "spreadplayers" => self.cmd_spreadplayers(ctx),
             id if id.starts_with("forceload.") => self.cmd_forceload(id, ctx),
@@ -734,6 +760,57 @@ impl Game<'_> {
             .append("]")
             .with_color(color)
     }
+    /// `ItemStack.getDisplayName`: the hover name (custom name in italics,
+    /// a written book's title, a potion's effect name...) in brackets, in the
+    /// rarity colour unless the stack is empty.
+    pub(super) fn stack_display_name(&self, s: &ItemStack) -> Text {
+        let item = &*s.item;
+        let empty = item == "minecraft:air" || s.count == 0;
+        let custom = s.custom_name();
+        let hover = if let Some(c) = custom {
+            Text::literal(c).italic()
+        } else if let Some(title) = s
+            .data()
+            .and_then(|d| d.written.as_ref())
+            .map(|w| w.title.clone())
+            .filter(|t| !t.trim().is_empty())
+        {
+            Text::literal(title)
+        } else if matches!(
+            item,
+            "minecraft:potion"
+                | "minecraft:splash_potion"
+                | "minecraft:lingering_potion"
+                | "minecraft:tipped_arrow"
+        ) && s.potion().is_some()
+        {
+            Text::translate(
+                &horizon_client::brewing::potion_name_key(item, s.potion()),
+                &[],
+            )
+        } else {
+            Text::literal(self.res.names.item(item))
+        };
+        let wrapped = Text::translate("chat.square_brackets", &[hover]);
+        if empty {
+            return wrapped;
+        }
+        let mut rarity = self.item_rarity(item);
+        if !s.enchantments().is_empty() {
+            rarity = match rarity.as_str() {
+                "rare" => "epic".into(),
+                "epic" => rarity,
+                _ => "rare".into(),
+            };
+        }
+        let color = match rarity.as_str() {
+            "uncommon" => text::YELLOW,
+            "rare" => text::AQUA,
+            "epic" => text::LIGHT_PURPLE,
+            _ => text::WHITE,
+        };
+        wrapped.with_color(color)
+    }
     /// ItemStack.getDisplayName of a renamed stack: the name in italics.
     pub(super) fn item_display_name_custom(&self, item: &str, custom: &str) -> Text {
         let color = self.item_display_name(item).spans.first().and_then(|s| s.style.color);
@@ -813,10 +890,12 @@ impl Game<'_> {
                 }
             }
         }
-        let name = match extra.as_ref().and_then(|e| e.custom_name.clone()) {
-            Some(custom) => self.item_display_name_custom(&id, &custom),
-            None => self.item_display_name(&id),
-        };
+        let name = self.stack_display_name(&ItemStack {
+            item: id.as_str().into(),
+            count: count.max(1) as u32,
+            damage,
+            extra: extra.clone(),
+        });
         let message = if targets.len() == 1 {
             Text::translate(
                 "commands.give.success.single",
@@ -1256,6 +1335,13 @@ impl Game<'_> {
         let Some(Arg::Resource(kind)) = ctx.get("entity").cloned() else {
             return Ok(0);
         };
+        // ResourceArgument.getSummonableEntityType.
+        if matches!(
+            kind.as_str(),
+            "minecraft:player" | "minecraft:fishing_bobber"
+        ) {
+            return Err(err("entity.not_summonable", &[&kind]));
+        }
         let pos = self
             .position_arg(ctx, "pos")
             .unwrap_or(self.source_position());

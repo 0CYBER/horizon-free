@@ -443,6 +443,10 @@ impl Game<'_> {
         }
         tag
     }
+    /// The compound an entity was loaded with (and commands have edited).
+    pub(super) fn persist_raw(&self, id: u32) -> Option<&Tag> {
+        self.persist.raw.get(&id)
+    }
     fn remember(&mut self, id: u32, uuid: Option<[i32; 4]>, tag: Tag) {
         if let Some(u) = uuid {
             self.persist.uuids.insert(id, u);

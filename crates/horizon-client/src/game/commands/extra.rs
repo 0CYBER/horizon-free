@@ -45,6 +45,13 @@ pub(in crate::game) struct CommandExtras {
     pub waypoint_icons: HashMap<Target, WaypointIcon>,
     /// The dialog `/dialog show` opened (its id or inline definition).
     pub dialog: Option<String>,
+    /// The waypoint manager's tracked transmitters (None until first used).
+    pub waypoints: Option<Vec<Target>>,
+    /// Entities whose waypoint transmit range changed since they last ticked.
+    pub waypoint_dirty: Vec<Target>,
+    /// Attribute maps of living entities whose attributes Horizon does not
+    /// model (an armor stand's, a mob's beyond its modelled three).
+    pub attributes: HashMap<Target, horizon_world::attributes::entity::EntityAttributes>,
     /// The `CommandResultCallback` results of the outermost source, when a
     /// harness records them.
     pub results: Option<Vec<(bool, i32)>>,
@@ -127,6 +134,15 @@ impl Game<'_> {
                 &[self.target_name(player)],
             ));
         }
+        // EntityType.clientTrackingRange: only a marker's is zero.
+        if let Some(t) = target
+            && self.target_type(t) == "minecraft:marker"
+        {
+            return Err(tr_error(
+                "commands.spectate.cannot_spectate",
+                &[self.target_name(t)],
+            ));
+        }
         self.set_camera(target);
         match target {
             Some(t) => {
@@ -163,6 +179,7 @@ impl Game<'_> {
             self.system_message(message);
         }
         self.tick_camera();
+        self.tick_waypoints();
     }
     /// The camera part of `ServerPlayer.tick`: follow a living camera, drop a
     /// removed one, and stop when the player sneaks or leaves spectator mode.
@@ -197,19 +214,67 @@ impl Game<'_> {
 
     // ---- /waypoint ------------------------------------------------------
 
-    /// `ServerWaypointManager.transmitters()`: living entities whose
-    /// `waypoint_transmit_range` is positive.
-    fn waypoint_transmitters(&mut self) -> Vec<Target> {
-        let mut out = Vec::new();
-        if let Some(p) = self.player.as_mut()
-            && let Some(k) = p.attributes.key("minecraft:waypoint_transmit_range")
-            && p.attributes
-                .value(Some(k), horizon_world::attribute_map::ValueKind::Computed)
-                .is_ok_and(|v| v > 0.0)
-        {
-            out.push(Target::Player);
+    /// A living entity's `waypoint_transmit_range` (`isTransmittingWaypoint`).
+    fn transmit_range(&mut self, t: Target) -> f64 {
+        if t == Target::Player {
+            return self
+                .player
+                .as_mut()
+                .and_then(|p| {
+                    let k = p.attributes.key("minecraft:waypoint_transmit_range")?;
+                    p.attributes
+                        .value(Some(k), horizon_world::attribute_map::ValueKind::Computed)
+                        .ok()
+                })
+                .unwrap_or(0.0);
         }
-        out
+        let catalog = self.motion.attributes.clone();
+        let Some(key) = catalog.id("minecraft:waypoint_transmit_range") else {
+            return 0.0;
+        };
+        match self.cmds.attributes.get_mut(&t) {
+            Some(map) => map.value(key).unwrap_or(0.0),
+            None => 0.0,
+        }
+    }
+    /// `ServerWaypointManager.transmitters()`: the tracked set. The player
+    /// joins tracked when transmitting; a changed range takes effect when the
+    /// entity next ticks (`LivingEntity.onAttributeUpdated`), and
+    /// `/waypoint modify` re-tracks its waypoint whatever its range.
+    fn waypoint_transmitters(&mut self) -> Vec<Target> {
+        if self.cmds.waypoints.is_none() {
+            let tracked = if self.transmit_range(Target::Player) > 0.0 {
+                vec![Target::Player]
+            } else {
+                Vec::new()
+            };
+            self.cmds.waypoints = Some(tracked);
+        }
+        let tracked = self.cmds.waypoints.clone().unwrap_or_default();
+        let alive: Vec<Target> = tracked
+            .into_iter()
+            .filter(|t| self.target_position(*t).is_some())
+            .collect();
+        self.cmds.waypoints = Some(alive.clone());
+        alive
+    }
+    /// The waypoint part of a living entity's tick: dirty transmit ranges
+    /// track or untrack it.
+    pub(in crate::game) fn tick_waypoints(&mut self) {
+        let dirty = std::mem::take(&mut self.cmds.waypoint_dirty);
+        if dirty.is_empty() {
+            return;
+        }
+        self.waypoint_transmitters();
+        for t in dirty {
+            let on = self.transmit_range(t) > 0.0;
+            if let Some(tracked) = self.cmds.waypoints.as_mut() {
+                tracked.retain(|x| *x != t);
+                if on {
+                    tracked.push(t);
+                }
+            }
+        }
     }
     fn waypoint_icon(&self, t: Target) -> WaypointIcon {
         self.cmds.waypoint_icons.get(&t).cloned().unwrap_or_default()
@@ -316,6 +381,12 @@ impl Game<'_> {
             )
         };
         self.cmds.waypoint_icons.insert(t, icon);
+        // WaypointCommand.mutateIcon: untrack, change, track again.
+        self.waypoint_transmitters();
+        if let Some(tracked) = self.cmds.waypoints.as_mut() {
+            tracked.retain(|x| *x != t);
+            tracked.push(t);
+        }
         self.feedback(message);
         Ok(0)
     }
