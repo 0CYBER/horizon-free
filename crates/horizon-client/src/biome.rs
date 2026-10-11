@@ -24,6 +24,9 @@ pub struct SpawnEntry {
 pub struct BiomeInfo {
     /// `natural_mob_spawns` by category (creature, monster, ...).
     pub spawns: HashMap<String, Vec<SpawnEntry>>,
+    /// `natural_mob_spawns` spawn costs by entity type.
+    pub spawn_costs: HashMap<String, crate::mobs::spawn_selection::SpawnCost>,
+    /// The `gameplay/creature_world_gen_spawn_probability` attribute.
     pub creature_probability: f32,
     pub name: String,
     pub temperature: f32,
@@ -105,15 +108,26 @@ impl Biomes {
                 _ => GrassModifier::None,
             };
             let mut spawns: HashMap<String, Vec<SpawnEntry>> = HashMap::new();
-            let categories = &attributes["minecraft:gameplay/natural_mob_spawns"]["argument"]["spawns_by_category"];
+            let natural = &attributes["minecraft:gameplay/natural_mob_spawns"];
+            // A modifier object ({argument, modifier: overlay}) or the plain value;
+            // the overlay over the dimension's empty default is the biome's value.
+            let natural = if natural["argument"].is_object() {
+                &natural["argument"]
+            } else {
+                natural
+            };
+            let categories = &natural["spawns_by_category"];
             for (category, entries) in categories.as_object().into_iter().flatten() {
                 let list = crate::mobs::spawn_selection::parse_entries(entries);
                 spawns.insert(category.clone(), list);
             }
             list.push(BiomeInfo {
                 spawns,
-                creature_probability: v["creature_spawn_probability"].as_f64().unwrap_or(0.1)
-                    as f32,
+                spawn_costs: crate::mobs::spawn_selection::parse_costs(&natural["spawn_costs"]),
+                creature_probability:
+                    attributes["minecraft:gameplay/creature_world_gen_spawn_probability"]
+                        .as_f64()
+                        .unwrap_or(0.1) as f32,
                 temperature,
                 downfall,
                 precipitation: v["has_precipitation"].as_bool().unwrap_or(true),

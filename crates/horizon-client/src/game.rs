@@ -52,6 +52,7 @@ mod mount_menu;
 mod mounts;
 mod music;
 mod names;
+mod natural_spawning;
 mod nautili;
 mod options;
 mod packs;

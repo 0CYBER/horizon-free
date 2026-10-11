@@ -6,7 +6,7 @@ use super::Game;
 impl Game<'_> {
     /// Structures reaching `pos`: (id, inside a piece). `getStructureAt`
     /// tests the start's whole box, `getStructureWithPieceAt` a piece's.
-    fn structures_reaching(&self, pos: [i32; 3]) -> Vec<(String, bool)> {
+    pub(super) fn structures_reaching(&self, pos: [i32; 3]) -> Vec<(String, bool)> {
         let Some(chunk) = self.world.chunks.get(&(pos[0] >> 4, pos[2] >> 4)) else {
             return Vec::new();
         };
@@ -38,29 +38,5 @@ impl Game<'_> {
             .filter(|(_, piece)| *piece)
             .map(|(n, _)| n)
             .collect()
-    }
-    /// `NaturalSpawner.mobsAt`: the fortress bounds on nether bricks, the
-    /// structure `spawn_overrides` whose box (or piece) holds `pos`, else the
-    /// biome's list.
-    pub(super) fn spawn_list(
-        &self,
-        category: &str,
-        pos: [i32; 3],
-        biome: &std::collections::HashMap<String, Vec<horizon_client::biome::SpawnEntry>>,
-    ) -> Vec<horizon_client::biome::SpawnEntry> {
-        use horizon_client::mobs::spawn_selection::{StructureAt, StructureSpawns, mobs_at};
-        let structures: Vec<StructureAt> = self
-            .structures_reaching(pos)
-            .into_iter()
-            .map(|(id, in_piece)| StructureAt {
-                id,
-                in_piece,
-                in_bounds: true,
-            })
-            .collect();
-        let below = self.world.block(pos[0], pos[1] - 1, pos[2]);
-        let bricks = &*self.res.facts.get(below).name == "minecraft:nether_bricks";
-        let spawns = StructureSpawns::shared(&self.options.resources);
-        mobs_at(spawns, biome, category, &structures, bricks)
     }
 }

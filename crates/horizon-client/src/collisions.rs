@@ -78,6 +78,23 @@ impl SceneCollisions<'_, '_> {
         )?)
     }
 }
+/// `noCollision(null, box)`: block collisions under the empty collision
+/// context, as entity-less queries such as spawn checks use.
+pub fn no_collision_empty<W, E>(world: &mut W, bounds: Aabb) -> bool
+where
+    W: BlockCollisionWorld<Error = E> + EntityMovementWorld<Error = E>,
+{
+    no_world_collision(
+        world,
+        CollisionCheckRequest {
+            entity: EntityIdentity(0),
+            context: CollisionContext::empty(false),
+            bounds,
+            candidate_budget: 1_000_000,
+        },
+    )
+    .unwrap_or(false)
+}
 impl BlockCollisionWorld for SceneCollisions<'_, '_> {
     type Error = io::Error;
     type Chunk = ChunkPos;

@@ -3,7 +3,6 @@
 //! breeding, conversions, drops), projectiles, player interactions
 //! (feeding, shearing, milking, spawn eggs, throwing) and rendering.
 use super::{Dim, Game, view_vector};
-use horizon_client::mobs::spawn_selection;
 use horizon_client::{
     Result,
     blocks::Fluid,
@@ -38,17 +37,6 @@ pub(super) struct Creatures {
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
 }
-/// MobCategory caps (maxInstancesPerChunk with the 17x17 spawnable chunk area).
-const CATEGORIES: [(&str, usize); 7] = [
-    ("monster", 70),
-    ("creature", 10),
-    ("ambient", 15),
-    ("axolotls", 5),
-    ("underground_water_creature", 5),
-    ("water_creature", 5),
-    ("water_ambient", 20),
-];
-
 struct ProjWorld<'a, 'w> {
     w: &'a MobWorld<'w>,
     targets: Vec<(Who, Aabb)>,
@@ -356,78 +344,6 @@ impl Game<'_> {
         }
         horizon_client::chunk::MIN_Y
     }
-    /// NaturalSpawner.spawnMobsForChunkGeneration (creature packs at generation).
-    pub(super) fn spawn_generation_creatures(&mut self, cx: i32, cz: i32) {
-        let Some(chunk) = self.world.chunks.get(&(cx, cz)).cloned() else {
-            return;
-        };
-        let biome = self.res.biomes.get(chunk.biome(8, 64, 8)).clone();
-        let Some(entries) = biome.spawns.get("creature").cloned() else {
-            return;
-        };
-        let (xo, zo) = (cx * 16, cz * 16);
-        while self.world.random.next_float() < biome.creature_probability {
-            let Some(entry) = spawn_selection::weighted_pick(&entries, &mut self.world.random)
-            else {
-                return;
-            };
-            let count = spawn_selection::sample_count(&entry, &mut self.world.random);
-            let mut x = xo + self.world.random.next_int_bound(16).unwrap_or(0);
-            let mut z = zo + self.world.random.next_int_bound(16).unwrap_or(0);
-            let (sx, sz) = (x, z);
-            let Some(kind) = self.res.mob_types.get(&entry.entity).cloned() else {
-                continue;
-            };
-            for _ in 0..count {
-                let mut success = false;
-                let mut attempts = 0;
-                while !success && attempts < 4 {
-                    attempts += 1;
-                    let mut y = self.motion_top(x, z);
-                    let placement = self.res.mob_data.placement(&entry.entity);
-                    if placement == horizon_client::mobs::data::Placement::OnGround {
-                        let below = self.world.block(x, y - 1, z);
-                        if self.res.mob_data.state(below).flags & horizon_client::mobs::data::LAND
-                            != 0
-                        {
-                            y -= 1;
-                        }
-                    }
-                    let ok = {
-                        let w = self.mob_world_base(&[]);
-                        spawning::placement_ok(kind.species, &w, x, y, z) && {
-                            let mut r = self.world.random.clone();
-
-                            spawning::spawn_rules_ok(kind.species, &w, &mut r, x, y, z)
-                        }
-                    };
-                    if ok {
-                        let width = kind.width;
-                        let fx =
-                            f64::from(x).clamp(f64::from(xo) + width, f64::from(xo) + 16.0 - width);
-                        let fz =
-                            f64::from(z).clamp(f64::from(zo) + width, f64::from(zo) + 16.0 - width);
-                        if self
-                            .spawn_mob(&entry.entity, [fx, f64::from(y), fz], true)
-                            .is_some()
-                        {
-                            success = true;
-                        }
-                    }
-                    x += self.world.random.next_int_bound(5).unwrap_or(0)
-                        - self.world.random.next_int_bound(5).unwrap_or(0);
-                    z += self.world.random.next_int_bound(5).unwrap_or(0)
-                        - self.world.random.next_int_bound(5).unwrap_or(0);
-                    while x < xo || x >= xo + 16 || z < zo || z >= zo + 16 {
-                        x = sx + self.world.random.next_int_bound(5).unwrap_or(0)
-                            - self.world.random.next_int_bound(5).unwrap_or(0);
-                        z = sz + self.world.random.next_int_bound(5).unwrap_or(0)
-                            - self.world.random.next_int_bound(5).unwrap_or(0);
-                    }
-                }
-            }
-        }
-    }
     pub(super) fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
         let (rain, thunder) = self.world.weather.levels(1.0);
         MobWorld {
@@ -495,167 +411,6 @@ impl Game<'_> {
                 }
             }
         }
-    }
-    /// NaturalSpawner.spawnForChunk over the chunks within 8 of the player.
-    fn spawn_natural(&mut self) {
-        let Some(p) = self.player.as_ref().map(|p| p.position) else {
-            return;
-        };
-        let (pcx, pcz) = (p.x.floor() as i32 >> 4, p.z.floor() as i32 >> 4);
-        let mut counts = [0usize; 7];
-        for m in &self.mobs {
-            if let Some(i) = CATEGORIES.iter().position(|c| c.0 == m.kind.category) {
-                counts[i] += 1;
-            }
-        }
-        let creature_tick = self.world.game_time % 400 == 0;
-        let mut chunks: Vec<(i32, i32)> = (-8..=8)
-            .flat_map(|dx| (-8..=8).map(move |dz| (pcx + dx, pcz + dz)))
-            .filter(|c| self.world.chunks.contains_key(c))
-            .collect();
-        // ChunkMap: shuffled each tick.
-        for i in (1..chunks.len()).rev() {
-            let j = self.world.random.next_int_bound(i as i32 + 1).unwrap_or(0) as usize;
-            chunks.swap(i, j);
-        }
-        // ServerChunkCache.tickChunks: the chunks are shuffled every tick, but
-        // no category spawns without spawn_mobs, and only friendly ones
-        // unless the level is spawning monsters (ServerLevel.isSpawningMonsters).
-        let spawn_mobs = self.ui.rules.bool("spawn_mobs");
-        let spawn_enemies = spawn_mobs && self.ui.rules.bool("spawn_monsters");
-        for (cx, cz) in chunks {
-            for (ci, (category, cap)) in CATEGORIES.iter().enumerate() {
-                if !spawn_mobs
-                    || counts[ci] >= *cap
-                    || *category == "creature" && !creature_tick
-                    || *category == "monster" && !spawn_enemies
-                {
-                    continue;
-                }
-                counts[ci] += self.spawn_category_for_chunk(category, cx, cz, p);
-            }
-        }
-    }
-    /// NaturalSpawner.spawnCategoryForPosition at a random point in the chunk.
-    fn spawn_category_for_chunk(
-        &mut self,
-        category: &str,
-        cx: i32,
-        cz: i32,
-        player: Vec3,
-    ) -> usize {
-        let x0 = cx * 16 + self.world.random.next_int_bound(16).unwrap_or(0);
-        let z0 = cz * 16 + self.world.random.next_int_bound(16).unwrap_or(0);
-        let top = self.motion_top(x0, z0) + 1;
-        let min = horizon_client::chunk::MIN_Y;
-        let y = min + self.world.random.next_int_bound(top - min + 1).unwrap_or(0);
-        if y < min + 1 {
-            return 0;
-        }
-        let start = self.res.facts.get(self.world.block(x0, y, z0));
-        if start.full_collision {
-            return 0;
-        }
-        let mut spawned = 0;
-        for _ in 0..3 {
-            let (mut x, mut z) = (x0, z0);
-            let mut entry: Option<horizon_client::biome::SpawnEntry> = None;
-            let mut group = (self.world.random.next_float() * 4.0).ceil() as u32;
-            let mut cluster = 0;
-            let mut i = 0;
-            while i < group {
-                i += 1;
-                x += self.world.random.next_int_bound(6).unwrap_or(0)
-                    - self.world.random.next_int_bound(6).unwrap_or(0);
-                z += self.world.random.next_int_bound(6).unwrap_or(0)
-                    - self.world.random.next_int_bound(6).unwrap_or(0);
-                let (fx, fz) = (f64::from(x) + 0.5, f64::from(z) + 0.5);
-                let d2 = (fx - player.x).powi(2)
-                    + (f64::from(y) - player.y).powi(2)
-                    + (fz - player.z).powi(2);
-                if d2 <= 576.0 {
-                    continue;
-                }
-                if entry.is_none() {
-                    let Some(chunk) = self.world.chunks.get(&(x >> 4, z >> 4)) else {
-                        break;
-                    };
-                    let biome = self.res.biomes.get(chunk.biome(x, y, z)).clone();
-                    let list = self.spawn_list(category, [x, y, z], &biome.spawns);
-                    let reduced = self
-                        .res
-                        .mob_data
-                        .biome_tags
-                        .get("minecraft:reduced_water_ambient_spawns")
-                        .is_some_and(|t| t.contains(&biome.name));
-                    let Some(e) = spawn_selection::random_spawn_mob_at(
-                        &list,
-                        category,
-                        reduced,
-                        &mut self.world.random,
-                    ) else {
-                        break;
-                    };
-                    group = spawn_selection::sample_count(&e, &mut self.world.random);
-                    entry = Some(e);
-                }
-                let e = entry.clone().unwrap_or_else(|| unreachable!());
-                let despawn = if category == "water_ambient" {
-                    64.0
-                } else {
-                    128.0
-                };
-                if d2 > despawn * despawn {
-                    continue;
-                }
-                let Some(kind) = self.res.mob_types.get(&e.entity).cloned() else {
-                    break;
-                };
-                let ok = {
-                    let w = self.mob_world_base(&[]);
-                    let mut r = self.world.random.clone();
-                    let placed = spawning::placement_ok(kind.species, &w, x, y, z)
-                        && spawning::spawn_rules_ok(kind.species, &w, &mut r, x, y, z);
-                    let half = kind.width / 2.0;
-                    let room = w.no_collision(Aabb::new(
-                        Vec3::new(fx - half, f64::from(y), fz - half),
-                        Vec3::new(fx + half, f64::from(y) + kind.height, fz + half),
-                    ));
-                    // PathfinderMob.checkSpawnRules: walk target value >= 0 (monsters need darkness).
-                    let light_ok = !kind.category.eq("monster")
-                        || matches!(
-                            kind.species,
-                            Species::Slime
-                                | Species::SulfurCube
-                                | Species::Ghast
-                                | Species::MagmaCube
-                                | Species::Guardian
-                                | Species::ElderGuardian
-                        )
-                        || w.brightness(x, y, z) <= 0.5;
-                    let consumed = r;
-                    (placed && room && light_ok, consumed)
-                };
-                self.world.random = ok.1;
-                if !ok.0 {
-                    continue;
-                }
-                if d2 > 16384.0 && kind.category != "creature" {
-                    continue;
-                }
-                if self
-                    .spawn_mob(&e.entity, [fx, f64::from(y), fz], false)
-                    .is_some()
-                {
-                    cluster += 1;
-                    spawned += 1;
-                    if spawned >= 4 || cluster >= group.max(1) {
-                        return spawned;
-                    }
-                }
-            }
-        }
-        spawned
     }
     /// Advance every mob one tick, then apply their events.
     pub(super) fn tick_creatures(&mut self) -> Result<()> {
