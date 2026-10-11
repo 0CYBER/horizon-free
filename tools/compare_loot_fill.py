@@ -66,7 +66,7 @@ def main():
     names = sorted({k[0] for k in vanilla} | {k[0] for k in errors})
     subprocess.run(['cargo', 'build', '--profile', 'fast', '-q', '-p', 'horizon-world', '--example', 'loot_fill'],
                    check=True, cwd=lab.ROOT)
-    rust_out = subprocess.run([str(lab.ROOT/'target/fast/examples/loot_fill'), resources, ','.join(names), *seeds],
+    rust_out = subprocess.run([str(lab.cargo_target()/'fast/examples/loot_fill'), resources, ','.join(names), *seeds],
                               check=True, capture_output=True, text=True).stdout
     rust, _ = parse(rust_out.splitlines())
     matched = differ = 0
