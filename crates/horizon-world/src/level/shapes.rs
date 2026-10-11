@@ -11,7 +11,11 @@ use super::{
     update::{above, below, rel},
 };
 use crate::{fluid::FluidKind, registry::BlockStateId};
-use horizon_core::{geometry::{Axis, Direction}, position::BlockPos, random::RandomSource};
+use horizon_core::{
+    geometry::{Axis, Direction},
+    position::BlockPos,
+    random::RandomSource,
+};
 
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `BlockState.updateShape(level, ticks, pos, direction, neighbourPos, neighbourState, random)`.
@@ -794,7 +798,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::NetherPortal => {
                 let x_axis = table.text(state, p.axis) == "x";
                 let update_axis = axis_of(dir);
-                let wrong_axis = update_axis != if x_axis { Axis::X } else { Axis::Z } && update_axis != Axis::Y;
+                let wrong_axis =
+                    update_axis != if x_axis { Axis::X } else { Axis::Z } && update_axis != Axis::Y;
                 if !wrong_axis
                     && !b.is_block(nstate, block)
                     && !self.find_portal_shape(pos, x_axis).is_complete()

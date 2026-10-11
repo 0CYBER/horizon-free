@@ -568,6 +568,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
                 }
             }
             c.triggered = int("triggered").unwrap_or(0) != 0;
+            c.state_triggered = None;
             c.crafting_ticks = int("crafting_ticks_remaining").unwrap_or(0);
         }
         BlockEntity::Jukebox(_)

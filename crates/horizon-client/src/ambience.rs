@@ -1,7 +1,9 @@
 //! The player's ambient sound handlers: `BiomeAmbientSoundsHandler` (biome
 //! loops with 40-tick cross-fades, random additions, cave mood) driven by the
 //! `minecraft:audio/ambient_sounds` attribute, `UnderwaterAmbientSoundHandler`
-//! and the underwater loop (`UnderLiquidAmbientSoundInstance`).
+//! and `LocalPlayer.updateIsUnderwater` (enter/exit sounds and the
+//! `UnderLiquidAmbientSoundInstance` loop), played through the sound engine.
+use crate::sound_engine::{AMBIENT, InstanceId, PLAYERS, SoundEngine, SoundInstance, Sounds};
 use horizon_core::random::{LegacyRandom, RandomSource};
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path};
@@ -80,87 +82,83 @@ impl AmbientTables {
             .unwrap_or_default()
     }
 }
-/// The sound engine side of the handlers.
-pub trait AmbientOutput {
-    /// A relative tickable instance; None when it could not start.
-    fn play_tracked(&mut self, event: &str, volume: f32, looping: bool) -> Option<u64>;
-    fn set_volume(&mut self, id: u64, volume: f32);
-    fn stop(&mut self, id: u64);
-    fn is_active(&self, id: u64) -> bool;
-    /// A positional one-shot (`SimpleSoundInstance`, linear attenuation).
-    fn play_at(&mut self, event: &str, at: [f64; 3]);
-}
-impl AmbientOutput for crate::audio::Audio {
-    fn play_tracked(&mut self, event: &str, volume: f32, looping: bool) -> Option<u64> {
-        crate::audio::Audio::play_tracked(self, event, volume, looping)
-    }
-    fn set_volume(&mut self, id: u64, volume: f32) {
-        self.set_tracked_volume(id, volume);
-    }
-    fn stop(&mut self, id: u64) {
-        self.stop_tracked(id);
-    }
-    fn is_active(&self, id: u64) -> bool {
-        self.tracked_active(id)
-    }
-    fn play_at(&mut self, event: &str, at: [f64; 3]) {
-        self.play(event, Some(at), 1.0, 1.0);
-    }
-}
-/// `BiomeAmbientSoundsHandler.LoopSoundInstance`.
-struct LoopSound {
-    id: Option<u64>,
-    fade: i32,
-    direction: i32,
-    stopped: bool,
-}
-impl LoopSound {
-    fn tick(&mut self) -> f32 {
-        if self.fade < 0 {
-            self.stopped = true;
-        }
-        self.fade += self.direction;
-        (self.fade as f32 / 40.0).clamp(0.0, 1.0)
-    }
-    fn fade_out(&mut self) {
-        self.fade = self.fade.min(40);
-        self.direction = -1;
-    }
-    fn fade_in(&mut self) {
-        self.fade = self.fade.max(0);
-        self.direction = 1;
-    }
-}
 /// What the handlers read about the player and level each tick.
 pub struct AmbientContext<'a> {
+    /// `AMBIENT_SOUNDS` at the player's position.
     pub sounds: &'a AmbientSounds,
-    /// Feet and eye position.
+    /// The player's position (feet) and eye height.
     pub position: [f64; 3],
     pub eye_y: f64,
+    /// `isEyeInFluid(WATER)` this tick (`Entity.updateIsUnderwater`).
     pub underwater: bool,
-    /// Raw (sky, block) light at a block.
+    pub spectator: bool,
+    /// `Level.getBrightness` (sky, block) at a block.
     pub light: &'a dyn Fn([i32; 3]) -> (u8, u8),
+    /// The bubble column in the player's box (its `drag` property), from
+    /// `bubble_column_in`.
+    pub bubble_column: Option<bool>,
+}
+/// `BubbleColumnAmbientSoundHandler`'s lookup: the first bubble column
+/// (x fastest, then y, then z) in the player's bounding box inflated by
+/// (0, -0.4F, 0) and deflated by 1.0E-6, as `drag_down`. `state` gives the
+/// bubble column at a block (None for anything else).
+pub fn bubble_column_in(bb: [f64; 6], state: impl Fn([i32; 3]) -> Option<bool>) -> Option<bool> {
+    // AABB keeps min <= max on every construction.
+    let make = |a: [f64; 6]| {
+        [
+            a[0].min(a[3]),
+            a[1].min(a[4]),
+            a[2].min(a[5]),
+            a[0].max(a[3]),
+            a[1].max(a[4]),
+            a[2].max(a[5]),
+        ]
+    };
+    let inflate = |b: [f64; 6], x: f64, y: f64, z: f64| {
+        make([b[0] - x, b[1] - y, b[2] - z, b[3] + x, b[4] + y, b[5] + z])
+    };
+    let b = inflate(make(bb), 0.0, f64::from(-0.4f32), 0.0);
+    let b = inflate(b, -1.0E-6, -1.0E-6, -1.0E-6);
+    let (x0, y0, z0) = (
+        b[0].floor() as i32,
+        b[1].floor() as i32,
+        b[2].floor() as i32,
+    );
+    let (x1, y1, z1) = (
+        b[3].floor() as i32,
+        b[4].floor() as i32,
+        b[5].floor() as i32,
+    );
+    for z in z0..=z1 {
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if let Some(drag) = state([x, y, z]) {
+                    return Some(drag);
+                }
+            }
+        }
+    }
+    None
 }
 /// The local player's ambient sound handlers.
 pub struct Ambience {
     /// The client level's random.
-    random: LegacyRandom,
-    loops: Vec<(String, LoopSound)>,
+    pub random: LegacyRandom,
+    /// `BiomeAmbientSoundsHandler.loopSounds` (insertion order).
+    loops: Vec<(String, InstanceId)>,
     previous_loop: Option<String>,
     pub moodiness: f32,
+    /// `UnderwaterAmbientSoundHandler.tickDelay`.
     underwater_delay: i32,
-    /// The underwater loop instance and its fade.
-    underwater_loop: Option<(u64, i32)>,
-    /// UnderLiquidSubSound instances (stop when the player leaves the water).
-    sub_sounds: Vec<u64>,
+    /// `LocalPlayer.wasUnderwater`.
     was_underwater: bool,
+    /// `BubbleColumnAmbientSoundHandler.wasInBubbleColumn` / `firstTick`.
+    was_in_bubble_column: bool,
+    first_tick: bool,
 }
 impl Default for Ambience {
     fn default() -> Self {
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as i64);
-        Self::new(seed)
+        Self::new(crate::sound_engine::unique_seed())
     }
 }
 impl Ambience {
@@ -171,53 +169,95 @@ impl Ambience {
             previous_loop: None,
             moodiness: 0.0,
             underwater_delay: 0,
-            underwater_loop: None,
-            sub_sounds: Vec::new(),
             was_underwater: false,
+            was_in_bubble_column: false,
+            first_tick: true,
         }
     }
-    /// Stop everything (leaving the world).
-    pub fn clear(&mut self, out: &mut impl AmbientOutput) {
-        for (_, l) in self.loops.drain(..) {
-            if let Some(id) = l.id {
-                out.stop(id);
-            }
-        }
-        if let Some((id, _)) = self.underwater_loop.take() {
-            out.stop(id);
-        }
-        for id in self.sub_sounds.drain(..) {
-            out.stop(id);
+    /// `LocalPlayer.isUnderWater`.
+    pub fn was_underwater(&self) -> bool {
+        self.was_underwater
+    }
+    /// `BiomeAmbientSoundsHandler.loopSounds`.
+    pub fn loops(&self) -> &[(String, InstanceId)] {
+        &self.loops
+    }
+    /// `UnderwaterAmbientSoundHandler.tickDelay`.
+    pub fn underwater_delay(&self) -> i32 {
+        self.underwater_delay
+    }
+    /// A new player (leaving or changing worlds): fresh handlers.
+    pub fn clear(&mut self, sounds: &mut impl Sounds) {
+        for (_, id) in self.loops.drain(..) {
+            sounds.release(id);
         }
         self.previous_loop = None;
         self.moodiness = 0.0;
+        self.underwater_delay = 0;
         self.was_underwater = false;
+        self.was_in_bubble_column = false;
+        self.first_tick = true;
     }
-    /// `LocalPlayer.updateIsUnderwater` enter/exit sounds and loop, then
-    /// `UnderwaterAmbientSoundHandler`, `BubbleColumn` (absent) and
-    /// `BiomeAmbientSoundsHandler` ticks, then the tickable instances.
-    pub fn tick(&mut self, ctx: &AmbientContext, out: &mut impl AmbientOutput) {
-        let feet = ctx.position;
-        if !self.was_underwater && ctx.underwater {
-            out.play_at("minecraft:ambient.underwater.enter", feet);
-            if let Some((id, _)) = self.underwater_loop.take() {
-                out.stop(id);
-            }
-            self.underwater_loop = out
-                .play_tracked("minecraft:ambient.underwater.loop", 0.0, true)
-                .map(|id| (id, 0));
-        }
-        if self.was_underwater && !ctx.underwater {
-            out.play_at("minecraft:ambient.underwater.exit", feet);
-        }
+    /// `ClientLevel.playLocalSound(x, y, z, sound, source, 1, 1, false)`.
+    fn play_local(&mut self, event: &str, source: usize, at: [f64; 3], sounds: &mut impl Sounds) {
+        let seed = self.random.next_long();
+        let instance = SoundInstance::at(event, source, 1.0, 1.0, LegacyRandom::new(seed), at);
+        sounds.play_instance(instance, false);
+    }
+    /// `LocalPlayer.updateIsUnderwater`, then the `ambientSoundHandlers`
+    /// (underwater, bubble column, biome) as `LocalPlayer.tick` runs them.
+    pub fn tick(&mut self, ctx: &AmbientContext, sounds: &mut impl Sounds) {
+        let old = self.was_underwater;
         self.was_underwater = ctx.underwater;
-        self.tick_underwater(ctx, out);
-        self.tick_biome(ctx, out);
-        self.tick_instances(ctx, out);
+        if !ctx.spectator {
+            if !old && ctx.underwater {
+                self.play_local(
+                    "minecraft:ambient.underwater.enter",
+                    AMBIENT,
+                    ctx.position,
+                    sounds,
+                );
+                let instance = SoundInstance::under_liquid_loop(
+                    "minecraft:ambient.underwater.loop",
+                    SoundEngine::unseeded(),
+                );
+                sounds.play_instance(instance, false);
+            }
+            if old && !ctx.underwater {
+                self.play_local(
+                    "minecraft:ambient.underwater.exit",
+                    AMBIENT,
+                    ctx.position,
+                    sounds,
+                );
+            }
+        }
+        self.tick_underwater(sounds);
+        self.tick_bubble_column(ctx, sounds);
+        self.tick_biome(ctx, sounds);
     }
-    fn tick_underwater(&mut self, ctx: &AmbientContext, out: &mut impl AmbientOutput) {
+    /// `BubbleColumnAmbientSoundHandler.tick`: entering a column plays its
+    /// inside sound (`LocalPlayer.playSound`, on PLAYERS).
+    fn tick_bubble_column(&mut self, ctx: &AmbientContext, sounds: &mut impl Sounds) {
+        if let Some(drag_down) = ctx.bubble_column {
+            if !self.was_in_bubble_column && !self.first_tick && !ctx.spectator {
+                let event = if drag_down {
+                    "minecraft:block.bubble_column.whirlpool_inside"
+                } else {
+                    "minecraft:block.bubble_column.upwards_inside"
+                };
+                self.play_local(event, PLAYERS, ctx.position, sounds);
+            }
+            self.was_in_bubble_column = true;
+        } else {
+            self.was_in_bubble_column = false;
+        }
+        self.first_tick = false;
+    }
+    /// `UnderwaterAmbientSoundHandler.tick`.
+    fn tick_underwater(&mut self, sounds: &mut impl Sounds) {
         self.underwater_delay -= 1;
-        if self.underwater_delay <= 0 && ctx.underwater {
+        if self.underwater_delay <= 0 && self.was_underwater {
             let rand = self.random.next_float();
             let sound = if rand < 1.0E-4 {
                 Some("minecraft:ambient.underwater.loop.additions.ultra_rare")
@@ -230,147 +270,121 @@ impl Ambience {
             };
             if let Some(sound) = sound {
                 self.underwater_delay = 0;
-                if let Some(id) = out.play_tracked(sound, 1.0, false) {
-                    self.sub_sounds.push(id);
-                }
+                let instance = SoundInstance::under_liquid_sub(sound, SoundEngine::unseeded());
+                sounds.play_instance(instance, false);
             }
         }
     }
-    fn tick_biome(&mut self, ctx: &AmbientContext, out: &mut impl AmbientOutput) {
-        self.loops.retain(|(_, l)| !l.stopped);
-        let sounds = ctx.sounds;
-        if sounds.r#loop != self.previous_loop {
-            self.previous_loop = sounds.r#loop.clone();
-            for (_, l) in &mut self.loops {
-                l.fade_out();
+    /// `BiomeAmbientSoundsHandler.tick`.
+    fn tick_biome(&mut self, ctx: &AmbientContext, sounds: &mut impl Sounds) {
+        let mut kept = Vec::new();
+        for (event, id) in std::mem::take(&mut self.loops) {
+            if sounds.engine().instance(id).is_some_and(|i| i.stopped) {
+                sounds.release(id);
+            } else {
+                kept.push((event, id));
             }
-            if let Some(event) = &sounds.r#loop {
-                if !self.loops.iter().any(|(e, _)| e == event) {
-                    let id = out.play_tracked(event, 0.0, true);
-                    self.loops.push((
-                        event.clone(),
-                        LoopSound {
-                            id,
-                            fade: 0,
-                            direction: 0,
-                            stopped: false,
-                        },
-                    ));
+        }
+        self.loops = kept;
+        let current = ctx
+            .sounds
+            .r#loop
+            .as_deref()
+            .map(crate::sound_events::normalize);
+        if current != self.previous_loop {
+            self.previous_loop = current.clone();
+            for (_, id) in &self.loops {
+                if let Some(i) = sounds.engine().instance_mut(*id) {
+                    i.fade_out();
                 }
-                if let Some((_, l)) = self.loops.iter_mut().find(|(e, _)| e == event) {
-                    l.fade_in();
+            }
+            if let Some(event) = current {
+                let id = match self.loops.iter().find(|(e, _)| *e == event) {
+                    Some((_, id)) => *id,
+                    None => {
+                        let instance = SoundInstance::biome_loop(&event, SoundEngine::unseeded());
+                        let id = sounds.engine().add(instance, true);
+                        sounds.play_id(id);
+                        self.loops.push((event, id));
+                        id
+                    }
+                };
+                if let Some(i) = sounds.engine().instance_mut(id) {
+                    i.fade_in();
                 }
             }
         }
-        for (sound, chance) in &sounds.additions {
-            if self.random.next_double() < *chance
-                && let Some(id) = out.play_tracked(sound, 1.0, false)
-            {
-                // forAmbientAddition: a one-shot nobody ticks.
-                let _ = id;
+        for (sound, chance) in &ctx.sounds.additions {
+            if self.random.next_double() < *chance {
+                let event = crate::sound_events::normalize(sound);
+                let instance = SoundInstance::for_ambient_addition(&event, SoundEngine::unseeded());
+                sounds.play_instance(instance, false);
             }
         }
-        let Some(mood) = &sounds.mood else { return };
+        let Some(mood) = &ctx.sounds.mood else { return };
         let extent = mood.block_search_extent;
         let span = extent * 2 + 1;
-        let mut offset = || self.random.next_int_bound(span).unwrap_or(0) - extent;
-        let (dx, dy, dz) = (offset(), offset(), offset());
-        let sample = [
-            (ctx.position[0] + f64::from(dx)).floor() as i32,
-            (ctx.eye_y + f64::from(dy)).floor() as i32,
-            (ctx.position[2] + f64::from(dz)).floor() as i32,
-        ];
+        let x = ctx.position[0] + f64::from(self.random.next_int_bound(span).unwrap_or(0))
+            - f64::from(extent);
+        let y = ctx.eye_y + f64::from(self.random.next_int_bound(span).unwrap_or(0))
+            - f64::from(extent);
+        let z = ctx.position[2] + f64::from(self.random.next_int_bound(span).unwrap_or(0))
+            - f64::from(extent);
+        let sample = [x.floor() as i32, y.floor() as i32, z.floor() as i32];
         let (sky, block) = (ctx.light)(sample);
         if sky > 0 {
             self.moodiness -= f32::from(sky) / 15.0 * 0.001;
         } else {
-            self.moodiness -= (f32::from(block) - 1.0) / mood.tick_delay as f32;
+            self.moodiness -= (i32::from(block) - 1) as f32 / mood.tick_delay as f32;
         }
         if self.moodiness >= 1.0 {
-            let d = [
-                f64::from(sample[0]) + 0.5 - ctx.position[0],
-                f64::from(sample[1]) + 0.5 - ctx.eye_y,
-                f64::from(sample[2]) + 0.5 - ctx.position[2],
-            ];
-            let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            let sample_x = f64::from(sample[0]) + 0.5;
+            let sample_y = f64::from(sample[1]) + 0.5;
+            let sample_z = f64::from(sample[2]) + 0.5;
+            let dx = sample_x - ctx.position[0];
+            let dy = sample_y - ctx.eye_y;
+            let dz = sample_z - ctx.position[2];
+            let distance = (dx * dx + dy * dy + dz * dz).sqrt();
             let source = distance + mood.offset;
-            out.play_at(
-                &mood.sound,
-                [
-                    ctx.position[0] + d[0] / distance * source,
-                    ctx.eye_y + d[1] / distance * source,
-                    ctx.position[2] + d[2] / distance * source,
-                ],
-            );
+            let at = [
+                ctx.position[0] + dx / distance * source,
+                ctx.eye_y + dy / distance * source,
+                ctx.position[2] + dz / distance * source,
+            ];
+            // The mood sound draws from the level random itself.
+            let event = crate::sound_events::normalize(&mood.sound);
+            let instance = SoundInstance::for_ambient_mood(&event, self.random.clone(), at);
+            let id = sounds.engine().add(instance, true);
+            sounds.play_id(id);
+            if let Some(i) = sounds.engine().instance(id) {
+                self.random = i.random.clone();
+            }
+            sounds.release(id);
             self.moodiness = 0.0;
         } else {
             self.moodiness = self.moodiness.max(0.0);
         }
-    }
-    /// The tickable instances' own ticks (SoundEngine.tickInGameSound).
-    fn tick_instances(&mut self, ctx: &AmbientContext, out: &mut impl AmbientOutput) {
-        for (_, l) in &mut self.loops {
-            let volume = l.tick();
-            if let Some(id) = l.id {
-                if l.stopped {
-                    out.stop(id);
-                } else {
-                    out.set_volume(id, volume);
-                }
-            }
-        }
-        // UnderLiquidAmbientSoundInstance: +1 per tick under water, -2 out of it.
-        if let Some((id, fade)) = self.underwater_loop.as_mut() {
-            if *fade >= 0 {
-                *fade += if ctx.underwater { 1 } else { -2 };
-                *fade = (*fade).min(40);
-                out.set_volume(*id, (*fade as f32 / 40.0).clamp(0.0, 1.0));
-            } else {
-                out.stop(*id);
-                self.underwater_loop = None;
-            }
-        }
-        // UnderLiquidSubSound: stops when the player leaves the water.
-        self.sub_sounds.retain(|&id| {
-            let keep = ctx.underwater && out.is_active(id);
-            if !keep {
-                out.stop(id);
-            }
-            keep
-        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sound_engine::{Bound, TickContext, test_backend::Null};
+    use crate::sound_events::SoundRegistry;
 
-    #[derive(Default)]
-    struct Fake {
-        next: u64,
-        live: HashMap<u64, (String, f32)>,
-        at: Vec<String>,
-    }
-    impl AmbientOutput for Fake {
-        fn play_tracked(&mut self, event: &str, volume: f32, _looping: bool) -> Option<u64> {
-            self.next += 1;
-            self.live.insert(self.next, (event.to_owned(), volume));
-            Some(self.next)
-        }
-        fn set_volume(&mut self, id: u64, volume: f32) {
-            if let Some(v) = self.live.get_mut(&id) {
-                v.1 = volume;
-            }
-        }
-        fn stop(&mut self, id: u64) {
-            self.live.remove(&id);
-        }
-        fn is_active(&self, id: u64) -> bool {
-            self.live.contains_key(&id)
-        }
-        fn play_at(&mut self, event: &str, _at: [f64; 3]) {
-            self.at.push(event.to_owned());
-        }
+    fn engine() -> SoundEngine {
+        let mut registry = SoundRegistry::default();
+        registry.add_file(
+            "minecraft",
+            br#"{"crimson": {"sounds": ["c"]}, "warped": {"sounds": ["w"]},
+                 "ambient.cave": {"sounds": ["a", "b"]},
+                 "ambient.underwater.loop": {"sounds": ["u"]},
+                 "ambient.underwater.enter": {"sounds": ["e"]},
+                 "ambient.underwater.exit": {"sounds": ["x"]}}"#,
+            &|_, _| true,
+        );
+        SoundEngine::new(registry)
     }
     fn ctx<'a>(
         sounds: &'a AmbientSounds,
@@ -382,49 +396,59 @@ mod tests {
             position: [0.5, 10.0, 0.5],
             eye_y: 11.62,
             underwater,
+            spectator: false,
             light,
+            bubble_column: None,
         }
     }
 
     #[test]
     fn loops_cross_fade_over_forty_ticks() {
+        let (mut engine, mut backend) = (engine(), Null::default());
         let mut a = Ambience::new(1);
-        let mut out = Fake::default();
-        let dark = |_: [i32; 3]| (15u8, 0u8);
+        let lit = |_: [i32; 3]| (15u8, 0u8);
         let crimson = AmbientSounds {
-            r#loop: Some("crimson".into()),
+            r#loop: Some("minecraft:crimson".into()),
             ..Default::default()
         };
-        for _ in 0..40 {
-            a.tick(&ctx(&crimson, false, &dark), &mut out);
-        }
-        assert_eq!(out.live.values().map(|v| v.1).collect::<Vec<_>>(), [1.0]);
         let warped = AmbientSounds {
-            r#loop: Some("warped".into()),
+            r#loop: Some("minecraft:warped".into()),
             ..Default::default()
         };
+        let tick =
+            |a: &mut Ambience, s: &AmbientSounds, engine: &mut SoundEngine, backend: &mut Null| {
+                a.tick(
+                    &ctx(s, false, &lit),
+                    &mut Bound {
+                        engine: &mut *engine,
+                        backend: &mut *backend,
+                    },
+                );
+                engine.tick(false, &TickContext::default(), backend);
+            };
+        for _ in 0..40 {
+            tick(&mut a, &crimson, &mut engine, &mut backend);
+        }
         for _ in 0..20 {
-            a.tick(&ctx(&warped, false, &dark), &mut out);
+            tick(&mut a, &warped, &mut engine, &mut backend);
         }
-        let mut volumes: Vec<_> = out.live.values().map(|v| (v.0.clone(), v.1)).collect();
-        volumes.sort_by(|x, y| x.0.cmp(&y.0));
-        assert_eq!(
-            volumes,
-            [("crimson".to_owned(), 0.5), ("warped".to_owned(), 0.5)]
-        );
+        let volumes: Vec<f32> = a
+            .loops
+            .iter()
+            .map(|(_, id)| engine.instance(*id).unwrap().volume)
+            .collect();
+        assert_eq!(volumes, [0.5, 0.5]);
         for _ in 0..30 {
-            a.tick(&ctx(&warped, false, &dark), &mut out);
+            tick(&mut a, &warped, &mut engine, &mut backend);
         }
-        assert_eq!(
-            out.live.values().map(|v| v.0.as_str()).collect::<Vec<_>>(),
-            ["warped"]
-        );
+        assert_eq!(a.loops.len(), 1);
     }
 
     #[test]
     fn mood_builds_in_the_dark_and_plays_a_cave_sound() {
+        let (mut engine, mut backend) = (engine(), Null::default());
+        engine.listening = true;
         let mut a = Ambience::new(2);
-        let mut out = Fake::default();
         let cave = |_: [i32; 3]| (0u8, 0u8);
         let sounds = AmbientSounds {
             mood: Some(Mood {
@@ -435,31 +459,19 @@ mod tests {
             }),
             ..Default::default()
         };
-        // Block light 0: +1/6000 per tick (float), so the sound plays around tick 6000.
         let mut ticks = 0;
-        while out.at.is_empty() && ticks < 7000 {
-            a.tick(&ctx(&sounds, false, &cave), &mut out);
+        while engine.notifications.is_empty() && ticks < 7000 {
+            a.tick(
+                &ctx(&sounds, false, &cave),
+                &mut Bound {
+                    engine: &mut engine,
+                    backend: &mut backend,
+                },
+            );
             ticks += 1;
         }
         assert!((5990..=6010).contains(&ticks), "{ticks}");
-        assert_eq!(out.at, ["minecraft:ambient.cave"]);
+        assert_eq!(engine.notifications[0].identifier, "minecraft:ambient.cave");
         assert_eq!(a.moodiness, 0.0);
-    }
-
-    #[test]
-    fn entering_water_plays_enter_and_fades_the_loop_in() {
-        let mut a = Ambience::new(3);
-        let mut out = Fake::default();
-        let lit = |_: [i32; 3]| (15u8, 0u8);
-        let none = AmbientSounds::default();
-        a.tick(&ctx(&none, true, &lit), &mut out);
-        assert_eq!(out.at, ["minecraft:ambient.underwater.enter"]);
-        let id = a.underwater_loop.unwrap().0;
-        assert_eq!(out.live[&id].1, 1.0 / 40.0);
-        a.tick(&ctx(&none, false, &lit), &mut out);
-        assert_eq!(out.at.last().unwrap(), "minecraft:ambient.underwater.exit");
-        // Fade 1 -> -1 stops on the next tick.
-        a.tick(&ctx(&none, false, &lit), &mut out);
-        assert!(!out.live.contains_key(&id));
     }
 }

@@ -84,12 +84,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `ShelfBlock.isConnectable`.
     fn shelf_connectable(&self, state: BlockStateId) -> bool {
         let b = self.b;
-        b.tag("minecraft:wooden_shelves").is_some_and(|tag| b.in_set(state, tag))
+        b.tag("minecraft:wooden_shelves")
+            .is_some_and(|tag| b.in_set(state, tag))
             && b.table.has(state, b.props.powered)
             && b.table.bool(state, b.props.powered)
     }
-    fn chain_neighbor(&mut self, n: &mut Neighbors, left: bool, steps: i32) -> (BlockPos, Option<Part>) {
-        let dir = if left { clockwise(n.facing) } else { counter_clockwise(n.facing) };
+    fn chain_neighbor(
+        &mut self,
+        n: &mut Neighbors,
+        left: bool,
+        steps: i32,
+    ) -> (BlockPos, Option<Part>) {
+        let dir = if left {
+            clockwise(n.facing)
+        } else {
+            counter_clockwise(n.facing)
+        };
         let mut pos = n.center;
         for _ in 0..steps {
             pos = rel(pos, dir);
@@ -105,7 +115,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn shelf_set_part(&mut self, pos: BlockPos, part: Part) {
         let state = self.state(pos);
         if self.shelf_part(state) != part {
-            let next = self.b.table.set_text(state, self.b.props.side_chain, part.name());
+            let next = self
+                .b
+                .table
+                .set_text(state, self.b.props.side_chain, part.name());
             self.set_block_and_update(pos, next);
         }
     }
@@ -115,7 +128,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if !self.shelf_connectable(state) {
             return 0;
         }
-        let mut n = Neighbors { facing: self.b.facing(state), center: pos, cache: HashMap::new() };
+        let mut n = Neighbors {
+            facing: self.b.facing(state),
+            center: pos,
+            cache: HashMap::new(),
+        };
         let mut size = 1;
         for (left, end) in [(true, Part::Left), (false, Part::Right)] {
             for steps in 1..MAX_CHAIN_LENGTH as i32 {
@@ -132,7 +149,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `SideChainPartBlock.updateNeighborsAfterPoweringDown`.
     pub(crate) fn shelf_after_powering_down(&mut self, pos: BlockPos, state: BlockStateId) {
-        let mut n = Neighbors { facing: self.b.facing(state), center: pos, cache: HashMap::new() };
+        let mut n = Neighbors {
+            facing: self.b.facing(state),
+            center: pos,
+            cache: HashMap::new(),
+        };
         if let (at, Some(part)) = self.chain_neighbor(&mut n, true, 1) {
             self.shelf_set_part(at, part.disconnected_from_the_right());
         }
@@ -150,11 +171,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if updated_by_neighbor {
             return;
         }
-        let mut n = Neighbors { facing: self.b.facing(state), center: pos, cache: HashMap::new() };
+        let mut n = Neighbors {
+            facing: self.b.facing(state),
+            center: pos,
+            cache: HashMap::new(),
+        };
         let (left_pos, left) = self.chain_neighbor(&mut n, true, 1);
         let (right_pos, right) = self.chain_neighbor(&mut n, false, 1);
-        let on_left = if left.is_some() { self.shelf_chain_size(left_pos) } else { 0 };
-        let on_right = if right.is_some() { self.shelf_chain_size(right_pos) } else { 0 };
+        let on_left = if left.is_some() {
+            self.shelf_chain_size(left_pos)
+        } else {
+            0
+        };
+        let on_right = if right.is_some() {
+            self.shelf_chain_size(right_pos)
+        } else {
+            0
+        };
         let mut own = Part::Unconnected;
         let mut length = 1;
         if on_left > 0 && length + on_left <= MAX_CHAIN_LENGTH {
@@ -189,13 +222,18 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         let mut next = b.table.set_bool(state, b.props.powered, signal);
         if !signal {
-            next = b.table.set_text(next, b.props.side_chain, Part::Unconnected.name());
+            next = b
+                .table
+                .set_text(next, b.props.side_chain, Part::Unconnected.name());
         }
         self.set_block_and_update(pos, next);
         let (sound, event) = if signal {
             ("minecraft:block.shelf.activate", "minecraft:block_activate")
         } else {
-            ("minecraft:block.shelf.deactivate", "minecraft:block_deactivate")
+            (
+                "minecraft:block.shelf.deactivate",
+                "minecraft:block_deactivate",
+            )
         };
         self.sound(pos, &sound.into(), 1.0, 1.0);
         self.game_event_state(pos, event, next);

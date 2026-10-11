@@ -563,10 +563,24 @@ impl ProtoChunk {
     }
 }
 
+/// Build range (minimum Y, height) of the vanilla dimension types.
+fn dimension_type_height(name: &str) -> Option<(i32, i32)> {
+    match name {
+        "minecraft:overworld" | "minecraft:overworld_caves" => Some((-64, 384)),
+        "minecraft:the_nether" | "minecraft:the_end" => Some((0, 256)),
+        _ => None,
+    }
+}
+
 /// Per-noise-settings values resolved from the dimension's generator JSON.
 struct Settings {
-    min_y: i32,
-    height: i32,
+    noise_min_y: i32,
+    noise_height: i32,
+    /// The dimension type's build range (LevelHeightAccessor): proto chunks,
+    /// their heightmaps and the decoration region span it, while the noise
+    /// only fills `noise_min_y..noise_min_y + noise_height`.
+    level_min_y: i32,
+    level_height: i32,
     sea_level: i32,
     default_block: BlockStateId,
     default_fluid: BlockStateId,
@@ -635,16 +649,25 @@ where
         generator: &Value,
         settings_json: &Value,
         with_structures: bool,
+        level: Option<(i32, i32)>,
     ) -> Result<Self, GeneratorError> {
         let registry = data.registry;
         let noise = &settings_json["noise"];
+        let min_y = noise["min_y"]
+            .as_i64()
+            .ok_or_else(|| resource("noise min_y"))? as i32;
+        let height = noise["height"]
+            .as_i64()
+            .ok_or_else(|| resource("noise height"))? as i32;
+        let (level_min_y, level_height) = level.unwrap_or((min_y, height));
+        if min_y < level_min_y || min_y + height > level_min_y + level_height {
+            return Err(resource("noise range outside the dimension's build height"));
+        }
         let settings = Settings {
-            min_y: noise["min_y"]
-                .as_i64()
-                .ok_or_else(|| resource("noise min_y"))? as i32,
-            height: noise["height"]
-                .as_i64()
-                .ok_or_else(|| resource("noise height"))? as i32,
+            noise_min_y: min_y,
+            noise_height: height,
+            level_min_y,
+            level_height,
             sea_level: settings_json["sea_level"]
                 .as_i64()
                 .ok_or_else(|| resource("sea_level"))? as i32,
@@ -777,8 +800,8 @@ where
     }
     fn generation(&self) -> WorldGenerationContext {
         WorldGenerationContext::new(
-            self.settings.min_y,
-            self.settings.height,
+            self.settings.noise_min_y,
+            self.settings.noise_height,
             self.settings.sea_level,
         )
     }
@@ -790,7 +813,7 @@ where
         if let Some(chunk) = self.biome_cache.lock().unwrap().get(&(pos.x, pos.z)) {
             return Ok(chunk.clone());
         }
-        let (min, height) = (self.settings.min_y, self.settings.height);
+        let (min, height) = (self.settings.level_min_y, self.settings.level_height);
         let mut chunk = BiomeChunk::new(pos, min, height, BiomeId(0)).map_err(stage("biomes"))?;
         let mut resolver = self.source.resolver(
             &self.climate,
@@ -856,8 +879,8 @@ where
     ) -> Result<ProtoChunk, GeneratorError> {
         let data = &self.data;
         let (min, height, sea) = (
-            self.settings.min_y,
-            self.settings.height,
+            self.settings.noise_min_y,
+            self.settings.noise_height,
             self.settings.sea_level,
         );
         let mut clock = std::time::Instant::now();
@@ -869,8 +892,10 @@ where
                     worker,
                     ChunkPos::new(pos.x.wrapping_add(dx), pos.z.wrapping_add(dz)),
                 )?;
-                for section in 0..(height / 16) as usize {
-                    possible.extend(chunk.section(section).unwrap().iter().copied());
+                let mut section = 0;
+                while let Some(biomes) = chunk.section(section) {
+                    possible.extend(biomes.iter().copied());
+                    section += 1;
                 }
                 neighbors.push((*chunk).clone());
             }
@@ -883,8 +908,14 @@ where
             .map(|id| data.biome_name(id).to_owned())
             .collect();
         worker.timings.biomes += lap(&mut clock);
-        let mut chunk = TerrainChunk::new(pos, min, height, data.registry, data.states.clone())
-            .map_err(stage("noise"))?;
+        let mut chunk = TerrainChunk::new(
+            pos,
+            self.settings.level_min_y,
+            self.settings.level_height,
+            data.registry,
+            data.states.clone(),
+        )
+        .map_err(stage("noise"))?;
         chunk.set_generation_stage(PreLightChunkStage::Biomes);
         let references = match &self.structures {
             Some(structures) => structures.references(
@@ -1036,7 +1067,7 @@ where
     /// ChunkGenerator.getBaseHeight: the first free Y above the noise column
     /// (with aquifers, without terrain adaptation) for a heightmap type.
     fn base_height(&self, x: i32, z: i32, kind: HeightmapType) -> i32 {
-        let min = self.settings.min_y;
+        let min = self.settings.noise_min_y;
         let mut found = min;
         self.noise_column(x, z, &mut |y, state| {
             if kind.is_opaque(self.data.states.get(state)) {
@@ -1054,7 +1085,7 @@ where
     }
     /// One noise-column pass, as opacities for each heightmap kind.
     fn base_columns(&self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>> {
-        let (min, height) = (self.settings.min_y, self.settings.height);
+        let (min, height) = (self.settings.noise_min_y, self.settings.noise_height);
         let mut columns = vec![vec![false; height as usize]; kinds.len()];
         self.noise_column(x, z, &mut |y, state| {
             let state = self.data.states.get(state);
@@ -1067,7 +1098,7 @@ where
     }
     /// iterateNoiseColumn from the top down until `visit` returns true.
     fn noise_column(&self, x: i32, z: i32, visit: &mut dyn FnMut(i32, BlockStateId) -> bool) {
-        let (min, height) = (self.settings.min_y, self.settings.height);
+        let (min, height) = (self.settings.noise_min_y, self.settings.noise_height);
         let Ok(volume) = DensityVolume::new([1, height, 1], [x, min, z], [1; 3]) else {
             return;
         };
@@ -1131,11 +1162,12 @@ impl<R: RandomSource> super::structure::jigsaw::JigsawContext for StructureQueri
 where
     R::Positional: Clone + Send + Sync,
 {
+    // Structure.GenerationContext.heightAccessor: the chunk, so the level's range.
     fn min_y(&self) -> i32 {
-        self.pipeline.settings.min_y
+        self.pipeline.settings.level_min_y
     }
     fn max_y(&self) -> i32 {
-        self.pipeline.settings.min_y + self.pipeline.settings.height - 1
+        self.pipeline.settings.level_min_y + self.pipeline.settings.level_height - 1
     }
     fn base_height(&mut self, x: i32, z: i32, kind: HeightmapType) -> i32 {
         if let Some(h) = self.worker.heights.get(&(x, z, kind as u8)) {
@@ -1329,6 +1361,7 @@ trait SeededPipeline: Send + Sync {
         pos: ChunkPos,
     ) -> Vec<Arc<super::structure::start::StructureStart>>;
     fn unsupported_features(&self) -> Vec<(String, String)>;
+    fn forget_structure_starts(&self);
     fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>>;
     fn locate(
         &self,
@@ -1411,6 +1444,11 @@ where
             .map(super::generator_decoration::Decoration::unsupported)
             .unwrap_or_default()
     }
+    fn forget_structure_starts(&self) {
+        if let Some(structures) = &self.structures {
+            structures.forget_starts();
+        }
+    }
     fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
         self.structures.as_ref()?.cached_rings(set)
     }
@@ -1485,6 +1523,9 @@ impl OverworldGenerator {
                 .ok_or_else(|| resource(format!("missing world preset {preset}")))?,
         )?;
         let generator = preset_json["dimensions"][dimension]["generator"].clone();
+        let level = preset_json["dimensions"][dimension]["type"]
+            .as_str()
+            .and_then(dimension_type_height);
         if generator["type"].as_str() != Some("minecraft:noise") {
             return Err(resource(format!("{dimension} is not a noise generator")));
         }
@@ -1507,6 +1548,7 @@ impl OverworldGenerator {
                 &generator,
                 &settings_json,
                 with_structures,
+                level,
             )?)
         } else {
             Arc::new(Pipeline::new(
@@ -1516,6 +1558,7 @@ impl OverworldGenerator {
                 &generator,
                 &settings_json,
                 with_structures,
+                level,
             )?)
         };
         Ok(Self { pipeline })
@@ -1585,6 +1628,11 @@ impl GeneratorWorker {
         pos: ChunkPos,
     ) -> Vec<Arc<super::structure::start::StructureStart>> {
         self.pipeline.structure_starts(&mut self.state, pos)
+    }
+    /// Forget the cached structure starts: chunks generated afterwards get
+    /// fresh starts, as in a new level that has not loaded the old chunks.
+    pub fn forget_structure_starts(&mut self) {
+        self.pipeline.forget_structure_starts();
     }
     pub fn stage_timings(&self) -> StageTimings {
         self.state.timings

@@ -509,7 +509,7 @@ impl Game<'_> {
             "frames": self.frames,
             "ticks": self.ticks,
             "day_time": self.world.day_time,
-            "music": self.music.current(),
+            "music": self.music.current(&self.audio.engine),
             "fishing": self.hook_status(),
             "tridents": self.tridents.len(),
             "rockets": self.rockets.len(),

@@ -351,7 +351,11 @@ pub trait LevelAccess {
     /// `CommandBlockEntity.setPowered` for the command block entity at `pos`:
     /// stores `powered` and returns the previous flag and `isAutomatic`, or
     /// None when there is no command block entity.
-    fn set_command_block_powered(&mut self, _pos: BlockPos, _powered: bool) -> Option<(bool, bool)> {
+    fn set_command_block_powered(
+        &mut self,
+        _pos: BlockPos,
+        _powered: bool,
+    ) -> Option<(bool, bool)> {
         None
     }
     /// Weak/strong signal of a block-entity-driven source (trapped chest

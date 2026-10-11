@@ -16,41 +16,42 @@ Horizon is a Rust rewrite of Minecraft Java **26.3** targeting one-to-one vanill
 
 Parity is **not** complete. Still missing: the warden and the sculk family, the breeze, sniffer, creaking, happy ghast, llamas and a few other mobs, raids and pillager patrols, villager breeding and gossip, the loom, crafter and recipe book, scoreboards, subtitles, and spawned mob gear enchantments. Multiplayer joins vanilla servers but Horizon cannot host one. See [Rust rewrite status](docs/rust-parity.md).
 
-### Java parity: 80%
+### Java parity: 84%
 
 Each subsystem scores 0 (absent), 0.25 (started, not playable), 0.5 (playable,
 major vanilla features missing), 0.75 (playable, mostly complete) or 1 (complete
 and verified against vanilla by differential tests). The percentage is the
 average; `tests/test_parity.py` keeps it in sync with this table. Last audited
-2026-10-10 against the code, not the docs: of the 232 `tools/test_*_parity.py`
-differential harnesses, 223 pass, 8 fail and the item model harness runs out of
-memory; the failures are new harnesses that still find divergences.
+2026-10-10 against the code, not the docs. The harnesses that failed in the
+previous audit (block updates, random ticks, redstone, command parsing, menu
+clicks, whole chunks, entity models and item models) now pass; the save
+round-trip harness has not been rerun.
 
 | Subsystem | Score | Main gaps |
 | --- | ---: | --- |
 | Window, input and game loop | 0.75 | Game loop and options match vanilla; camera, auto-jump, toggle sprint/sneak and the frame limiter not compared |
-| Assets and resources | 0.75 | Item model pipeline not yet used for all GUI icons; item model harness does not finish; no pack screen |
+| Assets and resources | 0.75 | Item models match vanilla over 196,290 stacks, but the client does not draw items through that pipeline yet; no pack screen |
 | Network protocol and multiplayer | 0.75 | Opens worlds to LAN, but hosting is not tested against a vanilla client; no dedicated server mode |
 | Chunk storage and palettes | 1 | None: client and saves share paletted containers, identical to vanilla over 266 scenarios |
 | Section meshing | 1 | None: 112 scenes and over a million quads identical to vanilla |
-| Rendering | 0.75 | Entity model harness fails; block entity renderers and HUD overlays not compared |
+| Rendering | 0.75 | Entity models match over 150 layers; block entity renderers and HUD overlays not compared |
 | Lighting | 1 | None: saved and relit light matches vanilla, slabs and stairs included |
-| World generation | 0.75 | Whole-chunk harness still finds single-block differences near camps, shipwrecks and villages |
+| World generation | 1 | None: 2,352 whole chunks over 225 structure sites, in all three dimensions, identical to vanilla |
 | Region files and saves | 0.75 | Save round-trip harness fails; older DataVersions are not upgraded |
 | Entities and physics | 0.75 | Attributes and dimensions match; AI, loot and spawn rules not compared; drowned, villagers, traders and the wither unverified |
-| Interaction and inventory | 0.75 | Menu click harness fails |
-| Menus, HUD and chat | 0.75 | Command parse harness fails; no /item modify, /spectate, /waypoint or /dialog; no tab list or world border rendering |
+| Interaction and inventory | 1 | None: menu clicks match over 6,000 click sequences |
+| Menus, HUD and chat | 0.75 | Commands parse as vanilla over 39,685 inputs, but /item modify, /spectate, /waypoint and /dialog do not run; no tab list or world border rendering |
 | Audio | 0.75 | Sound engine, music and ambience not compared with vanilla |
-| Block behaviours and ticking | 0.75 | Block update, random tick and redstone harnesses fail; a few dispenser behaviours missing |
+| Block behaviours and ticking | 0.75 | Block updates, random ticks and redstone match vanilla; dispensers lack several behaviours |
 
 ### Next steps
 
-1. Fix the divergences the failing harnesses report: block updates, random ticks, redstone, command parsing, menu clicks, save round-trip, whole chunks and entity models.
-2. Let the item model harness finish, and draw every GUI icon through the item model pipeline.
+1. Rerun the save round-trip harness and upgrade saves from older DataVersions.
+2. Draw every item through the item model pipeline, and add the resource pack screen.
 3. An audio harness: sound engine attenuation, weighted sound events, music and ambience.
 4. Mob AI, loot and spawn-rule harnesses, and an oracle for drowned, villagers, traders and the wither.
-5. The missing commands, the tab list and world border rendering.
-6. Test LAN hosting with a vanilla client, and upgrade saves from older DataVersions.
+5. The missing commands and dispenser behaviours, the tab list and world border rendering.
+6. Test LAN hosting with a vanilla client, and add a dedicated server mode.
 
 ```sh
 python3 tools/prepare_native_client.py --prepare   # needs JDK 25; extracts private vanilla resources

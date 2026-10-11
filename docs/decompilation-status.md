@@ -21,3 +21,17 @@ The full outputs and machine-readable reports are local and gitignored:
 ```
 
 Recheck with `python3 tools/lab.py status`. File coverage and the absence of detected failure markers do not prove every recovered method behaves identically, or that this source can be rebuilt. Original bytecode remains the behavior reference. There has been no gameplay baseline, full Rust port, or measured real-game optimization yet.
+
+## Querying the shipped bytecode with REA
+
+`tools/rea_vanilla.py` answers questions about the pinned game JARs with [REA](https://github.com/morluto/rea), which drives a headless JADX over the bytecode itself. Use it next to the Vineflower sources when you need what a text search can't give reliably: every caller of a method, including lambdas and bridge methods; every overload; or a second decompiler's view of a method whose Vineflower output looks wrong.
+
+```sh
+python3 tools/rea_vanilla.py classes DispenserBlock
+python3 tools/rea_vanilla.py class net.minecraft.world.level.block.DispenserBlock
+python3 tools/rea_vanilla.py method net.minecraft.world.level.block.DispenserBlock dispenseFrom
+python3 tools/rea_vanilla.py callers net.minecraft.server.level.ServerLevel tickChunk
+python3 tools/rea_vanilla.py --jar server-game classes DedicatedServer
+```
+
+The REA and JADX engine versions are pinned in `research-lock.json`; the first run downloads the engine into `.local/tools/`. REA only admits JADX targets named `.apk`, so the helper keeps an `.apk`-named copy of each JAR in `.local/rea/`. Each query loads the JAR again, which takes about five seconds. Like the Vineflower output, decompiled method bodies are a reading aid: the bytecode and the oracle harnesses remain the behavior reference.

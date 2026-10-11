@@ -921,21 +921,6 @@ impl Game<'_> {
     }
     /// A raider's ominous banner (drop chance 2.0: always dropped) and a
     /// patrol captain's ominous bottle (`entities/pillager`).
-    pub(super) fn raider_death_loot(&mut self, m: &horizon_client::mobs::Mob, pos: [f64; 3]) {
-        if !raider::is_raider(m.species()) {
-            return;
-        }
-        if m.extra.head.as_deref() == Some(raider::BANNER) {
-            self.spawn_item(raider::ominous_banner(), pos, [0.0, 0.2, 0.0], 10);
-        }
-        if m.species() == Species::Pillager && raider::is_captain(m) {
-            let amplifier = self.world.random.next_int_bound(5).unwrap_or(0) as u8;
-            let amplifier = (amplifier > 0).then_some(amplifier);
-            let mut bottle = horizon_client::items::ItemStack::new("minecraft:ominous_bottle", 1);
-            bottle.data_mut().ominous_amplifier = amplifier;
-            self.spawn_item(bottle, pos, [0.0, 0.2, 0.0], 10);
-        }
-    }
     /// `OminousBottleAmplifier.onConsume`: Bad Omen for 100 minutes at the
     /// bottle's amplifier, then the dispose sound; the bottle is used up.
     pub(super) fn drink_ominous_bottle(

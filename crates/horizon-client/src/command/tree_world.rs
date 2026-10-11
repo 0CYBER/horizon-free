@@ -56,19 +56,31 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     let place = d.literal(root, "place");
     d.requires(place, GAMEMASTERS);
     let feature = d.literal(place, "feature");
-    let f = d.argument(feature, "feature", ArgType::ResourceOrId("minecraft:worldgen/feature"));
+    let f = d.argument(
+        feature,
+        "feature",
+        ArgType::ResourceOrId("minecraft:worldgen/feature"),
+    );
     d.executes(f, "place.feature");
     let pos = d.argument(f, "pos", ArgType::BlockPos);
     d.executes(pos, "place.feature");
     let jigsaw = d.literal(place, "jigsaw");
-    let pool = d.argument(jigsaw, "pool", ArgType::ResKey("minecraft:worldgen/template_pool"));
+    let pool = d.argument(
+        jigsaw,
+        "pool",
+        ArgType::ResKey("minecraft:worldgen/template_pool"),
+    );
     let target = d.argument(pool, "target", ArgType::Id("none"));
     let depth = d.argument(target, "max_depth", ArgType::Integer { min: 1, max: 20 });
     d.executes(depth, "place.jigsaw");
     let position = d.argument(depth, "position", ArgType::BlockPos);
     d.executes(position, "place.jigsaw");
     let structure = d.literal(place, "structure");
-    let st = d.argument(structure, "structure", ArgType::ResKey("minecraft:worldgen/structure"));
+    let st = d.argument(
+        structure,
+        "structure",
+        ArgType::ResKey("minecraft:worldgen/structure"),
+    );
     d.executes(st, "place.structure");
     let pos = d.argument(st, "pos", ArgType::BlockPos);
     d.executes(pos, "place.structure");
@@ -89,7 +101,10 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     let mirror = d.argument(
         rotation,
         "mirror",
-        ArgType::StrEnum(&["none", "left_right", "front_back"], "argument.enum.invalid"),
+        ArgType::StrEnum(
+            &["none", "left_right", "front_back"],
+            "argument.enum.invalid",
+        ),
     );
     d.executes(mirror, "place");
     let integrity = d.argument(mirror, "integrity", ArgType::Float { min: 0.0, max: 1.0 });
@@ -160,7 +175,14 @@ fn rotate_swing(d: &mut Dispatcher, root: usize) {
     for hand in ["mainhand", "offhand"] {
         let h = d.literal(targets, hand);
         d.executes(h, "swing");
-        let animation = d.argument(h, "animation", ArgType::StrEnum(&["none", "whack", "stab"], "argument.swing_animation.invalid"));
+        let animation = d.argument(
+            h,
+            "animation",
+            ArgType::StrEnum(
+                &["none", "whack", "stab"],
+                "argument.swing_animation.invalid",
+            ),
+        );
         d.executes(animation, "swing");
         let duration = d.argument(animation, "duration", ArgType::Time { min: 1 });
         d.executes(duration, "swing");
@@ -285,7 +307,11 @@ fn fillbiome(d: &mut Dispatcher, root: usize) {
     let biome = d.argument(to, "biome", ArgType::Res("minecraft:worldgen/biome"));
     d.executes(biome, "fillbiome");
     let replace = d.literal(biome, "replace");
-    let filter = d.argument(replace, "filter", ArgType::ResOrTag("minecraft:worldgen/biome"));
+    let filter = d.argument(
+        replace,
+        "filter",
+        ArgType::ResOrTag("minecraft:worldgen/biome"),
+    );
     d.executes(filter, "fillbiome");
 }
 
@@ -357,7 +383,11 @@ fn loot(d: &mut Dispatcher, root: usize) {
     // Sources.
     for t in targets {
         let fish = d.literal(t, "fish");
-        let table = d.argument(fish, "loot_table", ArgType::ResourceOrId("minecraft:loot_table"));
+        let table = d.argument(
+            fish,
+            "loot_table",
+            ArgType::ResourceOrId("minecraft:loot_table"),
+        );
         let pos = d.argument(table, "pos", ArgType::BlockPos);
         d.executes(pos, "loot.fish");
         for hand in ["mainhand", "offhand"] {
@@ -367,7 +397,11 @@ fn loot(d: &mut Dispatcher, root: usize) {
         let tool = d.argument(pos, "tool", ArgType::Item);
         d.executes(tool, "loot.fish");
         let l = d.literal(t, "loot");
-        let lt = d.argument(l, "loot_table", ArgType::ResourceOrId("minecraft:loot_table"));
+        let lt = d.argument(
+            l,
+            "loot_table",
+            ArgType::ResourceOrId("minecraft:loot_table"),
+        );
         d.executes(lt, "loot.loot");
         let kill = d.literal(t, "kill");
         let target = d.argument(kill, "target", ENTITY);

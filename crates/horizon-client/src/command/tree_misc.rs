@@ -169,7 +169,11 @@ fn item(d: &mut Dispatcher, root: usize) {
             d.argument(p, "targetPos", ArgType::BlockPos)
         };
         let slot = d.argument(target, "slot", ArgType::SlotSource);
-        let modifier = d.argument(slot, "modifier", ArgType::ResourceOrId("minecraft:item_modifier"));
+        let modifier = d.argument(
+            slot,
+            "modifier",
+            ArgType::ResourceOrId("minecraft:item_modifier"),
+        );
         d.executes(modifier, "item.modify");
     }
     for mode in ["replace", "fill", "override"] {

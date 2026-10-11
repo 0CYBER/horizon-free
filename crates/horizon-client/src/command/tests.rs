@@ -37,9 +37,18 @@ fn reg() -> Registries {
             },
         );
     };
-    registry("minecraft:worldgen/biome", &["minecraft:desert", "minecraft:plains"]);
-    registry("minecraft:damage_type", &["minecraft:fall", "minecraft:magic"]);
-    registry("minecraft:attribute", &["minecraft:max_health", "minecraft:scale"]);
+    registry(
+        "minecraft:worldgen/biome",
+        &["minecraft:desert", "minecraft:plains"],
+    );
+    registry(
+        "minecraft:damage_type",
+        &["minecraft:fall", "minecraft:magic"],
+    );
+    registry(
+        "minecraft:attribute",
+        &["minecraft:max_health", "minecraft:scale"],
+    );
     registry("minecraft:item_modifier", &["a:b"]);
     registry("minecraft:predicate", &["a:b"]);
     registry(
@@ -54,7 +63,14 @@ fn reg() -> Registries {
         "minecraft:entity_type",
         &["minecraft:pig", "minecraft:player", "minecraft:zombie"],
     );
-    registry("minecraft:item", &["minecraft:diamond", "minecraft:diamond_sword", "minecraft:stone"]);
+    registry(
+        "minecraft:item",
+        &[
+            "minecraft:diamond",
+            "minecraft:diamond_sword",
+            "minecraft:stone",
+        ],
+    );
     r
 }
 fn run(input: &str) -> CmdResult<(String, Vec<String>)> {
@@ -436,7 +452,10 @@ fn world_command_trees() {
             "particle minecraft:dust{color:[1.0,0.0,0.0],scale:2.0} ~ ~ ~ 0.1 0.1 0.1 0 10 force @a",
             "particle",
         ),
-        ("particle minecraft:block{block_state:\"minecraft:stone\"} ~ ~ ~", "particle"),
+        (
+            "particle minecraft:block{block_state:\"minecraft:stone\"} ~ ~ ~",
+            "particle",
+        ),
         ("attribute @s minecraft:max_health get 2", "attribute.get"),
         (
             "attribute @s minecraft:max_health base set 40",
