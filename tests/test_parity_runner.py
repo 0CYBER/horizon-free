@@ -44,6 +44,25 @@ class ParityRunnerTests(unittest.TestCase):
             source.write_text("two!")
             self.assertTrue(parity.stale("x", state, hasher, "env"))
 
+    def test_a_pass_from_another_worktree_counts_only_for_the_same_content(self):
+        with tempfile.TemporaryDirectory() as temp:
+            elsewhere, here, shared = Path(temp, "a"), Path(temp, "b"), Path(temp, "shared")
+            for root in (elsewhere, here):
+                root.mkdir()
+                (root / "x.rs").write_text("same")
+            with mock.patch.object(parity, "SHARED", shared):
+                with mock.patch.object(parity, "ROOT", elsewhere):
+                    record = {"status": "pass", "dependencies": ["x.rs"], "artifacts": []}
+                    record["key"] = parity.key(record, parity.Hasher({}), "env")
+                    parity.publish("x", record)
+                with mock.patch.object(parity, "ROOT", here):
+                    state = {"harnesses": {}, "hashes": {}}
+                    self.assertFalse(parity.stale("x", state, parity.Hasher(state["hashes"]), "env"))
+                    self.assertTrue(state["harnesses"]["x"]["shared"])
+                    (here / "x.rs").write_text("changed")
+                    state = {"harnesses": {}, "hashes": {}}
+                    self.assertTrue(parity.stale("x", state, parity.Hasher(state["hashes"]), "env"))
+
 
 class OracleReuseTests(unittest.TestCase):
     """tools/parity_shim.py replays a run only when its inputs and outputs are as recorded."""
