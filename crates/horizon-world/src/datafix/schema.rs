@@ -509,12 +509,14 @@ impl Walker<'_> {
                             self.field(Ty::ItemStack, s, side);
                         }
                     }
-                } else {
+                } else if k >= key(3448, 0) {
                     self.list(Ty::ItemName, v, "sherds");
+                } else {
+                    self.list(Ty::ItemName, v, "shards");
                 }
                 self.field(Ty::ItemStack, v, "item");
             }
-            "minecraft:brushable_block" => self.field(Ty::ItemStack, v, "item"),
+            "minecraft:brushable_block" | "minecraft:suspicious_sand" => self.field(Ty::ItemStack, v, "item"),
             "minecraft:trial_spawner" if k >= key(3689, 0) => {
                 if let Some(Tag::List(items)) = v.get_mut("spawn_potentials") {
                     for p in items {
@@ -749,6 +751,12 @@ impl Walker<'_> {
 pub fn block_entity_known(be: &Tag, k: Key) -> bool {
     let id = namespaced(&as_str(be.get("id")).unwrap_or_default());
     let since = match id.as_str() {
+        "minecraft:sculk_catalyst" => key(3076, 0),
+        "minecraft:sculk_shrieker" => key(3078, 0),
+        "minecraft:hanging_sign" => key(3202, 0),
+        "minecraft:chiseled_bookshelf" => key(3204, 0),
+        "minecraft:decorated_pot" => key(3327, 0),
+        "minecraft:suspicious_sand" => return (key(3327, 0)..key(3438, 0)).contains(&k),
         "minecraft:crafter" => key(3682, 0),
         "minecraft:trial_spawner" => key(3689, 0),
         "minecraft:vault" => key(3807, 0),
@@ -758,7 +766,6 @@ pub fn block_entity_known(be: &Tag, k: Key) -> bool {
         "minecraft:shelf" => key(4533, 0),
         "minecraft:potent_sulfur" => key(4881, 0),
         "minecraft:bed" => return k < key(4885, 0),
-        "minecraft:suspicious_sand" => return k < key(3438, 0),
         "minecraft:brushable_block" | "minecraft:calibrated_sculk_sensor" => key(3438, 0),
         _ => 0,
     };

@@ -48,7 +48,7 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
 // ------------------------------------------------------------------ 3564
 
 /// `BlockEntitySignDoubleSidedEditableTextFix.FIELDS_TO_DROP`.
-const SIGN_FIELDS_TO_DROP: [&str; 10] = [
+pub(super) const SIGN_FIELDS_TO_DROP: [&str; 10] = [
     "Text1", "Text2", "Text3", "Text4", "FilteredText1", "FilteredText2", "FilteredText3", "FilteredText4", "Color",
     "GlowingText",
 ];

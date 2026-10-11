@@ -13,6 +13,7 @@ pub mod dynamic;
 mod fixes_a;
 mod fixes_b;
 mod fixes_c;
+mod fixes_old;
 pub mod files;
 mod items;
 pub mod json;
@@ -25,8 +26,9 @@ use schema::{Key, Ty, key, walk};
 
 /// The DataVersion of the game.
 pub const CURRENT: i32 = crate::DATA_VERSION;
-/// Data saved before this DataVersion (1.20) needs fixes that are not ported.
-pub const OLDEST_SUPPORTED: i32 = 3463;
+/// Data saved before this DataVersion (1.18.2 is 2975) needs fixes that are not
+/// ported (2967 and 2970, and everything before).
+pub const OLDEST_SUPPORTED: i32 = 2970;
 
 /// `Identifier.tryParse` validity, as `NamespacedSchema.ensureNamespaced` uses it.
 pub fn identifier(id: &str) -> Option<(String, String)> {
@@ -103,7 +105,7 @@ impl Cx<'_> {
 /// from that read. Each entity keeps that map under this key while fixes run.
 const LAST_READ: &str = "\u{0}last_read";
 
-/// Remember an entity's current fields as the map it was read from.
+/// Remember a record's current fields as the map it was read from.
 pub fn mark_read(e: &mut Tag) {
     if let Tag::Compound(_) = e {
         let mut raw = e.clone();
@@ -116,7 +118,13 @@ pub fn mark_read(e: &mut Tag) {
 /// written and read again with the output schema, so it (and every entity inside
 /// it) now remembers its current fields as the map it was last read from.
 pub fn reread(k: Key, e: &mut Tag) {
-    walk(Ty::Entity, e, k, Ty::Entity, &mut mark_read);
+    reread_as(Ty::Entity, k, e);
+}
+
+/// [`reread`] for a value of another type (a block entity).
+pub fn reread_as(ty: Ty, k: Key, v: &mut Tag) {
+    walk(ty, v, k, Ty::BlockEntity, &mut mark_read);
+    walk(ty, v, k, Ty::Entity, &mut mark_read);
 }
 
 /// A typed field dropped from an entity: what writing the entity gives back for
@@ -158,9 +166,10 @@ pub fn renamer<'a>(table: &'a [(&'a str, &'static str)]) -> impl Fn(&str) -> Opt
 
 type FixFn = fn(&mut Cx);
 
-/// Every fix from the 1.20 schemas on, in DataFixers order.
+/// Every ported fix (from the 1.19 schemas on), in DataFixers order.
 fn fixes() -> Vec<(Key, FixFn)> {
     let mut out = Vec::new();
+    fixes_old::register(&mut out);
     fixes_a::register(&mut out);
     fixes_b::register(&mut out);
     fixes_c::register(&mut out);
@@ -175,6 +184,7 @@ pub fn update(root: Ty, data: &mut Tag, from: i32, to: i32) {
     let from_key = key(from.max(0) as u32, 0);
     let to_version = to as u32;
     // The data is read once with the schema of its version (its read hooks)...
+    walk(root, data, from_key, Ty::BlockEntity, &mut mark_read);
     walk(root, data, from_key, Ty::Entity, &mut mark_read);
     read_hooks(root, data, from_key);
     // ...then every fix above that key, up to the target version...

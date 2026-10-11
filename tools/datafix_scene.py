@@ -58,6 +58,7 @@ ITEMS_A = [
     '{id:"minecraft:chest",Count:1b,tag:{BlockEntityTag:{LootTable:"minecraft:chests/simple_dungeon",LootTableSeed:5L}}}',
     '{id:"minecraft:pig_spawn_egg",Count:1b,tag:{EntityTag:{CustomName:\'"Babe"\',Age:-24000}}}',
     '{id:"minecraft:armor_stand",Count:1b,tag:{EntityTag:{Small:1b}}}',
+    '{id:"minecraft:pig_spawn_egg",Count:1b,tag:{EntityTag:{id:"minecraft:cow"}}}',
     '{id:"minecraft:leather_chestplate",Count:1b,tag:{display:{color:16711680},'
     'Trim:{material:"minecraft:gold",pattern:"minecraft:coast"}}}',
     '{id:"minecraft:goat_horn",Count:1b,tag:{instrument:"minecraft:sing_goat_horn"}}',
@@ -123,6 +124,8 @@ def experiments(version):
     """Experimental data packs a world of `version` turns on, so that the blocks behind
     them exist and the feature-flag fixes have flags to remove."""
     packs = []
+    if 3218 <= version < 3440:
+        packs.append('update_1_20')
     if 3698 <= version < 3939:
         packs.append('update_1_21')
     if 3700 <= version < 4067:
@@ -137,11 +140,27 @@ def items(e, version=None):
     stacks = ITEMS_A if e == A else ITEMS_B if e == B else ITEMS_C
     if version is None:
         return stacks
-    return [versioned(s, version) for s in stacks]
+    return [v for v in (versioned(s, version) for s in stacks) if available(v, version)]
+
+
+# Items era A worlds older than each DataVersion do not have.
+ITEM_SINCE = {
+    'minecraft:goat_horn': 3105,
+    'minecraft:decorated_pot': 3327,
+}
+
+
+def available(stack, version):
+    return all(version >= since for item, since in ITEM_SINCE.items() if f'"{item}"' in stack)
 
 
 def versioned(stack, version):
     """Rewrite the components whose format changed inside an era."""
+    if version < 3448:  # 1.19.4: pots hold shards, sherds were pottery_shard_*
+        stack = (stack.replace('sherds:', 'shards:')
+                 .replace('"minecraft:angler_pottery_sherd"', '"minecraft:pottery_shard_prize"')
+                 .replace('"minecraft:arms_up_pottery_sherd"', '"minecraft:pottery_shard_arms_up"')
+                 .replace('"minecraft:skull_pottery_sherd"', '"minecraft:pottery_shard_skull"'))
     if version >= 4541:  # chain renamed to iron_chain
         stack = stack.replace('"minecraft:chain"', '"minecraft:iron_chain"')
     if '"minecraft:attribute_modifiers"' in stack:
@@ -184,8 +203,13 @@ def block_entities(e, version):
               'is_waxed:1b}')
     sign_c = ('{front_text:{messages:[{text:"one"},"two","",""],color:"red",has_glowing_text:1b},'
               'back_text:{messages:["b","","",""]},is_waxed:1b}')
-    sign = sign_c if e == C else sign_a
-    out += [('oak_sign', sign), ('oak_hanging_sign', sign)]
+    # Before 1.20 (3439) a sign has one side of loose Text fields.
+    sign_old = ('{Text1:\'{"text":"one"}\',Text2:\'"two"\',Text3:\'""\',Text4:\'""\',Color:"red",GlowingText:1b,'
+                'FilteredText1:\'"x"\'}')
+    sign = sign_c if e == C else sign_a if version >= 3439 else sign_old
+    out.append(('oak_sign', sign))
+    if version >= 3218:  # hanging signs: 1.19.3 with the 1.20 experiment
+        out.append(('oak_hanging_sign', sign))
     if e == A:
         out += [
             ('white_banner', '{Patterns:[{Pattern:"cre",Color:15}],CustomName:\'{"translate":"block.minecraft.ominous_banner"}\'}'),
@@ -210,6 +234,9 @@ def block_entities(e, version):
         ]
         if version >= 3682:
             out.append(('crafter', '{Items:[{Slot:0b,id:"minecraft:stone",Count:1b}],triggered:1,crafting_ticks_remaining:2}'))
+        # Blocks the 1.20 experiment brought in 1.19.3 and 1.19.4.
+        since = {'decorated_pot': 3327, 'suspicious_sand': 3327, 'chiseled_bookshelf': 3218}
+        out = [(b, versioned(nbt, version)) for b, nbt in out if version >= since.get(b, 0)]
     else:
         out += [
             ('white_banner', '{patterns:[{pattern:"minecraft:creeper",color:"black"}],CustomName:%s}' % name("Flag")),
@@ -276,7 +303,17 @@ def entities(e, version):
             ('piglin', 'Inventory:[{id:"minecraft:gold_ingot",Count:2b}]'),
             ('firework_rocket', 'FireworksItem:{id:"minecraft:firework_rocket",Count:1b,tag:{Fireworks:{Flight:1b}}}'),
             ('allay', 'Inventory:[{id:"minecraft:diamond",Count:1b}]'),
+            ('goat', ''),
         ]
+        since = {'allay': 3105, 'chest_boat': 3105, 'text_display': 3325, 'item_display': 3325}
+        out = [(k, x) for k, x in out if version >= since.get(k, 0)]
+        if version < 3086:  # cats before 1.19 have a numeric CatType
+            out = [(k, 'CatType:1' if k == 'cat' else x) for k, x in out]
+        if 3105 <= version < 3322:  # darkness counts its factor from a timestamp before 1.19.4
+            out.append(('pig', 'ActiveEffects:[{Id:33b,Amplifier:0b,Duration:200,ShowParticles:1b,'
+                               'FactorCalculationData:{padding_duration:22,factor_start:0.0f,factor_target:1.0f,'
+                               'factor_current:0.0f,effect_changed_timestamp:5,factor_previous_frame:0.0f,'
+                               'had_effect_last_tick:0b}}]'))
         return out
     sword = '{id:"minecraft:iron_sword",count:1}'
     helmet = '{id:"minecraft:iron_helmet",count:1}'

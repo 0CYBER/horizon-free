@@ -33,8 +33,8 @@ import datafix_scene as scene  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local' / 'datafix'
-VERSIONS = ['1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.8',
-            '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.2', '26.2']
+VERSIONS = ['1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
+            '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.2', '26.2']
 MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 BOT = 'Upgrader'
 UUID_BASE = 0x6000
@@ -163,7 +163,13 @@ class Bot:
         self.protocol = protocol
         self.stop = threading.Event()
         self.send(0, varint(protocol) + mcstring('127.0.0.1') + struct.pack('>H', port) + varint(2))
-        if protocol <= 763:  # 1.20.1: optional UUID
+        if protocol <= 758:  # 1.18.2: the name only
+            self.send(0, mcstring(name))
+        elif protocol == 759:  # 1.19: no signature data
+            self.send(0, mcstring(name) + b'\x00')
+        elif protocol == 760:  # 1.19.2: no signature data, optional UUID
+            self.send(0, mcstring(name) + b'\x00' + b'\x01' + offline_uuid(name).bytes)
+        elif protocol <= 763:  # 1.19.3 - 1.20.1: optional UUID
             self.send(0, mcstring(name) + b'\x01' + offline_uuid(name).bytes)
         else:
             self.send(0, mcstring(name) + offline_uuid(name).bytes)
