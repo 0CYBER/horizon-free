@@ -9,7 +9,10 @@ motion, rotations, running goals and target goals, attack target, navigation pat
 controls, movement input, brain activities and memories) and the sounds played; this harness
 reports, per scenario and mob, how many ticks match before the first divergence and what differs.
 
-  python3 tools/test_mob_ai_parity.py [--only NAME ...] [--rust-only] [--java-only] [--report-only]
+  python3 tools/test_mob_ai_parity.py [--only NAME ...] [--rust-only] [--java-only] [--report-only] [--trace]
+
+The oracle traces every mob random draw with its call stack; --trace builds the probe with
+the rng-trace feature and line tables so the report shows Horizon's draws next to vanilla's.
 """
 import argparse
 import os
