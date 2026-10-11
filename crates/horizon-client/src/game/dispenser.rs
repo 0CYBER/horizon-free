@@ -1353,8 +1353,8 @@ impl Game<'_> {
             let rotation = match facing {
                 Direction::Up | Direction::Down => 0,
                 other => {
-                    // RotationSegment.convertToSegment: opposite 2D data value * 4.
-                    (match other.opposite() {
+                    // RotationSegment.convertToSegment: the 2D data value * 4.
+                    (match other {
                         Direction::South => 0,
                         Direction::West => 1,
                         Direction::North => 2,
@@ -1373,6 +1373,7 @@ impl Game<'_> {
                 if let Some(entity) = BlockEntity::for_block("minecraft:wither_skeleton_skull") {
                     self.world.block_entities.insert(target, entity);
                 }
+                self.post_block_game_event("minecraft:block_place", [target.0, target.1, target.2], None, None);
                 self.check_wither_spawn([target.0, target.1, target.2])?;
                 return Ok((shrink(stack), CLICK));
             }
@@ -1425,8 +1426,20 @@ impl Game<'_> {
                 .registry
                 .default_state("minecraft:carved_pumpkin")
             {
-                self.level_set([target.0, target.1, target.2], pumpkin)?;
-                self.check_golem_spawn([target.0, target.1, target.2])?;
+                let head = [target.0, target.1, target.2];
+                if self.completes_golem(head) {
+                    // CarvedPumpkinBlock.onPlace builds the golem inside
+                    // setBlock; the spot is air again by the time setBlock
+                    // would update neighbours, so it skips them.
+                    let at = Self::pos_of(target);
+                    self.with_level(|b, level, ticks| b.set_block(level, ticks, at, pumpkin, 2 | 16));
+                    self.process_level_events()?;
+                    self.check_golem_spawn(head)?;
+                } else {
+                    self.level_set(head, pumpkin)?;
+                    self.check_golem_spawn(head)?;
+                }
+                self.post_block_game_event("minecraft:block_place", head, None, None);
             }
             return Ok((shrink(stack), CLICK));
         }

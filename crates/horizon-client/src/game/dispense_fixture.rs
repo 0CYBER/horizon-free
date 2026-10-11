@@ -115,6 +115,8 @@ impl Game<'_> {
         self.orbs.clear();
         self.falling.clear();
         self.ui.rules = Default::default();
+        // The oracle level plays on normal difficulty.
+        self.ui.difficulty = 2;
         // The oracle level has world seed 0 and fresh random sequences.
         self.level.seed = 0;
         self.rand_sequences = Default::default();

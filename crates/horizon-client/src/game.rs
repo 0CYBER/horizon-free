@@ -1390,10 +1390,14 @@ impl Game<'_> {
                     pos,
                     data,
                 } => {
-                    // LevelRenderer: destroy particles and the block's break sound.
+                    // LevelEventHandler: destroy particles and the block's
+                    // break sound (none for air).
                     let state = BlockStateId(data as u32);
                     let p = [pos.x, pos.y, pos.z];
                     self.destroy_particles(p, state);
+                    if self.res.facts.is_air(state) {
+                        continue;
+                    }
                     let sounds = self.res.facts.get(state).sounds.clone();
                     let c = [
                         f64::from(pos.x) + 0.5,
