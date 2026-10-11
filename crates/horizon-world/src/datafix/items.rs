@@ -1,8 +1,8 @@
 //! Item stacks: the V705 read hook (`ADD_NAMES`), `ItemStackComponentizationFix`
 //! (1.20.5) and `ParticleUnflatteningFix`.
 use super::dynamic::{
-    as_bool, as_bool_opt, as_double, as_int, as_long, as_number, as_str, as_string, empty_map, int_list, is_empty_map,
-    namespaced, remove, rename, set, stream, string,
+    as_bool, as_bool_opt, as_double, as_int, as_long, as_number, as_str, as_string, empty_map,
+    int_list, is_empty_map, namespaced, remove, rename, set, stream, string,
 };
 use super::json;
 use crate::nbt::{JavaString, Tag};
@@ -30,7 +30,10 @@ const ITEM_TO_BLOCK_ENTITY: &[(&str, &str)] = &[
     ("minecraft:hopper", "minecraft:hopper"),
     ("minecraft:banner", "minecraft:banner"),
     ("minecraft:flower_pot", "minecraft:flower_pot"),
-    ("minecraft:repeating_command_block", "minecraft:command_block"),
+    (
+        "minecraft:repeating_command_block",
+        "minecraft:command_block",
+    ),
     ("minecraft:chain_command_block", "minecraft:command_block"),
     ("minecraft:shulker_box", "minecraft:shulker_box"),
     ("minecraft:white_shulker_box", "minecraft:shulker_box"),
@@ -71,7 +74,10 @@ const ITEM_TO_BLOCK_ENTITY: &[(&str, &str)] = &[
     ("minecraft:standing_sign", "minecraft:sign"),
     ("minecraft:wall_sign", "minecraft:sign"),
     ("minecraft:piston_head", "minecraft:piston"),
-    ("minecraft:daylight_detector_inverted", "minecraft:daylight_detector"),
+    (
+        "minecraft:daylight_detector_inverted",
+        "minecraft:daylight_detector",
+    ),
     ("minecraft:unpowered_comparator", "minecraft:comparator"),
     ("minecraft:powered_comparator", "minecraft:comparator"),
     ("minecraft:wall_banner", "minecraft:banner"),
@@ -128,33 +134,118 @@ const ITEM_TO_BLOCK_ENTITY: &[(&str, &str)] = &[
 
 /// `V705.ITEM_TO_ENTITY`: spawn eggs and the items that place an entity.
 fn item_to_entity(item: &str) -> Option<String> {
-    if let Some(mob) = item.strip_suffix("_spawn_egg").and_then(|m| m.strip_prefix("minecraft:"))
+    if let Some(mob) = item
+        .strip_suffix("_spawn_egg")
+        .and_then(|m| m.strip_prefix("minecraft:"))
         && SPAWN_EGG_MOBS.contains(&mob)
     {
         return Some(format!("minecraft:{mob}"));
     }
     match item {
-        "minecraft:armor_stand" | "minecraft:painting" | "minecraft:item_frame" | "minecraft:minecart"
-        | "minecraft:chest_minecart" | "minecraft:furnace_minecart" | "minecraft:tnt_minecart"
-        | "minecraft:hopper_minecart" | "minecraft:bamboo_raft" | "minecraft:bamboo_chest_raft" => Some(item.to_owned()),
+        "minecraft:armor_stand"
+        | "minecraft:painting"
+        | "minecraft:item_frame"
+        | "minecraft:minecart"
+        | "minecraft:chest_minecart"
+        | "minecraft:furnace_minecart"
+        | "minecraft:tnt_minecart"
+        | "minecraft:hopper_minecart"
+        | "minecraft:bamboo_raft"
+        | "minecraft:bamboo_chest_raft" => Some(item.to_owned()),
         "minecraft:boat" => Some("minecraft:oak_boat".into()),
         _ => {
             let wood = item.strip_prefix("minecraft:")?;
-            let wood = wood.strip_suffix("_chest_boat").or_else(|| wood.strip_suffix("_boat"))?;
+            let wood = wood
+                .strip_suffix("_chest_boat")
+                .or_else(|| wood.strip_suffix("_boat"))?;
             BOAT_WOODS.contains(&wood).then(|| item.to_owned())
         }
     }
 }
-const BOAT_WOODS: [&str; 8] = ["oak", "spruce", "birch", "jungle", "acacia", "cherry", "dark_oak", "mangrove"];
+const BOAT_WOODS: [&str; 8] = [
+    "oak", "spruce", "birch", "jungle", "acacia", "cherry", "dark_oak", "mangrove",
+];
 const SPAWN_EGG_MOBS: &[&str] = &[
-    "armadillo", "allay", "axolotl", "bat", "bee", "blaze", "bogged", "breeze", "cat", "camel", "cave_spider", "chicken",
-    "cod", "cow", "creeper", "dolphin", "donkey", "drowned", "elder_guardian", "ender_dragon", "enderman", "endermite",
-    "evoker", "fox", "frog", "ghast", "glow_squid", "goat", "guardian", "hoglin", "horse", "husk", "iron_golem", "llama",
-    "magma_cube", "mooshroom", "mule", "ocelot", "panda", "parrot", "phantom", "pig", "piglin", "piglin_brute",
-    "pillager", "polar_bear", "pufferfish", "rabbit", "ravager", "salmon", "sheep", "shulker", "silverfish", "skeleton",
-    "skeleton_horse", "slime", "sniffer", "snow_golem", "spider", "squid", "stray", "strider", "tadpole", "trader_llama",
-    "tropical_fish", "turtle", "vex", "villager", "vindicator", "wandering_trader", "warden", "witch", "wither",
-    "wither_skeleton", "wolf", "zoglin", "zombie", "zombie_horse", "zombie_villager", "zombified_piglin",
+    "armadillo",
+    "allay",
+    "axolotl",
+    "bat",
+    "bee",
+    "blaze",
+    "bogged",
+    "breeze",
+    "cat",
+    "camel",
+    "cave_spider",
+    "chicken",
+    "cod",
+    "cow",
+    "creeper",
+    "dolphin",
+    "donkey",
+    "drowned",
+    "elder_guardian",
+    "ender_dragon",
+    "enderman",
+    "endermite",
+    "evoker",
+    "fox",
+    "frog",
+    "ghast",
+    "glow_squid",
+    "goat",
+    "guardian",
+    "hoglin",
+    "horse",
+    "husk",
+    "iron_golem",
+    "llama",
+    "magma_cube",
+    "mooshroom",
+    "mule",
+    "ocelot",
+    "panda",
+    "parrot",
+    "phantom",
+    "pig",
+    "piglin",
+    "piglin_brute",
+    "pillager",
+    "polar_bear",
+    "pufferfish",
+    "rabbit",
+    "ravager",
+    "salmon",
+    "sheep",
+    "shulker",
+    "silverfish",
+    "skeleton",
+    "skeleton_horse",
+    "slime",
+    "sniffer",
+    "snow_golem",
+    "spider",
+    "squid",
+    "stray",
+    "strider",
+    "tadpole",
+    "trader_llama",
+    "tropical_fish",
+    "turtle",
+    "vex",
+    "villager",
+    "vindicator",
+    "wandering_trader",
+    "warden",
+    "witch",
+    "wither",
+    "wither_skeleton",
+    "wolf",
+    "zoglin",
+    "zombie",
+    "zombie_horse",
+    "zombie_villager",
+    "zombified_piglin",
 ];
 
 /// `V99.addNames` with V704/V705's tables: the read hook of item stacks before 1.20.5.
@@ -195,7 +286,13 @@ impl Stack {
         remove(&mut remainder, "Count");
         let tag = super::dynamic::or_empty_map(remainder.get("tag"));
         remove(&mut remainder, "tag");
-        Some(Self { item: namespaced(&item), count, components: empty_map(), remainder, tag })
+        Some(Self {
+            item: namespaced(&item),
+            count,
+            components: empty_map(),
+            remainder,
+            tag,
+        })
     }
     fn remove_tag(&mut self, key: &str) -> Option<Tag> {
         remove(&mut self.tag, key)
@@ -226,7 +323,12 @@ impl Stack {
         }
     }
     /// `fixSubTag`.
-    fn fix_sub_tag(&mut self, key: &str, skip_missing: bool, f: impl FnOnce(&mut Self, Tag) -> Tag) {
+    fn fix_sub_tag(
+        &mut self,
+        key: &str,
+        skip_missing: bool,
+        f: impl FnOnce(&mut Self, Tag) -> Tag,
+    ) {
         let value = self.tag.get(key).cloned();
         if skip_missing && value.is_none() {
             return;
@@ -243,7 +345,8 @@ impl Stack {
         self.item == id
     }
     fn write(mut self) -> Tag {
-        let mut result = Tag::compound([("id", string(&self.item)), ("count", Tag::Int(self.count))]);
+        let mut result =
+            Tag::compound([("id", string(&self.item)), ("count", Tag::Int(self.count))]);
         if !is_empty_map(&self.tag) {
             let tag = std::mem::replace(&mut self.tag, empty_map());
             self.set_component("minecraft:custom_data", tag);
@@ -270,14 +373,66 @@ const BUCKETED_MOBS: [&str; 6] = [
     "minecraft:axolotl_bucket",
     "minecraft:tadpole_bucket",
 ];
-const BUCKETED_MOB_TAGS: [&str; 10] =
-    ["NoAI", "Silent", "NoGravity", "Glowing", "Invulnerable", "Health", "Age", "Variant", "HuntingCooldown", "BucketVariantTag"];
+const BUCKETED_MOB_TAGS: [&str; 10] = [
+    "NoAI",
+    "Silent",
+    "NoGravity",
+    "Glowing",
+    "Invulnerable",
+    "Health",
+    "Age",
+    "Variant",
+    "HuntingCooldown",
+    "BucketVariantTag",
+];
 const BOOLEAN_BLOCK_STATE_PROPERTIES: &[&str] = &[
-    "attached", "bottom", "conditional", "disarmed", "drag", "enabled", "extended", "eye", "falling", "hanging",
-    "has_bottle_0", "has_bottle_1", "has_bottle_2", "has_record", "has_book", "inverted", "in_wall", "lit", "locked",
-    "occupied", "open", "persistent", "powered", "short", "signal_fire", "snowy", "triggered", "unstable", "waterlogged",
-    "berries", "bloom", "shrieking", "can_summon", "up", "down", "north", "east", "south", "west", "slot_0_occupied",
-    "slot_1_occupied", "slot_2_occupied", "slot_3_occupied", "slot_4_occupied", "slot_5_occupied", "cracked", "crafting",
+    "attached",
+    "bottom",
+    "conditional",
+    "disarmed",
+    "drag",
+    "enabled",
+    "extended",
+    "eye",
+    "falling",
+    "hanging",
+    "has_bottle_0",
+    "has_bottle_1",
+    "has_bottle_2",
+    "has_record",
+    "has_book",
+    "inverted",
+    "in_wall",
+    "lit",
+    "locked",
+    "occupied",
+    "open",
+    "persistent",
+    "powered",
+    "short",
+    "signal_fire",
+    "snowy",
+    "triggered",
+    "unstable",
+    "waterlogged",
+    "berries",
+    "bloom",
+    "shrieking",
+    "can_summon",
+    "up",
+    "down",
+    "north",
+    "east",
+    "south",
+    "west",
+    "slot_0_occupied",
+    "slot_1_occupied",
+    "slot_2_occupied",
+    "slot_3_occupied",
+    "slot_4_occupied",
+    "slot_5_occupied",
+    "cracked",
+    "crafting",
 ];
 
 /// The fix for one item stack (`writeFixAndRead` over ITEM_STACK).
@@ -302,7 +457,11 @@ fn fix_stack(s: &mut Stack) {
         let be = fix_block_entity_tag(s, be, &id);
         let mut without_id = be.clone();
         remove(&mut without_id, "id");
-        if is_empty_map(&without_id) { without_id } else { be }
+        if is_empty_map(&without_id) {
+            without_id
+        } else {
+            be
+        }
     });
     s.move_to_component("BlockEntityTag", "minecraft:block_entity_data");
     if as_bool(s.remove_tag("Unbreakable").as_ref(), false) {
@@ -312,13 +471,28 @@ fn fix_stack(s: &mut Stack) {
         }
         s.set_component("minecraft:unbreakable", c);
     }
-    fix_enchantments(s, "Enchantments", "minecraft:enchantments", hide_flags & 1 != 0);
+    fix_enchantments(
+        s,
+        "Enchantments",
+        "minecraft:enchantments",
+        hide_flags & 1 != 0,
+    );
     if s.is("minecraft:enchanted_book") {
-        fix_enchantments(s, "StoredEnchantments", "minecraft:stored_enchantments", hide_flags & 32 != 0);
+        fix_enchantments(
+            s,
+            "StoredEnchantments",
+            "minecraft:stored_enchantments",
+            hide_flags & 32 != 0,
+        );
     }
     s.fix_sub_tag("display", false, |s, d| fix_display(s, d, hide_flags));
     fix_block_predicates(s, "CanDestroy", "minecraft:can_break", hide_flags & 8 != 0);
-    fix_block_predicates(s, "CanPlaceOn", "minecraft:can_place_on", hide_flags & 16 != 0);
+    fix_block_predicates(
+        s,
+        "CanPlaceOn",
+        "minecraft:can_place_on",
+        hide_flags & 16 != 0,
+    );
     fix_attribute_modifiers(s, hide_flags);
     if let Some(mut trim) = s.remove_tag("Trim") {
         if hide_flags & 128 != 0 {
@@ -331,7 +505,11 @@ fn fix_stack(s: &mut Stack) {
     }
     if s.is("minecraft:crossbow") {
         s.remove_tag("Charged");
-        s.move_to_component_default("ChargedProjectiles", "minecraft:charged_projectiles", &Tag::List(vec![]));
+        s.move_to_component_default(
+            "ChargedProjectiles",
+            "minecraft:charged_projectiles",
+            &Tag::List(vec![]),
+        );
     }
     if s.is("minecraft:bundle") {
         s.move_to_component_default("Items", "minecraft:bundle_contents", &Tag::List(vec![]));
@@ -351,10 +529,14 @@ fn fix_stack(s: &mut Stack) {
     }
     if matches!(
         s.item.as_str(),
-        "minecraft:potion" | "minecraft:splash_potion" | "minecraft:lingering_potion" | "minecraft:tipped_arrow"
+        "minecraft:potion"
+            | "minecraft:splash_potion"
+            | "minecraft:lingering_potion"
+            | "minecraft:tipped_arrow"
     ) {
         let mut c = empty_map();
-        if let Some(p) = as_str(s.remove_tag("Potion").as_ref()).filter(|p| p != "minecraft:empty") {
+        if let Some(p) = as_str(s.remove_tag("Potion").as_ref()).filter(|p| p != "minecraft:empty")
+        {
             set(&mut c, "potion", string(&p));
         }
         s.move_tag_into("CustomPotionColor", &mut c, "custom_color");
@@ -366,14 +548,21 @@ fn fix_stack(s: &mut Stack) {
     if s.is("minecraft:writable_book")
         && let Some(pages) = fix_book_pages(s)
     {
-        s.set_component("minecraft:writable_book_content", Tag::compound([("pages", pages)]));
+        s.set_component(
+            "minecraft:writable_book_content",
+            Tag::compound([("pages", pages)]),
+        );
     }
     if s.is("minecraft:written_book") {
         let pages = fix_book_pages(s);
         let title = as_string(s.remove_tag("title").as_ref(), "");
         let filtered_title = as_str(s.remove_tag("filtered_title").as_ref());
         let mut c = empty_map();
-        set(&mut c, "title", filtered_text(&title, filtered_title.as_deref()));
+        set(
+            &mut c,
+            "title",
+            filtered_text(&title, filtered_title.as_deref()),
+        );
         s.move_tag_into("author", &mut c, "author");
         s.move_tag_into("resolved", &mut c, "resolved");
         s.move_tag_into("generation", &mut c, "generation");
@@ -408,11 +597,17 @@ fn fix_stack(s: &mut Stack) {
     }
     if s.is("minecraft:firework_rocket") {
         s.fix_sub_tag("Fireworks", true, |s, mut f| {
-            let explosions: Vec<Tag> = stream(f.get("Explosions")).into_iter().map(fix_firework_explosion).collect();
+            let explosions: Vec<Tag> = stream(f.get("Explosions"))
+                .into_iter()
+                .map(fix_firework_explosion)
+                .collect();
             let flight = as_int(f.get("Flight"), 0);
             s.set_component(
                 "minecraft:fireworks",
-                Tag::compound([("explosions", Tag::List(explosions)), ("flight_duration", Tag::Byte(flight as i8))]),
+                Tag::compound([
+                    ("explosions", Tag::List(explosions)),
+                    ("flight_duration", Tag::Byte(flight as i8)),
+                ]),
             );
             remove(&mut f, "Explosions");
             remove(&mut f, "Flight");
@@ -421,7 +616,10 @@ fn fix_stack(s: &mut Stack) {
     }
     if s.is("minecraft:firework_star") {
         s.fix_sub_tag("Explosion", true, |s, mut e| {
-            s.set_component("minecraft:firework_explosion", fix_firework_explosion(e.clone()));
+            s.set_component(
+                "minecraft:firework_explosion",
+                fix_firework_explosion(e.clone()),
+            );
             for k in ["Type", "Colors", "FadeColors", "Trail", "Flicker"] {
                 remove(&mut e, k);
             }
@@ -466,7 +664,10 @@ fn fix_display(s: &mut Stack, mut d: Tag, hide_flags: i32) -> Tag {
         s.set_component("minecraft:custom_name", name.clone());
     }
     if d.get("Lore").is_some() {
-        let lore = stream(d.get("Lore")).into_iter().filter(is_strictly_valid_json).collect();
+        let lore = stream(d.get("Lore"))
+            .into_iter()
+            .filter(is_strictly_valid_json)
+            .collect();
         s.set_component("minecraft:lore", Tag::List(lore));
     }
     let color = d.get("color").and_then(as_number).map(|n| n.int_value());
@@ -531,19 +732,36 @@ fn fix_block_entity_tag(s: &mut Stack, mut be: Tag, id: &str) -> Tag {
             let patterns = be.get("patterns").cloned();
             s.set_component_opt("minecraft:banner_patterns", patterns);
             if let Some(base) = be.get("Base").and_then(as_number) {
-                s.set_component("minecraft:base_color", string(super::fixes_a::dye_color(base.int_value())));
+                s.set_component(
+                    "minecraft:base_color",
+                    string(super::fixes_a::dye_color(base.int_value())),
+                );
             }
             remove(&mut be, "patterns");
             remove(&mut be, "Base");
         }
-        "minecraft:shulker_box" | "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:furnace"
-        | "minecraft:ender_chest" | "minecraft:dispenser" | "minecraft:dropper" | "minecraft:brewing_stand"
-        | "minecraft:hopper" | "minecraft:barrel" | "minecraft:smoker" | "minecraft:blast_furnace"
-        | "minecraft:campfire" | "minecraft:chiseled_bookshelf" | "minecraft:crafter" => {
+        "minecraft:shulker_box"
+        | "minecraft:chest"
+        | "minecraft:trapped_chest"
+        | "minecraft:furnace"
+        | "minecraft:ender_chest"
+        | "minecraft:dispenser"
+        | "minecraft:dropper"
+        | "minecraft:brewing_stand"
+        | "minecraft:hopper"
+        | "minecraft:barrel"
+        | "minecraft:smoker"
+        | "minecraft:blast_furnace"
+        | "minecraft:campfire"
+        | "minecraft:chiseled_bookshelf"
+        | "minecraft:crafter" => {
             let items: Vec<Tag> = stream(be.get("Items"))
                 .into_iter()
                 .map(|mut item| {
-                    let slot = item.get("Slot").and_then(as_number).map_or(0, |n| n.byte_value()) as u8;
+                    let slot = item
+                        .get("Slot")
+                        .and_then(as_number)
+                        .map_or(0, |n| n.byte_value()) as u8;
                     remove(&mut item, "Slot");
                     Tag::compound([("slot", Tag::Int(i32::from(slot))), ("item", item)])
                 })
@@ -626,7 +844,11 @@ fn fix_block_predicate(text: &str) -> Tag {
         if start < stop {
             for property in text[start + 1..stop].split(',') {
                 if let Some(eq) = property.find('=') {
-                    set(&mut props, property[..eq].trim(), string(property[eq + 1..].trim()));
+                    set(
+                        &mut props,
+                        property[..eq].trim(),
+                        string(property[eq + 1..].trim()),
+                    );
                 }
             }
         }
@@ -645,7 +867,10 @@ fn fix_attribute_modifiers(s: &mut Stack, hide_flags: i32) {
     let Some(field) = s.remove_tag("AttributeModifiers") else {
         return;
     };
-    let modifiers = stream(Some(&field)).into_iter().map(|m| fix_attribute_modifier(&m)).collect();
+    let modifiers = stream(Some(&field))
+        .into_iter()
+        .map(|m| fix_attribute_modifier(&m))
+        .collect();
     let mut c = Tag::compound([("modifiers", Tag::List(modifiers))]);
     if hide_flags & 2 != 0 {
         set(&mut c, "show_in_tooltip", Tag::Byte(0));
@@ -723,13 +948,19 @@ fn fix_map_decoration(d: &Tag) -> (JavaString, Tag) {
         ("type", string(ty)),
         ("x", Tag::Double(as_double(d.get("x"), 0.0).to_bits())),
         ("z", Tag::Double(as_double(d.get("z"), 0.0).to_bits())),
-        ("rotation", Tag::Float((as_double(d.get("rot"), 0.0) as f32).to_bits())),
+        (
+            "rotation",
+            Tag::Float((as_double(d.get("rot"), 0.0) as f32).to_bits()),
+        ),
     ]);
     (id, value)
 }
 
 fn fix_book_pages(s: &mut Stack) -> Option<Tag> {
-    let pages: Vec<String> = stream(s.remove_tag("pages").as_ref()).iter().map(|p| as_string(Some(p), "")).collect();
+    let pages: Vec<String> = stream(s.remove_tag("pages").as_ref())
+        .iter()
+        .map(|p| as_string(Some(p), ""))
+        .collect();
     let filtered: Vec<(String, String)> = match s.remove_tag("filtered_pages") {
         Some(Tag::Compound(c)) => c
             .iter()
@@ -744,7 +975,10 @@ fn fix_book_pages(s: &mut Stack) -> Option<Tag> {
         .iter()
         .enumerate()
         .map(|(i, page)| {
-            let f = filtered.iter().find(|(k, _)| *k == i.to_string()).map(|(_, v)| v.as_str());
+            let f = filtered
+                .iter()
+                .find(|(k, _)| *k == i.to_string())
+                .map(|(_, v)| v.as_str());
             filtered_text(page, f)
         })
         .collect();
@@ -768,7 +1002,11 @@ fn fix_lodestone_tracker(s: &mut Stack) {
     let tracked = as_bool(s.remove_tag("LodestoneTracked").as_ref(), true);
     let mut c = empty_map();
     if let (Some(p), Some(d)) = (pos, dimension) {
-        set(&mut c, "target", Tag::compound([("pos", p), ("dimension", d)]));
+        set(
+            &mut c,
+            "target",
+            Tag::compound([("pos", p), ("dimension", d)]),
+        );
     }
     if !tracked {
         set(&mut c, "tracked", Tag::Byte(0));
@@ -796,7 +1034,11 @@ fn fix_firework_explosion(mut e: Tag) -> Tag {
 /// `ItemStackComponentizationFix.fixProfile`.
 pub(super) fn fix_profile(v: &Tag) -> Tag {
     if let Some(name) = as_str(Some(v)) {
-        return if valid_player_name(&name) { Tag::compound([("name", string(&name))]) } else { empty_map() };
+        return if valid_player_name(&name) {
+            Tag::compound([("name", string(&name))])
+        } else {
+            empty_map()
+        };
     }
     let name = as_string(v.get("Name"), "");
     let id = v.get("Id").cloned();
@@ -855,7 +1097,8 @@ fn fix_profile_properties(v: Option<&Tag>) -> Option<Tag> {
 
 /// Java `String.hashCode`.
 pub(super) fn java_string_hash(s: &str) -> i32 {
-    s.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c)))
+    s.encode_utf16()
+        .fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c)))
 }
 
 /// Iteration order of a `java.util.HashMap`/`HashSet` built by inserting the
@@ -903,7 +1146,10 @@ pub(super) fn unflatten_particle(description: &str) -> Tag {
             }
             set(&mut result, "item", stack);
         }
-        "minecraft:block" | "minecraft:block_marker" | "minecraft:falling_dust" | "minecraft:dust_pillar" => {
+        "minecraft:block"
+        | "minecraft:block_marker"
+        | "minecraft:falling_dust"
+        | "minecraft:dust_pillar" => {
             let mut state = empty_map();
             match contents.find('[') {
                 None => set(&mut state, "Name", string(&namespaced(contents))),
@@ -1023,7 +1269,10 @@ struct Reader {
 }
 impl Reader {
     fn new(s: &str) -> Self {
-        Self { s: s.chars().collect(), pos: 0 }
+        Self {
+            s: s.chars().collect(),
+            pos: 0,
+        }
     }
     fn peek(&self) -> Option<char> {
         self.s.get(self.pos).copied()
@@ -1043,7 +1292,10 @@ impl Reader {
     }
     fn number_text(&mut self) -> String {
         let start = self.pos;
-        while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '.' || c == '-') {
+        while self
+            .peek()
+            .is_some_and(|c| c.is_ascii_digit() || c == '.' || c == '-')
+        {
             self.pos += 1;
         }
         self.s[start..self.pos].iter().collect()
@@ -1059,7 +1311,11 @@ impl Reader {
         while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '-') {
             self.pos += 1;
         }
-        self.s[start..self.pos].iter().collect::<String>().parse().ok()
+        self.s[start..self.pos]
+            .iter()
+            .collect::<String>()
+            .parse()
+            .ok()
     }
     fn vector(&mut self) -> Option<Tag> {
         let x = self.float()?;
@@ -1071,7 +1327,11 @@ impl Reader {
             return None;
         }
         let z = self.float()?;
-        Some(Tag::List(vec![Tag::Float(x.to_bits()), Tag::Float(y.to_bits()), Tag::Float(z.to_bits())]))
+        Some(Tag::List(vec![
+            Tag::Float(x.to_bits()),
+            Tag::Float(y.to_bits()),
+            Tag::Float(z.to_bits()),
+        ]))
     }
     /// `StringReader.readString`: quoted or unquoted.
     fn string(&mut self) -> Option<String> {
@@ -1100,10 +1360,9 @@ impl Reader {
             }
             _ => {
                 let start = self.pos;
-                while self
-                    .peek()
-                    .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '+'))
-                {
+                while self.peek().is_some_and(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '+')
+                }) {
                     self.pos += 1;
                 }
                 Some(self.s[start..self.pos].iter().collect())

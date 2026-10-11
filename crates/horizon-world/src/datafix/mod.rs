@@ -1,20 +1,20 @@
-//! Vanilla's DataFixers from the 1.20 schemas on (`net.minecraft.util.datafix`):
-//! the data of worlds saved by 1.20 to 26.2 brought to the 26.3 format exactly
+//! Vanilla's DataFixers from the 1.19 schemas on (`net.minecraft.util.datafix`):
+//! the data of worlds saved by 1.18.2 to 26.2 brought to the 26.3 format exactly
 //! as 26.3 does when it reads them, and the file fixes it runs when it opens
 //! such a world (`net.minecraft.util.filefix`).
 //!
 //! DataFixerUpper reads the data once with the schema of its version (running
 //! the schema's read hooks), applies every fix with a key above that version
 //! in order, and writes it with the current schema. Each fix finds its values
-//! with the schema just below its own key ([`schema`]). Data older than the
-//! 1.20 schemas (DataVersion 3463) is not supported: the fixes before them are
-//! not ported, see [`OLDEST_SUPPORTED`].
+//! with the schema just below its own key ([`schema`]). Data older than
+//! [`OLDEST_SUPPORTED`] needs fixes that are not ported. The fixes of client
+//! files (options, hotbars, debug profiles) are not ported either.
 pub mod dynamic;
+pub mod files;
 mod fixes_a;
 mod fixes_b;
 mod fixes_c;
 mod fixes_old;
-pub mod files;
 mod items;
 pub mod json;
 pub mod schema;
@@ -36,7 +36,9 @@ pub fn identifier(id: &str) -> Option<(String, String)> {
         Some((ns, path)) => (if ns.is_empty() { "minecraft" } else { ns }, path),
         None => ("minecraft", id),
     };
-    let ns_ok = ns.bytes().all(|c| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.'));
+    let ns_ok = ns
+        .bytes()
+        .all(|c| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.'));
     let path_ok = path
         .bytes()
         .all(|c| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.' | b'/'));
@@ -157,10 +159,15 @@ pub fn id_is(v: &Tag, id: &str) -> bool {
 }
 
 /// `createRenamer`: the id namespaced, looked up in a table.
-pub fn renamer<'a>(table: &'a [(&'a str, &'static str)]) -> impl Fn(&str) -> Option<&'static str> + 'a {
+pub fn renamer<'a>(
+    table: &'a [(&'a str, &'static str)],
+) -> impl Fn(&str) -> Option<&'static str> + 'a {
     move |id: &str| {
         let id = dynamic::namespaced(id);
-        table.iter().find(|(from, _)| *from == id).map(|(_, to)| *to)
+        table
+            .iter()
+            .find(|(from, _)| *from == id)
+            .map(|(_, to)| *to)
     }
 }
 

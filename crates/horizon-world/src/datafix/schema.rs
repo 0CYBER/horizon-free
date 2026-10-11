@@ -251,7 +251,10 @@ impl Walker<'_> {
                     let kind = match as_str(ct.get("type")).as_deref() {
                         Some("minecraft:mined") => Some(Ty::BlockName),
                         Some(
-                            "minecraft:crafted" | "minecraft:used" | "minecraft:broken" | "minecraft:picked_up"
+                            "minecraft:crafted"
+                            | "minecraft:used"
+                            | "minecraft:broken"
+                            | "minecraft:picked_up"
                             | "minecraft:dropped",
                         ) => Some(Ty::ItemName),
                         Some("minecraft:killed" | "minecraft:killed_by") => Some(Ty::EntityName),
@@ -302,7 +305,9 @@ impl Walker<'_> {
     fn equipment(&mut self, v: &mut Tag) {
         if self.k >= key(4301, 0) {
             if let Some(eq) = v.get_mut("equipment") {
-                for slot in ["mainhand", "offhand", "feet", "legs", "chest", "head", "body", "saddle"] {
+                for slot in [
+                    "mainhand", "offhand", "feet", "legs", "chest", "head", "body", "saddle",
+                ] {
                     self.field(Ty::ItemStack, eq, slot);
                 }
             }
@@ -329,7 +334,11 @@ impl Walker<'_> {
         };
         match id {
             "minecraft:area_effect_cloud" => {
-                let f = if k >= key(4420, 0) { "custom_particle" } else { "Particle" };
+                let f = if k >= key(4420, 0) {
+                    "custom_particle"
+                } else {
+                    "Particle"
+                };
                 self.field(Ty::Particle, v, f);
             }
             "minecraft:arrow" | "minecraft:spectral_arrow" => {
@@ -372,7 +381,11 @@ impl Walker<'_> {
                 if k < key(4300, 0) {
                     self.field(Ty::ItemStack, v, "SaddleItem");
                 }
-                let split = if id == "minecraft:llama" { key(3808, 1) } else { key(3808, 2) };
+                let split = if id == "minecraft:llama" {
+                    key(3808, 1)
+                } else {
+                    key(3808, 2)
+                };
                 if k < split {
                     self.field(Ty::ItemStack, v, "DecorItem");
                 }
@@ -425,8 +438,12 @@ impl Walker<'_> {
             "minecraft:item_display" => self.field(Ty::ItemStack, v, "item"),
             "minecraft:block_display" => self.field(Ty::BlockState, v, "block_state"),
             "minecraft:text_display" => self.field(Ty::TextComponent, v, "text"),
-            "minecraft:ominous_item_spawner" if k >= key(3825, 0) => self.field(Ty::ItemStack, v, "item"),
-            _ if k >= key(4067, 0) && (id.ends_with("_chest_boat") || id == "minecraft:bamboo_chest_raft") => {
+            "minecraft:ominous_item_spawner" if k >= key(3825, 0) => {
+                self.field(Ty::ItemStack, v, "item")
+            }
+            _ if k >= key(4067, 0)
+                && (id.ends_with("_chest_boat") || id == "minecraft:bamboo_chest_raft") =>
+            {
                 self.list(Ty::ItemStack, v, "Items");
             }
             _ => {}
@@ -460,8 +477,14 @@ impl Walker<'_> {
                 named_inventory(self, v);
                 self.keys(Ty::Recipe, v, "RecipesUsed");
             }
-            "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:dispenser" | "minecraft:dropper"
-            | "minecraft:hopper" | "minecraft:shulker_box" | "minecraft:brewing_stand" | "minecraft:barrel" => {
+            "minecraft:chest"
+            | "minecraft:trapped_chest"
+            | "minecraft:dispenser"
+            | "minecraft:dropper"
+            | "minecraft:hopper"
+            | "minecraft:shulker_box"
+            | "minecraft:brewing_stand"
+            | "minecraft:barrel" => {
                 named_inventory(self, v);
             }
             "minecraft:crafter" if k >= key(3682, 0) => named_inventory(self, v),
@@ -485,7 +508,9 @@ impl Walker<'_> {
                 self.field(Ty::TextComponent, v, "LastOutput");
             }
             "minecraft:jigsaw" => self.field(Ty::FlatBlockState, v, "final_state"),
-            "minecraft:campfire" | "minecraft:chiseled_bookshelf" => self.list(Ty::ItemStack, v, "Items"),
+            "minecraft:campfire" | "minecraft:chiseled_bookshelf" => {
+                self.list(Ty::ItemStack, v, "Items")
+            }
             "minecraft:shelf" if k >= key(4533, 0) => self.list(Ty::ItemStack, v, "Items"),
             "minecraft:lectern" => self.field(Ty::ItemStack, v, "Book"),
             "minecraft:beehive" => {
@@ -516,7 +541,9 @@ impl Walker<'_> {
                 }
                 self.field(Ty::ItemStack, v, "item");
             }
-            "minecraft:brushable_block" | "minecraft:suspicious_sand" => self.field(Ty::ItemStack, v, "item"),
+            "minecraft:brushable_block" | "minecraft:suspicious_sand" => {
+                self.field(Ty::ItemStack, v, "item")
+            }
             "minecraft:trial_spawner" if k >= key(3689, 0) => {
                 if let Some(Tag::List(items)) = v.get_mut("spawn_potentials") {
                     for p in items {
@@ -774,18 +801,57 @@ pub fn block_entity_known(be: &Tag, k: Key) -> bool {
 
 /// Block entity types of the schemas from 1.20 on.
 const BLOCK_ENTITIES: &[&str] = &[
-    "minecraft:furnace", "minecraft:chest", "minecraft:trapped_chest", "minecraft:ender_chest",
-    "minecraft:jukebox", "minecraft:dispenser", "minecraft:dropper", "minecraft:sign", "minecraft:mob_spawner",
-    "minecraft:piston", "minecraft:brewing_stand", "minecraft:enchanting_table", "minecraft:end_portal",
-    "minecraft:beacon", "minecraft:skull", "minecraft:daylight_detector", "minecraft:hopper", "minecraft:comparator",
-    "minecraft:banner", "minecraft:structure_block", "minecraft:end_gateway", "minecraft:command_block",
-    "minecraft:shulker_box", "minecraft:bed", "minecraft:conduit", "minecraft:barrel", "minecraft:smoker",
-    "minecraft:blast_furnace", "minecraft:lectern", "minecraft:bell", "minecraft:jigsaw", "minecraft:campfire",
-    "minecraft:beehive", "minecraft:sculk_sensor", "minecraft:sculk_catalyst", "minecraft:sculk_shrieker",
-    "minecraft:hanging_sign", "minecraft:chiseled_bookshelf", "minecraft:decorated_pot", "minecraft:suspicious_sand",
-    "minecraft:brushable_block", "minecraft:calibrated_sculk_sensor", "minecraft:crafter",
-    "minecraft:trial_spawner", "minecraft:vault", "minecraft:creaking_heart", "minecraft:test_block",
-    "minecraft:test_instance_block", "minecraft:copper_golem_statue", "minecraft:shelf", "minecraft:potent_sulfur",
+    "minecraft:furnace",
+    "minecraft:chest",
+    "minecraft:trapped_chest",
+    "minecraft:ender_chest",
+    "minecraft:jukebox",
+    "minecraft:dispenser",
+    "minecraft:dropper",
+    "minecraft:sign",
+    "minecraft:mob_spawner",
+    "minecraft:piston",
+    "minecraft:brewing_stand",
+    "minecraft:enchanting_table",
+    "minecraft:end_portal",
+    "minecraft:beacon",
+    "minecraft:skull",
+    "minecraft:daylight_detector",
+    "minecraft:hopper",
+    "minecraft:comparator",
+    "minecraft:banner",
+    "minecraft:structure_block",
+    "minecraft:end_gateway",
+    "minecraft:command_block",
+    "minecraft:shulker_box",
+    "minecraft:bed",
+    "minecraft:conduit",
+    "minecraft:barrel",
+    "minecraft:smoker",
+    "minecraft:blast_furnace",
+    "minecraft:lectern",
+    "minecraft:bell",
+    "minecraft:jigsaw",
+    "minecraft:campfire",
+    "minecraft:beehive",
+    "minecraft:sculk_sensor",
+    "minecraft:sculk_catalyst",
+    "minecraft:sculk_shrieker",
+    "minecraft:hanging_sign",
+    "minecraft:chiseled_bookshelf",
+    "minecraft:decorated_pot",
+    "minecraft:suspicious_sand",
+    "minecraft:brushable_block",
+    "minecraft:calibrated_sculk_sensor",
+    "minecraft:crafter",
+    "minecraft:trial_spawner",
+    "minecraft:vault",
+    "minecraft:creaking_heart",
+    "minecraft:test_block",
+    "minecraft:test_instance_block",
+    "minecraft:copper_golem_statue",
+    "minecraft:shelf",
+    "minecraft:potent_sulfur",
 ];
 
 /// Visit every value of `target` under a `root`-typed value read with schema `k`.

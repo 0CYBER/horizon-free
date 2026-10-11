@@ -76,7 +76,9 @@ impl Reader<'_> {
             };
             match c {
                 0x20 | 0x0A | 0x09 | 0x0D => self.pos += 1,
-                0x2F if self.s.get(self.pos + 1) == Some(&u('*')) || self.s.get(self.pos + 1) == Some(&u('/')) => {
+                0x2F if self.s.get(self.pos + 1) == Some(&u('*'))
+                    || self.s.get(self.pos + 1) == Some(&u('/')) =>
+                {
                     if !self.lenient() {
                         return Err(());
                     }
@@ -253,7 +255,21 @@ impl Reader<'_> {
         while let Some(c) = self.peek_char() {
             if matches!(
                 c,
-                0x2F | 0x5C | 0x3B | 0x23 | 0x3D | 0x7B | 0x7D | 0x5B | 0x5D | 0x3A | 0x2C | 0x20 | 0x09 | 0x0C | 0x0D | 0x0A
+                0x2F | 0x5C
+                    | 0x3B
+                    | 0x23
+                    | 0x3D
+                    | 0x7B
+                    | 0x7D
+                    | 0x5B
+                    | 0x5D
+                    | 0x3A
+                    | 0x2C
+                    | 0x20
+                    | 0x09
+                    | 0x0C
+                    | 0x0D
+                    | 0x0A
             ) {
                 break;
             }
@@ -268,11 +284,16 @@ impl Reader<'_> {
             return Err(());
         }
         let text = String::from_utf16_lossy(&lit);
-        for (word, value) in [("true", Json::Bool(true)), ("false", Json::Bool(false)), ("null", Json::Null)] {
+        for (word, value) in [
+            ("true", Json::Bool(true)),
+            ("false", Json::Bool(false)),
+            ("null", Json::Null),
+        ] {
             if text.len() == word.len()
-                && text.chars().zip(word.chars()).all(|(a, b)| {
-                    a == b || self.lenient() && a == b.to_ascii_uppercase()
-                })
+                && text
+                    .chars()
+                    .zip(word.chars())
+                    .all(|(a, b)| a == b || self.lenient() && a == b.to_ascii_uppercase())
             {
                 return Ok(value);
             }
@@ -505,7 +526,11 @@ pub fn from_nbt(tag: &Tag) -> Json {
         Tag::Long(v) => Json::Num(v.to_string()),
         Tag::Float(v) => Json::Num(java_float_string(f32::from_bits(*v))),
         Tag::Double(v) => Json::Num(java_double_string(f64::from_bits(*v))),
-        Tag::ByteArray(v) => Json::Arr(v.iter().map(|b| Json::Num((*b as i8).to_string())).collect()),
+        Tag::ByteArray(v) => Json::Arr(
+            v.iter()
+                .map(|b| Json::Num((*b as i8).to_string()))
+                .collect(),
+        ),
         Tag::IntArray(v) => Json::Arr(v.iter().map(|i| Json::Num(i.to_string())).collect()),
         Tag::LongArray(v) => Json::Arr(v.iter().map(|l| Json::Num(l.to_string())).collect()),
         Tag::String(s) => Json::Str(s.0.clone()),
@@ -562,7 +587,10 @@ fn java_fp_string(d: f64, sci: String) -> String {
 
 /// A string value as a JSON text component (`{"text": s}`), stable string.
 pub fn text_component_json(text: &[u16]) -> Vec<u16> {
-    to_stable_string(&Json::Obj(vec![("text".encode_utf16().collect(), Json::Str(text.to_vec()))]))
+    to_stable_string(&Json::Obj(vec![(
+        "text".encode_utf16().collect(),
+        Json::Str(text.to_vec()),
+    )]))
 }
 pub fn translatable_component_json(key: &str) -> Vec<u16> {
     to_stable_string(&Json::object(vec![("translate", Json::string(key))]))
@@ -590,12 +618,18 @@ mod tests {
         assert!(parse_strict(&w("hello")).is_none());
         assert_eq!(parse_lenient(&w("hello")), Some(Json::string("hello")));
         assert!(parse_lenient(&w("hello world")).is_none());
-        assert_eq!(parse_lenient(&w("{a:'b'}")), Some(Json::object(vec![("a", Json::string("b"))])));
+        assert_eq!(
+            parse_lenient(&w("{a:'b'}")),
+            Some(Json::object(vec![("a", Json::string("b"))]))
+        );
     }
     #[test]
     fn stable_strings_sort_keys() {
         let j = parse_strict(&w(r#"{"text":"a","color":"red"}"#)).unwrap();
-        assert_eq!(String::from_utf16(&to_stable_string(&j)).unwrap(), r#"{"color":"red","text":"a"}"#);
+        assert_eq!(
+            String::from_utf16(&to_stable_string(&j)).unwrap(),
+            r#"{"color":"red","text":"a"}"#
+        );
     }
     #[test]
     fn java_floating_point_strings() {

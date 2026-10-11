@@ -108,7 +108,8 @@ pub fn as_long(tag: Option<&Tag>, default: i64) -> i64 {
     tag.and_then(as_number).map_or(default, Number::long_value)
 }
 pub fn as_double(tag: Option<&Tag>, default: f64) -> f64 {
-    tag.and_then(as_number).map_or(default, Number::double_value)
+    tag.and_then(as_number)
+        .map_or(default, Number::double_value)
 }
 pub fn as_float(tag: Option<&Tag>, default: f32) -> f32 {
     tag.and_then(as_number).map_or(default, Number::float_value)

@@ -1,7 +1,7 @@
 //! Fixes of 1.20.2 to 1.20.6 (keys 3564 to 3833).
 use super::dynamic::{
-    as_double, as_float, as_int, as_number, as_str, as_string, empty_map, int_list, is_list, namespaced, remove,
-    rename, rename_and_fix, set, stream, string,
+    as_double, as_float, as_int, as_number, as_str, as_string, empty_map, int_list, is_list,
+    namespaced, remove, rename, rename_and_fix, set, stream, string,
 };
 use super::json;
 use super::schema::{Key, Ty, key};
@@ -9,32 +9,59 @@ use super::{Cx, FixFn, id_is, items, renamer, reread};
 use crate::nbt::Tag;
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
-    out.push((key(3564, 0), |cx| drop_invalid_sign_data(cx, "minecraft:sign")));
-    out.push((key(3564, 1), |cx| drop_invalid_sign_data(cx, "minecraft:hanging_sign")));
+    out.push((key(3564, 0), |cx| {
+        drop_invalid_sign_data(cx, "minecraft:sign")
+    }));
+    out.push((key(3564, 1), |cx| {
+        drop_invalid_sign_data(cx, "minecraft:hanging_sign")
+    }));
     out.push((key(3565, 0), random_sequence_settings));
     out.push((key(3566, 0), scoreboard_display_slots));
     out.push((key(3568, 0), mob_effect_ids));
     out.push((key(3683, 0), primed_tnt_block_state));
     out.push((key(3685, 0), projectile_stored_item));
-    out.push((key(3692, 0), |cx| block_rename(cx, &[("minecraft:grass", "minecraft:short_grass")])));
-    out.push((key(3692, 0), |cx| cx.rename(Ty::ItemName, renamer(&[("minecraft:grass", "minecraft:short_grass")]))));
-    out.push((key(3800, 0), |cx| cx.rename(Ty::ItemName, renamer(&[("minecraft:scute", "minecraft:turtle_scute")]))));
+    out.push((key(3692, 0), |cx| {
+        block_rename(cx, &[("minecraft:grass", "minecraft:short_grass")])
+    }));
+    out.push((key(3692, 0), |cx| {
+        cx.rename(
+            Ty::ItemName,
+            renamer(&[("minecraft:grass", "minecraft:short_grass")]),
+        )
+    }));
+    out.push((key(3800, 0), |cx| {
+        cx.rename(
+            Ty::ItemName,
+            renamer(&[("minecraft:scute", "minecraft:turtle_scute")]),
+        )
+    }));
     out.push((key(3803, 0), rename_sweeping));
     out.push((key(3807, 1), map_banner_block_pos));
-    out.push((key(3808, 0), |cx| horse_body_armor(cx, "minecraft:horse", "ArmorItem", true)));
-    out.push((key(3808, 1), |cx| horse_body_armor(cx, "minecraft:llama", "DecorItem", false)));
-    out.push((key(3808, 2), |cx| horse_body_armor(cx, "minecraft:trader_llama", "DecorItem", false)));
+    out.push((key(3808, 0), |cx| {
+        horse_body_armor(cx, "minecraft:horse", "ArmorItem", true)
+    }));
+    out.push((key(3808, 1), |cx| {
+        horse_body_armor(cx, "minecraft:llama", "DecorItem", false)
+    }));
+    out.push((key(3808, 2), |cx| {
+        horse_body_armor(cx, "minecraft:trader_llama", "DecorItem", false)
+    }));
     out.push((key(3809, 0), chested_horse_slots));
     out.push((key(3812, 0), wolf_health));
     out.push((key(3813, 0), block_pos_format));
     out.push((key(3814, 0), |cx| {
-        attributes_rename_legacy(cx, &|id| (namespaced(id) == "minecraft:horse.jump_strength").then_some("minecraft:generic.jump_strength"))
+        attributes_rename_legacy(cx, &|id| {
+            (namespaced(id) == "minecraft:horse.jump_strength")
+                .then_some("minecraft:generic.jump_strength")
+        })
     }));
     out.push((key(3818, 0), beehive_fields));
     out.push((key(3818, 1), banner_patterns));
     out.push((key(3818, 2), tipped_arrow_potion));
     out.push((key(3818, 4), particle_unflattening));
-    out.push((key(3818, 5), |cx| cx.each(Ty::ItemStack, items::componentize)));
+    out.push((key(3818, 5), |cx| {
+        cx.each(Ty::ItemStack, items::componentize)
+    }));
     out.push((key(3818, 6), area_effect_cloud_potion));
     out.push((key(3820, 0), player_head_profile));
     out.push((key(3820, 0), lodestone_compass_component));
@@ -49,7 +76,15 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
 
 /// `BlockEntitySignDoubleSidedEditableTextFix.FIELDS_TO_DROP`.
 pub(super) const SIGN_FIELDS_TO_DROP: [&str; 10] = [
-    "Text1", "Text2", "Text3", "Text4", "FilteredText1", "FilteredText2", "FilteredText3", "FilteredText4", "Color",
+    "Text1",
+    "Text2",
+    "Text3",
+    "Text4",
+    "FilteredText1",
+    "FilteredText2",
+    "FilteredText3",
+    "FilteredText4",
+    "Color",
     "GlowingText",
 ];
 
@@ -132,7 +167,10 @@ fn scoreboard_display_slots(cx: &mut Cx) {
             let old = std::mem::take(slots);
             for (k, value) in old {
                 let name = k.to_string_lossy();
-                let k = SLOT_RENAMES.iter().find(|(o, _)| *o == name).map_or(k, |(_, n)| (*n).into());
+                let k = SLOT_RENAMES
+                    .iter()
+                    .find(|(o, _)| *o == name)
+                    .map_or(k, |(_, n)| (*n).into());
                 slots.insert(k, value);
             }
         }
@@ -180,7 +218,9 @@ const EFFECT_IDS: [&str; 33] = [
 /// `getAndConvertMobEffectId`.
 fn effect_id(v: &Tag, field: &str) -> Option<Tag> {
     let n = as_number(v.get(field)?)?.int_value();
-    (1..=33).contains(&n).then(|| string(EFFECT_IDS[(n - 1) as usize]))
+    (1..=33)
+        .contains(&n)
+        .then(|| string(EFFECT_IDS[(n - 1) as usize]))
 }
 /// `replaceField(old, new, value)`.
 fn replace_field(v: &mut Tag, old: &str, new: &str, value: Option<Tag>) {
@@ -206,7 +246,14 @@ fn update_effect_instance(mut v: Tag) -> Tag {
     v
 }
 fn update_effect_list(v: &mut Tag, old: &str, new: &str) {
-    let value = is_list(v.get(old)).then(|| Tag::List(stream(v.get(old)).into_iter().map(update_effect_instance).collect()));
+    let value = is_list(v.get(old)).then(|| {
+        Tag::List(
+            stream(v.get(old))
+                .into_iter()
+                .map(update_effect_instance)
+                .collect(),
+        )
+    });
     replace_field(v, old, new, value);
 }
 fn update_stew_entry(input: &Tag, mut output: Tag) -> Tag {
@@ -241,7 +288,9 @@ fn mob_effect_ids(cx: &mut Cx) {
         }
         update_effect_list(e, "ActiveEffects", "active_effects");
     });
-    cx.each(Ty::Player, |p| update_effect_list(p, "ActiveEffects", "active_effects"));
+    cx.each(Ty::Player, |p| {
+        update_effect_list(p, "ActiveEffects", "active_effects")
+    });
     cx.each(Ty::ItemStack, |s| {
         let Some(id) = as_str(s.get("id")).map(|i| namespaced(&i)) else {
             return;
@@ -251,12 +300,20 @@ fn mob_effect_ids(cx: &mut Cx) {
         };
         if id == "minecraft:suspicious_stew" {
             let value = is_list(tag.get("Effects")).then(|| {
-                Tag::List(stream(tag.get("Effects")).into_iter().map(|e| update_stew_entry(&e.clone(), e)).collect())
+                Tag::List(
+                    stream(tag.get("Effects"))
+                        .into_iter()
+                        .map(|e| update_stew_entry(&e.clone(), e))
+                        .collect(),
+                )
             });
             replace_field(tag, "Effects", "effects", value);
         } else if matches!(
             id.as_str(),
-            "minecraft:potion" | "minecraft:splash_potion" | "minecraft:lingering_potion" | "minecraft:tipped_arrow"
+            "minecraft:potion"
+                | "minecraft:splash_potion"
+                | "minecraft:lingering_potion"
+                | "minecraft:tipped_arrow"
         ) {
             update_effect_list(tag, "CustomPotionEffects", "custom_potion_effects");
         }
@@ -268,7 +325,11 @@ fn mob_effect_ids(cx: &mut Cx) {
 fn primed_tnt_block_state(cx: &mut Cx) {
     let k = cx.k;
     cx.entity("minecraft:tnt", |e| {
-        set(e, "block_state", Tag::compound([("Name", string("minecraft:tnt"))]));
+        set(
+            e,
+            "block_state",
+            Tag::compound([("Name", string("minecraft:tnt"))]),
+        );
         if let Some(fuse) = e.get("Fuse").cloned() {
             set(e, "fuse", fuse);
         }
@@ -281,7 +342,11 @@ fn projectile_stored_item(cx: &mut Cx) {
     cx.each(Ty::Entity, |e| {
         let item = if id_is(e, "minecraft:arrow") {
             let potion = as_string(e.get("Potion"), "minecraft:empty");
-            if potion == "minecraft:empty" { "minecraft:arrow" } else { "minecraft:tipped_arrow" }
+            if potion == "minecraft:empty" {
+                "minecraft:arrow"
+            } else {
+                "minecraft:tipped_arrow"
+            }
         } else if id_is(e, "minecraft:spectral_arrow") {
             "minecraft:spectral_arrow"
         } else {
@@ -348,7 +413,11 @@ fn rename_sweeping(cx: &mut Cx) {
                     .into_iter()
                     .map(|mut e| {
                         if let Some(id) = as_str(e.get("id")) {
-                            let new = if namespaced(&id) == "minecraft:sweeping" { "minecraft:sweeping_edge".into() } else { id };
+                            let new = if namespaced(&id) == "minecraft:sweeping" {
+                                "minecraft:sweeping_edge".into()
+                            } else {
+                                id
+                            };
                             set(&mut e, "id", string(&new));
                         }
                         e
@@ -364,7 +433,11 @@ fn rename_sweeping(cx: &mut Cx) {
 
 /// `ExtraDataFixUtils.fixBlockPos`.
 pub(super) fn fix_block_pos(v: Tag) -> Tag {
-    let (x, y, z) = (v.get("X").and_then(as_number), v.get("Y").and_then(as_number), v.get("Z").and_then(as_number));
+    let (x, y, z) = (
+        v.get("X").and_then(as_number),
+        v.get("Y").and_then(as_number),
+        v.get("Z").and_then(as_number),
+    );
     match (x, y, z) {
         (Some(x), Some(y), Some(z)) => int_list(&[x.int_value(), y.int_value(), z.int_value()]),
         _ => v,
@@ -372,12 +445,20 @@ pub(super) fn fix_block_pos(v: Tag) -> Tag {
 }
 /// `ExtraDataFixUtils.fixInlineBlockPos`.
 pub(super) fn fix_inline_block_pos(v: &mut Tag, fx: &str, fy: &str, fz: &str, new: &str) {
-    let (x, y, z) = (v.get(fx).and_then(as_number), v.get(fy).and_then(as_number), v.get(fz).and_then(as_number));
+    let (x, y, z) = (
+        v.get(fx).and_then(as_number),
+        v.get(fy).and_then(as_number),
+        v.get(fz).and_then(as_number),
+    );
     if let (Some(x), Some(y), Some(z)) = (x, y, z) {
         remove(v, fx);
         remove(v, fy);
         remove(v, fz);
-        set(v, new, int_list(&[x.int_value(), y.int_value(), z.int_value()]));
+        set(
+            v,
+            new,
+            int_list(&[x.int_value(), y.int_value(), z.int_value()]),
+        );
     }
 }
 
@@ -424,7 +505,13 @@ fn horse_body_armor_entity(e: &mut Tag, field: &str, clear_armor_items: bool) {
                     stream(Some(&list))
                         .into_iter()
                         .enumerate()
-                        .map(|(i, x)| if i == 2 { Tag::Float(0.085f32.to_bits()) } else { x })
+                        .map(|(i, x)| {
+                            if i == 2 {
+                                Tag::Float(0.085f32.to_bits())
+                            } else {
+                                x
+                            }
+                        })
                         .collect(),
                 )
             });
@@ -436,9 +523,14 @@ fn horse_body_armor_entity(e: &mut Tag, field: &str, clear_armor_items: bool) {
 
 fn chested_horse_slots(cx: &mut Cx) {
     cx.each(Ty::Entity, |e| {
-        if !["minecraft:llama", "minecraft:trader_llama", "minecraft:mule", "minecraft:donkey"]
-            .iter()
-            .any(|id| id_is(e, id))
+        if ![
+            "minecraft:llama",
+            "minecraft:trader_llama",
+            "minecraft:mule",
+            "minecraft:donkey",
+        ]
+        .iter()
+        .any(|id| id_is(e, id))
         {
             return;
         }
@@ -461,7 +553,9 @@ fn wolf_health(cx: &mut Cx) {
                 stream(Some(&list))
                     .into_iter()
                     .map(|mut a| {
-                        if namespaced(&as_string(a.get("Name"), "")) == "minecraft:generic.max_health" {
+                        if namespaced(&as_string(a.get("Name"), ""))
+                            == "minecraft:generic.max_health"
+                        {
                             super::dynamic::update(&mut a, "Base", |base| {
                                 if as_double(Some(&base), 0.0) == 20.0 {
                                     adjusted = true;
@@ -477,7 +571,9 @@ fn wolf_health(cx: &mut Cx) {
             )
         });
         if adjusted {
-            super::dynamic::update(e, "Health", |h| Tag::Float((as_float(Some(&h), 0.0) * 2.0).to_bits()));
+            super::dynamic::update(e, "Health", |h| {
+                Tag::Float((as_float(Some(&h), 0.0) * 2.0).to_bits())
+            });
         }
     });
 }
@@ -515,8 +611,12 @@ fn block_pos_format(cx: &mut Cx) {
         }
         rename_block_pos(e, &[("Leash", "leash")]);
     });
-    cx.block_entity("minecraft:beehive", |be| rename_block_pos(be, &[("FlowerPos", "flower_pos")]));
-    cx.block_entity("minecraft:end_gateway", |be| rename_block_pos(be, &[("ExitPortal", "exit_portal")]));
+    cx.block_entity("minecraft:beehive", |be| {
+        rename_block_pos(be, &[("FlowerPos", "flower_pos")])
+    });
+    cx.block_entity("minecraft:end_gateway", |be| {
+        rename_block_pos(be, &[("ExitPortal", "exit_portal")])
+    });
     cx.each(Ty::SavedMapData, |v| {
         if let Some(d) = v.get_mut("data") {
             super::dynamic::update(d, "frames", |frames| {
@@ -547,11 +647,14 @@ fn block_pos_format(cx: &mut Cx) {
             });
         }
     });
-    cx.item(|id| id == "minecraft:compass", |s| {
-        if let Some(tag) = s.get_mut("tag") {
-            super::dynamic::update(tag, "LodestonePos", fix_block_pos);
-        }
-    });
+    cx.item(
+        |id| id == "minecraft:compass",
+        |s| {
+            if let Some(tag) = s.get_mut("tag") {
+                super::dynamic::update(tag, "LodestonePos", fix_block_pos);
+            }
+        },
+    );
 }
 
 // ------------------------------------------------------------------ 3814
@@ -677,7 +780,12 @@ pub(super) fn dye_color(id: i32) -> &'static str {
 pub(super) fn banner_layer(mut v: Tag) -> Tag {
     rename_and_fix(&mut v, "Pattern", "pattern", |p| {
         Some(match as_str(Some(&p)) {
-            Some(id) => string(PATTERN_IDS.iter().find(|(k, _)| *k == id).map_or(id.as_str(), |(_, n)| n)),
+            Some(id) => string(
+                PATTERN_IDS
+                    .iter()
+                    .find(|(k, _)| *k == id)
+                    .map_or(id.as_str(), |(_, n)| n),
+            ),
             None => p,
         })
     });
@@ -690,7 +798,9 @@ pub(super) fn banner_layer(mut v: Tag) -> Tag {
 fn banner_patterns(cx: &mut Cx) {
     cx.block_entity("minecraft:banner", |be| {
         rename_and_fix(be, "Patterns", "patterns", |p| {
-            Some(Tag::List(stream(Some(&p)).into_iter().map(banner_layer).collect()))
+            Some(Tag::List(
+                stream(Some(&p)).into_iter().map(banner_layer).collect(),
+            ))
         });
     });
 }
@@ -765,7 +875,10 @@ fn area_effect_cloud_potion(cx: &mut Cx) {
 
 fn player_head_profile(cx: &mut Cx) {
     cx.block_entity("minecraft:skull", |be| {
-        let profile = be.get("SkullOwner").or_else(|| be.get("ExtraType")).cloned();
+        let profile = be
+            .get("SkullOwner")
+            .or_else(|| be.get("ExtraType"))
+            .cloned();
         let Some(profile) = profile else {
             return;
         };
@@ -787,14 +900,23 @@ pub(super) fn component_fix(cx: &mut Cx, id: &str, new_id: &str, f: impl Fn(Tag)
 }
 
 fn lodestone_compass_component(cx: &mut Cx) {
-    component_fix(cx, "minecraft:lodestone_target", "minecraft:lodestone_tracker", |mut v| {
-        let pos = remove(&mut v, "pos");
-        let dimension = remove(&mut v, "dimension");
-        if let (Some(pos), Some(dimension)) = (pos, dimension) {
-            set(&mut v, "target", Tag::compound([("pos", pos), ("dimension", dimension)]));
-        }
-        Some(v)
-    });
+    component_fix(
+        cx,
+        "minecraft:lodestone_target",
+        "minecraft:lodestone_tracker",
+        |mut v| {
+            let pos = remove(&mut v, "pos");
+            let dimension = remove(&mut v, "dimension");
+            if let (Some(pos), Some(dimension)) = (pos, dimension) {
+                set(
+                    &mut v,
+                    "target",
+                    Tag::compound([("pos", pos), ("dimension", dimension)]),
+                );
+            }
+            Some(v)
+        },
+    );
 }
 
 // ------------------------------------------------------------------ 3825
@@ -838,7 +960,9 @@ fn item_custom_name_to_item_name(cx: &mut Cx) {
             _ => return,
         };
         if let Some(c) = s.get_mut("components")
-            && c.get("minecraft:custom_name").and_then(translation_key).is_some_and(|k| expected(&k))
+            && c.get("minecraft:custom_name")
+                .and_then(translation_key)
+                .is_some_and(|k| expected(&k))
         {
             rename(c, "minecraft:custom_name", "minecraft:item_name");
         }
@@ -856,7 +980,10 @@ fn banner_custom_name_to_item_name(cx: &mut Cx) {
         set(
             be,
             "components",
-            Tag::compound([("minecraft:item_name", name), ("minecraft:hide_additional_tooltip", empty_map())]),
+            Tag::compound([
+                ("minecraft:item_name", name),
+                ("minecraft:hide_additional_tooltip", empty_map()),
+            ]),
         );
         remove(be, "CustomName");
     });
@@ -921,12 +1048,19 @@ pub(super) fn unpack_objective(v: &mut Tag) {
     };
     let (ty, id) = match name.find(':') {
         None => ("_special".to_owned(), name.clone()),
-        Some(colon) => match (by_separator(&name[..colon]), by_separator(&name[colon + 1..])) {
+        Some(colon) => match (
+            by_separator(&name[..colon]),
+            by_separator(&name[colon + 1..]),
+        ) {
             (Some(t), Some(i)) => (t, i),
             _ => ("_special".to_owned(), name.clone()),
         },
     };
-    set(v, "CriteriaType", Tag::compound([("type", string(&ty)), ("id", string(&id))]));
+    set(
+        v,
+        "CriteriaType",
+        Tag::compound([("type", string(&ty)), ("id", string(&id))]),
+    );
 }
 
 /// `Identifier.bySeparator(s, '.')`: namespace before the first dot.
@@ -947,7 +1081,11 @@ pub(super) fn repack_objective(v: &mut Tag) {
     let (Some(ty), Some(id)) = (as_str(ct.get("type")), as_str(ct.get("id"))) else {
         return;
     };
-    let name = if ty == "_special" { id } else { format!("{}:{}", pack_with_dot(&ty), pack_with_dot(&id)) };
+    let name = if ty == "_special" {
+        id
+    } else {
+        format!("{}:{}", pack_with_dot(&ty), pack_with_dot(&id))
+    };
     set(v, "CriteriaName", string(&name));
     remove(v, "CriteriaType");
 }

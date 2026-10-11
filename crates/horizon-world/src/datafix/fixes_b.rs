@@ -1,7 +1,8 @@
 //! Fixes of 1.21 to 1.21.5 (keys 3938 to 4314), text components apart.
 use super::dynamic::{
-    as_bool, as_double, as_float, as_int, as_long, as_number, as_str, as_string, empty_map, is_empty_map, is_list,
-    namespaced, or_empty_map, remove, rename, rename_and_fix, set, stream, string, update,
+    as_bool, as_double, as_float, as_int, as_long, as_number, as_str, as_string, empty_map,
+    is_empty_map, is_list, namespaced, or_empty_map, remove, rename, rename_and_fix, set, stream,
+    string, update,
 };
 use super::fixes_a::{component_fix, dye_color, fix_inline_block_pos, translation_key};
 use super::items::java_hash_order;
@@ -19,23 +20,36 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
             }
         });
     }));
-    out.push((key(3939, 0), |cx| feature_flag_remove(cx, &["minecraft:update_1_21"])));
+    out.push((key(3939, 0), |cx| {
+        feature_flag_remove(cx, &["minecraft:update_1_21"])
+    }));
     out.push((key(3945, 0), attribute_modifier_ids));
     out.push((key(3945, 0), jukebox_ticks));
     out.push((key(4054, 0), ominous_banner_rarity));
-    out.push((key(4055, 0), |cx| attributes_rename(cx, true, &attribute_id_prefix)));
+    out.push((key(4055, 0), |cx| {
+        attributes_rename(cx, true, &attribute_id_prefix)
+    }));
     out.push((key(4059, 0), food_to_consumable));
     out.push((key(4061, 0), trial_spawner_config_in_registry));
     out.push((key(4064, 0), |cx| {
-        component_fix(cx, "minecraft:fire_resistant", "minecraft:damage_resistant", |_| {
-            Some(Tag::compound([("types", string("#minecraft:is_fire"))]))
-        });
+        component_fix(
+            cx,
+            "minecraft:fire_resistant",
+            "minecraft:damage_resistant",
+            |_| Some(Tag::compound([("types", string("#minecraft:is_fire"))])),
+        );
     }));
     out.push((key(4067, 0), boat_split));
-    out.push((key(4067, 0), |cx| feature_flag_remove(cx, &["minecraft:bundle"])));
-    out.push((key(4068, 0), |cx| component_fix(cx, "minecraft:lock", "minecraft:lock", fix_lock)));
+    out.push((key(4067, 0), |cx| {
+        feature_flag_remove(cx, &["minecraft:bundle"])
+    }));
     out.push((key(4068, 0), |cx| {
-        cx.each(Ty::BlockEntity, |be| rename_and_fix(be, "Lock", "lock", fix_lock));
+        component_fix(cx, "minecraft:lock", "minecraft:lock", fix_lock)
+    }));
+    out.push((key(4068, 0), |cx| {
+        cx.each(Ty::BlockEntity, |be| {
+            rename_and_fix(be, "Lock", "lock", fix_lock)
+        });
     }));
     out.push((key(4081, 0), |cx| {
         cx.entity("minecraft:salmon", |e| {
@@ -44,7 +58,9 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
             }
         });
     }));
-    out.push((key(4173, 0), |cx| cx.entity("minecraft:tnt_minecart", |e| rename(e, "TNTFuse", "fuse"))));
+    out.push((key(4173, 0), |cx| {
+        cx.entity("minecraft:tnt_minecart", |e| rename(e, "TNTFuse", "fuse"))
+    }));
     out.push((key(4175, 0), |cx| {
         cx.each(Ty::DataComponents, |c| {
             if let Some(eq) = c.get_mut("minecraft:equippable") {
@@ -70,39 +86,97 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
         });
     }));
     out.push((key(4176, 0), |cx| {
-        component_fix(cx, "minecraft:lock", "minecraft:lock", |l| (!broken_lock(&l)).then_some(l));
+        component_fix(cx, "minecraft:lock", "minecraft:lock", |l| {
+            (!broken_lock(&l)).then_some(l)
+        });
     }));
-    out.push((key(4180, 0), |cx| feature_flag_remove(cx, &["minecraft:winter_drop"])));
-    for id in ["minecraft:furnace", "minecraft:smoker", "minecraft:blast_furnace"] {
+    out.push((key(4180, 0), |cx| {
+        feature_flag_remove(cx, &["minecraft:winter_drop"])
+    }));
+    for id in [
+        "minecraft:furnace",
+        "minecraft:smoker",
+        "minecraft:blast_furnace",
+    ] {
         let _ = id;
     }
-    out.push((key(4181, 0), |cx| furnace_burn_time(cx, "minecraft:furnace")));
+    out.push((key(4181, 0), |cx| {
+        furnace_burn_time(cx, "minecraft:furnace")
+    }));
     out.push((key(4181, 0), |cx| furnace_burn_time(cx, "minecraft:smoker")));
-    out.push((key(4181, 0), |cx| furnace_burn_time(cx, "minecraft:blast_furnace")));
-    out.push((key(4187, 0), |cx| base_value(cx, "minecraft:villager", "minecraft:follow_range", 48.0, 16.0)));
-    out.push((key(4187, 0), |cx| base_value(cx, "minecraft:bee", "minecraft:follow_range", 48.0, 16.0)));
-    out.push((key(4187, 0), |cx| base_value(cx, "minecraft:allay", "minecraft:follow_range", 48.0, 16.0)));
-    out.push((key(4187, 0), |cx| base_value(cx, "minecraft:llama", "minecraft:follow_range", 40.0, 16.0)));
-    out.push((key(4187, 0), |cx| base_value(cx, "minecraft:piglin_brute", "minecraft:follow_range", 16.0, 12.0)));
-    out.push((key(4187, 0), |cx| base_value(cx, "minecraft:warden", "minecraft:follow_range", 16.0, 24.0)));
+    out.push((key(4181, 0), |cx| {
+        furnace_burn_time(cx, "minecraft:blast_furnace")
+    }));
+    out.push((key(4187, 0), |cx| {
+        base_value(
+            cx,
+            "minecraft:villager",
+            "minecraft:follow_range",
+            48.0,
+            16.0,
+        )
+    }));
+    out.push((key(4187, 0), |cx| {
+        base_value(cx, "minecraft:bee", "minecraft:follow_range", 48.0, 16.0)
+    }));
+    out.push((key(4187, 0), |cx| {
+        base_value(cx, "minecraft:allay", "minecraft:follow_range", 48.0, 16.0)
+    }));
+    out.push((key(4187, 0), |cx| {
+        base_value(cx, "minecraft:llama", "minecraft:follow_range", 40.0, 16.0)
+    }));
+    out.push((key(4187, 0), |cx| {
+        base_value(
+            cx,
+            "minecraft:piglin_brute",
+            "minecraft:follow_range",
+            16.0,
+            12.0,
+        )
+    }));
+    out.push((key(4187, 0), |cx| {
+        base_value(cx, "minecraft:warden", "minecraft:follow_range", 16.0, 24.0)
+    }));
     super::text::register(out);
     out.push((key(4293, 0), drop_chances_format));
     out.push((key(4294, 0), |cx| {
-        block_property_rename(cx, "minecraft:creaking_heart", "active", "creaking_heart_state", &|v| {
-            if v == "true" { "awake".into() } else { "uprooted".into() }
-        });
+        block_property_rename(
+            cx,
+            "minecraft:creaking_heart",
+            "active",
+            "creaking_heart_state",
+            &|v| {
+                if v == "true" {
+                    "awake".into()
+                } else {
+                    "uprooted".into()
+                }
+            },
+        );
     }));
     out.push((key(4296, 0), |cx| {
-        cx.entity("minecraft:area_effect_cloud", |e| set(e, "potion_duration_scale", Tag::Float(0.25f32.to_bits())));
+        cx.entity("minecraft:area_effect_cloud", |e| {
+            set(e, "potion_duration_scale", Tag::Float(0.25f32.to_bits()))
+        });
     }));
     out.push((key(4297, 0), forced_chunk_to_ticket));
     out.push((key(4299, 0), entity_spawner_item_variants));
     out.push((key(4300, 0), saddle_equipment_slot));
     out.push((key(4301, 0), equipment_format));
-    out.push((key(4303, 0), |cx| cx.each_out(Ty::Entity, fall_distance_to_double)));
-    out.push((key(4303, 0), |cx| cx.each_out(Ty::Player, fall_distance_to_double)));
+    out.push((key(4303, 0), |cx| {
+        cx.each_out(Ty::Entity, fall_distance_to_double)
+    }));
+    out.push((key(4303, 0), |cx| {
+        cx.each_out(Ty::Player, fall_distance_to_double)
+    }));
     out.push((key(4305, 0), |cx| {
-        block_property_rename(cx, "minecraft:test_block", "test_block_mode", "mode", &|v| v.to_owned());
+        block_property_rename(
+            cx,
+            "minecraft:test_block",
+            "test_block_mode",
+            "mode",
+            &|v| v.to_owned(),
+        );
     }));
     out.push((key(4306, 0), thrown_potion_split));
     out.push((key(4307, 0), tooltip_display));
@@ -110,7 +184,8 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(4309, 0), chunk_ticket_unpack_pos));
     out.push((key(4311, 0), |cx| {
         advancements_rename(cx, &|id| {
-            (namespaced(id) == "minecraft:nether/use_lodestone").then(|| "minecraft:adventure/use_lodestone".into())
+            (namespaced(id) == "minecraft:nether/use_lodestone")
+                .then(|| "minecraft:adventure/use_lodestone".into())
         });
     }));
     out.push((key(4312, 0), player_equipment));
@@ -160,60 +235,177 @@ fn uuid_text(u: [i32; 4]) -> String {
 }
 
 const MODIFIER_IDS: &[(&str, &str)] = &[
-    ("736565d2-e1a7-403d-a3f8-1aeb3e302542", "minecraft:creative_mode_block_range"),
-    ("98491ef6-97b1-4584-ae82-71a8cc85cf73", "minecraft:creative_mode_entity_range"),
-    ("91aeaa56-376b-4498-935b-2f7f68070635", "minecraft:effect.speed"),
-    ("7107de5e-7ce8-4030-940e-514c1f160890", "minecraft:effect.slowness"),
-    ("af8b6e3f-3328-4c0a-aa36-5ba2bb9dbef3", "minecraft:effect.haste"),
-    ("55fced67-e92a-486e-9800-b47f202c4386", "minecraft:effect.mining_fatigue"),
-    ("648d7064-6a60-4f59-8abe-c2c23a6dd7a9", "minecraft:effect.strength"),
-    ("c0105bf3-aef8-46b0-9ebc-92943757ccbe", "minecraft:effect.jump_boost"),
-    ("22653b89-116e-49dc-9b6b-9971489b5be5", "minecraft:effect.weakness"),
-    ("5d6f0ba2-1186-46ac-b896-c61c5cee99cc", "minecraft:effect.health_boost"),
-    ("eae29cf0-701e-4ed6-883a-96f798f3dab5", "minecraft:effect.absorption"),
-    ("03c3c89d-7037-4b42-869f-b146bcb64d2e", "minecraft:effect.luck"),
-    ("cc5af142-2bd2-4215-b636-2605aed11727", "minecraft:effect.unluck"),
+    (
+        "736565d2-e1a7-403d-a3f8-1aeb3e302542",
+        "minecraft:creative_mode_block_range",
+    ),
+    (
+        "98491ef6-97b1-4584-ae82-71a8cc85cf73",
+        "minecraft:creative_mode_entity_range",
+    ),
+    (
+        "91aeaa56-376b-4498-935b-2f7f68070635",
+        "minecraft:effect.speed",
+    ),
+    (
+        "7107de5e-7ce8-4030-940e-514c1f160890",
+        "minecraft:effect.slowness",
+    ),
+    (
+        "af8b6e3f-3328-4c0a-aa36-5ba2bb9dbef3",
+        "minecraft:effect.haste",
+    ),
+    (
+        "55fced67-e92a-486e-9800-b47f202c4386",
+        "minecraft:effect.mining_fatigue",
+    ),
+    (
+        "648d7064-6a60-4f59-8abe-c2c23a6dd7a9",
+        "minecraft:effect.strength",
+    ),
+    (
+        "c0105bf3-aef8-46b0-9ebc-92943757ccbe",
+        "minecraft:effect.jump_boost",
+    ),
+    (
+        "22653b89-116e-49dc-9b6b-9971489b5be5",
+        "minecraft:effect.weakness",
+    ),
+    (
+        "5d6f0ba2-1186-46ac-b896-c61c5cee99cc",
+        "minecraft:effect.health_boost",
+    ),
+    (
+        "eae29cf0-701e-4ed6-883a-96f798f3dab5",
+        "minecraft:effect.absorption",
+    ),
+    (
+        "03c3c89d-7037-4b42-869f-b146bcb64d2e",
+        "minecraft:effect.luck",
+    ),
+    (
+        "cc5af142-2bd2-4215-b636-2605aed11727",
+        "minecraft:effect.unluck",
+    ),
     ("6555be74-63b3-41f1-a245-77833b3c2562", "minecraft:evil"),
-    ("1eaf83ff-7207-4596-b37a-d7a07b3ec4ce", "minecraft:powder_snow"),
-    ("662a6b8d-da3e-4c1c-8813-96ea6097278d", "minecraft:sprinting"),
-    ("020e0dfb-87ae-4653-9556-831010e291a0", "minecraft:attacking"),
+    (
+        "1eaf83ff-7207-4596-b37a-d7a07b3ec4ce",
+        "minecraft:powder_snow",
+    ),
+    (
+        "662a6b8d-da3e-4c1c-8813-96ea6097278d",
+        "minecraft:sprinting",
+    ),
+    (
+        "020e0dfb-87ae-4653-9556-831010e291a0",
+        "minecraft:attacking",
+    ),
     ("766bfa64-11f3-11ea-8d71-362b9e155667", "minecraft:baby"),
     ("7e0292f2-9434-48d5-a29f-9583af7df27f", "minecraft:covered"),
-    ("9e362924-01de-4ddd-a2b2-d0f7a405a174", "minecraft:suffocating"),
+    (
+        "9e362924-01de-4ddd-a2b2-d0f7a405a174",
+        "minecraft:suffocating",
+    ),
     ("5cd17e52-a79a-43d3-a529-90fde04b181e", "minecraft:drinking"),
     ("b9766b59-9566-4402-bc1f-2ee2a276d836", "minecraft:baby"),
-    ("49455a49-7ec5-45ba-b886-3b90b23a1718", "minecraft:attacking"),
-    ("845db27c-c624-495f-8c9f-6020a9a58b6b", "minecraft:armor.boots"),
-    ("d8499b04-0e66-4726-ab29-64469d734e0d", "minecraft:armor.leggings"),
-    ("9f3d476d-c118-4544-8365-64846904b48e", "minecraft:armor.chestplate"),
-    ("2ad3f246-fee1-4e67-b886-69fd380bb150", "minecraft:armor.helmet"),
-    ("c1c72771-8b8e-ba4a-ace0-81a93c8928b2", "minecraft:armor.body"),
-    ("b572ecd2-ac0c-4071-abde-9594af072a37", "minecraft:enchantment.fire_protection"),
-    ("40a9968f-5c66-4e2f-b7f4-2ec2f4b3e450", "minecraft:enchantment.blast_protection"),
-    ("07a65791-f64d-4e79-86c7-f83932f007ec", "minecraft:enchantment.respiration"),
-    ("60b1b7db-fffd-4ad0-817c-d6c6a93d8a45", "minecraft:enchantment.aqua_affinity"),
-    ("11dc269a-4476-46c0-aff3-9e17d7eb6801", "minecraft:enchantment.depth_strider"),
-    ("87f46a96-686f-4796-b035-22e16ee9e038", "minecraft:enchantment.soul_speed"),
-    ("b9716dbd-50df-4080-850e-70347d24e687", "minecraft:enchantment.soul_speed"),
-    ("92437d00-c3a7-4f2e-8f6c-1f21585d5dd0", "minecraft:enchantment.swift_sneak"),
-    ("5d3d087b-debe-4037-b53e-d84f3ff51f17", "minecraft:enchantment.sweeping_edge"),
-    ("3ceb37c0-db62-46b5-bd02-785457b01d96", "minecraft:enchantment.efficiency"),
-    ("cb3f55d3-645c-4f38-a497-9c13a33db5cf", "minecraft:base_attack_damage"),
-    ("fa233e1c-4180-4865-b01b-bcce9785aca3", "minecraft:base_attack_speed"),
+    (
+        "49455a49-7ec5-45ba-b886-3b90b23a1718",
+        "minecraft:attacking",
+    ),
+    (
+        "845db27c-c624-495f-8c9f-6020a9a58b6b",
+        "minecraft:armor.boots",
+    ),
+    (
+        "d8499b04-0e66-4726-ab29-64469d734e0d",
+        "minecraft:armor.leggings",
+    ),
+    (
+        "9f3d476d-c118-4544-8365-64846904b48e",
+        "minecraft:armor.chestplate",
+    ),
+    (
+        "2ad3f246-fee1-4e67-b886-69fd380bb150",
+        "minecraft:armor.helmet",
+    ),
+    (
+        "c1c72771-8b8e-ba4a-ace0-81a93c8928b2",
+        "minecraft:armor.body",
+    ),
+    (
+        "b572ecd2-ac0c-4071-abde-9594af072a37",
+        "minecraft:enchantment.fire_protection",
+    ),
+    (
+        "40a9968f-5c66-4e2f-b7f4-2ec2f4b3e450",
+        "minecraft:enchantment.blast_protection",
+    ),
+    (
+        "07a65791-f64d-4e79-86c7-f83932f007ec",
+        "minecraft:enchantment.respiration",
+    ),
+    (
+        "60b1b7db-fffd-4ad0-817c-d6c6a93d8a45",
+        "minecraft:enchantment.aqua_affinity",
+    ),
+    (
+        "11dc269a-4476-46c0-aff3-9e17d7eb6801",
+        "minecraft:enchantment.depth_strider",
+    ),
+    (
+        "87f46a96-686f-4796-b035-22e16ee9e038",
+        "minecraft:enchantment.soul_speed",
+    ),
+    (
+        "b9716dbd-50df-4080-850e-70347d24e687",
+        "minecraft:enchantment.soul_speed",
+    ),
+    (
+        "92437d00-c3a7-4f2e-8f6c-1f21585d5dd0",
+        "minecraft:enchantment.swift_sneak",
+    ),
+    (
+        "5d3d087b-debe-4037-b53e-d84f3ff51f17",
+        "minecraft:enchantment.sweeping_edge",
+    ),
+    (
+        "3ceb37c0-db62-46b5-bd02-785457b01d96",
+        "minecraft:enchantment.efficiency",
+    ),
+    (
+        "cb3f55d3-645c-4f38-a497-9c13a33db5cf",
+        "minecraft:base_attack_damage",
+    ),
+    (
+        "fa233e1c-4180-4865-b01b-bcce9785aca3",
+        "minecraft:base_attack_speed",
+    ),
 ];
 const MODIFIER_NAMES: &[(&str, &str)] = &[
     ("Random spawn bonus", "minecraft:random_spawn_bonus"),
-    ("Random zombie-spawn bonus", "minecraft:zombie_random_spawn_bonus"),
+    (
+        "Random zombie-spawn bonus",
+        "minecraft:zombie_random_spawn_bonus",
+    ),
     ("Leader zombie bonus", "minecraft:leader_zombie_bonus"),
-    ("Zombie reinforcement callee charge", "minecraft:reinforcement_callee_charge"),
-    ("Zombie reinforcement caller charge", "minecraft:reinforcement_caller_charge"),
+    (
+        "Zombie reinforcement callee charge",
+        "minecraft:reinforcement_callee_charge",
+    ),
+    (
+        "Zombie reinforcement caller charge",
+        "minecraft:reinforcement_caller_charge",
+    ),
 ];
 
 /// `asIntStream` of a UUID field, as `uuidFromIntArray` wants it.
 fn uuid_of(v: Option<&Tag>) -> Option<[i32; 4]> {
     let ints: Vec<i32> = match v {
         Some(Tag::IntArray(a)) => a.clone(),
-        other => stream(other).iter().map(|t| as_number(t).map_or(0, |n| n.int_value())).collect(),
+        other => stream(other)
+            .iter()
+            .map(|t| as_number(t).map_or(0, |n| n.int_value()))
+            .collect(),
     };
     (ints.len() == 4).then(|| [ints[0], ints[1], ints[2], ints[3]])
 }
@@ -231,8 +423,13 @@ fn fix_modifiers(modifiers: Vec<Tag>) -> Vec<Tag> {
     for mut m in modifiers {
         let uuid = uuid_of(m.get("uuid")).map(uuid_text);
         let name = as_string(m.get("name"), "");
-        let from_uuid = uuid.as_deref().and_then(|u| MODIFIER_IDS.iter().find(|(k, _)| *k == u).map(|(_, v)| *v));
-        let from_name = MODIFIER_NAMES.iter().find(|(k, _)| *k == name).map(|(_, v)| *v);
+        let from_uuid = uuid
+            .as_deref()
+            .and_then(|u| MODIFIER_IDS.iter().find(|(k, _)| *k == u).map(|(_, v)| *v));
+        let from_name = MODIFIER_NAMES
+            .iter()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| *v);
         if let Some(id) = from_uuid {
             set(&mut m, "id", string(id));
             remove(&mut m, "uuid");
@@ -316,7 +513,8 @@ fn attribute_modifier_ids(cx: &mut Cx) {
 
 fn jukebox_ticks(cx: &mut Cx) {
     cx.block_entity("minecraft:jukebox", |be| {
-        let ticks = as_long(be.get("TickCount"), 0).wrapping_sub(as_long(be.get("RecordStartTick"), 0));
+        let ticks =
+            as_long(be.get("TickCount"), 0).wrapping_sub(as_long(be.get("RecordStartTick"), 0));
         remove(be, "IsPlaying");
         remove(be, "TickCount");
         remove(be, "RecordStartTick");
@@ -330,13 +528,17 @@ fn jukebox_ticks(cx: &mut Cx) {
 
 fn ominous_banner_rarity(cx: &mut Cx) {
     let fix = |c: &mut Tag| {
-        if c.get("minecraft:item_name").and_then(translation_key).as_deref() == Some("block.minecraft.ominous_banner") {
+        if c.get("minecraft:item_name")
+            .and_then(translation_key)
+            .as_deref()
+            == Some("block.minecraft.ominous_banner")
+        {
             set(
                 c,
                 "minecraft:item_name",
-                Tag::String(crate::nbt::JavaString(super::json::translatable_component_json(
-                    "block.minecraft.ominous_banner",
-                ))),
+                Tag::String(crate::nbt::JavaString(
+                    super::json::translatable_component_json("block.minecraft.ominous_banner"),
+                )),
             );
             set(c, "minecraft:rarity", string("uncommon"));
         }
@@ -346,11 +548,14 @@ fn ominous_banner_rarity(cx: &mut Cx) {
             fix(c);
         }
     });
-    cx.item(|id| id == "minecraft:white_banner", |s| {
-        if let Some(c) = s.get_mut("components") {
-            fix(c);
-        }
-    });
+    cx.item(
+        |id| id == "minecraft:white_banner",
+        |s| {
+            if let Some(c) = s.get_mut("components") {
+                fix(c);
+            }
+        },
+    );
 }
 
 fn attribute_id_prefix(id: &str) -> Option<String> {
@@ -365,7 +570,11 @@ fn attribute_id_prefix(id: &str) -> Option<String> {
 }
 
 /// `AttributesRenameFix`.
-pub(super) fn attributes_rename(cx: &mut Cx, old_component_format: bool, rename_fn: &dyn Fn(&str) -> Option<String>) {
+pub(super) fn attributes_rename(
+    cx: &mut Cx,
+    old_component_format: bool,
+    rename_fn: &dyn Fn(&str) -> Option<String>,
+) {
     let fix_field = |v: &mut Tag, field: &str| {
         if let Some(s) = as_str(v.get(field))
             && let Some(new) = rename_fn(&s)
@@ -377,7 +586,11 @@ pub(super) fn attributes_rename(cx: &mut Cx, old_component_format: bool, rename_
         let Some(a) = c.get_mut("minecraft:attribute_modifiers") else {
             return;
         };
-        let list = if old_component_format { a.get_mut("modifiers") } else { Some(a) };
+        let list = if old_component_format {
+            a.get_mut("modifiers")
+        } else {
+            Some(a)
+        };
         if let Some(Tag::List(mods)) = list {
             for m in mods {
                 fix_field(m, "type");
@@ -408,8 +621,14 @@ fn food_to_consumable(cx: &mut Cx) {
             .map(|e| {
                 Tag::compound([
                     ("type", string("minecraft:apply_effects")),
-                    ("effects", Tag::List(e.get("effect").cloned().into_iter().collect())),
-                    ("probability", Tag::Float(as_float(e.get("probability"), 1.0).to_bits())),
+                    (
+                        "effects",
+                        Tag::List(e.get("effect").cloned().into_iter().collect()),
+                    ),
+                    (
+                        "probability",
+                        Tag::Float(as_float(e.get("probability"), 1.0).to_bits()),
+                    ),
                 ])
             })
             .collect();
@@ -504,7 +723,9 @@ const TRIAL_CONFIGS: &[(&str, &str, &str)] = &[
 ];
 
 fn snbt(s: &str) -> Tag {
-    crate::nbt::parse_snbt(s).map(|(t, _)| t).unwrap_or_else(|_| empty_map())
+    crate::nbt::parse_snbt(s)
+        .map(|(t, _)| t)
+        .unwrap_or_else(|_| empty_map())
 }
 /// `CompoundTag.merge`.
 fn merge(into: &mut Tag, other: &Tag) {
@@ -560,12 +781,21 @@ fn trial_config_key(normal: &Tag, ominous: &Tag) -> Option<&'static str> {
 
 fn trial_spawner_config_in_registry(cx: &mut Cx) {
     cx.block_entity("minecraft:trial_spawner", |be| {
-        let (Some(normal), Some(ominous)) = (be.get("normal_config"), be.get("ominous_config")) else {
+        let (Some(normal), Some(ominous)) = (be.get("normal_config"), be.get("ominous_config"))
+        else {
             return;
         };
         if let Some(name) = trial_config_key(normal, ominous) {
-            set(be, "normal_config", string(&format!("minecraft:{name}/normal")));
-            set(be, "ominous_config", string(&format!("minecraft:{name}/ominous")));
+            set(
+                be,
+                "normal_config",
+                string(&format!("minecraft:{name}/normal")),
+            );
+            set(
+                be,
+                "ominous_config",
+                string(&format!("minecraft:{name}/ominous")),
+            );
         }
     });
 }
@@ -618,10 +848,13 @@ fn fix_lock(v: Tag) -> Option<Tag> {
 
 /// `InvalidLockComponentFix.isBrokenLock`: `{components: {custom_name: '""'}}`.
 fn broken_lock(v: &Tag) -> bool {
-    let one = |t: &Tag, field: &str| matches!(t, Tag::Compound(c) if c.len() == 1) && t.get(field).is_some();
+    let one = |t: &Tag, field: &str| {
+        matches!(t, Tag::Compound(c) if c.len() == 1) && t.get(field).is_some()
+    };
     one(v, "components")
         && v.get("components").is_some_and(|c| {
-            one(c, "minecraft:custom_name") && as_str(c.get("minecraft:custom_name")).as_deref() == Some("\"\"")
+            one(c, "minecraft:custom_name")
+                && as_str(c.get("minecraft:custom_name")).as_deref() == Some("\"\"")
         })
 }
 
@@ -662,15 +895,23 @@ fn base_value(cx: &mut Cx, entity: &str, attribute: &str, from: f64, to: f64) {
 
 fn drop_chances_format(cx: &mut Cx) {
     cx.each(Ty::Entity, |e| {
-        let parse = |v: Option<&Tag>| -> Vec<f32> { stream(v).iter().map(|t| as_float(Some(t), 0.085)).collect() };
+        let parse = |v: Option<&Tag>| -> Vec<f32> {
+            stream(v).iter().map(|t| as_float(Some(t), 0.085)).collect()
+        };
         let armor = parse(e.get("ArmorDropChances"));
         let hands = parse(e.get("HandDropChances"));
-        let body = e.get("body_armor_drop_chance").and_then(as_number).map_or(0.085, |n| n.float_value());
+        let body = e
+            .get("body_armor_drop_chance")
+            .and_then(as_number)
+            .map_or(0.085, |n| n.float_value());
         remove(e, "ArmorDropChances");
         remove(e, "HandDropChances");
         remove(e, "body_armor_drop_chance");
         let mut chances = empty_map();
-        for (slots, values) in [(&["feet", "legs", "chest", "head"][..], &armor), (&["mainhand", "offhand"][..], &hands)] {
+        for (slots, values) in [
+            (&["feet", "legs", "chest", "head"][..], &armor),
+            (&["mainhand", "offhand"][..], &hands),
+        ] {
             for (slot, chance) in slots.iter().zip(values.iter()) {
                 if *chance != 0.085 {
                     set(&mut chances, slot, Tag::Float(chance.to_bits()));
@@ -687,13 +928,21 @@ fn drop_chances_format(cx: &mut Cx) {
 }
 
 /// `LegacyBlockPropertyRenameAndFix`.
-fn block_property_rename(cx: &mut Cx, block: &str, old: &str, new: &str, f: &dyn Fn(&str) -> String) {
+fn block_property_rename(
+    cx: &mut Cx,
+    block: &str,
+    old: &str,
+    new: &str,
+    f: &dyn Fn(&str) -> String,
+) {
     cx.each(Ty::BlockState, |s| {
         if as_str(s.get("Name")).map(|n| namespaced(&n)).as_deref() != Some(block) {
             return;
         }
         if let Some(props) = s.get_mut("Properties") {
-            rename_and_fix(props, old, new, |v| Some(string(&f(&as_string(Some(&v), "")))));
+            rename_and_fix(props, old, new, |v| {
+                Some(string(&f(&as_string(Some(&v), ""))))
+            });
         }
     });
 }
@@ -704,7 +953,10 @@ fn forced_chunk_to_ticket(cx: &mut Cx) {
             rename_and_fix(data, "Forced", "tickets", |forced| {
                 let longs: Vec<i64> = match &forced {
                     Tag::LongArray(a) => a.clone(),
-                    other => stream(Some(other)).iter().map(|t| as_long(Some(t), 0)).collect(),
+                    other => stream(Some(other))
+                        .iter()
+                        .map(|t| as_long(Some(t), 0))
+                        .collect(),
                 };
                 Some(Tag::List(
                     longs
@@ -787,8 +1039,16 @@ fn entity_spawner_item_variants(cx: &mut Cx) {
                         b
                     });
                     set(c, "minecraft:tropical_fish/pattern", string(pattern));
-                    set(c, "minecraft:tropical_fish/base_color", string(dye_color(packed >> 16 & 0xFF)));
-                    set(c, "minecraft:tropical_fish/pattern_color", string(dye_color(packed >> 24 & 0xFF)));
+                    set(
+                        c,
+                        "minecraft:tropical_fish/base_color",
+                        string(dye_color(packed >> 16 & 0xFF)),
+                    );
+                    set(
+                        c,
+                        "minecraft:tropical_fish/pattern_color",
+                        string(dye_color(packed >> 24 & 0xFF)),
+                    );
                 }
             }
             _ => {}
@@ -831,8 +1091,14 @@ fn saddle_equipment_slot(cx: &mut Cx) {
     cx.each(Ty::Entity, |e| {
         let id = namespaced(&as_str(e.get("id")).unwrap_or_default());
         match id.as_str() {
-            "minecraft:horse" | "minecraft:skeleton_horse" | "minecraft:zombie_horse" | "minecraft:donkey"
-            | "minecraft:mule" | "minecraft:camel" | "minecraft:llama" | "minecraft:trader_llama" => {
+            "minecraft:horse"
+            | "minecraft:skeleton_horse"
+            | "minecraft:zombie_horse"
+            | "minecraft:donkey"
+            | "minecraft:mule"
+            | "minecraft:camel"
+            | "minecraft:llama"
+            | "minecraft:trader_llama" => {
                 if e.get("SaddleItem").is_some() {
                     rename(e, "SaddleItem", "saddle");
                     saddle_drop_chance(e);
@@ -843,7 +1109,11 @@ fn saddle_equipment_slot(cx: &mut Cx) {
                 let saddled = as_bool(e.get("Saddle"), false);
                 remove(e, "Saddle");
                 if saddled {
-                    set(e, "saddle", Tag::compound([("id", string("minecraft:saddle")), ("count", Tag::Int(1))]));
+                    set(
+                        e,
+                        "saddle",
+                        Tag::compound([("id", string("minecraft:saddle")), ("count", Tag::Int(1))]),
+                    );
                     saddle_drop_chance(e);
                 }
                 reread(k, e);
@@ -910,8 +1180,16 @@ fn thrown_potion_split(cx: &mut Cx) {
         if !id_is(e, "minecraft:potion") {
             return;
         }
-        let item = e.get("Item").and_then(|i| as_str(i.get("id"))).map(|i| namespaced(&i)).unwrap_or_default();
-        let new = if item == "minecraft:lingering_potion" { "minecraft:lingering_potion" } else { "minecraft:splash_potion" };
+        let item = e
+            .get("Item")
+            .and_then(|i| as_str(i.get("id")))
+            .map(|i| namespaced(&i))
+            .unwrap_or_default();
+        let new = if item == "minecraft:lingering_potion" {
+            "minecraft:lingering_potion"
+        } else {
+            "minecraft:splash_potion"
+        };
         set(e, "id", string(new));
     });
 }
@@ -969,9 +1247,19 @@ fn tooltip_display(cx: &mut Cx) {
         fix_component(c, &mut hidden, "minecraft:trim", None);
         fix_component(c, &mut hidden, "minecraft:unbreakable", None);
         fix_component(c, &mut hidden, "minecraft:dyed_color", Some("rgb"));
-        fix_component(c, &mut hidden, "minecraft:attribute_modifiers", Some("modifiers"));
+        fix_component(
+            c,
+            &mut hidden,
+            "minecraft:attribute_modifiers",
+            Some("modifiers"),
+        );
         fix_component(c, &mut hidden, "minecraft:enchantments", Some("levels"));
-        fix_component(c, &mut hidden, "minecraft:stored_enchantments", Some("levels"));
+        fix_component(
+            c,
+            &mut hidden,
+            "minecraft:stored_enchantments",
+            Some("levels"),
+        );
         fix_component(c, &mut hidden, "minecraft:jukebox_playable", Some("song"));
         let hide_tooltip = remove(c, "minecraft:hide_tooltip").is_some();
         let hide_additional = remove(c, "minecraft:hide_additional_tooltip").is_some();
@@ -990,7 +1278,10 @@ fn tooltip_display(cx: &mut Cx) {
                 "minecraft:tooltip_display",
                 Tag::compound([
                     ("hide_tooltip", Tag::Byte(i8::from(hide_tooltip))),
-                    ("hidden_components", Tag::List(hidden.iter().map(|s| string(s)).collect())),
+                    (
+                        "hidden_components",
+                        Tag::List(hidden.iter().map(|s| string(s)).collect()),
+                    ),
                 ]),
             );
         }
@@ -1111,12 +1402,22 @@ fn inline_block_pos_format(cx: &mut Cx) {
             p.get("SpawnZ").and_then(as_number),
         );
         if let (Some(x), Some(y), Some(z)) = spawn {
-            let mut respawn = Tag::compound([("pos", Tag::IntArray(vec![x.int_value(), y.int_value(), z.int_value()]))]);
+            let mut respawn = Tag::compound([(
+                "pos",
+                Tag::IntArray(vec![x.int_value(), y.int_value(), z.int_value()]),
+            )]);
             let source = p.clone();
             super::dynamic::copy_field(&source, "SpawnAngle", &mut respawn, "angle");
             super::dynamic::copy_field(&source, "SpawnDimension", &mut respawn, "dimension");
             super::dynamic::copy_field(&source, "SpawnForced", &mut respawn, "forced");
-            for k in ["SpawnX", "SpawnY", "SpawnZ", "SpawnAngle", "SpawnDimension", "SpawnForced"] {
+            for k in [
+                "SpawnX",
+                "SpawnY",
+                "SpawnZ",
+                "SpawnAngle",
+                "SpawnDimension",
+                "SpawnForced",
+            ] {
                 remove(p, k);
             }
             set(p, "respawn", respawn);
@@ -1126,7 +1427,10 @@ fn inline_block_pos_format(cx: &mut Cx) {
                 p,
                 "entered_nether_pos",
                 Tag::List(
-                    ["x", "y", "z"].iter().map(|k| Tag::Double(as_double(pos.get(k), 0.0).to_bits())).collect(),
+                    ["x", "y", "z"]
+                        .iter()
+                        .map(|k| Tag::Double(as_double(pos.get(k), 0.0).to_bits()))
+                        .collect(),
                 ),
             );
         }
@@ -1148,7 +1452,12 @@ fn inline_block_pos_format(cx: &mut Cx) {
             fix_inline_block_pos(e, "HomePosX", "HomePosY", "HomePosZ", "home_pos");
             rename(e, "HasEgg", "has_egg");
         }
-        for id in ["minecraft:item_frame", "minecraft:glow_item_frame", "minecraft:painting", "minecraft:leash_knot"] {
+        for id in [
+            "minecraft:item_frame",
+            "minecraft:glow_item_frame",
+            "minecraft:painting",
+            "minecraft:leash_knot",
+        ] {
             if id_is(e, id) {
                 fix_inline_block_pos(e, "TileX", "TileY", "TileZ", "block_pos");
             }

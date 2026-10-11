@@ -1,17 +1,25 @@
 //! The text component fixes of 1.21.5 (keys 4290 to 4292): JSON strings become
 //! NBT components, legacy hover events are replaced, stringified style flags
 //! become booleans and hover/click events take their new field names.
-use super::dynamic::{as_number, as_str, as_string, boolean, empty_map, remove, rename, rename_and_fix, set, string};
+use super::FixFn;
+use super::dynamic::{
+    as_number, as_str, as_string, boolean, empty_map, remove, rename, rename_and_fix, set, string,
+};
 use super::json;
 use super::schema::{Key, Ty, key};
-use super::FixFn;
 use crate::nbt::Tag;
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(4290, 0), |cx| cx.each(Ty::TextComponent, unflatten)));
-    out.push((key(4291, 0), |cx| cx.each(Ty::TextComponent, legacy_hover_event)));
-    out.push((key(4291, 0), |cx| cx.each(Ty::TextComponent, stringified_flags)));
-    out.push((key(4292, 0), |cx| cx.each(Ty::TextComponent, hover_and_click_event)));
+    out.push((key(4291, 0), |cx| {
+        cx.each(Ty::TextComponent, legacy_hover_event)
+    }));
+    out.push((key(4291, 0), |cx| {
+        cx.each(Ty::TextComponent, stringified_flags)
+    }));
+    out.push((key(4292, 0), |cx| {
+        cx.each(Ty::TextComponent, hover_and_click_event)
+    }));
 }
 
 /// `UnflattenTextComponentFix`: the JSON of a string component as NBT.
@@ -58,7 +66,10 @@ fn legacy_hover_event(v: &mut Tag) {
         text.extend(json::to_stable_string(&json::from_nbt(&hover)));
         Tag::compound([
             ("action", string("show_text")),
-            ("contents", Tag::compound([("text", Tag::String(crate::nbt::JavaString(text)))])),
+            (
+                "contents",
+                Tag::compound([("text", Tag::String(crate::nbt::JavaString(text)))]),
+            ),
         ])
     };
     set(v, "hoverEvent", new);
@@ -69,7 +80,13 @@ fn stringified_flags(v: &mut Tag) {
     if !is_full(v) {
         return;
     }
-    for flag in ["bold", "italic", "underlined", "strikethrough", "obfuscated"] {
+    for flag in [
+        "bold",
+        "italic",
+        "underlined",
+        "strikethrough",
+        "obfuscated",
+    ] {
         if let Some(s) = as_str(v.get(flag)) {
             set(v, flag, boolean(s.eq_ignore_ascii_case("true")));
         }
@@ -173,7 +190,9 @@ fn valid_uri(uri: &str) -> bool {
     while i < bytes.len() {
         let c = bytes[i];
         if c == '%' {
-            if !bytes.get(i + 1).is_some_and(char::is_ascii_hexdigit) || !bytes.get(i + 2).is_some_and(char::is_ascii_hexdigit) {
+            if !bytes.get(i + 1).is_some_and(char::is_ascii_hexdigit)
+                || !bytes.get(i + 2).is_some_and(char::is_ascii_hexdigit)
+            {
                 return false;
             }
             i += 3;
@@ -182,7 +201,10 @@ fn valid_uri(uri: &str) -> bool {
         if c == '#' {
             hashes += 1;
         }
-        if c.is_control() || c.is_whitespace() || matches!(c, '"' | '<' | '>' | '\\' | '^' | '`' | '{' | '|' | '}') {
+        if c.is_control()
+            || c.is_whitespace()
+            || matches!(c, '"' | '<' | '>' | '\\' | '^' | '`' | '{' | '|' | '}')
+        {
             return false;
         }
         i += 1;
@@ -207,7 +229,12 @@ mod tests {
     fn click_events_take_their_new_fields() {
         let mut c = j(r#"{"text":"a","clickEvent":{"action":"change_page","value":"0"}}"#);
         hover_and_click_event(&mut c);
-        assert_eq!(c, j(r#"{"text":"a","click_event":{"action":"change_page","page":1}}"#));
+        // The page is written as an int (`createInt`), not as JSON's narrowest number.
+        let mut expected = j(r#"{"text":"a","click_event":{"action":"change_page"}}"#);
+        if let Some(click) = expected.get_mut("click_event") {
+            super::super::dynamic::set(click, "page", Tag::Int(1));
+        }
+        assert_eq!(c, expected);
         let mut c = j(r#"{"text":"a","clickEvent":{"action":"open_url","value":"ftp://x"}}"#);
         hover_and_click_event(&mut c);
         assert_eq!(c, j(r#"{"text":"a"}"#));

@@ -1,7 +1,9 @@
 //! Fixes of 1.19 to 1.20 (keys 3076 to 3459): what worlds saved by 1.18.2 to
 //! 1.19.4 need before the fixes of [`super::fixes_a`]. The options fixes of
 //! this range (3201, 3214, 3319) are client settings, not world data.
-use super::dynamic::{as_number, as_str, is_list, namespaced, remove, rename, set, stream, string, update};
+use super::dynamic::{
+    as_number, as_str, is_list, namespaced, remove, rename, set, stream, string, update,
+};
 use super::fixes_a::fix_block_pos;
 use super::fixes_b::feature_flag_remove;
 use super::schema::{Key, Ty, key};
@@ -10,11 +12,18 @@ use crate::nbt::{Compound, Tag};
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(3077, 0), chunk_delete_ignored_light));
-    out.push((key(3084, 0), |cx| cx.rename(Ty::GameEventName, renamer(GAME_EVENTS))));
-    out.push((key(3086, 0), |cx| entity_variant(cx, "minecraft:cat", "CatType", cat_type)));
+    out.push((key(3084, 0), |cx| {
+        cx.rename(Ty::GameEventName, renamer(GAME_EVENTS))
+    }));
+    out.push((key(3086, 0), |cx| {
+        entity_variant(cx, "minecraft:cat", "CatType", cat_type)
+    }));
     out.push((key(3086, 0), |cx| {
         criteria_rename(cx, "minecraft:husbandry/complete_catalogue", &|s| {
-            CAT_TEXTURES.iter().find(|(from, _)| *from == s).map(|(_, to)| (*to).to_owned())
+            CAT_TEXTURES
+                .iter()
+                .find(|(from, _)| *from == s)
+                .map(|(_, to)| (*to).to_owned())
         });
     }));
     out.push((key(3087, 0), |cx| {
@@ -54,7 +63,10 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     }));
     out.push((key(3097, 0), |cx| {
         poi_records(cx, |r| {
-            !matches!(as_str(r.get("type")).as_deref(), Some("minecraft:unemployed" | "minecraft:nitwit") | None)
+            !matches!(
+                as_str(r.get("type")).as_deref(),
+                Some("minecraft:unemployed" | "minecraft:nitwit") | None
+            )
         })
     }));
     out.push((key(3108, 0), |cx| {
@@ -82,15 +94,24 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
             }
         })
     }));
-    out.push((key(3438, 0), |cx| cx.rename(Ty::ItemName, renamer(POTTERY_SHARDS))));
+    out.push((key(3438, 0), |cx| {
+        cx.rename(Ty::ItemName, renamer(POTTERY_SHARDS))
+    }));
     out.push((key(3439, 0), |cx| sign_double_sided(cx, "minecraft:sign")));
-    out.push((key(3439, 1), |cx| sign_double_sided(cx, "minecraft:hanging_sign")));
+    out.push((key(3439, 1), |cx| {
+        sign_double_sided(cx, "minecraft:hanging_sign")
+    }));
     out.push((key(3440, 0), multi_noise_preset));
-    out.push((key(3440, 0), |cx| feature_flag_remove(cx, &["minecraft:update_1_20"])));
+    out.push((key(3440, 0), |cx| {
+        feature_flag_remove(cx, &["minecraft:update_1_20"])
+    }));
     out.push((key(3447, 0), |cx| {
         cx.rename(Ty::ItemName, |id| {
             let id = namespaced(id);
-            POTTERY_SHERDS.iter().find(|(from, _)| *from == id).map(|(_, to)| *to)
+            POTTERY_SHERDS
+                .iter()
+                .find(|(from, _)| *from == id)
+                .map(|(_, to)| *to)
         })
     }));
     // DecoratedPotFieldRenameFix converts unchecked: the typed shards are written
@@ -115,7 +136,10 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
 /// `ChunkDeleteIgnoredLightDataFix`.
 fn chunk_delete_ignored_light(cx: &mut Cx) {
     cx.each(Ty::Chunk, |c| {
-        let light_on = c.get("isLightOn").and_then(as_number).is_some_and(|n| n.double_value() != 0.0);
+        let light_on = c
+            .get("isLightOn")
+            .and_then(as_number)
+            .is_some_and(|n| n.double_value() != 0.0);
         if !light_on && let Some(Tag::List(sections)) = c.get_mut("sections") {
             for s in sections {
                 remove(s, "BlockLight");
@@ -199,7 +223,10 @@ const CAT_TEXTURES: &[(&str, &str)] = &[
     ("textures/entity/cat/black.png", "minecraft:black"),
     ("textures/entity/cat/red.png", "minecraft:red"),
     ("textures/entity/cat/siamese.png", "minecraft:siamese"),
-    ("textures/entity/cat/british_shorthair.png", "minecraft:british"),
+    (
+        "textures/entity/cat/british_shorthair.png",
+        "minecraft:british",
+    ),
     ("textures/entity/cat/calico.png", "minecraft:calico"),
     ("textures/entity/cat/persian.png", "minecraft:persian"),
     ("textures/entity/cat/ragdoll.png", "minecraft:ragdoll"),
@@ -254,7 +281,11 @@ fn goat_horn_id(cx: &mut Cx) {
         |id| id == "minecraft:goat_horn",
         |tag| {
             let variant = super::dynamic::as_int(tag.get("SoundVariant"), 0);
-            let sound = INSTRUMENTS[if (0..8).contains(&variant) { variant as usize } else { 0 }];
+            let sound = INSTRUMENTS[if (0..8).contains(&variant) {
+                variant as usize
+            } else {
+                0
+            }];
             remove(tag, "SoundVariant");
             set(tag, "instrument", string(sound));
         },
@@ -294,7 +325,10 @@ fn poi_records(cx: &mut Cx, keep: impl Fn(&Tag) -> bool) {
             if let Some(records) = section.get("Records")
                 && is_list(Some(records))
             {
-                let kept: Vec<Tag> = stream(Some(records)).into_iter().filter(|r| keep(r)).collect();
+                let kept: Vec<Tag> = stream(Some(records))
+                    .into_iter()
+                    .filter(|r| keep(r))
+                    .collect();
                 set(section, "Records", Tag::List(kept));
             }
         }
@@ -309,7 +343,10 @@ fn pig_spawn_egg(cx: &mut Cx) {
     cx.item(
         |id| id == "minecraft:pig_spawn_egg",
         |s| {
-            let entity = s.get("tag").and_then(|t| t.get("EntityTag")).and_then(|e| as_str(e.get("id")));
+            let entity = s
+                .get("tag")
+                .and_then(|t| t.get("EntityTag"))
+                .and_then(|e| as_str(e.get("id")));
             if let Some(entity) = entity {
                 let egg = SPAWN_EGGS
                     .iter()
@@ -329,11 +366,17 @@ const SPAWN_EGGS: &[(&str, &str)] = &[
     ("minecraft:cow", "minecraft:cow_spawn_egg"),
     ("minecraft:creeper", "minecraft:creeper_spawn_egg"),
     ("minecraft:donkey", "minecraft:donkey_spawn_egg"),
-    ("minecraft:elder_guardian", "minecraft:elder_guardian_spawn_egg"),
+    (
+        "minecraft:elder_guardian",
+        "minecraft:elder_guardian_spawn_egg",
+    ),
     ("minecraft:ender_dragon", "minecraft:ender_dragon_spawn_egg"),
     ("minecraft:enderman", "minecraft:enderman_spawn_egg"),
     ("minecraft:endermite", "minecraft:endermite_spawn_egg"),
-    ("minecraft:evocation_illager", "minecraft:evocation_illager_spawn_egg"),
+    (
+        "minecraft:evocation_illager",
+        "minecraft:evocation_illager_spawn_egg",
+    ),
     ("minecraft:ghast", "minecraft:ghast_spawn_egg"),
     ("minecraft:guardian", "minecraft:guardian_spawn_egg"),
     ("minecraft:horse", "minecraft:horse_spawn_egg"),
@@ -353,7 +396,10 @@ const SPAWN_EGGS: &[(&str, &str)] = &[
     ("minecraft:shulker", "minecraft:shulker_spawn_egg"),
     ("minecraft:silverfish", "minecraft:silverfish_spawn_egg"),
     ("minecraft:skeleton", "minecraft:skeleton_spawn_egg"),
-    ("minecraft:skeleton_horse", "minecraft:skeleton_horse_spawn_egg"),
+    (
+        "minecraft:skeleton_horse",
+        "minecraft:skeleton_horse_spawn_egg",
+    ),
     ("minecraft:slime", "minecraft:slime_spawn_egg"),
     ("minecraft:snow_golem", "minecraft:snow_golem_spawn_egg"),
     ("minecraft:spider", "minecraft:spider_spawn_egg"),
@@ -362,21 +408,37 @@ const SPAWN_EGGS: &[(&str, &str)] = &[
     ("minecraft:turtle", "minecraft:turtle_spawn_egg"),
     ("minecraft:vex", "minecraft:vex_spawn_egg"),
     ("minecraft:villager", "minecraft:villager_spawn_egg"),
-    ("minecraft:vindication_illager", "minecraft:vindication_illager_spawn_egg"),
+    (
+        "minecraft:vindication_illager",
+        "minecraft:vindication_illager_spawn_egg",
+    ),
     ("minecraft:witch", "minecraft:witch_spawn_egg"),
     ("minecraft:wither", "minecraft:wither_spawn_egg"),
-    ("minecraft:wither_skeleton", "minecraft:wither_skeleton_spawn_egg"),
+    (
+        "minecraft:wither_skeleton",
+        "minecraft:wither_skeleton_spawn_egg",
+    ),
     ("minecraft:wolf", "minecraft:wolf_spawn_egg"),
     ("minecraft:zombie", "minecraft:zombie_spawn_egg"),
     ("minecraft:zombie_horse", "minecraft:zombie_horse_spawn_egg"),
-    ("minecraft:zombie_pigman", "minecraft:zombie_pigman_spawn_egg"),
-    ("minecraft:zombie_villager", "minecraft:zombie_villager_spawn_egg"),
+    (
+        "minecraft:zombie_pigman",
+        "minecraft:zombie_pigman_spawn_egg",
+    ),
+    (
+        "minecraft:zombie_villager",
+        "minecraft:zombie_villager_spawn_egg",
+    ),
 ];
 
 // ------------------------------------------------------------------ 3322
 
-const POTION_ITEMS: [&str; 4] =
-    ["minecraft:potion", "minecraft:splash_potion", "minecraft:lingering_potion", "minecraft:tipped_arrow"];
+const POTION_ITEMS: [&str; 4] = [
+    "minecraft:potion",
+    "minecraft:splash_potion",
+    "minecraft:lingering_potion",
+    "minecraft:tipped_arrow",
+];
 
 /// `EffectDurationFix.fix`: every effect's factor data counts ticks active.
 fn effect_list(list: Tag) -> Tag {
@@ -389,9 +451,14 @@ fn effect_list(list: Tag) -> Tag {
             .map(|mut effect| {
                 let duration = super::dynamic::as_int(effect.get("Duration"), -1);
                 update(&mut effect, "FactorCalculationData", |mut data| {
-                    let timestamp = super::dynamic::as_int(data.get("effect_changed_timestamp"), -1);
+                    let timestamp =
+                        super::dynamic::as_int(data.get("effect_changed_timestamp"), -1);
                     remove(&mut data, "effect_changed_timestamp");
-                    set(&mut data, "ticks_active", Tag::Int(timestamp.wrapping_sub(duration)));
+                    set(
+                        &mut data,
+                        "ticks_active",
+                        Tag::Int(timestamp.wrapping_sub(duration)),
+                    );
                     data
                 });
                 effect
@@ -408,39 +475,115 @@ fn effect_duration(cx: &mut Cx) {
     };
     cx.each(Ty::Entity, living);
     cx.each(Ty::Player, living);
-    item_tag(cx, |id| POTION_ITEMS.contains(&id), |tag| update(tag, "CustomPotionEffects", effect_list));
+    item_tag(
+        cx,
+        |id| POTION_ITEMS.contains(&id),
+        |tag| update(tag, "CustomPotionEffects", effect_list),
+    );
 }
 
 // ------------------------------------------------------------------ 3438, 3447
 
 const POTTERY_SHARDS: &[(&str, &str)] = &[
-    ("minecraft:pottery_shard_archer", "minecraft:archer_pottery_shard"),
-    ("minecraft:pottery_shard_prize", "minecraft:prize_pottery_shard"),
-    ("minecraft:pottery_shard_arms_up", "minecraft:arms_up_pottery_shard"),
-    ("minecraft:pottery_shard_skull", "minecraft:skull_pottery_shard"),
+    (
+        "minecraft:pottery_shard_archer",
+        "minecraft:archer_pottery_shard",
+    ),
+    (
+        "minecraft:pottery_shard_prize",
+        "minecraft:prize_pottery_shard",
+    ),
+    (
+        "minecraft:pottery_shard_arms_up",
+        "minecraft:arms_up_pottery_shard",
+    ),
+    (
+        "minecraft:pottery_shard_skull",
+        "minecraft:skull_pottery_shard",
+    ),
 ];
 
 const POTTERY_SHERDS: &[(&str, &str)] = &[
-    ("minecraft:angler_pottery_shard", "minecraft:angler_pottery_sherd"),
-    ("minecraft:archer_pottery_shard", "minecraft:archer_pottery_sherd"),
-    ("minecraft:arms_up_pottery_shard", "minecraft:arms_up_pottery_sherd"),
-    ("minecraft:blade_pottery_shard", "minecraft:blade_pottery_sherd"),
-    ("minecraft:brewer_pottery_shard", "minecraft:brewer_pottery_sherd"),
-    ("minecraft:burn_pottery_shard", "minecraft:burn_pottery_sherd"),
-    ("minecraft:danger_pottery_shard", "minecraft:danger_pottery_sherd"),
-    ("minecraft:explorer_pottery_shard", "minecraft:explorer_pottery_sherd"),
-    ("minecraft:friend_pottery_shard", "minecraft:friend_pottery_sherd"),
-    ("minecraft:heart_pottery_shard", "minecraft:heart_pottery_sherd"),
-    ("minecraft:heartbreak_pottery_shard", "minecraft:heartbreak_pottery_sherd"),
-    ("minecraft:howl_pottery_shard", "minecraft:howl_pottery_sherd"),
-    ("minecraft:miner_pottery_shard", "minecraft:miner_pottery_sherd"),
-    ("minecraft:mourner_pottery_shard", "minecraft:mourner_pottery_sherd"),
-    ("minecraft:plenty_pottery_shard", "minecraft:plenty_pottery_sherd"),
-    ("minecraft:prize_pottery_shard", "minecraft:prize_pottery_sherd"),
-    ("minecraft:sheaf_pottery_shard", "minecraft:sheaf_pottery_sherd"),
-    ("minecraft:shelter_pottery_shard", "minecraft:shelter_pottery_sherd"),
-    ("minecraft:skull_pottery_shard", "minecraft:skull_pottery_sherd"),
-    ("minecraft:snort_pottery_shard", "minecraft:snort_pottery_sherd"),
+    (
+        "minecraft:angler_pottery_shard",
+        "minecraft:angler_pottery_sherd",
+    ),
+    (
+        "minecraft:archer_pottery_shard",
+        "minecraft:archer_pottery_sherd",
+    ),
+    (
+        "minecraft:arms_up_pottery_shard",
+        "minecraft:arms_up_pottery_sherd",
+    ),
+    (
+        "minecraft:blade_pottery_shard",
+        "minecraft:blade_pottery_sherd",
+    ),
+    (
+        "minecraft:brewer_pottery_shard",
+        "minecraft:brewer_pottery_sherd",
+    ),
+    (
+        "minecraft:burn_pottery_shard",
+        "minecraft:burn_pottery_sherd",
+    ),
+    (
+        "minecraft:danger_pottery_shard",
+        "minecraft:danger_pottery_sherd",
+    ),
+    (
+        "minecraft:explorer_pottery_shard",
+        "minecraft:explorer_pottery_sherd",
+    ),
+    (
+        "minecraft:friend_pottery_shard",
+        "minecraft:friend_pottery_sherd",
+    ),
+    (
+        "minecraft:heart_pottery_shard",
+        "minecraft:heart_pottery_sherd",
+    ),
+    (
+        "minecraft:heartbreak_pottery_shard",
+        "minecraft:heartbreak_pottery_sherd",
+    ),
+    (
+        "minecraft:howl_pottery_shard",
+        "minecraft:howl_pottery_sherd",
+    ),
+    (
+        "minecraft:miner_pottery_shard",
+        "minecraft:miner_pottery_sherd",
+    ),
+    (
+        "minecraft:mourner_pottery_shard",
+        "minecraft:mourner_pottery_sherd",
+    ),
+    (
+        "minecraft:plenty_pottery_shard",
+        "minecraft:plenty_pottery_sherd",
+    ),
+    (
+        "minecraft:prize_pottery_shard",
+        "minecraft:prize_pottery_sherd",
+    ),
+    (
+        "minecraft:sheaf_pottery_shard",
+        "minecraft:sheaf_pottery_sherd",
+    ),
+    (
+        "minecraft:shelter_pottery_shard",
+        "minecraft:shelter_pottery_sherd",
+    ),
+    (
+        "minecraft:skull_pottery_shard",
+        "minecraft:skull_pottery_sherd",
+    ),
+    (
+        "minecraft:snort_pottery_shard",
+        "minecraft:snort_pottery_sherd",
+    ),
 ];
 
 // ------------------------------------------------------------------ 3439
@@ -454,16 +597,32 @@ fn empty_component() -> Tag {
 fn sign_double_sided(cx: &mut Cx, id: &str) {
     let k = cx.k;
     cx.block_entity(id, |be| {
-        let lines: Vec<Tag> =
-            (1..=4).map(|i| be.get(&format!("Text{i}")).cloned().unwrap_or_else(empty_component)).collect();
-        let filtered: Vec<Option<Tag>> = (1..=4).map(|i| be.get(&format!("FilteredText{i}")).cloned()).collect();
+        let lines: Vec<Tag> = (1..=4)
+            .map(|i| {
+                be.get(&format!("Text{i}"))
+                    .cloned()
+                    .unwrap_or_else(empty_component)
+            })
+            .collect();
+        let filtered: Vec<Option<Tag>> = (1..=4)
+            .map(|i| be.get(&format!("FilteredText{i}")).cloned())
+            .collect();
         let mut front = Compound::new();
         front.insert("messages".into(), Tag::List(lines.clone()));
-        front.insert("color".into(), be.get("Color").cloned().unwrap_or_else(|| string("black")));
-        front.insert("has_glowing_text".into(), be.get("GlowingText").cloned().unwrap_or(Tag::Byte(0)));
+        front.insert(
+            "color".into(),
+            be.get("Color").cloned().unwrap_or_else(|| string("black")),
+        );
+        front.insert(
+            "has_glowing_text".into(),
+            be.get("GlowingText").cloned().unwrap_or(Tag::Byte(0)),
+        );
         if filtered.iter().any(Option::is_some) {
-            let messages =
-                filtered.into_iter().zip(&lines).map(|(f, line)| f.unwrap_or_else(|| line.clone())).collect();
+            let messages = filtered
+                .into_iter()
+                .zip(&lines)
+                .map(|(f, line)| f.unwrap_or_else(|| line.clone()))
+                .collect();
             front.insert("filtered_messages".into(), Tag::List(messages));
         }
         set(be, "front_text", Tag::Compound(front));

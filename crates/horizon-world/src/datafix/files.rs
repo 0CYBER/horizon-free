@@ -61,7 +61,11 @@ pub fn data_version(tag: &Tag, default: i32) -> i32 {
 
 /// `FileFixerUpper.requiresFileFixing`.
 pub fn requires_file_fixing(level_version: i32) -> bool {
-    let from = if level_version < FILE_FIXER_INTRODUCTION { 0 } else { level_version };
+    let from = if level_version < FILE_FIXER_INTRODUCTION {
+        0
+    } else {
+        level_version
+    };
     from < *FILE_FIXES.last().unwrap()
 }
 
@@ -82,7 +86,11 @@ fn move_file(base: &Path, from: &str, to: &str) -> io::Result<()> {
     if to.exists() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            format!("cannot move {} to {}: target already exists", from.display(), to.display()),
+            format!(
+                "cannot move {} to {}: target already exists",
+                from.display(),
+                to.display()
+            ),
         ));
     }
     if let Some(parent) = to.parent() {
@@ -112,7 +120,12 @@ fn delete(base: &Path, relative: &str) -> io::Result<()> {
 
 fn subdirectories(path: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = fs::read_dir(path)
-        .map(|r| r.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.is_dir()).collect())
+        .map(|r| {
+            r.filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect()
+        })
         .unwrap_or_default();
     out.sort();
     out
@@ -122,12 +135,17 @@ fn subdirectories(path: &Path) -> Vec<PathBuf> {
 fn dimensions(base: &Path) -> Vec<PathBuf> {
     let root = base.join("dimensions");
     let defaults = || {
-        ["overworld", "the_nether", "the_end"].map(|d| base.join("dimensions/minecraft").join(d)).to_vec()
+        ["overworld", "the_nether", "the_end"]
+            .map(|d| base.join("dimensions/minecraft").join(d))
+            .to_vec()
     };
     if !root.exists() {
         return defaults();
     }
-    let found: Vec<PathBuf> = subdirectories(&root).iter().flat_map(|ns| subdirectories(ns)).collect();
+    let found: Vec<PathBuf> = subdirectories(&root)
+        .iter()
+        .flat_map(|ns| subdirectories(ns))
+        .collect();
     if found.is_empty() { defaults() } else { found }
 }
 
@@ -136,7 +154,10 @@ fn dimensions(base: &Path) -> Vec<PathBuf> {
 /// `LevelDat.read`: level.dat's `Data` brought to `version`.
 fn read_level(base: &Path, version: i32) -> io::Result<Option<Tag>> {
     Ok(read_dat(&base.join("level.dat"))?.map(|root| {
-        let mut data = root.get("Data").cloned().unwrap_or_else(|| Tag::Compound(Compound::new()));
+        let mut data = root
+            .get("Data")
+            .cloned()
+            .unwrap_or_else(|| Tag::Compound(Compound::new()));
         let from = data_version(&data, -1);
         update(Ty::Level, &mut data, from, version);
         data
@@ -148,14 +169,19 @@ fn write_level(base: &Path, mut data: Tag, version: i32) -> io::Result<()> {
 }
 /// `SavedDataNbt.write`.
 fn write_saved_data(path: &Path, data: Tag, version: i32) -> io::Result<()> {
-    write_dat(path, &Tag::compound([("data", data), ("DataVersion", Tag::Int(version))]))
+    write_dat(
+        path,
+        &Tag::compound([("data", data), ("DataVersion", Tag::Int(version))]),
+    )
 }
 /// `SavedDataNbt.read`: the `data` of a saved data file brought to `version`.
 fn read_saved_data(path: &Path, ty: Ty, version: i32) -> io::Result<Option<Tag>> {
     Ok(read_dat(path)?.map(|mut tag| {
         let from = data_version(&tag, -1);
         update(ty, &mut tag, from, version);
-        tag.get("data").cloned().unwrap_or_else(|| Tag::Compound(Compound::new()))
+        tag.get("data")
+            .cloned()
+            .unwrap_or_else(|| Tag::Compound(Compound::new()))
     }))
 }
 
@@ -174,7 +200,10 @@ fn fix_4772(base: &Path) -> io::Result<()> {
     }
     for (from, to) in [
         ("data", "dimensions/minecraft/overworld/data/minecraft"),
-        ("DIM-1/data", "dimensions/minecraft/the_nether/data/minecraft"),
+        (
+            "DIM-1/data",
+            "dimensions/minecraft/the_nether/data/minecraft",
+        ),
         ("DIM1/data", "dimensions/minecraft/the_end/data/minecraft"),
     ] {
         for (a, b) in [
@@ -196,16 +225,26 @@ fn fix_4772(base: &Path) -> io::Result<()> {
         move_file(&data, a, b)?;
     }
     regex_move(&data, |name| {
-        let ns = name.strip_prefix("command_storage_")?.strip_suffix(".dat")?;
-        (!ns.is_empty() && ns.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'-')))
-            .then(|| format!("{ns}/command_storage.dat"))
+        let ns = name
+            .strip_prefix("command_storage_")?
+            .strip_suffix(".dat")?;
+        (!ns.is_empty()
+            && ns
+                .bytes()
+                .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'-')))
+        .then(|| format!("{ns}/command_storage.dat"))
     })?;
     move_file(&data, "idcounts.dat", "minecraft/maps/last_id.dat")?;
     regex_move(&data, |name| {
         let id = name.strip_prefix("map_")?.strip_suffix(".dat")?;
-        (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then(|| format!("minecraft/maps/{id}.dat"))
+        (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| format!("minecraft/maps/{id}.dat"))
     })?;
-    move_file(&data, "random_sequences.dat", "minecraft/random_sequences.dat")?;
+    move_file(
+        &data,
+        "random_sequences.dat",
+        "minecraft/random_sequences.dat",
+    )?;
     for (from, to) in [
         ("", "dimensions/minecraft/overworld"),
         ("DIM-1", "dimensions/minecraft/the_nether"),
@@ -233,7 +272,16 @@ fn fix_4772(base: &Path) -> io::Result<()> {
     ] {
         delete(base, f)?;
     }
-    for s in ["Monument", "Stronghold", "Mineshaft", "Temple", "Mansion", "Village", "Fortress", "EndCity"] {
+    for s in [
+        "Monument",
+        "Stronghold",
+        "Mineshaft",
+        "Temple",
+        "Mansion",
+        "Village",
+        "Fortress",
+        "EndCity",
+    ] {
         delete(base, &format!("data/{s}.dat"))?;
         delete(base, &format!("data/{s}_index.dat"))?;
     }
@@ -264,14 +312,20 @@ fn level_dat_to_saved_data(base: &Path) -> io::Result<()> {
         return Ok(());
     };
     let data = base.join("data/minecraft");
-    let dim_data = |dim: &str, file: &str| base.join(format!("dimensions/minecraft/{dim}/data/minecraft/{file}"));
+    let dim_data = |dim: &str, file: &str| {
+        base.join(format!("dimensions/minecraft/{dim}/data/minecraft/{file}"))
+    };
     let extract = |content: &mut Tag, key: &str, path: PathBuf| -> io::Result<()> {
         if let Some(tag) = remove(content, key) {
             write_saved_data(&path, tag, V)?;
         }
         Ok(())
     };
-    extract(&mut content, "dragon_fight", dim_data("the_end", "ender_dragon_fight.dat"))?;
+    extract(
+        &mut content,
+        "dragon_fight",
+        dim_data("the_end", "ender_dragon_fight.dat"),
+    )?;
     if let Some(mut player) = remove(&mut content, "Player") {
         let from = data_version(&player, -1);
         update(Ty::Player, &mut player, from, V);
@@ -279,16 +333,31 @@ fn level_dat_to_saved_data(base: &Path) -> io::Result<()> {
             Some(u) => u.clone(),
             None => {
                 set(&mut player, "DataVersion", Tag::Int(V));
-                write_dat(&base.join("players/data/00000000-0000-0000-0000-000000000000.dat"), &player)?;
+                write_dat(
+                    &base.join("players/data/00000000-0000-0000-0000-000000000000.dat"),
+                    &player,
+                )?;
                 int_list(&[0, 0, 0, 0])
             }
         };
         set(&mut content, "singleplayer_uuid", uuid);
     }
-    extract(&mut content, "wandering_trader_migration_data", data.join("wandering_trader.dat"))?;
-    extract(&mut content, "CustomBossEvents", data.join("custom_boss_events.dat"))?;
+    extract(
+        &mut content,
+        "wandering_trader_migration_data",
+        data.join("wandering_trader.dat"),
+    )?;
+    extract(
+        &mut content,
+        "CustomBossEvents",
+        data.join("custom_boss_events.dat"),
+    )?;
     extract(&mut content, "weather_data", data.join("weather.dat"))?;
-    extract(&mut content, "scheduled_events", data.join("scheduled_events.dat"))?;
+    extract(
+        &mut content,
+        "scheduled_events",
+        data.join("scheduled_events.dat"),
+    )?;
     if let Some(border) = content.get("world_border").cloned() {
         for (dim, divider) in [("overworld", 1.0), ("the_nether", 8.0), ("the_end", 1.0)] {
             let mut b = border.clone();
@@ -326,12 +395,18 @@ fn fix_4899(base: &Path) -> io::Result<()> {
     let Some(level) = read_level(base, V)? else {
         return Ok(());
     };
-    let hardcore = level.get("difficulty_settings").is_some_and(|d| as_bool(d.get("hardcore"), false));
+    let hardcore = level
+        .get("difficulty_settings")
+        .is_some_and(|d| as_bool(d.get("hardcore"), false));
     if level.get("singleplayer_uuid").is_some() && hardcore {
         let path = base.join("data/minecraft/game_rules.dat");
         if let Some(mut rules) = read_saved_data(&path, Ty::SavedGameRules, V)? {
             if rules.get("minecraft:spectators_generate_chunks").is_some() {
-                set(&mut rules, "minecraft:spectators_generate_chunks", Tag::Byte(1));
+                set(
+                    &mut rules,
+                    "minecraft:spectators_generate_chunks",
+                    Tag::Byte(1),
+                );
             }
             write_saved_data(&path, rules, V)?;
         }
@@ -363,14 +438,21 @@ fn add_versions(data: &mut Tag) {
 /// the world had.
 pub fn fix_world_files(base: &Path) -> io::Result<i32> {
     let root = read_dat(&base.join("level.dat"))?.ok_or_else(|| invalid("missing level.dat"))?;
-    let mut data = root.get("Data").cloned().unwrap_or_else(|| Tag::Compound(Compound::new()));
+    let mut data = root
+        .get("Data")
+        .cloned()
+        .unwrap_or_else(|| Tag::Compound(Compound::new()));
     let loaded = data_version(&data, -1);
     if loaded >= CURRENT {
         return Ok(loaded);
     }
     let mut from = loaded;
     if requires_file_fixing(loaded) {
-        let start = if loaded < FILE_FIXER_INTRODUCTION { 0 } else { loaded };
+        let start = if loaded < FILE_FIXER_INTRODUCTION {
+            0
+        } else {
+            loaded
+        };
         for version in FILE_FIXES {
             if version > start && version <= CURRENT {
                 match version {
@@ -381,8 +463,12 @@ pub fn fix_world_files(base: &Path) -> io::Result<i32> {
             }
         }
         // `writeUpdatedLevelData`, then the world swapped in and read again.
-        let root = read_dat(&base.join("level.dat"))?.ok_or_else(|| invalid("missing level.dat"))?;
-        data = root.get("Data").cloned().unwrap_or_else(|| Tag::Compound(Compound::new()));
+        let root =
+            read_dat(&base.join("level.dat"))?.ok_or_else(|| invalid("missing level.dat"))?;
+        data = root
+            .get("Data")
+            .cloned()
+            .unwrap_or_else(|| Tag::Compound(Compound::new()));
         from = data_version(&data, -1);
         let _ = fs::remove_file(base.join("level.dat_old"));
         let _ = fs::remove_file(base.join("session.lock"));
@@ -437,7 +523,10 @@ fn upgrade_regions(folder: &Path, mut fix: impl FnMut(&mut Tag)) -> io::Result<(
             };
             let mut root = record.nbt(limits)?;
             fix(&mut root.tag);
-            records.push((pos, ChunkRecord::from_nbt(&root, record.compression, record.timestamp, limits)?));
+            records.push((
+                pos,
+                ChunkRecord::from_nbt(&root, record.compression, record.timestamp, limits)?,
+            ));
         }
         drop(region);
         let staging = folder.join(".datafix");
@@ -474,7 +563,11 @@ fn upgrade_saved_data(data: &Path) -> io::Result<()> {
     }
     files.sort();
     for file in files {
-        let relative = file.strip_prefix(data).unwrap_or(&file).to_string_lossy().replace('\\', "/");
+        let relative = file
+            .strip_prefix(data)
+            .unwrap_or(&file)
+            .to_string_lossy()
+            .replace('\\', "/");
         let Some(ty) = super::saved_data_type(&relative) else {
             continue;
         };
@@ -493,9 +586,12 @@ fn json_to_tag(j: &Json) -> Tag {
     match j {
         Json::Bool(b) => Tag::compound([("\u{0}bool", Tag::Byte(i8::from(*b)))]),
         Json::Arr(items) => Tag::List(items.iter().map(json_to_tag).collect()),
-        Json::Obj(entries) => {
-            Tag::Compound(entries.iter().map(|(k, v)| (JavaString(k.clone()), json_to_tag(v))).collect())
-        }
+        Json::Obj(entries) => Tag::Compound(
+            entries
+                .iter()
+                .map(|(k, v)| (JavaString(k.clone()), json_to_tag(v)))
+                .collect(),
+        ),
         other => json::to_nbt(other).unwrap_or(Tag::End),
     }
 }
@@ -505,7 +601,11 @@ fn tag_to_json(t: &Tag) -> Json {
             Json::Bool(as_int(t.get("\u{0}bool"), 0) != 0)
         }
         Tag::List(items) => Json::Arr(items.iter().map(tag_to_json).collect()),
-        Tag::Compound(c) => Json::Obj(c.iter().map(|(k, v)| (k.0.clone(), tag_to_json(v))).collect()),
+        Tag::Compound(c) => Json::Obj(
+            c.iter()
+                .map(|(k, v)| (k.0.clone(), tag_to_json(v)))
+                .collect(),
+        ),
         other => json::from_nbt(other),
     }
 }
@@ -513,7 +613,8 @@ fn tag_to_json(t: &Tag) -> Json {
 fn upgrade_json(path: &Path, ty: Ty) -> io::Result<()> {
     let text = fs::read_to_string(path)?;
     let units: Vec<u16> = text.encode_utf16().collect();
-    let parsed = json::parse_lenient(&units).ok_or_else(|| invalid(format!("bad JSON in {}", path.display())))?;
+    let parsed = json::parse_lenient(&units)
+        .ok_or_else(|| invalid(format!("bad JSON in {}", path.display())))?;
     let mut tag = json_to_tag(&parsed);
     let from = super::dynamic::as_int(tag.get("DataVersion"), 1343);
     if ty == Ty::Advancements {
@@ -538,10 +639,19 @@ pub fn upgrade_world_data(base: &Path) -> io::Result<()> {
                 ns.file_name().unwrap_or_default().to_string_lossy(),
                 dim.file_name().unwrap_or_default().to_string_lossy()
             );
-            let generator = generators.iter().find(|(d, _)| *d == id).map(|(_, g)| g.clone());
-            upgrade_regions(&dim.join("region"), |tag| super::update_chunk(tag, &id, generator.as_deref()))?;
-            upgrade_regions(&dim.join("entities"), |tag| super::update_region_tag(Ty::EntityChunk, tag))?;
-            upgrade_regions(&dim.join("poi"), |tag| super::update_region_tag(Ty::PoiChunk, tag))?;
+            let generator = generators
+                .iter()
+                .find(|(d, _)| *d == id)
+                .map(|(_, g)| g.clone());
+            upgrade_regions(&dim.join("region"), |tag| {
+                super::update_chunk(tag, &id, generator.as_deref())
+            })?;
+            upgrade_regions(&dim.join("entities"), |tag| {
+                super::update_region_tag(Ty::EntityChunk, tag)
+            })?;
+            upgrade_regions(&dim.join("poi"), |tag| {
+                super::update_region_tag(Ty::PoiChunk, tag)
+            })?;
             upgrade_saved_data(&dim.join("data"))?;
         }
     }
