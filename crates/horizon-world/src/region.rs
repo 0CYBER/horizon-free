@@ -104,14 +104,18 @@ impl RegionFile {
         let position = position_from_path(&path)?;
         let mut file = File::open(&path)?;
         let len = file.metadata()?.len();
-        if len < HEADER as u64 {
-            return Err(invalid("truncated region header"));
-        }
+        // RegionFile's constructor: a short header (an empty or truncated file)
+        // reads as far as it goes, the rest stays zero (no chunks).
         let mut header = [0; HEADER];
-        file.read_exact(&mut header)?;
+        let mut read = 0;
+        while read < HEADER {
+            match file.read(&mut header[read..])? {
+                0 => break,
+                n => read += n,
+            }
+        }
         let mut offsets = [0; 1024];
         let mut timestamps = [0; 1024];
-        let mut ranges = Vec::new();
         for i in 0..1024 {
             offsets[i] = u32::from_be_bytes(header[i * 4..i * 4 + 4].try_into().unwrap());
             timestamps[i] = u32::from_be_bytes(
@@ -124,16 +128,11 @@ impl RegionFile {
             }
             let start = offsets[i] >> 8;
             let count = offsets[i] & 255;
-            if start < 2 || count == 0 || u64::from(start + count) > len.div_ceil(SECTOR as u64) {
-                return Err(invalid(format!(
-                    "invalid sector allocation at region slot {i}"
-                )));
+            // Vanilla drops entries that overlap the header, are empty or start past
+            // the end of the file (logged as invalid sectors).
+            if start < 2 || count == 0 || u64::from(start) * SECTOR as u64 > len {
+                offsets[i] = 0;
             }
-            ranges.push((start, start + count));
-        }
-        ranges.sort_unstable();
-        if ranges.windows(2).any(|r| r[0].1 > r[1].0) {
-            return Err(invalid("overlapping region sector allocations"));
         }
         Ok(Self {
             file,

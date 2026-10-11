@@ -96,6 +96,53 @@ impl Cx<'_> {
     }
 }
 
+/// DataFixerUpper reads a record's typed fields from its map without taking
+/// them out: the record's remainder keeps the whole map it was read from, and
+/// writing lays the typed fields over it. A typed field that a fix drops (by
+/// casting to a type without it) therefore comes back on write with its value
+/// from that read. Each entity keeps that map under this key while fixes run.
+const LAST_READ: &str = "\u{0}last_read";
+
+/// Remember an entity's current fields as the map it was read from.
+pub fn mark_read(e: &mut Tag) {
+    if let Tag::Compound(_) = e {
+        let mut raw = e.clone();
+        strip_last_read(&mut raw);
+        dynamic::set(e, LAST_READ, raw);
+    }
+}
+
+/// `Util.writeAndReadTypedOrThrow` over an entity by the fix with key `k`: it is
+/// written and read again with the output schema, so it (and every entity inside
+/// it) now remembers its current fields as the map it was last read from.
+pub fn reread(k: Key, e: &mut Tag) {
+    walk(Ty::Entity, e, k, Ty::Entity, &mut mark_read);
+}
+
+/// A typed field dropped from an entity: what writing the entity gives back for
+/// it (its value in the map the entity was last read from, if any).
+pub fn drop_typed(e: &mut Tag, field: &str) {
+    match e.get(LAST_READ).and_then(|raw| raw.get(field)).cloned() {
+        Some(raw) => dynamic::set(e, field, raw),
+        None => {
+            dynamic::remove(e, field);
+        }
+    }
+}
+
+fn strip_last_read(v: &mut Tag) {
+    match v {
+        Tag::Compound(c) => {
+            c.remove(&dynamic::key(LAST_READ));
+            for value in c.values_mut() {
+                strip_last_read(value);
+            }
+        }
+        Tag::List(items) => items.iter_mut().for_each(strip_last_read),
+        _ => {}
+    }
+}
+
 /// The entity or block entity `id` field, namespaced.
 pub fn id_is(v: &Tag, id: &str) -> bool {
     as_str(v.get("id")).is_some_and(|s| dynamic::namespaced(&s) == id)
@@ -128,6 +175,7 @@ pub fn update(root: Ty, data: &mut Tag, from: i32, to: i32) {
     let from_key = key(from.max(0) as u32, 0);
     let to_version = to as u32;
     // The data is read once with the schema of its version (its read hooks)...
+    walk(root, data, from_key, Ty::Entity, &mut mark_read);
     read_hooks(root, data, from_key);
     // ...then every fix above that key, up to the target version...
     for (k, fix) in fixes() {
@@ -137,6 +185,7 @@ pub fn update(root: Ty, data: &mut Tag, from: i32, to: i32) {
     }
     // ...and written with the target schema (its write hooks).
     write_hooks(root, data, key(to_version, 9));
+    strip_last_read(data);
 }
 
 /// The read hooks of the schema the data was saved with.

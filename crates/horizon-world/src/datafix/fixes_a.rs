@@ -5,7 +5,7 @@ use super::dynamic::{
 };
 use super::json;
 use super::schema::{Key, Ty, key};
-use super::{Cx, FixFn, id_is, items, renamer};
+use super::{Cx, FixFn, id_is, items, renamer, reread};
 use crate::nbt::Tag;
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
@@ -266,15 +266,18 @@ fn mob_effect_ids(cx: &mut Cx) {
 // ------------------------------------------------------------------ 3683, 3685
 
 fn primed_tnt_block_state(cx: &mut Cx) {
+    let k = cx.k;
     cx.entity("minecraft:tnt", |e| {
         set(e, "block_state", Tag::compound([("Name", string("minecraft:tnt"))]));
         if let Some(fuse) = e.get("Fuse").cloned() {
             set(e, "fuse", fuse);
         }
+        reread(k, e);
     });
 }
 
 fn projectile_stored_item(cx: &mut Cx) {
+    let k = cx.k;
     cx.each(Ty::Entity, |e| {
         let item = if id_is(e, "minecraft:arrow") {
             let potion = as_string(e.get("Potion"), "minecraft:empty");
@@ -282,9 +285,11 @@ fn projectile_stored_item(cx: &mut Cx) {
         } else if id_is(e, "minecraft:spectral_arrow") {
             "minecraft:spectral_arrow"
         } else {
-            // The trident's value is cast to the new type: its Trident field is `item`.
+            // The trident's value is cast to the new type: its typed Trident field
+            // is written as `item`, and the raw Trident comes back from the remainder.
             if id_is(e, "minecraft:trident") {
                 rename(e, "Trident", "item");
+                super::drop_typed(e, "Trident");
             }
             return;
         };
@@ -294,6 +299,7 @@ fn projectile_stored_item(cx: &mut Cx) {
         if let Some(s) = e.get_mut("item") {
             items::add_names(s);
         }
+        reread(k, e);
     });
 }
 
@@ -390,7 +396,15 @@ fn map_banner_block_pos(cx: &mut Cx) {
 // ------------------------------------------------------------------ 3808, 3809, 3812
 
 fn horse_body_armor(cx: &mut Cx, id: &str, field: &str, clear_armor_items: bool) {
+    let k = cx.k;
     cx.entity(id, |e| {
+        horse_body_armor_entity(e, field, clear_armor_items);
+        reread(k, e);
+    });
+}
+
+fn horse_body_armor_entity(e: &mut Tag, field: &str, clear_armor_items: bool) {
+    {
         let Some(armor) = e.get(field).cloned() else {
             return;
         };
@@ -417,7 +431,7 @@ fn horse_body_armor(cx: &mut Cx, id: &str, field: &str, clear_armor_items: bool)
         }
         set(e, "body_armor_item", armor);
         set(e, "body_armor_drop_chance", Tag::Float(2.0f32.to_bits()));
-    });
+    }
 }
 
 fn chested_horse_slots(cx: &mut Cx) {
@@ -682,7 +696,15 @@ fn banner_patterns(cx: &mut Cx) {
 }
 
 fn tipped_arrow_potion(cx: &mut Cx) {
+    let k = cx.k;
     cx.entity("minecraft:arrow", |e| {
+        tipped_arrow_potion_entity(e);
+        reread(k, e);
+    });
+}
+
+fn tipped_arrow_potion_entity(e: &mut Tag) {
+    {
         let potion = e.get("Potion").cloned();
         let effects = e.get("custom_potion_effects").cloned();
         let color = e.get("Color").cloned();
@@ -706,7 +728,7 @@ fn tipped_arrow_potion(cx: &mut Cx) {
             set(&mut stack, "tag", tag);
             stack
         });
-    });
+    }
 }
 
 fn particle_unflattening(cx: &mut Cx) {

@@ -10,6 +10,16 @@ use super::{Cx, FixFn, id_is, renamer};
 use crate::nbt::Tag;
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
+    // NamedEntityConvertUncheckedFix: the typed Particle is written as
+    // custom_particle, the raw Particle comes back from the remainder.
+    out.push((key(4420, 0), |cx| {
+        cx.entity("minecraft:area_effect_cloud", |e| {
+            if let Some(p) = e.get("Particle").cloned() {
+                set(e, "custom_particle", p);
+            }
+            super::drop_typed(e, "Particle");
+        });
+    }));
     out.push((key(4424, 0), |cx| feature_flag_remove(cx, &["minecraft:locator_bar"])));
     out.push((key(4424, 0), |cx| cx.each(Ty::Player, add_locator_bar_style)));
     out.push((key(4424, 0), |cx| cx.each(Ty::Entity, add_locator_bar_style)));

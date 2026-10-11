@@ -6,10 +6,19 @@ use super::dynamic::{
 use super::fixes_a::{component_fix, dye_color, fix_inline_block_pos, translation_key};
 use super::items::java_hash_order;
 use super::schema::{Key, Ty, key};
-use super::{Cx, FixFn, id_is};
+use super::{Cx, FixFn, id_is, reread};
 use crate::nbt::{Compound, Tag};
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
+    // ProjectileStoredWeaponFix only writes and reads arrows with the new schema.
+    out.push((key(3938, 0), |cx| {
+        let k = cx.k;
+        cx.each(Ty::Entity, |e| {
+            if id_is(e, "minecraft:arrow") || id_is(e, "minecraft:spectral_arrow") {
+                reread(k, e);
+            }
+        });
+    }));
     out.push((key(3939, 0), |cx| feature_flag_remove(cx, &["minecraft:update_1_21"])));
     out.push((key(3945, 0), attribute_modifier_ids));
     out.push((key(3945, 0), jukebox_ticks));
@@ -588,7 +597,8 @@ fn boat_split(cx: &mut Cx) {
             (w, false) => format!("minecraft:{w}_boat"),
             (w, true) => format!("minecraft:{w}_chest_boat"),
         };
-        remove(e, "Type");
+        // The remainder update runs on the value cast to the new type, whose choice
+        // no longer has the old boat id: it finds nothing, so Type stays.
         set(e, "id", string(&new_id));
     });
 }
@@ -817,6 +827,7 @@ fn saddle_drop_chance(e: &mut Tag) {
 }
 
 fn saddle_equipment_slot(cx: &mut Cx) {
+    let k = cx.k;
     cx.each(Ty::Entity, |e| {
         let id = namespaced(&as_str(e.get("id")).unwrap_or_default());
         match id.as_str() {
@@ -826,6 +837,7 @@ fn saddle_equipment_slot(cx: &mut Cx) {
                     rename(e, "SaddleItem", "saddle");
                     saddle_drop_chance(e);
                 }
+                reread(k, e);
             }
             "minecraft:pig" | "minecraft:strider" => {
                 let saddled = as_bool(e.get("Saddle"), false);
@@ -834,6 +846,7 @@ fn saddle_equipment_slot(cx: &mut Cx) {
                     set(e, "saddle", Tag::compound([("id", string("minecraft:saddle")), ("count", Tag::Int(1))]));
                     saddle_drop_chance(e);
                 }
+                reread(k, e);
             }
             _ => {}
         }
@@ -864,6 +877,10 @@ pub(super) fn equipment_to_slots(e: &mut Tag) {
         ("body", body),
         ("saddle", saddle),
     ];
+    // The old fields are typed: they come back from the entity's remainder.
+    for field in ["ArmorItems", "HandItems", "body_armor_item", "saddle"] {
+        super::drop_typed(e, field);
+    }
     if slots.iter().all(|(_, s)| s.is_none()) {
         return;
     }
