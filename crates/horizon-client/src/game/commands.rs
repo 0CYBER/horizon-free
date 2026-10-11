@@ -1,5 +1,6 @@
 //! Command execution (the `execute` side of each vanilla command class):
 //! entity selectors resolved against the game, vanilla feedback and errors.
+mod compute;
 mod data;
 mod effects;
 pub(super) mod execute;
@@ -598,6 +599,7 @@ impl Game<'_> {
             "jfr" => self.cmd_jfr(ctx),
             "version" => self.cmd_version(),
             id if id.starts_with("test.") => self.cmd_test(id, ctx),
+            "compute" => self.cmd_compute(ctx),
             "place" => self.cmd_place(ctx),
             "recipe.give" | "recipe.take" => self.cmd_recipe(id, ctx),
             "damage" => self.cmd_damage(ctx),
@@ -816,15 +818,6 @@ impl Game<'_> {
             _ => text::WHITE,
         };
         wrapped.with_color(color)
-    }
-    /// ItemStack.getDisplayName of a renamed stack: the name in italics.
-    pub(super) fn item_display_name_custom(&self, item: &str, custom: &str) -> Text {
-        let color = self.item_display_name(item).spans.first().and_then(|s| s.style.color);
-        let mut t = Text::translate("chat.square_brackets", &[Text::literal(custom).italic()]);
-        if let Some(c) = color {
-            t = t.with_color(c);
-        }
-        t
     }
     fn item_rarity(&self, item: &str) -> String {
         static RARITY: std::sync::OnceLock<std::collections::HashMap<String, String>> =
