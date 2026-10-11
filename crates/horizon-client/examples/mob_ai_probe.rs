@@ -173,6 +173,7 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "TryFindWater" => "TryFindWaterGoal",
         "RangedAttack" => "RangedAttackGoal",
         "MoveTowardsTarget" => "MoveTowardsTargetGoal",
+        "DrownedGoToWater" => "DrownedGoToWaterGoal",
         "TakeBlock" => "EndermanTakeBlockGoal",
         "LeaveBlock" => "EndermanLeaveBlockGoal",
         "FreezeWhenLookedAt" => "EndermanFreezeWhenLookedAt",

@@ -208,7 +208,8 @@ pub fn drowned_travel(
     input: Vec3,
     events: &mut Vec<MobEvent>,
 ) -> bool {
-    if !(m.fluids.eye_in_water && m.fluids.in_water && drowned_wants_to_swim(m, w)) {
+    // isUnderWater: wasEyeInWater && isInWater.
+    if !(m.was_eye_in_water && m.fluids.in_water && drowned_wants_to_swim(m, w)) {
         return false;
     }
     m.move_relative(0.01, input);
@@ -260,7 +261,7 @@ impl Goal for DrownedTridentAttack {
         self.0.flags()
     }
     fn name(&self) -> &'static str {
-        "Drowned$DrownedTridentAttackGoal"
+        "DrownedTridentAttackGoal"
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         self.0.can_use(m, cx) && m.extra.main_hand.as_deref() == Some("minecraft:trident")
@@ -292,7 +293,7 @@ impl Goal for DrownedAttack {
         self.0.flags()
     }
     fn name(&self) -> &'static str {
-        "Drowned$DrownedAttackGoal"
+        "DrownedAttackGoal"
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         self.0.can_use(m, cx) && drowned_ok_target(m, cx.w)
@@ -333,7 +334,7 @@ impl Goal for DrownedGoToBeach {
         MOVE | super::goals::JUMP
     }
     fn name(&self) -> &'static str {
-        "Drowned$DrownedGoToBeachGoal"
+        "DrownedGoToBeachGoal"
     }
     fn every_tick(&self) -> bool {
         true
@@ -372,7 +373,7 @@ impl Goal for DrownedSwimUp {
         0
     }
     fn name(&self) -> &'static str {
-        "Drowned$DrownedSwimUpGoal"
+        "DrownedSwimUpGoal"
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         !cx.w.daylight && m.fluids.in_water && m.position.y < f64::from(cx.w.sea_level - 2)

@@ -371,6 +371,7 @@ fn tick_swing(m: &mut Mob) {
 }
 /// Entity.baseTick + LivingEntity.baseTick + Mob.baseTick.
 fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    m.was_eye_in_water = m.fluids.eye_in_water;
     m.fluids = w.fluids(m.bounds(), m.eye_y());
     if m.fluids.in_water {
         m.fall_distance = 0.0;
@@ -761,6 +762,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Blaze => super::nether::blaze_server_ai_step(m, cx),
         Species::ElderGuardian => super::guardian::elder_server_ai_step(m, cx),
         Species::Warden => super::warden::server_ai_step(m, cx),
+        Species::Wither if m.alive() => super::wither::custom_server_ai_step(m, cx.w, cx.events),
         // SpellcasterIllager.customServerAiStep.
         Species::Evoker if m.extra.counter > 0 => m.extra.counter -= 1,
         _ => {}

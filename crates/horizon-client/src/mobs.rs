@@ -595,6 +595,9 @@ pub struct Mob {
     pub ai: Box<ai::Ai>,
     pub extra: Extra,
     pub fluids: living::Fluids,
+    /// Entity.wasEyeInWater: the eyes were in water before this tick's fluid
+    /// update (`isUnderWater` reads it).
+    pub was_eye_in_water: bool,
     pub no_gravity: bool,
     /// `NoAI`: no goals and no movement.
     pub no_ai: bool,
@@ -626,6 +629,15 @@ pub enum MobEvent {
     Sound(&'static str, [f64; 3], f32, f32),
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
+    /// A level event's sound (`levelEvent`/`globalLevelEvent`): the client
+    /// plays it with its own random pitch spread (`(a - b) * spread + 1`),
+    /// nothing is drawn from the mob.
+    LevelEventSound {
+        sound: &'static str,
+        at: [f64; 3],
+        volume: f32,
+        spread: f32,
+    },
     AttackPlayer(f32, [f64; 3]),
     /// Damage of a given type to the player (guardian lasers, thorns).
     DamagePlayer {
@@ -1009,6 +1021,7 @@ impl Mob {
             ai: Box::default(),
             extra: Extra::default(),
             fluids: living::Fluids::default(),
+            was_eye_in_water: false,
             no_gravity: false,
             no_ai: false,
             silent: false,

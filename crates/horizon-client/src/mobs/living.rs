@@ -86,10 +86,34 @@ impl MobWorld<'_> {
                 }
             }
         }
-        let (fx, fz) = ((lo.x + hi.x) / 2.0, (lo.z + hi.z) / 2.0);
-        let ey = eye_y.floor() as i32;
-        let (fluid, h) = self.fluid_height(fx.floor() as i32, ey, fz.floor() as i32);
-        out.eye_in_water = fluid == Fluid::Water && eye_y < f64::from(ey) + h + 0.111_111_11;
+        // EntityFluidInteraction.update: the eyes are in a fluid block of
+        // the box in the entity's column, between its bottom and its height
+        // for the camera.
+        let (ex, ez) = (
+            ((lo.x + hi.x) / 2.0).floor() as i32,
+            ((lo.z + hi.z) / 2.0).floor() as i32,
+        );
+        for y in lo.y.floor() as i32..=(hi.y.ceil() as i32 - 1) {
+            let (fluid, h) = self.fluid_height(ex, y, ez);
+            if fluid != Fluid::Water || f64::from(y) + h < lo.y || eye_y < f64::from(y) {
+                continue;
+            }
+            let state = self.world.block(ex, y, ez);
+            let source = self
+                .registry
+                .state(state)
+                .and_then(|s| s.properties.get("level"))
+                .is_none_or(|l| l == "0");
+            let above = self.facts.get(self.world.block(ex, y + 1, ez));
+            let camera = if source && above.sturdy_full & 1 != 0 {
+                1.0
+            } else {
+                h
+            };
+            if eye_y <= f64::from(y) + camera {
+                out.eye_in_water = true;
+            }
+        }
         out
     }
     pub fn no_collision(&self, b: Aabb) -> bool {
@@ -362,8 +386,13 @@ impl Mob {
     fn flying_speed(&self) -> f32 {
         0.02
     }
+    /// Entity.getGravity: none while isNoGravity.
     fn gravity(&self) -> f64 {
-        self.kind.gravity
+        if self.no_gravity {
+            0.0
+        } else {
+            self.kind.gravity
+        }
     }
     /// LivingEntity.travel.
     pub fn travel(&mut self, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) {

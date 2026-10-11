@@ -635,6 +635,17 @@ impl Game<'_> {
                     self.audio
                         .play(&format!("minecraft:{name}"), Some(at), volume, pitch)
                 }
+                MobEvent::LevelEventSound {
+                    sound,
+                    at,
+                    volume,
+                    spread,
+                } => {
+                    let r = &mut self.world.random;
+                    let pitch = (r.next_float() - r.next_float()) * spread + 1.0;
+                    self.audio
+                        .play(&format!("minecraft:{sound}"), Some(at), volume, pitch)
+                }
                 MobEvent::SoundId(name, at, volume, pitch) => {
                     self.audio.play(&name, Some(at), volume, pitch)
                 }
