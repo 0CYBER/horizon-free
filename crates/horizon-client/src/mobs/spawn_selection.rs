@@ -408,6 +408,24 @@ impl Heightmap {
     }
 }
 
+/// `Heightmap.Types`' predicates: WORLD_SURFACE (not air), OCEAN_FLOOR
+/// (`#blocks_motion_in_heightmap`), MOTION_BLOCKING (that or a fluid) and
+/// MOTION_BLOCKING_NO_LEAVES (`#blocks_motion_in_heightmap_no_leaves` or a fluid).
+pub fn heightmap_blocks<L: SpawnLevel>(l: &L, kind: Heightmap, x: i32, y: i32, z: i32) -> bool {
+    let state = l.state(x, y, z);
+    let f = l.facts().get(state);
+    let fluid = f.fluid != crate::blocks::Fluid::None;
+    match kind {
+        Heightmap::WorldSurface => !l.facts().is_air(state),
+        Heightmap::OceanFloor => l.block_tag("minecraft:blocks_motion_in_heightmap", &f.name),
+        Heightmap::MotionBlocking => {
+            fluid || l.block_tag("minecraft:blocks_motion_in_heightmap", &f.name)
+        }
+        Heightmap::MotionBlockingNoLeaves => {
+            fluid || l.block_tag("minecraft:blocks_motion_in_heightmap_no_leaves", &f.name)
+        }
+    }
+}
 /// `LevelReader.getLightLevelDependentMagicValue`.
 fn magic_light<L: NaturalLevel>(l: &L, x: i32, y: i32, z: i32) -> f32 {
     let raw = l

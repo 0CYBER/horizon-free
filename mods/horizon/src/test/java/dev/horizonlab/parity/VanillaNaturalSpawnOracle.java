@@ -44,7 +44,8 @@ import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.levelgen.Heightmap;
-import net.minecraft.world.level.levelgen.flat.FlatLevelSource;
+import net.minecraft.world.level.levelgen.FlatLevelSource;
+import net.minecraft.util.Mth;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
 import net.minecraft.world.level.levelgen.structure.StructurePiece;
@@ -115,6 +116,8 @@ public final class VanillaNaturalSpawnOracle {
     static final class Lvl extends ServerLevel {
         Lvl() { super(null, null, null, null, null, null, false, 0L, List.of(), false); }
         RegistryAccess registries;
+        net.minecraft.server.MinecraftServer fake;
+        @Override public net.minecraft.server.MinecraftServer getServer() { return fake; }
         List<Map.Entry<Box, BlockState>> blocks = new ArrayList<>();
         List<Map.Entry<Box, int[]>> lights = new ArrayList<>();
         List<Map.Entry<Box, Holder<Biome>>> biomes = new ArrayList<>();
@@ -318,14 +321,24 @@ public final class VanillaNaturalSpawnOracle {
         var staticTags = TagLoader.loadTagsForExistingRegistries(resources, layers.getLayer(RegistryLayer.STATIC));
         var context = TagLoader.buildUpdatedLookups(layers.getAccessForLoading(RegistryLayer.WORLD), staticTags);
         RegistryAccess.Frozen world = RegistryDataLoader.load(resources, context, RegistryDataLoader.WORLD_REGISTRIES, Runnable::run).join();
+        var worldLayers = layers.replaceFrom(RegistryLayer.WORLD, world);
+        var loaded = net.minecraft.server.ReloadableServerRegistries.reload(worldLayers, staticTags, resources, Runnable::run).join();
+        HolderLookup.Provider lookup = loaded.lookupWithUpdatedTags();
+        var components = BuiltInRegistries.DATA_COMPONENT_INITIALIZERS.build(lookup);
         staticTags.forEach(Registry.PendingTags::apply);
-        var access = layers.replaceFrom(RegistryLayer.WORLD, world).compositeAccess();
+        components.forEach(net.minecraft.core.component.DataComponentInitializers.PendingComponents::apply);
+        RegistryAccess access = loaded.layers().compositeAccess();
         var biomes = access.lookupOrThrow(Registries.BIOME);
         var dimensions = access.lookupOrThrow(Registries.DIMENSION_TYPE);
         var blockLookup = access.lookupOrThrow(Registries.BLOCK);
         var structureLookup = access.lookupOrThrow(Registries.STRUCTURE);
 
+        // A server that only answers debug subscribers (path navigation asks).
+        var server = (net.minecraft.server.MinecraftServer) alloc(net.minecraft.server.dedicated.DedicatedServer.class);
+        put(server, net.minecraft.server.MinecraftServer.class, "debugSubscribers", alloc(net.minecraft.util.debug.ServerDebugSubscribers.class));
         Lvl level = (Lvl) alloc(Lvl.class);
+        level.fake = server;
+        put(level, ServerLevel.class, "server", server);
         level.registries = access;
         level.blocks = new ArrayList<>();
         level.lights = new ArrayList<>();
@@ -337,7 +350,7 @@ public final class VanillaNaturalSpawnOracle {
         level.border = new WorldBorder();
         level.neutral = new Neutral();
         level.rules = new GameRules(net.minecraft.world.flag.FeatureFlags.REGISTRY.allFlags());
-        level.biomeManager = new BiomeManager((x, y, z, sampler) -> level.biome, 0L) {
+        level.biomeManager = new BiomeManager((x, y, z) -> level.biome, 0L) {
             @Override public Holder<Biome> getBiome(BlockPos pos) { return level.biomeAt(pos.getX(), pos.getY(), pos.getZ()); }
             @Override public Holder<Biome> getBiome(int x, int y, int z) { return level.biomeAt(x, y, z); }
         };
@@ -360,7 +373,8 @@ public final class VanillaNaturalSpawnOracle {
         local.setAccessible(true);
         Method randomPos = NaturalSpawner.class.getDeclaredMethod("getRandomPosWithin", Level.class, LevelChunk.class);
         randomPos.setAccessible(true);
-        Field position = Entity.class.getDeclaredField("position");
+        Field entityId = Entity.class.getDeclaredField("id");
+        entityId.setAccessible(true);
 
         List<String> lines = Files.readAllLines(Path.of(args[0]));
         try (var w = new PrintWriter(Files.newBufferedWriter(Path.of(args[1]), StandardCharsets.UTF_8))) {
@@ -402,7 +416,11 @@ public final class VanillaNaturalSpawnOracle {
                     level.seed = Long.parseLong(c.getOrDefault("wseed", "0"));
                     level.difficulty = Difficulty.byName(c.getOrDefault("difficulty", "normal"));
                     level.rules.set(net.minecraft.world.level.gamerules.GameRules.SPAWN_MOBS, !c.getOrDefault("rules", "1").equals("0"), null);
-                    level.attributes = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().addStaticLayers(level).build();
+                    // The dimension and biome layers; the moon timeline's surface slime chance as a constant.
+                    level.attributes = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().addStaticLayers(level)
+                        .addConstantLayer(net.minecraft.world.attribute.EnvironmentAttributeMap.builder()
+                            .set(net.minecraft.world.attribute.EnvironmentAttributes.SURFACE_SLIME_SPAWN_CHANCE, Float.parseFloat(c.getOrDefault("slime", "0.0"))).build())
+                        .build();
                     level.unloaded.clear();
                     if (c.containsKey("unloaded")) for (String u : c.get("unloaded").split(";")) {
                         String[] p = u.split(",");
@@ -429,6 +447,7 @@ public final class VanillaNaturalSpawnOracle {
                         String[] v = p[0].split(",");
                         OraclePlayer player = (OraclePlayer) alloc(OraclePlayer.class);
                         player.mode = GameType.byName(p.length > 1 ? p[1] : "survival");
+                        entityId.setInt(player, 100000 + i);
                         put(player, Entity.class, "position", new Vec3(Double.parseDouble(v[0]), Double.parseDouble(v[1]), Double.parseDouble(v[2])));
                         level.playerList.add(player);
                     }
@@ -441,7 +460,8 @@ public final class VanillaNaturalSpawnOracle {
                         if (p.length > 2 && p[2].equals("p") && e instanceof Mob mob) mob.setPersistenceRequired();
                         level.entities.add(e);
                     }
-                    put(level, Level.class, "random", RandomSource.create(Long.parseLong(c.getOrDefault("seed", "0"))));
+                    RandomSource mainRandom = RandomSource.create(Long.parseLong(c.getOrDefault("seed", "0")));
+                    put(level, Level.class, "random", mainRandom);
                     String mode = c.getOrDefault("mode", "chunk");
                     String[] cp = c.getOrDefault("chunk", "0,0").split(",");
                     Chunk chunk = (Chunk) alloc(Chunk.class);
@@ -504,11 +524,12 @@ public final class VanillaNaturalSpawnOracle {
                                 if (start.getY() >= level.getMinY() + 1) NaturalSpawner.spawnCategoryForPosition(category, level, chunk, start, extra, after);
                             }
                         }
-                        log.add("next " + level.random.nextInt(1000));
+                        log.add("next " + mainRandom.nextInt(1000));
                     }
                     w.println(c.get("name") + " " + String.join(" ; ", log));
                 } catch (Throwable t) {
-                    Throwable cause = t instanceof InvocationTargetException ite ? ite.getCause() : t;
+                    Throwable cause = t;
+                    while ((cause instanceof InvocationTargetException || cause instanceof RuntimeException && cause.getCause() != null) && cause.getCause() != null) cause = cause.getCause();
                     StringBuilder line = new StringBuilder(c.get("name") + " error " + cause);
                     if (System.getenv("ORACLE_TRACE") != null) for (var frame : cause.getStackTrace()) line.append("\n  at ").append(frame);
                     w.println(line);

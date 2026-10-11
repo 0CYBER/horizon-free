@@ -27,6 +27,8 @@ use std::collections::HashMap;
 struct GameLevel<'g, 'a> {
     game: &'g Game<'a>,
     w: MobWorld<'g>,
+    /// Boxes of the mobs this pass created, not yet in the game's list.
+    pending: std::cell::RefCell<Vec<Aabb>>,
 }
 impl GameLevel<'_, '_> {
     fn biome(&self, x: i32, y: i32, z: i32) -> Option<&BiomeInfo> {
@@ -170,6 +172,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
             .player_view()
             .is_some_and(|p| p.alive && !p.spectator && p.bounds.intersects(bounds));
         !player
+            && !self.pending.borrow().iter().any(|b| b.intersects(bounds))
             && !self
                 .game
                 .mobs
@@ -183,41 +186,19 @@ impl NaturalLevel for GameLevel<'_, '_> {
         let top = horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT;
         (horizon_client::chunk::MIN_Y..top)
             .rev()
-            .find(|&y| heightmap_blocks(self.w.facts, self.w.data, kind, self.state(x, y, z)))
+            .find(|&y| spawn_selection::heightmap_blocks(self, kind, x, y, z))
             .map_or(horizon_client::chunk::MIN_Y, |y| y + 1)
     }
     fn pathfindable_land(&self, x: i32, y: i32, z: i32) -> bool {
         self.w.data.state(self.state(x, y, z)).flags & data::LAND != 0
     }
 }
-/// `Heightmap.Types` predicates: WORLD_SURFACE (not air), OCEAN_FLOOR
-/// (`blocksMotion`), MOTION_BLOCKING (or a fluid) and NO_LEAVES.
-pub fn heightmap_blocks(
-    facts: &BlockFacts,
-    data: &MobData,
-    kind: Heightmap,
-    state: BlockStateId,
-) -> bool {
-    let f = facts.get(state);
-    let blocks_motion = data.state(state).flags & data::SOLID != 0
-        && &*f.name != "minecraft:cobweb"
-        && &*f.name != "minecraft:bamboo_sapling";
-    let fluid = f.fluid != horizon_client::blocks::Fluid::None;
-    match kind {
-        Heightmap::WorldSurface => !facts.is_air(state),
-        Heightmap::OceanFloor => blocks_motion,
-        Heightmap::MotionBlocking => blocks_motion || fluid,
-        Heightmap::MotionBlockingNoLeaves => {
-            (blocks_motion || fluid) && !f.name.ends_with("_leaves")
-        }
-    }
-}
-
 impl<'a> Game<'a> {
     fn natural_level(&self) -> GameLevel<'_, 'a> {
         GameLevel {
             game: self,
             w: self.mob_world_base(&[]),
+            pending: Default::default(),
         }
     }
     /// Creates a mob the spawner accepted, finalized the game's way; the
@@ -314,8 +295,13 @@ impl<'a> Game<'a> {
             }
             if !categories.is_empty() {
                 for chunk in chunks {
-                    let mut spawn =
-                        |l: &GameLevel, r: &SpawnRequest| l.game.finalize_spawned(r, &mut pending);
+                    let mut spawn = |l: &GameLevel, r: &SpawnRequest| {
+                        let spawned = l.game.finalize_spawned(r, &mut pending);
+                        if let Some(s) = &spawned {
+                            l.pending.borrow_mut().push(s.bounds);
+                        }
+                        spawned
+                    };
                     spawn_selection::spawn_for_chunk(
                         &level,
                         &mut random,
@@ -347,8 +333,13 @@ impl<'a> Game<'a> {
         {
             let level = self.natural_level();
             let source = [cx * 16, level.max_y(), cz * 16];
-            let mut spawn =
-                |l: &GameLevel, r: &SpawnRequest| l.game.finalize_spawned(r, &mut pending);
+            let mut spawn = |l: &GameLevel, r: &SpawnRequest| {
+                let spawned = l.game.finalize_spawned(r, &mut pending);
+                if let Some(s) = &spawned {
+                    l.pending.borrow_mut().push(s.bounds);
+                }
+                spawned
+            };
             spawn_selection::spawn_mobs_for_chunk_generation(
                 &level,
                 source,
