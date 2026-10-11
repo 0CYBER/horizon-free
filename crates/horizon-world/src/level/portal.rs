@@ -160,7 +160,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return true;
         }
         // isPortal
-        if !matches!(self.level.dimension(), super::Dimension::Overworld | super::Dimension::Nether) {
+        if !matches!(
+            self.level.dimension(),
+            super::Dimension::Overworld | super::Dimension::Nether
+        ) {
             return false;
         }
         for face in Direction::ALL {

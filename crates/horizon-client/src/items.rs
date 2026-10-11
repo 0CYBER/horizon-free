@@ -527,7 +527,11 @@ impl Items {
         self.loot.contains_key(id)
     }
     /// The server random sequence the block's loot table draws from.
-    pub fn block_loot_sequence(&self, registry: &BlockRegistry, state: BlockStateId) -> Option<String> {
+    pub fn block_loot_sequence(
+        &self,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+    ) -> Option<String> {
         let block = registry.state(state)?;
         let name = block.name.trim_start_matches("minecraft:");
         let standing = name.replacen("_wall_", "_", 1);
@@ -913,7 +917,12 @@ impl LootContext<'_> {
             _ => false,
         }
     }
-    fn choose(&self, entries: &[Value], random: &mut impl RandomSource, produced: &mut Vec<ItemStack>) {
+    fn choose(
+        &self,
+        entries: &[Value],
+        random: &mut impl RandomSource,
+        produced: &mut Vec<ItemStack>,
+    ) {
         let mut candidates = Vec::new();
         for e in entries {
             self.expand(e, random, &mut candidates);

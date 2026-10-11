@@ -118,7 +118,9 @@ impl Game<'_> {
         let air = self.world.air;
         for &p in cells {
             let pos = horizon_core::position::BlockPos::new(p[0], p[1], p[2]);
-            self.with_level(|b, level, ticks| b.update_neighbors_at(level, ticks, pos, b.block(air)));
+            self.with_level(|b, level, ticks| {
+                b.update_neighbors_at(level, ticks, pos, b.block(air))
+            });
         }
         self.process_level_events()
     }

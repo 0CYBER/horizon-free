@@ -129,7 +129,8 @@ pub(super) fn entity_random() -> LegacyRandom {
     let mut current = UNIQUIFIER.load(Ordering::Relaxed);
     let seed = loop {
         let next = current.wrapping_mul(STEP);
-        match UNIQUIFIER.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+        match UNIQUIFIER.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+        {
             Ok(_) => break next,
             Err(actual) => current = actual,
         }
@@ -603,7 +604,9 @@ impl Game<'_> {
             "minecraft:honeycomb" => self.dispense_honeycomb(pos, facing, stack)?,
             "minecraft:potion" => self.dispense_potion(pos, facing, stack)?,
             _ if item.ends_with("shulker_box") => self.dispense_shulker_box(pos, facing, stack)?,
-            _ if super::boats::any_boat_wood(&item).is_some() => self.dispense_boat(pos, facing, stack),
+            _ if super::boats::any_boat_wood(&item).is_some() => {
+                self.dispense_boat(pos, facing, stack)
+            }
             _ if super::minecarts::CartKind::from_id(&item).is_some() => {
                 self.dispense_minecart(pos, facing, stack)
             }
@@ -686,7 +689,9 @@ impl Game<'_> {
     /// top of the block (`setPos(x + 0.5, y + 1, z + 0.5)`) falls one block
     /// against the collision shapes overlapping that block alone.
     fn drop_offset(&self, width: f64, height: f64, p: Pos) -> f64 {
-        use horizon_world::{block_collision_scan::BlockCollisionScan, collision_context::CollisionContext};
+        use horizon_world::{
+            block_collision_scan::BlockCollisionScan, collision_context::CollisionContext,
+        };
         let h = width / 2.0;
         let (x, z) = (f64::from(p.0) + 0.5, f64::from(p.2) + 0.5);
         let y = f64::from(p.1) + 1.0;
@@ -696,7 +701,11 @@ impl Game<'_> {
         );
         let cell = Aabb::new(
             Vec3::new(f64::from(p.0), f64::from(p.1), f64::from(p.2)),
-            Vec3::new(f64::from(p.0) + 1.0, f64::from(p.1) + 1.0, f64::from(p.2) + 1.0),
+            Vec3::new(
+                f64::from(p.0) + 1.0,
+                f64::from(p.1) + 1.0,
+                f64::from(p.2) + 1.0,
+            ),
         );
         let mut scene = SceneCollisions {
             world: &self.world,
@@ -704,9 +713,17 @@ impl Game<'_> {
         };
         let mut amount = -1.0;
         // Level.getCollisions(null, aabb): CollisionContext.empty().
-        if let Ok(scan) = BlockCollisionScan::new(&mut scene, CollisionContext::empty(false), cell, false, 1_000_000) {
+        if let Ok(scan) = BlockCollisionScan::new(
+            &mut scene,
+            CollisionContext::empty(false),
+            cell,
+            false,
+            1_000_000,
+        ) {
             for hit in scan.flatten() {
-                amount = hit.shape.collide(horizon_core::geometry::Axis::Y, entity, amount);
+                amount = hit
+                    .shape
+                    .collide(horizon_core::geometry::Axis::Y, entity, amount);
             }
         }
         1.0 + amount
@@ -762,9 +779,9 @@ impl Game<'_> {
         // LivingEntity.canEquipWithDispenser: alive, the slot usable, the
         // item's allowed entities, the slot empty and the dispenser rule.
         let target = self.targets_at(front).into_iter().find(|t| match *t {
-            Target::Player => slot.armor_index().is_some_and(|i| {
-                allows("minecraft:player") && self.armor[i].is_none()
-            }),
+            Target::Player => slot
+                .armor_index()
+                .is_some_and(|i| allows("minecraft:player") && self.armor[i].is_none()),
             Target::Stand(i) => slot.stand_index().is_some_and(|s| {
                 allows("minecraft:armor_stand") && self.armor_stands[i].equipment[s].is_none()
             }),
@@ -802,7 +819,11 @@ impl Game<'_> {
                 mob_set_slot(m, slot, one);
                 // setGuaranteedDrop / setPersistenceRequired.
                 m.persistent = true;
-                let sound = if m.silent { None } else { equip_sound(m, slot, sound) };
+                let sound = if m.silent {
+                    None
+                } else {
+                    equip_sound(m, slot, sound)
+                };
                 (Some(m.position), sound)
             }
         };
@@ -1010,7 +1031,10 @@ impl Game<'_> {
                 return (shrink(stack), CLICK);
             }
         }
-        (self.default_execute(pos, facing, stack), optional_event("chest"))
+        (
+            self.default_execute(pos, facing, stack),
+            optional_event("chest"),
+        )
     }
     /// `BoatDispenseItemBehavior`.
     fn dispense_boat(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Dispensed {
@@ -1183,7 +1207,12 @@ impl Game<'_> {
             if let Some(id) = self.spawn_mob_at(kind, target, true) {
                 self.mob_placed(id)?;
             }
-            self.post_block_game_event("minecraft:entity_place", [target.0, target.1, target.2], None, None);
+            self.post_block_game_event(
+                "minecraft:entity_place",
+                [target.0, target.1, target.2],
+                None,
+                None,
+            );
         }
         let bucket = ItemStack::new("minecraft:bucket", 1);
         Ok((
@@ -1203,7 +1232,12 @@ impl Game<'_> {
         self.process_level_events()?;
         match picked {
             Some(filled) => {
-                self.post_block_game_event("minecraft:fluid_pickup", [target.x, target.y, target.z], None, None);
+                self.post_block_game_event(
+                    "minecraft:fluid_pickup",
+                    [target.x, target.y, target.z],
+                    None,
+                    None,
+                );
                 let filled = ItemStack::new(filled, 1);
                 Ok((
                     self.consume_with_remainder(pos, facing, stack, filled),
@@ -1253,15 +1287,28 @@ impl Game<'_> {
             }
             return Ok((self.hurt_and_break(stack, 1), CLICK));
         }
-        if self.with_level(|b, level, ticks| b.fire_can_be_placed_at(level, ticks, target_pos, facing)) {
-            let fire = self.with_level(|b, level, ticks| b.fire_state_for(level, ticks, target_pos));
+        if self
+            .with_level(|b, level, ticks| b.fire_can_be_placed_at(level, ticks, target_pos, facing))
+        {
+            let fire =
+                self.with_level(|b, level, ticks| b.fire_state_for(level, ticks, target_pos));
             self.level_set([target.0, target.1, target.2], fire)?;
-            self.post_block_game_event("minecraft:block_place", [target.0, target.1, target.2], None, None);
+            self.post_block_game_event(
+                "minecraft:block_place",
+                [target.0, target.1, target.2],
+                None,
+                None,
+            );
         } else if self.can_light(state, &name) {
             if let Some(lit) = self.with_props(state, &[("lit", "true")]) {
                 self.level_set([target.0, target.1, target.2], lit)?;
             }
-            self.post_block_game_event("minecraft:block_change", [target.0, target.1, target.2], None, None);
+            self.post_block_game_event(
+                "minecraft:block_change",
+                [target.0, target.1, target.2],
+                None,
+                None,
+            );
         } else if &*name == "minecraft:tnt" {
             if self.ui.rules.bool("tnt_explodes") {
                 self.spawn_primed_tnt(target_pos, false);
@@ -1282,8 +1329,11 @@ impl Game<'_> {
         let lit = self.prop(state, "lit");
         let waterlogged = self.prop(state, "waterlogged");
         let dry_unlit = lit.as_deref() == Some("false") && waterlogged.as_deref() == Some("false");
-        ((self.in_block_tag("minecraft:campfires", name) || self.in_block_tag("minecraft:candles", name)) && dry_unlit)
-            || (self.in_block_tag("minecraft:candle_cakes", name) && lit.as_deref() == Some("false"))
+        ((self.in_block_tag("minecraft:campfires", name)
+            || self.in_block_tag("minecraft:candles", name))
+            && dry_unlit)
+            || (self.in_block_tag("minecraft:candle_cakes", name)
+                && lit.as_deref() == Some("false"))
     }
     fn dispense_bone_meal(
         &mut self,
@@ -1336,7 +1386,12 @@ impl Game<'_> {
             1.0,
             1.0,
         );
-        self.post_block_game_event("minecraft:entity_place", [front.0, front.1, front.2], None, None);
+        self.post_block_game_event(
+            "minecraft:entity_place",
+            [front.0, front.1, front.2],
+            None,
+            None,
+        );
         (shrink(stack), CLICK)
     }
 
@@ -1377,7 +1432,12 @@ impl Game<'_> {
                 if let Some(entity) = BlockEntity::for_block("minecraft:wither_skeleton_skull") {
                     self.world.block_entities.insert(target, entity);
                 }
-                self.post_block_game_event("minecraft:block_place", [target.0, target.1, target.2], None, None);
+                self.post_block_game_event(
+                    "minecraft:block_place",
+                    [target.0, target.1, target.2],
+                    None,
+                    None,
+                );
                 self.check_wither_spawn([target.0, target.1, target.2])?;
                 return Ok((shrink(stack), CLICK));
             }
@@ -1436,7 +1496,9 @@ impl Game<'_> {
                     // setBlock; the spot is air again by the time setBlock
                     // would update neighbours, so it skips them.
                     let at = Self::pos_of(target);
-                    self.with_level(|b, level, ticks| b.set_block(level, ticks, at, pumpkin, 2 | 16));
+                    self.with_level(|b, level, ticks| {
+                        b.set_block(level, ticks, at, pumpkin, 2 | 16)
+                    });
                     self.process_level_events()?;
                     self.check_golem_spawn(head)?;
                 } else {
@@ -1609,7 +1671,11 @@ impl Game<'_> {
         // BeehiveBlock.dropHoneycomb (harvest/beehive), then
         // releaseBeesAndResetHoneyLevel and the shear event.
         let p = [target.0, target.1, target.2];
-        for stack in self.sequence_loot("minecraft:harvest/beehive", "minecraft:harvest/beehive", None) {
+        for stack in self.sequence_loot(
+            "minecraft:harvest/beehive",
+            "minecraft:harvest/beehive",
+            None,
+        ) {
             self.pop_resource(p, stack);
         }
         if let Some(reset) = self.with_props(state, &[("honey_level", "0")]) {
@@ -1714,7 +1780,8 @@ impl Game<'_> {
                         .play("minecraft:entity.sulfur_cube.eject", sound_at, 1.0, 1.0);
                 }
                 Species::Sheep if !m.extra.sheared && !m.is_baby() => {
-                    let color = horizon_client::mobs::render::DYE_NAMES[m.extra.color as usize & 15];
+                    let color =
+                        horizon_client::mobs::render::DYE_NAMES[m.extra.color as usize & 15];
                     self.audio
                         .play("minecraft:entity.sheep.shear", sound_at, 1.0, 1.0);
                     let drops = self.sequence_loot(
@@ -1799,7 +1866,12 @@ impl Game<'_> {
                 }
                 _ => continue,
             }
-            self.post_block_game_event("minecraft:shear", [target.0, target.1, target.2], None, None);
+            self.post_block_game_event(
+                "minecraft:shear",
+                [target.0, target.1, target.2],
+                None,
+                None,
+            );
             return Ok(true);
         }
         Ok(false)
@@ -1816,7 +1888,9 @@ impl Game<'_> {
                 (Holder::Mob(m.id), b.center(), Some(i))
             }
             Target::Player => {
-                let Some(v) = self.player_view() else { return false };
+                let Some(v) = self.player_view() else {
+                    return false;
+                };
                 (Holder::Player, v.bounds.center(), None)
             }
             Target::Stand(_) => return false,
@@ -1826,7 +1900,9 @@ impl Game<'_> {
             .mobs
             .iter()
             .enumerate()
-            .filter(|(_, m)| !m.removed && m.extra.leash == Some(holder) && overlaps(m.bounds(), area))
+            .filter(|(_, m)| {
+                !m.removed && m.extra.leash == Some(holder) && overlaps(m.bounds(), area)
+            })
             .map(|(j, m)| (m.id, j))
             .collect();
         leashed.sort_unstable();
@@ -1963,7 +2039,10 @@ impl Game<'_> {
         let Some(waxed) =
             waxed.filter(|_| name.contains("copper") || name.contains("lightning_rod"))
         else {
-            return Ok((self.default_execute(pos, facing, stack), optional_event("honeycomb")));
+            return Ok((
+                self.default_execute(pos, facing, stack),
+                optional_event("honeycomb"),
+            ));
         };
         set_success("honeycomb", true);
         self.level_set([target.0, target.1, target.2], waxed)?;

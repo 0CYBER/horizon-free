@@ -65,11 +65,12 @@ enum Target {
     Stand(u32),
 }
 
-
 impl Game<'_> {
     /// Run every case of `spec` ("CASES,OUTPUT") and write the results.
     pub(super) fn dispense_fixture(&mut self, spec: &str) -> Result<()> {
-        let (input, output) = spec.split_once(',').ok_or("HORIZON_DISPENSE_FIXTURE=CASES,OUTPUT")?;
+        let (input, output) = spec
+            .split_once(',')
+            .ok_or("HORIZON_DISPENSE_FIXTURE=CASES,OUTPUT")?;
         // Saplings and feature placers grow from the live feature registry.
         self.install_live_features();
         let text = std::fs::read_to_string(input)?;
@@ -98,8 +99,10 @@ impl Game<'_> {
             for cz in -2..=2 {
                 let mut chunk = Chunk::empty(cx, cz);
                 for section in &mut chunk.sections {
-                    Arc::make_mut(section).biomes =
-                        horizon_core::paletted::PalettedContainer::new(horizon_client::chunk::BIOME_STRATEGY, plains);
+                    Arc::make_mut(section).biomes = horizon_core::paletted::PalettedContainer::new(
+                        horizon_client::chunk::BIOME_STRATEGY,
+                        plains,
+                    );
                 }
                 self.world.chunks.insert((cx, cz), Arc::new(chunk));
             }
@@ -133,7 +136,10 @@ impl Game<'_> {
         // The oracle level answers one sky and one block light everywhere.
         let light = case["light"].as_array();
         let level = |i: usize, default: i64| {
-            light.and_then(|l| l.get(i)).and_then(Value::as_i64).unwrap_or(default) as u8
+            light
+                .and_then(|l| l.get(i))
+                .and_then(Value::as_i64)
+                .unwrap_or(default) as u8
         };
         let packed = (level(0, 15) << 4) | level(1, 0);
         for chunk in self.world.chunks.values_mut() {
@@ -187,7 +193,12 @@ impl Game<'_> {
             targets.push(self.fixture_target(e)?);
         }
         // Leashable.setLeashedTo: a lead from a target to an earlier one.
-        for (e, t) in case["entities"].as_array().into_iter().flatten().zip(&targets) {
+        for (e, t) in case["entities"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .zip(&targets)
+        {
             let (Some(holder), Target::Mob(id)) = (e["leash"].as_u64(), t) else {
                 continue;
             };
@@ -294,16 +305,13 @@ impl Game<'_> {
         let flag = |name: &str| e[name].as_bool().unwrap_or(false);
         let ageable = !matches!(
             s,
-            Species::Zombie
-                | Species::Skeleton
-                | Species::Bogged
-                | Species::SnowGolem
+            Species::Zombie | Species::Skeleton | Species::Bogged | Species::SnowGolem
         );
         if flag("baby") && ageable {
             mob.extra.age = -24000;
         }
-        let tamable = body_in_head(s)
-            || matches!(s, Species::Cat | Species::Parrot | Species::Ocelot);
+        let tamable =
+            body_in_head(s) || matches!(s, Species::Cat | Species::Parrot | Species::Ocelot);
         if flag("tame") && tamable {
             mob.extra.tame = true;
         }
@@ -393,7 +401,12 @@ impl Game<'_> {
                 if let Some(r) = ready {
                     line.push_str(if r { " ready" } else { " unready" });
                 }
-                if x.chested && matches!(s, Species::Donkey | Species::Mule | Species::Llama | Species::TraderLlama) {
+                if x.chested
+                    && matches!(
+                        s,
+                        Species::Donkey | Species::Mule | Species::Llama | Species::TraderLlama
+                    )
+                {
                     line.push_str(" chest");
                 }
                 if x.leash.is_some() {
@@ -426,9 +439,18 @@ impl Game<'_> {
             let (p, v) = (m.position, m.velocity);
             out.push(line(&m.kind.id, [p.x, p.y, p.z], [v.x, v.y, v.z], ""));
         }
-        for s in self.armor_stands.iter().filter(|s| !old_stands.contains(&s.id)) {
+        for s in self
+            .armor_stands
+            .iter()
+            .filter(|s| !old_stands.contains(&s.id))
+        {
             let (p, v) = (s.position, s.velocity);
-            out.push(line("minecraft:armor_stand", [p.x, p.y, p.z], [v.x, v.y, v.z], ""));
+            out.push(line(
+                "minecraft:armor_stand",
+                [p.x, p.y, p.z],
+                [v.x, v.y, v.z],
+                "",
+            ));
         }
         for d in &self.dropped {
             let (p, v) = (d.position, d.velocity);
@@ -459,7 +481,12 @@ impl Game<'_> {
             out.push(line(kind, [p.x, p.y, p.z], [v.x, v.y, v.z], ""));
         }
         for (p, v) in self.rockets.iter().map(|r| r.motion()) {
-            out.push(line("minecraft:firework_rocket", [p.x, p.y, p.z], [v.x, v.y, v.z], ""));
+            out.push(line(
+                "minecraft:firework_rocket",
+                [p.x, p.y, p.z],
+                [v.x, v.y, v.z],
+                "",
+            ));
         }
         for t in &self.tnts {
             let (p, v) = (t.position, t.velocity);

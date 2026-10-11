@@ -204,9 +204,14 @@ impl Game<'_> {
                         if let Some((position, velocity, yaw)) = entity_nbt::boat_from_nbt(&tag) {
                             self.next_entity += 1;
                             let id = self.next_entity;
-                            let (wood, chest) = super::boats::any_boat_wood(k).unwrap_or(("oak", false));
-                            let mut b =
-                                super::boats::Boat::new(id, std::sync::Arc::from(wood), position, yaw);
+                            let (wood, chest) =
+                                super::boats::any_boat_wood(k).unwrap_or(("oak", false));
+                            let mut b = super::boats::Boat::new(
+                                id,
+                                std::sync::Arc::from(wood),
+                                position,
+                                yaw,
+                            );
                             if chest {
                                 b = b.with_chest();
                                 b.items = horizon_client::save::decode_items(

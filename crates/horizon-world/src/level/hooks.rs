@@ -459,8 +459,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if same {
             return;
         }
-        if matches!(self.level.dimension(), super::Dimension::Overworld | super::Dimension::Nether)
-            && let Some(shape) = self.find_empty_portal_shape(pos, true)
+        if matches!(
+            self.level.dimension(),
+            super::Dimension::Overworld | super::Dimension::Nether
+        ) && let Some(shape) = self.find_empty_portal_shape(pos, true)
         {
             self.create_portal_blocks(&shape);
             return;

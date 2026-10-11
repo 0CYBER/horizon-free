@@ -175,7 +175,10 @@ impl BoatModels {
                 }
             }
         }
-        Self { models, chest_models }
+        Self {
+            models,
+            chest_models,
+        }
     }
 }
 impl Game<'_> {
@@ -639,9 +642,10 @@ impl Game<'_> {
         if self.boats[i].chest && (sneaking || self.riding.is_some()) {
             let b = &self.boats[i];
             let key = (i32::MAX - 15, super::minecarts::CART_KEY_Y, b.id as i32);
-            self.world
-                .block_entities
-                .insert(key, horizon_client::containers::BlockEntity::Chest(b.items.clone()));
+            self.world.block_entities.insert(
+                key,
+                horizon_client::containers::BlockEntity::Chest(b.items.clone()),
+            );
             self.container = Some(key);
             self.screen = super::Screen::Inventory;
             self.capture(false);
