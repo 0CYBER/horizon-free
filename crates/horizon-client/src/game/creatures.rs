@@ -538,9 +538,18 @@ impl Game<'_> {
             let j = self.world.random.next_int_bound(i as i32 + 1).unwrap_or(0) as usize;
             chunks.swap(i, j);
         }
+        // ServerChunkCache.tickChunks: the chunks are shuffled every tick, but
+        // no category spawns without spawn_mobs, and only friendly ones
+        // unless the level is spawning monsters (ServerLevel.isSpawningMonsters).
+        let spawn_mobs = self.ui.rules.bool("spawn_mobs");
+        let spawn_enemies = spawn_mobs && self.ui.rules.bool("spawn_monsters");
         for (cx, cz) in chunks {
             for (ci, (category, cap)) in CATEGORIES.iter().enumerate() {
-                if counts[ci] >= *cap || *category == "creature" && !creature_tick {
+                if !spawn_mobs
+                    || counts[ci] >= *cap
+                    || *category == "creature" && !creature_tick
+                    || *category == "monster" && !spawn_enemies
+                {
                     continue;
                 }
                 counts[ci] += self.spawn_category_for_chunk(category, cx, cz, p);
@@ -690,9 +699,12 @@ impl Game<'_> {
         }
         self.tick_inhabited();
         self.tick_leads();
-        self.tick_wandering_trader();
         self.spawn_natural();
-        self.tick_patrol_spawner();
+        // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
+        if self.ui.rules.bool("spawn_mobs") {
+            self.tick_wandering_trader();
+            self.tick_patrol_spawner();
+        }
         self.tick_raids();
         let uuid = self.level.player_uuid;
         let snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
