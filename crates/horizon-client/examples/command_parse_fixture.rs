@@ -120,7 +120,8 @@ fn tree(d: &Dispatcher, node: usize) -> Value {
         }
         children.insert(child.name().to_owned(), v);
     }
-    let mut v = json!({"children": children});
+    let order: Vec<&str> = n.children.iter().map(|&c| d.nodes[c].name()).collect();
+    let mut v = json!({"children": children, "order": order});
     if n.command.is_some() {
         v["executable"] = json!(true);
     }

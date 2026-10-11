@@ -556,7 +556,7 @@ impl Game<'_> {
         };
         let skip = usize::from(text.starts_with('/'));
         let command = &text[skip..];
-        let d = vanilla::dispatcher();
+        let d = vanilla::game_dispatcher();
         let level = std::mem::replace(&mut self.ui.registries.permission, permission);
         let parse = d.parse(command, &self.ui.registries);
         let ((start, end), suggestions) = d.suggestions(&parse, command.len(), &self.ui.registries);

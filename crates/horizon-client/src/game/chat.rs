@@ -410,7 +410,7 @@ impl Game<'_> {
             return;
         };
         let atlas = &self.res.atlas;
-        let d = vanilla::dispatcher();
+        let d = vanilla::game_dispatcher();
         if screen.suggestion_key(atlas, d, &self.ui.registries, key, shift) {
             self.ui.chat_screen = Some(screen);
             return;
@@ -528,7 +528,7 @@ impl Game<'_> {
         screen.draw(
             batch,
             &self.res.atlas,
-            vanilla::dispatcher(),
+            vanilla::game_dispatcher(),
             &self.ui.registries,
             self.cursor,
             bg,
