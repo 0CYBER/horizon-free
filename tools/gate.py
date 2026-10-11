@@ -4,10 +4,13 @@
     python3 tools/gate.py               # everything
     python3 tools/gate.py --no-parity   # skip the vanilla harnesses
     python3 tools/gate.py --quick       # formatting, lints and Python tests only
+    python3 tools/gate.py --known-failures mob_ai,light   # harnesses already failing on the base
 
 Runs, in order, stopping at the first failure: the public-tree check,
 rustfmt, clippy with warnings denied, the Rust tests, the Python tests, and
-then every vanilla harness whose inputs changed (tools/parity.py). CI runs the
+then every vanilla harness whose inputs changed (tools/parity.py). Harnesses
+listed with --known-failures may still fail (they fail on the integration
+branch too); any other failing harness fails the gate. CI runs the
 same Rust and Python checks; the harnesses are the part CI cannot run.
 The result is written to .local/gate.json.
 """
@@ -48,6 +51,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--no-parity", action="store_true", help="skip the vanilla harnesses")
     parser.add_argument("--quick", action="store_true", help="only formatting, lints and Python tests")
+    parser.add_argument("--known-failures", default="", help="comma-separated harnesses allowed to keep failing")
     parser.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 3), help="parallel harnesses")
     args = parser.parse_args()
     logs = ROOT / ".local" / "gate"
@@ -62,6 +66,13 @@ def main():
         if name == "vanilla harnesses":
             # Stream the runner's own progress; it keeps per-harness logs.
             status = subprocess.run(command, cwd=ROOT).returncode
+            if status:
+                known = set(filter(None, args.known_failures.split(",")))
+                state = json.loads((ROOT / ".local/parity-runner/state.json").read_text())["harnesses"]
+                failing = {harness for harness, record in state.items() if record["status"] != "pass"}
+                new = sorted(failing - known)
+                print(f"Failing harnesses: {', '.join(sorted(failing))}; new: {', '.join(new) or 'none'}")
+                status = 1 if new else 0
         else:
             with log.open("w") as stream:
                 status = subprocess.run(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT).returncode

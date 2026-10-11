@@ -8,7 +8,8 @@
 
 The integration branch (`parity-base` by default) is checked out in its own
 worktree; `integrate` merges there, runs tools/gate.py and pushes the
-integration branch only when the gate passes. Otherwise it undoes the merge
+integration branch only when the gate passes, allowing only the harnesses
+that already fail on the integration branch to keep failing. Otherwise it undoes the merge
 and leaves the branch for its owner to fix. Worktrees live next to the
 integration worktree and share its vanilla data: their `.local/` entries
 link to `shared-local/` in the same directory.
@@ -113,6 +114,9 @@ def integrate(args):
     if git("status", "--porcelain", "--untracked-files=no", cwd=base_tree):
         raise SystemExit(f"{base_tree} has uncommitted changes; commit or stash them first")
     before = git("rev-parse", "HEAD", cwd=base_tree)
+    state = base_tree / ".local/parity-runner/state.json"
+    known = sorted(name for name, record in json.loads(state.read_text())["harnesses"].items()
+                   if record["status"] != "pass") if state.exists() else []
     merge = subprocess.run(["git", "merge", "--no-ff", "--no-edit", args.branch], cwd=base_tree, capture_output=True, text=True)
     if merge.returncode:
         conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=base_tree, check=False)
@@ -123,7 +127,8 @@ def integrate(args):
     if git("rev-parse", "HEAD", cwd=base_tree) == before:
         print(f"{args.branch} has nothing new for {args.base}.")
         return 0
-    gate = [sys.executable, "tools/gate.py", "-j", str(args.jobs)] + (["--no-parity"] if args.no_parity else [])
+    gate = [sys.executable, "tools/gate.py", "-j", str(args.jobs), "--known-failures", ",".join(known)]
+    gate += ["--no-parity"] if args.no_parity else []
     if subprocess.run(gate, cwd=base_tree).returncode:
         git("reset", "--hard", before, cwd=base_tree)
         print(f"The gate failed, so {args.branch} was not integrated; {args.base} is back at {before[:9]}.")
