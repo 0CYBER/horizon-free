@@ -2,10 +2,11 @@
 """Make sample worlds with older vanilla servers, for the DataFixer harness.
 
 For each listed version, the official server jar (cached under
-.local/datafix/servers/VERSION/server.jar) generates a default world around spawn,
+.local/datafix/servers/VERSION/server.jar, beside the shared vanilla data) generates a default world around spawn,
 gets a scene of block entities, entities and items in that version's own save
 format (tools/datafix_scene.py), and a bot player joins (with its inventory filled)
-so that player data exists. The saved world is kept in .local/datafix/worlds/VERSION.
+so that player data exists. The saved world is kept in datafix/worlds/VERSION beside the shared vanilla data
+(.local/datafix in a plain checkout), where every worktree finds it.
 
   datafix_worlds.py [--force] [VERSION...]      (default: every version below)
 """
@@ -33,6 +34,9 @@ import datafix_scene as scene  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local' / 'datafix'
+# Old server jars and their worlds are inputs, not outputs: keep them beside the
+# vanilla data, which parallel worktrees share (.local/minecraft links there).
+SHARED = (ROOT / '.local' / 'minecraft').resolve().parent / 'datafix'
 VERSIONS = ['1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
             '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.2', '26.2']
 MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
@@ -41,7 +45,7 @@ UUID_BASE = 0x6000
 
 
 def server_jar(version):
-    path = LOCAL / 'servers' / version / 'server.jar'
+    path = SHARED / 'servers' / version / 'server.jar'
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         manifest = json.load(urllib.request.urlopen(MANIFEST))
@@ -271,7 +275,7 @@ def uuid_nbt(i):
 
 def build(version, force=False):
     jar, data_version, protocol = server_jar(version)
-    target = LOCAL / 'worlds' / version
+    target = SHARED / 'worlds' / version
     if target.exists() and not force:
         print(f'{version}: kept {target}')
         return []
@@ -310,11 +314,15 @@ def build(version, force=False):
     bot.leave()
     time.sleep(2)
     server.stop()
-    shutil.rmtree(target, ignore_errors=True)
+    # Copy aside, then rename: an interrupted copy must not look like a finished world.
+    partial = target.with_name(target.name + '.partial')
+    shutil.rmtree(partial, ignore_errors=True)
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(work / 'world', target)
-    (target / 'datafix-source.json').write_text(json.dumps(
+    shutil.copytree(work / 'world', partial)
+    (partial / 'datafix-source.json').write_text(json.dumps(
         {'version': version, 'data_version': data_version, 'problems': problems}, indent=1))
+    shutil.rmtree(target, ignore_errors=True)
+    partial.rename(target)
     for command, out in problems:
         print(f'{version}: command failed: {command}\n   {out}')
     print(f'{version}: DataVersion {data_version}, world in {target}')

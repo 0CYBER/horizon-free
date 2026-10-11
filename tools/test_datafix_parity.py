@@ -2,8 +2,9 @@
 """DataFixer differential test: worlds saved by older game versions, upgraded by
 vanilla 26.3 and by Horizon, must give the same data.
 
-For every sample world in .local/datafix/worlds (made by tools/datafix_worlds.py
-with the official server jars of 1.20.1 to 26.2), two upgrades run on a copy:
+For every sample world in datafix/worlds beside the shared vanilla data (made by
+tools/datafix_worlds.py with the official server jars of 1.18.2 to 26.2, and
+generated automatically when missing), two upgrades run on a copy:
 
   vanilla  VanillaDataFixOracle: FileFixerUpper, then DataFixers on level.dat, every
            chunk, entity chunk and POI chunk, player, saved data, advancements and
@@ -31,7 +32,7 @@ import anvil_dump  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local' / 'datafix'
-WORLDS = LOCAL / 'worlds'
+WORLDS = (ROOT / '.local' / 'minecraft').resolve().parent / 'datafix' / 'worlds'
 RUN = LOCAL / 'run'
 
 IGNORED = {
@@ -184,10 +185,17 @@ def main():
     p.add_argument('--vanilla-only', action='store_true', help='only run the oracle')
     p.add_argument('--binary', help='a prebuilt datafix_world example')
     args = p.parse_args()
-    worlds = sorted(p.name for p in WORLDS.iterdir()) if WORLDS.is_dir() else []
+    import datafix_worlds
+    import fcntl
+    WORLDS.parent.mkdir(parents=True, exist_ok=True)
+    with open(WORLDS.parent / 'generate.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # another worktree may be generating them
+        missing = [v for v in datafix_worlds.VERSIONS if not (WORLDS / v / 'level.dat').exists()]
+        if missing:
+            print('generating sample worlds:', ' '.join(missing), flush=True)
+            subprocess.run([sys.executable, str(ROOT / 'tools' / 'datafix_worlds.py'), *missing], cwd=ROOT, check=True)
+    worlds = sorted(p.name for p in WORLDS.iterdir() if p.is_dir())
     versions = args.versions or worlds
-    if not versions:
-        sys.exit('no sample worlds: run tools/datafix_worlds.py first')
     classpath = java_classpath()
     binary = None if args.vanilla_only else Path(args.binary) if args.binary else build_rust()
     total = 0
