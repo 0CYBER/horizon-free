@@ -8,7 +8,6 @@ use horizon_client::{
     mesher::Vertex,
     mobs::leash::{self, Holder, Pending},
 };
-use horizon_core::random::RandomSource;
 use horizon_world::nbt::Tag;
 
 /// `Vec3.yRot(angle)`.

@@ -705,7 +705,7 @@ impl Game<'_> {
         }
         false
     }
-    pub(super) fn golem_shearable(&self, index: usize) -> bool {
+    fn golem_shearable(&self, index: usize) -> bool {
         self.mobs[index].extra.legs.as_deref().is_some_and(|a| {
             self.res
                 .items

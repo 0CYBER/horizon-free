@@ -217,19 +217,11 @@ pub(super) fn body_in_head(s: Species) -> bool {
         || matches!(s, Species::Wolf | Species::HappyGhast | Species::SulfurCube)
         || horizon_client::mobs::nautilus::is_nautilus(s)
 }
-/// Mobs whose saddle slot Horizon keeps in `extra.legs` (the copper
-/// golem's antenna, `EQUIPMENT_SLOT_ANTENNA`).
-fn saddle_in_legs(s: Species) -> bool {
-    s == Species::CopperGolem
-}
 /// What a mob holds in a slot.
 pub(super) fn mob_slot_item(m: &Mob, slot: Slot) -> Option<Arc<str>> {
     let x = &m.extra;
     let body = body_in_head(m.species());
-    let antenna = saddle_in_legs(m.species());
     match slot {
-        Slot::Saddle if antenna => x.legs.clone(),
-        Slot::Legs if antenna => None,
         Slot::MainHand => x.main_hand.clone(),
         Slot::OffHand => x.off_hand.clone(),
         Slot::Feet => x.feet.clone(),
@@ -301,10 +293,8 @@ fn equip_sound(m: &Mob, slot: Slot, default: Option<String>) -> Option<String> {
 }
 pub(super) fn mob_set_slot(m: &mut Mob, slot: Slot, stack: ItemStack) {
     let item: Arc<str> = stack.item.clone();
-    let antenna = saddle_in_legs(m.species());
     let x = &mut m.extra;
     match slot {
-        Slot::Saddle if antenna => x.legs = Some(item),
         Slot::MainHand => x.main_hand = Some(item),
         Slot::OffHand => x.off_hand = Some(item),
         Slot::Feet => x.feet = Some(item),
@@ -1680,14 +1670,6 @@ impl Game<'_> {
             let at = m.position;
             let sound_at = Some([at.x, at.y, at.z]);
             match m.species() {
-                Species::CopperGolem if self.golem_shearable(i) => {
-                    // CopperGolem.shear: the antenna (the saddle slot) drops 1.5 up.
-                    self.audio
-                        .play("minecraft:entity.copper_golem.shear", sound_at, 1.0, 1.0);
-                    if let Some(antenna) = self.mobs[i].extra.legs.take() {
-                        self.spawn_at_location(at, 1.5, ItemStack::new(&antenna, 1));
-                    }
-                }
                 Species::SulfurCube if sulfur_cube::has_body(m) => {
                     // SulfurCube.shear: the swallowed block comes out at the
                     // passenger attachment, and nothing is swallowed for 5 s.
@@ -1803,15 +1785,15 @@ impl Game<'_> {
             Target::Mob(i) => {
                 let m = &self.mobs[i];
                 let b = m.bounds();
-                (Holder::Mob(m.id), (b.min + b.max) * 0.5, Some(i))
+                (Holder::Mob(m.id), b.center(), Some(i))
             }
             Target::Player => {
                 let Some(v) = self.player_view() else { return false };
-                (Holder::Player, (v.bounds.min + v.bounds.max) * 0.5, None)
+                (Holder::Player, v.bounds.center(), None)
             }
             Target::Stand(_) => return false,
         };
-        let area = Aabb::new(centre - Vec3::new(16.0, 16.0, 16.0), centre + Vec3::new(16.0, 16.0, 16.0));
+        let area = Aabb::new(centre, centre).inflate(Vec3::new(16.0, 16.0, 16.0));
         let mut leashed: Vec<(u32, usize)> = self
             .mobs
             .iter()
@@ -1825,7 +1807,7 @@ impl Game<'_> {
             return false;
         }
         // Leashable.dropLeash: a lead item at the leashed entity's feet.
-        let mut drop = |game: &mut Self, j: usize| {
+        let drop = |game: &mut Self, j: usize| {
             if game.mobs[j].extra.leash.take().is_some() {
                 let at = game.mobs[j].position;
                 game.spawn_at_location(at, 0.0, ItemStack::new("minecraft:lead", 1));
