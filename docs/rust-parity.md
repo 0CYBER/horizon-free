@@ -445,6 +445,42 @@ The [contained-fluid comparison](world-data.md#contained-fluid-states) adds
 and surface/camera height queries. It covers every pinned block state and query
 failures; fluid spreading, entity interactions and rendering remain pending.
 
+## Block entity removal, drops and copper golems
+
+`LevelChunk.setBlockState` runs `BlockEntity.preRemoveSideEffects` when a
+block with a block entity is replaced by another block (`LevelAccess::remove_block_entity`,
+`level/removal.rs`): containers spill every slot through `Containers.dropItemStack`
+(chests, barrels, copper chests, hoppers, dispensers, droppers, crafters,
+furnaces, brewing stands, chiseled bookshelves, shelves, decorated pots and
+campfires, the last four from the block entities kept as loaded), jukeboxes pop
+their record, lecterns their book, and shulker boxes keep their contents for the
+dropped box. Copper chests and statues keep their block entity across
+weathering, and `UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS` skips the spill.
+`Block.dropResources` draws its loot and pop spots when the behaviour calls it,
+with ore, sculk and spawner experience, and the item entities and orbs the
+behaviour makes join the world before it returns, in the same tick. Player
+mining, explosions and `/setblock`/`/fill destroy` use the same path in
+vanilla's order.
+
+`tools/test_block_removal_parity.py` replaces, destroys and removes every block
+entity holder with random contents (4,000 cases) against `VanillaDispenserOracle`
+running vanilla's `setBlock`/`destroyBlock`/`removeBlock`, and compares block
+changes, contents left, item entities and orbs, events, sounds and the level
+random: all cases match. The block update oracle replays the same removal, so
+the block update, random tick and redstone harnesses cover it too.
+
+The copper golem is a species: its model, weathered textures and glowing eyes,
+keyframe animations (compared by the entity model harness), sounds, weathering,
+waxing and scraping, statues, saved `weather_state` and `next_weather_age`, death
+loot (entity death loot harness), the poppy iron golems give it, and building it
+from a pumpkin on a copper block (the copper block becomes the matching copper
+chest). The dispenser harness builds, shears and equips copper golems against
+vanilla. Its chest-sorting AI (`CopperGolemAi` with
+`TransportItemsBetweenContainers`) still runs as goals that follow vanilla's
+behaviour without its brain: porting it onto the brain machinery of
+`mobs/villager_brain.rs` and comparing it in the mob AI harness, which needs
+container contents in the probe's world, is still to do.
+
 ## Overlay feature composition
 
 The Rust overlay feature executes every child placed feature in order and

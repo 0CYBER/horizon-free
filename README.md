@@ -42,7 +42,7 @@ round-trip harness has not been rerun.
 | Interaction and inventory | 1 | None: menu clicks match over 6,000 click sequences |
 | Menus, HUD and chat | 0.75 | Commands parse as vanilla over 39,685 inputs, but /item modify, /spectate, /waypoint and /dialog do not run; no tab list or world border rendering |
 | Audio | 0.75 | Sound engine, music and ambience not compared with vanilla |
-| Block behaviours and ticking | 0.75 | Block updates, random ticks, redstone and dispensers match vanilla; a container replaced by another block keeps its contents instead of spilling them, and there are no copper golems |
+| Block behaviours and ticking | 0.75 | Block updates, random ticks, redstone, dispensers and block entity removal (containers spill, 4,000 cases) match vanilla; the copper golem's chest-sorting AI is not compared |
 
 ### Next steps
 
@@ -50,7 +50,7 @@ round-trip harness has not been rerun.
 2. Draw every item through the item model pipeline, and add the resource pack screen.
 3. An audio harness: sound engine attenuation, weighted sound events, music and ambience.
 4. A mob AI harness, and an oracle for drowned, villagers, traders and the wither.
-5. The missing commands, containers spilling when replaced, copper golems, the tab list and world border rendering.
+5. The missing commands, the copper golem's brain (chest sorting) in the mob AI harness, the tab list and world border rendering.
 6. Test LAN hosting with a vanilla client, and add a dedicated server mode.
 
 ```sh
