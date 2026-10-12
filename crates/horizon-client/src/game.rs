@@ -2730,6 +2730,15 @@ impl Game<'_> {
         self.tick_burning();
         self.tick_using();
         self.tick_hud();
+        // The player's digging comes in with its packets, before the level
+        // ticks; ServerLevel.tick then runs the scheduled and random block
+        // ticks before any entity, so what they drop or spawn (dispensed
+        // items, popped crops) moves on the tick it appears, as in vanilla.
+        self.tick_mining()?;
+        self.postprocess_chunks()?;
+        if running {
+            self.tick_blocks()?;
+        }
         if running {
             self.tick_paintings();
             self.tick_item_frames();
@@ -2744,7 +2753,6 @@ impl Game<'_> {
             self.tick_tridents();
             self.tick_rockets();
         }
-        self.tick_mining()?;
         if running {
             self.tick_items();
         }
@@ -2761,9 +2769,7 @@ impl Game<'_> {
         if running {
             self.tick_end()?;
         }
-        self.postprocess_chunks()?;
         if running {
-            self.tick_blocks()?;
             self.tick_falling()?;
             self.tick_tnt()?;
         }
