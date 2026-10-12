@@ -260,6 +260,16 @@ pub enum LevelEvent {
         state: BlockStateId,
         kind: &'static str,
     },
+    /// A queued block event that reached a block entity
+    /// (`BaseEntityBlock.triggerEvent`): the client's copy runs
+    /// `BlockEntity.triggerEvent(a, b)` (`ClientboundBlockEventPacket`), as
+    /// for a bell's ring (event 1, the struck direction).
+    BlockEntityEvent {
+        pos: BlockPos,
+        state: BlockStateId,
+        a: i32,
+        b: i32,
+    },
     /// A player-side effect of [`Behaviours::use_without_item`].
     Player {
         pos: BlockPos,

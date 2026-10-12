@@ -21,6 +21,7 @@ pub fn register(m: &mut Mob) {
     g.add(4, MeleeAttack::new(1.0, true));
     g.add(5, Stroll::avoiding_water(0.4));
     g.add(6, LookAtPlayer::new(6.0));
+    g.add(10, LookAtPlayer::mobs(8.0));
     let mut hurt = HurtByTarget::new().alert();
     hurt.ignore = vec![
         Species::Pillager,

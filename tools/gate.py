@@ -41,7 +41,7 @@ def steps(args):
     yield "doc tests", ["cargo", "+stable", "test", "--locked", "--workspace", "--doc"]
     yield "python tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"]
     if not args.no_parity:
-        yield "vanilla harnesses", [sys.executable, "tools/parity.py", "-j", str(args.jobs)]
+        yield "vanilla harnesses", [sys.executable, "tools/parity.py", *(["-j", str(args.jobs)] if args.jobs is not None else [])]
 
 
 def head():
@@ -53,7 +53,7 @@ def main():
     parser.add_argument("--no-parity", action="store_true", help="skip the vanilla harnesses")
     parser.add_argument("--quick", action="store_true", help="only formatting, lints and Python tests")
     parser.add_argument("--known-failures", default="", help="comma-separated harnesses allowed to keep failing")
-    parser.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 3), help="parallel harnesses")
+    parser.add_argument("-j", "--jobs", type=int, help="harnesses at once on this machine (default: tools/parity.py's)")
     args = parser.parse_args()
     logs = ROOT / ".local" / "gate"
     logs.mkdir(parents=True, exist_ok=True)

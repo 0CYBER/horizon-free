@@ -45,7 +45,8 @@ import org.joml.Quaternionf;
  * renderer's extractRenderState and submit, and captures every submitted
  * model (vertices after setupAnim and the pose stack, sprite-local UVs, tint,
  * light), text call and item. Level-backed inputs (light, chest lid
- * openness, pot wobble) come from the case because the entity has no level.
+ * openness, pot wobble) come from the case because the entity has no level;
+ * End gateways, which query theirs, get a stub level built from the case.
  *
  * Input lines: case JSON. Output lines: {case, submits:[...]} or {case, error}.
  */
@@ -206,6 +207,54 @@ public final class VanillaBlockEntityRenderOracle {
         return (SubmitNodeCollector) Proxy.newProxyInstance(SubmitNodeCollector.class.getClassLoader(), new Class<?>[] {SubmitNodeCollector.class}, handler);
     }
 
+    /**
+     * The level an End gateway reads: the gateway and the case's neighbour
+     * blocks (air elsewhere), its light, build height and game time. Allocated without running
+     * Level's constructor; everything else is unsupported.
+     */
+    static final class CaseLevel extends net.minecraft.world.level.Level {
+        Map<BlockPos, BlockState> blocks;
+        int minY, height, sky, block;
+        long gameTime;
+        CaseLevel() { super(null, null, null, null, false, false, 0L, 0); }
+        @Override public BlockState getBlockState(BlockPos p) { return blocks.getOrDefault(p, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState()); }
+        @Override public int getMinY() { return minY; }
+        @Override public int getHeight() { return height; }
+        @Override public long getGameTime() { return gameTime; }
+        @Override public int getBrightness(net.minecraft.world.level.LightLayer layer, BlockPos p) { return layer == net.minecraft.world.level.LightLayer.SKY ? sky : block; }
+        @Override public net.minecraft.world.clock.ClockManager clockManager() { throw new UnsupportedOperationException(); }
+        @Override public void destroyBlockProgress(int p0, BlockPos p1, int p2) { throw new UnsupportedOperationException(); }
+        @Override public java.util.Collection dragonParts() { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.flag.FeatureFlagSet enabledFeatures() { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.attribute.EnvironmentAttributeSystem environmentAttributes() { throw new UnsupportedOperationException(); }
+        @Override public void explode(net.minecraft.world.entity.Entity p0, net.minecraft.world.damagesource.DamageSource p1, net.minecraft.world.level.ExplosionDamageCalculator p2, double p3, double p4, double p5, float p6, boolean p7, net.minecraft.world.level.Level.ExplosionInteraction p8, net.minecraft.core.particles.ParticleOptions p9, net.minecraft.core.particles.ParticleOptions p10, net.minecraft.util.random.WeightedList p11, net.minecraft.core.Holder p12) { throw new UnsupportedOperationException(); }
+        @Override public void gameEvent(net.minecraft.core.Holder p0, net.minecraft.world.phys.Vec3 p1, net.minecraft.world.level.gameevent.GameEvent.Context p2) { throw new UnsupportedOperationException(); }
+        @Override public String gatherChunkSourceStats() { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.ticks.LevelTickAccess getBlockTicks() { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.level.chunk.ChunkSource getChunkSource() { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.level.entity.LevelEntityGetter getEntities() { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.entity.Entity getEntity(int p0) { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.ticks.LevelTickAccess getFluidTicks() { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.level.saveddata.maps.MapItemSavedData getMapData(net.minecraft.world.level.saveddata.maps.MapId p0) { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.level.storage.LevelData.RespawnData getRespawnData() { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.scores.Scoreboard getScoreboard() { throw new UnsupportedOperationException(); }
+        @Override public int getSeaLevel() { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.core.Holder getUncachedNoiseBiome(int p0, int p1, int p2) { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.level.border.WorldBorder getWorldBorder() { throw new UnsupportedOperationException(); }
+        @Override public void levelEvent(net.minecraft.world.entity.Entity p0, int p1, BlockPos p2, int p3) { throw new UnsupportedOperationException(); }
+        @Override public void playSeededSound(net.minecraft.world.entity.Entity p0, net.minecraft.world.entity.Entity p1, net.minecraft.core.Holder p2, net.minecraft.sounds.SoundSource p3, float p4, float p5, long p6) { throw new UnsupportedOperationException(); }
+        @Override public void playSeededSound(net.minecraft.world.entity.Entity p0, double p1, double p2, double p3, net.minecraft.core.Holder p4, net.minecraft.sounds.SoundSource p5, float p6, float p7, long p8) { throw new UnsupportedOperationException(); }
+        @Override public java.util.List players() { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.item.crafting.RecipeAccess recipeAccess() { throw new UnsupportedOperationException(); }
+        @Override public void sendBlockUpdated(BlockPos p0, BlockState p1, BlockState p2, int p3) { throw new UnsupportedOperationException(); }
+        @Override public void setRespawnData(net.minecraft.world.level.storage.LevelData.RespawnData p0) { throw new UnsupportedOperationException(); }
+        @Override public net.minecraft.world.TickRateManager tickRateManager() { throw new UnsupportedOperationException(); }
+    }
+
+    static BlockState parseState(String spec) throws Exception {
+        return BlockStateParser.parseForBlock(BuiltInRegistries.BLOCK, spec, false).blockState();
+    }
+
     static Field field(Class<?> type, String name) throws NoSuchFieldException {
         for (Class<?> c = type; c != null; c = c.getSuperclass()) {
             try {
@@ -263,6 +312,26 @@ public final class VanillaBlockEntityRenderOracle {
                     : Optional.of(new ItemStackTemplate(BuiltInRegistries.ITEM.getValue(Identifier.parse(id)))));
             }
             field(DecoratedPotBlockEntity.class, "decorations").set(be, new PotDecorations(items.get(0), items.get(1), items.get(2), items.get(3)));
+        } else if (be instanceof TheEndGatewayBlockEntity) {
+            // Age and teleportCooldown (synced and ticked by the client), and the level the renderer reads.
+            var g = c.has("gateway") ? c.getAsJsonObject("gateway") : new JsonObject();
+            field(TheEndGatewayBlockEntity.class, "age").setLong(be, g.has("age") ? g.get("age").getAsLong() : 0L);
+            field(TheEndGatewayBlockEntity.class, "teleportCooldown").setInt(be, g.has("cooldown") ? g.get("cooldown").getAsInt() : 0);
+            var level = (CaseLevel) allocate.invoke(unsafe, CaseLevel.class);
+            var height = c.has("level") ? c.getAsJsonArray("level") : null;
+            level.minY = height == null ? 0 : height.get(0).getAsInt();
+            level.height = height == null ? 256 : height.get(1).getAsInt();
+            level.gameTime = c.has("gameTime") ? c.get("gameTime").getAsLong() : 0L;
+            var light = c.getAsJsonArray("light");
+            level.sky = light.get(0).getAsInt();
+            level.block = light.get(1).getAsInt();
+            level.blocks = new HashMap<>();
+            level.blocks.put(be.getBlockPos(), be.getBlockState());
+            if (c.has("neighbours")) {
+                for (var e : c.getAsJsonObject("neighbours").entrySet())
+                    level.blocks.put(be.getBlockPos().relative(Direction.byName(e.getKey())), parseState(e.getValue().getAsString()));
+            }
+            be.setLevel(level);
         } else if (be instanceof BannerBlockEntity && c.has("patterns")) {
             var builder = new net.minecraft.world.level.block.entity.BannerPatternLayers.Builder();
             var registry = ParityData.access.lookupOrThrow(Registries.BANNER_PATTERN);
@@ -307,7 +376,10 @@ public final class VanillaBlockEntityRenderOracle {
                 throw new RuntimeException(e);
             }
         };
-        var context = new BlockEntityRendererProvider.Context(null, null, null, null, models, font, sprites, null);
+        // Campfires and brushable blocks resolve their (here always empty) items: an empty
+        // stack only clears the render state and never reaches the model manager.
+        var items = new net.minecraft.client.renderer.item.ItemModelResolver(null);
+        var context = new BlockEntityRendererProvider.Context(null, null, items, null, models, font, sprites, null);
         Map<Object, BlockEntityRenderer> renderers = (Map) BlockEntityRenderers.createEntityRenderers(context);
         var gson = new Gson();
         var out = new StringBuilder();
@@ -317,7 +389,7 @@ public final class VanillaBlockEntityRenderOracle {
             var result = new JsonObject();
             result.add("case", c);
             try {
-                BlockState state = BlockStateParser.parseForBlock(BuiltInRegistries.BLOCK, c.get("block").getAsString(), false).blockState();
+                BlockState state = parseState(c.get("block").getAsString());
                 var p = c.getAsJsonArray("pos");
                 var pos = new BlockPos(p.get(0).getAsInt(), p.get(1).getAsInt(), p.get(2).getAsInt());
                 var be = ((EntityBlock) state.getBlock()).newBlockEntity(pos, state);

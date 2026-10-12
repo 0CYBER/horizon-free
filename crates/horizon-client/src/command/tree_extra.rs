@@ -1,7 +1,6 @@
-//! Commands Horizon parses but does not run (multiplayer, profiling and
-//! server-only features): `/dialog`, `/kick`, `/posteffect`, `/fetchprofile`,
-//! `/spectate`, `/publish`, `/unpublish`, `/waypoint`, `/debug`, `/jfr` and
-//! the `/test` root.
+//! Commands of the hosted game rather than the world: `/dialog`, `/kick`,
+//! `/posteffect`, `/fetchprofile`, `/spectate`, `/publish`, `/unpublish`,
+//! `/waypoint`, `/debug`, `/jfr` and `/test`.
 use super::{
     Dispatcher,
     args::ArgType,
@@ -126,7 +125,84 @@ pub fn register(d: &mut Dispatcher, root: usize) {
         d.executes(l, "jfr");
     }
 
-    // TestCommand (game tests; only its root is modelled)
+    // TestCommand (release build: no export subcommands)
     let test = d.literal(root, "test");
     d.requires(test, GAMEMASTERS);
+    let tests = ArgType::ResourceSelector("minecraft:test_instance");
+    let int0 = ArgType::Integer {
+        min: 0,
+        max: i32::MAX,
+    };
+    let int = ArgType::Integer {
+        min: i32::MIN,
+        max: i32::MAX,
+    };
+    // numberOfTimes [untilFailed [rotationSteps [testsPerRow]]], or only
+    // the first two.
+    let retry = |d: &mut Dispatcher, node: usize, id: &'static str, build_info: bool| {
+        let n = d.argument(node, "numberOfTimes", int0.clone());
+        d.executes(n, id);
+        let u = d.argument(n, "untilFailed", ArgType::Bool);
+        d.executes(u, id);
+        if build_info {
+            let r = d.argument(u, "rotationSteps", int.clone());
+            d.executes(r, id);
+            let t = d.argument(r, "testsPerRow", int.clone());
+            d.executes(t, id);
+        }
+    };
+    let run = d.literal(test, "run");
+    let t = d.argument(run, "tests", tests.clone());
+    d.executes(t, "test.run");
+    retry(d, t, "test.run", true);
+    let multiple = d.literal(test, "runmultiple");
+    let t = d.argument(multiple, "tests", tests.clone());
+    d.executes(t, "test.run");
+    let a = d.argument(t, "amount", int.clone());
+    d.executes(a, "test.run");
+    for name in ["runthese", "runclosest", "runthat"] {
+        let l = d.literal(test, name);
+        d.executes(l, "test.run.found");
+        retry(d, l, "test.run.found", false);
+    }
+    let failed = d.literal(test, "runfailed");
+    d.executes(failed, "test.run.found");
+    let only = d.argument(failed, "onlyRequiredTests", ArgType::Bool);
+    d.executes(only, "test.run.found");
+    retry(d, only, "test.run.found", true);
+    retry(d, failed, "test.run.found", true);
+    let verify = d.literal(test, "verify");
+    let t = d.argument(verify, "tests", tests.clone());
+    d.executes(t, "test.verify");
+    let locate = d.literal(test, "locate");
+    let t = d.argument(locate, "tests", tests);
+    d.executes(t, "test.locate");
+    for name in [
+        "resetclosest",
+        "resetthese",
+        "resetthat",
+        "clearthat",
+        "clearthese",
+    ] {
+        let l = d.literal(test, name);
+        d.executes(l, "test.clear");
+    }
+    let all = d.literal(test, "clearall");
+    d.executes(all, "test.clear");
+    let r = d.argument(all, "radius", int.clone());
+    d.executes(r, "test.clear");
+    let stop = d.literal(test, "stop");
+    d.executes(stop, "test.stop");
+    let pos = d.literal(test, "pos");
+    d.executes(pos, "test.pos");
+    let var = d.argument(pos, "var", ArgType::Word);
+    d.executes(var, "test.pos");
+    let create = d.literal(test, "create");
+    let id = d.argument(create, "id", ArgType::Id("none"));
+    d.executes(id, "test.create");
+    let w = d.argument(id, "width", int.clone());
+    d.executes(w, "test.create");
+    let h = d.argument(w, "height", int.clone());
+    let depth = d.argument(h, "depth", int);
+    d.executes(depth, "test.create");
 }

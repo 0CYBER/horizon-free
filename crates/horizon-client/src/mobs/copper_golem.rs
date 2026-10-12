@@ -104,7 +104,7 @@ impl Goal for Serve {
         ]);
         match m.extra.point {
             Some(p) => {
-                if m.ai.nav.is_done() || m.age % 10 == 0 {
+                if m.ai.nav.is_done() || m.age.is_multiple_of(10) {
                     let block = [
                         p[0].floor() as i32,
                         p[1].floor() as i32,

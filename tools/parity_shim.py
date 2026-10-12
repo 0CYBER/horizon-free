@@ -103,7 +103,12 @@ def stdin_identity(hashes):
         return "null"
     import stat as modes
     if modes.S_ISREG(stat.st_mode):
-        return "f:" + hashes.file(os.readlink("/proc/self/fd/0"))
+        # Hash the content without moving the shared offset (no /proc on macOS).
+        digest, offset = hashlib.sha256(), 0
+        while chunk := os.pread(0, 1 << 20, offset):
+            digest.update(chunk)
+            offset += len(chunk)
+        return "f:" + digest.hexdigest()
     if modes.S_ISCHR(stat.st_mode):
         return "tty"
     return None  # a pipe or socket: its content is unknown, so never cache

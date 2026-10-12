@@ -4,10 +4,9 @@ use super::{
     commands::{R, err},
 };
 use horizon_client::{
-    bossbar::BossBars,
+    bossbar::{self, BossBars},
     command::{Arg, Context},
-    hud::{HudBatch, rgba},
-    save,
+    hud_overlays, save,
     scoreboard::{self as sb, Comp, comp_text},
     scoreboard_cmd::format_list,
     text::Text,
@@ -334,26 +333,10 @@ impl Game<'_> {
         Ok(self.resolve_component(value))
     }
 
-    /// How many boss bars the dragon and withers already show.
-    pub(super) fn builtin_bar_count(&self) -> usize {
-        let dragon = usize::from(self.dragon.is_some() && self.dim == super::Dim::End);
-        let withers = self.player.as_ref().map_or(0, |p| {
-            self.mobs
-                .iter()
-                .filter(|m| {
-                    m.species() == horizon_client::mobs::Species::Wither
-                        && m.alive()
-                        && m.position.distance_squared(p.position) <= 64.0 * 64.0
-                })
-                .count()
-        });
-        dragon + withers
-    }
     // ---- drawing ------------------------------------------------------------------
 
-    /// `BossHealthOverlay`: the visible custom bars under the built-in ones.
-    pub(super) fn draw_custom_bossbars(&self, batch: &mut HudBatch, mut y: f32) {
-        let atlas = &self.res.atlas;
+    /// The visible custom bars (`/bossbar`), after the built-in ones.
+    pub(super) fn custom_bossbars(&self, bars: &mut Vec<hud_overlays::BossBar>) {
         for b in self
             .bosses
             .bars
@@ -361,44 +344,18 @@ impl Game<'_> {
             .iter()
             .filter(|b| b.visible && b.player)
         {
-            if y >= batch.height / 3.0 {
-                break;
-            }
-            let x = (batch.width / 2.0 - 91.0).floor();
-            let sprite = |kind: &str| format!("gui/sprites/boss_bar/{kind}");
-            batch.sprite(atlas, &sprite(&format!("{}_background", b.color)), x, y);
-            if b.progress() > 0.0 {
-                batch.sprite_part(
-                    atlas,
-                    &sprite(&format!("{}_progress", b.color)),
-                    x,
-                    y,
-                    b.progress(),
-                );
-            }
-            if b.style != "progress" {
-                batch.sprite(atlas, &sprite(&format!("{}_background", b.style)), x, y);
-                if b.progress() > 0.0 {
-                    batch.sprite_part(
-                        atlas,
-                        &sprite(&format!("{}_progress", b.style)),
-                        x,
-                        y,
-                        b.progress(),
-                    );
-                }
-            }
-            let name = comp_text(&b.name);
-            let w = atlas.font.width_text(&name);
-            batch.text_styled(
-                atlas,
-                &name,
-                (batch.width / 2.0 - w / 2.0).floor(),
-                y - 9.0,
-                rgba(255, 255, 255, 255),
-                true,
-            );
-            y += 19.0;
+            bars.push(hud_overlays::BossBar {
+                name: comp_text(&b.name),
+                progress: b.progress(),
+                color: bossbar::COLORS
+                    .iter()
+                    .position(|c| *c == b.color)
+                    .unwrap_or(0),
+                overlay: bossbar::STYLES
+                    .iter()
+                    .position(|s| *s == b.style)
+                    .unwrap_or(0),
+            });
         }
     }
 }

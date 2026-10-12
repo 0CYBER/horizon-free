@@ -401,12 +401,13 @@ impl Game<'_> {
         }
         if !is_tnt {
             let dynamic = self.pending.dynamic(pos);
-            let drops = self.res.items.block_drops_with(
+            let drops = self.res.items.block_drops_full(
                 self.res.assets.registry,
                 state,
                 None,
                 &dynamic,
                 &mut self.world.random,
+                Some((&mut self.rand_sequences, self.level.seed)),
             );
             for mut stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {

@@ -14,6 +14,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import net.minecraft.SharedConstants;
@@ -65,7 +66,10 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.AgeableMob;
 import net.minecraft.world.entity.ai.Brain;
+import net.minecraft.world.entity.ai.behavior.BehaviorControl;
 import net.minecraft.world.entity.ai.behavior.BlockPosTracker;
+import net.minecraft.world.entity.ai.behavior.GateBehavior;
+import net.minecraft.world.entity.ai.behavior.ShufflingList;
 import net.minecraft.world.entity.ai.behavior.EntityTracker;
 import net.minecraft.world.entity.ai.control.LookControl;
 import net.minecraft.world.entity.ai.control.MoveControl;
@@ -105,6 +109,8 @@ import net.minecraft.world.phys.Vec3;
 public final class VanillaMobAiOracle {
     static final List<Scenario> SCENARIOS = new ArrayList<>();
     static PrintWriter out;
+    /** The temporary world directory, deleted before the oracle halts. */
+    static Path UNIVERSE;
     static final List<String> SOUNDS = new ArrayList<>();
 
     /** Draws of a traced mob random: the caller frames of each draw (AI_TRACE=scenario:from-to). */
@@ -208,7 +214,10 @@ public final class VanillaMobAiOracle {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
         Util.startTimerHackThread();
-        Path universe = Files.createTempDirectory("horizon-mob-ai");
+        // The harness passes an empty world directory under its build directory.
+        Path universe = args.length > 2 ? Path.of(args[2]) : Files.createTempDirectory("horizon-mob-ai");
+        Files.createDirectories(universe);
+        UNIVERSE = universe;
         LevelStorageSource.LevelStorageAccess access = LevelStorageSource.createDefault(universe).createAccess("aiworld");
         PackRepository packs = ServerPacksSource.createPackRepository(access);
         MinecraftServer.spin(thread -> Server.create(thread, access, packs));
@@ -344,7 +353,12 @@ public final class VanillaMobAiOracle {
         void step(BooleanSupplier haveTime) throws Exception {
             if (scenario >= SCENARIOS.size()) {
                 out.close();
-                // Nothing to save: skip the shutdown.
+                // Nothing to save: skip the shutdown, but leave no world behind.
+                try (var paths = Files.walk(UNIVERSE)) {
+                    paths.sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+                } catch (Exception e) {
+                    // best effort
+                }
                 Runtime.getRuntime().halt(0);
                 return;
             }
@@ -420,14 +434,23 @@ public final class VanillaMobAiOracle {
                     Connection connection = new Connection(PacketFlow.SERVERBOUND);
                     new EmbeddedChannel(connection);
                     this.getPlayerList().placeNewPlayer(connection, player, cookie);
+                    // A client that has finished loading: otherwise the player stays invulnerable
+                    // until 60 of the server ticks between scenarios have passed, so whether mobs can
+                    // hurt it would depend on the scenario order.
+                    method(player.connection.getClass(), "markClientLoaded").invoke(player.connection);
                 }
                 player.setGameMode(s.creative ? GameType.CREATIVE : GameType.SURVIVAL);
                 player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
+                // The player is never ticked during a scenario: give it the water state of
+                // where it stands (isInWater), not the previous scenario's.
+                method(Entity.class, "updateFluidInteraction").invoke(player);
                 player.setDeltaMovement(Vec3.ZERO);
             } else if (player != null) {
                 player.snapTo(s.originX + 5000, -60, s.originZ, 0.0F, 0.0F);
             }
             List<Mob> mobs = new ArrayList<>();
+            List<Brain<?>> brains = new ArrayList<>();
+            List<Long> seeds = new ArrayList<>();
             int id = 100000;
             for (MobSpec spec : s.mobs) {
                 EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(net.minecraft.resources.Identifier.parse(spec.type));
@@ -452,7 +475,10 @@ public final class VanillaMobAiOracle {
                 @SuppressWarnings("unchecked")
                 Map<Object, Sensor<?>> sensors = (Map<Object, Sensor<?>>) get(brain, "sensors");
                 for (Sensor<?> sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
+                seedGates(brain, spec.seed);
                 mobs.add(mob);
+                brains.add(brain);
+                seeds.add(spec.seed);
             }
             level.getRandom().setSeed(s.levelSeed);
             SOUNDS.clear();
@@ -467,6 +493,8 @@ public final class VanillaMobAiOracle {
                 if (player != null && s.player != null) {
                     player.setHealth(player.getMaxHealth());
                     player.setInvulnerableTime(0);
+                    // The hurt cooldown (only ServerPlayer.tick counts it down).
+                    field(LivingEntity.class, "damageCooldownTime").setInt(player, 0);
                     player.hurtTime = 0;
                     player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
                     player.setDeltaMovement(Vec3.ZERO);
@@ -474,6 +502,13 @@ public final class VanillaMobAiOracle {
                 TracingRandom.tick = t;
                 TracingRandom.on = tracing(s) && t >= traceFrom() && t <= traceTo();
                 SOUNDS.clear();
+                for (int i = 0; i < mobs.size(); i++) {
+                    // Villager.refreshBrain builds a new brain with new gates: seed those too.
+                    if (mobs.get(i).getBrain() != brains.get(i)) {
+                        brains.set(i, mobs.get(i).getBrain());
+                        seedGates(brains.get(i), seeds.get(i));
+                    }
+                }
                 for (Mob mob : mobs) {
                     if (mob.isRemoved()) continue;
                     mob.checkDespawn();
@@ -489,6 +524,26 @@ public final class VanillaMobAiOracle {
             for (Mob mob : mobs) mob.discard();
             managerTick.invoke(manager);
             out.flush();
+        }
+
+        /**
+         * Every GateBehavior (RunOne and the gates of TradeWithVillager and VillagerMakeLove) shuffles
+         * its behaviours with its own ShufflingList random, which RandomSource.create() seeds from the
+         * clock: give each a LegacyRandomSource seeded with the mob's seed so runs are reproducible.
+         */
+        static void seedGates(Brain<?> brain, long seed) throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<Integer, Map<?, Set<BehaviorControl<?>>>> byPriority = (Map<Integer, Map<?, Set<BehaviorControl<?>>>>) get(brain, "availableBehaviorsByPriority");
+            for (Map<?, Set<BehaviorControl<?>>> byActivity : byPriority.values())
+                for (Set<BehaviorControl<?>> behaviors : byActivity.values())
+                    for (BehaviorControl<?> behavior : behaviors) seedGate(behavior, seed);
+        }
+
+        static void seedGate(Object behavior, long seed) throws Exception {
+            if (!(behavior instanceof GateBehavior<?>)) return;
+            ShufflingList<?> list = (ShufflingList<?>) field(GateBehavior.class, "behaviors").get(behavior);
+            field(ShufflingList.class, "random").set(list, new net.minecraft.world.level.levelgen.LegacyRandomSource(seed));
+            for (Object child : list) seedGate(child, seed);
         }
 
         static String who(Entity e) {
