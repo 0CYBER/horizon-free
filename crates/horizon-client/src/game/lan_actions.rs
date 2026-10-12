@@ -511,6 +511,21 @@ impl Game<'_> {
 
     /// Commands.performCommand for a guest with command access.
     fn guest_command(&mut self, host: &mut LanHost, conn: u32, command: &str) {
+        // ListPlayersCommand needs no permission and lists every player.
+        let words: Vec<&str> = command.trim_start_matches('/').split(' ').collect();
+        if words[0] == "list" && (words.len() == 1 || words[1..] == ["uuids"]) {
+            let me = (self.options.dedicated.is_none() && self.player.is_some())
+                .then_some((host.host_uuid, super::chat::PLAYER_NAME));
+            let content = host.hub.list_reply(me, words.len() == 2);
+            host.hub.send_to(
+                conn,
+                &C::SystemChat(play::SystemChat {
+                    content,
+                    overlay: false,
+                }),
+            );
+            return;
+        }
         if !host.settings.guest_commands || !self.cheats {
             host.hub.send_to(
                 conn,
