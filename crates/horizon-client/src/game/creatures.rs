@@ -460,8 +460,11 @@ impl Game<'_> {
         let mut mobs = std::mem::take(&mut self.mobs);
         let mut dead = Vec::new();
         let mut died = std::mem::take(&mut self.died);
+        let level_random;
         {
             let w = self.mob_world_base(&snapshot);
+            // The level random, lent to the mobs (brain behaviours draw from
+            // it) and taken back after their ticks.
             let mut scratch = self.world.random.clone();
             mobs.retain_mut(|m| {
                 if !w
@@ -481,7 +484,9 @@ impl Game<'_> {
                 keep
             });
             push_apart(&mut mobs);
+            level_random = scratch;
         }
+        self.world.random = level_random;
         self.mobs.append(&mut mobs);
         self.died = died;
         self.sync_riders();
