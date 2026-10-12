@@ -6,6 +6,7 @@ mod allays;
 mod armor_stands;
 mod banners;
 mod beacon;
+mod block_entity_anims;
 mod blockctl;
 mod boats;
 mod books;
@@ -613,7 +614,8 @@ struct Game<'a> {
     raiding: raids::Raiding,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
-    chest_open: HashMap<(i32, i32, i32), (f32, f32)>,
+    /// Client-ticked block-entity animation state (`game/block_entity_anims.rs`).
+    be_anims: horizon_client::block_entity_anim::BlockEntityAnims,
     /// Item being used (eaten): hotbar slot and ticks used.
     using: Option<(usize, u32)>,
     /// Camera.oldFovModifier / fovModifier.
@@ -1590,6 +1592,9 @@ impl Game<'_> {
                     state,
                     kind: "shrieker_respond",
                 } => self.shrieker_block_event(pos, state),
+                LevelEvent::BlockEntityEvent { pos, a, b, .. } => {
+                    self.block_entity_event([pos.x, pos.y, pos.z], a, b)
+                }
                 LevelEvent::GrowTree { .. }
                 | LevelEvent::PlaceFeature { .. }
                 | LevelEvent::BlockEvent { .. } => {}
@@ -1614,6 +1619,7 @@ impl Game<'_> {
             self.craft_size = 3;
         } else if &*name == "minecraft:ender_chest" {
             self.open_ender_chest(key);
+            self.container_opener_event(key, true);
             let at = [
                 f64::from(key.0) + 0.5,
                 f64::from(key.1) + 0.5,
@@ -1626,9 +1632,12 @@ impl Game<'_> {
             self.world.block_entities.entry(key).or_insert_with(|| {
                 BlockEntity::for_block(&name).unwrap_or(BlockEntity::Chest(Vec::new()))
             });
+        } else if storage::is_shulker_box(&name) && !self.shulker_can_open(pos) {
+            // ShulkerBoxBlock.canOpen: the lid has no room; nothing opens.
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
+            self.container_opener_event(key, true);
             self.post_block_game_event(
                 "minecraft:container_open",
                 [key.0, key.1, key.2],
@@ -1865,6 +1874,7 @@ impl Game<'_> {
             let name = facts.name.clone();
             self.release_contents(pos, entity, &name);
             if self.container == Some((pos[0], pos[1], pos[2])) {
+                self.container_opener_event((pos[0], pos[1], pos[2]), false);
                 self.container = None;
                 self.screen = Screen::Playing;
             }
@@ -2756,17 +2766,10 @@ impl Game<'_> {
             self.tick_sculk()?;
             self.tick_brewing_stands()?;
         }
-        if let Some(r) = &self.renderer {
-            let eye = self.player.as_ref().map(|p| {
-                [
-                    p.position.x,
-                    p.position.y + f64::from(self.eye),
-                    p.position.z,
-                ]
-            });
-            self.res.block_entity_render.tick(r.block_entities(), eye);
-        }
         if running {
+            // ClientLevel.tickBlockEntities (not while paused or frozen):
+            // chest lids, books, shulker boxes, bells, conduits, heads.
+            self.tick_block_entity_anims();
             self.tick_particles();
         }
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
@@ -3477,6 +3480,7 @@ impl Game<'_> {
         }
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
+            self.container_opener_event(key, false);
             self.post_block_game_event(
                 "minecraft:container_close",
                 [key.0, key.1, key.2],
@@ -4122,14 +4126,8 @@ impl Game<'_> {
         }
         // Block entities (BlockEntityRenderers): chests, shulker boxes, banners, skulls...
         if let Some(r) = &self.renderer {
-            let lid = |p: [i32; 3]| {
-                let (prev, cur) = self
-                    .chest_open
-                    .get(&(p[0], p[1], p[2]))
-                    .copied()
-                    .unwrap_or((0.0, 0.0));
-                prev + (cur - prev) * alpha as f32
-            };
+            let lid = |p: [i32; 3]| self.chest_lid(p, alpha as f32);
+            let anim = |p: [i32; 3]| self.block_anim(p, alpha as f32);
             let (view_yaw, view_pitch) =
                 if self.camera_type == perspective::CameraType::ThirdPersonFront {
                     (self.yaw + 180.0, -self.pitch)
@@ -4145,7 +4143,7 @@ impl Game<'_> {
                     -view_pitch.to_radians(),
                     0.0,
                 ),
-                anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
+                anim: &anim,
                 texts: None,
                 partial: alpha as f32,
                 game_time: self.world.game_time,
@@ -4610,20 +4608,6 @@ impl Game<'_> {
         self.tick_jukeboxes();
         self.tick_beacons();
         self.tick_creaking_hearts()?;
-        // ChestLidController: 0.1 per tick towards open/closed.
-        if let Some(key) = self.container {
-            self.chest_open.entry(key).or_insert((0.0, 0.0));
-        }
-        let open = self.container;
-        self.chest_open.retain(|k, (prev, cur)| {
-            *prev = *cur;
-            *cur = if Some(*k) == open {
-                (*cur + 0.1).min(1.0)
-            } else {
-                (*cur - 0.1).max(0.0)
-            };
-            *cur > 0.0 || *prev > 0.0
-        });
         let mut lit_changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {
             if let BlockEntity::Furnace(f) = entity
@@ -5008,6 +4992,11 @@ impl Game<'_> {
         self.restore_effects();
         self.mining = None;
         self.container = None;
+        let kinds = std::mem::take(&mut self.be_anims.kinds);
+        self.be_anims = horizon_client::block_entity_anim::BlockEntityAnims {
+            kinds,
+            ..Default::default()
+        };
         self.carried = None;
         self.using = None;
         self.screen = Screen::Playing;
@@ -8042,7 +8031,11 @@ pub fn run() -> Result<()> {
         raiding: Default::default(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
-        chest_open: HashMap::new(),
+        be_anims: {
+            let mut anims = horizon_client::block_entity_anim::BlockEntityAnims::default();
+            anims.classify(registry_owner.registry);
+            anims
+        },
         using: None,
         view: Default::default(),
         limiter: horizon_client::window::FramerateLimiter::new(0),
