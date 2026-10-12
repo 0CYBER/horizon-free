@@ -77,11 +77,23 @@ fn require(map: &Compound, t: &Tag, keys: &[&str]) -> Result<(), String> {
         Err(missing.join("; "))
     }
 }
+/// The required fields of each context number provider type, in the
+/// order DataFixerUpper reports them missing (the reverse of the record's).
 fn provider_fields(id: &str, map: &Compound, t: &Tag) -> Result<(), String> {
-    match id {
-        "minecraft:uniform" => require(map, t, &["max", "min"]),
-        "minecraft:constant" => require(map, t, &["value"]),
-        "minecraft:binomial" => require(map, t, &["n", "p"]),
+    match id.trim_start_matches("minecraft:") {
+        "uniform" => require(map, t, &["max", "min"]),
+        "constant" => require(map, t, &["value"]),
+        "binomial" => require(map, t, &["p", "n"]),
+        "add" | "mul" | "avg" | "max" | "min" | "length" => require(map, t, &["inputs"]),
+        "sub" | "div" | "mod" | "floor_div" | "floor_mod" => require(map, t, &["right", "left"]),
+        "pow" => require(map, t, &["exponent", "base"]),
+        "abs" | "negate" | "from_float" | "from_int" | "floor" | "ceil" | "round" | "sqrt"
+        | "sin" | "cos" | "truncate" => require(map, t, &["input"]),
+        "conditional" => require(map, t, &["on_true", "condition"]),
+        "number_dispatcher" => require(map, t, &["cases"]),
+        "weighted_list" => require(map, t, &["distribution"]),
+        "enchantment_level" => require(map, t, &["amount"]),
+        "score" => require(map, t, &["score", "target"]),
         _ => Ok(()),
     }
 }
@@ -130,7 +142,19 @@ pub fn decode(registry: &str, t: &Tag, reg: &Registries) -> Result<(), String> {
         "minecraft:slot_source" => element_or_list(t, &|x| {
             dispatch(x, reg, "minecraft:slot_source_type", &|_, _, _| Ok(()))
         }),
-        "minecraft:dialog" => dispatch(t, reg, "minecraft:dialog_type", &|_, _, _| Ok(())),
+        // Dialog types: CommonDialogData's title, then each type's own.
+        "minecraft:dialog" => dispatch(t, reg, "minecraft:dialog_type", &|id, map, t| {
+            let own: &[&str] = match id {
+                "minecraft:confirmation" => &["yes", "no"],
+                "minecraft:multi_action" => &["actions"],
+                "minecraft:dialog_list" => &["dialogs"],
+                _ => &[],
+            };
+            let keys: Vec<&str> = std::iter::once("title")
+                .chain(own.iter().copied())
+                .collect();
+            require(map, t, &keys)
+        }),
         "minecraft:worldgen/feature" | "minecraft:loot_table" => match t {
             Tag::Compound(_) => Ok(()),
             _ => Err(not_map(t)),

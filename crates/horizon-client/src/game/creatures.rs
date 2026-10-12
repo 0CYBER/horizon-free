@@ -127,6 +127,14 @@ fn seen(m: &Mob, player: Option<[i32; 4]>) -> Seen {
             }
             _ => 0,
         },
+        pushable: m.pushable(),
+        category: m.category(),
+        potential_job: horizon_client::mobs::villager_brain::potential_job_site(m),
+        meeting: (m.species() == Species::Villager)
+            .then_some(m.extra.meeting)
+            .flatten(),
+        profession: m.extra.variant2,
+        xp: horizon_client::mobs::villager::xp(m),
     }
 }
 impl Game<'_> {
@@ -365,6 +373,7 @@ impl Game<'_> {
             mob_griefing: self.ui.rules.bool("mob_griefing"),
             end: self.dim == Dim::End,
             world_seed: self.level.seed,
+            sea_level: if self.dim == Dim::Nether { 32 } else { 63 },
             difficulty: self.local_difficulty(
                 self.player
                     .as_ref()
@@ -466,6 +475,7 @@ impl Game<'_> {
             // The level random, lent to the mobs (brain behaviours draw from
             // it) and taken back after their ticks.
             let mut scratch = self.world.random.clone();
+            let mut pushes = Vec::new();
             mobs.retain_mut(|m| {
                 if !w
                     .world
@@ -473,7 +483,10 @@ impl Game<'_> {
                 {
                     return !m.hostile() || m.persistent;
                 }
+                horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
+                let from = events.len();
                 let keep = m.tick(&w, &mut scratch, &mut events);
+                horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
                 // Killed during its own tick (drowning, burning, falling...).
                 if !m.alive() && !m.removed && died.insert(m.id) {
                     dead.push(m.clone());
@@ -483,7 +496,9 @@ impl Game<'_> {
                 }
                 keep
             });
-            push_apart(&mut mobs);
+            for m in &mut mobs {
+                horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
+            }
             level_random = scratch;
         }
         self.world.random = level_random;
@@ -655,6 +670,17 @@ impl Game<'_> {
                     self.audio
                         .play(&format!("minecraft:{name}"), Some(at), volume, pitch)
                 }
+                MobEvent::LevelEventSound {
+                    sound,
+                    at,
+                    volume,
+                    spread,
+                } => {
+                    let r = &mut self.world.random;
+                    let pitch = (r.next_float() - r.next_float()) * spread + 1.0;
+                    self.audio
+                        .play(&format!("minecraft:{sound}"), Some(at), volume, pitch)
+                }
                 MobEvent::SoundId(name, at, volume, pitch) => {
                     self.audio.play(&name, Some(at), volume, pitch)
                 }
@@ -820,11 +846,12 @@ impl Game<'_> {
                     let old = self.world.block(pos[0], pos[1], pos[2]);
                     self.destroy_particles(pos, old);
                     if drop {
-                        let drops = self.res.items.block_drops(
+                        let drops = self.res.items.block_drops_in(
                             self.res.assets.registry,
                             old,
                             None,
                             &mut self.world.random,
+                            Some((&mut self.rand_sequences, self.level.seed)),
                         );
                         for d in drops {
                             self.pop_resource(pos, d);
@@ -2418,6 +2445,7 @@ fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) -> &'static
         K::InWall => "minecraft:in_wall",
         K::Thorns => "minecraft:thorns",
         K::SonicBoom => "minecraft:sonic_boom",
+        K::OutOfWorld => "minecraft:out_of_world",
     }
 }
 /// A Horizon item stack as a loot stack (id, count, damage, enchantments).
@@ -2455,42 +2483,6 @@ fn from_loot(stack: &horizon_world::loot::LootStack) -> ItemStack {
     }
     item
 }
-/// Entity.push between overlapping mobs (LivingEntity.pushEntities).
-fn push_apart(mobs: &mut [Mob]) {
-    let n = mobs.len();
-    for i in 0..n {
-        if !mobs[i].alive() {
-            continue;
-        }
-        let bi = mobs[i].bounds();
-        for j in (i + 1)..n {
-            if !mobs[j].alive() || !bi.intersects(mobs[j].bounds()) {
-                continue;
-            }
-            // A rider and its vehicle do not push each other.
-            if mobs[i].extra.mount == Some(mobs[j].id) || mobs[j].extra.mount == Some(mobs[i].id) {
-                continue;
-            }
-            let (dx, dz) = (
-                mobs[j].position.x - mobs[i].position.x,
-                mobs[j].position.z - mobs[i].position.z,
-            );
-            let mut dd = dx.abs().max(dz.abs());
-            if dd >= 0.01 {
-                dd = dd.sqrt();
-                let (mut xa, mut za) = (dx / dd, dz / dd);
-                let inv = (1.0 / dd).min(1.0);
-                xa *= inv * 0.05;
-                za *= inv * 0.05;
-                mobs[i].velocity.x -= xa;
-                mobs[i].velocity.z -= za;
-                mobs[j].velocity.x += xa;
-                mobs[j].velocity.z += za;
-            }
-        }
-    }
-}
-
 impl Game<'_> {
     /// The rest of `NetherPortalBlock.randomTick` after a won roll: with a
     /// player close enough for spawning, a zombified piglin spawns on the block
