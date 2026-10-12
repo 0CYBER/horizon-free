@@ -173,6 +173,15 @@ fn entity_state(mob: &mut Mob, species: Species, case: &Value) {
                 mob.anim.states[i].started = case[k].as_f64().map(|v| v as f32);
             }
         }
+        Species::Breeze => {
+            // breeze::anim's state slots.
+            for (i, k) in ["idle", "shoot", "slide", "slideBack", "inhale", "longJump"]
+                .into_iter()
+                .enumerate()
+            {
+                mob.anim.states[i].started = case[k].as_f64().map(|v| v as f32);
+            }
+        }
         Species::Witch if flag("isHoldingItem") => {
             mob.extra.main_hand = Some("minecraft:potion".into());
         }
@@ -215,6 +224,9 @@ fn main() -> horizon_client::Result<()> {
             base = base.replace(cut, "");
         }
         let base = base.replace("undead_horse#", "zombie_horse#");
+        // The breeze's wind and eyes and the creaking's eyes are layers of
+        // the species' own model class.
+        let base = base.replace("#wind", "#main").replace("#eyes", "#main");
         let base = base.trim_start_matches("cold_").trim_start_matches("warm_");
         let Some(def) = species::ALL.iter().find(|d| {
             d.model == layer
