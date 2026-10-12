@@ -147,6 +147,7 @@ def items(e, version=None):
 ITEM_SINCE = {
     'minecraft:goat_horn': 3105,
     'minecraft:decorated_pot': 3327,
+    'minecraft:axolotl_bucket': 2686,
 }
 
 
@@ -309,7 +310,7 @@ def entities(e, version):
             ('allay', 'Inventory:[{id:"minecraft:diamond",Count:1b}]'),
             ('goat', ''),
         ]
-        since = {'allay': 3105, 'chest_boat': 3105, 'text_display': 3325, 'item_display': 3325}
+        since = {'allay': 3105, 'chest_boat': 3105, 'text_display': 3325, 'item_display': 3325, 'goat': 2700}
         out = [(k, x) for k, x in out if version >= since.get(k, 0)]
         if version < 3086:  # cats before 1.19 have a numeric CatType
             out = [(k, 'CatType:1' if k == 'cat' else x) for k, x in out]
