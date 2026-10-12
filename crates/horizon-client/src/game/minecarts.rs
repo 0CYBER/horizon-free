@@ -1236,6 +1236,7 @@ impl Game<'_> {
             texts: None,
             partial: 0.0,
             game_time: self.world.game_time,
+            max_y: self.dim.max_y(),
             world: &self.world,
             sprites: &self.res.atlas.sprites,
             nether: self.dim == super::Dim::Nether,

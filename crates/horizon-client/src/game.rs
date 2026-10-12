@@ -780,6 +780,13 @@ impl Dim {
             _ => Self::Overworld,
         }
     }
+    /// `Level.getMaxY`: the dimension type's minimum y plus height, less one.
+    fn max_y(self) -> i32 {
+        match self {
+            Self::Overworld => MIN_Y + HEIGHT - 1,
+            Self::Nether | Self::End => 255,
+        }
+    }
 }
 fn facing_offset(facing: &str) -> [i32; 3] {
     match facing {
@@ -4126,10 +4133,16 @@ impl Game<'_> {
                     -view_pitch.to_radians(),
                     0.0,
                 ),
-                anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
+                // The client does not track End gateway ages and cooldowns yet:
+                // gateways render as settled (no beam).
+                anim: &|_| horizon_client::block_entity_render::BlockAnim {
+                    gateway: (i64::MAX, 0),
+                    ..Default::default()
+                },
                 texts: None,
                 partial: alpha as f32,
                 game_time: self.world.game_time,
+                max_y: self.dim.max_y(),
                 world: &self.world,
                 sprites: &self.res.atlas.sprites,
                 nether: self.dim == Dim::Nether,
