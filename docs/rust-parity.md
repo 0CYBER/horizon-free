@@ -1288,3 +1288,58 @@ binding. Rendering, transport, full entity lifecycle integration and playable
 Linux gameplay remain unfinished. In this pinned version,
 `LivingEntity.updateDataBeforeSync` invokes dirty effect synchronization; it is a
 separate phase from `tickEffects`.
+
+## Scoreboards, teams and subtitles
+
+`tools/test_scoreboard_parity.py` runs vanilla's own `Scoreboard` (what
+`ServerScoreboard` extends) and `horizon_client::scoreboard` on 500 scripted
+cases, about 81,000 operations: objectives with every kind of criteria (custom,
+team kill, and statistics in every spelling `ObjectiveCriteria.byName` accepts,
+which resolve to their canonical names), display names, render types,
+auto-updated displays and number formats; scores set, added, read, locked,
+given displays and formats, reset, and changed through `forAllObjectives` as the
+gameplay criteria change them; display slots; teams with every option, joined,
+left, removed and emptied by `Scoreboard.entityRemoved`. Every result must
+match, as must each collection in the order vanilla iterates it (objectives,
+holders and teams are fastutil open hash maps, each team's members a
+`HashSet`; `fastutil_order` keeps the same tables), the
+`ScoreboardSaveData.Packed` codec output that `data/minecraft/scoreboard.dat`
+holds (fields equal to the codec defaults are left out, components are written
+as `ComponentSerialization` writes them), and the data after each side loads
+the other's NBT. Only each holder's scores, which vanilla keeps in an
+identity-hash map, are compared as a set. `tools/test_save_roundtrip_parity.py`
+also builds a scoreboard with every saved field on a vanilla server and requires
+the game to save it back unchanged.
+
+`tools/test_team_rules_parity.py` runs vanilla's `Entity.doTeamsAllowDamage`
+(friendly fire), `isAlliedTo`, `EntitySelector.pushableBy` (collision rules),
+`Entity.isInvisibleTo` (seeing invisible team mates) and
+`LivingEntityRenderer.shouldShowName` (name tag visibility, with a stand-in
+client) on stand-in entities over 6,000 combinations of two teams' options and
+the entities' teams; the game uses the same functions. Mobs on the player's team
+never target the player, a creeper's blast spares its team mates when friendly
+fire is off, mobs push each other only as their collision rules allow, name tags
+show the team's prefix, suffix and colour and the score of the objective
+displayed below names, and a team that hides death messages keeps the player's
+own death message out of chat. The criteria that follow the player (health,
+food, armor, xp, level, air) update as `ServerPlayer.doTick` does, and deaths,
+kills, team kills and statistics update their objectives.
+
+`tools/test_subtitle_parity.py` runs vanilla's `SubtitleOverlay` with a
+stand-in client on 1,500 scripted cases of sounds reported by the sound engine
+(subtitles from sounds.json, positions, ranges, looping) at controlled times,
+and frames that render it for a listener transform, the subtitle options (shown
+or not, notification display time, text background opacity) and a GUI size.
+Every frame's fills and texts, with their pose, must match the overlay in
+`hud_overlays`: which captions show and in what order, merging of repeats,
+expiry, the fade by age, the direction arrows and the box width. The overlay
+listens to the sound engine from the frame that renders it with the option on
+until one renders with it off, as vanilla's does.
+
+Not covered yet: the player's air supply (Horizon does not track drowning, so
+the `air` criteria stays at 300); displays auto-updated with the player's name
+carry the team formatting but not the click, hover and insertion of
+`Player.getDisplayName`; there is no attack sweep for allies to be spared from;
+scores below other players' names need the multiplayer scoreboard packets,
+which the client does not handle yet.
+
