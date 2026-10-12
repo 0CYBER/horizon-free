@@ -83,6 +83,73 @@ pub struct RegistryIds {
 }
 const EMPTY: &[String] = &[];
 impl Registries {
+    /// Fill what the game did not build itself from vanilla's exported
+    /// registries (`command-registries.json`, written by
+    /// `VanillaCommandParseOracle registries`): built-in registries such as
+    /// mob effects, data component types and dialogs, block entities and tag
+    /// members. Registries that data packs reload stay with the game.
+    pub fn fill_from_export(&mut self, r: &serde_json::Value) {
+        fn strings(v: &serde_json::Value) -> Vec<String> {
+            v.as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        let fill = |field: &mut Vec<String>, key: &str| {
+            if field.is_empty() {
+                *field = strings(&r[key]);
+            }
+        };
+        fill(&mut self.effects, "effects");
+        fill(&mut self.enchantments, "enchantments");
+        fill(&mut self.attributes, "attributes");
+        fill(&mut self.damage_types, "damage_types");
+        fill(&mut self.templates, "templates");
+        fill(&mut self.persistent_components, "persistent_components");
+        fill(&mut self.learnable_recipes, "learnable_recipes");
+        const RELOADED: [&str; 5] = [
+            "minecraft:advancement",
+            "minecraft:recipe",
+            "minecraft:loot_table",
+            "minecraft:predicate",
+            "minecraft:item_modifier",
+        ];
+        for (name, entry) in r["by_registry"].as_object().into_iter().flatten() {
+            if RELOADED.contains(&name.as_str()) || self.by_registry.contains_key(name) {
+                continue;
+            }
+            self.by_registry.insert(
+                name.clone(),
+                RegistryIds {
+                    ids: strings(&entry["ids"]),
+                    tags: strings(&entry["tags"]),
+                },
+            );
+        }
+        if self.block_entities.is_empty() {
+            self.block_entities = strings(&r["block_entities"]).into_iter().collect();
+        }
+        if self.block_tag_members.is_empty() {
+            for (tag, members) in r["block_tag_members"].as_object().into_iter().flatten() {
+                self.block_tag_members.insert(tag.clone(), strings(members));
+            }
+        }
+        if self.clock_time_markers.is_empty() {
+            for (clock, markers) in r["clock_time_markers"].as_object().into_iter().flatten() {
+                self.clock_time_markers
+                    .insert(clock.clone(), strings(markers));
+            }
+        }
+        if self.advancement_criteria.is_empty() {
+            for (id, criteria) in r["advancement_criteria"].as_object().into_iter().flatten() {
+                self.advancement_criteria
+                    .insert(id.clone(), strings(criteria));
+            }
+        }
+    }
     /// The element ids of a registry (sorted).
     pub fn ids(&self, registry: &str) -> &[String] {
         if let Some(r) = self.by_registry.get(registry) {
@@ -254,6 +321,47 @@ pub enum ArgType {
     SlotSource,
     /// ResourceOrIdArgument over a registry: an id or an inline SNBT value.
     ResourceOrId(&'static str),
+    /// ResourceSelectorArgument: a `*`/`?` pattern over a registry's ids.
+    ResourceSelector(&'static str),
+}
+
+/// FilenameUtils.wildcardMatch (case-sensitive) of `*` and `?` patterns.
+pub fn wildcard_match(text: &str, pattern: &str) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
+    let (mut ti, mut pi) = (0, 0);
+    let (mut star, mut mark) = (None, 0);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            ti += 1;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+/// ResourceSelectorArgument: the registry ids a pattern selects.
+pub fn select_resources<'a>(ids: &'a [String], pattern: &str) -> Vec<&'a String> {
+    let pattern = if pattern.contains(':') {
+        pattern.to_owned()
+    } else {
+        format!("minecraft:{pattern}")
+    };
+    ids.iter()
+        .filter(|id| wildcard_match(id, &pattern))
+        .collect()
 }
 
 /// SlotRanges.SLOTS: every slot range name and its size, in vanilla order.
@@ -1348,6 +1456,29 @@ impl ArgType {
                 }
                 Arg::Str(name.to_owned())
             }
+            ArgType::ResourceSelector(registry) => {
+                let start = reader.cursor;
+                while reader.can_read() && {
+                    let c = reader.peek();
+                    is_id_char(c) || c == '*' || c == '?'
+                } {
+                    reader.skip();
+                }
+                let raw = reader.string[start..reader.cursor].to_owned();
+                let pattern = if raw.contains(':') {
+                    raw
+                } else {
+                    format!("minecraft:{raw}")
+                };
+                if select_resources(reg.ids(registry), &pattern).is_empty() {
+                    return Err(CommandError::tr_at(
+                        "argument.resource_selector.not_found",
+                        &[&pattern, registry],
+                        reader,
+                    ));
+                }
+                Arg::Str(pattern)
+            }
             ArgType::HexColor => {
                 let text = reader.read_unquoted_string();
                 if !matches!(text.len(), 3 | 6) {
@@ -1521,15 +1652,26 @@ impl ArgType {
                     reader.skip();
                 }
                 let id = &reader.string[start..reader.cursor];
-                if !crate::scoreboard::criteria_exists(id, reg) {
-                    reader.cursor = start;
-                    return Err(CommandError::tr_at(
-                        "argument.criteria.invalid",
-                        &[&id],
-                        reader,
-                    ));
+                // ObjectiveCriteria.byName: statistics resolve to their canonical name.
+                match crate::scoreboard::criteria_by_name(id, reg) {
+                    Ok(Some(canonical)) => Arg::Str(canonical),
+                    Ok(None) => {
+                        reader.cursor = start;
+                        return Err(CommandError::tr_at(
+                            "argument.criteria.invalid",
+                            &[&id],
+                            reader,
+                        ));
+                    }
+                    Err(_) => {
+                        reader.cursor = start;
+                        return Err(CommandError::tr_at(
+                            "argument.criteria.invalid",
+                            &[&id],
+                            reader,
+                        ));
+                    }
                 }
-                Arg::Str(id.to_owned())
             }
             ArgType::ScoreboardSlot => {
                 let name = reader.read_unquoted_string();
@@ -1579,7 +1721,8 @@ impl ArgType {
                     if block {
                         parse_coord_int(reader)
                     } else {
-                        parse_coord_double(reader, false)
+                        // Vec2Argument.vec2(): integers are centred on the block.
+                        parse_coord_double(reader, true)
                     }
                 };
                 let x = one(reader)?;
@@ -1741,6 +1884,9 @@ impl ArgType {
             }
             ArgType::StrEnum(values, _) => builder.suggest_matching(values.iter().copied()),
             ArgType::HexColor => builder.suggest_matching(["F00", "FF0000"]),
+            ArgType::ResourceSelector(registry) => {
+                suggest_resources(builder, reg.ids(registry), "")
+            }
             ArgType::GameProfile => {
                 let players = reg.players.clone();
                 super::selector::suggest(builder, reg, &|b| {

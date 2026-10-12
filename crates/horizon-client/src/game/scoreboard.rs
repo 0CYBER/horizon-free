@@ -8,9 +8,10 @@ use horizon_client::{
         Context,
         args::{IntRange, Selector},
     },
-    hud::{HudBatch, rgba},
+    hud::HudBatch,
+    hud_layout, hud_overlays,
     save::{self, uuid_from_text, uuid_text},
-    scoreboard::{self as sb, Comp, NumberFormat, Scoreboard, literal},
+    scoreboard::{self as sb, Comp, Scoreboard, literal},
     scoreboard_cmd::{self, Env, Holder},
     text::Text,
 };
@@ -20,7 +21,8 @@ use std::collections::HashSet;
 /// What `ServerPlayer` last recorded for the criteria that follow the player.
 #[derive(Default)]
 pub(super) struct Recorded {
-    health: Option<i32>,
+    /// `lastRecordedHealthAndAbsorption` (compared as a float).
+    health_and_absorption: Option<f32>,
     food: Option<i32>,
     air: Option<i32>,
     armor: Option<i32>,
@@ -166,9 +168,16 @@ impl Game<'_> {
     /// `Entity.getTags` (the `Tags` list of the saved entity).
     pub(super) fn tags_of(&self, t: Target) -> Vec<String> {
         let raw = match t {
-            Target::Mob(id) | Target::Item(id) => self.persist.raw.get(&id),
+            Target::Mob(id)
+            | Target::Item(id)
+            | Target::Stand(id)
+            | Target::Frame(id)
+            | Target::Painting(id)
+            | Target::Boat(id)
+            | Target::Cart(id)
+            | Target::Other(id) => self.persist.raw.get(&id),
             Target::Player => self.level.player_extra.as_ref(),
-            _ => None,
+            Target::Orb(_) | Target::Arrow(_) => None,
         };
         match raw.and_then(|r| r.get("Tags")) {
             Some(Tag::List(l)) => l
@@ -306,18 +315,29 @@ impl Game<'_> {
                     });
                 }
             }
+            let display = self.player_display_comp();
             if let Some(p) = self.player.as_mut() {
-                let health = (p.health.health() + p.health.absorption()).ceil() as i32;
+                let health_and_absorption = p.health.health() + p.health.absorption();
                 let food = p.health.food.food;
+                // getArmorValue: the armor attribute rounded down.
                 let armor = p
                     .attribute("minecraft:armor")
                     .or_else(|_| p.attribute("armor"))
                     .unwrap_or(0.0)
-                    .ceil() as i32;
+                    .floor() as i32;
                 let rec = &mut self.score.recorded;
                 let board = &mut self.score.board;
+                if rec.health_and_absorption != Some(health_and_absorption) {
+                    rec.health_and_absorption = Some(health_and_absorption);
+                    let value = health_and_absorption.ceil() as i32;
+                    board.for_all_objectives_with(
+                        sb::CRITERIA_HEALTH,
+                        PLAYER_NAME,
+                        Some(&display),
+                        |_| value,
+                    );
+                }
                 for (criteria, last, value) in [
-                    (sb::CRITERIA_HEALTH, &mut rec.health, health),
                     (sb::CRITERIA_FOOD, &mut rec.food, food),
                     // The air supply is full unless the player is drowning.
                     (sb::CRITERIA_AIR, &mut rec.air, 300),
@@ -327,7 +347,12 @@ impl Game<'_> {
                 ] {
                     if *last != Some(value) {
                         *last = Some(value);
-                        board.for_all_objectives(criteria, PLAYER_NAME, |_| value);
+                        board.for_all_objectives_with(
+                            criteria,
+                            PLAYER_NAME,
+                            Some(&display),
+                            |_| value,
+                        );
                     }
                 }
             }
@@ -338,29 +363,39 @@ impl Game<'_> {
     }
     /// `ServerPlayer.die`: the death count.
     pub(super) fn score_player_died(&mut self) {
+        let display = self.player_display_comp();
         let board = &mut self.score.board;
-        board.for_all_objectives(sb::CRITERIA_DEATH_COUNT, PLAYER_NAME, |v| v + 1);
+        board.for_all_objectives_with(sb::CRITERIA_DEATH_COUNT, PLAYER_NAME, Some(&display), |v| {
+            v.wrapping_add(1)
+        });
         // A respawned player has everything to record again.
         self.score.recorded = Recorded::default();
     }
     /// `ServerPlayer.awardKillScore`: total kills and the team kill counts.
     pub(super) fn score_player_killed(&mut self, victim: Target) {
         let victim_name = self.holder_name(victim);
+        let display = self.player_display_comp();
         let board = &mut self.score.board;
-        board.for_all_objectives(sb::CRITERIA_TOTAL_KILLS, PLAYER_NAME, |v| v + 1);
+        let inc = |v: i32| v.wrapping_add(1);
+        board.for_all_objectives_with(sb::CRITERIA_TOTAL_KILLS, PLAYER_NAME, Some(&display), inc);
         if victim == Target::Player {
-            board.for_all_objectives(sb::CRITERIA_PLAYER_KILLS, PLAYER_NAME, |v| v + 1);
+            board.for_all_objectives_with(
+                sb::CRITERIA_PLAYER_KILLS,
+                PLAYER_NAME,
+                Some(&display),
+                inc,
+            );
         }
         let color_of =
             |board: &Scoreboard, name: &str| board.players_team(name).and_then(|t| t.color.clone());
         if let Some(victim_name) = victim_name {
             if let Some(color) = color_of(board, &victim_name) {
                 let criteria = format!("teamkill.{color}");
-                board.for_all_objectives(&criteria, PLAYER_NAME, |v| v + 1);
+                board.for_all_objectives_with(&criteria, PLAYER_NAME, Some(&display), inc);
             }
             if let Some(color) = color_of(board, PLAYER_NAME) {
                 let criteria = format!("killedByTeam.{color}");
-                board.for_all_objectives(&criteria, &victim_name, |v| v + 1);
+                board.for_all_objectives(&criteria, &victim_name, inc);
             }
         }
     }
@@ -369,9 +404,62 @@ impl Game<'_> {
         let Some(uuid) = self.persist.uuids.get(&id).copied() else {
             return;
         };
-        let name = uuid_text(uuid);
-        self.score.board.reset_all(&name);
-        self.score.board.remove_from_team(&name);
+        self.score.board.entity_removed(&uuid_text(uuid));
+    }
+
+    // ---- teams in gameplay -----------------------------------------------------
+
+    /// `Entity.getTeam` of a mob (a mob joins a team by its UUID).
+    pub(super) fn mob_team(&self, id: u32) -> Option<&sb::Team> {
+        let uuid = self.persist.uuids.get(&id)?;
+        self.score.board.players_team(&uuid_text(*uuid))
+    }
+    pub(super) fn player_team(&self) -> Option<&sb::Team> {
+        self.score.board.players_team(PLAYER_NAME)
+    }
+    /// The teams of the player and of the mobs on one (empty without teams).
+    pub(super) fn mob_teams(&self) -> horizon_client::mobs::Teams {
+        let board = &self.score.board;
+        if board.teams.is_empty() {
+            return Default::default();
+        }
+        horizon_client::mobs::Teams {
+            player: self.player_team().cloned(),
+            mobs: self
+                .persist
+                .uuids
+                .iter()
+                .filter_map(|(id, uuid)| {
+                    Some((*id, board.players_team(&uuid_text(*uuid))?.clone()))
+                })
+                .collect(),
+        }
+    }
+    /// The mobs on the player's team (`isAlliedTo`).
+    pub(super) fn player_allies(&self) -> HashSet<u32> {
+        let Some(team) = self.player_team() else {
+            return HashSet::new();
+        };
+        self.persist
+            .uuids
+            .iter()
+            .filter(|(_, uuid)| team.players.contains(&uuid_text(**uuid)))
+            .map(|(id, _)| *id)
+            .collect()
+    }
+    /// `Player.getDisplayName`: the name with the team's prefix, suffix and colour.
+    pub(super) fn player_display_comp(&self) -> Comp {
+        let name = literal(PLAYER_NAME);
+        match self.player_team() {
+            Some(t) => t.formatted_name_comp(&name),
+            None => name,
+        }
+    }
+    pub(super) fn player_display_text(&self) -> Text {
+        match self.player_team() {
+            Some(t) => t.formatted_name(Text::literal(PLAYER_NAME)),
+            None => Text::literal(PLAYER_NAME),
+        }
     }
 
     // ---- commands ------------------------------------------------------------
@@ -478,84 +566,16 @@ impl Game<'_> {
         else {
             return;
         };
-        let atlas = &self.res.atlas;
-        let default_format = NumberFormat::sidebar_default();
-        let format = objective.format_or_default(default_format);
-        let mut entries: Vec<_> = board
-            .list_scores(&objective.name)
-            .into_iter()
-            .filter(|e| !e.is_hidden())
-            .collect();
-        // Highest score first, then names case-insensitively.
-        entries.sort_by(|a, b| {
-            b.value
-                .cmp(&a.value)
-                .then_with(|| a.owner.to_lowercase().cmp(&b.owner.to_lowercase()))
-        });
-        entries.truncate(15);
-        let rows: Vec<(Text, Text, f32)> = entries
-            .iter()
-            .map(|e| {
-                let name = match board.players_team(&e.owner) {
-                    Some(t) => t.formatted_name(e.owner_name()),
-                    None => e.owner_name(),
-                };
-                let score = e.format_value(&format);
-                let width = atlas.font.width_text(&score);
-                (name, score, width)
-            })
-            .collect();
-        let title = objective.display_text();
-        let title_width = atlas.font.width_text(&title);
-        let spacer = atlas.font.width(": ");
-        let mut biggest = title_width;
-        for (name, _, score_width) in &rows {
-            let extra = if *score_width > 0.0 {
-                spacer + score_width
-            } else {
-                0.0
-            };
-            biggest = biggest.max(atlas.font.width_text(name) + extra);
-        }
-        let count = rows.len() as f32;
-        let height = count * 9.0;
-        let (w, h) = (batch.width, batch.height);
-        let bottom = (h / 2.0).trunc() + (height / 3.0).trunc();
-        let left = w - biggest - 3.0;
-        let right = w - 3.0 + 2.0;
-        let body = rgba(0, 0, 0, (0.3 * 255.0) as u8);
-        let header = rgba(0, 0, 0, (0.4 * 255.0) as u8);
-        let top = bottom - count * 9.0;
-        batch.fill(
-            atlas,
-            left - 2.0,
-            top - 9.0 - 1.0,
-            right - (left - 2.0),
-            9.0,
-            header,
+        let draws = hud_overlays::sidebar(
+            batch.width as i32,
+            batch.height as i32,
+            board,
+            objective,
+            &self.res.atlas.font,
+            self.settings.text_background(0.3),
+            self.settings.text_background(0.4),
         );
-        batch.fill(
-            atlas,
-            left - 2.0,
-            top - 1.0,
-            right - (left - 2.0),
-            bottom - (top - 1.0),
-            body,
-        );
-        let white = rgba(255, 255, 255, 255);
-        batch.text_styled(
-            atlas,
-            &title,
-            left + (biggest / 2.0).trunc() - (title_width / 2.0).trunc(),
-            top - 9.0,
-            white,
-            false,
-        );
-        for (i, (name, score, score_width)) in rows.iter().enumerate() {
-            let y = bottom - (count - i as f32) * 9.0;
-            batch.text_styled(atlas, name, left, y, white, false);
-            batch.text_styled(atlas, score, right - score_width, y, white, false);
-        }
+        hud_layout::paint(batch, &self.res.atlas, &draws);
     }
 }
 

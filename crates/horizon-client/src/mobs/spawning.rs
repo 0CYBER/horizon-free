@@ -220,10 +220,15 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
                 .into(),
             );
         }
-        // AbstractSkeleton.populateDefaultEquipmentSlots (the bow is given on
-        // registration).
+        // AbstractSkeleton.populateDefaultEquipmentSlots: armour, then a bow.
         S::Skeleton | S::Stray | S::Bogged | S::Parched => {
             populate_armor(m, difficulty);
+            m.extra.main_hand = Some("minecraft:bow".into());
+            m.extra.pick_up_loot = m.random.next_float() < 0.55 * difficulty.special();
+        }
+        // WitherSkeleton.populateDefaultEquipmentSlots: a stone sword only.
+        S::WitherSkeleton => {
+            m.extra.main_hand = Some("minecraft:stone_sword".into());
             m.extra.pick_up_loot = m.random.next_float() < 0.55 * difficulty.special();
         }
         S::Pillager => {

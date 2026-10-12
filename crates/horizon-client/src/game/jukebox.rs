@@ -104,8 +104,7 @@ impl Game<'_> {
         let description =
             horizon_client::component::to_text(&s.description, &mut |k| Text::literal(k));
         self.titles
-            .set_overlay(Text::translate("record.nowPlaying", &[description]));
-        self.titles.overlay_animated = true;
+            .set_overlay(Text::translate("record.nowPlaying", &[description]), true);
         self.update_song_volumes();
     }
     fn stop_song(&mut self, pos: [i32; 3]) {
@@ -126,16 +125,13 @@ impl Game<'_> {
         };
         self.stop_song(pos);
         if let Some(record) = record {
-            let r = &mut self.world.random;
-            // offsetRandomXZ(random, 0.7)
-            let dx = f64::from(r.next_float() * 2.0 - 1.0) * 0.7 / 2.0;
-            let dz = f64::from(r.next_float() * 2.0 - 1.0) * 0.7 / 2.0;
-            let at = [
-                f64::from(pos[0]) + 0.5 + dx,
-                f64::from(pos[1]) + 1.01,
-                f64::from(pos[2]) + 0.5 + dz,
-            ];
-            self.spawn_item(record, at, [0.0, 0.0, 0.0], 10);
+            // atLowerCornerWithOffset(pos, 0.5, 1.01, 0.5).offsetRandomXZ(random, 0.7);
+            // `new ItemEntity` moves it with its own random.
+            let at = horizon_world::level::removal::jukebox_pop_position(
+                &mut self.world.random,
+                horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+            );
+            self.spawn_item(record, at, super::dispenser::new_item_motion(), 10);
         }
         self.set_has_record(pos, false);
         self.jukebox_changed(pos);

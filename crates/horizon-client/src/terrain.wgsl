@@ -14,6 +14,10 @@ struct Globals {
     sun: vec4<f32>,
     // x: sky fog end, y: cloud fog end, z: dark disc flag
     fog_ends: vec4<f32>,
+    // Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
+    end_portal_sprites: array<vec4<f32>, 2>,
+    // x: vanilla's GameTime ((game time % 24000 + partial tick) / 24000)
+    time: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var sprites: texture_2d_array<f32>;

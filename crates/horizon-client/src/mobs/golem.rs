@@ -142,9 +142,10 @@ impl Goal for OfferFlower {
         if !cx.w.daylight || m.random.next_int_bound(8000).unwrap_or(1) != 0 {
             return false;
         }
+        // The nearest of #candidate_for_iron_golem_gift: villagers and copper golems.
         self.villager =
             cx.w.nearby(m.position, 6.0, |s| {
-                s.species == Species::Villager && s.alive
+                matches!(s.species, Species::Villager | Species::CopperGolem) && s.alive
             })
             .map(|s| s.id)
             .next();
@@ -157,8 +158,30 @@ impl Goal for OfferFlower {
         self.ticks = 400;
         m.extra.counter = 400;
     }
-    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.extra.counter = 0;
+        // A copper golem the offer ran out beside takes the poppy on its
+        // antenna (#accepts_iron_golem_gift) when it has none.
+        if self.ticks == 0
+            && let Some(v) = self.villager.and_then(|v| cx.w.seen(v))
+            && v.species == Species::CopperGolem
+        {
+            let b = m.bounds();
+            let (lo, hi) = (b.min_position(), b.max_position());
+            let (vlo, vhi) = (v.bounds.min_position(), v.bounds.max_position());
+            if lo.x - 6.0 < vhi.x
+                && hi.x + 6.0 > vlo.x
+                && lo.y - 2.0 < vhi.y
+                && hi.y + 2.0 > vlo.y
+                && lo.z - 6.0 < vhi.z
+                && hi.z + 6.0 > vlo.z
+            {
+                cx.events.push(MobEvent::Gift {
+                    target: v.id,
+                    item: "minecraft:poppy",
+                });
+            }
+        }
         self.villager = None;
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
@@ -284,7 +307,12 @@ fn snowball_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let yo = (xd * xd + zd * zd).sqrt() * 0.2;
     let mut p = Projectile::new(ProjectileKind::Snowball, start, Some(Who::Mob(m.id)));
     // rangedAttackUncertainty: 14 - 4 * difficulty (normal: 6).
-    p.shoot(&mut m.random, [xd, yd + yo - start.y, zd], 1.6, 6.0);
+    p.shoot(
+        &mut crate::projectiles::own_random(m),
+        [xd, yd + yo - start.y, zd],
+        1.6,
+        6.0,
+    );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 0.4 / (m.random.next_float() * 0.4 + 0.8);
     cx.events.push(MobEvent::Sound(

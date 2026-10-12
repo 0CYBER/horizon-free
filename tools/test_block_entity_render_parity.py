@@ -122,6 +122,16 @@ def cases():
     for block in ['end_portal', 'end_gateway', 'campfire[facing=north]', 'spawner',
                   'trial_spawner', 'vault', 'suspicious_sand', 'oak_shelf[facing=east]']:
         add('minecraft:' + block)
+    # End gateways: the beam while spawning (age < 200) or cooling down, in End and
+    # Overworld build heights, and the faces Block.shouldRenderFace leaves against neighbours.
+    neighbours = [{}, {'up': 'minecraft:bedrock', 'down': 'minecraft:bedrock'},
+                  {'north': 'minecraft:end_gateway', 'east': 'minecraft:glass', 'west': 'minecraft:oak_slab[type=top]',
+                   'south': 'minecraft:end_stone', 'down': 'minecraft:oak_stairs[facing=east,half=top]'}]
+    for age, cooldown in [(0, 0), (37, 0), (150, 0), (199, 0), (120, 25), (5000, 1), (5000, 17), (5000, 40), (5000, 0)]:
+        add('minecraft:end_gateway', gateway={'age': age, 'cooldown': cooldown}, gameTime=rng.randint(0, 10 ** 6),
+            level=rng.choice([[0, 256], [-64, 384]]), neighbours=rng.choice(neighbours))
+    for n in neighbours:
+        add('minecraft:end_portal', neighbours=n)
     return out
 
 

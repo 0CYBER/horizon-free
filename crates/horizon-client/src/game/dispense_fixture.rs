@@ -13,6 +13,7 @@ use horizon_client::{
     containers::BlockEntity,
     gamerules::Value as RuleValue,
     item_data::{canon_stack, parse_stack},
+    items::ItemStack,
     mobs::{Mob, Species},
     projectiles::ProjectileKind,
     world::World,
@@ -179,14 +180,7 @@ impl Game<'_> {
             );
             let slot = item[3].as_u64().unwrap_or(0) as usize;
             let stack = parse_stack(item[4].as_str().unwrap_or("-"))?;
-            if let Some(cell) = self
-                .world
-                .block_entities
-                .get_mut(&p)
-                .and_then(|e| e.slots_mut().get_mut(slot))
-            {
-                *cell = stack;
-            }
+            self.fixture_fill(p, slot, stack);
         }
         let mut targets = Vec::new();
         for e in case["entities"].as_array().into_iter().flatten() {
@@ -225,7 +219,11 @@ impl Game<'_> {
             pos[2].as_i64().unwrap_or(0) as i32,
         );
         let state = self.world.block(origin.x, origin.y, origin.z);
-        self.dispense_from(origin, state)?;
+        if let Some(op) = case.get("remove") {
+            self.fixture_remove(origin, op)?;
+        } else {
+            self.dispense_from(origin, state)?;
+        }
 
         let mut out = Vec::new();
         let mut changed: Vec<(i32, i32, i32)> = self.world.block_log.take().unwrap_or_default();
@@ -241,7 +239,11 @@ impl Game<'_> {
         containers.sort_unstable();
         for p in containers {
             let entity = &self.world.block_entities[&p];
-            for (i, slot) in entity.slots().iter().enumerate() {
+            let single = match entity {
+                BlockEntity::Jukebox(j) => std::slice::from_ref(&j.record),
+                _ => entity.slots(),
+            };
+            for (i, slot) in single.iter().enumerate() {
                 if let Some(stack) = slot {
                     out.push(format!(
                         "inv {},{},{} {i} {}",
@@ -264,6 +266,112 @@ impl Game<'_> {
         }
         out.push(format!("rng {}", self.world.random.next_long()));
         Ok(out)
+    }
+
+    /// A stack in a block entity's slot: a container's, a jukebox's record, a
+    /// lectern's book, or the items of a block entity Horizon keeps as saved.
+    fn fixture_fill(&mut self, p: (i32, i32, i32), slot: usize, stack: Option<ItemStack>) {
+        let jukebox =
+            &*self.res.facts.get(self.world.block(p.0, p.1, p.2)).name == "minecraft:jukebox";
+        match self.world.block_entities.get_mut(&p) {
+            Some(BlockEntity::Jukebox(j)) => j.record = stack,
+            Some(BlockEntity::Lectern(l)) => l.book = stack,
+            Some(e) => {
+                if let Some(cell) = e.slots_mut().get_mut(slot) {
+                    *cell = stack;
+                }
+            }
+            None if jukebox => {
+                // JukeboxBlockEntity holding its record (setSongItemWithoutPlaying).
+                self.world.block_entities.insert(
+                    p,
+                    BlockEntity::Jukebox(horizon_client::containers::Jukebox {
+                        record: stack,
+                        ticks: 0,
+                        playing: false,
+                    }),
+                );
+            }
+            None => self.fixture_fill_saved(p, slot, stack),
+        }
+    }
+    /// The saved block entity of a campfire, decorated pot, chiseled
+    /// bookshelf or shelf, as a loaded world keeps it.
+    fn fixture_fill_saved(&mut self, p: (i32, i32, i32), slot: usize, stack: Option<ItemStack>) {
+        use horizon_world::nbt::Tag;
+        let name = self
+            .res
+            .facts
+            .get(self.world.block(p.0, p.1, p.2))
+            .name
+            .clone();
+        let id = match name.strip_prefix("minecraft:").unwrap_or(&name) {
+            "campfire" | "soul_campfire" => "minecraft:campfire",
+            "decorated_pot" => "minecraft:decorated_pot",
+            "chiseled_bookshelf" => "minecraft:chiseled_bookshelf",
+            n if n.ends_with("_shelf") => "minecraft:shelf",
+            _ => return,
+        };
+        let Some(chunk) = self.world.chunks.get_mut(&(p.0 >> 4, p.2 >> 4)) else {
+            return;
+        };
+        let chunk = Arc::make_mut(chunk);
+        let saved = Arc::make_mut(chunk.saved.get_or_insert_with(Default::default));
+        let at = |t: &Tag| {
+            t.get("x") == Some(&Tag::Int(p.0))
+                && t.get("y") == Some(&Tag::Int(p.1))
+                && t.get("z") == Some(&Tag::Int(p.2))
+        };
+        let index = match saved.block_entities.iter().position(at) {
+            Some(i) => i,
+            None => {
+                saved.block_entities.push(Tag::compound([
+                    ("id", Tag::String(id.into())),
+                    ("x", Tag::Int(p.0)),
+                    ("y", Tag::Int(p.1)),
+                    ("z", Tag::Int(p.2)),
+                ]));
+                saved.block_entities.len() - 1
+            }
+        };
+        let Tag::Compound(map) = &mut saved.block_entities[index] else {
+            return;
+        };
+        let Some(stack) = stack else { return };
+        if id == "minecraft:decorated_pot" {
+            map.insert("item".into(), horizon_client::save::item_to_nbt(&stack));
+            return;
+        }
+        let mut item = horizon_client::save::item_to_nbt(&stack);
+        if let Tag::Compound(c) = &mut item {
+            c.insert("Slot".into(), Tag::Byte(slot as i8));
+        }
+        match map
+            .entry("Items".into())
+            .or_insert_with(|| Tag::List(Vec::new()))
+        {
+            Tag::List(list) => list.push(item),
+            other => *other = Tag::List(vec![item]),
+        }
+    }
+    /// `Level.setBlock`, `destroyBlock` or `removeBlock` on the case's block.
+    fn fixture_remove(&mut self, origin: BlockPos, op: &Value) -> Result<()> {
+        match op["op"].as_str().unwrap_or("") {
+            "set" => {
+                let state = BlockStateId(op["state"].as_u64().unwrap_or(0) as u32);
+                let flags = op["flags"].as_i64().unwrap_or(3) as i32;
+                self.with_level(|b, level, ticks| b.set_block(level, ticks, origin, state, flags));
+            }
+            "destroy" => {
+                let drop = op["drop"].as_bool().unwrap_or(true);
+                self.with_level(|b, level, ticks| b.destroy_block(level, ticks, origin, drop));
+            }
+            "remove" => {
+                self.with_level(|b, level, ticks| b.remove_block(level, ticks, origin, false));
+            }
+            other => return Err(format!("unknown removal {other}").into()),
+        }
+        self.process_level_events()
     }
 
     /// `EntityType.create` and `snapTo` for one target: no spawn finalization.
@@ -391,13 +499,17 @@ impl Game<'_> {
                         let _ = write!(line, " {name}={item}x1");
                     }
                 }
-                let ready = match s {
-                    Species::Sheep => Some(!x.sheared && !m.is_baby()),
-                    Species::Mooshroom => Some(!m.is_baby()),
-                    Species::Bogged => Some(!x.sheared),
-                    Species::SnowGolem => Some(!x.sheared),
-                    _ => None,
-                };
+                let ready =
+                    match s {
+                        Species::Sheep => Some(!x.sheared && !m.is_baby()),
+                        Species::Mooshroom => Some(!m.is_baby()),
+                        Species::Bogged => Some(!x.sheared),
+                        Species::SnowGolem => Some(!x.sheared),
+                        Species::CopperGolem => Some(self.golem_shearable(
+                            self.mobs.iter().position(|o| o.id == id).unwrap_or(0),
+                        )),
+                        _ => None,
+                    };
                 if let Some(r) = ready {
                     line.push_str(if r { " ready" } else { " unready" });
                 }
@@ -501,6 +613,15 @@ impl Game<'_> {
             let kind = b.entity_type();
             let (p, v) = (b.position, b.velocity);
             out.push(line(&kind, [p.x, p.y, p.z], [v.x, v.y, v.z], ""));
+        }
+        for o in &self.orbs {
+            let (p, v) = (o.position, o.velocity);
+            out.push(line(
+                "minecraft:experience_orb",
+                [p.x, p.y, p.z],
+                [v.x, v.y, v.z],
+                "",
+            ));
         }
         for c in &self.carts {
             let (p, v) = (c.position, c.velocity);

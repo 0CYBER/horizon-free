@@ -15,6 +15,7 @@ pub mod breeze;
 pub mod camel;
 pub mod caravan;
 pub mod control;
+pub mod copper_golem;
 pub mod creaking;
 pub mod cube;
 pub mod data;
@@ -56,6 +57,7 @@ pub mod trader;
 pub mod undead;
 pub mod vex;
 pub mod villager;
+pub mod villager_brain;
 pub mod warden;
 pub mod witch;
 pub mod wither;
@@ -359,6 +361,8 @@ pub enum DamageKind {
     InWall,
     Thorns,
     SonicBoom,
+    /// `fell_out_of_world`: below the world's floor.
+    OutOfWorld,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -414,6 +418,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Generic
                 | DamageKind::SonicBoom
+                | DamageKind::OutOfWorld
         )
     }
     pub fn is_fire(&self) -> bool {
@@ -436,6 +441,7 @@ impl Damage {
                 | DamageKind::Cactus
                 | DamageKind::Generic
                 | DamageKind::InWall
+                | DamageKind::OutOfWorld
         )
     }
     pub fn is_projectile(&self) -> bool {
@@ -591,6 +597,9 @@ pub struct Mob {
     pub ai: Box<ai::Ai>,
     pub extra: Extra,
     pub fluids: living::Fluids,
+    /// Entity.wasEyeInWater: the eyes were in water before this tick's fluid
+    /// update (`isUnderWater` reads it).
+    pub was_eye_in_water: bool,
     pub no_gravity: bool,
     /// `NoAI`: no goals and no movement.
     pub no_ai: bool,
@@ -620,8 +629,23 @@ pub struct Mob {
 #[derive(Clone, Debug)]
 pub enum MobEvent {
     Sound(&'static str, [f64; 3], f32, f32),
+    /// `OfferFlowerGoal.stop`: the item goes to the target's antenna (saddle)
+    /// slot if it is empty, as a guaranteed drop.
+    Gift {
+        target: u32,
+        item: &'static str,
+    },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
+    /// A level event's sound (`levelEvent`/`globalLevelEvent`): the client
+    /// plays it with its own random pitch spread (`(a - b) * spread + 1`),
+    /// nothing is drawn from the mob.
+    LevelEventSound {
+        sound: &'static str,
+        at: [f64; 3],
+        volume: f32,
+        spread: f32,
+    },
     AttackPlayer(f32, [f64; 3]),
     /// Damage of a given type to the player (guardian lasers, thorns).
     DamagePlayer {
@@ -876,6 +900,60 @@ pub struct Seen {
     pub active_raid: bool,
     /// A villager's reputation of the player (`getPlayerReputation`).
     pub player_rep: i32,
+    /// `isPushable` and pushed by others (`Entity.push(Entity)` moves it).
+    pub pushable: bool,
+    /// `MobCategory` (`monster`, `creature`, ...).
+    pub category: &'static str,
+    /// A villager's `POTENTIAL_JOB_SITE` and `MEETING_POINT`.
+    pub potential_job: Option<[i32; 3]>,
+    pub meeting: Option<[i32; 3]>,
+    /// A villager's profession (index into `render::PROFESSIONS`) and experience.
+    pub profession: u8,
+    pub xp: i32,
+}
+impl Mob {
+    /// `EntityType.getCategory`'s name.
+    pub fn category(&self) -> &'static str {
+        match self.kind.category.as_str() {
+            "monster" => "monster",
+            "creature" => "creature",
+            "ambient" => "ambient",
+            "axolotls" => "axolotls",
+            "underground_water_creature" => "underground_water_creature",
+            "water_creature" => "water_creature",
+            "water_ambient" => "water_ambient",
+            _ => "misc",
+        }
+    }
+}
+/// `Entity.push` on other mobs acts at once in vanilla: a mob ticking later
+/// moves with it this tick. Takes the `Push` events aimed at mobs out of
+/// `events[from..]` into `pending`, which the caller adds to each mob's
+/// velocity before its tick (and to every mob once all have ticked).
+pub fn take_mob_pushes(events: &mut Vec<MobEvent>, from: usize, pending: &mut Vec<(u32, Vec3)>) {
+    let mut i = from;
+    while i < events.len() {
+        if let MobEvent::Push {
+            target: Who::Mob(id),
+            velocity,
+        } = events[i]
+        {
+            pending.push((id, Vec3::new(velocity[0], velocity[1], velocity[2])));
+            events.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+/// Adds the pending pushes aimed at `m` to its velocity, in push order.
+pub fn apply_mob_pushes(m: &mut Mob, pending: &mut Vec<(u32, Vec3)>) {
+    pending.retain(|(id, v)| {
+        if *id != m.id {
+            return true;
+        }
+        m.velocity = Vec3::new(m.velocity.x + v.x, m.velocity.y + v.y, m.velocity.z + v.z);
+        false
+    });
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]
@@ -904,6 +982,9 @@ pub struct PlayerView {
     pub hero: bool,
     /// The player's UUID (villagers' gossip is keyed by it).
     pub uuid: [i32; 4],
+    /// The mobs on the player's team (`isAlliedTo`): combat targeting
+    /// leaves the player alone.
+    pub allies: std::sync::Arc<std::collections::HashSet<u32>>,
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,
@@ -929,6 +1010,24 @@ pub struct MobWorld<'a> {
     pub end: bool,
     /// The world seed (slime chunks).
     pub world_seed: i64,
+    /// `Level.getSeaLevel` (63 in the overworld, -63 in a flat world).
+    pub sea_level: i32,
+    /// The scoreboard teams of the player and the mobs (collision rules).
+    pub teams: Teams,
+}
+/// `Entity.getTeam` of the player and of the mobs on a team.
+#[derive(Clone, Debug, Default)]
+pub struct Teams {
+    pub player: Option<crate::scoreboard::Team>,
+    pub mobs: HashMap<u32, crate::scoreboard::Team>,
+}
+impl Teams {
+    pub fn of(&self, who: Who) -> Option<&crate::scoreboard::Team> {
+        match who {
+            Who::Player => self.player.as_ref(),
+            Who::Mob(id) => self.mobs.get(&id),
+        }
+    }
 }
 impl Mob {
     pub fn new(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {
@@ -972,6 +1071,7 @@ impl Mob {
             ai: Box::default(),
             extra: Extra::default(),
             fluids: living::Fluids::default(),
+            was_eye_in_water: false,
             no_gravity: false,
             no_ai: false,
             silent: false,
@@ -1164,10 +1264,10 @@ impl Mob {
     pub fn tick(
         &mut self,
         w: &MobWorld,
-        _random: &mut LegacyRandom,
+        level_random: &mut LegacyRandom,
         events: &mut Vec<MobEvent>,
     ) -> bool {
-        ai::tick(self, w, events)
+        ai::tick(self, w, level_random, events)
     }
     pub fn distance_to(&self, p: [f64; 3]) -> f64 {
         let d = [
@@ -1315,8 +1415,10 @@ impl Mob {
     /// Wear (or take off) a saddle stack, keeping its components.
     pub fn set_saddle(&mut self, saddle: Option<crate::items::ItemStack>) {
         self.extra.saddled = saddle.is_some();
+        // A plain saddle is implied by `saddled`; anything else (a copper
+        // golem's antenna flower) is kept as it is.
         self.extra.saddle_stack = saddle
             .map(|s| crate::items::ItemStack { count: 1, ..s })
-            .filter(|s| s.damage != 0 || s.extra.is_some());
+            .filter(|s| s.damage != 0 || s.extra.is_some() || &*s.item != "minecraft:saddle");
     }
 }

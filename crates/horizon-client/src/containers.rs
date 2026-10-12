@@ -208,6 +208,7 @@ impl BlockEntity {
         }
         let size = match name {
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
+            n if n.ends_with("copper_chest") => 27,
             "minecraft:hopper" => 5,
             "minecraft:dispenser" | "minecraft:dropper" => 9,
             n if n.ends_with("shulker_box") => 27,
@@ -219,6 +220,7 @@ impl BlockEntity {
     pub fn id_for_block(name: &str) -> Option<&'static str> {
         Some(match name {
             "minecraft:chest" => "minecraft:chest",
+            n if n.ends_with("copper_chest") => "minecraft:chest",
             "minecraft:trapped_chest" => "minecraft:trapped_chest",
             "minecraft:barrel" => "minecraft:barrel",
             "minecraft:hopper" => "minecraft:hopper",

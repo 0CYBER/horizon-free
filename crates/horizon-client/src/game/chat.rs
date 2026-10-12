@@ -286,7 +286,11 @@ impl Game<'_> {
         reg.structures = list("data/minecraft/worldgen/structure");
         reg.biomes = list("data/minecraft/worldgen/biome");
         reg.clocks = list("data/minecraft/world_clock");
-        reg.dimensions = vec!["minecraft:overworld".into(), "minecraft:the_nether".into()];
+        reg.dimensions = vec![
+            "minecraft:overworld".into(),
+            "minecraft:the_nether".into(),
+            "minecraft:the_end".into(),
+        ];
         reg.players = vec![PLAYER_NAME.into()];
         // Timelines of the overworld clock and their time markers.
         self.ui.markers.clear();
@@ -322,6 +326,15 @@ impl Game<'_> {
                         show,
                     },
                 );
+            }
+        }
+        // Vanilla's built-in registries (mob effects, components, dialogs...).
+        for dir in [&self.options.resources, &self.ui.vanilla_root] {
+            if let Ok(bytes) = std::fs::read(dir.join("command-registries.json"))
+                && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            {
+                self.ui.registries.fill_from_export(&v);
+                break;
             }
         }
         let reg = &mut self.ui.registries;
@@ -368,7 +381,7 @@ impl Game<'_> {
     /// A chat message from the game (ChatComponent.addServerSystemMessage).
     pub(super) fn system_message(&mut self, text: Text) {
         if let Some(capture) = self.chat_capture.as_mut() {
-            capture.push(text.plain());
+            capture.push(text);
             return;
         }
         let focused = self.screen == Screen::Chat;
@@ -397,7 +410,7 @@ impl Game<'_> {
             return;
         };
         let atlas = &self.res.atlas;
-        let d = vanilla::dispatcher();
+        let d = vanilla::game_dispatcher();
         if screen.suggestion_key(atlas, d, &self.ui.registries, key, shift) {
             self.ui.chat_screen = Some(screen);
             return;
@@ -511,11 +524,11 @@ impl Game<'_> {
             return;
         };
         screen.resize(batch.width, batch.height);
-        let bg = self.ui.chat.options.background_opacity;
+        let bg = self.ui.chat.options.background_opacity as f32;
         screen.draw(
             batch,
             &self.res.atlas,
-            vanilla::dispatcher(),
+            vanilla::game_dispatcher(),
             &self.ui.registries,
             self.cursor,
             bg,
@@ -655,15 +668,19 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return;
         };
+        let below_world = p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64);
+        let name = self.player_display_text();
         let message = match cause {
-            Some(key) => Text::translate(&key, &[Text::literal(PLAYER_NAME)]),
-            None if p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64) => {
-                Text::translate("death.attack.outOfWorld", &[Text::literal(PLAYER_NAME)])
-            }
+            Some(key) => Text::translate(&key, &[name]),
+            None if below_world => Text::translate("death.attack.outOfWorld", &[name]),
             None => self.combat_death_message(),
         };
         self.ui.death_text = Some(message.clone());
-        self.system_message(message);
+        // ServerPlayer.die: a team that hides death messages keeps it out of
+        // the dying player's own chat (the death screen still shows it).
+        if horizon_client::scoreboard::own_death_message_shown(self.player_team()) {
+            self.system_message(message);
+        }
     }
     /// F1 hides the HUD (and hand); the screenshot key still works.
     pub(super) fn toggle_hide_gui(&mut self) {

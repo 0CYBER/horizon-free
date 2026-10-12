@@ -102,7 +102,7 @@ impl Game<'_> {
             m.extra.scratch[3] -= 1;
         }
         // The visited positions fade after 6000 ticks.
-        if m.extra.ints[2] > 0 && m.age >= m.extra.ints[2] {
+        if m.extra.ints[2] > 0 && m.age as i32 >= m.extra.ints[2] {
             m.extra.positions.clear();
             m.extra.ints[2] = 0;
         }
@@ -141,9 +141,11 @@ impl Game<'_> {
         if next == -2 {
             return false;
         }
-        let interval = |m: &mut Mob| 504_000 + i64::from(m.random.next_int_bound(48_001).unwrap_or(0));
+        // updateWeathering draws from the level random.
+        let r = &mut self.world.random;
+        let mut interval = || 504_000 + i64::from(r.next_int_bound(48_001).unwrap_or(0));
         if next == -1 {
-            m.extra.vector[0] = (now + interval(m)) as f64;
+            m.extra.vector[0] = (now + interval()) as f64;
             return false;
         }
         let fully = m.extra.variant >= 3;
@@ -153,7 +155,7 @@ impl Game<'_> {
             m.extra.vector[0] = if new >= 3 {
                 0.0
             } else {
-                (next + interval(m)) as f64
+                (next + interval()) as f64
             };
         }
         if fully && self.golem_can_turn_to_statue(m) {
@@ -177,8 +179,9 @@ impl Game<'_> {
             m.position.y.floor() as i32,
             m.position.z.floor() as i32,
         ];
+        // The pose comes from the golem's own random (`this.random.nextInt(0, 4)`).
         let pose = ["standing", "sitting", "running", "star"]
-            [self.world.random.next_int_bound(4).unwrap_or(0) as usize];
+            [m.random.next_int_bound(4).unwrap_or(0) as usize];
         // Direction.fromYRot.
         let facing = ["south", "west", "north", "east"]
             [((f64::from(m.yaw) / 90.0 + 0.5).floor() as i32 & 3) as usize];
@@ -186,7 +189,7 @@ impl Game<'_> {
             name: "minecraft:oxidized_copper_golem_statue".into(),
             properties: [
                 ("facing".to_string(), facing.to_string()),
-                ("pose".to_string(), pose.to_string()),
+                ("copper_golem_pose".to_string(), pose.to_string()),
                 ("waterlogged".to_string(), "false".to_string()),
             ]
             .into(),
@@ -212,15 +215,18 @@ impl Game<'_> {
             1.0,
         );
     }
-    /// `dropPreservedEquipment`: the carried stack and the antenna.
+    /// `Mob.dropPreservedEquipment`: the guaranteed drops in `EquipmentSlot`
+    /// order, the carried stack (main hand) then the antenna flower (saddle),
+    /// each `spawnAtLocation` at the golem's feet.
     pub(super) fn golem_drop_equipment(&mut self, m: &mut Mob) {
-        let at = [m.position.x, m.position.y + 0.5, m.position.z];
+        let at = m.position;
         if let Some(stack) = held(m).cloned() {
             set_held(m, None);
-            self.spawn_item(stack, at, [0.0, 0.2, 0.0], 10);
+            self.spawn_at_location(at, 0.0, stack);
         }
-        if let Some(antenna) = m.extra.legs.take() {
-            self.spawn_item(ItemStack::new(&antenna, 1), at, [0.0, 0.2, 0.0], 10);
+        if let Some(antenna) = m.saddle_item() {
+            m.set_saddle(None);
+            self.spawn_at_location(at, 0.0, antenna);
         }
     }
     // ---- containers -------------------------------------------------------
@@ -252,7 +258,8 @@ impl Game<'_> {
     fn golem_chest_blocked(&self, keys: &[Key]) -> bool {
         keys.iter().any(|k| {
             let above = self.world.block(k.0, k.1 + 1, k.2);
-            self.behaviours.facts(above).flags & horizon_world::level::data::state_flags::CONDUCTOR
+            self.res.behaviours.facts(above).flags
+                & horizon_world::level::data::state_flags::CONDUCTOR
                 != 0
         })
     }
@@ -273,7 +280,11 @@ impl Game<'_> {
         None
     }
     fn golem_max_stack(&self, stack: &ItemStack) -> u32 {
-        self.res.items.get(&stack.item).map_or(64, |i| i.max_stack).max(1)
+        self.res
+            .items
+            .get(&stack.item)
+            .map_or(64, |i| i.max_stack)
+            .max(1)
     }
     /// `pickupItemFromContainer`: up to 16 of the first non-empty slot.
     fn golem_pick_up(&mut self, keys: &[Key]) -> Option<ItemStack> {
@@ -362,7 +373,10 @@ impl Game<'_> {
         let Some(h) = m.extra.home else { return false };
         let key = (h[0], h[1], h[2]);
         let valid = self.golem_wanted_block(m, key)
-            && matches!(self.world.block_entities.get(&key), Some(BlockEntity::Chest(_)))
+            && matches!(
+                self.world.block_entities.get(&key),
+                Some(BlockEntity::Chest(_))
+            )
             && !self.golem_chest_blocked(&self.golem_container(key));
         if !valid {
             return false;
@@ -389,7 +403,11 @@ impl Game<'_> {
                 f64::from(n.y) + m.kind.height / 2.0,
                 f64::from(n.z) + 0.5,
             ],
-            None => [m.position.x, m.position.y + m.kind.height / 2.0, m.position.z],
+            None => [
+                m.position.x,
+                m.position.y + m.kind.height / 2.0,
+                m.position.z,
+            ],
         };
         let reach = golem_within(m, self.golem_range(m), from, h);
         (path.is_none() && !reach) || reach
@@ -446,7 +464,7 @@ impl Game<'_> {
         }
         m.extra.positions.retain(|p| p[1] >= UNREACHABLE);
         m.extra.positions.extend(list);
-        m.extra.ints[2] = m.age + MEMORY_TICKS;
+        m.extra.ints[2] = m.age as i32 + MEMORY_TICKS;
     }
     fn golem_mark_unreachable(&mut self, m: &mut Mob, h: [i32; 3]) {
         m.extra.positions.retain(|p| *p != h);
@@ -454,11 +472,16 @@ impl Game<'_> {
         if !m.extra.positions.contains(&marked) {
             m.extra.positions.push(marked);
         }
-        let count = m.extra.positions.iter().filter(|p| p[1] >= UNREACHABLE).count();
+        let count = m
+            .extra
+            .positions
+            .iter()
+            .filter(|p| p[1] >= UNREACHABLE)
+            .count();
         if count > 50 {
             self.golem_enter_cooldown(m);
         } else {
-            m.extra.ints[2] = m.age + MEMORY_TICKS;
+            m.extra.ints[2] = m.age as i32 + MEMORY_TICKS;
         }
     }
     fn golem_stop_targeting(&mut self, m: &mut Mob) {
@@ -495,7 +518,9 @@ impl Game<'_> {
     }
     fn golem_chest_sound(&mut self, key: Key, open: bool) {
         let name = self.golem_block_name(key);
-        let base = name.trim_start_matches("minecraft:").trim_start_matches("waxed_");
+        let base = name
+            .trim_start_matches("minecraft:")
+            .trim_start_matches("waxed_");
         let kind = if base.starts_with("weathered") {
             "copper_chest_weathered"
         } else if base.starts_with("oxidized") {
@@ -508,8 +533,12 @@ impl Game<'_> {
         let side = if open { "open" } else { "close" };
         let at = chest_center([key.0, key.1, key.2]);
         let pitch = self.world.random.next_float() * 0.1 + 0.9;
-        self.audio
-            .play(&format!("minecraft:block.{kind}.{side}"), Some(at), 0.5, pitch);
+        self.audio.play(
+            &format!("minecraft:block.{kind}.{side}"),
+            Some(at),
+            0.5,
+            pitch,
+        );
     }
     fn golem_on_queuing(&mut self, m: &mut Mob) {
         let Some(h) = m.extra.home else { return };
@@ -601,7 +630,8 @@ impl Game<'_> {
                 && let Some(sound) = sound
             {
                 let at = [m.position.x, m.position.y, m.position.z];
-                self.audio.play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
+                self.audio
+                    .play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
             }
             if ticks == 60 {
                 self.golem_release(m);
@@ -626,7 +656,9 @@ impl Game<'_> {
                     .any(|s| held(m).is_some_and(|h| h.item == s.item))
             {
                 // putDownItem.
-                let stack = held(m).cloned().unwrap_or_else(|| ItemStack::new("minecraft:air", 0));
+                let stack = held(m)
+                    .cloned()
+                    .unwrap_or_else(|| ItemStack::new("minecraft:air", 0));
                 let left = self.golem_put_down(&keys, stack);
                 let emptied = left.is_none();
                 set_held(m, left);
@@ -657,25 +689,39 @@ impl Game<'_> {
                 return false;
             };
             set_held(&mut self.mobs[index], None);
+            // BehaviorUtils.throwItem: from 0.3 below the golem's eyes towards
+            // the player's feet at 0.3 blocks a tick, default pickup delay.
             let p = self.player.as_ref().map(|p| p.position);
-            let from = [at[0], at[1] + 0.9, at[2]];
+            let eye = f64::from(self.mobs[index].eye_height());
+            let from = [at[0], at[1] + eye - f64::from(0.3f32), at[2]];
             let v = p.map_or([0.0; 3], |p| {
-                let d = [p.x - from[0], p.y + 1.0 - from[1], p.z - from[2]];
-                let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
-                [d[0] / len * 0.3, d[1] / len * 0.3 + 0.1, d[2] / len * 0.3]
+                let d = [p.x - at[0], p.y - at[1], p.z - at[2]];
+                let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                if len < 1.0e-5 {
+                    return [0.0; 3];
+                }
+                let k = f64::from(0.3f32);
+                [d[0] / len * k, d[1] / len * k, d[2] / len * k]
             });
-            self.spawn_item(h, from, v, 40);
+            self.spawn_item(h, from, v, 10);
             return true;
         }
         let name = item;
         let is_axe = name.ends_with("_axe");
         let waxed = self.mobs[index].extra.vector[0] as i64 == -2;
         if name == "minecraft:shears" && self.golem_shearable(index) {
-            let antenna = self.mobs[index].extra.legs.take();
+            // CopperGolem.shear: the sound, the antenna slot emptied (an
+            // unequip) and the flower dropped 1.5 up.
             self.audio
                 .play("minecraft:entity.copper_golem.shear", Some(at), 1.0, 1.0);
+            let antenna = self.mobs[index].saddle_item();
+            self.mobs[index].set_saddle(None);
+            let id = self.mobs[index].id;
+            let ctx = self.who_context(Some(horizon_client::mobs::Who::Mob(id)), None);
+            self.post_game_event("minecraft:unequip", at, ctx);
             if let Some(a) = antenna {
-                self.spawn_item(ItemStack::new(&a, 1), [at[0], at[1] + 1.5, at[2]], [0.0, 0.2, 0.0], 10);
+                let p = self.mobs[index].position;
+                self.spawn_at_location(p, 1.5, a);
             }
             self.damage_held_tool();
             return true;
@@ -705,13 +751,14 @@ impl Game<'_> {
         }
         false
     }
-    fn golem_shearable(&self, index: usize) -> bool {
-        self.mobs[index].extra.legs.as_deref().is_some_and(|a| {
+    /// `readyForShearing`: the antenna holds a flower shears take.
+    pub(super) fn golem_shearable(&self, index: usize) -> bool {
+        self.mobs[index].saddle_item().is_some_and(|a| {
             self.res
                 .items
                 .item_tags
                 .get("minecraft:shearable_from_copper_golem")
-                .is_some_and(|t| t.contains(a))
+                .is_some_and(|t| t.contains(&*a.item))
         })
     }
 }

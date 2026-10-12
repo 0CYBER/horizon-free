@@ -79,6 +79,17 @@ public final class VanillaBlockUpdateOracle {
             Block newBlock = state.getBlock();
             boolean blockChanged = !old.is(newBlock);
             boolean movedByPiston = (flags & 64) != 0;
+            boolean sideEffects = (flags & 256) == 0;
+            if (blockChanged && old.hasBlockEntity() && !state.shouldChangedStateKeepBlockEntity(old)) {
+                // A real chunk always holds the block entity of an entity block.
+                BlockEntity blockEntity = world.blockEntityFor(pos.immutable(), old);
+                if (sideEffects && blockEntity != null) {
+                    blockEntity.preRemoveSideEffects(pos, old);
+                }
+                // LevelChunk.removeBlockEntity.
+                if (world.blockEntities != null) world.blockEntities.remove(pos);
+                if (blockEntity != null) blockEntity.setRemoved();
+            }
             if ((blockChanged || newBlock instanceof net.minecraft.world.level.block.BaseRailBlock) && ((flags & 1) != 0 || movedByPiston)) {
                 old.affectNeighborsAfterRemoval(world, pos, movedByPiston);
             }
@@ -133,7 +144,10 @@ public final class VanillaBlockUpdateOracle {
         // one creates it on first use and replaces it when the block changes.
         Map<BlockPos, BlockEntity> blockEntities;
         @Override public BlockEntity getBlockEntity(BlockPos p) {
-            BlockState state = getBlockState(p);
+            return blockEntityFor(p, getBlockState(p));
+        }
+        /** The block entity at `p` for `state` (the block there, or the one being replaced). */
+        BlockEntity blockEntityFor(BlockPos p, BlockState state) {
             if (!(state.getBlock() instanceof net.minecraft.world.level.block.EntityBlock entityBlock)) {
                 return null;
             }

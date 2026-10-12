@@ -142,6 +142,8 @@ fn goal_name(m: &Mob, name: &str) -> String {
     let vanilla = match name {
         "Float" => "FloatGoal",
         "Stroll" => "WaterAvoidingRandomStrollGoal",
+        "RandomStroll" => "RandomStrollGoal",
+        "RandomSwimming" => "RandomSwimmingGoal",
         "LookAtPlayer" => "LookAtPlayerGoal",
         "RandomLookAround" => "RandomLookAroundGoal",
         "HurtByTarget" => "HurtByTargetGoal",
@@ -171,6 +173,12 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "TryFindWater" => "TryFindWaterGoal",
         "RangedAttack" => "RangedAttackGoal",
         "MoveTowardsTarget" => "MoveTowardsTargetGoal",
+        "DrownedGoToWater" => "DrownedGoToWaterGoal",
+        "TakeBlock" => "EndermanTakeBlockGoal",
+        "LeaveBlock" => "EndermanLeaveBlockGoal",
+        "FreezeWhenLookedAt" => "EndermanFreezeWhenLookedAt",
+        "LookForPlayer" => "EndermanLookForPlayerGoal",
+        "HealRaiders" => "NearestHealableRaiderTargetGoal",
         other => return other.to_owned(),
     };
     vanilla.to_owned()
@@ -221,13 +229,43 @@ fn seen(m: &Mob) -> Seen {
         hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
         active_raid: horizon_client::mobs::raider::has_active_raid(m),
         player_rep: 0,
+        pushable: m.pushable(),
+        category: m.category(),
+        potential_job: horizon_client::mobs::villager_brain::potential_job_site(m),
+        meeting: (m.species() == Species::Villager)
+            .then_some(m.extra.meeting)
+            .flatten(),
+        profession: m.extra.variant2,
+        xp: horizon_client::mobs::villager::xp(m),
+    }
+}
+
+/// Whether an event hurts the scenario's player (survival, normal difficulty,
+/// no armour, made hurtable again every tick by the oracle).
+fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
+    let Some(p) = player.filter(|p| !p.creative) else {
+        return false;
+    };
+    match e {
+        MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
+        // ServerExplosion.hurtEntities: within twice the radius every hit does damage.
+        MobEvent::Explode(at, radius) => {
+            let d = Vec3::new(at[0], at[1], at[2])
+                .distance_squared(p.position)
+                .sqrt();
+            let r = 2.0 * f64::from(*radius);
+            d / r <= 1.0 && d != 0.0
+        }
+        _ => false,
     }
 }
 
 fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
     let _ = write!(out, "{t} {i}");
     if m.removed {
-        let _ = writeln!(out, " removed DISCARDED");
+        // Entity.RemovalReason: the end of the death animation, else a discard.
+        let reason = if m.alive() { "DISCARDED" } else { "KILLED" };
+        let _ = writeln!(out, " removed {reason}");
         return;
     }
     let p = m.position;
@@ -316,7 +354,11 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
         f(m.ai.speed),
         u8::from(m.ai.jumping)
     );
-    let _ = writeln!(out, "\trng {:x}", m.random.state());
+    let _ = write!(out, "\trng {:x}", m.random.state());
+    if let Some((acts, mem)) = horizon_client::mobs::villager_brain::describe(m) {
+        let _ = write!(out, "\tact {acts}\tmem {mem}");
+    }
+    out.push('\n');
 }
 
 fn main() -> horizon_client::Result<()> {
@@ -429,6 +471,16 @@ fn main() -> horizon_client::Result<()> {
                 }
             }
             m.random = LegacyRandom::new(spec.seed);
+            if m.species() == Species::Villager {
+                // The oracle seeds the random after the brain is built, then
+                // delays the sensors again and seeds the gates' shuffles.
+                horizon_client::mobs::villager_brain::init(
+                    &mut m,
+                    world.game_time,
+                    s.time,
+                    spec.seed,
+                );
+            }
             mobs.push(m);
         }
         let player = s.player.map(|p| {
@@ -456,6 +508,7 @@ fn main() -> horizon_client::Result<()> {
                 yaw: 0.0,
                 hero: false,
                 uuid: [0, 0x1234, 0, 0x5678],
+                allies: Default::default(),
             }
         });
         let mut scratch = LegacyRandom::new(0);
@@ -466,6 +519,7 @@ fn main() -> horizon_client::Result<()> {
             world.game_time += 1;
             let snapshot: Vec<Seen> = mobs.iter().filter(|m| !m.removed).map(seen).collect();
             let w = MobWorld {
+                teams: Default::default(),
                 world: &world,
                 registry,
                 facts: &facts,
@@ -485,15 +539,37 @@ fn main() -> horizon_client::Result<()> {
                 difficulty: LocalDifficulty::new(2, world.day_time, 0, 0.0),
                 end: false,
                 world_seed: 0,
+                // FlatLevelSource.getSeaLevel.
+                sea_level: -63,
             };
             let mut events = Vec::new();
-            for m in &mut mobs {
+            #[allow(unused_mut)] // filled only with the rng-trace feature
+            let mut traces: Vec<String> = Vec::new();
+            let mut pushes = Vec::new();
+            for (i, m) in mobs.iter_mut().enumerate() {
                 if m.removed {
                     continue;
                 }
-                if !m.tick(&w, &mut scratch, &mut events) {
+                horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
+                let from = events.len();
+                #[cfg(feature = "rng-trace")]
+                horizon_core::random::trace::set(true);
+                let alive = m.tick(&w, &mut scratch, &mut events);
+                #[cfg(feature = "rng-trace")]
+                {
+                    horizon_core::random::trace::set(false);
+                    for line in horizon_core::random::trace::take() {
+                        traces.push(format!("{t} trace {i} {line}"));
+                    }
+                }
+                horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
+                let _ = i;
+                if !alive {
                     m.removed = true;
                 }
+            }
+            for m in &mut mobs {
+                horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
             }
             for (i, m) in mobs.iter().enumerate() {
                 print(&mut out, t, i, m);
@@ -508,7 +584,17 @@ fn main() -> horizon_client::Result<()> {
                     );
                 } else if let MobEvent::SoundId(name, _, volume, pitch) = e {
                     let _ = writeln!(out, "{t} sound {name} {} {}", f(*volume), f(*pitch));
+                } else if player_hurt(player.as_ref(), e) {
+                    // The oracle's survival player, healed and made hurtable every tick,
+                    // takes the damage (LivingEntity.playHurtSound).
+                    let _ = writeln!(
+                        out,
+                        "{t} sound minecraft:entity.player.hurt 3f800000 3f800000"
+                    );
                 }
+            }
+            for line in traces {
+                let _ = writeln!(out, "{line}");
             }
         }
     }

@@ -106,7 +106,10 @@ FRONT_FOR = {
     'armor_stand': ['air', 'air', 'stone', 'water', 'short_grass'],
 }
 # Structures a behaviour completes (golems, the wither, a nether portal).
-SCENES = {'carved_pumpkin': ['snow_golem', 'iron_golem'], 'wither_skeleton_skull': ['wither'], 'flint_and_steel': ['portal']}
+SCENES = {'carved_pumpkin': ['snow_golem', 'iron_golem', 'copper_golem', 'copper_golem'], 'wither_skeleton_skull': ['wither'],
+          'flint_and_steel': ['portal']}
+COPPER_BLOCKS = ['copper_block', 'exposed_copper', 'weathered_copper', 'oxidized_copper', 'waxed_copper_block',
+                 'waxed_exposed_copper', 'waxed_weathered_copper', 'waxed_oxidized_copper']
 # Plants that need soil (or a log) under them to exist at all.
 ROOTED = {'wheat', 'carrots', 'potatoes', 'beetroots', 'oak_sapling', 'birch_sapling', 'spruce_sapling', 'cherry_sapling',
           'mangrove_propagule', 'sweet_berry_bush', 'cocoa', 'bamboo_sapling', 'bamboo', 'pumpkin_stem', 'melon_stem',
@@ -115,7 +118,7 @@ ROOTED = {'wheat', 'carrots', 'potatoes', 'beetroots', 'oak_sapling', 'birch_sap
 BELOW = ['air', 'stone', 'water', 'rail', 'grass_block', 'soul_sand', 'dirt', 'farmland', 'netherrack']
 
 TARGETS = {
-    'iron_helmet': ['zombie', 'skeleton', 'armor_stand', 'pig'],
+    'iron_helmet': ['zombie', 'skeleton', 'armor_stand', 'pig', 'copper_golem'],
     'chainmail_helmet': ['zombie', 'armor_stand', 'villager'],
     'diamond_chestplate': ['zombie', 'armor_stand'],
     'leather_leggings': ['skeleton', 'armor_stand'],
@@ -129,11 +132,11 @@ TARGETS = {
     'white_carpet': ['llama', 'horse', 'trader_llama'],
     'red_carpet': ['llama', 'trader_llama'],
     'chest': ['donkey', 'mule', 'llama', 'horse', 'trader_llama'],
-    'carved_pumpkin': ['zombie', 'armor_stand', 'snow_golem'],
+    'carved_pumpkin': ['zombie', 'armor_stand', 'snow_golem', 'copper_golem'],
     'elytra': ['armor_stand', 'zombie'],
     'wolf_armor': ['wolf'],
     'white_harness': ['happy_ghast'],
-    'shears': ['sheep', 'sheep', 'mooshroom', 'bogged', 'snow_golem', 'sulfur_cube', 'pig', 'cow'],
+    'shears': ['sheep', 'sheep', 'mooshroom', 'bogged', 'snow_golem', 'sulfur_cube', 'pig', 'cow', 'copper_golem', 'copper_golem'],
     'brush': ['armadillo'],
     'tnt': ['sulfur_cube'],
     'flint_and_steel': ['sulfur_cube'],
@@ -189,6 +192,8 @@ def build_scene(cells, states, rng, scene, front, facing):
     if scene == 'snow_golem':
         put((x, y - 1, z), 'snow_block')
         put((x, y - 2, z), 'snow_block')
+    elif scene == 'copper_golem':
+        put((x, y - 1, z), rng.choice(COPPER_BLOCKS))
     elif scene == 'iron_golem':
         put((x, y - 1, z), 'iron_block')
         put((x, y - 2, z), 'iron_block')
@@ -296,6 +301,9 @@ def cases(facts, count, seed, only):
                         target[flag] = True
                 if target['type'] == 'minecraft:sulfur_cube' and rng.random() < 0.5:
                     target['equip'] = {'body': plain(rng.choice(SWALLOWED))}
+                if target['type'] == 'minecraft:copper_golem' and rng.random() < 0.7:
+                    # The poppy an iron golem offered sits in the antenna (saddle) slot.
+                    target['equip'] = {'saddle': plain(rng.choice(['poppy', 'poppy', 'dandelion']))}
                 # Leads: tied to an earlier target, or that target holds this one's.
                 holders = [i for i, e in enumerate(entities) if e['type'] != 'minecraft:armor_stand']
                 if holders and rng.random() < 0.3:

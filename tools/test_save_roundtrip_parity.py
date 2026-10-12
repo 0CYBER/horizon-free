@@ -176,6 +176,59 @@ def block_position(i):
     return 2 + 3 * (i % 10), -60, 2 + 3 * (i // 10)
 
 
+SCOREBOARD = [
+    'scoreboard objectives add kills totalKillCount {"text":"Kills","color":"red"}',
+    'scoreboard objectives add d dummy',
+    'scoreboard objectives add hearts dummy "Hearts"',
+    'scoreboard objectives modify hearts rendertype hearts',
+    'scoreboard objectives add t trigger',
+    'scoreboard objectives add mined minecraft.mined:minecraft.stone',
+    'scoreboard objectives modify d displayautoupdate true',
+    'scoreboard objectives modify d numberformat styled {"color":"gold","bold":true}',
+    'scoreboard objectives modify kills numberformat blank',
+    'scoreboard objectives setdisplay sidebar d',
+    'scoreboard objectives setdisplay below_name hearts',
+    'scoreboard objectives setdisplay sidebar.team.red kills',
+    'scoreboard players set #fake d 5',
+    'scoreboard players set Alex d -3',
+    'scoreboard players set Alex kills 7',
+    'scoreboard players set Alex hearts 0',
+    'scoreboard players set Steve hearts 12',
+    'scoreboard players add {uuid0} d 2',
+    'scoreboard players display name Alex d {"text":"Alexandra","italic":true}',
+    'scoreboard players display numberformat Alex hearts fixed "lots"',
+    'scoreboard players enable Alex t',
+    'scoreboard players set Steve t 3',
+    'team add red {"text":"Red Team"}',
+    'team modify red color red',
+    'team modify red prefix "[R] "',
+    'team modify red suffix {"text":" *","color":"gold"}',
+    'team modify red friendlyFire false',
+    'team modify red seeFriendlyInvisibles false',
+    'team modify red nametagVisibility hideForOtherTeams',
+    'team modify red deathMessageVisibility never',
+    'team modify red collisionRule pushOwnTeam',
+    'team join red Alex',
+    'team join red #fake',
+    'team add blue',
+    'team join blue {uuid0}',
+    'team join blue Steve',
+]
+
+
+def normalize_scoreboard(data):
+    """Each holder's scores sit in an identity-hash map in vanilla: compare them as a set."""
+    scores = data.get('data', {}).get('PlayerScores') if isinstance(data, dict) else None
+    if isinstance(scores, list):
+        order = []
+        for row in scores:
+            if row.get('Name') not in order:
+                order.append(row.get('Name'))
+        data['data']['PlayerScores'] = sorted(
+            scores, key=lambda r: (order.index(r.get('Name')), json.dumps(r, sort_keys=True, default=str)))
+    return data
+
+
 def build_world(directory):
     """Fill a fresh vanilla world; returns the failed scene commands."""
     server = Vanilla(directory)
@@ -197,6 +250,12 @@ def build_world(directory):
     for i, (kind, extra) in enumerate(scene.ENTITIES):
         command = entity_command(i, kind, extra)
         out = server.run(command)
+        if command_failed(out):
+            failed.append((command, out))
+    # A scoreboard with every kind of saved field (scoreboard.dat). No criteria that
+    # Horizon's own player (not the bot) would update while it runs.
+    for command in SCOREBOARD:
+        out = server.run(command.replace('{uuid0}', entity_uuid_text(0)))
         if command_failed(out):
             failed.append((command, out))
     server.run('time set 6000')
@@ -472,7 +531,10 @@ def compare_worlds(vanilla, horizon):
         if not b.exists():
             report.append((rel, 'present', 'missing from Horizon'))
         elif a.exists():
-            compare_dat(rel, anvil_dump.read_dat(str(a)), anvil_dump.read_dat(str(b)), report)
+            va, hb = anvil_dump.read_dat(str(a)), anvil_dump.read_dat(str(b))
+            if rel.endswith('scoreboard.dat'):
+                va, hb = normalize_scoreboard(va), normalize_scoreboard(hb)
+            compare_dat(rel, va, hb, report)
     return report
 
 

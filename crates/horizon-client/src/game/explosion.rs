@@ -191,6 +191,15 @@ impl Game<'_> {
                 [d[0] / l, d[1] / l, d[2] / l]
             }
         };
+        // `source.doTeamsAllowDamage(entity)`: the exploding mob spares its
+        // team mates when its team has no friendly fire (they are still pushed).
+        let exploding = self.combat.explosion_source;
+        let teams_allow = |g: &Self, victim: Option<&horizon_client::scoreboard::Team>| {
+            exploding.is_none_or(|id| {
+                horizon_client::scoreboard::teams_allow_damage(g.mob_team(id), victim)
+            })
+        };
+        let player_hurtable = teams_allow(self, self.player_team());
         // Player.
         if let Some(p) = self.player.as_ref() {
             let feet = [p.position.x, p.position.y, p.position.z];
@@ -217,7 +226,7 @@ impl Game<'_> {
                     && let Some(id) = self.motion.health.damage.id("minecraft:explosion")
                 {
                     // Creative players are invulnerable to explosions.
-                    if !creative {
+                    if !creative && player_hurtable {
                         hurt = p
                             .hurt(&self.motion.health, self.world.health_rules, id, amount)
                             .unwrap_or(false);
@@ -236,6 +245,7 @@ impl Game<'_> {
         // Mobs.
         let mut mobs = std::mem::take(&mut self.mobs);
         for m in mobs.iter_mut().filter(|m| m.alive()) {
+            let hurtable = teams_allow(self, self.mob_team(m.id));
             let feet = [m.position.x, m.position.y, m.position.z];
             let dist = distance(feet) / diameter;
             if dist > 1.0 {
@@ -253,7 +263,7 @@ impl Game<'_> {
                 attacker: None,
                 from: Some(center),
             };
-            if !m.damage(damage(dist, exposure), source) {
+            if hurtable && !m.damage(damage(dist, exposure), source) {
                 continue;
             }
             let dir = direction(eye);
@@ -390,17 +400,30 @@ impl Game<'_> {
         }
         let name = self.res.facts.get(state).name.clone();
         let is_tnt = &*name == "minecraft:tnt";
+        // Block.onExplosionHit: the drops copy from the block entity, which
+        // then spills its contents as the block turns to air.
+        let key = (pos[0], pos[1], pos[2]);
+        if let Some(entity) = self.world.block_entities.get(&key).cloned() {
+            let custom = self.world.block_names.get(&key).cloned();
+            self.pending.record(pos, &entity, &name, custom);
+        } else if let Some(tag) = super::spill::saved_entity(&self.world, pos) {
+            self.pending.record_saved(pos, &tag);
+        }
         if !is_tnt {
-            let drops = self.res.items.block_drops(
+            let dynamic = self.pending.dynamic(pos);
+            let drops = self.res.items.block_drops_full(
                 self.res.assets.registry,
                 state,
                 None,
+                &dynamic,
                 &mut self.world.random,
+                Some((&mut self.rand_sequences, self.level.seed)),
             );
-            for stack in drops {
+            for mut stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {
                     continue;
                 }
+                self.pending.attach(pos, &mut stack);
                 // survives_explosion / explosion_decay: 1 / radius per stack.
                 if interaction == BlockInteraction::DestroyWithDecay
                     && self.world.random.next_float() > 1.0 / radius
@@ -410,17 +433,8 @@ impl Game<'_> {
                 add_or_append_stack(stacks, stack, pos);
             }
         }
-        let contents = self.world.block_entities.remove(&(pos[0], pos[1], pos[2]));
-        let name = self
-            .res
-            .facts
-            .get(self.world.block(pos[0], pos[1], pos[2]))
-            .name
-            .clone();
+        self.pending.clear(pos);
         self.level_set(pos, self.world.air)?;
-        if let Some(entity) = contents {
-            self.release_contents(pos, entity, &name);
-        }
         if is_tnt {
             self.spawn_primed_tnt(BlockPos::new(pos[0], pos[1], pos[2]), true);
         }

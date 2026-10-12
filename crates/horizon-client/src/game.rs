@@ -6,6 +6,7 @@ mod allays;
 mod armor_stands;
 mod banners;
 mod beacon;
+mod block_entity_anims;
 mod blockctl;
 mod boats;
 mod books;
@@ -14,8 +15,10 @@ mod breezes;
 mod cartography;
 mod chat;
 mod combat;
+mod command_harness;
 mod commands;
 mod control;
+mod copper_golems;
 mod creaking;
 mod creatures;
 mod crossbow;
@@ -75,6 +78,7 @@ mod sculk;
 mod shield;
 mod sign_edit;
 mod sniffers;
+mod spill;
 mod station_control;
 mod stations;
 mod stats;
@@ -109,7 +113,7 @@ use horizon_client::{
     environment::Environment,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
-    hud_layout,
+    hud_layout, hud_overlays,
     items::{ItemStack, Items},
     keymapping::KeyAction,
     light::LightTables,
@@ -322,6 +326,10 @@ struct GameLevel<'w> {
     items: &'w Items,
     registry: &'static horizon_world::registry::BlockRegistry,
     rules: horizon_world::level::GameRules,
+    /// Block loot random sequences (`ServerLevel.getRandomSequence`).
+    rand_sequences: &'w mut horizon_client::random_sequences::RandomSequences,
+    pending: &'w mut spill::Pending,
+    spill: &'w mut spill::Spill,
 }
 impl LevelAccess for GameLevel<'_> {
     fn precipitation(&self, pos: BlockPos) -> Option<horizon_world::level::Precipitation> {
@@ -465,7 +473,26 @@ impl LevelAccess for GameLevel<'_> {
         }
     }
     fn emit(&mut self, event: LevelEvent) {
-        self.events.push(event);
+        match event {
+            // Block.dropResources draws its loot and spots right away.
+            LevelEvent::DropResources { pos, state } => self.drop_resources_now(pos, state),
+            // Block.popResource of the block's own item (tall flowers, flower beds).
+            LevelEvent::BlockEvent {
+                pos,
+                state,
+                kind: "pop_block_item",
+            } => self.pop_block_item(pos, state),
+            // ComposterBlock.extractProduce: bone meal above the composter.
+            LevelEvent::Player {
+                pos,
+                effect: PlayerEffect::DropItem(item),
+                ..
+            } => self.pop_above(pos, item),
+            event => self.events.push(event),
+        }
+    }
+    fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) -> u8 {
+        self.remove_entity(pos, old, side_effects)
     }
 }
 /// FallingBlockEntity carrying a block state.
@@ -612,7 +639,8 @@ struct Game<'a> {
     raiding: raids::Raiding,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
-    chest_open: HashMap<(i32, i32, i32), (f32, f32)>,
+    /// Client-ticked block-entity animation state (`game/block_entity_anims.rs`).
+    be_anims: horizon_client::block_entity_anim::BlockEntityAnims,
     /// Item being used (eaten): hotbar slot and ticks used.
     using: Option<(usize, u32)>,
     /// Camera.oldFovModifier / fovModifier.
@@ -635,6 +663,8 @@ struct Game<'a> {
     /// The source of a command run through /execute (the player otherwise).
     command_source: Option<commands::execute::Source>,
     titles: titles::Titles,
+    /// `Hud.toolHighlightTimer`: the selected item name.
+    tool_highlight: horizon_client::hud_overlays::ToolHighlight,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
     orbs: Vec<ExperienceOrb>,
@@ -679,6 +709,8 @@ struct Game<'a> {
     map_frame_model: frames::FrameModel,
     glow_map_frame_model: frames::FrameModel,
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
+    /// Entities of types Horizon does not simulate.
+    others: Vec<commands::OtherEntity>,
     armor_stand_assets: armor_stands::ArmorStandAssets,
     boats: Vec<boats::Boat>,
     boat_models: boats::BoatModels,
@@ -702,12 +734,13 @@ struct Game<'a> {
     /// The ender inventory (27 slots) and the ender chest showing it.
     ender_items: Vec<Option<ItemStack>>,
     ender_open: Option<(i32, i32, i32)>,
-    /// Contents of broken shulker boxes waiting for their dropped item.
-    pending_shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
-    /// Layers of broken banners waiting for their dropped item.
-    pending_banner: HashMap<[i32; 3], horizon_client::containers::Banner>,
-    /// Custom names of broken containers, for the dropped item (`copy_components`).
-    pending_names: HashMap<[i32; 3], (String, String)>,
+    /// Block entity data of broken blocks waiting for their dropped item.
+    pending: spill::Pending,
+    /// The chest each copper golem has open (`CopperGolem.openedChestPos`).
+    golem_openers: HashMap<u32, (i32, i32, i32)>,
+    /// Item entities spawned and block entities removed while the block
+    /// behaviour ran (spilled contents, popped resources).
+    spill: spill::Spill,
     /// The recipe book of the open screen (game/recipe_book.rs).
     recipe_ui: recipe_book::RecipeUi,
     /// The horse inventory (game/mount_menu.rs).
@@ -738,7 +771,9 @@ struct Game<'a> {
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     lan_acting: Option<u32>,
     /// Command feedback to forward to a guest.
-    chat_capture: Option<Vec<String>>,
+    chat_capture: Option<Vec<horizon_client::text::Text>>,
+    /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
+    cmds: commands::extra::CommandExtras,
     /// Allow Cheats: whether guests may be given commands.
     cheats: bool,
     ui: chat::UiState,
@@ -779,6 +814,13 @@ impl Dim {
             "minecraft:the_nether" => Self::Nether,
             "minecraft:the_end" => Self::End,
             _ => Self::Overworld,
+        }
+    }
+    /// `Level.getMaxY`: the dimension type's minimum y plus height, less one.
+    fn max_y(self) -> i32 {
+        match self {
+            Self::Overworld => MIN_Y + HEIGHT - 1,
+            Self::Nether | Self::End => 255,
         }
     }
 }
@@ -1078,33 +1120,36 @@ impl Game<'_> {
     }
     /// `Block.getDrops`: the block's loot table, drawing from its server random
     /// sequence (`LootContext.Builder.create`), else the level random.
-    fn block_loot(&mut self, state: BlockStateId, held: Option<&ItemStack>) -> Vec<ItemStack> {
+    fn block_loot_at(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        held: Option<&ItemStack>,
+    ) -> Vec<ItemStack> {
         let registry = self.res.assets.registry;
+        let dynamic = self.pending.dynamic(pos);
         match self.res.items.block_loot_sequence(registry, state) {
             Some(sequence) => {
                 let random = self.rand_sequences.get(&sequence, self.level.seed);
-                self.res.items.block_drops(registry, state, held, random)
+                self.res
+                    .items
+                    .block_drops_with(registry, state, held, &dynamic, random)
             }
-            None => self
-                .res
-                .items
-                .block_drops(registry, state, held, &mut self.world.random),
+            None => self.res.items.block_drops_with(
+                registry,
+                state,
+                held,
+                &dynamic,
+                &mut self.world.random,
+            ),
         }
     }
     /// Block.popResource
     fn pop_resource(&mut self, pos: [i32; 3], mut stack: ItemStack) {
-        self.attach_shulker_contents(pos, &mut stack);
-        self.attach_container_name(pos, &mut stack);
-        self.attach_banner_layers(pos, &mut stack);
+        self.pending.attach(pos, &mut stack);
         // Block.popResource: Mth.nextDouble offsets from the level random; the
         // motion is `new ItemEntity(..)`'s own, from the item's random.
-        let r = &mut self.world.random;
-        let mut offset = || -0.25 + r.next_double() * 0.5;
-        let p = [
-            f64::from(pos[0]) + 0.5 + offset(),
-            f64::from(pos[1]) + 0.5 + offset() - 0.125,
-            f64::from(pos[2]) + 0.5 + offset(),
-        ];
+        let p = spill::pop_position(&mut self.world.random, pos);
         let v = dispenser::new_item_motion();
         self.spawn_item(stack, p, v, 10);
     }
@@ -1266,8 +1311,13 @@ impl Game<'_> {
             items: &self.res.items,
             registry: self.res.assets.registry,
             rules,
+            rand_sequences: &mut self.rand_sequences,
+            pending: &mut self.pending,
+            spill: &mut self.spill,
         };
-        f(&self.res.behaviours, &mut level, &mut self.block_ticks)
+        let result = f(&self.res.behaviours, &mut level, &mut self.block_ticks);
+        self.flush_spill();
+        result
     }
     /// Level.setBlock(pos, state, UPDATE_ALL) with neighbour/shape updates.
     fn level_set(&mut self, pos: [i32; 3], state: BlockStateId) -> Result<()> {
@@ -1452,18 +1502,9 @@ impl Game<'_> {
                     };
                     self.audio.play(&name, Some(c), volume, pitch);
                 }
+                // Handled as the behaviour emits it (GameLevel::emit).
                 LevelEvent::DropResources { pos, state } => {
-                    self.jukebox_removed([pos.x, pos.y, pos.z]);
-                    if let Some(entity) = self.world.block_entities.remove(&(pos.x, pos.y, pos.z)) {
-                        let name = self.res.facts.get(state).name.clone();
-                        self.release_contents([pos.x, pos.y, pos.z], entity, &name);
-                    }
-                    let drops = self.block_loot(state, None);
-                    for d in drops {
-                        if &*d.item != "minecraft:air" {
-                            self.pop_resource([pos.x, pos.y, pos.z], d);
-                        }
-                    }
+                    self.with_level(|_, level, _| level.drop_resources_now(pos, state));
                 }
                 LevelEvent::FallingBlock { pos, state } => {
                     let p = Vec3::new(
@@ -1495,15 +1536,8 @@ impl Game<'_> {
                             self.pop_resource([pos.x, pos.y, pos.z], rest);
                         }
                     }
-                    PlayerEffect::DropItem(item) => self.pop_resource(
-                        [pos.x, pos.y + 1, pos.z],
-                        ItemStack {
-                            item,
-                            count: 1,
-                            damage: 0,
-                            extra: None,
-                        },
-                    ),
+                    // Popped as the behaviour emits it (GameLevel::emit).
+                    PlayerEffect::DropItem(_) => {}
                     PlayerEffect::EatCake => {
                         if let Some(p) = self.player.as_mut() {
                             let food = &mut p.health.food;
@@ -1561,22 +1595,6 @@ impl Game<'_> {
                     state,
                     kind: "spawn_ghastling",
                 } => self.spawn_ghastling([pos.x, pos.y, pos.z], state),
-                LevelEvent::BlockEvent {
-                    pos,
-                    state,
-                    kind: "pop_block_item",
-                } => {
-                    let item = self.res.facts.get(state).item.clone();
-                    self.pop_resource(
-                        [pos.x, pos.y, pos.z],
-                        ItemStack {
-                            item,
-                            count: 1,
-                            damage: 0,
-                            extra: None,
-                        },
-                    );
-                }
                 LevelEvent::GameEvent { pos, event, state } => {
                     self.sculk_level_event(pos, event, state)
                 }
@@ -1585,6 +1603,9 @@ impl Game<'_> {
                     state,
                     kind: "shrieker_respond",
                 } => self.shrieker_block_event(pos, state),
+                LevelEvent::BlockEntityEvent { pos, a, b, .. } => {
+                    self.block_entity_event([pos.x, pos.y, pos.z], a, b)
+                }
                 LevelEvent::GrowTree { .. }
                 | LevelEvent::PlaceFeature { .. }
                 | LevelEvent::BlockEvent { .. } => {}
@@ -1609,6 +1630,7 @@ impl Game<'_> {
             self.craft_size = 3;
         } else if &*name == "minecraft:ender_chest" {
             self.open_ender_chest(key);
+            self.container_opener_event(key, true);
             let at = [
                 f64::from(key.0) + 0.5,
                 f64::from(key.1) + 0.5,
@@ -1621,9 +1643,12 @@ impl Game<'_> {
             self.world.block_entities.entry(key).or_insert_with(|| {
                 BlockEntity::for_block(&name).unwrap_or(BlockEntity::Chest(Vec::new()))
             });
+        } else if storage::is_shulker_box(&name) && !self.shulker_can_open(pos) {
+            // ShulkerBoxBlock.canOpen: the lid has no room; nothing opens.
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
+            self.container_opener_event(key, true);
             self.post_block_game_event(
                 "minecraft:container_open",
                 [key.0, key.1, key.2],
@@ -1788,23 +1813,63 @@ impl Game<'_> {
         self.with_player_actor(|game| game.break_block_as_player(pos))
     }
     fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
+        // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
         if self.guarded_by_piglins(&facts.name) {
             self.anger_piglins(false);
         }
-        if !self.creative {
-            // Block.playerDestroy: the mined statistic and the exhaustion.
-            self.stats.add("mined", &facts.name, 1);
-            if let Some(p) = self.player.as_mut() {
-                p.health.food.exhaustion = (p.health.food.exhaustion + 0.005).min(40.0);
-            }
+        // The block entity as it was, for what the drops copy from it.
+        let key = (pos[0], pos[1], pos[2]);
+        if let Some(entity) = self.world.block_entities.get(&key).cloned() {
+            let name = self.world.block_names.get(&key).cloned();
+            self.pending.record(pos, &entity, &facts.name, name);
+        } else if let Some(tag) = spill::saved_entity(&self.world, pos) {
+            self.pending.record_saved(pos, &tag);
+        }
+        self.creaking_heart_broken(pos);
+        // playerWillDestroy and Level.removeBlock through the vanilla behaviour
+        // library: the block entity's side effects (containers spill), neighbour
+        // and shape updates, and the destroy event (particles, sound).
+        let creative = self.creative;
+        let removed = self.with_level(|b, level, ticks| {
+            b.player_destroy_block(
+                level,
+                ticks,
+                BlockPos::new(pos[0], pos[1], pos[2]),
+                creative,
+            )
+        });
+        if removed && !creative {
             let held = self.held().cloned();
+            // ItemStack.mineBlock: tools lose durability on blocks with nonzero hardness.
+            if facts.hardness > 0.0
+                && let Some(stack) = self.inventory[self.selected].clone()
+                && let Some(max) = self
+                    .res
+                    .items
+                    .get(&stack.item)
+                    .filter(|i| i.max_damage > 0 && !i.tool.is_empty())
+                    .map(|i| i.max_damage)
+            {
+                let loss = self.durability_loss(&stack, 1);
+                if let Some(stack) = self.inventory[self.selected].as_mut() {
+                    stack.damage += loss;
+                    if stack.damage >= max {
+                        self.inventory[self.selected] = None;
+                    }
+                }
+            }
             let harvest = !facts.requires_tool
                 || self.res.items.correct_for_drops(held.as_ref(), &facts.name);
             if harvest {
-                let drops = self.block_loot(state, held.as_ref());
+                // Block.playerDestroy: the mined statistic, the exhaustion and the drops.
+                self.stats.add("mined", &facts.name, 1);
+                if let Some(p) = self.player.as_mut() {
+                    p.health.food.exhaustion = (p.health.food.exhaustion + 0.005).min(40.0);
+                }
+                let drops = self.block_loot_at(pos, state, held.as_ref());
                 let silk = held
                     .as_ref()
                     .is_some_and(|h| h.enchantment_level("minecraft:silk_touch") > 0);
@@ -1829,53 +1894,8 @@ impl Game<'_> {
                     );
                 }
             }
-            // Tools lose durability on blocks with nonzero hardness.
-            if facts.hardness > 0.0
-                && let Some(stack) = self.inventory[self.selected].clone()
-                && let Some(max) = self
-                    .res
-                    .items
-                    .get(&stack.item)
-                    .filter(|i| i.max_damage > 0 && !i.tool.is_empty())
-                    .map(|i| i.max_damage)
-            {
-                let loss = self.durability_loss(&stack, 1);
-                if let Some(stack) = self.inventory[self.selected].as_mut() {
-                    stack.damage += loss;
-                    if stack.damage >= max {
-                        self.inventory[self.selected] = None;
-                    }
-                }
-            }
         }
-        let replacement = if facts.waterlogged {
-            self.res.assets.registry.default_state("minecraft:water")
-        } else {
-            None
-        }
-        .unwrap_or(self.world.air);
-        self.creaking_heart_broken(pos);
-        if let Some(entity) = self.world.block_entities.remove(&(pos[0], pos[1], pos[2])) {
-            // Containers.dropContents (shulker boxes keep theirs).
-            let name = facts.name.clone();
-            self.release_contents(pos, entity, &name);
-            if self.container == Some((pos[0], pos[1], pos[2])) {
-                self.container = None;
-                self.screen = Screen::Playing;
-            }
-        }
-        let _ = replacement;
-        // Block.playerDestroy through the vanilla behaviour library: removal,
-        // neighbour and shape updates, and the destroy event (particles, sound).
-        let creative = self.creative;
-        self.with_level(|b, level, ticks| {
-            b.player_destroy_block(
-                level,
-                ticks,
-                BlockPos::new(pos[0], pos[1], pos[2]),
-                creative,
-            );
-        });
+        self.pending.clear(pos);
         self.process_level_events()?;
         Ok(())
     }
@@ -2500,6 +2520,8 @@ impl Game<'_> {
         }
         self.apply_totem();
         self.update_totem_ready();
+        self.tick_command_extras();
+        let camera_eye = self.camera_eye_height();
         if self.riding.is_some() && self.player.is_some() {
             let playing = self.screen == Screen::Playing;
             let held = |k| playing && self.keys.contains(&k);
@@ -2597,7 +2619,7 @@ impl Game<'_> {
         }
         let feet = [player.position.x, player.position.y, player.position.z];
         self.previous_eye = self.eye;
-        self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
+        self.eye += (camera_eye.unwrap_or(player.dimensions.eye_height) - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         self.tick_avatar(before, riding);
         self.record_combat(&events);
@@ -2707,7 +2729,16 @@ impl Game<'_> {
         self.tick_effects();
         self.tick_burning();
         self.tick_using();
-        self.titles.tick();
+        self.tick_hud();
+        // The player's digging comes in with its packets, before the level
+        // ticks; ServerLevel.tick then runs the scheduled and random block
+        // ticks before any entity, so what they drop or spawn (dispensed
+        // items, popped crops) moves on the tick it appears, as in vanilla.
+        self.tick_mining()?;
+        self.postprocess_chunks()?;
+        if running {
+            self.tick_blocks()?;
+        }
         if running {
             self.tick_paintings();
             self.tick_item_frames();
@@ -2722,13 +2753,13 @@ impl Game<'_> {
             self.tick_tridents();
             self.tick_rockets();
         }
-        self.tick_mining()?;
         if running {
             self.tick_items();
         }
         self.spawn_loaded_entities();
         if running {
             self.tick_mobs()?;
+            self.tick_copper_golems();
             self.tick_experience();
         }
         self.tick_lan();
@@ -2738,9 +2769,7 @@ impl Game<'_> {
         if running {
             self.tick_end()?;
         }
-        self.postprocess_chunks()?;
         if running {
-            self.tick_blocks()?;
             self.tick_falling()?;
             self.tick_tnt()?;
         }
@@ -2749,17 +2778,10 @@ impl Game<'_> {
             self.tick_sculk()?;
             self.tick_brewing_stands()?;
         }
-        if let Some(r) = &self.renderer {
-            let eye = self.player.as_ref().map(|p| {
-                [
-                    p.position.x,
-                    p.position.y + f64::from(self.eye),
-                    p.position.z,
-                ]
-            });
-            self.res.block_entity_render.tick(r.block_entities(), eye);
-        }
         if running {
+            // ClientLevel.tickBlockEntities (not while paused or frozen):
+            // chest lids, books, shulker boxes, bells, conduits, heads.
+            self.tick_block_entity_anims();
             self.tick_particles();
         }
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
@@ -2854,26 +2876,30 @@ impl Game<'_> {
         // `GuiGraphics.renderItem`: the resolved item model (tints, foil and
         // special renderers included), then the decorations.
         self.draw_item_model(batch, stack, x, y);
-        let atlas = &self.res.atlas;
-        if stack.count > 1 {
-            let text = stack.count.to_string();
-            let w = HudBatch::text_width(atlas, &text);
-            batch.text(atlas, &text, x + 17.0 - w, y + 9.0, u32::MAX, true);
-        }
-        if let Some(info) = self.res.items.get(&stack.item)
-            && info.max_damage > 0
-            && stack.damage > 0
-        {
-            let f = 1.0 - stack.damage as f32 / info.max_damage as f32;
-            let width = (13.0 * f).round();
-            let hue = f / 3.0;
-            let (r, g) = (
-                (255.0 * (1.0 - hue * 3.0).clamp(0.0, 1.0)) as u8,
-                (255.0 * (hue * 3.0).clamp(0.0, 1.0)) as u8,
-            );
-            batch.fill(atlas, x + 2.0, y + 13.0, 13.0, 2.0, rgba(0, 0, 0, 255));
-            batch.fill(atlas, x + 2.0, y + 13.0, width, 1.0, rgba(r, g, 0, 255));
-        }
+        // GuiGraphicsExtractor.itemDecorations, laid out at the origin and
+        // moved to (x, y). Horizon tracks no item cooldowns to shade yet.
+        let max_damage = self
+            .res
+            .items
+            .get(&stack.item)
+            .map_or(0, |info| info.max_damage as i32);
+        let decorations = hud_overlays::ItemDecorations {
+            count: stack.count,
+            count_text: None,
+            bar: hud_overlays::damage_bar(stack.damage as i32, max_damage),
+            cooldown: 0.0,
+        };
+        let mut draws = vec![hud_layout::GuiDraw::Push(vec![
+            hud_layout::PoseOp::Translate(x, y),
+        ])];
+        draws.extend(hud_overlays::item_decorations(
+            0,
+            0,
+            &decorations,
+            &self.res.atlas.font,
+        ));
+        draws.push(hud_layout::GuiDraw::Pop);
+        hud_layout::paint(batch, &self.res.atlas, &draws);
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
@@ -2941,8 +2967,12 @@ impl Game<'_> {
         }
         self.draw_effect_icons(&mut batch);
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
-        self.draw_boss_bar(&mut batch);
-        self.draw_custom_bossbars(&mut batch, 12.0 + 19.0 * self.builtin_bar_count() as f32);
+        self.draw_boss_bars(&mut batch);
+        // Hud.extractSleepOverlay, under the sidebar, titles and chat.
+        if let Some((_, ticks)) = self.sleeping {
+            let draws = hud_overlays::sleep_overlay(wi, hi, ticks as i32);
+            hud_layout::paint(&mut batch, &self.res.atlas, &draws);
+        }
         self.draw_titles(&mut batch);
         self.draw_scoreboard(&mut batch);
         self.draw_subtitles(&mut batch);
@@ -3011,6 +3041,9 @@ impl Game<'_> {
             };
             let draws = self.health_hud.layout(&inputs, wi, hi);
             hud_layout::paint(&mut batch, atlas, &draws);
+        }
+        if !spectator {
+            self.draw_selected_name(&mut batch, !self.creative);
         }
         let atlas = &self.res.atlas;
         if self.debug {
@@ -3113,12 +3146,6 @@ impl Game<'_> {
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
         self.draw_chat(&mut batch);
-        let atlas = &self.res.atlas;
-        if let Some((_, ticks)) = self.sleeping {
-            // Gui sleep overlay fading in over 100 ticks.
-            let a = ((ticks as f32 / 100.0).min(1.0) * 204.0) as u8;
-            batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 32, a));
-        }
         match self.screen {
             Screen::Paused => self.draw_pause_menu(&mut batch),
             Screen::Dead => self.draw_death_screen(&mut batch),
@@ -3470,6 +3497,7 @@ impl Game<'_> {
         }
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
+            self.container_opener_event(key, false);
             self.post_block_game_event(
                 "minecraft:container_close",
                 [key.0, key.1, key.2],
@@ -4115,14 +4143,8 @@ impl Game<'_> {
         }
         // Block entities (BlockEntityRenderers): chests, shulker boxes, banners, skulls...
         if let Some(r) = &self.renderer {
-            let lid = |p: [i32; 3]| {
-                let (prev, cur) = self
-                    .chest_open
-                    .get(&(p[0], p[1], p[2]))
-                    .copied()
-                    .unwrap_or((0.0, 0.0));
-                prev + (cur - prev) * alpha as f32
-            };
+            let lid = |p: [i32; 3]| self.chest_lid(p, alpha as f32);
+            let anim = |p: [i32; 3]| self.block_anim(p, alpha as f32);
             let (view_yaw, view_pitch) =
                 if self.camera_type == perspective::CameraType::ThirdPersonFront {
                     (self.yaw + 180.0, -self.pitch)
@@ -4138,10 +4160,11 @@ impl Game<'_> {
                     -view_pitch.to_radians(),
                     0.0,
                 ),
-                anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
+                anim: &anim,
                 texts: None,
                 partial: alpha as f32,
                 game_time: self.world.game_time,
+                max_y: self.dim.max_y(),
                 world: &self.world,
                 sprites: &self.res.atlas.sprites,
                 nether: self.dim == Dim::Nether,
@@ -4603,20 +4626,6 @@ impl Game<'_> {
         self.tick_jukeboxes();
         self.tick_beacons();
         self.tick_creaking_hearts()?;
-        // ChestLidController: 0.1 per tick towards open/closed.
-        if let Some(key) = self.container {
-            self.chest_open.entry(key).or_insert((0.0, 0.0));
-        }
-        let open = self.container;
-        self.chest_open.retain(|k, (prev, cur)| {
-            *prev = *cur;
-            *cur = if Some(*k) == open {
-                (*cur + 0.1).min(1.0)
-            } else {
-                (*cur - 0.1).max(0.0)
-            };
-            *cur > 0.0 || *prev > 0.0
-        });
         let mut lit_changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {
             if let BlockEntity::Furnace(f) = entity
@@ -5001,6 +5010,11 @@ impl Game<'_> {
         self.restore_effects();
         self.mining = None;
         self.container = None;
+        let kinds = std::mem::take(&mut self.be_anims.kinds);
+        self.be_anims = horizon_client::block_entity_anim::BlockEntityAnims {
+            kinds,
+            ..Default::default()
+        };
         self.carried = None;
         self.using = None;
         self.screen = Screen::Playing;
@@ -5961,25 +5975,35 @@ impl Game<'_> {
         Ok(false)
     }
     /// ExperienceOrb.award: split into vanilla orb sizes.
+    /// `ExperienceOrb.award`: orbs of the largest sizes; each draws the id
+    /// `tryMergeToExisting` compares from the level random, then moves with
+    /// its own random.
     fn spawn_orbs(&mut self, at: [f64; 3], mut value: u32) {
         while value > 0 {
             let v = ExperienceOrb::split(value);
             value -= v;
-            let r = &mut self.world.random;
-            let p = Vec3::new(at[0], at[1], at[2]);
-            self.orbs.push(ExperienceOrb {
-                position: p,
-                previous: p,
-                velocity: Vec3::new(
-                    (r.next_double() * 0.2 - 0.1) * 2.0,
-                    r.next_double() * 0.2 * 2.0,
-                    (r.next_double() * 0.2 - 0.1) * 2.0,
-                ),
-                value: v,
-                age: 0,
-                on_ground: false,
-            });
+            let _merge_id = self.world.random.next_int_bound(40);
+            self.add_orb(at, v);
         }
+    }
+    /// `new ExperienceOrb(level, pos, Vec3.ZERO, value)`: yaw and motion from
+    /// the orb's own random.
+    fn add_orb(&mut self, at: [f64; 3], value: u32) {
+        let mut r = dispenser::entity_random();
+        let _yaw = r.next_float();
+        let p = Vec3::new(at[0], at[1], at[2]);
+        self.orbs.push(ExperienceOrb {
+            position: p,
+            previous: p,
+            velocity: Vec3::new(
+                (r.next_double() * 0.2 - 0.1) * 2.0,
+                r.next_double() * 0.2 * 2.0,
+                (r.next_double() * 0.2 - 0.1) * 2.0,
+            ),
+            value,
+            age: 0,
+            on_ground: false,
+        });
     }
     /// DropExperienceBlock / RedStoneOreBlock / SculkBlock experience ranges.
     fn block_experience(&mut self, name: &str) -> u32 {
@@ -7079,6 +7103,14 @@ impl Game<'_> {
             hand: &hand,
             screen: &screen,
             game_time: self.world.game_time as f32,
+            shader_game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
+            end_portal_sprites: ["environment/end_sky", "entity/end_portal/end_portal"].map(|n| {
+                self.res
+                    .atlas
+                    .sprites
+                    .get(n)
+                    .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0])
+            }),
             ticks: self.ticks,
             darkness: self.darkness_lighting(alpha as f32),
             night_vision: self.night_vision_intensity(),
@@ -8035,7 +8067,11 @@ pub fn run() -> Result<()> {
         raiding: Default::default(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
-        chest_open: HashMap::new(),
+        be_anims: {
+            let mut anims = horizon_client::block_entity_anim::BlockEntityAnims::default();
+            anims.classify(registry_owner.registry);
+            anims
+        },
         using: None,
         view: Default::default(),
         limiter: horizon_client::window::FramerateLimiter::new(0),
@@ -8048,6 +8084,7 @@ pub fn run() -> Result<()> {
         shield_cooldown: 0,
         command_source: None,
         titles: Default::default(),
+        tool_highlight: Default::default(),
         applied_modifiers: Vec::new(),
         experience: Experience::default(),
         orbs: Vec::new(),
@@ -8083,6 +8120,7 @@ pub fn run() -> Result<()> {
         map_frame_model: frames::bake_frame(&root, "item_frame_map"),
         glow_map_frame_model: frames::bake_frame(&root, "glow_item_frame_map"),
         armor_stands: Vec::new(),
+        others: Vec::new(),
         armor_stand_assets: armor_stands::ArmorStandAssets::load(&root),
         boats: Vec::new(),
         boat_models: boats::BoatModels::load(&root),
@@ -8101,9 +8139,9 @@ pub fn run() -> Result<()> {
         riding: None,
         ender_items: vec![None; 27],
         ender_open: None,
-        pending_shulker: HashMap::new(),
-        pending_banner: HashMap::new(),
-        pending_names: HashMap::new(),
+        pending: Default::default(),
+        golem_openers: HashMap::new(),
+        spill: Default::default(),
         recipe_ui: Default::default(),
         mount_menu: Default::default(),
         hook: None,
@@ -8126,6 +8164,7 @@ pub fn run() -> Result<()> {
         lan_events: Vec::new(),
         lan_acting: None,
         chat_capture: None,
+        cmds: Default::default(),
         cheats: true,
         ui: Default::default(),
         combat: Default::default(),
@@ -8171,6 +8210,12 @@ pub fn run() -> Result<()> {
             game.open_world(&folder, None, Some(seed), creative)?;
         }
         None => game.title = Some(Title::new(std::env::current_dir()?.join("saves"))),
+    }
+    if let (Some(script), Some(output)) = (
+        std::env::var_os("HORIZON_COMMAND_SCRIPT"),
+        std::env::var_os("HORIZON_COMMAND_OUTPUT"),
+    ) {
+        return game.run_command_harness(script.as_ref(), output.as_ref());
     }
     EventLoop::new()?.run_app(&mut game)?;
     if let Some(path) = &game.options.report {

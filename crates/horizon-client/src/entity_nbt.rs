@@ -407,7 +407,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         }
         // Skeletons are spawned holding a bow (finalizeSpawn); a mob loaded
         // from NBT keeps only its saved equipment.
-        "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged" if raw.is_none() => {
+        "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged"
+            if raw.is_none() && m.extra.main_hand.as_deref() == Some("minecraft:bow") =>
+        {
             map.entry("equipment".into()).or_insert_with(|| {
                 Tag::compound([(
                     "mainhand",
@@ -429,6 +431,17 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             for (key, value) in [("Color", Tag::Byte(0)), ("Sheared", Tag::Byte(0))] {
                 map.entry(key.into()).or_insert(value);
             }
+        }
+        // CopperGolem.addAdditionalSaveData.
+        "minecraft:copper_golem" => {
+            map.insert(
+                "next_weather_age".into(),
+                Tag::Long(m.extra.vector[0] as i64),
+            );
+            map.insert(
+                "weather_state".into(),
+                string(crate::mobs::copper_golem::WEATHER[m.extra.variant.min(3) as usize]),
+            );
         }
         _ => {}
     }
@@ -736,6 +749,21 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     }
     if m.species() == crate::mobs::Species::Sniffer {
         crate::mobs::sniffer::from_nbt(&mut m, tag);
+    }
+    if m.species() == crate::mobs::Species::CopperGolem {
+        // CopperGolem.readAdditionalSaveData: -1 (unset) when missing.
+        m.extra.vector[0] = match tag.get("next_weather_age") {
+            Some(Tag::Long(v)) => *v as f64,
+            _ => -1.0,
+        };
+        let weather = match tag.get("weather_state") {
+            Some(Tag::String(s)) => s.to_string_lossy(),
+            _ => String::new(),
+        };
+        m.extra.variant = crate::mobs::copper_golem::WEATHER
+            .iter()
+            .position(|w| *w == weather)
+            .unwrap_or(0) as u8;
     }
     m.extra.leash_pending = crate::mobs::leash::pending_from_nbt(tag.get("leash"));
     if m.species() == crate::mobs::Species::Warden {
@@ -1117,6 +1145,25 @@ pub fn armor_stand_to_nbt(a: &ArmorStand, uuid: [i32; 4], raw: Option<&Tag>) -> 
         && !map.contains_key(&horizon_world::nbt::JavaString::from("Health"))
     {
         put(&mut tag, "Health", Tag::Float(20f32.to_bits()));
+    }
+    // LivingEntity.addAdditionalSaveData and ArmorStand's own fields.
+    if let Tag::Compound(map) = &mut tag {
+        for (key, value) in [
+            ("HurtTime", Tag::Short(0)),
+            ("DeathTime", Tag::Short(0)),
+            ("AbsorptionAmount", Tag::Float(0)),
+            ("FallFlying", Tag::Byte(0)),
+            ("current_impulse_context_reset_grace_time", Tag::Int(0)),
+            ("attributes", Tag::List(Vec::new())),
+            (
+                "Brain",
+                Tag::compound([("memories", Tag::Compound(Compound::new()))]),
+            ),
+            ("DisabledSlots", Tag::Int(0)),
+            ("Pose", Tag::Compound(Compound::new())),
+        ] {
+            map.entry(key.into()).or_insert(value);
+        }
     }
     tag
 }
