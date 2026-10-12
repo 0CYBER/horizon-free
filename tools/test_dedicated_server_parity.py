@@ -254,6 +254,15 @@ def main():
         server.wait_for(r'Done \(')
         server.console('gamerule respawn_radius 0')
         server.wait_for(r'respawn_radius', timeout=30)
+        # Vanilla keeps no spawn chunks: force-load the area the client is
+        # sent and its neighbours (the console stands at the world spawn) so
+        # both servers load full chunks instead of finishing proto-chunks.
+        server.console('forceload add ~-80 ~-80 ~80 ~80')
+        server.wait_for(r'chunks in the Overworld are now force loaded|forceloaded|force loaded', timeout=60)
+        time.sleep(20)
+        server.console('forceload remove all')
+        server.console('save-all flush')
+        server.wait_for(r'Saved the game', timeout=120)
     finally:
         server.stop()
     world = generate / 'world'

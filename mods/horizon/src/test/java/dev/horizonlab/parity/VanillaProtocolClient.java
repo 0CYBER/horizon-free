@@ -294,7 +294,7 @@ public final class VanillaProtocolClient {
             }
             return b.append('}').toString();
         }
-        return s.replaceAll("@[0-9a-f]{4,}", "@");
+        return s.replaceAll("\\$\\$Lambda/0x[0-9a-f]+@", "\\$\\$Lambda@").replaceAll("@[0-9a-f]{4,}", "@");
     }
 
     private void record(String section, String line) {
@@ -519,11 +519,31 @@ public final class VanillaProtocolClient {
      * loaded with their saved light, which test_light_parity covers.
      */
     private static String chunkHash(ClientboundLevelChunkWithLightPacket p) {
-        RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), ParityData.access);
-        ClientboundLevelChunkPacketData.STREAM_CODEC.encode(buf, p.chunkData());
-        byte[] bytes = new byte[buf.readableBytes()];
-        buf.readBytes(bytes);
-        return sha(bytes);
+        var data = p.chunkData();
+        var heightmaps = new TreeMap<String, String>();
+        data.getHeightmaps().forEach((k, v) -> heightmaps.put(k.getSerializedName(), java.util.Arrays.toString(v)));
+        FriendlyByteBuf buf = data.getReadBuffer();
+        byte[] sections = new byte[buf.readableBytes()];
+        buf.getBytes(buf.readerIndex(), sections);
+        // What the sections hold, apart from how their palettes encode it.
+        FriendlyByteBuf copy = new FriendlyByteBuf(Unpooled.wrappedBuffer(sections));
+        var factory = PalettedContainerFactory.create(ParityData.access);
+        StringBuilder content = new StringBuilder();
+        while (copy.isReadable()) {
+            LevelChunkSection section = new LevelChunkSection(factory);
+            section.read(copy);
+            for (int y = 0; y < 16; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
+                content.append(net.minecraft.world.level.block.Block.getId(section.getBlockState(x, y, z))).append(',');
+            }
+            for (int y = 0; y < 4; y++) for (int z = 0; z < 4; z++) for (int x = 0; x < 4; x++) {
+                content.append(section.getNoiseBiome(x, y, z).getRegisteredName()).append(',');
+            }
+        }
+        StringBuilder entities = new StringBuilder();
+        data.forEachBlockEntityTag(p.x(), p.z(), (pos, type, tag) -> entities.append(pos.toShortString()).append(' ')
+            .append(net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(type)).append(' ').append(tag).append(';'));
+        return "c" + sha(content.toString().getBytes()).substring(0, 8) + "s" + sha(sections).substring(0, 8) + "h" + sha(heightmaps.toString().getBytes()).substring(0, 8) + "e"
+            + sha(entities.toString().getBytes()).substring(0, 8);
     }
 
     /** The light layers a chunk has, sky then block (with data or empty). */
@@ -623,6 +643,8 @@ public final class VanillaProtocolClient {
             return text(r.packet).replaceAll("playerId=-?\\d+", "playerId=_").replaceAll("levels=\\[(ResourceKey\\[[^\\]]*\\](, )?)*\\]", "levels=" + levels);
         }
         if (t.equals("minecraft:set_time") || t.equals("minecraft:keep_alive") || t.equals("minecraft:ping")) return "";
+        // The tree is compared below, as sets: the children's order is vanilla's registration order.
+        if (t.equals("minecraft:commands")) return "";
         if (t.equals("minecraft:set_entity_data")) {
             return text(((net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket) r.packet).packedItems());
         }
