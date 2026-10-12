@@ -15,6 +15,7 @@ mod fixes_a;
 mod fixes_b;
 mod fixes_c;
 mod fixes_cliffs;
+mod fixes_mid;
 mod fixes_old;
 mod items;
 pub mod json;
@@ -177,6 +178,7 @@ type FixFn = fn(&mut Cx);
 /// Every ported fix (from the 1.19 schemas on), in DataFixers order.
 fn fixes() -> Vec<(Key, FixFn)> {
     let mut out = Vec::new();
+    fixes_mid::register(&mut out);
     fixes_cliffs::register(&mut out);
     fixes_old::register(&mut out);
     fixes_a::register(&mut out);

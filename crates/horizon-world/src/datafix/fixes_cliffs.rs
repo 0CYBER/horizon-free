@@ -21,10 +21,16 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     }));
     out.push((key(2690, 0), |cx| cx.rename(Ty::ItemName, renamer(COPPER))));
     out.push((key(2690, 0), |cx| block_rename(cx, COPPER)));
-    out.push((key(2691, 0), |cx| cx.rename(Ty::ItemName, renamer(WAXED_COPPER))));
+    out.push((key(2691, 0), |cx| {
+        cx.rename(Ty::ItemName, renamer(WAXED_COPPER))
+    }));
     out.push((key(2691, 0), |cx| block_rename(cx, WAXED_COPPER)));
-    out.push((key(2693, 0), |cx| add_flag(cx, "has_increased_height_already", false)));
-    out.push((key(2696, 0), |cx| cx.rename(Ty::ItemName, renamer(GRIMSTONE))));
+    out.push((key(2693, 0), |cx| {
+        add_flag(cx, "has_increased_height_already", false)
+    }));
+    out.push((key(2696, 0), |cx| {
+        cx.rename(Ty::ItemName, renamer(GRIMSTONE))
+    }));
     out.push((key(2696, 0), |cx| block_rename(cx, GRIMSTONE)));
     out.push((key(2700, 0), |cx| {
         block_rename(
@@ -37,20 +43,28 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     }));
     out.push((key(2701, 0), feature_pool_elements));
     out.push((key(2702, 0), arrow_pickup));
-    out.push((key(2707, 0), |cx| add_flag(cx, "has_increased_height_already", true)));
+    out.push((key(2707, 0), |cx| {
+        add_flag(cx, "has_increased_height_already", true)
+    }));
     out.push((key(2710, 0), |cx| {
         stats_rename(cx, &[("minecraft:play_one_minute", "minecraft:play_time")])
     }));
     out.push((key(2717, 0), |cx| {
         cx.rename(
             Ty::ItemName,
-            renamer(&[("minecraft:azalea_leaves_flowers", "minecraft:flowering_azalea_leaves")]),
+            renamer(&[(
+                "minecraft:azalea_leaves_flowers",
+                "minecraft:flowering_azalea_leaves",
+            )]),
         )
     }));
     out.push((key(2717, 0), |cx| {
         block_rename(
             cx,
-            &[("minecraft:azalea_leaves_flowers", "minecraft:flowering_azalea_leaves")],
+            &[(
+                "minecraft:azalea_leaves_flowers",
+                "minecraft:flowering_azalea_leaves",
+            )],
         )
     }));
     out.push((key(2825, 0), |cx| {
@@ -372,53 +386,161 @@ fn cauldron_rename(cx: &mut Cx) {
 }
 
 const COPPER: &[(&str, &str)] = &[
-    ("minecraft:weathered_copper_block", "minecraft:oxidized_copper_block"),
-    ("minecraft:semi_weathered_copper_block", "minecraft:weathered_copper_block"),
-    ("minecraft:lightly_weathered_copper_block", "minecraft:exposed_copper_block"),
-    ("minecraft:weathered_cut_copper", "minecraft:oxidized_cut_copper"),
-    ("minecraft:semi_weathered_cut_copper", "minecraft:weathered_cut_copper"),
-    ("minecraft:lightly_weathered_cut_copper", "minecraft:exposed_cut_copper"),
-    ("minecraft:weathered_cut_copper_stairs", "minecraft:oxidized_cut_copper_stairs"),
-    ("minecraft:semi_weathered_cut_copper_stairs", "minecraft:weathered_cut_copper_stairs"),
-    ("minecraft:lightly_weathered_cut_copper_stairs", "minecraft:exposed_cut_copper_stairs"),
-    ("minecraft:weathered_cut_copper_slab", "minecraft:oxidized_cut_copper_slab"),
-    ("minecraft:semi_weathered_cut_copper_slab", "minecraft:weathered_cut_copper_slab"),
-    ("minecraft:lightly_weathered_cut_copper_slab", "minecraft:exposed_cut_copper_slab"),
-    ("minecraft:waxed_semi_weathered_copper", "minecraft:waxed_weathered_copper"),
-    ("minecraft:waxed_lightly_weathered_copper", "minecraft:waxed_exposed_copper"),
-    ("minecraft:waxed_semi_weathered_cut_copper", "minecraft:waxed_weathered_cut_copper"),
-    ("minecraft:waxed_lightly_weathered_cut_copper", "minecraft:waxed_exposed_cut_copper"),
-    ("minecraft:waxed_semi_weathered_cut_copper_stairs", "minecraft:waxed_weathered_cut_copper_stairs"),
-    ("minecraft:waxed_lightly_weathered_cut_copper_stairs", "minecraft:waxed_exposed_cut_copper_stairs"),
-    ("minecraft:waxed_semi_weathered_cut_copper_slab", "minecraft:waxed_weathered_cut_copper_slab"),
-    ("minecraft:waxed_lightly_weathered_cut_copper_slab", "minecraft:waxed_exposed_cut_copper_slab"),
+    (
+        "minecraft:weathered_copper_block",
+        "minecraft:oxidized_copper_block",
+    ),
+    (
+        "minecraft:semi_weathered_copper_block",
+        "minecraft:weathered_copper_block",
+    ),
+    (
+        "minecraft:lightly_weathered_copper_block",
+        "minecraft:exposed_copper_block",
+    ),
+    (
+        "minecraft:weathered_cut_copper",
+        "minecraft:oxidized_cut_copper",
+    ),
+    (
+        "minecraft:semi_weathered_cut_copper",
+        "minecraft:weathered_cut_copper",
+    ),
+    (
+        "minecraft:lightly_weathered_cut_copper",
+        "minecraft:exposed_cut_copper",
+    ),
+    (
+        "minecraft:weathered_cut_copper_stairs",
+        "minecraft:oxidized_cut_copper_stairs",
+    ),
+    (
+        "minecraft:semi_weathered_cut_copper_stairs",
+        "minecraft:weathered_cut_copper_stairs",
+    ),
+    (
+        "minecraft:lightly_weathered_cut_copper_stairs",
+        "minecraft:exposed_cut_copper_stairs",
+    ),
+    (
+        "minecraft:weathered_cut_copper_slab",
+        "minecraft:oxidized_cut_copper_slab",
+    ),
+    (
+        "minecraft:semi_weathered_cut_copper_slab",
+        "minecraft:weathered_cut_copper_slab",
+    ),
+    (
+        "minecraft:lightly_weathered_cut_copper_slab",
+        "minecraft:exposed_cut_copper_slab",
+    ),
+    (
+        "minecraft:waxed_semi_weathered_copper",
+        "minecraft:waxed_weathered_copper",
+    ),
+    (
+        "minecraft:waxed_lightly_weathered_copper",
+        "minecraft:waxed_exposed_copper",
+    ),
+    (
+        "minecraft:waxed_semi_weathered_cut_copper",
+        "minecraft:waxed_weathered_cut_copper",
+    ),
+    (
+        "minecraft:waxed_lightly_weathered_cut_copper",
+        "minecraft:waxed_exposed_cut_copper",
+    ),
+    (
+        "minecraft:waxed_semi_weathered_cut_copper_stairs",
+        "minecraft:waxed_weathered_cut_copper_stairs",
+    ),
+    (
+        "minecraft:waxed_lightly_weathered_cut_copper_stairs",
+        "minecraft:waxed_exposed_cut_copper_stairs",
+    ),
+    (
+        "minecraft:waxed_semi_weathered_cut_copper_slab",
+        "minecraft:waxed_weathered_cut_copper_slab",
+    ),
+    (
+        "minecraft:waxed_lightly_weathered_cut_copper_slab",
+        "minecraft:waxed_exposed_cut_copper_slab",
+    ),
 ];
 
 const WAXED_COPPER: &[(&str, &str)] = &[
     ("minecraft:waxed_copper", "minecraft:waxed_copper_block"),
-    ("minecraft:oxidized_copper_block", "minecraft:oxidized_copper"),
-    ("minecraft:weathered_copper_block", "minecraft:weathered_copper"),
+    (
+        "minecraft:oxidized_copper_block",
+        "minecraft:oxidized_copper",
+    ),
+    (
+        "minecraft:weathered_copper_block",
+        "minecraft:weathered_copper",
+    ),
     ("minecraft:exposed_copper_block", "minecraft:exposed_copper"),
 ];
 
 const GRIMSTONE: &[(&str, &str)] = &[
     ("minecraft:grimstone", "minecraft:deepslate"),
-    ("minecraft:grimstone_slab", "minecraft:cobbled_deepslate_slab"),
-    ("minecraft:grimstone_stairs", "minecraft:cobbled_deepslate_stairs"),
-    ("minecraft:grimstone_wall", "minecraft:cobbled_deepslate_wall"),
-    ("minecraft:polished_grimstone", "minecraft:polished_deepslate"),
-    ("minecraft:polished_grimstone_slab", "minecraft:polished_deepslate_slab"),
-    ("minecraft:polished_grimstone_stairs", "minecraft:polished_deepslate_stairs"),
-    ("minecraft:polished_grimstone_wall", "minecraft:polished_deepslate_wall"),
+    (
+        "minecraft:grimstone_slab",
+        "minecraft:cobbled_deepslate_slab",
+    ),
+    (
+        "minecraft:grimstone_stairs",
+        "minecraft:cobbled_deepslate_stairs",
+    ),
+    (
+        "minecraft:grimstone_wall",
+        "minecraft:cobbled_deepslate_wall",
+    ),
+    (
+        "minecraft:polished_grimstone",
+        "minecraft:polished_deepslate",
+    ),
+    (
+        "minecraft:polished_grimstone_slab",
+        "minecraft:polished_deepslate_slab",
+    ),
+    (
+        "minecraft:polished_grimstone_stairs",
+        "minecraft:polished_deepslate_stairs",
+    ),
+    (
+        "minecraft:polished_grimstone_wall",
+        "minecraft:polished_deepslate_wall",
+    ),
     ("minecraft:grimstone_tiles", "minecraft:deepslate_tiles"),
-    ("minecraft:grimstone_tile_slab", "minecraft:deepslate_tile_slab"),
-    ("minecraft:grimstone_tile_stairs", "minecraft:deepslate_tile_stairs"),
-    ("minecraft:grimstone_tile_wall", "minecraft:deepslate_tile_wall"),
+    (
+        "minecraft:grimstone_tile_slab",
+        "minecraft:deepslate_tile_slab",
+    ),
+    (
+        "minecraft:grimstone_tile_stairs",
+        "minecraft:deepslate_tile_stairs",
+    ),
+    (
+        "minecraft:grimstone_tile_wall",
+        "minecraft:deepslate_tile_wall",
+    ),
     ("minecraft:grimstone_bricks", "minecraft:deepslate_bricks"),
-    ("minecraft:grimstone_brick_slab", "minecraft:deepslate_brick_slab"),
-    ("minecraft:grimstone_brick_stairs", "minecraft:deepslate_brick_stairs"),
-    ("minecraft:grimstone_brick_wall", "minecraft:deepslate_brick_wall"),
-    ("minecraft:chiseled_grimstone", "minecraft:chiseled_deepslate"),
+    (
+        "minecraft:grimstone_brick_slab",
+        "minecraft:deepslate_brick_slab",
+    ),
+    (
+        "minecraft:grimstone_brick_stairs",
+        "minecraft:deepslate_brick_stairs",
+    ),
+    (
+        "minecraft:grimstone_brick_wall",
+        "minecraft:deepslate_brick_wall",
+    ),
+    (
+        "minecraft:chiseled_grimstone",
+        "minecraft:chiseled_deepslate",
+    ),
 ];
 
 /// `SavedDataFeaturePoolElementFix`: the feature of jigsaw pieces' feature pool
@@ -446,7 +568,9 @@ fn feature_pool_elements(cx: &mut Cx) {
                     return child;
                 }
                 let element = child.get("pool_element");
-                let is_feature = element.and_then(|e| as_str(e.get("element_type"))).as_deref()
+                let is_feature = element
+                    .and_then(|e| as_str(e.get("element_type")))
+                    .as_deref()
                     == Some("minecraft:feature_pool_element");
                 if is_feature
                     && let Some(f) = child
