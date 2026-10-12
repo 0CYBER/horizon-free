@@ -2,7 +2,6 @@
 //! campfire smoke and rain splashes (`ClientLevel.tickWeatherEffects`).
 use super::{Dim, Game};
 use horizon_client::fog::{FogData, FogInputs, FogType, fog_type, update_rain_fog};
-use horizon_client::screen_effects::{ScreenInputs, ScreenQuad, lightmap_brightness};
 use horizon_client::{
     animate_tick::{AnimateContext, animate_tick, campfire_particles},
     biome::Biomes,
@@ -10,6 +9,10 @@ use horizon_client::{
     chunk::{HEIGHT, MIN_Y},
     particles::{ParticleLevel, ParticleOptions, ParticleType},
     world::World,
+};
+use horizon_client::{
+    hud_overlays,
+    screen_effects::{ScreenInputs, ScreenQuad, lightmap_brightness},
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
 
@@ -140,12 +143,33 @@ impl Game<'_> {
             fog_type(&self.world, &self.res.facts, eye, self.forward()) == FogType::Water;
         let water =
             (in_water && !spectator).then(|| (self.eye_brightness(eye), self.yaw, self.pitch));
-        let camera_overlays = match &self.armor[0] {
-            Some(stack) if &*stack.item == "minecraft:carved_pumpkin" => {
-                vec!["misc/pumpkinblur".to_owned()]
-            }
-            _ => Vec::new(),
+        // Hud.extractCameraOverlays; the spyglass scope (and its easing) is
+        // drawn on the HUD by draw_spyglass.
+        let fx = &self.res.screen_fx;
+        let overlays = hud_overlays::CameraOverlays {
+            vignette: self
+                .settings
+                .vignette
+                .then_some((fx.vignette_brightness, 0.0)),
+            first_person: self.camera_type.first_person(),
+            scoping: self.scoping(),
+            game_time_delta: 0.0,
+            equipment: match &self.armor[0] {
+                Some(stack) if &*stack.item == "minecraft:carved_pumpkin" => {
+                    vec!["misc/pumpkinblur".to_owned()]
+                }
+                _ => Vec::new(),
+            },
+            ticks_frozen: 0,
+            percent_frozen: 0.0,
+            partial,
+            portal: [fx.o_portal, fx.portal],
+            nausea: 0.0,
+            screen_effect_scale: 1.0,
         };
+        let mut scope = self.scope_scale;
+        let gui_overlays =
+            hud_overlays::camera_overlays(size[0] as i32, size[1] as i32, &overlays, &mut scope);
         self.res.screen_fx.build(&ScreenInputs {
             sprites: &self.res.atlas.sprites,
             aspect: size[0] as f32 / size[1].max(1) as f32,
@@ -153,10 +177,7 @@ impl Game<'_> {
             block_overlay,
             water,
             on_fire: false,
-            camera_overlays,
-            frozen: 0.0,
-            vignette: true,
-            border_warning: None,
+            gui_overlays: &gui_overlays,
         })
     }
     /// `Lightmap.getBrightness(getMaxLocalRawBrightness(eye))`.

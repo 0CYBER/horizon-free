@@ -39,6 +39,30 @@ impl ResourceSource for std::path::PathBuf {
     }
 }
 
+/// DeprecatedTranslationsInfo.applyToMap: drop removed keys, then move each
+/// renamed key's text to its new key (a missing old key removes the new one).
+pub fn apply_deprecated(map: &mut HashMap<String, String>, json: &[u8]) {
+    let Ok(info) = serde_json::from_slice::<serde_json::Value>(json) else {
+        return;
+    };
+    for key in info["removed"].as_array().into_iter().flatten() {
+        if let Some(k) = key.as_str() {
+            map.remove(k);
+        }
+    }
+    for (from, to) in info["renamed"].as_object().into_iter().flatten() {
+        let Some(to) = to.as_str() else { continue };
+        match map.remove(from) {
+            Some(value) => {
+                map.insert(to.to_owned(), value);
+            }
+            None => {
+                map.remove(to);
+            }
+        }
+    }
+}
+
 impl Language {
     pub fn from_map(code: &str, map: HashMap<String, String>) -> Self {
         Self {
@@ -65,28 +89,12 @@ impl Language {
             }
         }
         // DeprecatedTranslationsInfo.loadFromDefaultResource().applyToMap: the
-        // game's own deprecated.json drops removed keys and renames others.
+        // game's own deprecated.json, not a resource pack's.
         if let Some(bytes) = sources
             .iter()
             .find_map(|s| s.read("assets/minecraft/lang/deprecated.json"))
-            && let Ok(info) = serde_json::from_slice::<serde_json::Value>(&bytes)
         {
-            for key in info["removed"].as_array().into_iter().flatten() {
-                if let Some(key) = key.as_str() {
-                    map.remove(key);
-                }
-            }
-            for (from, to) in info["renamed"].as_object().into_iter().flatten() {
-                let Some(to) = to.as_str() else { continue };
-                match map.remove(from) {
-                    Some(value) => {
-                        map.insert(to.to_owned(), value);
-                    }
-                    None => {
-                        map.remove(to);
-                    }
-                }
-            }
+            apply_deprecated(&mut map, &bytes);
         }
         Self {
             code: code.to_owned(),

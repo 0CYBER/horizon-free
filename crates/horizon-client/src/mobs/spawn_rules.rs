@@ -586,7 +586,7 @@ impl SpawnLevel for super::MobWorld<'_> {
         self.thundering
     }
     fn sea_level(&self) -> i32 {
-        if self.nether { 32 } else { 63 }
+        self.sea_level
     }
     fn world_surface(&self, x: i32, z: i32) -> i32 {
         let top = crate::chunk::MIN_Y + crate::chunk::HEIGHT;

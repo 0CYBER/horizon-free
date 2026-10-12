@@ -40,6 +40,10 @@ import net.minecraft.world.level.storage.LevelStorageSource;
  *
  * Files the game rewrites after loading get the current DataVersion so that the
  * output compares with what the game would save. Nothing is answered by hand.
+ *
+ * OUT_WORLD is replaced. The oracle exits as soon as everything is written:
+ * the level storage starts the game's IO worker pool, whose idle threads would
+ * otherwise keep the JVM alive for a minute.
  */
 public final class VanillaDataFixOracle {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -49,6 +53,7 @@ public final class VanillaDataFixOracle {
         Bootstrap.bootStrap();
         Path in = Path.of(args[0]);
         Path out = Path.of(args[1]);
+        delete(out);
         copy(in, out);
         int current = SharedConstants.getCurrentVersion().dataVersion().version();
         var fixer = DataFixers.getDataFixer();
@@ -104,6 +109,7 @@ public final class VanillaDataFixOracle {
             fixed = fixed.set("DataVersion", fixed.createInt(current));
             Files.writeString(file, GSON.toJson(fixed.getValue()), StandardCharsets.UTF_8);
         }
+        System.exit(0);
     }
 
     /** Chunk generator type per dimension, from the saved world generation settings. */
@@ -228,6 +234,17 @@ public final class VanillaDataFixOracle {
         }
         try (Stream<Path> s = Files.list(folder)) {
             return s.filter(p -> p.getFileName().toString().endsWith(suffix)).sorted().toList();
+        }
+    }
+
+    private static void delete(Path path) throws Exception {
+        if (!Files.exists(path)) {
+            return;
+        }
+        try (Stream<Path> s = Files.walk(path)) {
+            for (Path p : s.sorted(Comparator.reverseOrder()).toList()) {
+                Files.delete(p);
+            }
         }
     }
 

@@ -86,10 +86,34 @@ impl MobWorld<'_> {
                 }
             }
         }
-        let (fx, fz) = ((lo.x + hi.x) / 2.0, (lo.z + hi.z) / 2.0);
-        let ey = eye_y.floor() as i32;
-        let (fluid, h) = self.fluid_height(fx.floor() as i32, ey, fz.floor() as i32);
-        out.eye_in_water = fluid == Fluid::Water && eye_y < f64::from(ey) + h + 0.111_111_11;
+        // EntityFluidInteraction.update: the eyes are in a fluid block of
+        // the box in the entity's column, between its bottom and its height
+        // for the camera.
+        let (ex, ez) = (
+            ((lo.x + hi.x) / 2.0).floor() as i32,
+            ((lo.z + hi.z) / 2.0).floor() as i32,
+        );
+        for y in lo.y.floor() as i32..=(hi.y.ceil() as i32 - 1) {
+            let (fluid, h) = self.fluid_height(ex, y, ez);
+            if fluid != Fluid::Water || f64::from(y) + h < lo.y || eye_y < f64::from(y) {
+                continue;
+            }
+            let state = self.world.block(ex, y, ez);
+            let source = self
+                .registry
+                .state(state)
+                .and_then(|s| s.properties.get("level"))
+                .is_none_or(|l| l == "0");
+            let above = self.facts.get(self.world.block(ex, y + 1, ez));
+            let camera = if source && above.sturdy_full & 1 != 0 {
+                1.0
+            } else {
+                h
+            };
+            if eye_y <= f64::from(y) + camera {
+                out.eye_in_water = true;
+            }
+        }
         out
     }
     pub fn no_collision(&self, b: Aabb) -> bool {
@@ -108,6 +132,10 @@ impl Mob {
     /// slime size scaling.
     /// `EntityDimensions` (float width, height and eye height) widened to double.
     pub fn dims(&self) -> (f64, f64, f64) {
+        // LivingEntity.SLEEPING_DIMENSIONS.
+        if super::villager::sleeping(self) {
+            return (f64::from(0.2_f32), f64::from(0.2_f32), f64::from(0.2_f32));
+        }
         let k = &self.kind;
         let (mut w, mut h, mut e) = (k.width as f32, k.height as f32, k.eye_height as f32);
         // Sniffer.DIGGING_DIMENSIONS: 0.4 lower, its eyes at 0.81.
@@ -362,8 +390,13 @@ impl Mob {
     fn flying_speed(&self) -> f32 {
         0.02
     }
+    /// Entity.getGravity: none while isNoGravity.
     fn gravity(&self) -> f64 {
-        self.kind.gravity
+        if self.no_gravity {
+            0.0
+        } else {
+            self.kind.gravity
+        }
     }
     /// LivingEntity.travel.
     pub fn travel(&mut self, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) {
@@ -474,7 +507,11 @@ impl Mob {
             if self.horizontal_collision && self.kind.flags.climber {
                 m.y = 0.2;
             }
-            m = Vec3::new(m.x * f64::from(slow), m.y * 0.8, m.z * f64::from(slow));
+            m = Vec3::new(
+                m.x * f64::from(slow),
+                m.y * f64::from(0.8_f32),
+                m.z * f64::from(slow),
+            );
             self.velocity = fluid_falling(gravity, falling, m);
         } else {
             self.move_relative(0.02, input);
@@ -482,7 +519,7 @@ impl Mob {
             if self.fluids.lava <= self.fluid_jump_threshold() {
                 self.velocity = Vec3::new(
                     self.velocity.x * 0.5,
-                    self.velocity.y * 0.8,
+                    self.velocity.y * f64::from(0.8_f32),
                     self.velocity.z * 0.5,
                 );
                 self.velocity = fluid_falling(gravity, falling, self.velocity);
@@ -502,11 +539,11 @@ impl Mob {
         if self.horizontal_collision
             && w.no_collision(self.bounds().move_by(Vec3::new(
                 m.x,
-                m.y + 0.6 - self.position.y + old_y,
+                m.y + f64::from(0.6_f32) - self.position.y + old_y,
                 m.z,
             )))
         {
-            self.velocity.y = 0.3;
+            self.velocity.y = f64::from(0.3_f32);
         }
     }
     /// The jump part of LivingEntity.aiStep.

@@ -42,6 +42,21 @@ impl Game<'_> {
                 if let Some(u) = player_uuid {
                     set_key(&mut tag, "UUID", Tag::IntArray(u.to_vec()));
                 }
+                // NbtPredicate.getEntityTagToCompare: a player's held stack.
+                let selected = self.level.selected_slot;
+                let held = match tag.get("Inventory") {
+                    Some(Tag::List(items)) => items
+                        .iter()
+                        .find(|i| matches!(i.get("Slot"), Some(Tag::Byte(b)) if i32::from(*b) == selected))
+                        .cloned(),
+                    _ => None,
+                };
+                if let Some(mut stack) = held {
+                    if let Tag::Compound(c) = &mut stack {
+                        c.remove(&"Slot".into());
+                    }
+                    set_key(&mut tag, "SelectedItem", stack);
+                }
                 tag
             }
             Target::Mob(id) => {
@@ -86,6 +101,11 @@ impl Game<'_> {
                 let uuid = self.uuid_for(id);
                 let c = self.carts.iter().find(|c| c.id == id)?;
                 c.to_nbt(uuid, self.persist.raw.get(&id))
+            }
+            Target::Other(id) => {
+                let uuid = self.uuid_for(id);
+                let o = self.others.iter().find(|o| o.id == id)?.clone();
+                self.other_to_nbt(&o, uuid)
             }
             Target::Orb(i) => entity_nbt::orb_to_nbt(self.orbs.get(i)?, random_uuid()),
             Target::Arrow(i) => {
@@ -166,7 +186,8 @@ impl Game<'_> {
             | Target::Frame(id)
             | Target::Painting(id)
             | Target::Boat(id)
-            | Target::Cart(id) => Some(self.persist.raw.entry(id).or_insert_with(empty)),
+            | Target::Cart(id)
+            | Target::Other(id) => Some(self.persist.raw.entry(id).or_insert_with(empty)),
             _ => None,
         }
     }
@@ -226,9 +247,16 @@ impl Game<'_> {
     }
     pub(in crate::game) fn data_of(&mut self, r: &DataRef) -> R<Tag> {
         match r {
-            DataRef::Entity(t) => self
-                .entity_nbt(*t)
-                .ok_or_else(|| err("argument.entity.notfound.entity", &[])),
+            // EntityDataAccessor.getData: Entity.saveWithoutId.
+            DataRef::Entity(t) => {
+                let mut tag = self
+                    .entity_nbt(*t)
+                    .ok_or_else(|| err("argument.entity.notfound.entity", &[]))?;
+                if let Tag::Compound(c) = &mut tag {
+                    c.remove(&"id".into());
+                }
+                Ok(tag)
+            }
             DataRef::Block(p) => {
                 let key = (p[0], p[1], p[2]);
                 let name = self.data_block_name(*p);
@@ -237,7 +265,12 @@ impl Game<'_> {
                     .block_entities
                     .get(&key)
                     .ok_or_else(|| err("commands.data.block.invalid", &[]))?;
-                Ok(save::encode_block_entity(key, e, &name))
+                // BlockEntity.saveWithFullMetadata: no chunk-only keepPacked.
+                let mut tag = save::encode_block_entity(key, e, &name);
+                if let Tag::Compound(c) = &mut tag {
+                    c.remove(&"keepPacked".into());
+                }
+                Ok(tag)
             }
             DataRef::Storage(id) => Ok(self.score.storage.get(id)),
         }
@@ -626,10 +659,11 @@ impl Game<'_> {
         };
         self.world.loaded_entities.push((key, vec![tag]));
         self.spawn_loaded_entities();
-        let id = self.next_entity;
-        if id == before {
+        if self.next_entity == before {
             return None;
         }
+        // The root of the stack is the first entity spawned.
+        let id = before + 1;
         if self.mobs.iter().any(|m| m.id == id) {
             Some(Target::Mob(id))
         } else if self.dropped.iter().any(|e| e.id == id) {
@@ -644,6 +678,8 @@ impl Game<'_> {
             Some(Target::Boat(id))
         } else if self.carts.iter().any(|c| c.id == id) {
             Some(Target::Cart(id))
+        } else if self.others.iter().any(|o| o.id == id) {
+            Some(Target::Other(id))
         } else {
             None
         }
@@ -660,18 +696,36 @@ impl Game<'_> {
             return Err(err("argument.nbt.expected.compound", &[]));
         }
         set_key(&mut tag, "id", Tag::String(kind.into()));
-        let p = pos.map(|v| Tag::Double(v.to_bits()));
-        set_key(&mut tag, "Pos", Tag::List(p.to_vec()));
-        if tag.get("Rotation").is_none() {
-            set_key(
-                &mut tag,
-                "Rotation",
-                Tag::List(vec![
-                    Tag::Float(0.0f32.to_bits()),
-                    Tag::Float(0.0f32.to_bits()),
-                ]),
-            );
+        // EntityType.loadEntityRecursive snaps every entity of the stack,
+        // passengers included, to the position.
+        fn place(tag: &mut Tag, pos: [f64; 3]) {
+            let p = pos.map(|v| Tag::Double(v.to_bits()));
+            set_key(tag, "Pos", Tag::List(p.to_vec()));
+            // Entity.load: an absent Fire reads as 0 (until the entity moves).
+            if tag.get("Fire").is_none() {
+                set_key(tag, "Fire", Tag::Short(0));
+            }
+            if tag.get("Rotation").is_none() {
+                set_key(
+                    tag,
+                    "Rotation",
+                    Tag::List(vec![
+                        Tag::Float(0.0f32.to_bits()),
+                        Tag::Float(0.0f32.to_bits()),
+                    ]),
+                );
+            }
+            if let Tag::Compound(c) = tag
+                && let Some(Tag::List(riders)) = c.get_mut(&"Passengers".into())
+            {
+                for r in riders {
+                    if matches!(r, Tag::Compound(_)) {
+                        place(r, pos);
+                    }
+                }
+            }
         }
+        place(&mut tag, pos);
         Ok(self.spawn_entity_from_nbt(tag))
     }
 }

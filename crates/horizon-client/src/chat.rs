@@ -5,6 +5,7 @@
 use crate::{
     command::{Dispatcher, ParseResults, Registries, Suggestion},
     hud::{HudAtlas, HudBatch, rgba},
+    hud_layout::{self, GuiDraw, PoseOp},
     text::{self, Style, Text},
     ui::{EditBox, char_len},
 };
@@ -12,15 +13,16 @@ use crate::{
 /// GuiMessageTag.systemSinglePlayer's indicator colour.
 pub const SYSTEM_INDICATOR: u32 = 0xD0D0D0;
 
+/// The chat options (doubles, as vanilla keeps them).
 #[derive(Clone, Copy, Debug)]
 pub struct ChatOptions {
-    pub opacity: f32,
-    pub background_opacity: f32,
-    pub scale: f32,
-    pub width: f32,
-    pub height_focused: f32,
-    pub height_unfocused: f32,
-    pub line_spacing: f32,
+    pub opacity: f64,
+    pub background_opacity: f64,
+    pub scale: f64,
+    pub width: f64,
+    pub height_focused: f64,
+    pub height_unfocused: f64,
+    pub line_spacing: f64,
 }
 impl Default for ChatOptions {
     fn default() -> Self {
@@ -37,20 +39,21 @@ impl Default for ChatOptions {
 }
 impl ChatOptions {
     /// ChatComponent.getWidth/getHeight.
-    pub fn width_px(&self) -> f32 {
-        (self.width * 280.0 + 40.0).floor()
+    pub fn width_px(&self) -> i32 {
+        (self.width * 280.0 + 40.0).floor() as i32
     }
-    pub fn height_px(&self, focused: bool) -> f32 {
+    pub fn height_px(&self, focused: bool) -> i32 {
         ((if focused {
             self.height_focused
         } else {
             self.height_unfocused
         }) * 160.0
             + 20.0)
-            .floor()
+            .floor() as i32
     }
-    pub fn line_height(&self) -> f32 {
-        (9.0 * (self.line_spacing + 1.0)).floor()
+    /// `getLineHeight`.
+    pub fn line_height(&self) -> i32 {
+        (9.0 * (self.line_spacing + 1.0)) as i32
     }
 }
 #[derive(Clone, Debug)]
@@ -59,11 +62,24 @@ struct Message {
     content: Text,
     indicator: Option<u32>,
 }
+/// A wrapped line (`GuiMessage.Line`).
 #[derive(Clone, Debug)]
 struct Line {
     added: u64,
     content: Text,
     indicator: Option<u32>,
+}
+
+/// `ChatComponent.AlphaCalculator.timeBased`: opaque for 180 ticks, then
+/// fading out quadratically over 20.
+fn time_alpha(ticks: u64, added: u64) -> f32 {
+    let delta = ticks as i64 - added as i64;
+    let mut t = delta as f64 / 200.0;
+    t = 1.0 - t;
+    t *= 10.0;
+    t = t.clamp(0.0, 1.0);
+    t *= t;
+    t as f32
 }
 #[derive(Default)]
 pub struct Chat {
@@ -80,10 +96,11 @@ pub struct Chat {
 }
 impl Chat {
     pub fn lines_per_page(&self, focused: bool) -> usize {
-        (self.options.height_px(focused) / self.options.line_height().max(1.0)) as usize
+        (self.options.height_px(focused) / self.options.line_height().max(1)) as usize
     }
-    fn max_width(&self) -> f32 {
-        (self.options.width_px() / self.options.scale.max(0.01)).floor()
+    /// The wrapping width, `Mth.floor(getWidth() / getScale())`.
+    fn max_width(&self) -> i32 {
+        (f64::from(self.options.width_px()) / self.options.scale).floor() as i32
     }
     /// ChatComponent.addMessage: wrap, prepend and trim to 100 lines.
     pub fn add(
@@ -108,7 +125,7 @@ impl Chat {
     }
     fn add_lines(&mut self, atlas: &HudAtlas, message: &Message, focused: bool) {
         let width = self.max_width();
-        for line in atlas.font.split(&message.content, width) {
+        for line in atlas.font.wrap_components(&message.content, width) {
             if focused && self.scroll > 0 {
                 self.new_since_scroll = true;
                 self.scroll_by(1, focused);
@@ -164,116 +181,113 @@ impl Chat {
             self.scroll = pos as usize;
         }
     }
-    /// ChatComponent.extractRenderState.
-    pub fn draw(&self, batch: &mut HudBatch, atlas: &HudAtlas, ticks: u64, focused: bool) {
-        if self.lines.is_empty() {
-            return;
+    /// `ChatComponent.extractRenderState` (background mode unless `focused`)
+    /// on a screen `height` GUI pixels tall at `Hud.tickCount` `ticks`.
+    pub fn layout(&self, height: i32, ticks: u64, focused: bool) -> Vec<GuiDraw> {
+        let total = self.lines.len();
+        if total == 0 {
+            return Vec::new();
         }
         let o = &self.options;
-        let scale = o.scale;
-        if scale <= 0.0 {
-            return;
-        }
-        let max_width = (o.width_px() / scale).ceil();
-        let chat_bottom = ((batch.height - 40.0) / scale).floor();
-        let text_opacity = o.opacity * 0.9 + 0.1;
+        let scale = o.scale as f32;
+        let max_width = hud_layout::ceil(o.width_px() as f32 / scale);
+        let chat_bottom = hud_layout::floor((height - 40) as f32 / scale);
+        let text_opacity = o.opacity as f32 * 0.9 + 0.1;
+        let background_opacity = o.background_opacity as f32;
         let entry_height = o.line_height();
-        let bottom_to_text = (8.0 * (o.line_spacing + 1.0) - 4.0 * o.line_spacing).round();
-        let per_page = self.lines_per_page(focused);
-        let alpha_of = |line: &Line| -> f32 {
+        let bottom_to_text =
+            (8.0 * (o.line_spacing + 1.0) - 4.0 * o.line_spacing + 0.5).floor() as i32;
+        let alpha_of = |line: &Line| {
             if focused {
-                return 1.0;
+                1.0
+            } else {
+                time_alpha(ticks, line.added)
             }
-            let t =
-                ((1.0 - (ticks.saturating_sub(line.added)) as f64 / 200.0) * 10.0).clamp(0.0, 1.0);
-            (t * t) as f32
         };
-        let visible = self.lines.len().saturating_sub(self.scroll).min(per_page);
-        let mut count = 0;
-        // Pass 1: backgrounds; pass 2: text (same order as vanilla).
-        let s = |v: f32| v * scale;
-        for i in (0..visible).rev() {
-            let line = &self.lines[i + self.scroll];
-            let alpha = alpha_of(line);
-            if alpha <= 1.0e-5 {
-                continue;
-            }
-            count += 1;
-            let bottom = chat_bottom - i as f32 * entry_height;
-            let top = bottom - entry_height;
-            batch.fill(
-                atlas,
-                0.0,
-                s(top),
-                s(max_width + 8.0),
-                s(entry_height),
-                rgba(0, 0, 0, (alpha * o.background_opacity * 255.0) as u8),
-            );
+        let visible = total
+            .saturating_sub(self.scroll)
+            .min(self.lines_per_page(focused));
+        let lines: Vec<(usize, &Line, f32)> = (0..visible)
+            .rev()
+            .map(|i| (i, &self.lines[i + self.scroll]))
+            .map(|(i, line)| (i, line, alpha_of(line)))
+            .filter(|(_, _, alpha)| *alpha > 1.0e-5)
+            .collect();
+        let mut out = vec![GuiDraw::Push(vec![
+            PoseOp::Scale(scale, scale),
+            PoseOp::Translate(4.0, 0.0),
+        ])];
+        for &(i, _, alpha) in &lines {
+            let bottom = chat_bottom - i as i32 * entry_height;
+            out.push(hud_layout::fill(
+                -4,
+                bottom - entry_height,
+                max_width + 4 + 4,
+                bottom,
+                hud_layout::as8(alpha * background_opacity) << 24,
+            ));
         }
-        for i in (0..visible).rev() {
-            let line = &self.lines[i + self.scroll];
-            let alpha = alpha_of(line);
-            if alpha <= 1.0e-5 {
-                continue;
+        for &(i, line, alpha) in &lines {
+            let bottom = chat_bottom - i as i32 * entry_height;
+            let opacity = alpha * text_opacity;
+            let color = hud_layout::white(opacity);
+            if color >> 24 != 0 {
+                out.push(GuiDraw::Text {
+                    text: line.content.clone(),
+                    x: 0,
+                    y: bottom - bottom_to_text,
+                    color,
+                    shadow: true,
+                });
             }
-            let bottom = chat_bottom - i as f32 * entry_height;
-            let top = bottom - entry_height;
-            let text_top = bottom - bottom_to_text;
-            let a = (alpha * text_opacity * 255.0) as u8;
-            if let Some(c) = line.indicator {
-                batch.fill(
-                    atlas,
-                    0.0,
-                    s(top),
-                    s(2.0),
-                    s(entry_height),
-                    rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, a),
-                );
-            }
-            if a > 3 {
-                batch.text_styled(
-                    atlas,
-                    &line.content,
-                    s(4.0),
-                    s(text_top),
-                    rgba(255, 255, 255, a),
-                    true,
-                );
+            if let Some(indicator) = line.indicator {
+                let color = hud_layout::as8(opacity) << 24 | indicator & 0xFF_FFFF;
+                out.push(hud_layout::fill(
+                    -4,
+                    bottom - entry_height,
+                    -2,
+                    bottom,
+                    color,
+                ));
             }
         }
-        // Scroll bar while focused and scrolled content exists.
-        if focused && count > 0 {
-            let total = self.lines.len() as f32;
-            let chat_height = count as f32 * entry_height;
-            let virtual_height = total * entry_height;
+        if focused {
+            let count = lines.len() as i32;
+            let chat_height = count * entry_height;
+            let virtual_height = total as i32 * entry_height;
+            let y = self.scroll as i32 * chat_height / total as i32 - chat_bottom;
+            let height = chat_height * chat_height / virtual_height;
             if virtual_height != chat_height {
-                let y = self.scroll as f32 * chat_height / total - chat_bottom;
-                let height = chat_height * chat_height / virtual_height;
-                let alpha = if y > 0.0 { 170 } else { 96 };
-                let c = if self.new_since_scroll {
+                let alpha: u32 = if y > 0 { 170 } else { 96 };
+                let color = if self.new_since_scroll {
                     0xCC3333
                 } else {
                     0x3333AA
                 };
-                let x = max_width + 4.0 + 4.0;
-                batch.fill(
-                    atlas,
-                    s(x),
-                    s(-y - height),
-                    s(2.0),
-                    s(height),
-                    rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, alpha),
-                );
-                batch.fill(
-                    atlas,
-                    s(x + 1.0),
-                    s(-y - height),
-                    s(1.0),
-                    s(height),
-                    rgba(0xCC, 0xCC, 0xCC, alpha),
-                );
+                let x = max_width + 4;
+                out.push(hud_layout::fill(
+                    x,
+                    -y,
+                    x + 2,
+                    -y - height,
+                    alpha << 24 | color,
+                ));
+                out.push(hud_layout::fill(
+                    x + 2,
+                    -y,
+                    x + 1,
+                    -y - height,
+                    alpha << 24 | 0xCCCCCC,
+                ));
             }
         }
+        out.push(GuiDraw::Pop);
+        out
+    }
+    /// Draws [`Chat::layout`] into the HUD batch.
+    pub fn draw(&self, batch: &mut HudBatch, atlas: &HudAtlas, ticks: u64, focused: bool) {
+        let draws = self.layout(batch.height as i32, ticks, focused);
+        hud_layout::paint(batch, atlas, &draws);
     }
     /// Plain text of the newest messages (for tests and the control socket).
     pub fn recent_lines(&self, n: usize) -> Vec<String> {
