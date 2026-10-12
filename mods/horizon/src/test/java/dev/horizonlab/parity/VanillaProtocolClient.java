@@ -55,6 +55,7 @@ import net.minecraft.network.protocol.configuration.ServerboundFinishConfigurati
 import net.minecraft.network.protocol.configuration.ServerboundSelectKnownPacks;
 import net.minecraft.network.protocol.game.ClientboundChunkBatchFinishedPacket;
 import net.minecraft.network.protocol.game.ClientboundDisguisedChatPacket;
+import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerChatPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
@@ -357,6 +358,19 @@ public final class VanillaProtocolClient {
                 send(new ServerboundPongPacket(p.getId()));
             } else if (r.packet instanceof ClientboundCustomPayloadPacket p) {
                 record("config", r.type + " " + text(p.payload()));
+            } else if (r.packet instanceof net.minecraft.network.protocol.common.ClientboundUpdateTagsPacket p) {
+                record("config", r.type + " sha=" + sha(r.payload));
+                // Each registry's tags: what they hold, then the order sent.
+                for (var e : p.tags().entrySet()) {
+                    var tags = new TreeMap<String, String>();
+                    StringBuilder order = new StringBuilder();
+                    for (var t : e.getValue().tags().entrySet()) {
+                        tags.put(t.getKey().toString(), t.getValue().toString());
+                        order.append(t.getKey()).append(';');
+                    }
+                    record("config-tags", e.getKey().identifier() + " " + tags.size() + " content=" + sha(tags.toString().getBytes())
+                        + " order=" + sha(order.toString().getBytes()));
+                }
             } else if (r.packet instanceof ClientboundFinishConfigurationPacket) {
                 record("config", r.type);
                 send(ServerboundFinishConfigurationPacket.INSTANCE);
@@ -425,7 +439,7 @@ public final class VanillaProtocolClient {
                 } else if (packet instanceof ClientboundChunkBatchFinishedPacket) {
                     send(new ServerboundChunkBatchReceivedPacket(64.0F));
                 } else if (packet instanceof ClientboundLevelChunkWithLightPacket p) {
-                    chunks.put(p.x() + "," + p.z(), sha(r.payload));
+                    chunks.put(p.x() + "," + p.z(), chunkHash(p));
                     lastChunk = now;
                     int px = (int) Math.floor(position.position().x) >> 4;
                     int pz = (int) Math.floor(position.position().z) >> 4;
@@ -466,6 +480,25 @@ public final class VanillaProtocolClient {
         record("error", "timed out in play, step " + step + ", chunks " + chunks.size());
     }
 
+    /**
+     * A chunk's blocks, biomes, heightmaps and block entities (its
+     * ClientboundLevelChunkPacketData bytes) and which light layers it has.
+     * The light values are left out: both servers relight around chunks
+     * loaded with their saved light, which test_light_parity covers.
+     */
+    private static String chunkHash(ClientboundLevelChunkWithLightPacket p) {
+        RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), ParityData.access);
+        ClientboundLevelChunkPacketData.STREAM_CODEC.encode(buf, p.chunkData());
+        byte[] bytes = new byte[buf.readableBytes()];
+        buf.readBytes(bytes);
+        var light = p.lightData();
+        BitSet sky = (BitSet) light.skyYMask().clone();
+        sky.or(light.emptySkyYMask());
+        BitSet block = (BitSet) light.blockYMask().clone();
+        block.or(light.emptyBlockYMask());
+        return sha(bytes) + "/" + sky + "/" + block;
+    }
+
     /** The player's chunk part by part, so a difference in its bytes can be told apart. */
     private void chunkParts(ClientboundLevelChunkWithLightPacket p) {
         var data = p.chunkData();
@@ -499,14 +532,6 @@ public final class VanillaProtocolClient {
         data.forEachBlockEntityTag(p.x(), p.z(), (pos, type, tag) -> entities.append(pos.toShortString()).append(' ')
             .append(net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(type)).append(' ').append(tag).append(';'));
         record("chunk-block-entities", entities.toString());
-        var light = p.lightData();
-        record("chunk-light-masks", light.skyYMask() + " " + light.blockYMask() + " " + light.emptySkyYMask() + " " + light.emptyBlockYMask());
-        StringBuilder sky = new StringBuilder();
-        for (byte[] b : light.skyUpdates()) sky.append(sha(b)).append(' ');
-        record("chunk-light-sky", sky.toString());
-        StringBuilder block = new StringBuilder();
-        for (byte[] b : light.blockUpdates()) block.append(sha(b)).append(' ');
-        record("chunk-light-block", block.toString());
     }
 
     /** The first play packets: entity ids, seeds and times aside. */

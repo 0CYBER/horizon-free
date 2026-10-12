@@ -284,20 +284,53 @@ impl ChunkEncoder {
     }
 }
 
-/// The iteration order of a java.util.HashMap keyed by BlockPos (LevelChunk's
-/// block entities) filled in the given order: by bucket at the capacity the
-/// map grew to, insertion order within a bucket (resizes keep it).
-fn java_hash_order<T>(items: &mut [T], pos: impl Fn(&T) -> (i32, i32, i32)) {
+/// The order LevelChunk.getBlockEntities() iterates in: a fastutil
+/// Object2ObjectOpenHashMap keyed by BlockPos (linear probing from
+/// HashCommon.mix(hashCode), grown at 3/4 by reinserting from the top of
+/// the table, iterated from the top down), filled in the order of the
+/// java.util.HashMap of pending block entities that the loaded chunk's list
+/// (`items` in section order) went through.
+fn java_hash_order<T>(items: &mut Vec<T>, pos: impl Fn(&T) -> (i32, i32, i32)) {
+    // Vec3i.hashCode.
+    let hash = |&(x, y, z): &(i32, i32, i32)| y.wrapping_add(z.wrapping_mul(31)).wrapping_mul(31).wrapping_add(x);
+    let keys: Vec<i32> = items.iter().map(|i| hash(&pos(i))).collect();
+    // java.util.HashMap: buckets in index order, insertion order within one.
     let mut capacity = 16usize;
-    while items.len() * 4 > capacity * 3 {
+    while keys.len() * 4 > capacity * 3 {
         capacity *= 2;
     }
-    items.sort_by_key(|item| {
-        let (x, y, z) = pos(item);
-        // Vec3i.hashCode, then HashMap.hash.
-        let h = y.wrapping_add(z.wrapping_mul(31)).wrapping_mul(31).wrapping_add(x);
-        ((h ^ ((h as u32) >> 16) as i32) as u32 as usize) & (capacity - 1)
-    });
+    let mut order: Vec<usize> = (0..keys.len()).collect();
+    order.sort_by_key(|&i| ((keys[i] ^ ((keys[i] as u32) >> 16) as i32) as u32 as usize) & (capacity - 1));
+    // Object2ObjectOpenHashMap.
+    let mix = |h: i32| {
+        let h = h.wrapping_mul(0x9E37_79B9_u32 as i32) as u32;
+        (h ^ (h >> 16)) as usize
+    };
+    let put = |table: &mut Vec<Option<usize>>, i: usize| {
+        let mask = table.len() - 1;
+        let mut at = mix(keys[i]) & mask;
+        while table[at].is_some() {
+            at = (at + 1) & mask;
+        }
+        table[at] = Some(i);
+    };
+    // Default expected size 16: HashCommon.arraySize(16, 0.75) = 32 slots.
+    let mut table: Vec<Option<usize>> = vec![None; 32];
+    for (size, &i) in order.iter().enumerate() {
+        put(&mut table, i);
+        // insert: `if (size++ >= maxFill) rehash(arraySize(size + 1, f))`.
+        let max_fill = (table.len() * 3).div_ceil(4).min(table.len() - 1);
+        if size >= max_fill {
+            let grown = ((size + 2) * 4).div_ceil(3).next_power_of_two().max(2);
+            let old = std::mem::replace(&mut table, vec![None; grown]);
+            for &j in old.iter().rev().flatten() {
+                put(&mut table, j);
+            }
+        }
+    }
+    let iteration: Vec<usize> = table.iter().rev().flatten().copied().collect();
+    let mut slots: Vec<Option<T>> = items.drain(..).map(Some).collect();
+    items.extend(iteration.into_iter().filter_map(|i| slots[i].take()));
 }
 
 /// The update tag of a block entity (getUpdateTag) for what the client shows.
