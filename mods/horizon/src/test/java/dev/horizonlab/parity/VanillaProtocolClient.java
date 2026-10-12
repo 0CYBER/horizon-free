@@ -486,6 +486,7 @@ public final class VanillaProtocolClient {
             // Once the chunks stop coming: chat, then /list, then leave.
             if (loaded && lastChunk > 0 && now - lastChunk > 3000 && step == 0) {
                 record("play-chunks", chunks.size() + " " + chunks);
+                BLOCK_ENTITIES.forEach((k, v) -> record("play-block-entities", k + " " + v));
                 // Which light layers exist depends on the neighbouring
                 // columns: compared where all eight were sent.
                 Map<String, String> inner = new TreeMap<>();
@@ -518,6 +519,8 @@ public final class VanillaProtocolClient {
      * ClientboundLevelChunkPacketData bytes). The light is left out: both servers relight around chunks
      * loaded with their saved light, which test_light_parity covers.
      */
+    private static final Map<String, String> BLOCK_ENTITIES = new TreeMap<>();
+
     private static String chunkHash(ClientboundLevelChunkWithLightPacket p) {
         var data = p.chunkData();
         var heightmaps = new TreeMap<String, String>();
@@ -542,6 +545,7 @@ public final class VanillaProtocolClient {
         StringBuilder entities = new StringBuilder();
         data.forEachBlockEntityTag(p.x(), p.z(), (pos, type, tag) -> entities.append(pos.toShortString()).append(' ')
             .append(net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(type)).append(' ').append(tag).append(';'));
+        if (entities.length() > 0) BLOCK_ENTITIES.put(p.x() + "," + p.z(), entities.toString());
         return "c" + sha(content.toString().getBytes()).substring(0, 8) + "s" + sha(sections).substring(0, 8) + "h" + sha(heightmaps.toString().getBytes()).substring(0, 8) + "e"
             + sha(entities.toString().getBytes()).substring(0, 8);
     }
