@@ -16,6 +16,7 @@ pub mod camel;
 pub mod caravan;
 pub mod control;
 pub mod creaking;
+pub mod creaking_heart;
 pub mod cube;
 pub mod data;
 pub mod drops;

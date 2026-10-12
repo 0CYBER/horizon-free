@@ -303,12 +303,13 @@ pub fn player_is_stuck(m: &mut Mob, eye: Option<[f64; 3]>) -> bool {
     };
     let b = m.bounds();
     let (lo, hi) = (b.min_position(), b.max_position());
+    // AABB.contains: the far faces are outside.
     let inside = eye[0] >= lo.x
-        && eye[0] <= hi.x
+        && eye[0] < hi.x
         && eye[1] >= lo.y
-        && eye[1] <= hi.y
+        && eye[1] < hi.y
         && eye[2] >= lo.z
-        && eye[2] <= hi.z;
+        && eye[2] < hi.z;
     if inside {
         m.extra.ints[STUCK] += 1;
         m.extra.ints[STUCK] > 4
