@@ -73,6 +73,27 @@ def scenarios():
         'player 12.5 -60 0.5',
         'mob minecraft:villager 0.5 -60 0.5 0 51 persistent',
     ])
+    # Llamas and trader llamas: strolling, looking at the player, a baby following its parent and a
+    # llama hunting a wolf (LlamaAttackWolfGoal) and spitting at it.
+    for species, seed in [('llama', 61), ('trader_llama', 62)]:
+        add(f'{species}_player', 200, ['player 6.5 -60 0.5', f'mob minecraft:{species} 0.5 -60 0.5 0 {seed} persistent'])
+        add(f'{species}_alone', 200, [f'mob minecraft:{species} 0.5 -60 0.5 90 {seed * 7 + 1} persistent'])
+    add('llama_family', 200, ['mob minecraft:llama 0.5 -60 0.5 0 63 persistent',
+                              'mob minecraft:llama 6.5 -60 2.5 0 64 persistent baby'])
+    add('llama_wolf', 200, ['mob minecraft:llama 0.5 -60 0.5 0 65 persistent',
+                            'mob minecraft:wolf 8.5 -60 0.5 0 66 persistent'])
+    # Sniffers on diggable grass: scenting, sniffing, searching and digging.
+    add('sniffer_player', 400, ['player 8.5 -60 0.5', 'mob minecraft:sniffer 0.5 -60 0.5 0 71 persistent'])
+    for i, seed in enumerate([72, 73, 74]):
+        add(f'sniffer_alone_{i}', 600, [f'mob minecraft:sniffer 0.5 -60 0.5 {90 * i} {seed} persistent'])
+    add('sniffer_baby', 300, ['mob minecraft:sniffer 0.5 -60 0.5 0 75 persistent baby'])
+    # Happy ghasts float above the grass; ghastlings follow players and adults.
+    add('happy_ghast_player', 200, ['player 6.5 -60 0.5', 'mob minecraft:happy_ghast 0.5 -55 0.5 0 81 persistent'])
+    add('happy_ghast_alone', 200, ['mob minecraft:happy_ghast 0.5 -55 0.5 90 82 persistent'])
+    add('ghastling_player', 200, ['player 8.5 -60 0.5', 'mob minecraft:happy_ghast 0.5 -57 0.5 0 83 persistent baby'])
+    add('ghastling_alone', 200, ['mob minecraft:happy_ghast 0.5 -57 0.5 0 84 persistent baby'])
+    add('ghastling_adult', 200, ['mob minecraft:happy_ghast 10.5 -55 0.5 0 85 persistent',
+                                 'mob minecraft:happy_ghast 0.5 -57 0.5 0 86 persistent baby'])
     return s
 
 

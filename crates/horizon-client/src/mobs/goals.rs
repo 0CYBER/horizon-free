@@ -304,6 +304,100 @@ impl Mob {
         let water = w.fluid(p[0], p[1], p[2]) == crate::blocks::Fluid::Water;
         (!water && self.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0).then_some(p)
     }
+    /// The home a mob stays near (`Mob.getHomePosition` / `getHomeRadius`):
+    /// only happy ghasts keep one here.
+    fn home(&self) -> Option<([i32; 3], i32)> {
+        if self.species() != Species::HappyGhast {
+            return None;
+        }
+        self.extra.home.map(|h| (h, self.extra.ints[4]))
+    }
+    /// `Entity.getViewVector(0)`: `calculateViewVector(xRotO, yRotO)`.
+    pub fn view_vector(&self) -> [f64; 3] {
+        use horizon_core::geometry::trig::Mth;
+        let to_rad = std::f32::consts::PI / 180.0;
+        let x = self.previous_head_pitch * to_rad;
+        let y = -self.previous_yaw * to_rad;
+        let (y_cos, y_sin, x_cos, x_sin) = (y.mcos(), y.msin(), x.mcos(), x.msin());
+        [
+            f64::from(y_sin * x_cos),
+            f64::from(-x_sin),
+            f64::from(y_cos * x_cos),
+        ]
+    }
+    /// AirAndWaterRandomPos.getPos: within the radians of a direction, kept
+    /// near home, moved up out of solid blocks and free of path maluses.
+    pub fn air_and_water_random_pos(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        fly_height: i32,
+        xd: f64,
+        zd: f64,
+    ) -> Option<[f64; 3]> {
+        let home = self.home();
+        let at = self.position;
+        let within = |c: [i32; 3], r: f64, p: [f64; 3]| {
+            let d = |i: usize| f64::from(c[i]) + 0.5 - p[i];
+            d(0) * d(0) + d(1) * d(1) + d(2) * d(2) < r * r
+        };
+        // GoalUtils.mobRestricted
+        let restrict = home
+            .is_some_and(|(c, r)| within(c, f64::from(r) + f64::from(h) + 1.0, [at.x, at.y, at.z]));
+        self.pick_best(w, |m| {
+            let d = m.random_direction_within(
+                0.0,
+                f64::from(h),
+                v,
+                fly_height,
+                xd,
+                zd,
+                std::f64::consts::FRAC_PI_2,
+            )?;
+            // RandomPos.generateRandomPosTowardDirection, toward home.
+            let (mut xt, mut zt) = (f64::from(d[0]), f64::from(d[2]));
+            if let Some((c, _)) = home
+                && h > 1
+            {
+                let half = f64::from(h) / 2.0;
+                if m.position.x > f64::from(c[0]) {
+                    xt -= m.random.next_double() * half;
+                } else {
+                    xt += m.random.next_double() * half;
+                }
+                if m.position.z > f64::from(c[2]) {
+                    zt -= m.random.next_double() * half;
+                } else {
+                    zt += m.random.next_double() * half;
+                }
+            }
+            let mut p = [
+                (xt + m.position.x).floor() as i32,
+                (f64::from(d[1]) + m.position.y).floor() as i32,
+                (zt + m.position.z).floor() as i32,
+            ];
+            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 {
+                return None;
+            }
+            // GoalUtils.isRestricted: Mob.isWithinHome(BlockPos).
+            if restrict && let Some((c, r)) = home {
+                let dd = |i: usize| i64::from(c[i] - p[i]);
+                let r = i64::from(r);
+                if dd(0) * dd(0) + dd(1) * dd(1) + dd(2) * dd(2) >= r * r {
+                    return None;
+                }
+            }
+            // RandomPos.moveUpOutOfSolid
+            if w.solid(p[0], p[1], p[2]) {
+                p[1] += 1;
+                while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
+                    p[1] += 1;
+                }
+            }
+            (m.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0).then_some(p)
+        })
+    }
     /// LandRandomPos.getPos
     pub fn land_random_pos(&mut self, w: &MobWorld, h: i32, v: i32) -> Option<[f64; 3]> {
         self.pick_best(w, |m| {

@@ -3,10 +3,10 @@
 //! ghastling follows players and adults, a harnessed adult can be ridden and
 //! flown, healing is slow (fast in the rain) and `HappyGhastModel`.
 use super::{
-    Mob, MobEvent, MobWorld, Species,
+    Mob, MobEvent, MobWorld,
     anim::{Poses, State},
     control::{MoveKind, Operation},
-    goals::{Cx, Float, Goal, LOOK, MOVE, Panic, Stroll, Tempt, goal_clone},
+    goals::{Cx, Float, Goal, LOOK, MOVE, goal_clone},
     nav::NavKind,
 };
 use horizon_core::{
@@ -25,8 +25,11 @@ pub const AIR_SPEED: f32 = 0.05 * 5.0 / 3.0;
 pub fn register(m: &mut Mob) {
     setup(m, m.is_baby());
 }
-/// `adultGhastSetup` and `babyGhastSetup`.
+/// `adultGhastSetup` and `babyGhastSetup`: the ghastling flies with a
+/// `FlyingMoveControl` and has no goals (its brain drives it); the adult
+/// floats with `GhastMoveControl` and three goals, its brain stopped.
 fn setup(m: &mut Mob, baby: bool) {
+    let was = m.extra.scratch[0];
     m.extra.scratch[0] = if baby { 1 } else { 2 };
     m.ai.goals.clear();
     m.ai.nav.stop();
@@ -36,19 +39,14 @@ fn setup(m: &mut Mob, baby: bool) {
             max_turn: 180.0,
             hovers: true,
         };
+        // BabyFlyingPathNavigation.
         m.ai.nav.kind = NavKind::Flying;
         m.ai.nav.can_float = true;
         m.ai.nav.required_path_length = 48.0;
-        let tempt = m.kind.food.clone();
-        let g = &mut m.ai.goals;
-        g.add(0, Float);
-        g.add(0, Panic::new(2.0));
-        let mut t = Tempt::new(1.25, tempt, false);
-        t.stop_distance = 3.0;
-        g.add(1, t);
-        g.add(2, FollowAdult::default());
-        g.add(4, Stroll::flying(1.0));
         return;
+    }
+    if was == 1 {
+        super::animal_brain::grown_up(m);
     }
     m.ai.mov.kind = MoveKind::Custom;
     m.ai.nav.kind = NavKind::Ground;
@@ -272,53 +270,6 @@ impl Goal for FloatAround {
             t.y = c.y - (c.y - t.y).abs();
         }
         m.ai.mov.set_wanted(t.x, t.y, t.z, 1.0);
-    }
-}
-/// `BabyFollowAdult`: a ghastling drifts toward the nearest player or adult
-/// until it is a few blocks away.
-#[derive(Clone, Debug, Default)]
-struct FollowAdult {
-    close: f64,
-}
-impl FollowAdult {
-    fn target(m: &Mob, cx: &Cx) -> Option<Vec3> {
-        let player =
-            cx.w.player
-                .as_ref()
-                .filter(|p| p.alive && !p.spectator && m.distance_sqr(p.position) <= 32.0 * 32.0)
-                .map(|p| p.position);
-        player.or_else(|| {
-            cx.w.nearby(m.position, 32.0, |s| {
-                s.species == Species::HappyGhast && !s.baby
-            })
-            .next()
-            .map(|s| s.position)
-        })
-    }
-}
-impl Goal for FollowAdult {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        MOVE
-    }
-    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        m.is_baby()
-            && Self::target(m, cx).is_some_and(|t| {
-                let close = if self.close > 0.0 { self.close } else { 16.0 };
-                m.position.distance_squared(t) > close * close
-            })
-    }
-    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        Self::target(m, cx).is_some_and(|t| m.position.distance_squared(t) > 9.0)
-    }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
-        // UniformInt.of(3, 16).
-        self.close = f64::from(3 + m.random.next_int_bound(14).unwrap_or(0));
-    }
-    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some(t) = Self::target(m, cx) {
-            m.nav_move_to(cx.w, [t.x, t.y, t.z], 1.1);
-        }
     }
 }
 /// What a rider asks (`getRiddenInput`, `tickRidden`).

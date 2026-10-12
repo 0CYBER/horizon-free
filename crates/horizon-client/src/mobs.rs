@@ -8,6 +8,7 @@
 pub mod ai;
 pub mod allay;
 pub mod anim;
+pub mod animal_brain;
 pub mod aquatic;
 pub mod body_anim;
 pub mod brain;
@@ -537,6 +538,8 @@ pub struct Extra {
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.
     pub villager: Option<Box<villager::Ext>>,
+    /// The sniffer's and the ghastling's brain.
+    pub animal_brain: Option<Box<animal_brain::Brain>>,
     /// The mob this one rides, and the mob riding it (`getVehicle`, `getFirstPassenger`).
     pub mount: Option<u32>,
     pub rider: Option<u32>,
@@ -620,6 +623,12 @@ pub struct Mob {
 #[derive(Clone, Debug)]
 pub enum MobEvent {
     Sound(&'static str, [f64; 3], f32, f32),
+    /// `AnimalMakeLove`: the partner remembers this mob as its breed target
+    /// and walks to it and looks at it.
+    BreedTarget {
+        mob: u32,
+        partner: u32,
+    },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
     AttackPlayer(f32, [f64; 3]),

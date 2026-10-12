@@ -850,6 +850,11 @@ impl Game<'_> {
                     }
                 },
                 MobEvent::Breed { parent, partner } => self.breed(parent, partner),
+                MobEvent::BreedTarget { mob, partner } => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        horizon_client::mobs::animal_brain::set_breed_partner(m, partner);
+                    }
+                }
                 MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),
                 MobEvent::Vibration { from, to, ticks } => {
                     self.mob_vibration_particle(from, to, ticks)
