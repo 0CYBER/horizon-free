@@ -318,7 +318,7 @@ def entities(e, version):
         ]
         since = {'allay': 3105, 'chest_boat': 3105, 'text_display': 3325, 'item_display': 3325, 'goat': 2700}
         out = [(k, x) for k, x in out if version >= since.get(k, 0)]
-        if version < 2586:  # 1.13.2 to 1.15: entities in the formats those versions write
+        if version < 2514:  # 1.13.2 to 1.15: entities in the formats those versions write
             import datafix_scene_old
             out += datafix_scene_old.entities(version)
         if version < 3086:  # cats before 1.19 have a numeric CatType
