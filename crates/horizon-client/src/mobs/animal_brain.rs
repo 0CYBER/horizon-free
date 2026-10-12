@@ -1186,7 +1186,7 @@ impl B {
                 };
                 // closerThan(adult, 17) && !closerThan(adult, 3)
                 let d = m.distance_sqr(at.position);
-                if !(d < 17.0 * 17.0 && d >= 3.0 * 3.0) {
+                if !(3.0 * 3.0..17.0 * 17.0).contains(&d) {
                     return false;
                 }
                 let mm = mem(m);
@@ -1352,11 +1352,7 @@ impl B {
                 let near =
                     cx.w.target_info(player)
                         .is_some_and(|t| m.distance_sqr(t.position) < close * close);
-                let speed = if brain_mut(m).kind == Kind::Sniffer {
-                    1.25
-                } else {
-                    1.25
-                };
+                let speed = 1.25;
                 let mm = mem(m);
                 if near {
                     mm.walk_target.clear();

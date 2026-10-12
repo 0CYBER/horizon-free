@@ -353,7 +353,7 @@ fn world_gen_height_and_biome(cx: &mut Cx) {
     cx.each(Ty::WorldGenSettings, |v| {
         let flag = v.get("has_increased_height_already").cloned();
         let was_exp_snap = flag.is_none();
-        let was_previously_increased = flag.as_ref().map_or(true, |f| as_bool(Some(f), true));
+        let was_previously_increased = flag.as_ref().is_none_or(|f| as_bool(Some(f), true));
         remove(v, "has_increased_height_already");
         let Some(generator) = v
             .get_mut("dimensions")

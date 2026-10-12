@@ -692,7 +692,7 @@ impl Game<'_> {
             // BehaviorUtils.throwItem: from 0.3 below the golem's eyes towards
             // the player's feet at 0.3 blocks a tick, default pickup delay.
             let p = self.player.as_ref().map(|p| p.position);
-            let eye = f64::from(self.mobs[index].eye_height());
+            let eye = self.mobs[index].eye_height();
             let from = [at[0], at[1] + eye - f64::from(0.3f32), at[2]];
             let v = p.map_or([0.0; 3], |p| {
                 let d = [p.x - at[0], p.y - at[1], p.z - at[2]];
