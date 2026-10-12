@@ -58,7 +58,7 @@ EXTRAS = [
 # Layers a renderer reuses for another entity under a different constant.
 SKIP_LAYERS = re.compile(r'(banner|bell|book|skull|head|chest|shulker_box|boat|cushion|conduit|leash|arrow|trident|'
                          r'shield|elytra|spin_attack|ears|cape|decorated_pot|minecart|wind_charge|evoker_fangs|'
-                         r'llama_spit|shulker_bullet|bee_stinger|end_crystal|armor_stand|copper_golem|#(helmet|chestplate|leggings|'
+                         r'llama_spit|shulker_bullet|bee_stinger|end_crystal|armor_stand|copper_golem_\w+|#(helmet|chestplate|leggings|'
                          r'boots|outer|armor|decor|saddle|collar|wool|wool_undercoat|eyes|wind|inner|pattern|tendrils|'
                          r'heart|bioluminescent|pulsating_spots|water_patch|flag|cage|shell)$)')
 
@@ -189,6 +189,10 @@ SPECIES = {
              {'tongueAnimationState': 3}, {'swimIdleAnimationState': 2, 'isSwimming': T}],
     'rabbit': [{'hopAnimationState': 2}, {'idleHeadTiltAnimationState': 1}],
     'fox': FOX,
+    # CopperGolemModel: the idle head spin and the four chest interactions (started N ticks ago).
+    'copper_golem': [{'idleAnimationState': 4}, {'idleAnimationState': 37}, {'interactionGetItem': 3},
+                     {'interactionGetItem': 30}, {'interactionGetNoItem': 12}, {'interactionDropItem': 8},
+                     {'interactionDropItem': 45}, {'interactionDropNoItem': 20}],
 }
 
 

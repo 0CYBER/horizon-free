@@ -370,6 +370,22 @@ fn main() -> horizon_client::Result<()> {
                 },
                 &animations,
             ),
+            Species::CopperGolem => {
+                // CopperGolemRenderState's animation states, in the golem's slots.
+                for (slot, key) in [
+                    "idleAnimationState",
+                    "interactionGetItem",
+                    "interactionGetNoItem",
+                    "interactionDropItem",
+                    "interactionDropNoItem",
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    mob.anim.states[slot] = started(key);
+                }
+                horizon_client::mobs::copper_golem::anim(&mob, s, p, &animations);
+            }
             Species::Rabbit => b_anim::rabbit(
                 p,
                 s,

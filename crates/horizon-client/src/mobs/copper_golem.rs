@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 // Copper golem state: `variant` the weathering (0 unaffected .. 3 oxidized),
 // `variant3` the `CopperGolemState`, `main_hand` with `ints[1]` the carried
-// stack, the saddle slot the antenna (`EQUIPMENT_SLOT_ANTENNA`), `egg_time` the next weathering tick (-1
-// unset, -2 waxed), `ints[0]` the idle animation start tick, `home` the chest
+// stack, the saddle slot the antenna (`EQUIPMENT_SLOT_ANTENNA`), `vector[0]`
+// the next weathering tick (-1 unset, -2 waxed), `ints[0]` the idle animation start tick, `home` the chest
 // being served with `positions` the visited chests, `point` where it walks,
 // `scratch` = [transport phase, ticks since reaching the target, interaction
 // state, transport cooldown ticks]. AnimationState slots: idle (0), getting an
@@ -32,7 +32,8 @@ pub fn register(m: &mut Mob) {
     m.ai.nav.required_path_length = 48.0;
     m.ai.nav.can_open_doors = true;
     m.persistent = true;
-    m.extra.egg_time = -1;
+    // nextWeatheringTick starts unset (-1); waxed is -2.
+    m.extra.vector[0] = -1.0;
     m.extra.scratch[3] = 60 + m.random.next_int_bound(40).unwrap_or(0);
     let g = &mut m.ai.goals;
     g.add(0, Panic::new(1.5));

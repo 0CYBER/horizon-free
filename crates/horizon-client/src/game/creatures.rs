@@ -759,6 +759,13 @@ impl Game<'_> {
                         }
                     }
                 },
+                MobEvent::Gift { target, item } => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
+                        && m.saddle_item().is_none()
+                    {
+                        m.set_saddle(Some(ItemStack::new(item, 1)));
+                    }
+                }
                 MobEvent::HurtSelf { mob, kind, amount } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         m.damage(amount, horizon_client::mobs::Damage::of(kind));

@@ -629,6 +629,12 @@ pub struct Mob {
 #[derive(Clone, Debug)]
 pub enum MobEvent {
     Sound(&'static str, [f64; 3], f32, f32),
+    /// `OfferFlowerGoal.stop`: the item goes to the target's antenna (saddle)
+    /// slot if it is empty, as a guaranteed drop.
+    Gift {
+        target: u32,
+        item: &'static str,
+    },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
     /// A level event's sound (`levelEvent`/`globalLevelEvent`): the client
