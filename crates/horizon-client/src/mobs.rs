@@ -669,6 +669,15 @@ pub enum MobEvent {
         volume: f32,
         spread: f32,
     },
+    /// `Level.gameEvent` from a mob's own movement (`GameEvent.STEP`): the
+    /// game's sculk layer tracks steps itself, the mob AI probe hears them
+    /// through the wardens (`warden::listen`).
+    GameEvent {
+        event: &'static str,
+        at: [f64; 3],
+        source: u32,
+        state: horizon_world::registry::BlockStateId,
+    },
     AttackPlayer(f32, [f64; 3]),
     /// Damage of a given type to the player (guardian lasers, thorns).
     DamagePlayer {

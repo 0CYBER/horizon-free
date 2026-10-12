@@ -350,6 +350,7 @@ pub fn tick(
     if m.removed {
         return false;
     }
+    super::warden::pre_tick(m, w, events);
     base_tick(m, w, events);
     if m.death_time >= super::creaking::death_limit(m) {
         // Creaking.tickDeath: a heart's creaking crumbles away.

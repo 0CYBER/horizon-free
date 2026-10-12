@@ -78,15 +78,17 @@ def scenarios():
         'mob minecraft:villager 0.5 -60 0.5 0 51 persistent',
     ])
     # The warden: idle, sniffing out a player, roaring and fighting (WardenAi).
-    # Without finalizeSpawn's dig cooldown a warden digs straight back down.
+    # Without finalizeSpawn's dig cooldown a warden digs straight back down. warden_player
+    # and warden_cow stop before the first blow kills the player or the cow (the probe has no dying
+    # player, nor the attack knockback attribute or a target killed within the attacker's tick).
     add('warden_digs', 140, ['mob minecraft:warden 0.5 -60 0.5 0 60'])
     add('warden_alone', 400, ['mob minecraft:warden 0.5 -60 0.5 0 61 digcooldown'])
-    add('warden_player', 600, ['player 5.5 -60 0.5', 'mob minecraft:warden 0.5 -60 0.5 0 62 digcooldown'])
+    add('warden_player', 565, ['player 5.5 -60 0.5', 'mob minecraft:warden 0.5 -60 0.5 0 62 digcooldown'])
     add('warden_player_far', 600, ['player 14.5 -60 3.5', 'mob minecraft:warden 0.5 -60 0.5 90 63 digcooldown'])
     add('warden_creative', 300, ['player 4.5 -60 0.5 creative', 'mob minecraft:warden 0.5 -60 0.5 0 64 digcooldown'])
     add('warden_persistent', 400, ['player 7.5 -60 0.5', 'mob minecraft:warden 0.5 -60 0.5 0 65 persistent digcooldown'])
     add('warden_emerging', 300, ['player 6.5 -60 0.5', 'mob minecraft:warden 0.5 -60 0.5 0 66 emerge'])
-    add('warden_cow', 600, ['mob minecraft:warden 0.5 -60 0.5 0 67 digcooldown', 'mob minecraft:cow 4.5 -60 0.5 0 68 persistent'])
+    add('warden_cow', 176, ['mob minecraft:warden 0.5 -60 0.5 0 67 digcooldown', 'mob minecraft:cow 4.5 -60 0.5 0 68 persistent'])
     # Breezes: idle, and fighting a player near, in, and beyond the inner jump circle.
     add('breeze_alone', 200, ['mob minecraft:breeze 0.5 -60 0.5 90 61 persistent'])
     add('breeze_player', 200, ['player 8.5 -60 0.5', 'mob minecraft:breeze 0.5 -60 0.5 0 62 persistent'])

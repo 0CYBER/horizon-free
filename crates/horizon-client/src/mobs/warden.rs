@@ -441,6 +441,11 @@ pub(super) fn do_hurt_target(m: &mut Mob, target: Who, w: &MobWorld, events: &mu
     super::ai::do_hurt_target(m, target, &mut cx);
 }
 
+/// The brain's attack target (`Warden.getTarget` before `asValidTarget`).
+pub fn brain_target(m: &Mob) -> Option<Who> {
+    warden_brain::mem_ref(m).and_then(|mem| mem.attack_target.value())
+}
+
 // ---- vibrations ----
 
 /// `Warden.VibrationUser.canReceiveVibration`.
@@ -453,6 +458,85 @@ pub fn can_receive_vibration(m: &Mob, _now: i64, ctx: &Context) -> bool {
         && !st.brain.mem.vibration_cooldown.present()
         && !digging_or_emerging(m)
         && !(ctx.living && !ctx.targetable)
+}
+/// `VibrationSystem.Listener.handleGameEvent` for the warden: a free
+/// listener within 16 blocks of its eyes schedules what it can hear.
+/// `occluded` is `VibrationSystem.Listener.isOccluded`.
+pub fn listen(
+    m: &mut Mob,
+    now: i64,
+    event: &'static str,
+    pos: [f64; 3],
+    ctx: &Context,
+    occluded: impl Fn([f64; 3], [f64; 3]) -> bool,
+) {
+    let eye = [m.position.x, m.position.y + m.kind.eye_height, m.position.z];
+    let Some(st) = m.extra.warden.as_ref() else {
+        return;
+    };
+    if st.vibration.current.is_some() {
+        return;
+    }
+    let block = |p: [f64; 3]| p.map(|v| i64::from(v.floor() as i32));
+    let (source, listener) = (block(pos), block(eye));
+    let d = [0, 1, 2].map(|i| source[i] - listener[i]);
+    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 256
+        || !sculk::valid_vibration(sculk::warden_can_listen(event), event, ctx)
+        || !can_receive_vibration(m, i64::from(m.age), ctx)
+        || occluded(pos, eye)
+    {
+        return;
+    }
+    let d = [pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2]];
+    let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
+    if let Some(st) = m.extra.warden.as_mut() {
+        st.vibration.schedule(
+            Info {
+                event,
+                distance,
+                pos,
+                source: ctx.source,
+                owner: ctx.owner,
+            },
+            now,
+        );
+    }
+}
+/// `Level.gameEvent` for the mobs' own movement events from `from` on, as
+/// the mob AI probe has no sculk layer: every warden's listener hears them.
+pub fn hear_mob_events(mobs: &mut [Mob], events: &[MobEvent], from: usize, w: &MobWorld) {
+    for e in &events[from..] {
+        let MobEvent::GameEvent {
+            event,
+            at,
+            source,
+            state,
+        } = *e
+        else {
+            continue;
+        };
+        let who = mobs.iter().find(|m| m.id == source);
+        let name = &w.facts.get(state).name;
+        let ctx = Context {
+            source: Some(Who::Mob(source)),
+            dampening_state: w.has_tag("minecraft:dampens_vibrations", name),
+            dampens: who.is_some_and(|m| m.species() == Species::Warden),
+            targetable: who.is_some_and(|m| m.alive() && m.species() != Species::Warden),
+            living: true,
+            ..Context::default()
+        };
+        for m in mobs.iter_mut().filter(|m| m.extra.warden.is_some()) {
+            listen(m, w.game_time, event, at, &ctx, |a, b| {
+                sculk::is_occluded(a, b, |p| {
+                    let block = w.world.block(p.x, p.y, p.z);
+                    w.has_tag(
+                        "minecraft:occludes_vibration_signals",
+                        &w.facts.get(block).name,
+                    )
+                })
+            });
+        }
+    }
 }
 /// `Warden.VibrationUser.onReceiveVibration`.
 fn receive_vibration(m: &mut Mob, w: &MobWorld, info: Info, events: &mut Vec<MobEvent>) {
@@ -507,15 +591,9 @@ fn receive_vibration(m: &mut Mob, w: &MobWorld, info: Info, events: &mut Vec<Mob
 
 // ---- the server tick ----
 
-/// `Warden.tick` (the vibration ticker, persistence keeping the dig
-/// cooldown) and `Warden.customServerAiStep` (the brain, the darkness
-/// pulse, anger and the activity).
-pub fn server_ai_step(
-    m: &mut Mob,
-    w: &MobWorld,
-    level_random: &mut LegacyRandom,
-    events: &mut Vec<MobEvent>,
-) {
+/// `Warden.tick` before `super.tick()`: the vibration ticker, and
+/// persistence keeping the dig cooldown.
+pub fn pre_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.extra.warden.is_none() {
         return;
     }
@@ -541,6 +619,18 @@ pub fn server_ai_step(
     }
     if m.persistent || m.custom_name.is_some() {
         warden_brain::set_dig_cooldown(m);
+    }
+}
+/// `Warden.customServerAiStep`: the brain, the darkness pulse, anger and
+/// the activity.
+pub fn server_ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
+    if m.extra.warden.is_none() {
+        return;
     }
     handle_hurt(m, w, events);
     warden_brain::tick(m, w, level_random, events);
