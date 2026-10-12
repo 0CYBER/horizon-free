@@ -184,8 +184,10 @@ impl Game<'_> {
             mob: Some(m.id),
             name: m.custom_name.clone(),
         };
-        // setTradingPlayer: a wandering trader stands still while trading.
-        self.mobs[index].extra.flag2 = species == Species::WanderingTrader;
+        // setTradingPlayer: a wandering trader stands still while trading, a
+        // villager's brain follows and looks at the player
+        // (LookAndFollowTradingPlayerSink).
+        self.mobs[index].extra.flag2 = true;
         self.open_merchant_state(state);
         Ok(true)
     }

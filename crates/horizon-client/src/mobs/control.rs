@@ -230,7 +230,7 @@ impl Mob {
         self.ai.speed = speed;
         self.ai.zza = speed;
     }
-    fn ground_move_tick(&mut self, w: &MobWorld, attr_speed: f64) {
+    pub(crate) fn ground_move_tick(&mut self, w: &MobWorld, attr_speed: f64) {
         match self.ai.mov.operation {
             Operation::Strafe => {
                 let speed = self.ai.mov.speed_modifier as f32 * attr_speed as f32;

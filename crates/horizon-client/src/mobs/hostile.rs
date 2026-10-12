@@ -47,10 +47,10 @@ pub fn register(m: &mut Mob) {
             g.add(6, RandomLookAround::default());
             m.ai.targets.add(1, HurtByTarget::new());
             m.ai.targets
-                .add(2, NearestTarget::player(true).when(dark_enough));
+                .add(2, NearestTarget::player(true).gate(dark_enough));
             m.ai.targets.add(
                 3,
-                NearestTarget::species(&[S::IronGolem], true).when(dark_enough),
+                NearestTarget::species(&[S::IronGolem], true).gate(dark_enough),
             );
             m.ai.nav.kind = super::nav::NavKind::WallClimber;
         }
