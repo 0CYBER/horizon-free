@@ -73,7 +73,8 @@ pub enum Out {
 
 /// PlayerList.canPlayerLogin for a dedicated server: the disconnect reason
 /// (bans, whitelist) for a profile connecting from an address, if refused.
-pub type LoginGate = Arc<dyn Fn(SocketAddr, u128, &str) -> Option<horizon_world::nbt::Tag> + Send + Sync>;
+pub type LoginGate =
+    Arc<dyn Fn(SocketAddr, u128, &str) -> Option<horizon_world::nbt::Tag> + Send + Sync>;
 
 /// How the server side of the network behaves: an integrated server's LAN
 /// uses the defaults, a dedicated server takes them from server.properties.
@@ -199,7 +200,9 @@ impl Shared {
     }
     fn next_random(&self, bound: usize) -> usize {
         let mut r = self.random.lock().unwrap();
-        *r = r.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        *r = r
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         ((*r >> 33) as usize) % bound.max(1)
     }
     /// The status response (MinecraftServer.buildServerStatus encoded with
@@ -211,7 +214,10 @@ impl Shared {
         let online: Vec<(u128, String)> = self.online.lock().unwrap().clone();
         let count = self.online();
         let mut players = vec![
-            ("max".to_owned(), Json::Number(self.max_players().to_string())),
+            (
+                "max".to_owned(),
+                Json::Number(self.max_players().to_string()),
+            ),
             ("online".to_owned(), Json::Number(count.to_string())),
         ];
         if !self.config.hide_online_players && !online.is_empty() {
@@ -244,7 +250,10 @@ impl Shared {
                 "version".to_owned(),
                 Json::Object(vec![
                     ("name".to_owned(), Json::String(GAME_VERSION.to_owned())),
-                    ("protocol".to_owned(), Json::Number(PROTOCOL_VERSION.to_string())),
+                    (
+                        "protocol".to_owned(),
+                        Json::Number(PROTOCOL_VERSION.to_string()),
+                    ),
                 ]),
             ),
         ];
@@ -266,12 +275,24 @@ pub fn base64(data: &[u8]) -> String {
     const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
         out.push(char::from(A[(n >> 18) as usize & 63]));
         out.push(char::from(A[(n >> 12) as usize & 63]));
-        out.push(if chunk.len() > 1 { char::from(A[(n >> 6) as usize & 63]) } else { '=' });
-        out.push(if chunk.len() > 2 { char::from(A[n as usize & 63]) } else { '=' });
+        out.push(if chunk.len() > 1 {
+            char::from(A[(n >> 6) as usize & 63])
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            char::from(A[n as usize & 63])
+        } else {
+            '='
+        });
     }
     out
 }

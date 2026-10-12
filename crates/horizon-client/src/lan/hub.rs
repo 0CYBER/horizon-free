@@ -129,7 +129,12 @@ pub fn yellow_translation(key: &str, args: &[&str]) -> Tag {
 /// Player.getDisplayName for a player in no team: the name, suggesting
 /// `/tell NAME `, showing the player on hover and inserting the name.
 pub fn display_name(uuid: u128, name: &str) -> Tag {
-    let words = [(uuid >> 96) as i32, (uuid >> 64) as i32, (uuid >> 32) as i32, uuid as i32];
+    let words = [
+        (uuid >> 96) as i32,
+        (uuid >> 64) as i32,
+        (uuid >> 32) as i32,
+        uuid as i32,
+    ];
     Tag::compound([
         ("text", string(name)),
         (
@@ -275,7 +280,12 @@ impl Hub {
     pub fn list_reply(&self, host: Option<(u128, &str)>, uuids: bool) -> Tag {
         let players: Vec<(u128, &str)> = host
             .into_iter()
-            .chain(self.guests.iter().filter(|g| g.placed).map(|g| (g.uuid, g.name.as_str())))
+            .chain(
+                self.guests
+                    .iter()
+                    .filter(|g| g.placed)
+                    .map(|g| (g.uuid, g.name.as_str())),
+            )
             .collect();
         let format = |(uuid, name): (u128, &str)| {
             if uuids {
@@ -300,7 +310,10 @@ impl Hub {
                 let mut extra = Vec::new();
                 for (k, p) in players.iter().enumerate() {
                     if k > 0 {
-                        extra.push(Tag::compound([("text", string(", ")), ("color", string("gray"))]));
+                        extra.push(Tag::compound([
+                            ("text", string(", ")),
+                            ("color", string("gray")),
+                        ]));
                     }
                     extra.push(format(*p));
                 }
@@ -536,7 +549,10 @@ impl Hub {
         // ServerLevel.addNewPlayer: the chunk tracking starts at the player.
         let g = &mut self.guests[i];
         let (cx, cz) = g.chunk();
-        g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter { x: cx, z: cz }));
+        g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
+            x: cx,
+            z: cz,
+        }));
         g.center_sent = Some((cx, cz));
         g.placed_at = self.ticks;
         // ServerPlayer.sendPostEffects and initInventoryMenu.

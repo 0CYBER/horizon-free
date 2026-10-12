@@ -52,10 +52,37 @@ fn component_value(tag: &horizon_world::nbt::Tag) -> crate::server::json::Json {
     use crate::server::json::Json;
     use horizon_world::nbt::Tag;
     const ORDER: &[&str] = &[
-        "type", "text", "translate", "fallback", "with", "score", "selector", "separator",
-        "keybind", "nbt", "interpret", "block", "entity", "storage", "source", "object",
-        "sprite", "atlas", "player", "hat", "extra", "color", "shadow_color", "bold", "italic",
-        "underlined", "strikethrough", "obfuscated", "click_event", "hover_event", "insertion",
+        "type",
+        "text",
+        "translate",
+        "fallback",
+        "with",
+        "score",
+        "selector",
+        "separator",
+        "keybind",
+        "nbt",
+        "interpret",
+        "block",
+        "entity",
+        "storage",
+        "source",
+        "object",
+        "sprite",
+        "atlas",
+        "player",
+        "hat",
+        "extra",
+        "color",
+        "shadow_color",
+        "bold",
+        "italic",
+        "underlined",
+        "strikethrough",
+        "obfuscated",
+        "click_event",
+        "hover_event",
+        "insertion",
         "font",
     ];
     match tag {
@@ -125,7 +152,10 @@ fn serve_legacy(mut stream: TcpStream, shared: &Shared) -> Result<(), String> {
         let bytes = d.get(*at + 2..*at + 2 + len * 2)?;
         *at += 2 + len * 2;
         Some(String::from_utf16_lossy(
-            &bytes.chunks(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect::<Vec<_>>(),
+            &bytes
+                .chunks(2)
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
         ))
     };
     let motd = shared.motd();
@@ -181,7 +211,10 @@ pub fn serve(
     let e = |e: horizon_protocol::Error| e.to_string();
     // LegacyQueryHandler, ahead of the frame decoder while status is on.
     let mut first = [0u8; 1];
-    if shared.config.enable_status && stream.peek(&mut first).is_ok_and(|n| n == 1) && first[0] == 0xFE {
+    if shared.config.enable_status
+        && stream.peek(&mut first).is_ok_and(|n| n == 1)
+        && first[0] == 0xFE
+    {
         return serve_legacy(stream, &shared);
     }
     let mut c = Connection::from_stream(stream).map_err(e)?;

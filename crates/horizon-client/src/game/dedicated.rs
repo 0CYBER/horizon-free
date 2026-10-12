@@ -37,7 +37,11 @@ pub(super) fn java_double(v: f64) -> String {
     } else {
         let s = format!("{v:E}");
         let (m, e) = s.split_once('E').unwrap_or((&s, "0"));
-        let m = if m.contains('.') { m.to_owned() } else { format!("{m}.0") };
+        let m = if m.contains('.') {
+            m.to_owned()
+        } else {
+            format!("{m}.0")
+        };
         format!("{m}E{e}")
     }
 }
@@ -75,8 +79,14 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
     while let Some(arg) = it.next() {
         let name = arg.trim_start_matches('-');
         match name {
-            "nogui" | "demo" | "bonusChest" | "forceUpgrade" | "eraseCache"
-            | "recreateRegionFiles" | "safeMode" | "jfrProfile" => {}
+            "nogui"
+            | "demo"
+            | "bonusChest"
+            | "forceUpgrade"
+            | "eraseCache"
+            | "recreateRegionFiles"
+            | "safeMode"
+            | "jfrProfile" => {}
             "initSettings" => init_settings = true,
             "help" => {
                 eprintln!(
@@ -296,7 +306,10 @@ impl Game<'_> {
                 let stdin = std::io::stdin();
                 let mut line = String::new();
                 while stdin.read_line(&mut line).is_ok_and(|n| n > 0) {
-                    if tx.send(line.trim_end_matches(['\r', '\n']).to_owned()).is_err() {
+                    if tx
+                        .send(line.trim_end_matches(['\r', '\n']).to_owned())
+                        .is_err()
+                    {
                         break;
                     }
                     line.clear();
@@ -632,13 +645,24 @@ impl Game<'_> {
                 let guests: Vec<(String, u128)> = self
                     .lan
                     .as_ref()
-                    .map(|h| h.hub.guests.iter().map(|g| (g.name.clone(), g.uuid)).collect())
+                    .map(|h| {
+                        h.hub
+                            .guests
+                            .iter()
+                            .map(|g| (g.name.clone(), g.uuid))
+                            .collect()
+                    })
                     .unwrap_or_default();
-                let max = self.lan.as_ref().map_or(0, |h| h.hub.lan.shared.max_players());
+                let max = self
+                    .lan
+                    .as_ref()
+                    .map_or(0, |h| h.hub.lan.shared.max_players());
                 let names: Vec<String> = if rest.first() == Some(&"uuids") {
                     guests
                         .iter()
-                        .map(|(n, u)| format!("{n} ({})", horizon_protocol::crypto::uuid_string(*u)))
+                        .map(|(n, u)| {
+                            format!("{n} ({})", horizon_protocol::crypto::uuid_string(*u))
+                        })
                         .collect()
                 } else {
                     guests.iter().map(|(n, _)| n.clone()).collect()
@@ -697,7 +721,12 @@ impl Game<'_> {
                         &[
                             lit(&user.name),
                             reason.as_deref().map_or_else(
-                                || Text::translate("multiplayer.disconnect.banned.reason.default", &[]),
+                                || {
+                                    Text::translate(
+                                        "multiplayer.disconnect.banned.reason.default",
+                                        &[],
+                                    )
+                                },
                                 lit,
                             ),
                         ],
@@ -820,7 +849,12 @@ impl Game<'_> {
                                 lit(&name),
                                 lit(&source),
                                 reason.as_deref().map_or_else(
-                                    || Text::translate("multiplayer.disconnect.banned.reason.default", &[]),
+                                    || {
+                                        Text::translate(
+                                            "multiplayer.disconnect.banned.reason.default",
+                                            &[],
+                                        )
+                                    },
                                     lit,
                                 ),
                             ],
@@ -932,7 +966,11 @@ impl Game<'_> {
                     (false, "commands.whitelist.remove.failed")
                 };
                 drop(l);
-                let args = if ok { vec![lit(&user.name)] } else { Vec::new() };
+                let args = if ok {
+                    vec![lit(&user.name)]
+                } else {
+                    Vec::new()
+                };
                 self.console_reply(Text::translate(key, &args));
             }
             _ => self.console_reply(Text::translate("command.unknown.argument", &[])),
@@ -968,7 +1006,11 @@ impl Game<'_> {
     /// MinecraftServer.saveAllChunks, not silent: one line per level, in
     /// the server's level order.
     fn log_saved_levels(&self) {
-        for dimension in ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"] {
+        for dimension in [
+            "minecraft:overworld",
+            "minecraft:the_nether",
+            "minecraft:the_end",
+        ] {
             log(
                 "INFO",
                 &format!(
@@ -988,8 +1030,10 @@ impl Game<'_> {
             }
             let conns: Vec<u32> = h.hub.guests.iter().map(|g| g.conn).collect();
             for conn in conns {
-                h.hub
-                    .kick(conn, translatable("multiplayer.disconnect.server_shutdown", &[]));
+                h.hub.kick(
+                    conn,
+                    translatable("multiplayer.disconnect.server_shutdown", &[]),
+                );
             }
         }
         std::thread::sleep(Duration::from_millis(100));

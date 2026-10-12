@@ -651,7 +651,11 @@ pub fn client_heightmaps(chunk: &Chunk, tables: &SaveTables) -> Vec<(i32, Vec<i6
     ];
     let mut maps: Vec<(i32, Heightmap)> = kinds
         .iter()
-        .filter_map(|(id, k)| Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16).ok().map(|m| (*id, m)))
+        .filter_map(|(id, k)| {
+            Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16)
+                .ok()
+                .map(|m| (*id, m))
+        })
         .collect();
     let view = HeightmapView { chunk, tables };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().map(|(_, m)| m).collect();

@@ -203,9 +203,9 @@ impl ChunkEncoder {
         for (i, s) in chunk.sections.iter().enumerate() {
             let mut unpacked = [0u16; BLOCKS];
             s.unpack(&mut unpacked);
-            let any = unpacked.iter().any(|&v| {
-                self.flags.get(usize::from(v)).copied().unwrap_or(0) & NON_AIR != 0
-            });
+            let any = unpacked
+                .iter()
+                .any(|&v| self.flags.get(usize::from(v)).copied().unwrap_or(0) & NON_AIR != 0);
             if any {
                 bits |= 1 << i;
             }
@@ -296,7 +296,11 @@ impl ChunkEncoder {
 /// (`items` in section order) went through.
 fn java_hash_order<T>(items: &mut Vec<T>, pos: impl Fn(&T) -> (i32, i32, i32)) {
     // Vec3i.hashCode.
-    let hash = |&(x, y, z): &(i32, i32, i32)| y.wrapping_add(z.wrapping_mul(31)).wrapping_mul(31).wrapping_add(x);
+    let hash = |&(x, y, z): &(i32, i32, i32)| {
+        y.wrapping_add(z.wrapping_mul(31))
+            .wrapping_mul(31)
+            .wrapping_add(x)
+    };
     let keys: Vec<i32> = items.iter().map(|i| hash(&pos(i))).collect();
     // java.util.HashMap: buckets in index order, insertion order within one.
     let mut capacity = 16usize;
@@ -304,7 +308,9 @@ fn java_hash_order<T>(items: &mut Vec<T>, pos: impl Fn(&T) -> (i32, i32, i32)) {
         capacity *= 2;
     }
     let mut order: Vec<usize> = (0..keys.len()).collect();
-    order.sort_by_key(|&i| ((keys[i] ^ ((keys[i] as u32) >> 16) as i32) as u32 as usize) & (capacity - 1));
+    order.sort_by_key(|&i| {
+        ((keys[i] ^ ((keys[i] as u32) >> 16) as i32) as u32 as usize) & (capacity - 1)
+    });
     // Object2ObjectOpenHashMap.
     let mix = |h: i32| {
         let h = h.wrapping_mul(0x9E37_79B9_u32 as i32) as u32;
@@ -356,7 +362,15 @@ fn saved_update_tag(chunk: &Chunk, pos: (i32, i32, i32)) -> Option<Tag> {
     let Tag::Compound(mut c) = crate::block_entity_nbt::canonical(tag)? else {
         return None;
     };
-    for key in ["id", "x", "y", "z", "keepPacked", "SpawnPotentials", "components"] {
+    for key in [
+        "id",
+        "x",
+        "y",
+        "z",
+        "keepPacked",
+        "SpawnPotentials",
+        "components",
+    ] {
         c.remove(&key.into());
     }
     Some(Tag::Compound(c))
@@ -466,7 +480,9 @@ mod tests {
     #[test]
     fn light_masks_cover_the_world_plus_borders() {
         let chunk = Chunk::empty(0, 0);
-        let data = light_data(&chunk);
+        // A column with nothing around it has no light layers at all.
+        assert!(light_data(&chunk, 0).sky.is_empty());
+        let data = light_data(&chunk, u64::MAX);
         // Default sections are full sky light and no block light.
         assert_eq!(data.sky.len(), SECTIONS + 1);
         assert_eq!(data.block.len(), 0);

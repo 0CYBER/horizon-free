@@ -45,7 +45,10 @@ impl Game<'_> {
                 quiet_since = now;
             }
             match step {
-                0 if spawned_at.is_some() && count > 0 && now - quiet_since > Duration::from_secs(3) => {
+                0 if spawned_at.is_some()
+                    && count > 0
+                    && now - quiet_since > Duration::from_secs(3) =>
+                {
                     chunks = count;
                     self.send_chat("hello from the horizon client");
                     step = 1;

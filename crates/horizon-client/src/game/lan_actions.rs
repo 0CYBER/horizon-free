@@ -517,7 +517,13 @@ impl Game<'_> {
             let me = (self.options.dedicated.is_none() && self.player.is_some())
                 .then_some((host.host_uuid, super::chat::PLAYER_NAME));
             let content = host.hub.list_reply(me, words.len() == 2);
-            host.hub.send_to(conn, &C::SystemChat(play::SystemChat { content, overlay: false }));
+            host.hub.send_to(
+                conn,
+                &C::SystemChat(play::SystemChat {
+                    content,
+                    overlay: false,
+                }),
+            );
             return;
         }
         if !host.settings.guest_commands || !self.cheats {
