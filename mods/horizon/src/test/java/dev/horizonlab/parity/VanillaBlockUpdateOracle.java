@@ -201,6 +201,7 @@ public final class VanillaBlockUpdateOracle {
         @Override public net.minecraft.world.flag.FeatureFlagSet enabledFeatures() { return FeatureFlags.DEFAULT_FLAGS; }
         @Override public GameRules getGameRules() { return rules; }
         @Override public net.minecraft.server.MinecraftServer getServer() { return server; }
+        @Override public net.minecraft.world.item.crafting.RecipeManager recipeAccess() { return Server.recipes; }
         @Override public net.minecraft.world.level.border.WorldBorder getWorldBorder() { return new net.minecraft.world.level.border.WorldBorder(); }
         @Override public int getSeaLevel() { return 63; }
         @Override public int getBrightness(net.minecraft.world.level.LightLayer layer, BlockPos p) { return layer == net.minecraft.world.level.LightLayer.SKY ? skyLight : blockLight; }
@@ -438,6 +439,9 @@ public final class VanillaBlockUpdateOracle {
         Server() {
             super(null, null, null, null, null, null, null, null, null, false, null);
         }
+        /** Crafting recipes, for the oracles that craft (the crafter); null elsewhere. */
+        static net.minecraft.world.item.crafting.RecipeManager recipes;
+        @Override public net.minecraft.world.item.crafting.RecipeManager getRecipeManager() { return recipes; }
         @Override public net.minecraft.server.ReloadableServerRegistries.Holder reloadableRegistries() { return loot; }
         @Override protected boolean initServer() { return false; }
         @Override public int getMaxPlayers() { return 0; }

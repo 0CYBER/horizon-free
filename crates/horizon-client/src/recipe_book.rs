@@ -4,7 +4,7 @@
 //! craftable stack), where a recipe goes in a grid (`PlaceRecipeHelper`) and
 //! the book's saved settings.
 use crate::{
-    crafting::{Ingredient, Recipe, Recipes},
+    crafting::{Ingredient, Placement, Recipe, Recipes},
     items::{ItemStack, Items},
 };
 use horizon_world::nbt::Tag;
@@ -89,6 +89,23 @@ pub enum Category {
     BlastMisc,
     SmokerFood,
 }
+impl Category {
+    /// The `RecipeBookCategories` registry path.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::CraftingBuilding => "crafting_building_blocks",
+            Self::CraftingRedstone => "crafting_redstone",
+            Self::CraftingEquipment => "crafting_equipment",
+            Self::CraftingMisc => "crafting_misc",
+            Self::FurnaceFood => "furnace_food",
+            Self::FurnaceBlocks => "furnace_blocks",
+            Self::FurnaceMisc => "furnace_misc",
+            Self::BlastBlocks => "blast_furnace_blocks",
+            Self::BlastMisc => "blast_furnace_misc",
+            Self::SmokerFood => "smoker_food",
+        }
+    }
+}
 /// A tab button: the search tab or one category.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Tab {
@@ -133,6 +150,9 @@ pub enum Display {
 pub struct Entry {
     /// The recipe id, `minecraft:name`.
     pub id: String,
+    /// `RecipeDisplayId`: the display's index among every recipe's displays
+    /// (`Book::set_display_ids`; -1 until then).
+    pub display_id: i32,
     pub category: Category,
     pub group: Option<String>,
     pub display: Display,
@@ -245,6 +265,9 @@ pub struct Collection {
 #[derive(Default)]
 pub struct Book {
     pub entries: Vec<Entry>,
+    /// `Recipe.placementInfo` by recipe id: what the book's craftable test
+    /// and the server's placement look for.
+    pub placements: HashMap<String, Placement>,
     /// Item id -> registry position, to order ingredient choices.
     pub order: HashMap<String, usize>,
 }
@@ -286,6 +309,7 @@ impl Book {
                     for (display, result) in special.book_displays() {
                         entries.push(Entry {
                             id: format!("minecraft:{name}"),
+                            display_id: -1,
                             category: crafting_category(&category),
                             group: group(&grp),
                             display,
@@ -297,6 +321,7 @@ impl Book {
             };
             entries.push(Entry {
                 id: format!("minecraft:{name}"),
+                display_id: -1,
                 category: crafting_category(&category),
                 group: group(&grp),
                 display,
@@ -315,6 +340,7 @@ impl Book {
             };
             entries.push(Entry {
                 id: format!("minecraft:{}", c.id),
+                display_id: -1,
                 category,
                 group: group(&c.group),
                 display: Display::Furnace(c.ingredient.clone()),
@@ -327,43 +353,15 @@ impl Book {
             .enumerate()
             .map(|(i, id)| (id.to_string(), i))
             .collect();
-        Self { entries, order }
-    }
-    /// The unlocked recipes of one tab as collections (`ClientRecipeBook.rebuildCollections`).
-    pub fn collections(
-        &self,
-        unlocked: &BTreeSet<String>,
-        book: BookType,
-        tab: Tab,
-    ) -> Vec<Collection> {
-        let categories: Vec<Category> = match tab {
-            Tab::Search => book.search_categories().to_vec(),
-            Tab::Category(c) => vec![c],
-        };
-        let mut out = Vec::new();
-        for category in categories {
-            let mut by_group: HashMap<&str, usize> = HashMap::new();
-            let start = out.len();
-            for (i, e) in self.entries.iter().enumerate() {
-                if e.category != category || !unlocked.contains(&e.id) {
-                    continue;
-                }
-                match e.group.as_deref().and_then(|g| by_group.get(g).copied()) {
-                    Some(c) => {
-                        let c: usize = c;
-                        let collection: &mut Collection = &mut out[start + c];
-                        collection.entries.push(i);
-                    }
-                    None => {
-                        if let Some(g) = e.group.as_deref() {
-                            by_group.insert(g, out.len() - start);
-                        }
-                        out.push(Collection { entries: vec![i] });
-                    }
-                }
-            }
+        let placements = entries
+            .iter()
+            .filter_map(|e| Some((e.id.clone(), recipes.placement(&e.id)?)))
+            .collect();
+        Self {
+            entries,
+            placements,
+            order,
         }
-        out
     }
     /// Which book a recipe id belongs to.
     pub fn book_of(&self, id: &str) -> Option<BookType> {
@@ -379,6 +377,30 @@ impl Book {
             Category::BlastBlocks | Category::BlastMisc => BookType::BlastFurnace,
             Category::SmokerFood => BookType::Smoker,
         })
+    }
+    /// `RecipeDisplayEntry.canCraft`: the recipe's placement ingredients
+    /// (`craftingRequirements`) can all be found in `stock`.
+    pub fn can_craft(&self, entry: &Entry, stock: &crate::menu::place::Stacked) -> bool {
+        self.placements
+            .get(&entry.id)
+            .is_some_and(|p| stock.can_craft(&p.ingredients.iter().collect::<Vec<_>>()))
+    }
+    /// Numbers the entries as `RecipeManager.unpackRecipeInfo` numbers the
+    /// displays: every recipe in id order, each with its displays.
+    pub fn set_display_ids(&mut self, index: &RecipeIndex) {
+        let mut previous: Option<(String, i32)> = None;
+        for e in &mut self.entries {
+            let next = match &previous {
+                Some((id, last)) if *id == e.id => last + 1,
+                _ => index.first_display(&e.id).unwrap_or(-1),
+            };
+            e.display_id = next;
+            previous = Some((e.id.clone(), next));
+        }
+    }
+    /// The entry of a display id.
+    pub fn entry_of_display(&self, display: i32) -> Option<usize> {
+        self.entries.iter().position(|e| e.display_id == display)
     }
     pub fn entry(&self, id: &str) -> Option<&Entry> {
         self.entries.iter().find(|e| e.id == id)
@@ -419,161 +441,253 @@ impl Book {
     }
 }
 
-/// `StackedItemContents`: simple stacks (undamaged, unenchanted, unnamed) by item.
-#[derive(Clone, Debug, Default)]
-pub struct Available {
-    pub counts: HashMap<String, u32>,
-}
-impl Available {
-    /// `accountSimpleStack`.
-    pub fn add(&mut self, stack: &ItemStack) {
-        if stack.count > 0
-            && stack.damage == 0
-            && stack.enchantments().is_empty()
-            && stack.custom_name().is_none()
-        {
-            *self.counts.entry(stack.item.to_string()).or_default() += stack.count;
+/// A `RecipeDisplayId` as a `HashMap` key: a record of one int hashes as it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DisplayKey(i32);
+impl horizon_world::java_hash_map::JavaKey for DisplayKey {
+    fn java_hash(&self) -> i32 {
+        self.0
+    }
+    fn tie_break(&self, other: &Self) -> std::cmp::Ordering {
+        if self.0 < other.0 {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
         }
     }
-    pub fn from_stacks<'a>(stacks: impl IntoIterator<Item = &'a ItemStack>) -> Self {
-        let mut a = Self::default();
-        for s in stacks {
-            a.add(s);
-        }
-        a
-    }
-    /// `StackedItemContents.canCraft(ingredients, null)`.
-    pub fn can_craft(&self, requirements: &[&Ingredient]) -> bool {
-        !requirements.is_empty() && pick(requirements, &self.counts, 1, &HashMap::new()).is_some()
-    }
-    /// `canCraft(recipe, amount, output)`: the item each ingredient uses when
-    /// `amount` sets can be made, preferring earlier registry items.
-    pub fn pick(
-        &self,
-        requirements: &[&Ingredient],
-        amount: u32,
-        order: &HashMap<String, usize>,
-    ) -> Option<Vec<String>> {
-        pick(requirements, &self.counts, amount, order)
-    }
-    /// `getBiggestCraftableStack`: how many sets can be made, up to 99.
-    pub fn biggest_stack(&self, requirements: &[&Ingredient]) -> u32 {
-        if !self.can_craft(requirements) {
-            return 0;
-        }
-        let none = HashMap::new();
-        let (mut lo, mut hi) = (1u32, 99u32);
-        while lo < hi {
-            let mid = (lo + hi).div_ceil(2);
-            if pick(requirements, &self.counts, mid, &none).is_some() {
-                lo = mid;
-            } else {
-                hi = mid - 1;
-            }
-        }
-        lo
-    }
-}
-/// Bipartite assignment of one item to each ingredient where an item can
-/// serve `count / amount` ingredients.
-fn pick(
-    requirements: &[&Ingredient],
-    counts: &HashMap<String, u32>,
-    amount: u32,
-    order: &HashMap<String, usize>,
-) -> Option<Vec<String>> {
-    let amount = amount.max(1);
-    let capacity = |item: &str| counts.get(item).copied().unwrap_or(0) / amount;
-    let candidates: Vec<Vec<String>> = requirements
-        .iter()
-        .map(|ing| {
-            let mut v: Vec<String> = ing.0.iter().filter(|i| capacity(i) > 0).cloned().collect();
-            v.sort_by_key(|i| (order.get(i).copied().unwrap_or(usize::MAX), i.clone()));
-            v
-        })
-        .collect();
-    let mut used: HashMap<String, Vec<usize>> = HashMap::new();
-    fn assign(
-        i: usize,
-        candidates: &[Vec<String>],
-        used: &mut HashMap<String, Vec<usize>>,
-        visited: &mut Vec<String>,
-        capacity: &dyn Fn(&str) -> u32,
-    ) -> bool {
-        for item in &candidates[i] {
-            if visited.contains(item) {
-                continue;
-            }
-            visited.push(item.clone());
-            let holders = used.get(item).cloned().unwrap_or_default();
-            if (holders.len() as u32) < capacity(item) {
-                used.entry(item.clone()).or_default().push(i);
-                return true;
-            }
-            for j in holders {
-                if assign(j, candidates, used, visited, capacity) {
-                    // j moved elsewhere: drop it from this item and take its place.
-                    if let Some(list) = used.get_mut(item) {
-                        list.retain(|x| *x != j);
-                        list.push(i);
-                    }
-                    return true;
-                }
-            }
-        }
-        false
-    }
-    for i in 0..requirements.len() {
-        let mut visited = Vec::new();
-        if !assign(i, &candidates, &mut used, &mut visited, &capacity) {
-            return None;
-        }
-    }
-    let mut result = vec![String::new(); requirements.len()];
-    for (item, holders) in used {
-        for i in holders {
-            result[i] = item.clone();
-        }
-    }
-    Some(result)
 }
 
-/// The recipe book's saved state: the `recipeBook` compound of the player.
+/// `ClientRecipeBook`: the displays the client was sent, in a `HashMap` whose
+/// iteration order (the display ids' buckets, then arrival order) decides the
+/// order of the book's buttons.
+#[derive(Default)]
+pub struct ClientBook {
+    known: horizon_world::java_hash_map::JavaHashMap<DisplayKey, ()>,
+    pub highlight: std::collections::HashSet<i32>,
+}
+impl ClientBook {
+    pub fn add(&mut self, display: i32) {
+        self.known.put(DisplayKey(display), ());
+    }
+    pub fn remove(&mut self, display: i32) {
+        self.known.remove(&DisplayKey(display));
+        self.highlight.remove(&display);
+    }
+    /// `clear` (a replacing `ClientboundRecipeBookAddPacket`): the table keeps its size.
+    pub fn clear(&mut self) {
+        self.known.clear();
+        self.highlight.clear();
+    }
+    /// The known display ids in iteration order.
+    pub fn displays(&self) -> Vec<i32> {
+        self.known.entries().map(|(k, _)| k.0).collect()
+    }
+    /// `rebuildCollections` then `getCollection(tab)`: per category, a
+    /// collection per entry without a group or per group, in the order the
+    /// known displays iterate; the search tab lists its categories in turn.
+    pub fn collections(&self, book: &Book, book_type: BookType, tab: Tab) -> Vec<Collection> {
+        let by_display: HashMap<i32, usize> = book
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.display_id, i))
+            .collect();
+        let mut by_category: HashMap<Category, Vec<Collection>> = HashMap::new();
+        let mut groups: HashMap<(Category, String), (Category, usize)> = HashMap::new();
+        for display in self.displays() {
+            let Some(&i) = by_display.get(&display) else {
+                continue;
+            };
+            let e = &book.entries[i];
+            let list = by_category.entry(e.category).or_default();
+            match &e.group {
+                None => list.push(Collection { entries: vec![i] }),
+                Some(g) => match groups.get(&(e.category, g.clone())) {
+                    Some(&(_, at)) => list[at].entries.push(i),
+                    None => {
+                        groups.insert((e.category, g.clone()), (e.category, list.len()));
+                        list.push(Collection { entries: vec![i] });
+                    }
+                },
+            }
+        }
+        let categories: Vec<Category> = match tab {
+            Tab::Search => book_type.search_categories().to_vec(),
+            Tab::Category(c) => vec![c],
+        };
+        categories
+            .into_iter()
+            .flat_map(|c| by_category.remove(&c).unwrap_or_default())
+            .collect()
+    }
+}
+
+/// What the server knows of each recipe of the datapack: whether it is
+/// special (`Recipe.isSpecial`: never learnable) and how many recipe book
+/// displays it has (`RecipeManager.listDisplaysForRecipe`).
+#[derive(Clone, Debug, Default)]
+pub struct RecipeIndex {
+    /// Recipe id -> (special, display count, first display id).
+    recipes: std::collections::BTreeMap<String, (bool, usize, i32)>,
+}
+impl RecipeIndex {
+    /// Reads `data/minecraft/recipe/*.json` under `root`.
+    pub fn load(root: &std::path::Path) -> Self {
+        let mut recipes = std::collections::BTreeMap::new();
+        let dir = root.join("data/minecraft/recipe");
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let (Some(stem), Some(v)) = (
+                path.file_stem().and_then(|s| s.to_str()),
+                std::fs::read(&path)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()),
+            ) else {
+                continue;
+            };
+            let kind = v["type"].as_str().unwrap_or_default();
+            let special = kind.starts_with("minecraft:crafting_special_")
+                || kind == "minecraft:crafting_decorated_pot";
+            let displays = if special {
+                0
+            } else if kind == "minecraft:crafting_transmute" {
+                // TransmuteRecipe.display: one per material count.
+                match &v["material_count"] {
+                    serde_json::Value::Object(o) => {
+                        let min = o.get("min").and_then(|m| m.as_u64()).unwrap_or(1);
+                        let max = o.get("max").and_then(|m| m.as_u64()).unwrap_or(8);
+                        (max.saturating_sub(min) + 1) as usize
+                    }
+                    _ => 1,
+                }
+            } else {
+                1
+            };
+            recipes.insert(format!("minecraft:{stem}"), (special, displays, 0));
+        }
+        // RecipeManager keeps its recipes sorted by id and numbers the displays in that order.
+        let mut next = 0;
+        for r in recipes.values_mut() {
+            r.2 = next;
+            next += r.1 as i32;
+        }
+        Self { recipes }
+    }
+    pub fn contains(&self, id: &str) -> bool {
+        self.recipes.contains_key(id)
+    }
+    pub fn special(&self, id: &str) -> bool {
+        self.recipes.get(id).is_some_and(|r| r.0)
+    }
+    pub fn displays(&self, id: &str) -> usize {
+        self.recipes.get(id).map_or(0, |r| r.1)
+    }
+    /// Every recipe id, in id order.
+    pub fn ids(&self) -> impl Iterator<Item = &String> {
+        self.recipes.keys()
+    }
+    /// The display ids of a recipe (none for a special one).
+    pub fn display_ids(&self, id: &str) -> std::ops::Range<i32> {
+        self.recipes.get(id).map_or(0..0, |r| r.2..r.2 + r.1 as i32)
+    }
+    pub fn first_display(&self, id: &str) -> Option<i32> {
+        self.recipes.get(id).filter(|r| r.1 > 0).map(|r| r.2)
+    }
+}
+
+/// `ServerRecipeBook`: the player's `recipeBook` compound, the known recipes
+/// and the ones still to highlight (`toBeDisplayed`) with the open and
+/// filter settings of each `RecipeBookType`.
 #[derive(Clone, Debug, Default)]
 pub struct Settings {
     /// `isGuiOpen`-style flags per `BookType`.
     pub open: [bool; 4],
     pub filtering: [bool; 4],
-    /// Unlocked recipe ids (`recipes`).
-    pub recipes: Vec<String>,
+    /// Known recipe ids (`recipes`).
+    pub recipes: BTreeSet<String>,
     /// Recipes not yet shown in the book (`toBeDisplayed`): they animate once.
-    pub to_be_displayed: Vec<String>,
+    pub to_be_displayed: BTreeSet<String>,
 }
 impl Settings {
+    /// `ServerRecipeBook.addRecipes`: the displays added (the count
+    /// `/recipe give` reports) and the recipes now known, in order.
+    pub fn add_recipes(&mut self, index: &RecipeIndex, ids: &[String]) -> (usize, Vec<String>) {
+        let mut displays = 0;
+        let mut added = Vec::new();
+        for id in ids {
+            if !self.recipes.contains(id) && !index.special(id) {
+                self.recipes.insert(id.clone());
+                self.to_be_displayed.insert(id.clone());
+                displays += index.displays(id);
+                added.push(id.clone());
+            }
+        }
+        (displays, added)
+    }
+    /// `ServerRecipeBook.removeRecipes`: the displays removed.
+    pub fn remove_recipes(&mut self, index: &RecipeIndex, ids: &[String]) -> usize {
+        let mut displays = 0;
+        for id in ids {
+            if self.recipes.remove(id) {
+                self.to_be_displayed.remove(id);
+                displays += index.displays(id);
+            }
+        }
+        displays
+    }
+    /// `removeHighlight` (`ServerboundRecipeBookSeenRecipePacket`).
+    pub fn remove_highlight(&mut self, id: &str) {
+        self.to_be_displayed.remove(id);
+    }
+    pub fn knows(&self, id: &str) -> bool {
+        self.recipes.contains(id)
+    }
+    /// The compound as saved, every recipe kept.
     pub fn read(tag: Option<&Tag>) -> Self {
+        Self::read_valid(tag, &|_| true)
+    }
+    /// `ServerRecipeBook.loadUntrusted`: unknown recipes are dropped. Without
+    /// both lists the compound does not decode and nothing is read.
+    pub fn read_valid(tag: Option<&Tag>, valid: &dyn Fn(&str) -> bool) -> Self {
         let mut s = Self::default();
         let Some(tag) = tag else { return s };
+        let ids = |key: &str| match tag.get(key) {
+            Some(Tag::List(list)) => Some(
+                list.iter()
+                    .filter_map(|t| match t {
+                        Tag::String(id) => Some(id.to_string_lossy()),
+                        _ => None,
+                    })
+                    .map(|id| {
+                        if id.contains(':') {
+                            id
+                        } else {
+                            format!("minecraft:{id}")
+                        }
+                    })
+                    .filter(|id| valid(id))
+                    .collect::<BTreeSet<String>>(),
+            ),
+            _ => None,
+        };
+        let (Some(recipes), Some(to_be_displayed)) = (ids("recipes"), ids("toBeDisplayed")) else {
+            return s;
+        };
         let flag = |k: &str| matches!(tag.get(k), Some(Tag::Byte(b)) if *b != 0);
         for b in BookType::ALL {
             let (open, filter) = b.keys();
             s.open[b.index()] = flag(open);
             s.filtering[b.index()] = flag(filter);
         }
-        let ids = |key: &str| match tag.get(key) {
-            Some(Tag::List(list)) => list
-                .iter()
-                .filter_map(|t| match t {
-                    Tag::String(id) => Some(id.to_string_lossy()),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        s.recipes = ids("recipes");
-        s.to_be_displayed = ids("toBeDisplayed");
+        s.recipes = recipes;
+        s.to_be_displayed = to_be_displayed;
         s
     }
-    /// The compound written to the player file.
+    /// The compound written to the player file (vanilla's lists follow an
+    /// identity hash order; these are sorted).
     pub fn write(&self) -> Tag {
         let mut entries: Vec<(&str, Tag)> = Vec::new();
         for b in BookType::ALL {
@@ -586,7 +700,7 @@ impl Settings {
                 entries.push((filter, Tag::Byte(1)));
             }
         }
-        let list = |ids: &[String]| {
+        let list = |ids: &BTreeSet<String>| {
             Tag::List(ids.iter().map(|i| Tag::String(i.as_str().into())).collect())
         };
         entries.push(("recipes", list(&self.recipes)));
@@ -601,11 +715,6 @@ mod tests {
 
     fn ing(items: &[&str]) -> Ingredient {
         Ingredient(items.iter().map(|s| (*s).to_owned()).collect())
-    }
-    fn have(items: &[(&str, u32)]) -> Available {
-        Available {
-            counts: items.iter().map(|(i, n)| ((*i).to_owned(), *n)).collect(),
-        }
     }
     #[test]
     fn small_recipes_are_centred_in_the_grid() {
@@ -631,49 +740,10 @@ mod tests {
         assert_eq!(small, vec![0]);
     }
     #[test]
-    fn a_single_item_can_fill_several_ingredients() {
-        let planks = ing(&["minecraft:oak_planks", "minecraft:birch_planks"]);
-        let reqs = [&planks, &planks, &planks, &planks];
-        let a = have(&[("minecraft:oak_planks", 2), ("minecraft:birch_planks", 2)]);
-        assert!(a.can_craft(&reqs));
-        let none = HashMap::new();
-        // Two sets need 8 planks, but only 4 are there.
-        assert!(a.pick(&reqs, 2, &none).is_none());
-        assert!(a.pick(&reqs, 1, &none).is_some());
-        assert_eq!(a.biggest_stack(&reqs), 1);
-        assert_eq!(
-            have(&[("minecraft:oak_planks", 64)]).biggest_stack(&reqs),
-            16
-        );
-    }
-    #[test]
-    fn the_matching_reassigns_flexible_ingredients() {
-        // The first ingredient takes either item, the second only the stick:
-        // one stick must not be wasted on the first.
-        let any = ing(&["minecraft:stick", "minecraft:bone"]);
-        let stick = ing(&["minecraft:stick"]);
-        let a = have(&[("minecraft:stick", 1), ("minecraft:bone", 1)]);
-        let mut order = HashMap::new();
-        order.insert("minecraft:stick".to_owned(), 0);
-        order.insert("minecraft:bone".to_owned(), 1);
-        let picked = a.pick(&[&any, &stick], 1, &order).expect("matching");
-        assert_eq!(picked, vec!["minecraft:bone", "minecraft:stick"]);
-        assert!(!have(&[("minecraft:stick", 1)]).can_craft(&[&any, &stick]));
-    }
-    #[test]
-    fn damaged_or_named_stacks_are_not_counted() {
-        let mut named = ItemStack::new("minecraft:stick", 4);
-        named.data_mut().custom_name = Some("x".into());
-        let mut damaged = ItemStack::new("minecraft:iron_sword", 1);
-        damaged.damage = 3;
-        let a = Available::from_stacks([&named, &damaged, &ItemStack::new("minecraft:stick", 2)]);
-        assert_eq!(a.counts.get("minecraft:stick"), Some(&2));
-        assert!(!a.counts.contains_key("minecraft:iron_sword"));
-    }
-    #[test]
     fn collections_group_recipes_of_a_category() {
-        let entry = |id: &str, group: Option<&str>, category| Entry {
+        let entry = |id: &str, display_id, group: Option<&str>, category| Entry {
             id: id.into(),
+            display_id,
             category,
             group: group.map(str::to_owned),
             display: Display::Shapeless(vec![ing(&["minecraft:stick"])]),
@@ -681,38 +751,51 @@ mod tests {
         };
         let book = Book {
             entries: vec![
-                entry("minecraft:a", Some("planks"), Category::CraftingBuilding),
-                entry("minecraft:b", Some("planks"), Category::CraftingBuilding),
-                entry("minecraft:c", None, Category::CraftingBuilding),
-                entry("minecraft:d", Some("planks"), Category::CraftingMisc),
+                entry("minecraft:a", 0, Some("planks"), Category::CraftingBuilding),
+                entry("minecraft:b", 1, Some("planks"), Category::CraftingBuilding),
+                entry("minecraft:c", 2, None, Category::CraftingBuilding),
+                entry("minecraft:d", 3, Some("planks"), Category::CraftingMisc),
             ],
+            placements: HashMap::new(),
             order: HashMap::new(),
         };
-        let unlocked: BTreeSet<String> = ["a", "b", "c", "d"]
-            .iter()
-            .map(|n| format!("minecraft:{n}"))
-            .collect();
+        let mut client = ClientBook::default();
+        for d in 0..4 {
+            client.add(d);
+        }
         let tab = Tab::Category(Category::CraftingBuilding);
-        let c = book.collections(&unlocked, BookType::Crafting, tab);
+        let c = client.collections(&book, BookType::Crafting, tab);
         assert_eq!(c.len(), 2);
         assert_eq!(c[0].entries, vec![0, 1]);
         // The search tab lists every category; the same group in another category is separate.
-        let all = book.collections(&unlocked, BookType::Crafting, Tab::Search);
+        let all = client.collections(&book, BookType::Crafting, Tab::Search);
         assert_eq!(all.len(), 3);
-        // Locked recipes are hidden.
-        let some: BTreeSet<String> = ["minecraft:c".to_owned()].into();
-        assert_eq!(book.collections(&some, BookType::Crafting, tab).len(), 1);
+        // Displays the client was not sent are not listed.
+        client.clear();
+        client.add(2);
+        assert_eq!(client.collections(&book, BookType::Crafting, tab).len(), 1);
+    }
+    #[test]
+    fn display_ids_collide_in_a_small_table() {
+        // A 16-bucket table: 17 and 1 share a bucket and keep arrival order.
+        let mut client = ClientBook::default();
+        for d in [17, 3, 1] {
+            client.add(d);
+        }
+        assert_eq!(client.displays(), vec![17, 1, 3]);
     }
     #[test]
     fn search_reads_tooltip_lines_and_ids() {
         let book = Book {
             entries: vec![Entry {
                 id: "minecraft:stick".into(),
+                display_id: 0,
                 category: Category::CraftingMisc,
                 group: None,
                 display: Display::Shapeless(Vec::new()),
                 result: ItemStack::new("minecraft:stick", 4),
             }],
+            placements: HashMap::new(),
             order: HashMap::new(),
         };
         let lines = |s: &ItemStack| vec![format!("Item {}", s.item), "Stick".to_owned()];
@@ -727,7 +810,7 @@ mod tests {
         let mut s = Settings::default();
         s.open[BookType::Furnace.index()] = true;
         s.filtering[BookType::Crafting.index()] = true;
-        s.recipes = vec!["minecraft:stick".into()];
+        s.recipes = ["minecraft:stick".to_owned()].into();
         let back = Settings::read(Some(&s.write()));
         assert_eq!(back.open, s.open);
         assert_eq!(back.filtering, s.filtering);

@@ -447,7 +447,8 @@ impl Game<'_> {
             Kind::Merchant => super::trading::update(&mut s, items),
             Kind::Beacon => {}
             Kind::Cartography => s.result = self.cartography_result(&s),
-            Kind::Loom => self.loom_changed(&mut s),
+            // The menu engine keeps the loom's state (Game::menu_session).
+            Kind::Loom => {}
             Kind::Stonecutter => {
                 let item = s.inputs[0].as_ref().map(|i| i.item.clone());
                 if item != s.input_item {
@@ -522,7 +523,7 @@ impl Game<'_> {
         match s.kind {
             Kind::Enchanting if i == 0 => (true, 1),
             Kind::Beacon => (super::beacon::is_payment(&stack.item), 1),
-            Kind::Loom => self.loom_slot_rules(i, stack),
+            Kind::Loom => (false, 64),
             Kind::Cartography if i == 0 => (super::maps::map_id(stack).is_some(), 64),
             Kind::Cartography => (
                 matches!(
@@ -644,12 +645,8 @@ impl Game<'_> {
             return false;
         };
         let player = Self::player_slots();
-        let loom = self.station.as_ref().is_some_and(|s| s.kind == Kind::Loom);
         let moved = if (300..305).contains(&slot) || slot >= INPUT {
-            // LoomMenu moves into the inventory front to back, the others back to front.
-            self.move_to(&mut stack, &player, !loom)
-        } else if loom {
-            self.loom_quick_move(slot, &mut stack)
+            self.move_to(&mut stack, &player, true)
         } else if self.brewing_open() {
             // BrewingStandMenu.quickMoveStack: fuel, ingredient, bottles, then the other half.
             let data = self.data();
@@ -894,7 +891,7 @@ impl Game<'_> {
                     self.cartography_taken(pos);
                 }
             }
-            Kind::Loom => self.loom_taken(&mut s),
+            Kind::Loom => {}
             Kind::Enchanting => {}
         }
         self.station = Some(s);
@@ -1069,6 +1066,16 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return true;
         };
+        if self.station.as_ref().is_some_and(|s| s.kind == Kind::Loom) {
+            // LoomMenu clicks run on the verified menu engine.
+            let input = if shift {
+                horizon_client::menu::Input::QuickMove
+            } else {
+                horizon_client::menu::Input::Pickup
+            };
+            self.menu_click(Some(slot), i32::from(right), input);
+            return true;
+        }
         if slot == RESULT {
             self.click_result(shift);
             return true;

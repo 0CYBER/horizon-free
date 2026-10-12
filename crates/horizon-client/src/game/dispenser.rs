@@ -387,7 +387,20 @@ impl Game<'_> {
                 self.audio
                     .play("minecraft:entity.wind_charge.throw", Some(c), 0.5, pitch);
             }
-            2000 => {
+            1049 => self
+                .audio
+                .play("minecraft:block.crafter.craft", Some(c), 1.0, 1.0),
+            1050 => self
+                .audio
+                .play("minecraft:block.crafter.fail", Some(c), 1.0, 1.0),
+            // LevelEventHandler.shootParticles: smoke for dispensers, white
+            // smoke out of a crafter's front.
+            2000 | 2010 => {
+                let particle = if id == 2010 {
+                    ParticleType::WhiteSmoke
+                } else {
+                    ParticleType::Smoke
+                };
                 let s = match data {
                     0 => [0, -1, 0],
                     1 => [0, 1, 0],
@@ -422,8 +435,7 @@ impl Game<'_> {
                         sy * pow + r.next_gaussian() * 0.01,
                         sz * pow + r.next_gaussian() * 0.01,
                     ];
-                    self.particles
-                        .add(&ParticleOptions::simple(ParticleType::Smoke), p, v);
+                    self.particles.add(&ParticleOptions::simple(particle), p, v);
                 }
             }
             _ => {}

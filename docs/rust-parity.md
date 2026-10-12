@@ -1379,3 +1379,47 @@ carry the team formatting but not the click, hover and insertion of
 scores below other players' names need the multiplayer scoreboard packets,
 which the client does not handle yet.
 
+## Loom, crafter and recipe book
+
+The loom, the crafter and the recipe book run on code checked against
+vanilla's own classes, and the game uses that code:
+
+- **Menus.** `horizon_client::menu` runs `LoomMenu` (selectable patterns,
+  `clickMenuButton`, the six-layer limit, quick moves, the result's `onTake`)
+  and the server's `CrafterMenu` over the block entity (the result following
+  the grid, `setSlotState`, a filled disabled slot enabling itself) besides the
+  other menus. `tools/test_menu_click_parity.py` compares 8,000 random click
+  sequences over 19 menus, with pattern button and slot state packets, with
+  vanilla's menu classes. The game's loom and crafter screens click through
+  `Game::menu_session` on the same engine.
+- **Crafter block.** `tools/test_crafter_parity.py` runs `CrafterBlock.dispenseFrom`
+  and `CrafterBlockEntity.serverTick` over the block update oracle's level:
+  4,000 crafts of datapack recipes (remainders and special recipes included)
+  with disabled slots and containers, other crafters or air in front, comparing
+  block changes, container contents, the animation ticks, triggered flag,
+  comparator signal, shot items, level events and the level random.
+- **Recipe placement.** `horizon_client::menu::place` ports `ServerPlaceRecipe`
+  with `StackedContents`' recipe picker for the inventory, crafting table and
+  furnaces. Vanilla counts the available items in a hash map ordered by
+  identity hash codes, an order that changes between runs and decides which
+  of several fitting items fills an ingredient; `tools/test_place_recipe_parity.py`
+  hands the oracle's order to the Rust side and compares 6,000 placements.
+- **The book's contents.** `recipe_book::ClientBook` keeps the displays as
+  `ClientRecipeBook`'s `HashMap` of display ids does (on the verified Java
+  `HashMap` port), whose order is the order of the buttons;
+  `tools/test_recipe_book_view_parity.py` runs the client's `ClientRecipeBook`,
+  `RecipeCollection` selection and the tab and page logic over 1,200 cases.
+- **The player's book.** `recipe_book::Settings` with a `RecipeIndex` is
+  `ServerRecipeBook`: awards (advancements, `/recipe`, crafting) never learn
+  special recipes and count displays, and loading drops unknown recipes;
+  `tools/test_recipe_book_parity.py` compares 1,500 operation sequences and the
+  saved compound.
+- **Screens.** `screen_layout` holds `LoomScreen.extractBackground` and
+  `CrafterScreen`'s decorations as draw calls the game paints;
+  `tools/test_screen_layout_parity.py` runs vanilla's screens on stand-in
+  menus and compares 1,600 call lists.
+
+Not compared yet: the recipe book's own drawing (tabs, buttons, the overlay
+and ghost slots) and its text search, the banner preview's 3D flag (drawn as
+the flat front face), furnaces awarding their recipes and experience when
+their output is taken, and the limited crafting game rule.

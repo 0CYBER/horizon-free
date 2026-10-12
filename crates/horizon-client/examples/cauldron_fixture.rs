@@ -80,10 +80,13 @@ fn main() -> horizon_client::Result<()> {
     let items = Items::catalog(root)?;
     let recipes = Recipes::load(root, &items)?;
     let brewing = horizon_client::brewing::Brewing::load(root, &items);
+    // The inventory menu never reads banner patterns.
+    let banners = horizon_client::banner::Banners::default();
     let env = Env {
         items: &items,
         recipes: &recipes,
         brewing: &brewing,
+        banners: &banners,
     };
     let mut out = String::new();
     for line in input.lines() {

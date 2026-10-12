@@ -87,6 +87,7 @@ pub mod save;
 pub mod scoreboard;
 pub mod scoreboard_cmd;
 pub mod screen_effects;
+pub mod screen_layout;
 pub mod sculk;
 pub mod settings;
 pub mod shadows;
