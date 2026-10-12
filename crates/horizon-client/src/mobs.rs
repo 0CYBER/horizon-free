@@ -22,6 +22,7 @@ pub mod drops;
 pub mod enderman;
 pub mod equine;
 pub mod farm;
+pub mod finalize;
 pub mod gear;
 pub mod goals;
 pub mod golem;
@@ -201,6 +202,8 @@ pub struct MobType {
     pub armor_toughness: f32,
     pub knockback_resistance: f64,
     pub jump_strength: f64,
+    /// Every default attribute value of the type (`entity-types.json`).
+    pub attributes: Arc<HashMap<String, f64>>,
     pub gravity: f64,
     pub safe_fall_distance: f64,
     pub fall_damage_multiplier: f64,
@@ -234,12 +237,35 @@ impl MobType {
         self.layers.get(key)
     }
 }
+/// Each type's default attribute values, parsed exactly (serde_json's
+/// default float parsing can miss the nearest double by one ulp).
+fn exact_attributes(bytes: &[u8]) -> HashMap<String, HashMap<String, f64>> {
+    use serde_json::value::RawValue;
+    type Raw = HashMap<String, Box<RawValue>>;
+    let Ok(types) = serde_json::from_slice::<Raw>(bytes) else {
+        return HashMap::new();
+    };
+    types
+        .into_iter()
+        .filter_map(|(id, t)| {
+            let t: Raw = serde_json::from_str(t.get()).ok()?;
+            let attrs: Raw = serde_json::from_str(t.get("attributes")?.get()).ok()?;
+            let values = attrs
+                .into_iter()
+                .filter_map(|(k, v)| v.get().trim().parse::<f64>().ok().map(|v| (k, v)))
+                .collect();
+            Some((id, values))
+        })
+        .collect()
+}
 pub struct MobTypes {
     pub types: HashMap<String, MobType>,
 }
 impl MobTypes {
     pub fn load(root: &Path) -> crate::Result<Self> {
-        let types: Value = serde_json::from_slice(&fs::read(root.join("entity-types.json"))?)?;
+        let bytes = fs::read(root.join("entity-types.json"))?;
+        let types: Value = serde_json::from_slice(&bytes)?;
+        let exact = exact_attributes(&bytes);
         let models: Value = serde_json::from_slice(&fs::read(root.join("entity-models.json"))?)?;
         let item_tags = crate::items::load_tags(root, "item").unwrap_or_default();
         sulfur_cube::load_archetype_items(&item_tags);
@@ -264,7 +290,8 @@ impl MobTypes {
             let Some(model) = models.get(&model_key) else {
                 continue;
             };
-            let attr = |k: &str| t["attributes"][format!("minecraft:{k}")].as_f64();
+            let defaults = exact.get(&id).cloned().unwrap_or_default();
+            let attr = |k: &str| defaults.get(&format!("minecraft:{k}")).copied();
             let mut layers = HashMap::new();
             if let Some(all) = models.as_object() {
                 for prefix in def.layer_prefixes() {
@@ -298,6 +325,7 @@ impl MobTypes {
                     armor_toughness: attr("armor_toughness").unwrap_or(0.0) as f32,
                     knockback_resistance: attr("knockback_resistance").unwrap_or(0.0),
                     jump_strength: attr("jump_strength").unwrap_or(0.42),
+                    attributes: Arc::new(defaults.clone()),
                     gravity: attr("gravity").unwrap_or(0.08),
                     safe_fall_distance: attr("safe_fall_distance").unwrap_or(3.0),
                     fall_damage_multiplier: attr("fall_damage_multiplier").unwrap_or(1.0),
@@ -457,6 +485,9 @@ pub struct Attrs {
     pub attack_damage: f32,
     pub max_health: f32,
     pub follow_range: f64,
+    pub knockback_resistance: f64,
+    pub spawn_reinforcements: f64,
+    pub jump_strength: f64,
 }
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
@@ -555,6 +586,24 @@ pub struct Extra {
     /// `Mob.dropChances` by `EquipmentSlot` (`drops::SLOTS` order) when set
     /// explicitly; None uses the defaults of `drops::drop_chance`.
     pub drop_chances: Option<Box<[f32; 8]>>,
+    /// `Mob.leftHanded`.
+    pub left_handed: bool,
+    /// The sound variant: index in the species' `*_sound_variant` registry.
+    pub sound_variant: u8,
+    /// `Zombie.canBreakDoors`.
+    pub can_break_doors: bool,
+    /// A goat's `IsScreamingGoat` and the horns it lost (left, right).
+    pub screaming: bool,
+    pub lost_horns: [bool; 2],
+    /// Attribute bases and permanent modifiers set by `finalizeSpawn`.
+    pub attributes: Option<Box<finalize::Attributes>>,
+    /// Brain memories `finalizeSpawn` sets: (memory, value, ticks to expiry).
+    pub memories: Vec<(&'static str, i64, i64)>,
+    /// A camel's `LAST_POSE_CHANGE_TICK`.
+    pub pose_change_tick: i64,
+    /// The school leader a fish follows, and a tropical fish that swims alone.
+    pub leader: Option<u32>,
+    pub lone: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -1066,6 +1115,13 @@ impl Mob {
                 attack_damage: kind.attack_damage,
                 max_health: kind.max_health,
                 follow_range: kind.follow_range,
+                knockback_resistance: kind.knockback_resistance,
+                spawn_reinforcements: kind
+                    .attributes
+                    .get("minecraft:spawn_reinforcements")
+                    .copied()
+                    .unwrap_or(0.0),
+                jump_strength: kind.jump_strength,
             },
             kind,
         };

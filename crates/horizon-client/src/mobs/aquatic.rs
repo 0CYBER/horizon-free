@@ -445,35 +445,35 @@ impl Goal for PufferfishPuff {
     }
 }
 /// finalizeSpawn variants (tropical fish patterns and colours).
+/// TropicalFish.COMMON_VARIANTS: (pattern index, base colour, pattern colour).
+pub const COMMON_TROPICAL: [(u8, u8, u8); 22] = [
+    (7, 1, 7),
+    (6, 7, 7),
+    (6, 7, 11),
+    (11, 0, 7),
+    (1, 11, 7),
+    (0, 1, 0),
+    (5, 6, 3),
+    (9, 10, 4),
+    (11, 0, 14),
+    (5, 0, 4),
+    (8, 0, 7),
+    (11, 0, 1),
+    (3, 9, 6),
+    (4, 5, 3),
+    (10, 14, 0),
+    (2, 7, 14),
+    (9, 14, 0),
+    (6, 0, 4),
+    (0, 14, 0),
+    (1, 7, 0),
+    (3, 9, 4),
+    (6, 4, 4),
+];
 pub fn finalize(m: &mut Mob) {
     if m.species() == Species::TropicalFish {
-        // TropicalFish.COMMON_VARIANTS: (pattern index, base colour, pattern colour).
-        const COMMON: [(u8, u8, u8); 22] = [
-            (7, 1, 7),
-            (6, 7, 7),
-            (6, 7, 11),
-            (11, 0, 7),
-            (1, 11, 7),
-            (0, 1, 0),
-            (5, 6, 3),
-            (9, 10, 4),
-            (11, 0, 14),
-            (5, 0, 4),
-            (8, 0, 7),
-            (11, 0, 1),
-            (3, 9, 6),
-            (4, 5, 3),
-            (10, 14, 0),
-            (2, 7, 14),
-            (9, 14, 0),
-            (6, 0, 4),
-            (0, 14, 0),
-            (1, 7, 0),
-            (3, 9, 4),
-            (6, 4, 4),
-        ];
         let (p, b, c) = if m.random.next_float() < 0.9 {
-            COMMON[m.random.next_int_bound(COMMON.len() as i32).unwrap_or(0) as usize]
+            COMMON_TROPICAL[m.random.next_int_bound(COMMON_TROPICAL.len() as i32).unwrap_or(0) as usize]
         } else {
             (
                 m.random.next_int_bound(12).unwrap_or(0) as u8,
