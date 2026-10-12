@@ -232,57 +232,42 @@ impl Game<'_> {
             _ => None,
         }
     }
-    /// `CrafterScreen`'s background, title, disabled slots and powered arrow.
+    /// `CrafterScreen`'s background, disabled slots and powered arrow (the
+    /// verified `screen_layout::crafter`) and its centred title.
     pub(in crate::game) fn draw_crafter_screen(&self, batch: &mut HudBatch, ox: f32, oy: f32) {
         let Some(c) = self.container.and_then(|k| self.crafter_at(k)) else {
             return;
         };
+        let powered = self
+            .container
+            .map(|k| self.world.block(k.0, k.1, k.2))
+            .is_some_and(|state| self.containers().prop(state, "triggered") == Some("true"));
+        let draws =
+            horizon_client::screen_layout::crafter(&horizon_client::screen_layout::CrafterView {
+                width: 176,
+                height: 166,
+                left: 0,
+                top: 0,
+                disabled: c.disabled,
+                powered,
+            });
+        // The background goes first, then the labels, then the slot decorations.
+        let (background, rest) = draws.split_at(2.min(draws.len()));
+        self.paint_screen(batch, ox, oy, background, true);
         let atlas = &self.res.atlas;
-        batch.sprite_region(
-            atlas,
-            "gui/container/crafter",
-            [ox, oy, 176.0, 166.0],
-            256.0,
-            256.0,
-        );
         let grey = rgba(64, 64, 64, 255);
         let title = self.container_title(self.translate("container.crafter", "Crafter"));
         let tw = HudBatch::text_width(atlas, &title);
         batch.text(
             atlas,
             &title,
-            ox + (176.0 - tw) / 2.0,
+            ox + ((176.0 - tw) / 2.0).trunc(),
             oy + 6.0,
             grey,
             false,
         );
         batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
-        for slot in 0..9 {
-            if c.disabled[slot] {
-                let (x, y) = self.crafter_slot_position(300 + slot).unwrap_or_default();
-                batch.sprite(
-                    atlas,
-                    "gui/sprites/container/crafter/disabled_slot",
-                    ox + x - 1.0,
-                    oy + y - 1.0,
-                );
-            }
-        }
-        let powered = self
-            .container
-            .map(|k| self.world.block(k.0, k.1, k.2))
-            .is_some_and(|state| self.containers().prop(state, "triggered") == Some("true"));
-        let arrow = if powered {
-            "powered_redstone"
-        } else {
-            "unpowered_redstone"
-        };
-        batch.sprite(
-            atlas,
-            &format!("gui/sprites/container/crafter/{arrow}"),
-            ox + 97.0,
-            oy + 35.0,
-        );
+        self.paint_screen(batch, ox, oy, rest, true);
     }
     /// `gui.togglable_slot` over an empty, enabled grid slot.
     pub(in crate::game) fn crafter_tooltip(&self, slot: usize) -> Option<String> {
