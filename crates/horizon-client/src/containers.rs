@@ -97,7 +97,7 @@ impl Crafter {
             .count() as i32
     }
     /// `canPlaceItem`: a hopper fills the smallest stacks first.
-    pub fn can_place(&self, slot: usize, stack: &ItemStack, max_stack: u32) -> bool {
+    pub fn can_place(&self, slot: usize, _stack: &ItemStack, max_stack: u32) -> bool {
         if slot >= 9 || self.disabled[slot] {
             return false;
         }
@@ -112,7 +112,7 @@ impl Crafter {
                 && match &self.items[i] {
                     None => true,
                     Some(other) => {
-                        other.count < current.count && other.same_item_same_components(stack)
+                        other.count < current.count && other.same_item_same_components(current)
                     }
                 }
         })

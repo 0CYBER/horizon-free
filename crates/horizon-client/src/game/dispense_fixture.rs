@@ -188,6 +188,39 @@ impl Game<'_> {
                 *cell = stack;
             }
         }
+        // CrafterBlock.newBlockEntity copies the state's triggered flag;
+        // CrafterBlockEntity.setSlotState disables only empty slots.
+        let crafter_positions: Vec<(i32, i32, i32)> = self
+            .world
+            .block_entities
+            .iter()
+            .filter(|(_, e)| matches!(e, BlockEntity::Crafter(_)))
+            .map(|(p, _)| *p)
+            .collect();
+        for p in crafter_positions {
+            let state = self.world.block(p.0, p.1, p.2);
+            let triggered = self
+                .res
+                .assets
+                .registry
+                .state(state)
+                .and_then(|s| s.properties.get("triggered"))
+                .is_some_and(|v| v == "true");
+            if let Some(BlockEntity::Crafter(c)) = self.world.block_entities.get_mut(&p) {
+                c.triggered = triggered;
+                c.state_triggered = Some(triggered);
+            }
+        }
+        for d in case["disabled"].as_array().into_iter().flatten() {
+            let p = (
+                d[0].as_i64().unwrap_or(0) as i32,
+                d[1].as_i64().unwrap_or(0) as i32,
+                d[2].as_i64().unwrap_or(0) as i32,
+            );
+            if let Some(BlockEntity::Crafter(c)) = self.world.block_entities.get_mut(&p) {
+                c.set_slot_state(d[3].as_u64().unwrap_or(0) as usize, false);
+            }
+        }
         let mut targets = Vec::new();
         for e in case["entities"].as_array().into_iter().flatten() {
             targets.push(self.fixture_target(e)?);
@@ -226,6 +259,10 @@ impl Game<'_> {
         );
         let state = self.world.block(origin.x, origin.y, origin.z);
         self.dispense_from(origin, state)?;
+        // CrafterBlockEntity.serverTick, the crafting animation running down.
+        for _ in 0..case["ticks"].as_u64().unwrap_or(0) {
+            self.tick_crafters();
+        }
 
         let mut out = Vec::new();
         let mut changed: Vec<(i32, i32, i32)> = self.world.block_log.take().unwrap_or_default();
@@ -252,6 +289,32 @@ impl Game<'_> {
                     ));
                 }
             }
+        }
+        let mut crafters: Vec<_> = self
+            .world
+            .block_entities
+            .iter()
+            .filter_map(|(p, e)| match e {
+                BlockEntity::Crafter(c) => Some((*p, c)),
+                _ => None,
+            })
+            .collect();
+        crafters.sort_unstable_by_key(|c| c.0);
+        for (p, c) in crafters {
+            let disabled: Vec<String> = (0..9)
+                .filter(|&i| c.disabled[i])
+                .map(|i| i.to_string())
+                .collect();
+            out.push(format!(
+                "crafter {},{},{} ticks={} triggered={} signal={} disabled={}",
+                p.0,
+                p.1,
+                p.2,
+                c.crafting_ticks,
+                c.triggered,
+                c.redstone_signal(),
+                disabled.join(",")
+            ));
         }
         self.fixture_entities(&old_mobs, &old_stands, &mut out);
         for (i, t) in targets.iter().enumerate() {

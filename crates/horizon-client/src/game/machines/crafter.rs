@@ -7,7 +7,6 @@ use horizon_client::{
     advancements as adv,
     containers::Crafter,
     hud::{HudBatch, rgba},
-    particles::{ParticleOptions, ParticleType},
 };
 use serde_json::Value;
 
@@ -67,6 +66,8 @@ impl Game<'_> {
             .filter(|(_, e)| matches!(e, BlockEntity::Crafter(_)))
             .map(|(p, _)| *p)
             .collect();
+        let mut positions = positions;
+        positions.sort_unstable();
         for pos in positions {
             let state = self.world.block(pos.0, pos.1, pos.2);
             let triggered = self.containers().prop(state, "triggered") == Some("true");
@@ -101,6 +102,7 @@ impl Game<'_> {
             return Ok(());
         };
         let grid: Vec<Option<ItemStack>> = crafter.items.to_vec();
+        // RecipeCache.get: the first crafting recipe that matches, assembled.
         let found = self
             .res
             .recipes
@@ -108,9 +110,7 @@ impl Game<'_> {
             .map(|(name, result)| (name.to_owned(), result))
             .filter(|(_, result)| result.count > 0);
         let Some((recipe, result)) = found else {
-            // LevelEvent 1050: CRAFTER_FAIL.
-            self.audio
-                .play("minecraft:block.crafter.fail", Some(center(key)), 1.0, 1.0);
+            self.dispenser_event(1050, key, 0);
             return Ok(());
         };
         let Some(facing) = self
@@ -130,6 +130,7 @@ impl Game<'_> {
             true,
             horizon_world::level::flags::UPDATE_CLIENTS,
         );
+        // The remainders come from the grid as it was before anything moved.
         let remainders = self.res.recipes.remainders(&recipe, &grid, 3);
         self.crafter_eject(key, facing, result, &recipe);
         for rest in remainders.into_iter().flatten() {
@@ -184,38 +185,6 @@ impl Game<'_> {
             return;
         }
         self.spawn_dispensed(pos, facing, rest, 6);
-        // LevelEvent 1049 (CRAFTER_CRAFT) and 2010 (white smoke shot out the front).
-        self.audio
-            .play("minecraft:block.crafter.craft", Some(center(pos)), 1.0, 1.0);
-        let s = step(facing);
-        for _ in 0..10 {
-            let r = &mut self.world.random;
-            let pow = r.next_double() * 0.2 + 0.01;
-            let at = [
-                f64::from(pos.0)
-                    + f64::from(s[0]) * 0.6
-                    + 0.5
-                    + f64::from(s[0]) * 0.01
-                    + (r.next_double() - 0.5) * f64::from(s[2]) * 0.5,
-                f64::from(pos.1)
-                    + f64::from(s[1]) * 0.6
-                    + 0.5
-                    + f64::from(s[1]) * 0.01
-                    + (r.next_double() - 0.5) * f64::from(s[1]) * 0.5,
-                f64::from(pos.2)
-                    + f64::from(s[2]) * 0.6
-                    + 0.5
-                    + f64::from(s[2]) * 0.01
-                    + (r.next_double() - 0.5) * f64::from(s[0]) * 0.5,
-            ];
-            let v = [
-                f64::from(s[0]) * pow + r.next_gaussian() * 0.01,
-                f64::from(s[1]) * pow + r.next_gaussian() * 0.01,
-                f64::from(s[2]) * pow + r.next_gaussian() * 0.01,
-            ];
-            self.particles
-                .add(&ParticleOptions::simple(ParticleType::WhiteSmoke), at, v);
-        }
         // CrafterRecipeCraftedTrigger for players within the 17-block box.
         let near = self.eye_position().is_some_and(|e| {
             let c = center(pos);
@@ -234,6 +203,8 @@ impl Game<'_> {
                 adv::conditions(&c["player"], &ctx, w) && recipe_matches(&c["recipes"], &id)
             });
         }
+        self.dispenser_event(1049, pos, 0);
+        self.dispenser_event(2010, pos, facing as i32);
     }
 
     // ---- the menu ----
