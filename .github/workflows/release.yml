@@ -1,0 +1,24 @@
+name: release builds
+# Started by hand: gh workflow run release.yml --ref <branch>
+# Builds the Windows x64 client and uploads the playable folder as an artifact.
+# Linux and macOS builds are made on the development machines.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Build the client
+        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client
+      - name: Package
+        shell: bash
+        run: packaging/package.sh target/release/horizon-client.exe dist/horizon-windows-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: horizon-windows-x64
+          path: dist/horizon-windows-x64
