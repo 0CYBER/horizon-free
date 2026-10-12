@@ -98,6 +98,15 @@ public final class VanillaScoreboardOracle {
         if (tag instanceof DoubleTag d) {
             return new JsonPrimitive("d:" + Long.toHexString(Double.doubleToRawLongBits(d.value())));
         }
+        if (tag instanceof IntArrayTag a) {
+            JsonObject o = new JsonObject();
+            JsonArray v = new JsonArray();
+            for (int i : a.getAsIntArray()) {
+                v.add(i);
+            }
+            o.add("I;", v);
+            return o;
+        }
         return new JsonPrimitive("?" + tag.getType().getName());
     }
 

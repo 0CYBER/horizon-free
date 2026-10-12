@@ -32,6 +32,7 @@ fn canon(tag: &Tag) -> Value {
         Tag::Long(v) => Value::String(format!("{v}L")),
         Tag::Float(v) => Value::String(format!("f:{v:x}")),
         Tag::Double(v) => Value::String(format!("d:{v:x}")),
+        Tag::IntArray(v) => json!({ "I;": v }),
         other => Value::String(format!("?{other:?}")),
     }
 }

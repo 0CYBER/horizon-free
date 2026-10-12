@@ -7,8 +7,9 @@
 //! usage: subtitle_fixture RESOURCES INPUTS OUTPUT
 use horizon_client::{
     hud::HudAtlas,
+    hud_layout::{GuiDraw, IDENTITY, background_color, pose_apply},
+    hud_overlays::{SubtitleFrame, SubtitleOverlay},
     lang,
-    subtitles::{Draw, Frame, SubtitleOverlay, background_color},
 };
 use serde_json::{Value, json};
 use std::{fs, io::Write, path::PathBuf};
@@ -16,8 +17,8 @@ use std::{fs, io::Write, path::PathBuf};
 fn vec3(v: &Value) -> [f64; 3] {
     std::array::from_fn(|i| v[i].as_f64().unwrap_or(0.0))
 }
-fn pose(t: [f32; 2]) -> Value {
-    json!([1.0, 0.0, 0.0, 1.0, t[0], t[1]])
+fn pose(m: [f32; 6]) -> Value {
+    json!(m)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -53,48 +54,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 "frame" => {
-                    let frame = Frame {
+                    let frame = SubtitleFrame {
                         show: op["show"].as_bool().unwrap_or(false),
                         position: vec3(&op["pos"]),
                         forward: vec3(&op["forward"]),
                         up: vec3(&op["up"]),
                         multiplier: op["mult"].as_f64().unwrap_or(1.0),
                         background: background_color(
-                            0.8,
-                            op["opacity"].as_f64().unwrap_or(0.5) as f32,
                             op["chat_only"].as_bool().unwrap_or(true),
+                            op["opacity"].as_f64().unwrap_or(0.5),
+                            0.8,
                         ),
                         width: op["w"].as_i64().unwrap_or(0) as i32,
                         height: op["h"].as_i64().unwrap_or(0) as i32,
                     };
-                    let draws: Vec<Value> = overlay
-                        .extract(&frame, &atlas.font, now)
-                        .into_iter()
-                        .map(|d| match d {
-                            Draw::Stratum => json!({"type": "stratum"}),
-                            Draw::Fill {
+                    let mut stack = vec![IDENTITY];
+                    let mut draws = Vec::new();
+                    let calls = overlay.extract(&frame, &atlas.font, now);
+                    if !calls.is_empty() {
+                        draws.push(json!({"type": "stratum"}));
+                    }
+                    for d in calls {
+                        let m = *stack.last().unwrap_or(&IDENTITY);
+                        match d {
+                            GuiDraw::Push(ops) => {
+                                let mut top = m;
+                                for op in ops {
+                                    pose_apply(&mut top, op);
+                                }
+                                stack.push(top);
+                            }
+                            GuiDraw::Pop => {
+                                stack.pop();
+                            }
+                            GuiDraw::Fill {
                                 x0,
                                 y0,
                                 x1,
                                 y1,
                                 color,
-                                translate,
-                            } => json!({
+                            } => draws.push(json!({
                                 "type": "fill", "x0": x0, "y0": y0, "x1": x1, "y1": y1,
-                                "color": format!("{color:x}"), "pose": pose(translate),
-                            }),
-                            Draw::Text {
+                                "color": format!("{color:x}"), "pose": pose(m),
+                            })),
+                            GuiDraw::Text {
                                 text,
                                 x,
                                 y,
                                 color,
-                                translate,
-                            } => json!({
+                                shadow,
+                            } => draws.push(json!({
                                 "type": "text", "text": text.plain(), "x": x, "y": y,
-                                "color": format!("{color:x}"), "shadow": true, "pose": pose(translate),
-                            }),
-                        })
-                        .collect();
+                                "color": format!("{color:x}"), "shadow": shadow, "pose": pose(m),
+                            })),
+                            other => return Err(format!("unexpected draw {other:?}").into()),
+                        }
+                    }
                     frames.push(Value::Array(draws));
                 }
                 other => return Err(format!("op {other}").into()),

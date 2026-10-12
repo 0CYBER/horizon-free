@@ -72,6 +72,9 @@ def components(rng, name=None):
         lambda: {'type': 'text', 'text': 'typed'},
         lambda: {'keybind': 'key.jump'},
         lambda: {'text': 'strike', 'strikethrough': True, 'obfuscated': False},
+        lambda: {'text': name or 'E', 'hover_event': {'action': 'show_entity', 'id': 'minecraft:pig',
+                                                     'uuid': [rng.randint(-9, 9) for _ in range(4)]}},
+        lambda: {'text': 'tip', 'hover_event': {'action': 'show_text', 'value': {'text': 'hi', 'color': 'red'}}},
     ]
     return rng.choice(choices)()
 

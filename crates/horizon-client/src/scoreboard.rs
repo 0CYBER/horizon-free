@@ -169,7 +169,9 @@ impl NumberFormat {
         }
     }
     pub fn to_tag(&self) -> Tag {
-        json_to_tag(&self.to_json())
+        let mut tag = json_to_tag(&self.to_json());
+        entity_uuids(&mut tag);
+        tag
     }
     pub fn from_tag(t: &Tag) -> Option<Self> {
         Self::from_json(&tag_to_json(t))
@@ -1243,7 +1245,41 @@ impl Scoreboard {
 
 /// A component as `ComponentSerialization.CODEC` writes it to NBT.
 pub fn component_tag(c: &Comp) -> Tag {
-    json_to_tag(&canonical_component(c))
+    let mut tag = json_to_tag(&canonical_component(c));
+    entity_uuids(&mut tag);
+    tag
+}
+/// `HoverEvent.ShowEntity` writes its UUID with `UUIDUtil.CODEC`: an int array.
+fn entity_uuids(tag: &mut Tag) {
+    match tag {
+        Tag::Compound(c) => {
+            let show_entity = matches!(c.get(&"action".into()), Some(Tag::String(a)) if a.to_string_lossy() == "show_entity");
+            for (k, v) in c.iter_mut() {
+                if show_entity && k.to_string_lossy() == "uuid" {
+                    let ints = match v {
+                        Tag::List(l) => l
+                            .iter()
+                            .map(|t| match t {
+                                Tag::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<i32>>>(),
+                        Tag::String(s) => {
+                            crate::save::uuid_from_text(&s.to_string_lossy()).map(Vec::from)
+                        }
+                        _ => None,
+                    };
+                    if let Some(ints) = ints.filter(|i| i.len() == 4) {
+                        *v = Tag::IntArray(ints);
+                    }
+                } else {
+                    entity_uuids(v);
+                }
+            }
+        }
+        Tag::List(l) => l.iter_mut().for_each(entity_uuids),
+        _ => {}
+    }
 }
 
 /// A style object as `Style.Serializer.MAP_CODEC` re-encodes it.
