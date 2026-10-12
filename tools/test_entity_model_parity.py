@@ -48,6 +48,8 @@ EXTRAS = [
     ('minecraft:pillager#main', 'IllagerModel'), ('minecraft:vindicator#main', 'IllagerModel'),
     ('minecraft:llama#main', 'LlamaModel'), ('minecraft:trader_llama#main', 'LlamaModel'),
     ('minecraft:llama_baby#main', 'BabyLlamaModel'), ('minecraft:trader_llama_baby#main', 'BabyLlamaModel'),
+    # LlamaDecorLayer: the carpet and the trader's blanket.
+    ('minecraft:llama#decor', 'LlamaModel'), ('minecraft:llama_baby#decor', 'BabyLlamaModel'),
     ('minecraft:donkey#main', 'DonkeyModel'), ('minecraft:mule#main', 'DonkeyModel'),
     ('minecraft:donkey_baby#main', 'BabyDonkeyModel'), ('minecraft:mule_baby#main', 'BabyDonkeyModel'),
     ('minecraft:skeleton_horse#main', 'HorseModel'), ('minecraft:zombie_horse#main', 'HorseModel'),
@@ -134,6 +136,8 @@ PIGLIN = [{'armPose': pose, 'maxCrossbowChageDuration': 25.0, 'ticksUsingItem': 
 EQUINE = [{'eatAnimation': 0.6}, {'standAnimation': 0.5}, {'eatAnimation': 0.3, 'standAnimation': 0.4, 'feedingAnimation': 0.7},
           {'isInWater': T}, {'standAnimation': 1.0, 'eatAnimation': 1.0}]
 WATER = [{'isInWater': T}, {'isInWater': F}]
+GHAST_BODY = [{'bodyItem': 'minecraft:white_harness'}, {'isRidden': T}, {'bodyItem': 'minecraft:red_harness', 'isRidden': T},
+              {'isLeashHolder': T, 'bodyItem': 'minecraft:blue_harness'}]
 SPECIES = {
     'horse': EQUINE, 'donkey': EQUINE + [{'hasChest': T}], 'mule': EQUINE + [{'hasChest': T}], 'zombie_horse': EQUINE, 'skeleton_horse': EQUINE,
     'iron_golem': [{'attackTicksRemaining': 7.0}, {'offerFlowerTick': 30}, {'attackTicksRemaining': 0.0, 'offerFlowerTick': 0}],
@@ -170,6 +174,11 @@ SPECIES = {
               {'sitAmount': 0.6, 'isEating': T}, {'sitAmount': 1.0, 'isScared': T}, {'sitAmount': 0.3},
               {'lieOnBackAmount': 0.5}, {'rollAmount': 0.7}],
     'llama': [{'hasChest': T}, {'hasChest': F}],
+    'sniffer': [{'isSearching': T}, {'diggingAnimationState': 2}, {'sniffingAnimationState': 5}, {'risingAnimationState': 1},
+                {'feelingHappyAnimationState': 3}, {'scentingAnimationState': 0}, {'diggingAnimationState': 50, 'isSearching': T},
+                {'feelingHappyAnimationState': 30, 'scentingAnimationState': 20}],
+    'happy_ghast': GHAST_BODY, 'happy_ghast_ropes': GHAST_BODY, 'happy_ghast_baby_ropes': GHAST_BODY,
+    'happy_ghast_harness': GHAST_BODY, 'happy_ghast_baby_harness': GHAST_BODY,
     'trader_llama': [{'hasChest': T}, {'hasChest': F}],
     'turtle': [{'isOnLand': T}, {'isOnLand': T, 'isLayingEgg': T}, {'isOnLand': F, 'hasEgg': T}, {'isOnLand': T, 'hasEgg': T}],
     'strider': [{'isRidden': T}, {'isRidden': F}],

@@ -8,7 +8,7 @@ use horizon_client::mobs::{
     anim::{self, Poses, State},
     aquatic, body_anim as b_anim, equine, guardian,
     keyframes::AnimationState,
-    shulker, species, tame,
+    shulker, sniffer, species, tame,
 };
 use horizon_core::geometry::Vec3;
 use serde_json::{Value, json};
@@ -173,6 +173,30 @@ fn entity_state(mob: &mut Mob, species: Species, case: &Value) {
                 mob.anim.states[i].started = case[k].as_f64().map(|v| v as f32);
             }
         }
+        Species::Sniffer => {
+            if flag("isSearching") {
+                mob.extra.variant = sniffer::SEARCHING;
+            }
+            // Sniffer's animation states, in `sniffer::anim`'s order.
+            for (i, k) in [
+                "feelingHappyAnimationState",
+                "scentingAnimationState",
+                "sniffingAnimationState",
+                "diggingAnimationState",
+                "risingAnimationState",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                mob.anim.states[i].started = case[k].as_f64().map(|v| v as f32);
+            }
+        }
+        Species::HappyGhast => {
+            mob.extra.head = case["bodyItem"].as_str().map(Into::into);
+            if flag("isRidden") {
+                mob.rider = Some(Default::default());
+            }
+        }
         Species::Witch if flag("isHoldingItem") => {
             mob.extra.main_hand = Some("minecraft:potion".into());
         }
@@ -214,7 +238,10 @@ fn main() -> horizon_client::Result<()> {
         for cut in cuts {
             base = base.replace(cut, "");
         }
-        let base = base.replace("undead_horse#", "zombie_horse#");
+        // LlamaDecorLayer's model animates like the llama.
+        let base = base
+            .replace("undead_horse#", "zombie_horse#")
+            .replace("#decor", "#main");
         let base = base.trim_start_matches("cold_").trim_start_matches("warm_");
         let Some(def) = species::ALL.iter().find(|d| {
             d.model == layer
