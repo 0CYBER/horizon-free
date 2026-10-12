@@ -6,7 +6,7 @@ use super::{Dim, Game};
 use horizon_client::mobs::villager as mobs_villager;
 use horizon_client::{
     effects::{EffectInstance, OmenTick},
-    hud::{HudBatch, rgba},
+    hud_overlays,
     mobs::{
         Mob, Species, raider,
         spawn_rules::{self, SpawnLevel},
@@ -15,6 +15,7 @@ use horizon_client::{
     },
     patrol::{GameplayAttributes, Member, PatrolLevel, PatrolSpawner},
     raid::{self, Action, BarName, RaidLevel, RaidPlayer, RaiderInfo, RaiderType, Raids, Spawn},
+    text::Text,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use std::collections::{HashMap, HashSet};
@@ -1015,63 +1016,44 @@ impl Game<'_> {
         }
     }
 
-    /// `SetRaidStatus` / `ResetRaidStatus` for villagers: which raid package
-    /// they follow, by the raid nearest to them.
+    /// What `getRaidAt` tells each villager where it stands (its brain's
+    /// `SetRaidStatus`, `ResetRaidStatus`, `ReactToBell` and raid packages
+    /// read it).
     fn sync_villager_raids(&mut self, infos: &HashMap<i32, Vec<RaiderInfo>>) {
         let raids = &self.raiding.raids;
-        let random = &mut self.world.random;
         for m in &mut self.mobs {
             if m.species() != Species::Villager {
                 continue;
             }
             let at = block_of(m.position);
-            let status = match raids.nearby(at) {
-                Some((id, r)) if !r.is_stopped() && !r.is_loss() => {
+            let (status, wave) = match raids.nearby(at) {
+                Some((id, r)) => {
                     let alive = infos.get(&id).map_or(0, Vec::len);
-                    if r.is_victory() {
+                    let wave = r.has_first_wave_spawned() && !r.is_between_waves(alive);
+                    let status = if r.is_victory() {
                         mobs_villager::RAID_VICTORY
-                    } else if r.has_first_wave_spawned() && !r.is_between_waves(alive) {
+                    } else if r.is_loss() {
+                        mobs_villager::RAID_LOSS
+                    } else if wave {
                         mobs_villager::RAID
                     } else {
                         mobs_villager::PRE_RAID
-                    }
+                    };
+                    (status, wave)
                 }
-                _ => mobs_villager::RAID_NONE,
+                None => (mobs_villager::RAID_NONE, false),
             };
             let ext = mobs_villager::ext_mut(m);
-            // ResetRaidStatus clears at once; SetRaidStatus one tick in twenty.
-            if status == mobs_villager::RAID_NONE
-                || ext.raid != status && random.next_int_bound(20).unwrap_or(1) == 0
-            {
-                ext.raid = status;
-            }
+            ext.raid = status;
+            ext.raid_wave = wave;
         }
     }
 
-    /// The raid boss bars (`BossHealthOverlay`): a red notched bar with the
-    /// raid's title. Returns the next free row.
-    pub(super) fn draw_raid_bar(&self, batch: &mut HudBatch, mut y: f32) -> f32 {
-        let atlas = &self.res.atlas;
+    /// The raid boss bars: red and notched in tens, with the raid's title.
+    pub(super) fn raid_bars(&self, bars: &mut Vec<hud_overlays::BossBar>) {
         for raid in self.raiding.raids.map.values() {
             if !raid.bar.visible || !raid.bar.player || raid.is_stopped() {
                 continue;
-            }
-            let x = (batch.width / 2.0 - 91.0).floor();
-            batch.sprite(atlas, "gui/sprites/boss_bar/red_background", x, y);
-            batch.sprite(atlas, "gui/sprites/boss_bar/notched_10_background", x, y);
-            let p = raid.bar.progress;
-            // Mth.lerpDiscrete(progress, 0, 182).
-            let width = (p * 181.0).floor() as i32 + i32::from(p > 0.0);
-            if width > 0 {
-                let fraction = width as f32 / 182.0;
-                batch.sprite_part(atlas, "gui/sprites/boss_bar/red_progress", x, y, fraction);
-                batch.sprite_part(
-                    atlas,
-                    "gui/sprites/boss_bar/notched_10_progress",
-                    x,
-                    y,
-                    fraction,
-                );
             }
             let title = self.translate("event.minecraft.raid", "Raid");
             let name = match raid.bar.name {
@@ -1091,18 +1073,13 @@ impl Game<'_> {
                     self.translate("event.minecraft.raid.defeat.full", "Raid - Defeat")
                 }
             };
-            let w = HudBatch::text_width(atlas, &name);
-            batch.text(
-                atlas,
-                &name,
-                (batch.width / 2.0 - w / 2.0).floor(),
-                y - 9.0,
-                rgba(255, 255, 255, 255),
-                true,
-            );
-            y += 19.0;
+            bars.push(hud_overlays::BossBar {
+                name: Text::literal(name),
+                progress: raid.bar.progress,
+                color: 2,
+                overlay: 2,
+            });
         }
-        y
     }
     /// A firework a villager launches to celebrate (`CelebrateVillagersSurvivedRaid`).
     pub(super) fn villager_firework(&mut self, at: [f64; 3], color: usize, flight: u8) {

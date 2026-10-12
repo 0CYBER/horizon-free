@@ -293,7 +293,11 @@ impl Game<'_> {
         reg.structures = list("data/minecraft/worldgen/structure");
         reg.biomes = list("data/minecraft/worldgen/biome");
         reg.clocks = list("data/minecraft/world_clock");
-        reg.dimensions = vec!["minecraft:overworld".into(), "minecraft:the_nether".into()];
+        reg.dimensions = vec![
+            "minecraft:overworld".into(),
+            "minecraft:the_nether".into(),
+            "minecraft:the_end".into(),
+        ];
         reg.players = vec![PLAYER_NAME.into()];
         // Timelines of the overworld clock and their time markers.
         self.ui.markers.clear();
@@ -329,6 +333,15 @@ impl Game<'_> {
                         show,
                     },
                 );
+            }
+        }
+        // Vanilla's built-in registries (mob effects, components, dialogs...).
+        for dir in [&self.options.resources, &self.ui.vanilla_root] {
+            if let Ok(bytes) = std::fs::read(dir.join("command-registries.json"))
+                && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            {
+                self.ui.registries.fill_from_export(&v);
+                break;
             }
         }
         let reg = &mut self.ui.registries;
@@ -375,7 +388,7 @@ impl Game<'_> {
     /// A chat message from the game (ChatComponent.addServerSystemMessage).
     pub(super) fn system_message(&mut self, text: Text) {
         if let Some(capture) = self.chat_capture.as_mut() {
-            capture.push(text.plain());
+            capture.push(text);
             return;
         }
         let focused = self.screen == Screen::Chat;
@@ -404,7 +417,7 @@ impl Game<'_> {
             return;
         };
         let atlas = &self.res.atlas;
-        let d = vanilla::dispatcher();
+        let d = vanilla::game_dispatcher();
         if screen.suggestion_key(atlas, d, &self.ui.registries, key, shift) {
             self.ui.chat_screen = Some(screen);
             return;
@@ -518,11 +531,11 @@ impl Game<'_> {
             return;
         };
         screen.resize(batch.width, batch.height);
-        let bg = self.ui.chat.options.background_opacity;
+        let bg = self.ui.chat.options.background_opacity as f32;
         screen.draw(
             batch,
             &self.res.atlas,
-            vanilla::dispatcher(),
+            vanilla::game_dispatcher(),
             &self.ui.registries,
             self.cursor,
             bg,

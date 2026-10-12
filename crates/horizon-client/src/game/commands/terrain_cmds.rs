@@ -2,6 +2,7 @@
 use super::{Arg, Context, Game, R, Target, err, items::Owner};
 use horizon_client::{
     chunk::{HEIGHT, MIN_Y},
+    command::CommandError,
     items::ItemStack,
     scoreboard_cmd::{Holder, Tracker},
     text::Text,
@@ -146,18 +147,14 @@ impl Game<'_> {
     // ---- /fillbiome ----------------------------------------------------------------
 
     pub(super) fn cmd_fillbiome(&mut self, ctx: &Context) -> R<i32> {
-        let (Some(Arg::Resource(biome)), from, to) = (
-            ctx.get("biome").cloned(),
-            self.coords(ctx, "from"),
-            self.coords(ctx, "to"),
-        ) else {
+        let Some(Arg::Resource(biome)) = ctx.get("biome").cloned() else {
             return Ok(0);
         };
-        let (Some(from), Some(to)) = (from, to) else {
-            return Ok(0);
-        };
-        let (src_pos, src_rot) = (self.source_position(), self.source_rotation());
-        let (a, b) = (from.block(src_pos, src_rot), to.block(src_pos, src_rot));
+        // BlockPosArgument.getLoadedBlockPos on both corners first.
+        let (a, b) = (
+            self.block_pos_arg(ctx, "from")?,
+            self.block_pos_arg(ctx, "to")?,
+        );
         // Quantize to biome cells (`QuartPos`), then work with the box.
         let q = |v: i32| (v >> 2) << 2;
         let lo = [
@@ -433,11 +430,20 @@ impl Game<'_> {
 
     fn tool_stack(&mut self, ctx: &Context) -> R<Option<ItemStack>> {
         if let Some(Arg::Item(p)) = ctx.get("tool") {
+            let (damage, extra) = match p
+                .components
+                .as_deref()
+                .map(horizon_client::item_data::command_components)
+            {
+                Some(Ok(tag)) => horizon_client::item_data::decode_components(Some(&tag)),
+                Some(Err(e)) => return Err(CommandError::new(Text::literal(e))),
+                None => (0, None),
+            };
             return Ok(Some(ItemStack {
                 item: p.id.as_str().into(),
                 count: 1,
-                damage: 0,
-                extra: None,
+                damage,
+                extra,
             }));
         }
         let entity = self
@@ -461,19 +467,41 @@ impl Game<'_> {
                 let Some(Arg::Resource(table)) = ctx.get("loot_table").cloned() else {
                     return Ok(0);
                 };
-                if !self.res.items.has_loot_table(&table) {
-                    return Err(err("argument.resource_or_id.failed_to_parse", &[&table]));
-                }
-                let held = if id == "loot.fish" {
-                    self.tool_stack(ctx)?
-                } else {
-                    None
-                };
-                let drops =
-                    self.res
+                // An inline table (ResourceOrIdArgument): no random sequence.
+                if table.starts_with('{') {
+                    let (tag, _) = horizon_world::nbt::parse_snbt(&table)
+                        .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
+                    let json = horizon_client::scoreboard::tag_to_json(&tag);
+                    let drops = self
+                        .res
                         .items
-                        .loot_table(&table, false, held.as_ref(), &mut self.world.random);
-                (drops, None)
+                        .inline_loot_table(&json, &mut self.world.random);
+                    (drops, None)
+                } else {
+                    if !self.res.items.has_loot_table(&table) {
+                        return Err(err("argument.resource_or_id.failed_to_parse", &[&table]));
+                    }
+                    let held = if id == "loot.fish" {
+                        self.tool_stack(ctx)?
+                    } else {
+                        None
+                    };
+                    let drops = match self.res.items.loot_sequence(&table) {
+                        Some(seq) => {
+                            let random = self.rand_sequences.get(&seq, self.level.seed);
+                            self.res
+                                .items
+                                .loot_table(&table, false, held.as_ref(), random)
+                        }
+                        None => self.res.items.loot_table(
+                            &table,
+                            false,
+                            held.as_ref(),
+                            &mut self.world.random,
+                        ),
+                    };
+                    (drops, None)
+                }
             }
             "loot.kill" => {
                 let targets = self.entities(ctx, "target", false)?;
@@ -493,12 +521,20 @@ impl Game<'_> {
                     None | Some(Some(Target::Player))
                 );
                 let held = self.slot_get(&super::items::Slot::Inv(self.selected));
-                let drops = self.res.items.entity_drops(
-                    &ty,
-                    by_player,
-                    held.as_ref(),
-                    &mut self.world.random,
-                );
+                let drops = match self.res.items.loot_sequence(&table) {
+                    Some(seq) => {
+                        let random = self.rand_sequences.get(&seq, self.level.seed);
+                        self.res
+                            .items
+                            .entity_drops(&ty, by_player, held.as_ref(), random)
+                    }
+                    None => self.res.items.entity_drops(
+                        &ty,
+                        by_player,
+                        held.as_ref(),
+                        &mut self.world.random,
+                    ),
+                };
                 (drops, Some(table))
             }
             _ => {
@@ -511,12 +547,23 @@ impl Game<'_> {
                     return Err(err("commands.drop.no_loot_table.block", &[&name]));
                 }
                 let tool = self.tool_stack(ctx)?;
-                let drops = self.res.items.block_drops(
-                    self.res.assets.registry,
-                    state,
-                    tool.as_ref(),
-                    &mut self.world.random,
-                );
+                let drops = match self.res.items.loot_sequence(&table) {
+                    Some(seq) => {
+                        let random = self.rand_sequences.get(&seq, self.level.seed);
+                        self.res.items.block_drops(
+                            self.res.assets.registry,
+                            state,
+                            tool.as_ref(),
+                            random,
+                        )
+                    }
+                    None => self.res.items.block_drops(
+                        self.res.assets.registry,
+                        state,
+                        tool.as_ref(),
+                        &mut self.world.random,
+                    ),
+                };
                 (drops, Some(table))
             }
         };

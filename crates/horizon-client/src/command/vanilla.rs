@@ -403,6 +403,7 @@ pub fn build_with(dev: bool) -> Dispatcher {
     super::tree_misc::register(&mut d, root);
     super::tree_world::register(&mut d, root);
     super::tree_extra::register(&mut d, root);
+    apply_vanilla_order(&mut d);
     d
 }
 
@@ -506,6 +507,42 @@ pub fn game_modes() -> [&'static str; 4] {
     GameMode::ALL.map(GameMode::name)
 }
 /// The shared vanilla tree.
+/// Reorder node children as vanilla registers them (Brigadier keeps
+/// children in registration order; smart usage lists them that way).
+fn apply_vanilla_order(d: &mut Dispatcher) {
+    for (path, order) in super::vanilla_order::ORDER {
+        let mut node = Some(0usize);
+        for name in path.split(' ').filter(|n| !n.is_empty()) {
+            node = node.and_then(|n| {
+                d.nodes[n]
+                    .children
+                    .iter()
+                    .copied()
+                    .find(|&c| d.nodes[c].name() == name)
+            });
+        }
+        let Some(n) = node else { continue };
+        let mut children = d.nodes[n].children.clone();
+        let rank = |c: usize| {
+            order
+                .iter()
+                .position(|o| *o == d.nodes[c].name())
+                .unwrap_or(order.len())
+        };
+        children.sort_by_key(|&c| rank(c));
+        d.nodes[n].children = children;
+    }
+}
+/// The tree the game runs: a release integrated server's, or with
+/// `HORIZON_DEV_COMMANDS` set the development one
+/// (SharedConstants.DEBUG_DEV_COMMANDS).
+pub fn game_dispatcher() -> &'static Dispatcher {
+    if std::env::var_os("HORIZON_DEV_COMMANDS").is_some() {
+        dispatcher()
+    } else {
+        release_dispatcher()
+    }
+}
 pub fn dispatcher() -> &'static Dispatcher {
     static TREE: std::sync::OnceLock<Dispatcher> = std::sync::OnceLock::new();
     TREE.get_or_init(build)

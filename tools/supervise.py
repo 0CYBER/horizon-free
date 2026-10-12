@@ -133,7 +133,8 @@ def integrate(args):
     if git("rev-parse", "HEAD", cwd=base_tree) == before:
         print(f"{names}: nothing new for {args.base}.")
         return 0
-    gate = [sys.executable, "tools/gate.py", "-j", str(args.jobs), "--known-failures", ",".join(known)]
+    gate = [sys.executable, "tools/gate.py", "--known-failures", ",".join(known)]
+    gate += ["-j", str(args.jobs)] if args.jobs is not None else []
     gate += ["--no-parity"] if args.no_parity else []
     if subprocess.run(gate, cwd=base_tree).returncode:
         git("reset", "--hard", before, cwd=base_tree)
@@ -158,7 +159,7 @@ def main():
     command.set_defaults(run=save)
     command = commands.add_parser("integrate")
     command.add_argument("branches", nargs="+", help="merged in order, then gated together")
-    command.add_argument("-j", "--jobs", type=int, default=8)
+    command.add_argument("-j", "--jobs", type=int, help="harnesses at once on this machine (default: tools/parity.py's)")
     command.add_argument("--no-parity", action="store_true", help="skip the vanilla harnesses in the gate")
     command.set_defaults(run=integrate)
     args = parser.parse_args()

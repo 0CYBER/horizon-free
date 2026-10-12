@@ -21,6 +21,53 @@ impl Behaviours {
     pub fn live_features(&self) -> Option<&Arc<LiveFeatures>> {
         self.growth.features.get()
     }
+    /// `JigsawPlacement.generateJigsaw`: `assemble` builds the pieces (from
+    /// the generation context's own random), then each piece is placed into
+    /// the level with the level random, an unbounded box and `reference` as
+    /// the origin. Returns whether pieces were assembled.
+    pub fn place_jigsaw<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut super::Ticks,
+        reference: [i32; 3],
+        assemble: impl FnOnce() -> Option<crate::worldgen::generator::JigsawPieces>,
+    ) -> bool {
+        let Some(features) = self.live_features() else {
+            return false;
+        };
+        let Some(jigsaw) = assemble() else {
+            return false;
+        };
+        let mut sim = self.sim(level, ticks);
+        let mut random = sim.random().clone();
+        {
+            let mut world = LevelFeatureWorld {
+                sim: &mut sim,
+                features,
+            };
+            let unbounded =
+                crate::worldgen::structure::BoundingBox::new([i32::MIN; 3], [i32::MAX; 3]);
+            for piece in &jigsaw.pieces {
+                let mut place_feature =
+                    |w: &mut LevelFeatureWorld<'_, '_, L>,
+                     r: &mut horizon_core::random::LegacyRandom,
+                     name: &str,
+                     p: [i32; 3]| { Ok(features.place_placed(name, w, r, p)) };
+                if let Err(e) = piece.place(
+                    &mut world,
+                    &jigsaw.resources,
+                    &mut random,
+                    unbounded,
+                    reference,
+                    &mut place_feature,
+                ) {
+                    eprintln!("Horizon: placing a jigsaw piece failed: {e}");
+                }
+            }
+        }
+        *sim.random() = random;
+        true
+    }
 }
 
 /// The four (state, position) pairs of a 2x2 sapling square.

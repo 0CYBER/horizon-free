@@ -1,21 +1,14 @@
-//! Villagers (`Villager` and its brain packages, as goals): taking the
-//! profession of a free job site nearby (`AcquirePoi` with
-//! `AssignProfessionFromJobSite`), losing a fresh profession when the site
-//! goes (`ResetProfession`), claiming a bed and a bell, the daily schedule
-//! (work and restock at the job site, meet at the bell, sleep in the bed),
-//! fleeing hostiles (`VillagerPanicTrigger`) and the unhappy head shake.
+//! Villagers (`Villager`): professions, sleeping, the unhappy head shake,
+//! food, gossip and the raid state. Their AI is the brain in
+//! `villager_brain`.
 use super::{
-    Mob, MobEvent, MobWorld, Species, Who,
+    Mob, MobEvent, MobWorld, Species,
     anim::{Poses, State},
-    goals::{
-        Avoid, AvoidEntity, Cx, Float, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround,
-        Stroll, goal_clone,
-    },
 };
 use crate::items::ItemStack;
 use horizon_core::geometry::trig::Mth;
 use horizon_core::random::RandomSource;
-use std::{collections::HashMap, f32::consts::PI};
+use std::f32::consts::PI;
 
 // Villager state: `variant` type, `variant2` profession (index into
 // `render::PROFESSIONS`), `variant3` level, `home` the claimed job site,
@@ -50,187 +43,12 @@ pub fn register(m: &mut Mob) {
     if m.extra.variant3 == 0 {
         m.extra.variant3 = 1;
     }
-    let g = &mut m.ai.goals;
-    g.add(0, Float);
-    // VillagerHostilesSensor: zombies within 8 blocks, illagers further.
-    let zombies = vec![
-        Species::Zombie,
-        Species::ZombieVillager,
-        Species::Husk,
-        Species::Drowned,
-        Species::Vex,
-    ];
-    let raiders = vec![
-        Species::Pillager,
-        Species::Vindicator,
-        Species::Evoker,
-        Species::Illusioner,
-        Species::Ravager,
-        Species::Zoglin,
-    ];
-    g.add(
-        1,
-        AvoidEntity::new(Avoid::Species(zombies), 8.0, 0.75, 0.75),
-    );
-    g.add(
-        1,
-        AvoidEntity::new(Avoid::Species(raiders), 12.0, 0.75, 0.75),
-    );
-    g.add(1, Panic::new(0.75));
-    g.add(2, RaidBehavior::default());
-    g.add(3, Social::default());
-    g.add(0, GolemCall);
-    g.add(3, GiftToHero::default());
-    g.add(3, JobSite::default());
-    g.add(3, AcquireHome::default());
-    g.add(4, Schedule::default());
-    g.add(5, Stroll::avoiding_water(0.5));
-    g.add(6, LookAtPlayer::new(8.0));
-    g.add(7, RandomLookAround::default());
+    // Villager's constructor: its brain does everything, it has no goals.
+    m.ai.nav.can_open_doors = true;
+    m.ai.nav.can_float = true;
+    m.ai.nav.required_path_length = 48.0;
 }
 
-/// `AcquirePoi` for job sites with `AssignProfessionFromJobSite`: walk to the
-/// nearest unclaimed job site and take its profession once within 2 blocks.
-#[derive(Clone, Debug, Default)]
-struct JobSite {
-    target: Option<[i32; 3]>,
-    next_search: i32,
-    ticks: i32,
-}
-fn claimed(w: &MobWorld, me: u32, p: [i32; 3]) -> bool {
-    w.others
-        .iter()
-        .any(|s| s.id != me && s.alive && s.job == Some(p))
-}
-fn job_seeker(m: &Mob) -> bool {
-    !m.is_baby() && m.extra.home.is_none() && m.extra.variant2 != NITWIT
-}
-#[derive(Clone, Copy, PartialEq)]
-enum Poi {
-    Job(u8),
-    Bed,
-    Bell,
-}
-fn poi_at(w: &MobWorld, state: horizon_world::registry::BlockStateId) -> Option<Poi> {
-    let name = &w.facts.get(state).name;
-    if name.as_ref() == "minecraft:bell" {
-        return Some(Poi::Bell);
-    }
-    if name.ends_with("_bed") {
-        let s = w.registry.state(state)?;
-        let free = s.properties.get("part").map(String::as_str) == Some("head")
-            && s.properties.get("occupied").map(String::as_str) != Some("true");
-        return free.then_some(Poi::Bed);
-    }
-    job_site_profession(name).map(Poi::Job)
-}
-/// `PoiManager.findClosest` (`AcquirePoi.SCAN_RANGE` 48 blocks across, 8
-/// up and down): the nearest position whose POI passes `want`.
-fn scan(m: &Mob, w: &MobWorld, want: impl Fn(Poi, [i32; 3]) -> bool) -> Option<[i32; 3]> {
-    let (bx, by, bz) = (
-        m.position.x.floor() as i32,
-        m.position.y.floor() as i32,
-        m.position.z.floor() as i32,
-    );
-    let mut known: HashMap<u32, Option<Poi>> = HashMap::new();
-    let mut best: Option<(i32, [i32; 3])> = None;
-    for y in by - 8..=by + 8 {
-        for z in bz - 48..=bz + 48 {
-            for x in bx - 48..=bx + 48 {
-                let state = w.world.block(x, y, z);
-                if w.facts.is_air(state) {
-                    continue;
-                }
-                let poi = *known.entry(state.0).or_insert_with(|| poi_at(w, state));
-                let Some(poi) = poi else { continue };
-                let d = (x - bx).pow(2) + (y - by).pow(2) + (z - bz).pow(2);
-                if best.is_none_or(|(b, _)| d < b) && want(poi, [x, y, z]) {
-                    best = Some((d, [x, y, z]));
-                }
-            }
-        }
-    }
-    best.map(|(_, p)| p)
-}
-/// The nearest free job site (a profession's own one once employed).
-fn find_site(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
-    scan(m, w, |poi, p| match poi {
-        Poi::Job(profession) => {
-            (m.extra.variant2 == NONE || profession == m.extra.variant2) && !claimed(w, m.id, p)
-        }
-        _ => false,
-    })
-}
-impl Goal for JobSite {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        MOVE
-    }
-    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if !job_seeker(m) {
-            return false;
-        }
-        if self.next_search > 0 {
-            self.next_search -= 1;
-            return false;
-        }
-        // AcquirePoi's scan pacing: 20 to 40 ticks between scans.
-        self.next_search = 20 + m.random.next_int_bound(20).unwrap_or(0);
-        self.target = find_site(m, cx.w);
-        self.target.is_some()
-    }
-    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        job_seeker(m)
-            && self.ticks < 1200
-            && self.target.is_some_and(|p| {
-                job_site_profession(cx.w.block_name(p[0], p[1], p[2])).is_some()
-                    && !claimed(cx.w, m.id, p)
-            })
-    }
-    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.ticks = 0;
-        if let Some(p) = self.target {
-            let path = m.create_path_to(cx.w, p, 1);
-            m.nav_move_to_path(path, 0.5);
-        }
-    }
-    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
-        m.nav_stop();
-        self.target = None;
-    }
-    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.ticks += 1;
-        let Some(p) = self.target else { return };
-        let c = [
-            f64::from(p[0]) + 0.5,
-            f64::from(p[1]) + 0.5,
-            f64::from(p[2]) + 0.5,
-        ];
-        if m.position
-            .distance_squared(horizon_core::geometry::Vec3::new(c[0], c[1], c[2]))
-            < 4.0
-        {
-            take_job(m, p, cx.w, cx.events);
-            return;
-        }
-        if m.ai.nav.is_done() && self.ticks % 40 == 0 {
-            let path = m.create_path_to(cx.w, p, 1);
-            m.nav_move_to_path(path, 0.5);
-        }
-    }
-}
-/// `AssignProfessionFromJobSite`: claim the site, take its profession if
-/// unemployed, and show the happy particles (entity event 14).
-fn take_job(m: &mut Mob, p: [i32; 3], w: &MobWorld, events: &mut Vec<MobEvent>) {
-    m.extra.home = Some(p);
-    if m.extra.variant2 == NONE
-        && let Some(profession) = job_site_profession(w.block_name(p[0], p[1], p[2]))
-    {
-        m.extra.variant2 = profession;
-        m.extra.trade = None;
-    }
-    particles_around(m, "happy_villager", events);
-}
 /// `LivingEntity.addParticlesAroundSelf`: five particles about the body.
 pub fn particles_around(m: &mut Mob, kind: &'static str, events: &mut Vec<MobEvent>) {
     let (w, h) = (f64::from(m.width()), f64::from(m.height()));
@@ -253,8 +71,11 @@ pub enum Activity {
     Rest,
 }
 pub fn activity(m: &Mob, day_time: i64) -> Activity {
+    activity_at(m.is_baby(), day_time)
+}
+pub fn activity_at(baby: bool, day_time: i64) -> Activity {
     let t = day_time.rem_euclid(24000);
-    if m.is_baby() {
+    if baby {
         match t {
             10..3000 | 6000..10000 => Activity::Idle,
             3000..6000 | 10000..12000 => Activity::Play,
@@ -269,192 +90,13 @@ pub fn activity(m: &Mob, day_time: i64) -> Activity {
         }
     }
 }
-fn center(p: [i32; 3]) -> [f64; 3] {
-    [
-        f64::from(p[0]) + 0.5,
-        f64::from(p[1]) + 0.5,
-        f64::from(p[2]) + 0.5,
-    ]
-}
-fn distance(m: &Mob, p: [i32; 3]) -> f64 {
-    let c = center(p);
-    m.position
-        .distance_squared(horizon_core::geometry::Vec3::new(c[0], c[1], c[2]))
-        .sqrt()
-}
-/// `AcquirePoi` for `HOME` (a free bed head) and `MEETING` (a bell), with
-/// the happy particles on success; failed scans back off.
-#[derive(Clone, Debug, Default)]
-struct AcquireHome {
-    next_search: i32,
-}
-impl Goal for AcquireHome {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        0
-    }
-    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if m.extra.bed.is_some() && m.extra.meeting.is_some() {
-            return false;
-        }
-        if self.next_search > 0 {
-            self.next_search -= 1;
-            return false;
-        }
-        let w = cx.w;
-        let mut found = false;
-        if m.extra.bed.is_none()
-            && let Some(p) = scan(m, w, |poi, p| {
-                poi == Poi::Bed
-                    && !w
-                        .others
-                        .iter()
-                        .any(|s| s.id != m.id && s.alive && s.bed == Some(p))
-            })
-        {
-            m.extra.bed = Some(p);
-            found = true;
-        }
-        if m.extra.meeting.is_none()
-            && !m.is_baby()
-            && let Some(p) = scan(m, w, |poi, _| poi == Poi::Bell)
-        {
-            m.extra.meeting = Some(p);
-            found = true;
-        }
-        if found {
-            particles_around(m, "happy_villager", cx.events);
-        }
-        self.next_search = if found {
-            20 + m.random.next_int_bound(20).unwrap_or(0)
-        } else {
-            200 + m.random.next_int_bound(200).unwrap_or(0)
-        };
-        false
-    }
-}
-/// The schedule's walk targets (`SetWalkTargetFromBlockMemory`,
-/// `StrollToPoi`, `StrollAroundPoi`), `WorkAtPoi` with restocking, and
-/// `SleepInBed`.
-#[derive(Clone, Debug, Default)]
-struct Schedule {
-    cooldown: i32,
-    target: Option<[f64; 3]>,
-    to_site: bool,
-    last_work: i64,
-    ticks: i32,
-}
-impl Schedule {
-    fn anchor(m: &Mob, a: Activity) -> Option<([i32; 3], f64)> {
-        match a {
-            Activity::Work if m.extra.variant2 != NONE && m.extra.variant2 != NITWIT => {
-                m.extra.home.map(|p| (p, 9.0))
-            }
-            Activity::Meet => m.extra.meeting.map(|p| (p, 6.0)),
-            Activity::Rest => m.extra.bed.map(|p| (p, 1.0)),
-            _ => None,
-        }
-    }
-}
-impl Goal for Schedule {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        MOVE
-    }
-    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if sleeping(m) {
-            return false;
-        }
-        if self.cooldown > 0 {
-            self.cooldown -= 1;
-            return false;
-        }
-        let a = activity(m, cx.w.day_time);
-        let Some((p, close)) = Self::anchor(m, a) else {
-            return false;
-        };
-        self.to_site = false;
-        let c = center(p);
-        self.target = if a == Activity::Rest || distance(m, p) > close {
-            self.to_site = true;
-            Some(c)
-        } else if m.random.next_int_bound(2).unwrap_or(0) == 0 && a == Activity::Work {
-            // StrollToPoi / WorkAtPoi.
-            self.to_site = true;
-            Some(c)
-        } else {
-            // StrollAroundPoi: somewhere near the site.
-            let r = &mut m.random;
-            let spread = if a == Activity::Meet { 6 } else { 4 };
-            let mut d = || f64::from(r.next_int_bound(2 * spread + 1).unwrap_or(0) - spread);
-            Some([c[0] + d(), c[1], c[2] + d()])
-        };
-        self.cooldown = 40 + m.random.next_int_bound(80).unwrap_or(0);
-        true
-    }
-    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.ticks < 400
-            && !sleeping(m)
-            && Self::anchor(m, activity(m, cx.w.day_time)).is_some()
-            && !(m.ai.nav.is_done() && self.ticks > 20)
-    }
-    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.ticks = 0;
-        if let Some(t) = self.target {
-            m.nav_move_to(cx.w, t, 0.5);
-        }
-    }
-    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
-        m.nav_stop();
-    }
-    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.ticks += 1;
-        let a = activity(m, cx.w.day_time);
-        let Some((p, _)) = Self::anchor(m, a) else {
-            return;
-        };
-        if !self.to_site {
-            return;
-        }
-        match a {
-            Activity::Work if distance(m, p) < 1.73 => {
-                // WorkAtPoi: every 300 ticks at most, half the time.
-                let now = cx.w.game_time;
-                m.look_at(center(p));
-                if now - self.last_work >= 300 && m.random.next_int_bound(2).unwrap_or(1) == 0 {
-                    self.last_work = now;
-                    work(m, cx.w, cx.events);
-                }
-                m.nav_stop();
-            }
-            Activity::Rest if distance(m, p) < 2.0 => start_sleeping(m, p, cx.w),
-            _ => {}
-        }
-    }
-}
-/// `WorkAtPoi.start`: the profession's work sound, and a restock when due.
-fn work(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    let profession = super::render::PROFESSIONS[m.extra.variant2 as usize % 15];
-    events.push(MobEvent::SoundId(
-        format!("minecraft:entity.villager.work_{profession}"),
-        [m.position.x, m.position.y, m.position.z],
-        1.0,
-        1.0,
-    ));
-    let day = w.day_time.div_euclid(24000);
-    if let Some(t) = m.extra.trade.as_mut()
-        && t.should_restock(w.game_time, day)
-    {
-        t.restock(w.game_time);
-    }
-}
 pub fn sleeping(m: &Mob) -> bool {
     matches!(m.species(), Species::Villager | Species::WanderingTrader) && m.extra.ints[1] != 0
 }
 /// `LivingEntity.startSleeping`: lie in the bed (`setPosToBed`).
-fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld) {
+pub fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld) -> bool {
     if w.prop(p[0], p[1], p[2], "occupied") == Some("true") {
-        return;
+        return false;
     }
     m.extra.ints[1] = match w.prop(p[0], p[1], p[2], "facing") {
         Some("north") => 1,
@@ -470,6 +112,7 @@ fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld) {
         f64::from(p[1]) + 0.6875,
         f64::from(p[2]) + 0.5,
     );
+    true
 }
 /// `LivingEntity.stopSleeping` with `BedBlock.findStandUpPosition`: beside
 /// the bed where there is room, else on top of it.
@@ -499,14 +142,6 @@ pub fn stop_sleeping(m: &mut Mob, w: &MobWorld) {
     }
     m.position.y = f64::from(p[1]) + 0.5625;
 }
-/// While asleep the villager stays in the bed.
-pub fn travel(m: &mut Mob) -> bool {
-    if !sleeping(m) {
-        return false;
-    }
-    m.velocity = horizon_core::geometry::Vec3::ZERO;
-    true
-}
 /// `LivingEntityRenderer.sleepDirectionToRotation` and the bed's direction
 /// (the body is shifted back from the pillow by the standing eye height).
 pub fn sleep_pose(m: &Mob) -> Option<(f32, [f32; 2])> {
@@ -518,69 +153,24 @@ pub fn sleep_pose(m: &Mob) -> Option<(f32, [f32; 2])> {
         _ => return None,
     })
 }
-/// `Villager.tick` / brain upkeep: the unhappy counter, and
-/// `ResetProfession` / job site loss when the site's block is gone.
+/// `Villager.tick`: the unhappy counter and the gossip decay; a sleeper
+/// hurt or without its bed wakes up (`LivingEntity.hurtServer`,
+/// `LivingEntity.checkBedExists`). The brain does the rest.
 pub fn ai_step(m: &mut Mob, w: &MobWorld) {
     if m.extra.ints[0] > 0 {
         m.extra.ints[0] -= 1;
     }
     if m.species() == Species::Villager {
-        let now = w.game_time;
-        let seen_golem = (i64::from(m.age) + i64::from(m.id)) % 200 == 0
-            && w.others.iter().any(|s| {
-                s.species == Species::IronGolem
-                    && s.alive
-                    && (s.position.x - m.position.x).abs() <= 16.0
-                    && (s.position.y - m.position.y).abs() <= 16.0
-                    && (s.position.z - m.position.z).abs() <= 16.0
-            });
-        let e = ext_mut(m);
-        // Villager.maybeDecayGossip and the GolemSensor (every 200 ticks).
-        e.maybe_decay(now);
-        if seen_golem {
-            e.golem_until = now + 599;
-        }
+        ext_mut(m).maybe_decay(w.game_time);
     }
-    // WakeUp / LivingEntity.hurt: morning, a hit or a missing bed.
     if sleeping(m) {
         let bed_gone = m
             .extra
             .bed
             .is_none_or(|p| !w.block_name(p[0], p[1], p[2]).ends_with("_bed"));
-        if activity(m, w.day_time) != Activity::Rest || m.hurt_time > 0 || bed_gone {
+        if m.hurt_time > 0 || bed_gone {
             stop_sleeping(m, w);
-        }
-    }
-    // ValidateNearbyPoi for the bed and bell.
-    if m.age.is_multiple_of(20) {
-        let loaded = |p: [i32; 3]| w.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4));
-        if let Some(p) = m.extra.bed
-            && loaded(p)
-            && !w.block_name(p[0], p[1], p[2]).ends_with("_bed")
-        {
-            m.extra.bed = None;
-        }
-        if let Some(p) = m.extra.meeting
-            && loaded(p)
-            && w.block_name(p[0], p[1], p[2]) != "minecraft:bell"
-        {
-            m.extra.meeting = None;
-        }
-    }
-    if m.species() != Species::Villager || !m.age.is_multiple_of(20) {
-        return;
-    }
-    let Some(p) = m.extra.home else { return };
-    if !w.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4)) {
-        return;
-    }
-    if job_site_profession(w.block_name(p[0], p[1], p[2])).is_none() {
-        m.extra.home = None;
-        let fresh = m.extra.trade.as_ref().is_none_or(|t| t.xp == 0);
-        if m.extra.variant2 != NONE && m.extra.variant2 != NITWIT && fresh && m.extra.variant3 <= 1
-        {
-            m.extra.variant2 = NONE;
-            m.extra.trade = None;
+            super::villager_brain::woken(m, w.game_time);
         }
     }
 }
@@ -622,19 +212,26 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
 
 // ---- Raids: the raid activities and the gift for a hero.
 
+/// No raid where the villager stands (`ServerLevel.getRaidAt` is null).
 pub const RAID_NONE: u8 = 0;
-/// A raid is near but no wave is on (`Activity.PRE_RAID`).
+/// A raid is near, before or between its waves.
 pub const PRE_RAID: u8 = 1;
-/// A wave is on (`Activity.RAID`).
+/// A raid is near and a wave is on.
 pub const RAID: u8 = 2;
-/// The raid was won: the villagers celebrate.
+/// The raid there was won: the villagers celebrate.
 pub const RAID_VICTORY: u8 = 3;
+/// The raid there was lost (still found by `getRaidAt` until it stops).
+pub const RAID_LOSS: u8 = 4;
 
 /// Villager state beyond `Extra`'s scratch fields.
 #[derive(Clone, Debug, Default)]
 pub struct Ext {
-    /// Which raid package the villager follows.
+    /// The raid `getRaidAt` finds where the villager stands (`RAID_NONE`
+    /// ... `RAID_LOSS`), set by the game every tick.
     pub raid: u8,
+    /// That raid has spawned a wave and is not between waves
+    /// (`hasFirstWaveSpawned && !isBetweenWaves`).
+    pub raid_wave: bool,
     /// What the villager remembers of players (`gossips`).
     pub gossips: crate::gossip::Gossips,
     pub last_gossip_time: i64,
@@ -651,6 +248,8 @@ pub struct Ext {
     pub hurt_seen: i32,
     /// A zombie villager's cure under way.
     pub cure: Option<super::zombie_villager::Cure>,
+    /// The villager's brain, built at its first tick.
+    pub brain: Option<Box<super::villager_brain::Brain>>,
 }
 pub fn ext(m: &Mob) -> Option<&Ext> {
     m.extra.villager.as_deref()
@@ -658,127 +257,76 @@ pub fn ext(m: &Mob) -> Option<&Ext> {
 pub fn ext_mut(m: &mut Mob) -> &mut Ext {
     m.extra.villager.get_or_insert_with(Box::default)
 }
-fn raid_status(m: &Mob) -> u8 {
+/// The raid where the villager stands (`RAID_NONE` ... `RAID_LOSS`).
+pub fn raid_status(m: &Mob) -> u8 {
     ext(m).map_or(RAID_NONE, |e| e.raid)
 }
-
-/// The raid packages of `VillagerGoalPackages`: in a raid villagers hide at
-/// home (`LocateHidingPlace`), before one they gather at the bell and ring it
-/// (`RingBell`), and after a victory they look for the sky to celebrate
-/// (`MoveToSkySeeingSpot`, `CelebrateVillagersSurvivedRaid`).
-#[derive(Clone, Debug, Default)]
-struct RaidBehavior {
-    next_move: i32,
+/// `ServerLevel.getRaidAt(blockPosition)` is a raid.
+pub fn raid_nearby(m: &Mob) -> bool {
+    ext(m).is_some_and(|e| e.raid != RAID_NONE)
 }
-impl Goal for RaidBehavior {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        MOVE
-    }
-    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
-        raid_status(m) != RAID_NONE && !sleeping(m)
-    }
-    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.can_use(m, cx)
-    }
-    fn start(&mut self, m: &mut Mob, _cx: &mut Cx) {
-        self.next_move = 0;
-        m.nav_stop();
-    }
-    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
-        m.nav_stop();
-    }
-    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.next_move -= 1;
-        let p = m.position;
-        match raid_status(m) {
-            RAID => {
-                // LocateHidingPlace(24, 0.7, 1): back to the bed.
-                let Some(home) = m.extra.bed else { return };
-                if distance(m, home) > 1.0 && (self.next_move <= 0 || m.ai.nav.is_done()) {
-                    if distance(m, home) <= 24.0 {
-                        m.nav_move_to(cx.w, center(home), 0.7);
-                    }
-                    self.next_move = 40;
-                }
-            }
-            PRE_RAID => {
-                // RingBell and SetWalkTargetFromBlockMemory(meeting, 0.75).
-                let Some(bell) = m.extra.meeting else { return };
-                if distance(m, bell) > 2.0 && (self.next_move <= 0 || m.ai.nav.is_done()) {
-                    m.nav_move_to(cx.w, center(bell), 0.75);
-                    self.next_move = 40;
-                }
-                if distance(m, bell) < 3.0
-                    && m.random.next_float() > 0.95
-                    && cx.w.block_name(bell[0], bell[1], bell[2]) == "minecraft:bell"
-                {
-                    cx.events.push(MobEvent::SoundId(
-                        "minecraft:block.bell.use".into(),
-                        center(bell),
-                        2.0,
-                        1.0,
-                    ));
-                }
-            }
-            RAID_VICTORY => {
-                let (x, y, z) = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
-                if cx.w.can_see_sky(x, y, z) {
-                    // CelebrateVillagersSurvivedRaid.tick.
-                    if m.random.next_int_bound(100).unwrap_or(1) == 0 {
-                        m.voice("entity.villager.celebrate", cx.events);
-                    }
-                    if m.random.next_int_bound(200).unwrap_or(1) == 0 {
-                        let color = m.random.next_int_bound(16).unwrap_or(0) as usize;
-                        let flight = m.random.next_int_bound(3).unwrap_or(0) as u8;
-                        cx.events.push(MobEvent::Firework {
-                            at: [p.x, m.eye_y(), p.z],
-                            color,
-                            flight,
-                        });
-                    }
-                    m.nav_stop();
-                } else if self.next_move <= 0 || m.ai.nav.is_done() {
-                    // MoveToSkySeeingSpot: a random spot with a view of the sky.
-                    for _ in 0..5 {
-                        if let Some(at) = m.land_random_pos(cx.w, 15, 7)
-                            && cx.w.can_see_sky(
-                                at[0].floor() as i32,
-                                at[1].floor() as i32,
-                                at[2].floor() as i32,
-                            )
-                        {
-                            m.nav_move_to(cx.w, at, 0.5);
-                            break;
-                        }
-                    }
-                    self.next_move = 40;
-                }
-            }
-            _ => {}
+/// `ResetRaidStatus`: no raid, a stopped one or a lost one.
+pub fn raid_over_or_lost(m: &Mob) -> bool {
+    matches!(raid_status(m), RAID_NONE | RAID_LOSS)
+}
+/// `SetRaidStatus`: `Some(true)` while a wave is on
+/// (`hasFirstWaveSpawned && !isBetweenWaves`), `Some(false)` otherwise.
+pub fn raid_state(m: &Mob) -> Option<bool> {
+    let e = ext(m)?;
+    (e.raid != RAID_NONE).then_some(e.raid_wave)
+}
+/// `Villager.getVillagerXp`.
+pub fn xp(m: &Mob) -> i32 {
+    m.extra.trade.as_ref().map_or(0, |t| t.xp)
+}
+/// `Villager.setVillagerData(withProfession)`: a new profession forgets the
+/// offers.
+pub fn set_profession(m: &mut Mob, profession: u8) {
+    if m.extra.variant2 != profession {
+        m.extra.variant2 = profession;
+        if let Some(t) = m.extra.trade.as_mut() {
+            t.offers.clear();
         }
     }
 }
+/// `VillagerProfession.workSound`.
+pub fn work_sound(profession: u8) -> Option<&'static str> {
+    Some(match super::render::PROFESSIONS[profession as usize % 15] {
+        "armorer" => "entity.villager.work_armorer",
+        "butcher" => "entity.villager.work_butcher",
+        "cartographer" => "entity.villager.work_cartographer",
+        "cleric" => "entity.villager.work_cleric",
+        "farmer" => "entity.villager.work_farmer",
+        "fisherman" => "entity.villager.work_fisherman",
+        "fletcher" => "entity.villager.work_fletcher",
+        "leatherworker" => "entity.villager.work_leatherworker",
+        "librarian" => "entity.villager.work_librarian",
+        "mason" => "entity.villager.work_mason",
+        "shepherd" => "entity.villager.work_shepherd",
+        "toolsmith" => "entity.villager.work_toolsmith",
+        "weaponsmith" => "entity.villager.work_weaponsmith",
+        _ => return None,
+    })
+}
+/// A `CropBlock` at `p`.
+pub fn crop(w: &MobWorld, p: [i32; 3]) -> bool {
+    matches!(
+        w.block_name(p[0], p[1], p[2]),
+        "minecraft:wheat" | "minecraft:carrots" | "minecraft:potatoes" | "minecraft:beetroots"
+    )
+}
+/// `CropBlock.isMaxAge` for the block at `p`.
+pub fn ripe_crop(w: &MobWorld, p: [i32; 3]) -> bool {
+    let max = match w.block_name(p[0], p[1], p[2]) {
+        "minecraft:wheat" | "minecraft:carrots" | "minecraft:potatoes" => "7",
+        "minecraft:beetroots" => "3",
+        _ => return false,
+    };
+    w.prop(p[0], p[1], p[2], "age") == Some(max)
+}
 
-/// `GiveGiftToHero`: a villager that sees a hero of the village walks up and
-/// throws a gift of its profession, every so often.
-#[derive(Clone, Debug)]
-struct GiftToHero {
-    until_next: i32,
-    started: i64,
-    given: bool,
-}
-impl Default for GiftToHero {
-    fn default() -> Self {
-        Self {
-            until_next: 600,
-            started: 0,
-            given: false,
-        }
-    }
-}
 /// The gift loot table of a villager (`GiveGiftToHero.getLootTableToThrow`).
-fn gift_table(m: &Mob) -> String {
+pub fn gift_table(m: &Mob) -> String {
     if m.is_baby() {
         return "minecraft:gameplay/hero_of_the_village/baby_gift".into();
     }
@@ -789,66 +337,6 @@ fn gift_table(m: &Mob) -> String {
     };
     format!("minecraft:gameplay/hero_of_the_village/{name}_gift")
 }
-fn hero_in_view(m: &mut Mob, cx: &Cx) -> bool {
-    let Some(p) = &cx.w.player else { return false };
-    p.hero
-        && p.alive
-        && !p.spectator
-        && m.position.distance_squared(p.position) <= 16.0 * 16.0
-        && m.sees(cx.w, Who::Player)
-}
-impl Goal for GiftToHero {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        MOVE | LOOK
-    }
-    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if !hero_in_view(m, cx) || sleeping(m) {
-            return false;
-        }
-        if self.until_next > 0 {
-            self.until_next -= 1;
-            return false;
-        }
-        true
-    }
-    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        hero_in_view(m, cx) && !self.given
-    }
-    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.given = false;
-        self.started = cx.w.game_time;
-        if let Some(p) = &cx.w.player {
-            m.look_at(p.eye);
-        }
-    }
-    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
-        self.until_next = 600 + m.random.next_int_bound(6001).unwrap_or(0);
-        m.nav_stop();
-    }
-    fn every_tick(&self) -> bool {
-        true
-    }
-    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        let Some(p) = cx.w.player.clone() else { return };
-        m.look_at(p.eye);
-        let near = m.position.distance_squared(p.position) < 25.0;
-        if near {
-            if cx.w.game_time - self.started > 20 {
-                cx.events.push(MobEvent::ThrowGift {
-                    table: gift_table(m),
-                    from: [m.position.x, m.eye_y() - 0.3, m.position.z],
-                    to: [p.position.x, p.position.y, p.position.z],
-                });
-                self.given = true;
-            }
-            m.nav_stop();
-        } else if m.ai.nav.is_done() {
-            m.nav_move_to(cx.w, [p.position.x, p.position.y, p.position.z], 0.5);
-        }
-    }
-}
-
 // ---- Gossip, food, breeding and golems.
 
 /// `VillagerFood` nutrition (`DataComponents.VILLAGER_FOOD`).
@@ -1071,191 +559,6 @@ pub fn read_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
             .filter_map(crate::save::item_from_nbt)
             .take(INVENTORY_SLOTS)
             .collect();
-    }
-}
-
-/// `InteractWith(VILLAGER)`, `TradeWithVillager` and `VillagerMakeLove` while
-/// idle, and `SocializeAtBell` at the meeting: walk up to a villager, swap
-/// gossip and food, and make a baby with a willing partner.
-#[derive(Clone, Debug, Default)]
-struct Social {
-    target: Option<u32>,
-    breed: bool,
-    ticks: i32,
-    cooldown: i32,
-    birth_at: i64,
-}
-impl Social {
-    fn pick(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        let breedable = can_breed(m);
-        let id = m.id;
-        let nearest =
-            cx.w.nearby(m.position, 8.0, move |s| {
-                s.species == Species::Villager && s.id != id
-            })
-            .filter(|s| m.position.distance_squared(s.position) <= 64.0)
-            .map(|s| (s.id, s.in_love))
-            .collect::<Vec<_>>();
-        let visible: Vec<(u32, bool)> = nearest
-            .into_iter()
-            .filter(|(i, _)| m.sees(cx.w, Who::Mob(*i)))
-            .collect();
-        let Some(&(target, partner_willing)) = visible.first() else {
-            return false;
-        };
-        // RunOne weights: interact 2, breed 1 (when both are willing).
-        let breed = breedable && partner_willing && m.random.next_int_bound(3).unwrap_or(0) == 0;
-        self.target = Some(target);
-        self.breed = breed;
-        true
-    }
-}
-impl Goal for Social {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        MOVE | LOOK
-    }
-    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if m.is_baby() || sleeping(m) || raid_status(m) != RAID_NONE {
-            return false;
-        }
-        if self.cooldown > 0 {
-            self.cooldown -= 1;
-            return false;
-        }
-        match activity(m, cx.w.day_time) {
-            Activity::Idle => self.pick(m, cx),
-            Activity::Meet => {
-                // SocializeAtBell: one tick in a hundred, near the bell.
-                let near_bell = m.extra.meeting.is_some_and(|p| distance(m, p) < 4.0);
-                near_bell && m.random.next_int_bound(100).unwrap_or(1) == 0 && {
-                    let ok = self.pick(m, cx);
-                    self.breed = false;
-                    ok
-                }
-            }
-            _ => false,
-        }
-    }
-    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        let Some(t) = self.target else { return false };
-        let Some(s) = cx.w.seen(t) else { return false };
-        if !s.alive || sleeping(m) || raid_status(m) != RAID_NONE {
-            return false;
-        }
-        if self.breed {
-            self.ticks < 350 && can_breed(m) && s.in_love
-        } else {
-            self.ticks < 60
-        }
-    }
-    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.ticks = 0;
-        self.birth_at = 0;
-        if let Some(s) = self.target.and_then(|t| cx.w.seen(t)) {
-            let at = [s.position.x, s.position.y, s.position.z];
-            m.nav_move_to(cx.w, at, 0.5);
-        }
-    }
-    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
-        m.nav_stop();
-        self.target = None;
-        self.cooldown = 20 + m.random.next_int_bound(40).unwrap_or(0);
-    }
-    fn every_tick(&self) -> bool {
-        true
-    }
-    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.ticks += 1;
-        let Some(t) = self.target else { return };
-        let Some(s) = cx.w.seen(t) else { return };
-        let (at, eye) = ([s.position.x, s.position.y, s.position.z], s.eye_y);
-        m.look_at([at[0], eye, at[2]]);
-        if m.position.distance_squared(s.position) > 5.0 {
-            if m.ai.nav.is_done() && self.ticks % 10 == 1 {
-                m.nav_move_to(cx.w, at, 0.5);
-            }
-            return;
-        }
-        m.nav_stop();
-        if !self.breed {
-            cx.events.push(MobEvent::VillagerMeet {
-                mob: m.id,
-                other: t,
-            });
-            return;
-        }
-        let now = cx.w.game_time;
-        if self.birth_at == 0 {
-            self.birth_at = now + 275 + i64::from(m.random.next_int_bound(50).unwrap_or(0));
-        }
-        if now >= self.birth_at {
-            cx.events.push(MobEvent::VillagerBirth {
-                parent: m.id,
-                partner: t,
-            });
-            self.ticks = 1000;
-        } else if m.random.next_int_bound(35).unwrap_or(1) == 0 {
-            for p in [m.position, s.position] {
-                cx.events.push(MobEvent::Particles {
-                    kind: "heart",
-                    at: [p.x, p.y + 1.8, p.z],
-                    count: 1,
-                });
-            }
-        }
-    }
-}
-
-/// `VillagerPanicTrigger.tick`: a frightened villager calls for a golem
-/// every five seconds.
-#[derive(Clone, Debug, Default)]
-struct GolemCall;
-/// `VillagerHostilesSensor`: how close each hostile must be to scare.
-fn hostile_range(s: Species) -> f64 {
-    match s {
-        Species::Drowned
-        | Species::Husk
-        | Species::Vex
-        | Species::Zombie
-        | Species::ZombieVillager => 8.0,
-        Species::Evoker | Species::Illusioner | Species::Ravager => 12.0,
-        Species::Pillager => 15.0,
-        Species::Vindicator | Species::Zoglin => 10.0,
-        _ => 0.0,
-    }
-}
-fn frightened(m: &Mob, cx: &Cx) -> bool {
-    // HURT_BY lasts 100 ticks.
-    let hurt = m.ai.last_hurt_by.is_some() && m.age as i32 - m.ai.last_hurt_by_time <= 100;
-    hurt || cx.w.others.iter().any(|s| {
-        s.alive && {
-            let r = hostile_range(s.species);
-            r > 0.0 && s.position.distance_squared(m.position) <= r * r
-        }
-    })
-}
-impl Goal for GolemCall {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        0
-    }
-    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        !m.is_baby() && frightened(m, cx)
-    }
-    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.can_use(m, cx)
-    }
-    fn every_tick(&self) -> bool {
-        true
-    }
-    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if cx.w.game_time % 100 == 0 {
-            cx.events.push(MobEvent::GolemCheck {
-                mob: m.id,
-                needed: 3,
-            });
-        }
     }
 }
 

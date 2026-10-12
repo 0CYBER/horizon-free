@@ -328,7 +328,7 @@ impl Pretty {
                 "\n"
             };
             let n = c.len();
-            for (i, (k, v)) in c.iter().enumerate() {
+            for (i, (k, v)) in java_hash_order(c).into_iter().enumerate() {
                 self.lit(&entry, None);
                 let key = string_of(k);
                 if !key.is_empty()
@@ -356,6 +356,91 @@ impl Pretty {
             self.lit("}", None);
         }
     }
+}
+/// The iteration order of the `HashMap<String, Tag>` a `CompoundTag` holds,
+/// for a map that grew to its size by insertion: buckets by
+/// `HashMap.hash(String.hashCode())`, keys sharing a bucket in key order.
+pub fn java_hash_order(
+    c: &horizon_world::nbt::Compound,
+) -> Vec<(&horizon_world::nbt::JavaString, &Tag)> {
+    let mut capacity = 16usize;
+    while c.len() > capacity * 3 / 4 {
+        capacity *= 2;
+    }
+    let bucket = |k: &horizon_world::nbt::JavaString| {
+        let h = string_of(k)
+            .encode_utf16()
+            .fold(0u32, |h, ch| h.wrapping_mul(31).wrapping_add(u32::from(ch)));
+        ((h ^ (h >> 16)) as usize) & (capacity - 1)
+    };
+    // Keys sharing a bucket iterate in insertion order: the order vanilla's
+    // savers write them, as far as it is known here.
+    const WRITE_ORDER: &[&str] = &[
+        // ItemStack.CODEC.
+        "id",
+        "count",
+        "components",
+        // Entity.saveWithoutId.
+        "Pos",
+        "Motion",
+        "Rotation",
+        "fall_distance",
+        "Fire",
+        "Air",
+        "OnGround",
+        "Invulnerable",
+        "PortalCooldown",
+        "UUID",
+        "CustomName",
+        "CustomNameVisible",
+        "Silent",
+        "NoGravity",
+        "Glowing",
+        "TicksFrozen",
+        "HasVisualFire",
+        "Tags",
+        "data",
+        "Passengers",
+        // LivingEntity.addAdditionalSaveData.
+        "Health",
+        "HurtTime",
+        "DeathTime",
+        "AbsorptionAmount",
+        "current_impulse_context_reset_grace_time",
+        "current_explosion_impact_pos",
+        "attributes",
+        "active_effects",
+        "FallFlying",
+        "sleeping_pos",
+        "Brain",
+        "equipment",
+        // ArmorStand.
+        "Invisible",
+        "Small",
+        "ShowArms",
+        "DisabledSlots",
+        "NoBasePlate",
+        "Marker",
+        "Pose",
+    ];
+    // BlockEntity.saveMetadata writes the position after the entity's data.
+    const AFTER: &[&str] = &["x", "y", "z"];
+    let rank = |k: &horizon_world::nbt::JavaString| {
+        let k = string_of(k);
+        WRITE_ORDER
+            .iter()
+            .position(|w| *w == k)
+            .or_else(|| {
+                AFTER
+                    .iter()
+                    .position(|w| *w == k)
+                    .map(|i| WRITE_ORDER.len() + 1 + i)
+            })
+            .unwrap_or(WRITE_ORDER.len())
+    };
+    let mut entries: Vec<_> = c.iter().collect();
+    entries.sort_by_key(|(k, _)| (bucket(k), rank(k)));
+    entries
 }
 /// `NbtUtils.toPrettyComponent`: the coloured, unindented form.
 pub fn pretty(tag: &Tag) -> Text {
