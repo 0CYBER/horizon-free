@@ -2,7 +2,9 @@
 """Compare client-ticked block-entity animation with the vanilla 26.3 block entities.
 
 The Java oracle (VanillaBlockEntityAnimOracle) builds each case's real vanilla
-block entity (shulker box, bell, conduit, dragon/piglin head, decorated pot)
+block entity (chest, trapped/copper chest and the other half of a double chest,
+ender chest, enchanting table, shulker box, bell, conduit, dragon/piglin head,
+decorated pot)
 on a stand-in client level, then per scripted step applies the block event
 (triggerEvent), runs the entity's own client ticker and the renderer's
 extractRenderState, printing the fields, the level calls the tick made
@@ -31,6 +33,9 @@ ALL = ['down', 'up'] + HORIZONTAL
 FRAME = ['minecraft:prismarine', 'minecraft:prismarine_bricks', 'minecraft:sea_lantern', 'minecraft:dark_prismarine']
 WATERY = ['minecraft:water', 'minecraft:water[level=3]', 'minecraft:bubble_column', 'minecraft:seagrass',
           'minecraft:kelp_plant', 'minecraft:oak_slab[waterlogged=true]', 'minecraft:oak_stairs[waterlogged=true]']
+CHESTS = ['chest', 'trapped_chest', 'copper_chest', 'exposed_copper_chest', 'waxed_oxidized_copper_chest']
+CLOCKWISE = {'north': 'east', 'east': 'south', 'south': 'west', 'west': 'north'}
+STEP = {'north': (0, 0, -1), 'south': (0, 0, 1), 'west': (-1, 0, 0), 'east': (1, 0, 0)}
 DRY = ['minecraft:air', 'minecraft:stone', 'minecraft:lava', 'minecraft:oak_slab', 'minecraft:ice']
 
 
@@ -157,6 +162,78 @@ def cases():
                 step['event'] = [rng.choice([1, 1, 1, 2]), rng.choice([0, 1, 0, 1, 2, -1])]
             steps.append(step)
         add('pot', f'minecraft:decorated_pot[facing={rng.choice(HORIZONTAL)}]', steps)
+    # Chests and ender chests: open counts from block event 1 (both halves of
+    # a double chest), other events ignored; the neighbour a double half
+    # connects to may be its other half or not (wrong block, type, facing).
+    for i in range(48):
+        facing = rng.choice(HORIZONTAL)
+        partner = None
+        world = {}
+        if rng.random() < 0.2:
+            block = f'minecraft:ender_chest[facing={facing}]'
+        else:
+            name = rng.choice(CHESTS)
+            kind = rng.choice(['single', 'left', 'right', 'left', 'right'])
+            block = f'minecraft:{name}[facing={facing},type={kind}]'
+            if kind != 'single':
+                connected = CLOCKWISE[facing] if kind == 'left' else [d for d, c in CLOCKWISE.items() if c == facing][0]
+                other_kind = 'right' if kind == 'left' else 'left'
+                other_name, other_facing, r = name, facing, rng.random()
+                if r < 0.1:
+                    other_kind = kind
+                elif r < 0.2:
+                    other_facing = rng.choice([d for d in HORIZONTAL if d != facing])
+                elif r < 0.3:
+                    other_name = rng.choice([c for c in CHESTS if c != name])
+                elif r < 0.35:
+                    other_kind = 'single'
+                if r < 0.95:
+                    partner = '%d,%d,%d' % STEP[connected]
+                    world[partner] = f'minecraft:{other_name}[facing={other_facing},type={other_kind}]'
+        steps, count, other = [], 0, 0
+        for t in times(rng.randint(20, 70)):
+            step = {'time': t, 'partial': round(rng.random(), 4)}
+            r = rng.random()
+            if r < 0.12:
+                count = max(count, 0) + 1
+                step['event'] = [1, count]
+            elif r < 0.22:
+                count -= 1
+                step['event'] = [1, count]
+            elif r < 0.25:
+                step['event'] = [rng.choice([0, 2, 1]), rng.randint(-2, 3)]
+            if partner and rng.random() < 0.15:
+                other = other + 1 if rng.random() < 0.55 else other - 1
+                step['partnerEvent'] = [1, other]
+            steps.append(step)
+        extra = {'world': world}
+        if partner:
+            extra['partner'] = partner
+        add('chest', block, steps, **extra)
+
+    # Enchanting tables: players (and spectators) walking in and out of the
+    # 3-block reach; the class's shared RANDOM seeded per case.
+    for i in range(36):
+        p = pos()
+        centre = [p[0] + 0.5, p[1] + 0.5, p[2] + 0.5]
+
+        def players():
+            out = []
+            for _ in range(rng.choice([0, 1, 1, 1, 2, 3])):
+                spread = rng.choice([1.5, 3, 5])
+                out.append({'pos': [centre[k] + round(rng.uniform(-spread, spread) * 1024) / 1024 for k in range(3)],
+                            'spectator': rng.random() < 0.15})
+            return out
+        steps = []
+        for t in times(rng.randint(40, 160)):
+            step = {'time': t, 'partial': round(rng.random(), 4)}
+            if rng.random() < 0.08:
+                step['players'] = players()
+            steps.append(step)
+        case = {'name': f'book-{len(out)}', 'block': 'minecraft:enchanting_table', 'pos': p, 'steps': steps,
+                'players': players(), 'seed': rng.randint(0, 2 ** 40)}
+        out.append(case)
+
     return out
 
 

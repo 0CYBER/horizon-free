@@ -6,6 +6,8 @@ import java.lang.reflect.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.function.Predicate;
+import net.minecraft.client.model.object.book.BookModel;
+import net.minecraft.client.model.object.chest.ChestModel;
 import net.minecraft.client.renderer.blockentity.*;
 import net.minecraft.client.renderer.blockentity.state.*;
 import net.minecraft.commands.arguments.blocks.BlockStateParser;
@@ -18,7 +20,9 @@ import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.RandomSource;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.*;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.*;
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.entity.*;
@@ -27,12 +31,14 @@ import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.*;
 
 /**
- * Original oracle for the client-ticked animation state of shulker boxes,
- * bells, conduits, skulls and decorated pots. Each case builds the real
+ * Original oracle for the client-ticked animation state of chests and ender
+ * chests (ChestLidController), enchanting table books, shulker boxes, bells,
+ * conduits, skulls and decorated pots. Each case builds the real
  * vanilla block entity on a stand-in client level (scripted blocks, entities,
  * game time and a seeded LegacyRandomSource), then per step applies the
  * scripted block event (triggerEvent), runs the block entity's own client
- * ticker (ShulkerBoxBlockEntity.tick, BellBlockEntity.clientTick,
+ * ticker (lidAnimateTick, bookAnimationTick with the class's static RANDOM
+ * reseeded, ShulkerBoxBlockEntity.tick, BellBlockEntity.clientTick,
  * ConduitBlockEntity.clientTick, SkullBlockEntity.animation; pots have none)
  * and runs the real renderer's extractRenderState at the step's partial tick.
  * It prints the block entity's fields, the level calls the tick made
@@ -74,12 +80,30 @@ public final class VanillaBlockEntityAnimOracle {
         @Override public boolean isAlive() { return !this.isRemoved() && this.living; }
     }
 
+    /** A player the case places: position and game mode (spectators are skipped). */
+    static final class Gamer extends Player {
+        GameType mode;
+        Gamer() { super(null, null); }
+        @Override public GameType gameMode() { return mode; }
+        @Override public net.minecraft.world.item.component.ResolvableProfile getProfile() { return null; }
+    }
+
+    static Gamer gamer(JsonObject e) throws Exception {
+        Gamer g = make(Gamer.class);
+        g.mode = e.has("spectator") && e.get("spectator").getAsBoolean() ? GameType.SPECTATOR : GameType.SURVIVAL;
+        var p = e.getAsJsonArray("pos");
+        put(g, Entity.class, "position", new Vec3(p.get(0).getAsDouble(), p.get(1).getAsDouble(), p.get(2).getAsDouble()));
+        return g;
+    }
+
     /** The stand-in client level. */
     static final class World extends Level {
         World() { super(null, null, null, null, false, false, 0L, 0); }
         long time;
         Map<BlockPos, BlockState> blocks = new HashMap<>();
         List<Mob> mobs = new ArrayList<>();
+        List<Player> gamers = new ArrayList<>();
+        Map<BlockPos, BlockEntity> entities = new HashMap<>();
         RandomSource random;
         StringBuilder log = new StringBuilder();
 
@@ -89,6 +113,7 @@ public final class VanillaBlockEntityAnimOracle {
         @Override public FluidState getFluidState(BlockPos p) { return getBlockState(p).getFluidState(); }
         @Override public int getBrightness(LightLayer layer, BlockPos p) { return 0; }
         @Override public RandomSource getRandom() { return random; }
+        @Override public BlockEntity getBlockEntity(BlockPos p) { return entities.get(p.immutable()); }
         @Override public void updateNeighborsAt(BlockPos p, Block block) { log.append(" neighbors"); }
         @Override public void neighborShapeChanged(Direction dir, BlockPos p, BlockPos from, BlockState state, int flags, int limit) {}
         @Override public List<Entity> getEntities(Entity except, AABB bb) { log.append(" push ").append(box(bb)); return List.of(); }
@@ -132,7 +157,7 @@ public final class VanillaBlockEntityAnimOracle {
 @Override public void levelEvent(net.minecraft.world.entity.Entity p0,int p1,net.minecraft.core.BlockPos p2,int p3){throw new UnsupportedOperationException();}
 @Override public void playSeededSound(net.minecraft.world.entity.Entity p0,net.minecraft.world.entity.Entity p1,net.minecraft.core.Holder p2,net.minecraft.sounds.SoundSource p3,float p4,float p5,long p6){throw new UnsupportedOperationException();}
 @Override public void playSeededSound(net.minecraft.world.entity.Entity p0,double p1,double p2,double p3,net.minecraft.core.Holder p4,net.minecraft.sounds.SoundSource p5,float p6,float p7,long p8){throw new UnsupportedOperationException();}
-@Override public java.util.List players(){throw new UnsupportedOperationException();}
+@Override public java.util.List players(){return gamers;}
 @Override public net.minecraft.world.item.crafting.RecipeAccess recipeAccess(){throw new UnsupportedOperationException();}
 @Override public void sendBlockUpdated(net.minecraft.core.BlockPos p0,net.minecraft.world.level.block.state.BlockState p1,net.minecraft.world.level.block.state.BlockState p2,int p3){throw new UnsupportedOperationException();}
 @Override public void setRespawnData(net.minecraft.world.level.storage.LevelData.RespawnData p0){throw new UnsupportedOperationException();}
@@ -154,10 +179,28 @@ public final class VanillaBlockEntityAnimOracle {
         return m;
     }
 
+    static ChestModel CHEST_MODEL;
+
+    static void tickLid(World world, BlockEntity e) {
+        if (e instanceof ChestBlockEntity c) ChestBlockEntity.lidAnimateTick(world, c.getBlockPos(), c.getBlockState(), c);
+        else if (e instanceof EnderChestBlockEntity c) EnderChestBlockEntity.lidAnimateTick(world, c.getBlockPos(), c.getBlockState(), c);
+    }
+
+    static String lid(BlockEntity e) throws Exception {
+        if (!(e instanceof ChestBlockEntity) && !(e instanceof EnderChestBlockEntity)) return "-";
+        Class<?> owner = e instanceof ChestBlockEntity ? ChestBlockEntity.class : EnderChestBlockEntity.class;
+        Object lid = field(owner, "chestLidController").get(e);
+        return field(ChestLidController.class, "shouldBeOpen").getBoolean(lid)
+            + " " + f(field(ChestLidController.class, "openness").getFloat(lid))
+            + " " + f(field(ChestLidController.class, "oOpenness").getFloat(lid));
+    }
+
     static String run(JsonObject c) throws Exception {
         World world = make(World.class);
         world.blocks = new HashMap<>();
         world.mobs = new ArrayList<>();
+        world.gamers = new ArrayList<>();
+        world.entities = new HashMap<>();
         world.log = new StringBuilder();
         world.random = RandomSource.create(c.has("seed") ? c.get("seed").getAsLong() : 0L);
         var pa = c.getAsJsonArray("pos");
@@ -173,6 +216,23 @@ public final class VanillaBlockEntityAnimOracle {
         if (c.has("entities")) for (var e : c.getAsJsonArray("entities")) world.mobs.add(mob(e.getAsJsonObject(), world));
         var be = ((EntityBlock) state.getBlock()).newBlockEntity(pos, state);
         be.setLevel(world);
+        world.entities.put(pos, be);
+        // The other half of a double chest (or whatever block sits there).
+        BlockEntity partner = null;
+        if (c.has("partner")) {
+            String[] xyz = c.get("partner").getAsString().split(",");
+            BlockPos at = pos.offset(Integer.parseInt(xyz[0]), Integer.parseInt(xyz[1]), Integer.parseInt(xyz[2]));
+            BlockState there = world.getBlockState(at);
+            if (there.getBlock() instanceof EntityBlock eb) {
+                partner = eb.newBlockEntity(at, there);
+                partner.setLevel(world);
+                world.entities.put(at, partner);
+            }
+        }
+        if (c.has("players")) for (var e : c.getAsJsonArray("players")) world.gamers.add(gamer(e.getAsJsonObject()));
+        if (be instanceof EnchantingTableBlockEntity) {
+            ((RandomSource) field(EnchantingTableBlockEntity.class, "RANDOM").get(null)).setSeed(c.get("seed").getAsLong());
+        }
         if (c.has("target") && be instanceof ConduitBlockEntity) {
             put(be, ConduitBlockEntity.class, "destroyTarget", EntityReference.of(mob(c.getAsJsonObject("target"), world)));
         }
@@ -187,14 +247,50 @@ public final class VanillaBlockEntityAnimOracle {
                     world.blocks.put(pos.offset(Integer.parseInt(xyz[0]), Integer.parseInt(xyz[1]), Integer.parseInt(xyz[2])), parse(e.getValue().getAsString()));
                 }
             }
+            if (step.has("players")) {
+                world.gamers.clear();
+                for (var e : step.getAsJsonArray("players")) world.gamers.add(gamer(e.getAsJsonObject()));
+            }
             if (step.has("event")) {
                 var ev = step.getAsJsonArray("event");
                 boolean handled = be.triggerEvent(ev.get(0).getAsInt(), ev.get(1).getAsInt());
                 world.log.append(" event ").append(handled);
             }
+            if (step.has("partnerEvent") && partner != null) {
+                var ev = step.getAsJsonArray("partnerEvent");
+                boolean handled = partner.triggerEvent(ev.get(0).getAsInt(), ev.get(1).getAsInt());
+                world.log.append(" partner event ").append(handled);
+            }
             float partial = step.get("partial").getAsFloat();
             String fields;
-            if (be instanceof ShulkerBoxBlockEntity s) {
+            if (be instanceof ChestBlockEntity || be instanceof EnderChestBlockEntity) {
+                tickLid(world, be);
+                if (partner != null) tickLid(world, partner);
+                ChestRenderer<?> renderer = make(ChestRenderer.class);
+                var r = new net.minecraft.client.renderer.blockentity.state.ChestRenderState();
+                @SuppressWarnings({"unchecked", "rawtypes"})
+                ChestRenderer raw = renderer;
+                raw.extractRenderState(be, r, partial, Vec3.ZERO, null);
+                float open = r.open;
+                // ChestRenderer.submit, then ChestModel.setupAnim.
+                open = 1.0F - open;
+                open = 1.0F - open * open * open;
+                CHEST_MODEL.setupAnim(open);
+                fields = lid(be) + " partner " + (partner == null ? "none" : lid(partner))
+                    + " render " + f(r.open) + " " + f(((net.minecraft.client.model.geom.ModelPart) field(ChestModel.class, "lid").get(CHEST_MODEL)).xRot);
+            } else if (be instanceof EnchantingTableBlockEntity t) {
+                EnchantingTableBlockEntity.bookAnimationTick(world, pos, state, t);
+                var r = new net.minecraft.client.renderer.blockentity.state.EnchantTableRenderState();
+                make(EnchantTableRenderer.class).extractRenderState(t, r, partial, Vec3.ZERO, null);
+                // EnchantTableRenderer.submit's book state.
+                float ff1 = Mth.frac(r.flip + 0.25F) * 1.6F - 0.3F;
+                float ff2 = Mth.frac(r.flip + 0.75F) * 1.6F - 0.3F;
+                var book = BookModel.State.forAnimation(r.time, Mth.clamp(ff1, 0.0F, 1.0F), Mth.clamp(ff2, 0.0F, 1.0F), r.open);
+                fields = t.time + " " + f(t.flip) + " " + f(t.oFlip) + " " + f(t.flipT) + " " + f(t.flipA)
+                    + " " + f(t.open) + " " + f(t.oOpen) + " " + f(t.rot) + " " + f(t.oRot) + " " + f(t.tRot)
+                    + " render " + f(r.flip) + " " + f(r.open) + " " + f(r.time) + " " + f(r.yRot)
+                    + " book " + f(book.openness()) + " " + f(book.pageFlip1()) + " " + f(book.pageFlip2());
+            } else if (be instanceof ShulkerBoxBlockEntity s) {
                 ShulkerBoxBlockEntity.tick(world, pos, state, s);
                 var r = make(ShulkerBoxRenderer.class).createRenderState();
                 make(ShulkerBoxRenderer.class).extractRenderState(s, r, partial, Vec3.ZERO, null);
@@ -248,6 +344,7 @@ public final class VanillaBlockEntityAnimOracle {
         allocate = allocator.getMethod("allocateInstance", Class.class);
         putObject = allocator.getMethod("putObject", Object.class, long.class, Object.class);
         objectFieldOffset = allocator.getMethod("objectFieldOffset", Field.class);
+        CHEST_MODEL = new ChestModel(ChestModel.createSingleBodyLayer().bakeRoot());
         try (var out = new PrintWriter(Files.newBufferedWriter(Path.of(args[1])));
              var lines = Files.lines(Path.of(args[0]))) {
             for (String line : (Iterable<String>) lines::iterator) {

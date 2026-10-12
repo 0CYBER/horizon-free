@@ -114,6 +114,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         } else if data.is(super::classes::Class::Note) {
             self.note_trigger_event(pos, state);
             true
+        } else if data.is(super::classes::Class::Bell) {
+            // BellBlockEntity.triggerEvent handles event 1; the server
+            // broadcasts handled events to the clients.
+            if a == 1 {
+                self.emit(LevelEvent::BlockEntityEvent { pos, state, a, b });
+            }
+            a == 1
         } else {
             false
         }

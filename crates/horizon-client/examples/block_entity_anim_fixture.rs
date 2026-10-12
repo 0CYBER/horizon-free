@@ -7,9 +7,10 @@
 use horizon_client::{
     assets::Assets,
     block_entity_anim::{
-        Bell, BellEntity, BlockEntityAnims, Conduit, ConduitTarget, DIRECTIONS, PotWobble, Shulker,
-        ShulkerStatus, Skull, WobbleStyle, direction_index,
+        Bell, BellEntity, BlockEntityAnims, ChestLid, Conduit, ConduitTarget, DIRECTIONS,
+        PotWobble, Shulker, ShulkerStatus, Skull, WobbleStyle, chest_lid_x_rot, direction_index,
     },
+    block_entity_render::BlockEntityRenderer,
     blocks::{BlockFacts, Fluid},
     items::Items,
 };
@@ -86,6 +87,27 @@ fn mob(e: &Value) -> BellEntity {
     }
 }
 
+fn lid_text(l: Option<&ChestLid>) -> String {
+    l.map_or("-".to_owned(), |l| {
+        format!("{} {} {}", l.should_be_open, f(l.openness), f(l.o_openness))
+    })
+}
+
+/// The case's players: feet positions and whether each is a spectator.
+fn players(v: &Value) -> Vec<([f64; 3], bool)> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| {
+            let c = |i: usize| p["pos"][i].as_f64().unwrap_or(0.0);
+            (
+                [c(0), c(1), c(2)],
+                p["spectator"].as_bool().unwrap_or(false),
+            )
+        })
+        .collect()
+}
+
 fn status(s: ShulkerStatus) -> &'static str {
     match s {
         ShulkerStatus::Closed => "CLOSED",
@@ -103,6 +125,7 @@ fn main() -> Result<()> {
     let assets = Assets::load(root)?;
     let registry = assets.registry;
     let facts = BlockFacts::load(root, registry)?;
+    let renderer = BlockEntityRenderer::load(root, registry)?;
     let tags = Items::tags_only(root)?;
     let frames = tags
         .block_tags
@@ -154,6 +177,14 @@ fn main() -> Result<()> {
         let mut random = LegacyRandom::new(case["seed"].as_i64().unwrap_or(0));
         let name = block.split('[').next().unwrap_or_default().to_owned();
         let mut anims = BlockEntityAnims::default();
+        let partner = case["partner"].as_str().map(|k| {
+            let o = offset(k);
+            [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]
+        });
+        let mut gamers = players(&case["players"]);
+        if name == "minecraft:enchanting_table" {
+            anims.book_random = LegacyRandom::new(case["seed"].as_i64().unwrap_or(0));
+        }
         let facing = prop(&block, "facing")
             .and_then(direction_index)
             .unwrap_or(1);
@@ -165,7 +196,83 @@ fn main() -> Result<()> {
             place(&mut blocks, &step["set"]);
             let event = step["event"].as_array().map(|e| (int(&e[0]), int(&e[1])));
             text.clear();
-            if name.ends_with("shulker_box") {
+            if step.get("players").is_some() {
+                gamers = players(&step["players"]);
+            }
+            if name.ends_with("chest") {
+                let lid = anims.chests.entry(pos).or_default();
+                if let Some((a, b)) = event {
+                    let handled = lid.trigger_event(a, b);
+                    let _ = write!(log, " event {handled}");
+                }
+                if let Some(other) = partner {
+                    let lid = anims.chests.entry(other).or_default();
+                    if let Some(e) = step["partnerEvent"].as_array() {
+                        let handled = lid.trigger_event(int(&e[0]), int(&e[1]));
+                        let _ = write!(log, " partner event {handled}");
+                    }
+                }
+                // lidAnimateTick: this chest, then the other half.
+                if let Some(l) = anims.chests.get_mut(&pos) {
+                    l.tick();
+                }
+                if let Some(l) = partner.and_then(|p| anims.chests.get_mut(&p)) {
+                    l.tick();
+                }
+                let state_at = |p: [i32; 3]| {
+                    find_state(
+                        registry,
+                        blocks.get(&p).map_or("minecraft:air", String::as_str),
+                    )
+                    .unwrap_or(0)
+                };
+                let (open, _) = renderer
+                    .chest_openness_of(pos, state_at(pos), &state_at, &|p| anims.lid(p, partial));
+                let _ = write!(
+                    text,
+                    "{} partner {} render {} {}",
+                    lid_text(anims.chests.get(&pos)),
+                    partner.map_or("none".to_owned(), |p| lid_text(anims.chests.get(&p))),
+                    f(open),
+                    f(chest_lid_x_rot(open))
+                );
+            } else if name == "minecraft:enchanting_table" {
+                let feet: Vec<[f64; 3]> = gamers
+                    .iter()
+                    .filter(|(_, spectator)| !spectator)
+                    .map(|(p, _)| *p)
+                    .collect();
+                let BlockEntityAnims {
+                    books, book_random, ..
+                } = &mut anims;
+                books.entry(pos).or_default().tick(pos, &feet, book_random);
+                let b = anims.books[&pos];
+                let r = anims
+                    .block_anim(pos, time, partial, Default::default())
+                    .book
+                    .render(partial);
+                let _ = write!(
+                    text,
+                    "{} {} {} {} {} {} {} {} {} {} render {} {} {} {} book {} {} {}",
+                    b.time,
+                    f(b.flip),
+                    f(b.o_flip),
+                    f(b.flip_t),
+                    f(b.flip_a),
+                    f(b.open),
+                    f(b.o_open),
+                    f(b.rot),
+                    f(b.o_rot),
+                    f(b.t_rot),
+                    f(r.flip),
+                    f(r.open),
+                    f(r.time),
+                    f(r.y_rot),
+                    f(r.openness),
+                    f(r.page_flip1),
+                    f(r.page_flip2)
+                );
+            } else if name.ends_with("shulker_box") {
                 let s = anims.shulkers.entry(pos).or_insert_with(Shulker::default);
                 if let Some((a, b)) = event {
                     let handled = s.trigger_event(a, b);

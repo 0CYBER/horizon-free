@@ -7,6 +7,7 @@ use glam::{DVec3, Mat4, Quat, Vec3};
 use horizon_client::{
     assets::Assets,
     banner::{self, Banners},
+    block_entity_anim::EnchantingBook,
     block_entity_render::{BlockAnim, BlockEntityRenderer, Scene, TextCall},
     chunk::{Chunk, Light},
     hud::{HudAtlas, Rect},
@@ -113,7 +114,7 @@ fn main() -> Result<()> {
     };
     let assets = Assets::load(root)?;
     let registry = assets.registry;
-    let mut renderer = BlockEntityRenderer::load(root, registry)?;
+    let renderer = BlockEntityRenderer::load(root, registry)?;
     let atlas = HudAtlas::build(root)?;
     let banners = Banners::load(root);
     let (sprites, names, grid) = fake_sprites(textures)?;
@@ -196,13 +197,22 @@ fn main() -> Result<()> {
                 world.chunks.insert((cx, cz), Arc::new(chunk));
             }
         }
-        if let Some(book) = case.get("book") {
-            renderer.set_book(
-                pos,
-                int(&book["time"]),
-                ["flip", "oFlip", "open", "oOpen", "rot", "oRot"].map(|k| float(&book[k])),
-            );
-        }
+        let book = case
+            .get("book")
+            .map_or_else(EnchantingBook::default, |book| {
+                let [flip, o_flip, open, o_open, rot, o_rot] =
+                    ["flip", "oFlip", "open", "oOpen", "rot", "oRot"].map(|k| float(&book[k]));
+                EnchantingBook {
+                    time: int(&book["time"]),
+                    flip,
+                    o_flip,
+                    open,
+                    o_open,
+                    rot,
+                    o_rot,
+                    ..EnchantingBook::default()
+                }
+            });
         let sign = case.get("sign").map(|s| {
             let mut data = SignData {
                 hanging: block.contains("hanging"),
@@ -246,6 +256,7 @@ fn main() -> Result<()> {
             wobble: case["wobble"]
                 .as_array()
                 .map(|w| (w[0].as_str() == Some("POSITIVE"), float(&w[1]))),
+            book,
         };
         let open = float(&case["open"]);
         let near = case["sign"]["near"].as_bool().unwrap_or(false);
