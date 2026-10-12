@@ -21,28 +21,25 @@ impl Behaviours {
     pub fn live_features(&self) -> Option<&Arc<LiveFeatures>> {
         self.growth.features.get()
     }
-    /// `JigsawPlacement.generateJigsaw`: `assemble` builds the pieces from
-    /// the level random, then each piece is placed into the level with an
-    /// unbounded box and `reference` as the origin. Returns whether pieces
-    /// were assembled.
+    /// `JigsawPlacement.generateJigsaw`: `assemble` builds the pieces (from
+    /// the generation context's own random), then each piece is placed into
+    /// the level with the level random, an unbounded box and `reference` as
+    /// the origin. Returns whether pieces were assembled.
     pub fn place_jigsaw<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut super::Ticks,
         reference: [i32; 3],
-        assemble: impl FnOnce(
-            &mut horizon_core::random::LegacyRandom,
-        ) -> Option<crate::worldgen::generator::JigsawPieces>,
+        assemble: impl FnOnce() -> Option<crate::worldgen::generator::JigsawPieces>,
     ) -> bool {
         let Some(features) = self.live_features() else {
             return false;
         };
-        let mut sim = self.sim(level, ticks);
-        let mut random = sim.random().clone();
-        let Some(jigsaw) = assemble(&mut random) else {
-            *sim.random() = random;
+        let Some(jigsaw) = assemble() else {
             return false;
         };
+        let mut sim = self.sim(level, ticks);
+        let mut random = sim.random().clone();
         {
             let mut world = LevelFeatureWorld {
                 sim: &mut sim,

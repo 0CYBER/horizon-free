@@ -157,9 +157,7 @@ impl Game<'_> {
                     position: pos,
                 };
                 let placed = self.with_level(|b, level, ticks| {
-                    b.place_jigsaw(level, ticks, pos, |random| {
-                        terrain.jigsaw_pieces(&query, random)
-                    })
+                    b.place_jigsaw(level, ticks, pos, || terrain.jigsaw_pieces(&query))
                 });
                 self.process_level_events()
                     .map_err(|_| err("command.failed", &[]))?;

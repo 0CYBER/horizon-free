@@ -1379,7 +1379,6 @@ trait SeededPipeline: Send + Sync {
         &self,
         worker: &mut WorkerState,
         query: &JigsawQuery<'_>,
-        random: &mut horizon_core::random::LegacyRandom,
     ) -> Option<JigsawPieces>;
 }
 impl<R: RandomSource + 'static> SeededPipeline for Pipeline<R>
@@ -1526,12 +1525,15 @@ where
         &self,
         worker: &mut WorkerState,
         query: &JigsawQuery<'_>,
-        random: &mut horizon_core::random::LegacyRandom,
     ) -> Option<JigsawPieces> {
         // JigsawPlacement.generateJigsaw: addPieces with no heightmap
         // projection, MaxDistance(128), no aliases, no padding and
-        // waterlogging applied.
+        // waterlogging applied. The pieces draw from the GenerationContext's
+        // random, seeded from the level seed and the position's chunk, not
+        // from the level random.
         let structures = self.structures.as_ref()?;
+        let mut random = horizon_core::random::WorldgenRandom::new(LegacyRandom::new(0));
+        random.set_large_feature_seed(self.seed, query.position[0] >> 4, query.position[2] >> 4);
         let aliases = BTreeMap::new();
         let config = super::structure::jigsaw::JigsawConfig {
             start_pool: query.pool,
@@ -1554,7 +1556,7 @@ where
             &structures.registry.pools,
             &structures.resources,
             &structures.bindings,
-            random,
+            &mut random,
             query.position,
         )?;
         Some(JigsawPieces {
@@ -1791,13 +1793,10 @@ impl GeneratorWorker {
     pub fn find_closest_biome(&mut self, search: &BiomeSearch<'_>) -> Option<(String, [i32; 3])> {
         self.pipeline.find_closest_biome(&mut self.state, search)
     }
-    /// `JigsawPlacement.addPieces` for `/place jigsaw`, drawing from `random`.
-    pub fn jigsaw_pieces(
-        &mut self,
-        query: &JigsawQuery<'_>,
-        random: &mut horizon_core::random::LegacyRandom,
-    ) -> Option<JigsawPieces> {
-        self.pipeline.jigsaw_pieces(&mut self.state, query, random)
+    /// `JigsawPlacement.addPieces` for `/place jigsaw`, drawing from the
+    /// generation context's random (level seed and the position's chunk).
+    pub fn jigsaw_pieces(&mut self, query: &JigsawQuery<'_>) -> Option<JigsawPieces> {
+        self.pipeline.jigsaw_pieces(&mut self.state, query)
     }
     /// STRUCTURE_STARTS: the structure starts owned by a chunk (cached).
     pub fn structure_starts(
