@@ -3,7 +3,9 @@ use horizon_client::{
     brewing, component,
     hud::HudAtlas,
     hud_layout::{self, GuiDraw},
-    hud_overlays::{self, BossBar, EffectIcon, HeldName, ItemDecorations, Titles, ToolHighlight},
+    hud_overlays::{
+        self, BossBar, CameraOverlays, EffectIcon, HeldName, ItemDecorations, Titles, ToolHighlight,
+    },
     scoreboard::{NumberFormat, RenderType, Scoreboard},
     text::{self, Text},
 };
@@ -28,7 +30,12 @@ fn background(c: &Value) -> u32 {
     )
 }
 
-pub fn run(kind: &str, c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
+pub fn run(
+    kind: &str,
+    c: &Value,
+    atlas: &HudAtlas,
+    state: &mut serde_json::Map<String, Value>,
+) -> Vec<GuiDraw> {
     let (w, h) = (int(c, "width", 0), int(c, "height", 0));
     match kind {
         "effects" => effects(c, w),
@@ -38,6 +45,7 @@ pub fn run(kind: &str, c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
         "jump" => hud_overlays::jump_bar(w, h, int(c, "cooldown", 0), float(c, "jumpScale", 0.0)),
         "sidebar" => sidebar(c, w, h, atlas),
         "decor" => decor(c, atlas),
+        "overlays" => overlays(c, w, h, state),
         _ => Vec::new(),
     }
 }
@@ -220,4 +228,64 @@ fn decor(c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
         cooldown,
     };
     hud_overlays::item_decorations(int(c, "x", 0), int(c, "y", 0), &d, &atlas.font)
+}
+
+/// `Hud.extractCameraOverlays` then `extractSleepOverlay`; the border is
+/// static, so only its warning blocks matter.
+fn overlays(c: &Value, w: i32, h: i32, state: &mut serde_json::Map<String, Value>) -> Vec<GuiDraw> {
+    let partial = float(c, "partial", 0.0);
+    let warning = match &c["border"] {
+        Value::Null => 0.0,
+        b => {
+            // WorldBorder.getDistanceToBorder with the static extent's clamped box.
+            let max = 29_999_984.0;
+            let half = b["size"].as_f64().unwrap_or(0.0) / 2.0;
+            let (cx, cz) = (
+                b["centerX"].as_f64().unwrap_or(0.0),
+                b["centerZ"].as_f64().unwrap_or(0.0),
+            );
+            let (min_x, max_x) = ((cx - half).clamp(-max, max), (cx + half).clamp(-max, max));
+            let (min_z, max_z) = ((cz - half).clamp(-max, max), (cz + half).clamp(-max, max));
+            let (x, z) = (
+                f64::from(float(c, "camX", 0.0)),
+                f64::from(float(c, "camZ", 0.0)),
+            );
+            let distance = (x - min_x).min(max_x - x).min(z - min_z).min(max_z - z);
+            hud_overlays::border_warning(
+                distance as f32,
+                int(b, "warningBlocks", 5),
+                int(b, "warningTime", 15),
+                0.0,
+                0.0,
+            )
+        }
+    };
+    let ticks_frozen = int(c, "ticksFrozen", 0);
+    let inputs = CameraOverlays {
+        vignette: c["vignette"]
+            .as_bool()
+            .unwrap_or(false)
+            .then(|| (float(c, "vignetteBrightness", 1.0), warning)),
+        first_person: c["firstPerson"].as_bool().unwrap_or(false),
+        scoping: c["scoping"].as_bool().unwrap_or(false),
+        game_time_delta: partial,
+        equipment: match c["head"].as_str() {
+            Some("carved_pumpkin") => vec!["misc/pumpkinblur".to_owned()],
+            _ => Vec::new(),
+        },
+        ticks_frozen,
+        percent_frozen: ticks_frozen.min(140) as f32 / 140.0,
+        partial,
+        portal: [
+            c["portal"][0].as_f64().unwrap_or(0.0) as f32,
+            c["portal"][1].as_f64().unwrap_or(0.0) as f32,
+        ],
+        nausea: float(c, "nausea", 0.0),
+        screen_effect_scale: float(c, "screenEffectScale", 1.0),
+    };
+    let mut scope = float(c, "scopeScale", 0.5);
+    let mut out = hud_overlays::camera_overlays(w, h, &inputs, &mut scope);
+    out.extend(hud_overlays::sleep_overlay(w, h, int(c, "sleepTimer", 0)));
+    state.insert("scopeScale".into(), serde_json::json!(scope));
+    out
 }

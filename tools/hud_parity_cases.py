@@ -174,6 +174,28 @@ def decor(rng, n):
     return case
 
 
+
+def overlays(rng, n):
+    """Camera overlays (vignette and border warning, spyglass, pumpkin, powder snow, portal, nausea) and sleep."""
+    case = {**screen(rng), 'vignette': rng.random() < 0.7,
+            'vignetteBrightness': rng.choice([1.0, 0.0, 0.5, round(rng.random(), 4), 1.3, -0.2]),
+            'firstPerson': rng.random() < 0.8, 'scoping': rng.random() < 0.2,
+            'scopeScale': rng.choice([0.5, 1.125, round(rng.uniform(0.5, 1.125), 4)]), 'partial': round(rng.random(), 3),
+            'head': rng.choice([None, None, 'carved_pumpkin', 'diamond_helmet']),
+            'ticksFrozen': rng.choice([0, 0, 0, 1, 70, 139, 140, 300]),
+            'portal': rng.choice([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0125], [0.5, 0.5125], [1.0, 1.0], [0.05, 0.0], [round(rng.random(), 3)] * 2]),
+            'nausea': rng.choice([0.0, 0.0, 1.0, 0.25, round(rng.random(), 3)]),
+            'screenEffectScale': rng.choice([1.0, 0.0, 0.5, round(rng.random(), 3)]),
+            'sleepTimer': rng.choice([0, 0, 0, 1, 50, 100, 101, 105, 110, 111])}
+    if rng.random() < 0.4:
+        size = rng.choice([10.0, 50.0, 200.0, 1000.0])
+        case['border'] = {'centerX': rng.choice([0.0, 100.5]), 'centerZ': rng.choice([0.0, -30.25]), 'size': size,
+                          'warningBlocks': rng.choice([0, 5, 20, 100]), 'warningTime': rng.choice([0, 15])}
+    case['camX'] = round(rng.uniform(-150, 250), 2)
+    case['camZ'] = round(rng.uniform(-150, 150), 2)
+    return case
+
+
 # Generators by kind: (rng, index) -> case. Cases are drawn round-robin.
 KINDS = {
     'decorations': decorations,
@@ -184,4 +206,5 @@ KINDS = {
     'jump': jump,
     'sidebar': sidebar,
     'decor': decor,
+    'overlays': overlays,
 }

@@ -33,11 +33,14 @@ fn main() -> Result<()> {
         .filter(|l| !l.is_empty())
     {
         let c: Value = serde_json::from_str(line)?;
+        // State the case reads back besides the draws (e.g. `scopeScale`).
+        let mut state = serde_json::Map::new();
         let draws = match c["kind"].as_str().unwrap_or("decorations") {
             "decorations" => decorations(&c, &atlas),
-            kind => kinds::run(kind, &c, &atlas),
+            kind => kinds::run(kind, &c, &atlas, &mut state),
         };
-        writeln!(out, "{}", json!({ "draws": encode(&draws) }))?;
+        state.insert("draws".into(), json!(encode(&draws)));
+        writeln!(out, "{}", Value::Object(state))?;
     }
     Ok(())
 }

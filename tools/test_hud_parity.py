@@ -118,6 +118,11 @@ def main():
             errors.append(v['error']); continue
         a = [normal(d) for d in v['draws']]
         b = [normal(d) for d in r['draws']]
+        # State the case reads back besides the draws.
+        for key in v.keys() - {'case', 'draws'}:
+            if key not in r or not close(v[key], r[key]):
+                a = a + [{'type': 'state', key: v[key]}]
+                b = b + [{'type': 'state', key: r.get(key)}]
         if len(a) != len(b) or not all(same(x, y) for x, y in zip(a, b)):
             first = next((i for i, (x, y) in enumerate(zip(a, b)) if not same(x, y)), min(len(a), len(b)))
             bad.append((v['case'], first, a[first:first + 2], b[first:first + 2], len(a), len(b)))

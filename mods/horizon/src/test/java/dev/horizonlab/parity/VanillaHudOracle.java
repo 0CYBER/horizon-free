@@ -148,6 +148,16 @@ public final class VanillaHudOracle {
                     : method.getReturnType() == boolean.class ? false : method.getReturnType() == float.class ? 0.0F : null);
         }
         @Override public float getJumpRidingScale() { return f("jumpScale", 0); }
+        @Override public ItemStack getItemBySlot(net.minecraft.world.entity.EquipmentSlot slot) {
+            return slot == net.minecraft.world.entity.EquipmentSlot.HEAD && c.has("head") && !c.get("head").isJsonNull()
+                ? new ItemStack(BuiltInRegistries.ITEM.getValue(Identifier.withDefaultNamespace(c.get("head").getAsString()))) : ItemStack.EMPTY;
+        }
+        @Override public int getTicksFrozen() { return i("ticksFrozen", 0); }
+        @Override public boolean isScoping() { return b("scoping"); }
+        @Override public float getEffectBlendFactor(Holder<MobEffect> effect, float partial) {
+            return effect.is(net.minecraft.world.effect.MobEffects.NAUSEA) ? f("nausea", 0) : 0.0F;
+        }
+        @Override public int getSleepTimer() { return i("sleepTimer", 0); }
         @Override public void playSound(net.minecraft.sounds.SoundEvent sound, float volume, float pitch) { }
     }
 
@@ -306,6 +316,8 @@ public final class VanillaHudOracle {
         Method overlayMessage = hudMethod("extractOverlayMessage", GuiGraphicsExtractor.class, DeltaTracker.class);
         Method selectedName = hudMethod("extractSelectedItemName", GuiGraphicsExtractor.class);
         Method tick = hudMethod("tick");
+        Method cameraOverlays = hudMethod("extractCameraOverlays", GuiGraphicsExtractor.class, DeltaTracker.class);
+        Method sleep = hudMethod("extractSleepOverlay", GuiGraphicsExtractor.class, DeltaTracker.class);
         Method sidebar = hudMethod("displayScoreboardSidebar", GuiGraphicsExtractor.class, net.minecraft.world.scores.Objective.class);
         Method level = Class.forName("net.minecraft.client.gui.contextualbar.ContextualBar")
             .getDeclaredMethod("extractExperienceLevel", GuiGraphicsExtractor.class, Font.class, int.class);
@@ -509,6 +521,42 @@ public final class VanillaHudOracle {
                         put(mc, Minecraft.class, "deltaTracker", timer);
                         capture.realDecorations = true;
                         capture.itemDecorations(font, stack, i("x", 0), i("y", 0), c.has("countText") ? c.get("countText").getAsString() : null);
+                    }
+                    case "overlays" -> {
+                        put(options, Options.class, "vignette", option(b("vignette")));
+                        put(options, Options.class, "cameraType", b("firstPerson") ? net.minecraft.client.CameraType.FIRST_PERSON : net.minecraft.client.CameraType.THIRD_PERSON_BACK);
+                        put(options, Options.class, "screenEffectScale", option((double) f("screenEffectScale", 1)));
+                        var border = new net.minecraft.world.level.border.WorldBorder();
+                        if (c.has("border") && !c.get("border").isJsonNull()) {
+                            var bo = c.getAsJsonObject("border");
+                            border.setCenter(bo.get("centerX").getAsDouble(), bo.get("centerZ").getAsDouble());
+                            border.setSize(bo.get("size").getAsDouble());
+                            border.setWarningBlocks(bo.get("warningBlocks").getAsInt());
+                            border.setWarningTime(bo.get("warningTime").getAsInt());
+                        }
+                        put(clientLevel, ClientLevel.class, "worldBorder", border);
+                        put(mc, Minecraft.class, "level", clientLevel);
+                        put(actor, Entity.class, "position", new net.minecraft.world.phys.Vec3(f("camX", 0), 64, f("camZ", 0)));
+                        actor.oPortalEffectIntensity = c.getAsJsonArray("portal").get(0).getAsFloat();
+                        actor.portalEffectIntensity = c.getAsJsonArray("portal").get(1).getAsFloat();
+                        put(hud, Hud.class, "vignetteBrightness", f("vignetteBrightness", 1));
+                        put(hud, Hud.class, "scopeScale", f("scopeScale", 0.5F));
+                        // The nether portal particle sprite, as the block model set would give it.
+                        var contents = alloc(net.minecraft.client.renderer.texture.SpriteContents.class);
+                        put(contents, net.minecraft.client.renderer.texture.SpriteContents.class, "name", Identifier.withDefaultNamespace("block/nether_portal"));
+                        var sprite = alloc(net.minecraft.client.renderer.texture.TextureAtlasSprite.class);
+                        put(sprite, net.minecraft.client.renderer.texture.TextureAtlasSprite.class, "contents", contents);
+                        var material = new net.minecraft.client.resources.model.sprite.Material.Baked(sprite, false);
+                        var model = (net.minecraft.client.renderer.block.dispatch.BlockStateModel) Proxy.newProxyInstance(Actor.class.getClassLoader(),
+                            new Class<?>[] {net.minecraft.client.renderer.block.dispatch.BlockStateModel.class},
+                            (proxy, method, a) -> method.getName().equals("particleMaterial") ? material : null);
+                        var models = alloc(net.minecraft.client.resources.model.ModelManager.class);
+                        put(models, net.minecraft.client.resources.model.ModelManager.class, "blockStateModelSet",
+                            new net.minecraft.client.renderer.block.BlockStateModelSet(Map.of(), model));
+                        put(mc, Minecraft.class, "modelManager", models);
+                        cameraOverlays.invoke(hud, capture, delta);
+                        sleep.invoke(hud, capture, delta);
+                        result.addProperty("scopeScale", (float) field(Hud.class, "scopeScale").get(hud));
                     }
                     default -> throw new IllegalArgumentException(c.get("kind").getAsString());
                 }

@@ -2936,6 +2936,11 @@ impl Game<'_> {
         self.draw_effect_icons(&mut batch);
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
         self.draw_boss_bars(&mut batch);
+        // Hud.extractSleepOverlay, under the sidebar, titles and chat.
+        if let Some((_, ticks)) = self.sleeping {
+            let draws = hud_overlays::sleep_overlay(wi, hi, ticks as i32);
+            hud_layout::paint(&mut batch, &self.res.atlas, &draws);
+        }
         self.draw_titles(&mut batch);
         self.draw_scoreboard(&mut batch);
         self.draw_subtitles(&mut batch);
@@ -3109,12 +3114,6 @@ impl Game<'_> {
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
         self.draw_chat(&mut batch);
-        let atlas = &self.res.atlas;
-        if let Some((_, ticks)) = self.sleeping {
-            // Gui sleep overlay fading in over 100 ticks.
-            let a = ((ticks as f32 / 100.0).min(1.0) * 204.0) as u8;
-            batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 32, a));
-        }
         match self.screen {
             Screen::Paused => self.draw_pause_menu(&mut batch),
             Screen::Dead => self.draw_death_screen(&mut batch),

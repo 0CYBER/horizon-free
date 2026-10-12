@@ -5,7 +5,9 @@
 //! selected item name (`extractSelectedItemName` and its `toolHighlightTimer`).
 use crate::{
     font::Font,
-    hud_layout::{GuiDraw, PoseOp, fill, hsv_to_argb, multiply, white, width},
+    hud_layout::{
+        Blend, GuiDraw, PoseOp, color_from_float, fill, hsv_to_argb, multiply, white, width,
+    },
     text::{Style, Text},
 };
 use std::{borrow::Cow, cmp::Ordering};
@@ -691,4 +693,210 @@ pub fn item_decorations(x: i32, y: i32, d: &ItemDecorations, font: &Font) -> Vec
     }
     out.push(GuiDraw::Pop);
     out
+}
+
+/// A full-screen `graphics.blit` of `textures/<texture>.png`.
+fn screen_blit(
+    w: i32,
+    h: i32,
+    texture: impl Into<Cow<'static, str>>,
+    blend: Blend,
+    color: u32,
+) -> GuiDraw {
+    GuiDraw::Blit {
+        texture: texture.into(),
+        blend,
+        x: 0,
+        y: 0,
+        w,
+        h,
+        uv: [0.0, 0.0],
+        src: [w, h],
+        tex: [w, h],
+        color,
+    }
+}
+
+/// `Hud.extractVignette`: `brightness` is `vignetteBrightness` and
+/// `border_warning` the world border warning strength (0 when far).
+pub fn vignette(w: i32, h: i32, brightness: f32, border_warning: f32) -> GuiDraw {
+    let brightness = brightness.clamp(0.0, 1.0);
+    let color = if border_warning > 0.0 {
+        let warning = border_warning.clamp(0.0, 1.0);
+        let red = brightness * (1.0 - warning);
+        let green_blue = brightness + (1.0 - brightness) * warning;
+        color_from_float(1.0, red, green_blue, green_blue)
+    } else {
+        color_from_float(1.0, brightness, brightness, brightness)
+    };
+    screen_blit(w, h, "misc/vignette", Blend::Vignette, color)
+}
+
+/// The border warning strength of `extractVignette` for a camera
+/// `distance` from a border with `warning_blocks`, `warning_time`, its
+/// `lerp_speed` and how far its size still has to move.
+pub fn border_warning(
+    distance: f32,
+    warning_blocks: i32,
+    warning_time: i32,
+    lerp_speed: f64,
+    size_left: f64,
+) -> f32 {
+    let moving = (lerp_speed * f64::from(warning_time)).min(size_left.abs());
+    let warning_distance = f64::from(warning_blocks).max(moving);
+    if f64::from(distance) < warning_distance {
+        1.0 - (f64::from(distance) / warning_distance) as f32
+    } else {
+        0.0
+    }
+}
+
+/// `Hud.extractSpyglassOverlay`.
+pub fn spyglass(w: i32, h: i32, scale: f32) -> Vec<GuiDraw> {
+    let src = w.min(h) as f32;
+    let ratio = (w as f32 / src).min(h as f32 / src) * scale;
+    let width = crate::hud_layout::floor(src * ratio);
+    let height = crate::hud_layout::floor(src * ratio);
+    let left = (w - width) / 2;
+    let top = (h - height) / 2;
+    let (right, bottom) = (left + width, top + height);
+    vec![
+        GuiDraw::Blit {
+            texture: Cow::Borrowed("misc/spyglass_scope"),
+            blend: Blend::Textured,
+            x: left,
+            y: top,
+            w: width,
+            h: height,
+            uv: [0.0, 0.0],
+            src: [width, height],
+            tex: [width, height],
+            color: crate::hud_layout::WHITE,
+        },
+        fill(0, bottom, w, h, 0xFF00_0000),
+        fill(0, 0, w, top, 0xFF00_0000),
+        fill(0, top, left, bottom, 0xFF00_0000),
+        fill(right, top, w, bottom, 0xFF00_0000),
+    ]
+}
+
+/// `Hud.extractPortalOverlay`: the nether portal block sprite over the screen.
+pub fn portal_overlay(w: i32, h: i32, mut alpha: f32) -> GuiDraw {
+    if alpha < 1.0 {
+        alpha *= alpha;
+        alpha *= alpha;
+        alpha = alpha * 0.8 + 0.2;
+    }
+    GuiDraw::AtlasSprite {
+        sprite: Cow::Borrowed("block/nether_portal"),
+        x: 0,
+        y: 0,
+        w,
+        h,
+        color: white(alpha),
+    }
+}
+
+/// `Hud.extractConfusionOverlay`: the nausea swirl scaled about the centre.
+pub fn confusion_overlay(w: i32, h: i32, strength: f32) -> Vec<GuiDraw> {
+    let size = 2.0 + strength * (1.0 - 2.0);
+    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+    vec![
+        GuiDraw::Push(vec![
+            PoseOp::Translate(cx, cy),
+            PoseOp::Scale(size, size),
+            PoseOp::Translate(-cx, -cy),
+        ]),
+        screen_blit(
+            w,
+            h,
+            "misc/nausea",
+            Blend::Nausea,
+            color_from_float(1.0, 0.2 * strength, 0.4 * strength, 0.2 * strength),
+        ),
+        GuiDraw::Pop,
+    ]
+}
+
+/// What `Hud.extractCameraOverlays` reads.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CameraOverlays {
+    /// `Options.vignette`: `vignetteBrightness` and the border warning strength.
+    pub vignette: Option<(f32, f32)>,
+    pub first_person: bool,
+    /// `LocalPlayer.isScoping`.
+    pub scoping: bool,
+    /// `DeltaTracker.getGameTimeDeltaTicks`.
+    pub game_time_delta: f32,
+    /// `Equippable.cameraOverlay` textures (`misc/pumpkinblur`) of the worn
+    /// items in `EquipmentSlot` order.
+    pub equipment: Vec<String>,
+    /// `getTicksFrozen` and `getPercentFrozen`.
+    pub ticks_frozen: i32,
+    pub percent_frozen: f32,
+    /// The partial tick and `oPortalEffectIntensity` / `portalEffectIntensity`.
+    pub partial: f32,
+    pub portal: [f32; 2],
+    /// `getEffectBlendFactor(NAUSEA, partial)` and `Options.screenEffectScale`.
+    pub nausea: f32,
+    pub screen_effect_scale: f32,
+}
+
+/// `Hud.extractCameraOverlays`, easing `scope_scale` (`Hud.scopeScale`).
+pub fn camera_overlays(w: i32, h: i32, i: &CameraOverlays, scope_scale: &mut f32) -> Vec<GuiDraw> {
+    let mut out = Vec::new();
+    if let Some((brightness, warning)) = i.vignette {
+        out.push(vignette(w, h, brightness, warning));
+    }
+    *scope_scale += 0.5 * i.game_time_delta * (1.125 - *scope_scale);
+    if i.first_person {
+        if i.scoping {
+            out.extend(spyglass(w, h, *scope_scale));
+        } else {
+            *scope_scale = 0.5;
+            for texture in &i.equipment {
+                out.push(screen_blit(
+                    w,
+                    h,
+                    texture.clone(),
+                    Blend::Textured,
+                    crate::hud_layout::WHITE,
+                ));
+            }
+        }
+    }
+    if i.ticks_frozen > 0 {
+        out.push(screen_blit(
+            w,
+            h,
+            "misc/powder_snow_outline",
+            Blend::Textured,
+            white(i.percent_frozen),
+        ));
+    }
+    let portal = i.portal[0] + i.partial * (i.portal[1] - i.portal[0]);
+    if portal > 0.0 {
+        out.push(portal_overlay(w, h, portal));
+    } else if i.nausea > 0.0 && i.screen_effect_scale < 1.0 {
+        out.extend(confusion_overlay(
+            w,
+            h,
+            i.nausea * (1.0 - i.screen_effect_scale),
+        ));
+    }
+    out
+}
+
+/// `Hud.extractSleepOverlay`.
+pub fn sleep_overlay(w: i32, h: i32, sleep_timer: i32) -> Vec<GuiDraw> {
+    if sleep_timer <= 0 {
+        return Vec::new();
+    }
+    let timer = sleep_timer as f32;
+    let mut amount = timer / 100.0;
+    if amount > 1.0 {
+        amount = 1.0 - (timer - 100.0) / 10.0;
+    }
+    let color = (((220.0 * amount) as i32) << 24) as u32 | 0x10_1020;
+    vec![fill(0, 0, w, h, color)]
 }
