@@ -348,6 +348,13 @@ def uuid_nbt(i):
     return f'[I;{UUID_BASE},0,0,{i}]'
 
 
+def uuid_fields(data_version, i):
+    """The UUID of a summoned entity: an int array since 1.16, two longs before."""
+    if data_version >= 2514:
+        return f'UUID:{uuid_nbt(i)}'
+    return f'UUIDMost:{UUID_BASE << 32}L,UUIDLeast:{i + 1}L'
+
+
 def build(version, force=False):
     jar, data_version, protocol = server_jar(version)
     target = SHARED / 'worlds' / version
@@ -376,8 +383,10 @@ def build(version, force=False):
         run(f'setblock {x} 100 {z} minecraft:{block}{nbt}')
     for i, (kind, extra) in enumerate(scene.entities(era, data_version)):
         x, z = 1.5 + 3 * (i % 15), 25.5 + 3 * (i // 15)
-        fields = f'UUID:{uuid_nbt(i)},NoAI:1b,Silent:1b,NoGravity:1b,Invulnerable:1b,PersistenceRequired:1b'
+        fields = f'{uuid_fields(data_version, i)},NoAI:1b,Silent:1b,NoGravity:1b,Invulnerable:1b,PersistenceRequired:1b'
         run(f'summon minecraft:{kind} {x} 100 {z} {{{fields}' + (',' + extra if extra else '') + '}')
+    for i, block in enumerate(scene.blocks(data_version)):
+        run(f'setblock {1 + 3 * (i % 15)} 100 {19 + 3 * (i // 15)} minecraft:{block}')
     run('setworldspawn 20 101 20')
     bot = Bot(port, protocol, BOT)
     time.sleep(3)

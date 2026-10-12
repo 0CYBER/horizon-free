@@ -177,6 +177,17 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
         )
     }));
     out.push((key(2511, 0), projectile_owner));
+    // `SplashPotionItemFieldRenameFix` casts the thrown potion to the type whose
+    // item stack field is `Item`: the typed `Potion` value takes its place, and
+    // writing the entity gives `Potion` back from the map it was read from.
+    out.push((key(2511, 1), |cx| {
+        cx.entity("minecraft:potion", |e| {
+            if let Some(item) = e.get("Potion").cloned() {
+                set(e, "Item", item);
+            }
+            super::drop_typed(e, "Potion");
+        })
+    }));
     out.push((key(2514, 0), entity_uuids));
     out.push((key(2514, 0), block_entity_uuids));
     out.push((key(2514, 0), player_uuids));
