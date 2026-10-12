@@ -20,6 +20,8 @@ pub const SPECTATOR: i32 = 3;
 
 pub struct Guest {
     pub conn: u32,
+    /// The client's address (IP bans, `list`).
+    pub address: std::net::SocketAddr,
     pub uuid: u128,
     pub name: String,
     pub entity_id: i32,
@@ -97,6 +99,7 @@ impl Guest {
     pub fn new(j: Joined, entity_id: i32, position: [f64; 3], view_distance: i32) -> Self {
         Self {
             conn: j.conn,
+            address: j.address,
             uuid: j.uuid,
             name: j.name,
             entity_id,

@@ -35,14 +35,59 @@ const KEEP_ALIVE_EVERY: Duration = Duration::from_secs(15);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Packets queued for one client beyond this many bytes disconnect it.
 const MAX_PENDING: usize = 96 << 20;
-/// Connection.setupCompression threshold of the integrated server.
-const COMPRESSION_THRESHOLD: i32 = 256;
-
 /// Vanilla's server-side disconnect during login is a JSON component.
-fn login_disconnect(c: &mut Connection, key: &str) {
-    let json = format!("{{\"translate\":\"{key}\"}}");
+fn login_disconnect(c: &mut Connection, reason: &horizon_world::nbt::Tag) {
+    let json = component_json(reason);
     let _ =
         c.send(&login::Clientbound::Disconnect(login::Disconnect { reason_json: json }).encode());
+}
+
+/// A component as ComponentSerialization.CODEC writes it with JsonOps (and
+/// Gson without HTML escaping): plain text collapses to a string, the
+/// content fields come first, then `extra`, then the style.
+pub fn component_json(tag: &horizon_world::nbt::Tag) -> String {
+    component_value(tag).compact()
+}
+fn component_value(tag: &horizon_world::nbt::Tag) -> crate::server::json::Json {
+    use crate::server::json::Json;
+    use horizon_world::nbt::Tag;
+    const ORDER: &[&str] = &[
+        "type", "text", "translate", "fallback", "with", "score", "selector", "separator",
+        "keybind", "nbt", "interpret", "block", "entity", "storage", "source", "object",
+        "sprite", "atlas", "player", "hat", "extra", "color", "shadow_color", "bold", "italic",
+        "underlined", "strikethrough", "obfuscated", "click_event", "hover_event", "insertion",
+        "font",
+    ];
+    match tag {
+        Tag::String(s) => Json::String(s.to_string_lossy()),
+        Tag::List(items) => Json::Array(items.iter().map(component_value).collect()),
+        Tag::Compound(map) => {
+            if map.len() == 1
+                && let Some(Tag::String(t)) = map.get(&horizon_world::nbt::JavaString::from("text"))
+            {
+                return Json::String(t.to_string_lossy());
+            }
+            let mut keys: Vec<String> = map.keys().map(|k| k.to_string_lossy()).collect();
+            keys.sort_by_key(|k| ORDER.iter().position(|o| o == k).unwrap_or(ORDER.len()));
+            Json::Object(
+                keys.into_iter()
+                    .map(|k| {
+                        let v = &map[&horizon_world::nbt::JavaString::from(k.as_str())];
+                        let value = match v {
+                            Tag::Byte(b) => Json::Bool(*b != 0),
+                            Tag::Int(i) => Json::Number(i.to_string()),
+                            other => component_value(other),
+                        };
+                        (k, value)
+                    })
+                    .collect(),
+            )
+        }
+        Tag::Byte(b) => Json::Bool(*b != 0),
+        Tag::Int(i) => Json::Number(i.to_string()),
+        Tag::Long(i) => Json::Number(i.to_string()),
+        _ => Json::Null,
+    }
 }
 
 /// StringUtil.isValidPlayerName.
@@ -63,7 +108,11 @@ impl PlayerSender {
     }
 }
 
-pub fn serve(stream: TcpStream, shared: Arc<Shared>) -> Result<(), String> {
+pub fn serve(
+    stream: TcpStream,
+    address: std::net::SocketAddr,
+    shared: Arc<Shared>,
+) -> Result<(), String> {
     let e = |e: horizon_protocol::Error| e.to_string();
     let mut c = Connection::from_stream(stream).map_err(e)?;
     c.reader
@@ -75,10 +124,20 @@ pub fn serve(stream: TcpStream, shared: Arc<Shared>) -> Result<(), String> {
         _ => return Err("expected a handshake".into()),
     };
     match intention.intent {
+        // ServerHandshakePacketListenerImpl: a server that does not reply
+        // to status requests closes the connection.
+        handshake::STATUS if !shared.config.enable_status => Ok(()),
         handshake::STATUS => serve_status(&mut c, &shared),
+        handshake::TRANSFER if !shared.config.accepts_transfers => {
+            login_disconnect(
+                &mut c,
+                &translatable("multiplayer.disconnect.transfers_disabled", &[]),
+            );
+            Ok(())
+        }
         handshake::LOGIN | handshake::TRANSFER => {
             if intention.protocol != PROTOCOL_VERSION {
-                let key = if intention.protocol < PROTOCOL_VERSION {
+                let key = if intention.protocol < 754 {
                     "multiplayer.disconnect.outdated_client"
                 } else {
                     "multiplayer.disconnect.incompatible"
@@ -93,7 +152,7 @@ pub fn serve(stream: TcpStream, shared: Arc<Shared>) -> Result<(), String> {
                 );
                 return Ok(());
             }
-            serve_login(c, &shared)
+            serve_login(c, address, &shared)
         }
         other => Err(format!("unknown intent {other}")),
     }
@@ -101,10 +160,14 @@ pub fn serve(stream: TcpStream, shared: Arc<Shared>) -> Result<(), String> {
 
 fn serve_status(c: &mut Connection, shared: &Shared) -> Result<(), String> {
     let e = |e: horizon_protocol::Error| e.to_string();
+    let mut requested = false;
     loop {
         let (id, payload) = c.recv().map_err(e)?;
         match status::Serverbound::decode(id, &payload).map_err(e)? {
+            // ServerStatusPacketListenerImpl: a second request disconnects.
+            status::Serverbound::StatusRequest(_) if requested => return Ok(()),
             status::Serverbound::StatusRequest(_) => {
+                requested = true;
                 let json = shared.status_json();
                 c.send(
                     &status::Clientbound::StatusResponse(status::StatusResponse { json }).encode(),
@@ -121,7 +184,11 @@ fn serve_status(c: &mut Connection, shared: &Shared) -> Result<(), String> {
     }
 }
 
-fn serve_login(mut c: Connection, shared: &Arc<Shared>) -> Result<(), String> {
+fn serve_login(
+    mut c: Connection,
+    address: std::net::SocketAddr,
+    shared: &Arc<Shared>,
+) -> Result<(), String> {
     let e = |e: horizon_protocol::Error| e.to_string();
     let (id, payload) = c.recv().map_err(e)?;
     let hello = match login::Serverbound::decode(id, &payload).map_err(e)? {
@@ -129,20 +196,23 @@ fn serve_login(mut c: Connection, shared: &Arc<Shared>) -> Result<(), String> {
         _ => return Err("expected a login hello".into()),
     };
     if !valid_name(&hello.name) {
-        login_disconnect(&mut c, "multiplayer.disconnect.invalid_name");
+        login_disconnect(
+            &mut c,
+            &translatable("multiplayer.disconnect.invalid_name", &[]),
+        );
         return Ok(());
     }
     // Offline mode: the profile is derived from the name (PlayerList.canPlayerLogin
     // then rejects duplicates and a full server).
     let uuid = offline_uuid(&hello.name);
-    if let Some(reason) = shared.try_admit(uuid, &hello.name) {
-        login_disconnect(&mut c, reason);
+    if let Some(reason) = shared.try_admit(address, uuid, &hello.name) {
+        login_disconnect(&mut c, &reason);
         return Ok(());
     }
     let result = login_and_configure(&mut c, shared, uuid, &hello.name);
     match result {
         Ok(Some(parts)) => {
-            play(c, shared, parts);
+            play(c, shared, parts, address);
             Ok(())
         }
         Ok(None) => {
@@ -170,14 +240,12 @@ fn login_and_configure(
     name: &str,
 ) -> Result<Option<Parts>, String> {
     let e = |e: horizon_protocol::Error| e.to_string();
-    c.send(
-        &login::Clientbound::Compression(login::Compression {
-            threshold: COMPRESSION_THRESHOLD,
-        })
-        .encode(),
-    )
-    .map_err(e)?;
-    c.set_compression(COMPRESSION_THRESHOLD);
+    let threshold = shared.config.compression_threshold;
+    if threshold >= 0 {
+        c.send(&login::Clientbound::Compression(login::Compression { threshold }).encode())
+            .map_err(e)?;
+        c.set_compression(threshold);
+    }
     c.send(
         &login::Clientbound::LoginFinished(login::LoginFinished {
             profile: login::GameProfile {
@@ -266,7 +334,7 @@ fn login_and_configure(
     }))
 }
 
-fn play(c: Connection, shared: &Arc<Shared>, parts: Parts) {
+fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::SocketAddr) {
     let conn_id = shared.next_id();
     let events = shared.events.clone();
     let _ = c.reader.set_read_timeout(Some(KEEP_ALIVE_TIMEOUT));
@@ -294,6 +362,7 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts) {
         brand: parts.brand,
         sender,
         latency,
+        address,
     };
     let reason = if events.send(NetEvent::Joined(Box::new(joined))).is_ok() {
         read_loop(&mut reader, conn_id, &events, &alive)

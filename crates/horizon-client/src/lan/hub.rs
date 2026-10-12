@@ -409,9 +409,7 @@ impl Hub {
     /// The permissions changed: tell everyone their level and commands again.
     pub fn resend_commands(&mut self) {
         for i in 0..self.guests.len() {
-            if !self.config.dedicated {
-                self.guests[i].permission = self.default_permission(self.guests[i].uuid);
-            }
+            self.guests[i].permission = self.default_permission(self.guests[i].uuid);
             if self.guests[i].placed {
                 self.send_permission_level(i);
             }
@@ -584,6 +582,20 @@ impl Hub {
                 NetEvent::Packet(conn, packet) => {
                     if let Some(g) = self.guest_mut(conn) {
                         g.inbox.push_back(*packet);
+                    }
+                }
+                NetEvent::Duplicate(uuid) => {
+                    let conns: Vec<u32> = self
+                        .guests
+                        .iter()
+                        .filter(|g| g.uuid == uuid)
+                        .map(|g| g.conn)
+                        .collect();
+                    for conn in conns {
+                        self.kick(
+                            conn,
+                            translatable("multiplayer.disconnect.duplicate_login", &[]),
+                        );
                     }
                 }
             }

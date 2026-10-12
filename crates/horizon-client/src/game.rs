@@ -20,6 +20,7 @@ mod commands;
 mod control;
 mod creaking;
 mod creatures;
+mod dedicated;
 mod crossbow;
 mod dispense_fixture;
 mod dispenser;
@@ -181,6 +182,9 @@ struct Options {
     /// Multiplayer: `--server HOST[:PORT]` joins at start; `--name` is the offline player name.
     server: Option<String>,
     player_name: String,
+    /// `--dedicated`: run as a dedicated server; vanilla's server arguments
+    /// (`--nogui`, `--port`, `--world`, `--universe`, `--initSettings`) follow.
+    dedicated: Option<Vec<String>>,
 }
 impl Options {
     fn read() -> Result<Option<Self>> {
@@ -212,6 +216,7 @@ impl Options {
             control: None,
             server: None,
             player_name: std::env::var("HORIZON_PLAYER_NAME").unwrap_or_else(|_| "Player".into()),
+            dedicated: None,
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -221,6 +226,10 @@ impl Options {
                         "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (tools/prepare_native_client.py)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default Player)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
                     );
                     return Ok(None);
+                }
+                "--dedicated" => {
+                    o.dedicated = Some(args.by_ref().collect());
+                    break;
                 }
                 "--creative" => o.creative = true,
                 "--test-terrain" => o.test_terrain = true,
@@ -2542,6 +2551,10 @@ impl Game<'_> {
         }
         let riding = self.riding.is_some();
         let Some(player) = self.player.as_mut() else {
+            // A dedicated server has no local player: the world still runs.
+            if self.options.dedicated.is_some() {
+                return self.tick_world(running);
+            }
             return Ok(());
         };
         // Hold position until the surrounding terrain exists.
@@ -2729,6 +2742,11 @@ impl Game<'_> {
             self.screen = Screen::Dead;
             self.capture(false);
         }
+        self.tick_world(running)
+    }
+    /// What the tick runs after the local player's own update: effects, the
+    /// world's entities and blocks, and the network hub.
+    fn tick_world(&mut self, running: bool) -> Result<()> {
         self.tick_omens();
         self.tick_effects();
         self.tick_burning();
@@ -7833,6 +7851,9 @@ pub fn run() -> Result<()> {
     let Some(mut options) = Options::read()? else {
         return Ok(());
     };
+    if options.dedicated.is_some() && !dedicated::preflight(&mut options)? {
+        return Ok(());
+    }
     let started = Instant::now();
     let vanilla_root = options.resources.clone();
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
@@ -7907,7 +7928,11 @@ pub fn run() -> Result<()> {
             .join("saves")
             .join(".horizon-title"),
     ));
-    let audio = Audio::new(&root);
+    let audio = if options.dedicated.is_some() {
+        Audio::silent(&root)
+    } else {
+        Audio::new(&root)
+    };
     let world = World::new(facts.air, 0);
     let creative = options.creative;
     let stations = horizon_client::stations::StationData::load(&root, &items);
@@ -8183,6 +8208,9 @@ pub fn run() -> Result<()> {
     }
     if let Ok(spec) = std::env::var("HORIZON_DISPENSE_FIXTURE") {
         return game.dispense_fixture(&spec);
+    }
+    if game.options.dedicated.is_some() {
+        return game.run_dedicated();
     }
     match game.options.world.clone() {
         _ if game.options.server.is_some() => {

@@ -7,7 +7,7 @@ use horizon_client::{
     Result,
     items::ItemStack,
     lan::{
-        self, Lan, MAX_PLAYERS,
+        self, Lan, MAX_PLAYERS, NetConfig,
         chunks::ChunkEncoder,
         data::SyncData,
         entity::EntityState,
@@ -345,6 +345,40 @@ impl Game<'_> {
         if self.lan.is_some() || self.remote.is_some() || self.title.is_some() {
             return Err("already open".into());
         }
+        let motd = format!("{PLAYER_NAME} - {}", self.level.name);
+        let host_uuid = self.level.player_uuid.map_or_else(
+            || offline_uuid(PLAYER_NAME),
+            |u| {
+                u128::from(u[0] as u32) << 96
+                    | u128::from(u[1] as u32) << 64
+                    | u128::from(u[2] as u32) << 32
+                    | u128::from(u[3] as u32)
+            },
+        );
+        let config = HubConfig {
+            default_game_mode: self.level.mode(),
+            guest_commands: settings.guest_commands,
+            force_game_mode: settings.force_game_mode,
+            hardcore: self.level.hardcore,
+            view_distance: self.settings.render_distance.clamp(2, 32),
+            simulation_distance: self.settings.render_distance.clamp(2, 32),
+            dimension: self.dim.id().to_owned(),
+            seed: self.level.seed,
+            max_players: MAX_PLAYERS,
+            dedicated: false,
+        };
+        let net = NetConfig::lan(settings.port, motd, MAX_PLAYERS);
+        self.lan_host(settings, net, config, Some(host_uuid))
+    }
+    /// Start the network side and the play-state hub: for the LAN (with the
+    /// host's own profile reserved) or for a dedicated server (no host).
+    pub(super) fn lan_host(
+        &mut self,
+        settings: LanSettings,
+        net: NetConfig,
+        config: HubConfig,
+        host: Option<u128>,
+    ) -> Result<()> {
         let root = self.options.resources.clone();
         let sync = SYNC
             .get_or_init(|| SyncData::load(&root).map(Arc::new))
@@ -372,37 +406,14 @@ impl Game<'_> {
             &biome_names,
             &registry,
         );
-        let motd = format!("{PLAYER_NAME} - {}", self.level.name);
-        let lan = Lan::start(sync.clone(), settings.port, motd, MAX_PLAYERS)?;
-        let host_uuid = self.level.player_uuid.map_or_else(
-            || offline_uuid(PLAYER_NAME),
-            |u| {
-                u128::from(u[0] as u32) << 96
-                    | u128::from(u[1] as u32) << 64
-                    | u128::from(u[2] as u32) << 32
-                    | u128::from(u[3] as u32)
-            },
-        );
-        lan.reserve(host_uuid);
+        let lan = Lan::start_with(sync.clone(), net)?;
+        if let Some(uuid) = host {
+            lan.reserve(uuid);
+        }
+        let host_uuid = host.unwrap_or(0);
         self.next_entity += 1;
         let host_entity = self.next_entity as i32;
-        let hub = Hub::new(
-            lan,
-            sync,
-            encoder,
-            HubConfig {
-                default_game_mode: self.level.mode(),
-                guest_commands: settings.guest_commands,
-                force_game_mode: settings.force_game_mode,
-                hardcore: self.level.hardcore,
-                view_distance: self.settings.render_distance.clamp(2, 32),
-                simulation_distance: self.settings.render_distance.clamp(2, 32),
-                dimension: self.dim.id().to_owned(),
-                seed: self.level.seed,
-                max_players: MAX_PLAYERS,
-                dedicated: false,
-            },
-        );
+        let hub = Hub::new(lan, sync, encoder, config);
         let port = hub.lan.port;
         self.world.block_log = Some(Vec::new());
         self.lan = Some(LanHost {
@@ -543,7 +554,9 @@ impl Game<'_> {
         let Some(mut host) = self.lan.take() else {
             return;
         };
-        if let Some(state) = self.lan_host_state(&host) {
+        let state = self.lan_host_state(&host);
+        // A dedicated server runs the hub without a host player.
+        if state.is_some() || host.hub.config.dedicated {
             let has_guests = !host.hub.guests.is_empty();
             let entities = if has_guests {
                 self.lan_entities(&mut host.hub)
@@ -554,7 +567,7 @@ impl Game<'_> {
             let events = {
                 let mut ctx = TickCtx {
                     world: &mut self.world,
-                    host: Some(&state),
+                    host: state.as_ref(),
                     entities: &entities,
                     next_entity: &mut self.next_entity,
                     spawn,
@@ -570,14 +583,16 @@ impl Game<'_> {
                 };
                 host.hub.tick(&mut ctx)
             };
-            if host.host_mode != state.game_mode {
+            if let Some(state) = &state
+                && host.host_mode != state.game_mode
+            {
                 host.host_mode = state.game_mode;
                 host.hub.set_host_game_mode(state.uuid, state.game_mode);
             }
             for event in events {
                 match event {
                     HostEvent::Joined(conn) => {
-                        self.lan_guest_joined(&mut host, conn, &state, &entities, spawn)
+                        self.lan_guest_joined(&mut host, conn, state.as_ref(), &entities, spawn)
                     }
                     HostEvent::Left(guest) => {
                         playerdata::save(&guest, &self.world_root);
@@ -602,7 +617,7 @@ impl Game<'_> {
         &mut self,
         host: &mut LanHost,
         conn: u32,
-        state: &HostState,
+        state: Option<&HostState>,
         entities: &[EntityState],
         spawn: [f64; 3],
     ) {
@@ -624,7 +639,7 @@ impl Game<'_> {
         }
         let mut ctx = TickCtx {
             world: &mut self.world,
-            host: Some(state),
+            host: state,
             entities,
             next_entity: &mut self.next_entity,
             spawn,
