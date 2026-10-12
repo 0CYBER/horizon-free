@@ -638,7 +638,8 @@ impl Game<'_> {
     pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
         for e in events {
             match e {
-                MobEvent::Sound(name, at, volume, pitch) => {
+                MobEvent::Sound(name, at, volume, pitch)
+                | MobEvent::LocalSound(name, at, volume, pitch) => {
                     self.audio
                         .play(&format!("minecraft:{name}"), Some(at), volume, pitch)
                 }

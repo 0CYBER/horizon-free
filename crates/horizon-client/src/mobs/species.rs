@@ -1428,6 +1428,7 @@ impl Def {
                     | S::MagmaCube
                     | S::Wither
                     | S::Allay
+                    | S::Breeze
             ),
             flying: matches!(s, S::Ghast | S::Phantom | S::HappyGhast),
             climber: matches!(s, S::Spider | S::CaveSpider),
@@ -1526,6 +1527,8 @@ impl Def {
                 | S::Ravager
                 | S::Wither
                 | S::Warden
+                | S::Breeze
+                | S::Creaking
         )
     }
     /// The item tag Animal.isFood tests.
