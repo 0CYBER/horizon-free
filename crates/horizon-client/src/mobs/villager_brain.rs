@@ -4076,3 +4076,62 @@ pub fn potential_job_site(m: &Mob) -> Option<[i32; 3]> {
 pub fn seen_can_breed(s: &Seen) -> bool {
     s.species == Species::Villager && s.in_love
 }
+/// The memories other villagers read: the interaction target, the path's
+/// nodes (while it is not done), whether a golem was seen lately and the
+/// last sleep.
+#[allow(clippy::type_complexity)]
+pub fn seen_memories(
+    m: &Mob,
+) -> (
+    Option<Who>,
+    Option<(Option<[i32; 3]>, [i32; 3])>,
+    bool,
+    Option<i64>,
+) {
+    let Some(mm) = mem_ref(m) else {
+        return (None, None, false, None);
+    };
+    let path = mm.path.present().then(|| m.ai.nav.path.as_ref()).flatten();
+    let nodes = path.filter(|p| !p.is_done()).map(|p| {
+        let n = |i: usize| [p.nodes[i].x, p.nodes[i].y, p.nodes[i].z];
+        ((p.next > 0).then(|| n(p.next - 1)), n(p.next))
+    });
+    (
+        mm.interaction_target.value(),
+        nodes,
+        mm.golem_detected_recently.present(),
+        mm.last_slept.value(),
+    )
+}
+/// What one villager's tick does to another at once (vanilla writes the
+/// other villager directly): applied before the next mob ticks.
+#[derive(Clone, Debug)]
+pub enum Op {
+    /// `BehaviorUtils.lockGazeAndWalkToEachOther`, the other villager's half.
+    LockGaze(Who),
+    /// `Villager.gossip`: the target's `lastGossipTime`.
+    GossipTime(i64),
+    /// `Villager.eatAndDigestFood`.
+    EatAndDigest,
+    /// `AgeableMob.setAge`.
+    SetAge(i32),
+    /// `GolemSensor.golemDetected`.
+    GolemDetected,
+}
+/// Applies an `Op` to the villager it targets.
+pub fn apply_op(m: &mut Mob, op: &Op) {
+    if m.species() != Species::Villager {
+        return;
+    }
+    match op {
+        Op::LockGaze(who) => lock_gaze(m, *who),
+        Op::GossipTime(t) => super::villager::ext_mut(m).last_gossip_time = *t,
+        Op::EatAndDigest => super::villager::ext_mut(m).eat_and_digest(),
+        Op::SetAge(age) => m.extra.age = *age,
+        Op::GolemDetected => golem_detected(m),
+    }
+}
+/// `GolemSensor.golemDetected`: remembered for 600 ticks.
+fn golem_detected(m: &mut Mob) {
+    mem(m).golem_detected_recently.set_ttl(true, 600);
+}

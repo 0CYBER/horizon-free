@@ -88,6 +88,8 @@ def write_scenarios(path, chosen):
         lines.append(f'origin {ox} {oz}')
         for line in body:
             f = line.split()
+            # `at TICK block ...` changes blocks before that tick; `watch` boxes stay relative.
+            head, f = (f[:2], f[2:]) if f[0] == 'at' else ([], f)
             if f[0] == 'player':
                 f[1] = repr(float(f[1]) + ox)
                 f[3] = repr(float(f[3]) + oz)
@@ -102,7 +104,7 @@ def write_scenarios(path, chosen):
                     f[k] = str(int(f[k]) + ox)
                 for k in (3, 6):
                     f[k] = str(int(f[k]) + oz)
-            lines.append(' '.join(f))
+            lines.append(' '.join(head + f))
         lines.append('end')
     path.write_text('\n'.join(lines) + '\n')
 
@@ -119,6 +121,9 @@ def parse(path):
         t = int(parts[0])
         if parts[1] == 'sound':
             cur['sounds'].setdefault(t, []).append(parts[2])
+            continue
+        if parts[1] == 'block':
+            cur.setdefault('blocks', {}).setdefault(t, []).append(parts[2])
             continue
         if parts[1] == 'trace':
             cur.setdefault('trace', {}).setdefault(t, []).append(parts[2])
@@ -210,12 +215,14 @@ def compare(vanilla, rust, fields=None):
                     report.extend('    ' + d for d in diffs[:12])
             if first is not None:
                 clean = False
-        # Sounds: first differing tick.
-        for t in sorted(set(v['sounds']) | set(r['sounds'])):
-            if v['sounds'].get(t, []) != r['sounds'].get(t, []):
-                report.append(f'{name}: sounds differ at tick {t}: vanilla {v["sounds"].get(t, [])} | horizon {r["sounds"].get(t, [])}')
-                clean = False
-                break
+        # Sounds and watched block changes: first differing tick.
+        for kind in ('sounds', 'blocks'):
+            va, ra = v.get(kind, {}), r.get(kind, {})
+            for t in sorted(set(va) | set(ra)):
+                if va.get(t, []) != ra.get(t, []):
+                    report.append(f'{name}: {kind} differ at tick {t}: vanilla {va.get(t, [])} | horizon {ra.get(t, [])}')
+                    clean = False
+                    break
         totals['clean'] += clean
         if clean:
             report.append(f'{name}: all {len(v["ticks"])} ticks match')

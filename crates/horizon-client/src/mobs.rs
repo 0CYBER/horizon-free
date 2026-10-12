@@ -761,20 +761,11 @@ pub enum MobEvent {
         kind: DamageKind,
         amount: f32,
     },
-    /// Two villagers are close: swap gossip and share food and wares.
-    VillagerMeet {
-        mob: u32,
-        other: u32,
-    },
-    /// Two villagers make a baby.
-    VillagerBirth {
-        parent: u32,
-        partner: u32,
-    },
-    /// A villager asks whether enough neighbours want an iron golem.
-    GolemCheck {
-        mob: u32,
-        needed: usize,
+    /// What a villager's tick does to another villager at once
+    /// (`take_mob_ops` applies it before the next mob ticks).
+    VillagerOp {
+        target: u32,
+        op: villager_brain::Op,
     },
     /// A villager launches a firework rocket (celebrating a won raid).
     Firework {
@@ -903,8 +894,57 @@ pub struct Seen {
     /// A villager's profession (index into `render::PROFESSIONS`) and experience.
     pub profession: u8,
     pub xp: i32,
+    /// What other villagers read of a villager's state and brain.
+    pub villager: Option<Arc<villager::Seen>>,
 }
 impl Mob {
+    /// What other mobs see of this one this tick (`player`: the player's
+    /// UUID, which villagers' reputation is keyed by).
+    pub fn seen(&self, player: Option<[i32; 4]>) -> Seen {
+        let m = self;
+        let villager = m.species() == Species::Villager;
+        Seen {
+            id: m.id,
+            species: m.species(),
+            position: m.position,
+            bounds: m.bounds(),
+            eye_y: m.eye_y(),
+            alive: m.alive(),
+            baby: m.is_baby(),
+            // A villager is "in love" when it is willing to breed (`canBreed`).
+            in_love: if villager {
+                villager::can_breed(m)
+            } else {
+                m.extra.in_love > 0
+            },
+            tame: m.extra.tame,
+            hostile: m.hostile(),
+            target: m.ai.target,
+            health: m.health,
+            variant: m.extra.variant,
+            color: m.extra.color,
+            job: villager.then_some(m.extra.home).flatten(),
+            bed: villager.then_some(m.extra.bed).flatten(),
+            yaw: m.yaw,
+            velocity: m.velocity,
+            leash: m.extra.leash,
+            caravan: caravan::head_of(m),
+            delay: m.extra.ints[5],
+            hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
+            active_raid: raider::has_active_raid(m),
+            player_rep: match (villager, player) {
+                (true, Some(uuid)) => villager::ext(m).map_or(0, |e| e.gossips.reputation(uuid)),
+                _ => 0,
+            },
+            pushable: m.pushable(),
+            category: m.category(),
+            potential_job: villager_brain::potential_job_site(m),
+            meeting: villager.then_some(m.extra.meeting).flatten(),
+            profession: m.extra.variant2,
+            xp: villager::xp(m),
+            villager: villager.then(|| Arc::new(villager::seen(m))),
+        }
+    }
     /// `EntityType.getCategory`'s name.
     pub fn category(&self) -> &'static str {
         match self.kind.category.as_str() {
@@ -937,6 +977,27 @@ pub fn take_mob_pushes(events: &mut Vec<MobEvent>, from: usize, pending: &mut Ve
             i += 1;
         }
     }
+}
+/// Applies the `VillagerOp`s in `events[from..]` to the mobs they target,
+/// at once, as vanilla's villagers write each other directly. Returns the
+/// indices of the mobs changed (whose snapshot is stale).
+pub fn take_mob_ops(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: usize) -> Vec<usize> {
+    let mut changed = Vec::new();
+    let mut i = from;
+    while i < events.len() {
+        if let MobEvent::VillagerOp { target, op } = &events[i] {
+            if let Some(j) = mobs.iter().position(|m| m.id == *target && !m.removed) {
+                villager_brain::apply_op(&mut mobs[j], op);
+                if !changed.contains(&j) {
+                    changed.push(j);
+                }
+            }
+            events.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    changed
 }
 /// Adds the pending pushes aimed at `m` to its velocity, in push order.
 pub fn apply_mob_pushes(m: &mut Mob, pending: &mut Vec<(u32, Vec3)>) {

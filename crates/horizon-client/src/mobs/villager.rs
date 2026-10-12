@@ -488,6 +488,46 @@ impl Ext {
         now < self.last_gossip_time || now >= self.last_gossip_time + 1200
     }
 }
+/// What a villager ticking later reads of another one this tick (vanilla
+/// reads the other villager itself).
+#[derive(Clone, Debug, Default)]
+pub struct Seen {
+    pub gossips: crate::gossip::Gossips,
+    pub last_gossip_time: i64,
+    /// `countFoodPointsInInventory`.
+    pub food_points: i32,
+    /// The `INTERACTION_TARGET` memory (play tag's chases).
+    pub interaction_target: Option<super::Who>,
+    /// The `PATH` memory, when not done: its previous and next nodes.
+    pub path_nodes: Option<(Option<[i32; 3]>, [i32; 3])>,
+    /// `LAST_SLEPT` and whether `GOLEM_DETECTED_RECENTLY` is remembered.
+    pub last_slept: Option<i64>,
+    pub golem_detected: bool,
+}
+impl Seen {
+    /// `Villager.wantsToSpawnGolem`.
+    pub fn wants_golem(&self, now: i64) -> bool {
+        self.last_slept.is_some_and(|t| now - t < 24000) && !self.golem_detected
+    }
+    /// `Villager.wantsMoreFood`.
+    pub fn wants_more_food(&self) -> bool {
+        self.food_points < 12
+    }
+}
+pub fn seen(m: &Mob) -> Seen {
+    let e = ext(m);
+    let (interaction_target, path_nodes, golem_detected, last_slept) =
+        super::villager_brain::seen_memories(m);
+    Seen {
+        gossips: e.map(|e| e.gossips.clone()).unwrap_or_default(),
+        last_gossip_time: e.map_or(0, |e| e.last_gossip_time),
+        food_points: e.map_or(0, Ext::food_in_inventory),
+        interaction_target,
+        path_nodes,
+        last_slept: last_slept.or(e.and_then(|e| e.last_slept)),
+        golem_detected,
+    }
+}
 /// `Villager.canBreed`: enough food, awake and an adult.
 pub fn can_breed(m: &Mob) -> bool {
     m.species() == Species::Villager
