@@ -43,6 +43,8 @@ struct Scenario {
     blocks: Vec<Vec<String>>,
     player: Option<[f64; 3]>,
     creative: bool,
+    /// The tick from which the player faces another yaw.
+    turn: Option<(i32, f32)>,
     mobs: Vec<MobSpec>,
 }
 
@@ -79,7 +81,16 @@ fn parse(text: &str) -> Vec<Scenario> {
                     f[2].parse().unwrap(),
                     f[3].parse().unwrap(),
                 ]);
-                s.creative = f.get(4) == Some(&"creative");
+                for opt in &f[4..] {
+                    if *opt == "creative" {
+                        s.creative = true;
+                    } else if let Some(t) = opt.strip_prefix("turn=") {
+                        let (tick, yaw) = t.split_once(',').unwrap();
+                        s.turn = Some((tick.parse().unwrap(), yaw.parse().unwrap()));
+                    } else {
+                        panic!("unknown player option {opt}");
+                    }
+                }
             }
             "mob" => s.mobs.push(MobSpec {
                 kind: f[1].to_owned(),
@@ -355,7 +366,9 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
         u8::from(m.ai.jumping)
     );
     let _ = write!(out, "\trng {:x}", m.random.state());
-    if let Some((acts, mem)) = horizon_client::mobs::villager_brain::describe(m) {
+    if let Some((acts, mem)) = horizon_client::mobs::villager_brain::describe(m)
+        .or_else(|| horizon_client::mobs::monster_brain::describe(m))
+    {
         let _ = write!(out, "\tact {acts}\tmem {mem}");
     }
     out.push('\n');
@@ -471,6 +484,11 @@ fn main() -> horizon_client::Result<()> {
                 }
             }
             m.random = LegacyRandom::new(spec.seed);
+            if horizon_client::mobs::monster_brain::has_brain(m.species()) {
+                // The oracle delays the sensors again with the seeded random
+                // and seeds RunOne's shuffles with the mob's seed.
+                horizon_client::mobs::monster_brain::init(&mut m, spec.seed);
+            }
             if m.species() == Species::Villager {
                 // The oracle seeds the random after the brain is built, then
                 // delays the sensors again and seeds the gates' shuffles.
@@ -483,7 +501,7 @@ fn main() -> horizon_client::Result<()> {
             }
             mobs.push(m);
         }
-        let player = s.player.map(|p| {
+        let mut player = s.player.map(|p| {
             let position = Vec3::new(p[0], p[1], p[2]);
             PlayerView {
                 position,
@@ -516,6 +534,18 @@ fn main() -> horizon_client::Result<()> {
         }
         for t in 1..=s.ticks {
             world.game_time += 1;
+            if let (Some(p), Some((tick, yaw))) = (player.as_mut(), s.turn)
+                && t >= tick
+            {
+                // Entity.calculateViewVector(0, yaw).
+                let r = -yaw * horizon_core::geometry::trig::DEG_TO_RAD;
+                let (cos, sin) = (
+                    horizon_core::geometry::trig::cos(f64::from(r)),
+                    horizon_core::geometry::trig::sin(f64::from(r)),
+                );
+                p.look = [f64::from(sin), -0.0, f64::from(cos)];
+                p.yaw = yaw;
+            }
             let snapshot: Vec<Seen> = mobs.iter().filter(|m| !m.removed).map(seen).collect();
             let w = MobWorld {
                 world: &world,

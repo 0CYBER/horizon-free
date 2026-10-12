@@ -157,6 +157,9 @@ public final class VanillaMobAiOracle {
         List<String[]> blocks = new ArrayList<>();
         double[] player;
         boolean creative;
+        /** The tick from which the player faces turnYaw (head and body), else 0. */
+        int turnTick = Integer.MAX_VALUE;
+        float turnYaw;
         List<MobSpec> mobs = new ArrayList<>();
         long levelSeed = 0;
     }
@@ -187,7 +190,14 @@ public final class VanillaMobAiOracle {
                 case "fill", "block" -> s.blocks.add(f);
                 case "player" -> {
                     s.player = new double[] {Double.parseDouble(f[1]), Double.parseDouble(f[2]), Double.parseDouble(f[3])};
-                    s.creative = f.length > 4 && f[4].equals("creative");
+                    for (int i = 4; i < f.length; i++) {
+                        if (f[i].equals("creative")) s.creative = true;
+                        else if (f[i].startsWith("turn=")) {
+                            String[] tv = f[i].substring(5).split(",");
+                            s.turnTick = Integer.parseInt(tv[0]);
+                            s.turnYaw = Float.parseFloat(tv[1]);
+                        } else throw new IllegalArgumentException(line);
+                    }
                 }
                 case "mob" -> {
                     MobSpec m = new MobSpec();
@@ -441,6 +451,11 @@ public final class VanillaMobAiOracle {
                 }
                 player.setGameMode(s.creative ? GameType.CREATIVE : GameType.SURVIVAL);
                 player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
+                // snapTo leaves the head and body as the player was created
+                // (a random head yaw): face +z like the probe's player.
+                player.setYHeadRot(0.0F);
+                player.yHeadRotO = 0.0F;
+                player.setYBodyRot(0.0F);
                 // The player is never ticked during a scenario: give it the water state of
                 // where it stands (isInWater), not the previous scenario's.
                 method(Entity.class, "updateFluidInteraction").invoke(player);
@@ -498,6 +513,12 @@ public final class VanillaMobAiOracle {
                     player.hurtTime = 0;
                     player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
                     player.setDeltaMovement(Vec3.ZERO);
+                    if (t >= s.turnTick) {
+                        // The view vector follows the head (LivingEntity.getViewYRot).
+                        player.setYRot(s.turnYaw);
+                        player.setYHeadRot(s.turnYaw);
+                        player.setYBodyRot(s.turnYaw);
+                    }
                 }
                 TracingRandom.tick = t;
                 TracingRandom.on = tracing(s) && t >= traceFrom() && t <= traceTo();

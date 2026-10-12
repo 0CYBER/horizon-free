@@ -77,6 +77,17 @@ def scenarios():
         'player 12.5 -60 0.5',
         'mob minecraft:villager 0.5 -60 0.5 0 51 persistent',
     ])
+    # Breezes: idle, and fighting a player near, in, and beyond the inner jump circle.
+    add('breeze_alone', 200, ['mob minecraft:breeze 0.5 -60 0.5 90 61 persistent'])
+    add('breeze_player', 200, ['player 8.5 -60 0.5', 'mob minecraft:breeze 0.5 -60 0.5 0 62 persistent'])
+    add('breeze_close', 200, ['player 2.5 -60 1.5', 'mob minecraft:breeze 0.5 -60 0.5 0 63 persistent'])
+    add('breeze_far', 200, ['player 13.5 -60 6.5', 'mob minecraft:breeze 0.5 -60 0.5 0 64 persistent'])
+    # Creakings: the player faces +z, so it watches one and turns its back on the other.
+    add('creaking_alone', 200, ['mob minecraft:creaking 0.5 -60 0.5 90 71 persistent'])
+    add('creaking_watched', 200, ['player 0.5 -60 -7.5', 'mob minecraft:creaking 0.5 -60 0.5 180 72 persistent'])
+    add('creaking_behind', 200, ['player 0.5 -60 8.5', 'mob minecraft:creaking 0.5 -60 0.5 0 73 persistent'])
+    # Woken while watched, then free to hunt and hit once the player turns away.
+    add('creaking_attack', 240, ['player 0.5 -60 -7.5 turn=40,180', 'mob minecraft:creaking 0.5 -60 0.5 180 74 persistent'])
     return s
 
 
