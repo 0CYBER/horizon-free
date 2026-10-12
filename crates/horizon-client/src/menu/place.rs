@@ -79,9 +79,10 @@ impl Stacked {
         &self.keys
     }
     /// `canCraft(ingredients, null)` without touching the counts (the recipe
-    /// book's craftable test; the answer does not depend on the order).
+    /// book's craftable test; the answer does not depend on the order; no
+    /// ingredients at all can always be found).
     pub fn can_craft(&self, ingredients: &[&Ingredient]) -> bool {
-        !ingredients.is_empty() && self.clone().try_pick(ingredients, 1, None)
+        self.clone().try_pick(ingredients, 1, None)
     }
     /// `getResultUpperBound`.
     fn upper_bound(&self, ingredients: &[&Ingredient]) -> i32 {

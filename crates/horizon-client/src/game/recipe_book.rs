@@ -10,7 +10,7 @@ use horizon_client::{
     hud::{HudBatch, Rect, rgba},
     items::ItemStack,
     menu::place::{PostPlace, Stacked},
-    recipe_book::{Book, BookType, Collection, Display, Entry, Tab},
+    recipe_book::{Book, BookType, ClientBook, Collection, Display, Entry, Tab},
     ui::EditBox,
 };
 use std::{
@@ -72,6 +72,11 @@ pub(super) struct RecipeUi {
     /// Squeeze animations of new recipes: ticks left per button index and tab.
     button_anim: Vec<(usize, f32)>,
     tab_anim: Vec<(Tab, f32)>,
+    /// The client's copy of the known recipes (`ClientRecipeBook`), its
+    /// order deciding the buttons', and the recipes it was last synced with.
+    client: ClientBook,
+    client_known: Option<BTreeSet<String>>,
+    client_version: u64,
 }
 
 impl RecipeUi {
@@ -219,12 +224,44 @@ impl Game<'_> {
         });
         out
     }
-    fn unlocked_recipes(&self) -> BTreeSet<String> {
-        self.level.recipe_book.recipes.clone()
+    /// Sends the client book what changed in the server's: the first time a
+    /// replacing batch (vanilla's server iterates an identity hash set; this
+    /// one goes in id order), then each unlock and removal.
+    fn sync_client_book(&mut self) {
+        let known = &self.level.recipe_book.recipes;
+        let index = &self.res.stations.recipe_index;
+        let ui = &mut self.recipe_ui;
+        match ui.client_known.as_ref() {
+            Some(previous) if previous == known => return,
+            Some(previous) => {
+                for id in previous.difference(known) {
+                    for d in index.display_ids(id) {
+                        ui.client.remove(d);
+                    }
+                }
+                for id in known.difference(previous) {
+                    for d in index.display_ids(id) {
+                        ui.client.add(d);
+                    }
+                }
+            }
+            None => {
+                ui.client.clear();
+                for id in known {
+                    for d in index.display_ids(id) {
+                        ui.client.add(d);
+                    }
+                }
+            }
+        }
+        ui.client_known = Some(known.clone());
+        ui.client_version += 1;
     }
     fn ensure_book(&mut self) {
         if self.recipe_ui.book.is_none() {
-            self.recipe_ui.book = Some(Book::build(&self.res.recipes, &self.res.items));
+            let mut book = Book::build(&self.res.recipes, &self.res.items);
+            book.set_display_ids(&self.res.stations.recipe_index);
+            self.recipe_ui.book = Some(book);
         }
         if self.recipe_ui.search.is_none() {
             let mut search = EditBox::new(0.0, 0.0, 81.0, 14.0);
@@ -237,6 +274,7 @@ impl Game<'_> {
     /// Rebuilds the tab and button lists when anything they depend on changed.
     fn refresh_book_view(&mut self, book_type: BookType) {
         self.ensure_book();
+        self.sync_client_book();
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for s in self.inventory.iter().flatten() {
             (&s.item, s.count, s.damage).hash(&mut h);
@@ -253,7 +291,7 @@ impl Game<'_> {
             stack.map(|s| (s.item, s.count)).hash(&mut h);
         }
         self.craft_size.hash(&mut h);
-        self.level.recipe_book.recipes.len().hash(&mut h);
+        self.recipe_ui.client_version.hash(&mut h);
         self.book_filtering(book_type).hash(&mut h);
         self.recipe_ui.tab.map(|t| format!("{t:?}")).hash(&mut h);
         self.recipe_ui
@@ -287,7 +325,6 @@ impl Game<'_> {
         let Some(book) = self.recipe_ui.book.take() else {
             return;
         };
-        let unlocked = self.unlocked_recipes();
         let filtering = self.book_filtering(book_type);
         let (gw, gh) = self.book_grid();
         let available = self.book_available(book_type);
@@ -301,8 +338,10 @@ impl Game<'_> {
             if tab == Tab::Search {
                 continue;
             }
-            let hit = book
-                .collections(&unlocked, book_type, tab)
+            let hit = self
+                .recipe_ui
+                .client
+                .collections(&book, book_type, tab)
                 .iter()
                 .flat_map(|c| c.entries.iter())
                 .any(|&i| shown(&book.entries[i]) && new(self, &book.entries[i]));
@@ -345,7 +384,6 @@ impl Game<'_> {
         let Some(book) = ui.book.as_ref() else {
             return View::default();
         };
-        let unlocked = self.unlocked_recipes();
         let available = self.book_available(book_type);
         let (gw, gh) = self.book_grid();
         let selected = |e: &Entry| match book_type {
@@ -357,8 +395,9 @@ impl Game<'_> {
         let mut tabs = Vec::new();
         for tab in book_type.tabs() {
             let visible = tab == Tab::Search
-                || book
-                    .collections(&unlocked, book_type, tab)
+                || ui
+                    .client
+                    .collections(book, book_type, tab)
                     .iter()
                     .any(|c| c.entries.iter().any(|&i| selected(&book.entries[i])));
             if visible {
@@ -371,7 +410,7 @@ impl Game<'_> {
             .as_ref()
             .map(|s| s.value.clone())
             .unwrap_or_default();
-        let collections: Vec<Collection> = book.collections(&unlocked, book_type, tab);
+        let collections: Vec<Collection> = ui.client.collections(book, book_type, tab);
         let mut buttons = Vec::new();
         for c in collections {
             if !c.entries.iter().any(|&i| selected(&book.entries[i])) {
