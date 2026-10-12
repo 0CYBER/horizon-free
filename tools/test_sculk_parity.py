@@ -107,6 +107,24 @@ def handwritten():
                                   'at 2 event minecraft:step 3.5 -60 0.5 player'])
     add('shrieker_creative', 60, [f'block 0 {FLOOR} 0 {SHRIEKER}[can_summon=true]', watch, *near, 'player 3.5 -60 0.5 creative warn=2',
                                   'at 2 event minecraft:step 3.5 -60 0.5 player'])
+    # Catalysts: a mob killed by the player nearby charges the catalyst, which blooms and spreads sculk.
+    region = f'region -9 {FLOOR - 3} -9 9 {FLOOR + 3} 9'
+    # Mobs without loot (items are another harness's work).
+    for name, mob, floor in [('catalyst_silverfish', 'silverfish', 'minecraft:sculk'), ('catalyst_endermite', 'endermite', 'minecraft:stone'),
+                             ('catalyst_axolotl_grass', 'axolotl', None), ('catalyst_blaze', 'blaze', 'minecraft:deepslate')]:
+        lines = [f'block 0 {FLOOR} 0 {CATALYST}', watch, region, 'player 5.5 -60 5.5', f'mob minecraft:{mob} 2.5 -60 0.5 0 7 noai',
+                 'at 3 kill m0']
+        if floor:
+            lines.insert(0, f'fill -6 {FLOOR - 1} -6 6 {FLOOR - 1} 6 {floor}')
+        add(name, 200, lines)
+    add('catalyst_far', 60, [f'block 0 {FLOOR} 0 {CATALYST}', watch, region, 'player 5.5 -60 5.5',
+                             'mob minecraft:silverfish 9.5 -60 0.5 0 7 noai', 'at 3 kill m0'])
+    add('catalyst_two', 200, [f'block 0 {FLOOR} 0 {CATALYST}', watch, f'block 4 {FLOOR} 0 {CATALYST}', f'watch 4 {FLOOR} 0', region,
+                              f'fill -6 {FLOOR - 1} -6 6 {FLOOR - 1} 6 minecraft:sculk', 'player 5.5 -60 5.5',
+                              'mob minecraft:endermite 3.5 -60 0.5 0 7 noai', 'mob minecraft:silverfish -1.5 -60 2.5 0 8 noai',
+                              'at 3 kill m0', 'at 4 kill m1'])
+    add('catalyst_unkilled', 60, [f'block 0 {FLOOR} 0 {CATALYST}', watch, region, 'player 5.5 -60 5.5',
+                                  'mob minecraft:silverfish 2.5 -60 0.5 0 7 noai', 'at 3 kill m0 3'])
     return s
 
 
@@ -167,8 +185,52 @@ def random_scenarios(count, seed):
     return out
 
 
+def catalyst_scenarios(count, seed):
+    """Catalysts over random terrain charged by kills: blooms, cursors, veins, growths."""
+    rng = random.Random(seed * 7919 + 13)
+    out = []
+    ground = ['minecraft:stone', 'minecraft:dirt', 'minecraft:deepslate', 'minecraft:sculk', 'minecraft:grass_block',
+              'minecraft:moss_block', 'minecraft:tuff', 'minecraft:cobblestone', 'minecraft:sand']
+    extras = ['minecraft:stone', 'minecraft:glass', 'minecraft:oak_planks', 'minecraft:water', 'minecraft:sculk_vein[down=true]',
+              'minecraft:sculk', 'minecraft:sculk_catalyst', 'minecraft:white_wool', 'minecraft:oak_slab']
+    # Mobs without loot (item drops are another harness's work).
+    mobs = ['silverfish', 'endermite', 'axolotl', 'silverfish', 'vex']
+    for n in range(count):
+        lines = []
+        for x in range(-7, 8):
+            for z in range(-7, 8):
+                if rng.random() < 0.7:
+                    lines.append(f'block {x} {FLOOR - 1} {z} {rng.choice(ground)}')
+        cells = {}
+        for _ in range(rng.randrange(0, 14)):
+            x, y, z = rng.randrange(-6, 7), FLOOR + rng.randrange(0, 2), rng.randrange(-6, 7)
+            cells[(x, y, z)] = rng.choice(extras)
+        for (x, y, z), state in sorted(cells.items(), key=lambda c: c[0][1]):
+            if y > FLOOR and (x, FLOOR, z) not in cells:
+                lines.append(f'block {x} {FLOOR} {z} minecraft:stone')
+            lines.append(f'block {x} {y} {z} {state}')
+        catalysts = []
+        for _ in range(rng.choice([1, 1, 1, 2, 3])):
+            x, z = rng.randrange(-4, 5), rng.randrange(-4, 5)
+            catalysts.append((x, z))
+            lines.append(f'block {x} {FLOOR} {z} {CATALYST}')
+            lines.append(f'watch {x} {FLOOR} {z}')
+        lines.append(f'region -9 {FLOOR - 3} -9 9 {FLOOR + 3} 9')
+        lines.append(f'player {rng.randrange(-8, 9) + 0.5} {FLOOR + 4} {rng.randrange(-8, 9) + 0.5}')
+        ticks = rng.choice([120, 200, 300])
+        kills = rng.randrange(1, 12)
+        for i in range(kills):
+            cx, cz = rng.choice(catalysts)
+            x, z = cx + rng.randrange(-6, 7) + 0.5, cz + rng.randrange(-6, 7) + 0.5
+            lines.append(f'mob minecraft:{rng.choice(mobs)} {x} {FLOOR + 2} {z} 0 {rng.randrange(1000)} noai')
+            lines.append(f'at {rng.randrange(1, ticks // 2)} kill m{i}')
+        opts = f'levelseed={rng.randrange(1 << 30)}'
+        out.append((f'catalyst_random_{n}', ticks, opts, lines))
+    return out
+
+
 def scenarios(count, seed):
-    return handwritten() + random_scenarios(count, seed)
+    return handwritten() + random_scenarios(count, seed) + catalyst_scenarios(count // 3, seed)
 
 
 def write_scenarios(path, chosen):
@@ -186,6 +248,11 @@ def write_scenarios(path, chosen):
             elif f[0] == 'mob':
                 f[2] = repr(float(f[2]) + ox)
                 f[4] = repr(float(f[4]) + oz)
+            elif f[0] == 'region':
+                for k in (1, 4):
+                    f[k] = str(int(f[k]) + ox)
+                for k in (3, 6):
+                    f[k] = str(int(f[k]) + oz)
             elif f[0] in ('block', 'watch'):
                 f[1] = str(int(f[1]) + ox)
                 f[3] = str(int(f[3]) + oz)

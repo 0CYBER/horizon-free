@@ -442,11 +442,24 @@ impl Game<'_> {
     /// The entity phase of `tick_creatures`: every mob's tick, deaths, and the
     /// projectiles and effects that follow from them.
     pub(super) fn tick_creature_entities(&mut self) -> Result<()> {
+        // LivingEntity.die runs when the killing blow lands: mobs killed
+        // since the last tick (by the player, explosions...) die first.
+        let killed: Vec<Mob> = self
+            .mobs
+            .iter()
+            .filter(|m| !m.alive() && !m.removed && !self.died.contains(&m.id))
+            .cloned()
+            .collect();
+        for m in killed {
+            self.died.insert(m.id);
+            self.mob_died(&m);
+        }
         let uuid = self.level.player_uuid;
         let snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
         let mut events = Vec::new();
         let mut mobs = std::mem::take(&mut self.mobs);
         let mut dead = Vec::new();
+        let mut died = std::mem::take(&mut self.died);
         {
             let w = self.mob_world_base(&snapshot);
             let mut scratch = self.world.random.clone();
@@ -458,14 +471,19 @@ impl Game<'_> {
                     return !m.hostile() || m.persistent;
                 }
                 let keep = m.tick(&w, &mut scratch, &mut events);
-                if !keep && !m.alive() && !m.removed {
+                // Killed during its own tick (drowning, burning, falling...).
+                if !m.alive() && !m.removed && died.insert(m.id) {
                     dead.push(m.clone());
+                }
+                if !keep {
+                    died.remove(&m.id);
                 }
                 keep
             });
             push_apart(&mut mobs);
         }
         self.mobs.append(&mut mobs);
+        self.died = died;
         self.sync_riders();
         self.tick_skeleton_traps();
         self.tick_apparition();

@@ -164,6 +164,7 @@ public final class VanillaSculkOracle {
         int warning = -1;
         List<MobSpec> mobs = new ArrayList<>();
         List<int[]> watch = new ArrayList<>();
+        List<int[]> regions = new ArrayList<>();
         List<Action> actions = new ArrayList<>();
     }
 
@@ -209,6 +210,8 @@ public final class VanillaSculkOracle {
                     for (int i = 7; i < f.length; i++) m.flags.add(f[i]);
                     s.mobs.add(m);
                 }
+                case "region" -> s.regions.add(new int[] {Integer.parseInt(f[1]), Integer.parseInt(f[2]), Integer.parseInt(f[3]),
+                    Integer.parseInt(f[4]), Integer.parseInt(f[5]), Integer.parseInt(f[6])});
                 case "watch" -> s.watch.add(new int[] {Integer.parseInt(f[1]), Integer.parseInt(f[2]), Integer.parseInt(f[3])});
                 case "at" -> {
                     Action a = new Action();
@@ -422,7 +425,7 @@ public final class VanillaSculkOracle {
 
         /** Put the flat preset back around the origin: no blocks, block entities, ticks or entities left from the last scenario. */
         void reset(Scenario s, ServerLevel level) throws Exception {
-            for (Entity e : level.getAllEntities()) if (!(e instanceof ServerPlayer)) e.discard();
+            for (Entity e : allEntities(level)) if (!(e instanceof ServerPlayer)) e.discard();
             BlockState bedrock = net.minecraft.world.level.block.Blocks.BEDROCK.defaultBlockState();
             BlockState dirt = net.minecraft.world.level.block.Blocks.DIRT.defaultBlockState();
             BlockState grass = net.minecraft.world.level.block.Blocks.GRASS_BLOCK.defaultBlockState();
@@ -441,6 +444,13 @@ public final class VanillaSculkOracle {
             level.getBlockTicks().clearArea(box);
             level.getFluidTicks().clearArea(box);
             ((java.util.Collection<?>) get(level, "blockEvents")).clear();
+        }
+
+        /** The level's entities, copied (discarding while iterating leaves holes). */
+        static List<Entity> allEntities(ServerLevel level) {
+            List<Entity> all = new ArrayList<>();
+            for (Entity e : level.getAllEntities()) if (e != null) all.add(e);
+            return all;
         }
 
         static BlockState parseState(ServerLevel level, String text) throws Exception {
@@ -528,7 +538,7 @@ public final class VanillaSculkOracle {
             Method managerTick = method(manager.getClass(), "tick");
             managerTick.invoke(manager);
             Set<Entity> known = new HashSet<>();
-            for (Entity e : level.getAllEntities()) known.add(e);
+            for (Entity e : allEntities(level)) known.add(e);
             if (System.getenv("SCULK_TRACE") != null) field(Level.class, "random").set(level, new TracingRandom(0L));
             level.getRandom().setSeed(s.levelSeed);
             Method tickTime = method(ServerLevel.class, "tickTime");
@@ -574,6 +584,18 @@ public final class VanillaSculkOracle {
                         lines.add("blk " + key + " " + line);
                     }
                 }
+                // Regions: every block whose state changed (all of them at tick 0 are left out).
+                for (int[] r : s.regions) {
+                    for (int x = r[0]; x <= r[3]; x++)
+                        for (int y = r[1]; y <= r[4]; y++)
+                            for (int z = r[2]; z <= r[5]; z++) {
+                                BlockPos p = new BlockPos(x, y, z);
+                                String key = "r" + pos(p);
+                                String state = BlockStateParser_serialize(level.getBlockState(p));
+                                String before = last.put(key, state);
+                                if (t > 0 && !state.equals(before)) lines.add("set " + pos(p) + " " + state);
+                            }
+                }
                 WardenSpawnTracker tracker = player.getWardenSpawnTracker();
                 MobEffectInstance dark = player.getEffect(MobEffects.DARKNESS);
                 String now = "warn " + tracker.getWarningLevel() + " "
@@ -583,7 +605,7 @@ public final class VanillaSculkOracle {
                     lines.add(now);
                 }
                 List<Entity> fresh = new ArrayList<>();
-                for (Entity e : level.getAllEntities()) if (!known.contains(e)) fresh.add(e);
+                for (Entity e : allEntities(level)) if (!known.contains(e)) fresh.add(e);
                 fresh.sort(Comparator.comparingInt(Entity::getId));
                 for (Entity e : fresh) {
                     known.add(e);
@@ -595,6 +617,11 @@ public final class VanillaSculkOracle {
                         Map<Object, net.minecraft.world.entity.ai.sensing.Sensor<?>> sensors =
                             (Map<Object, net.minecraft.world.entity.ai.sensing.Sensor<?>>) get(mob.getBrain(), "sensors");
                         for (var sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
+                    }
+                    if (e instanceof net.minecraft.world.entity.ExperienceOrb orb) {
+                        // Where an orb flies comes from its own unseeded random: its value only.
+                        lines.add("new minecraft:experience_orb value=" + orb.getValue());
+                        continue;
                     }
                     lines.add("new " + BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()) + " " + d(e.getX()) + "," + d(e.getY()) + "," + d(e.getZ()));
                 }
@@ -608,7 +635,7 @@ public final class VanillaSculkOracle {
                 for (String line : lines) out.println(t + " " + line);
             }
             for (Mob mob : mobs) mob.discard();
-            for (Entity e : level.getAllEntities()) if (!(e instanceof ServerPlayer)) e.discard();
+            for (Entity e : allEntities(level)) if (!(e instanceof ServerPlayer)) e.discard();
             // Out of the way while the next scenario is built.
             player.snapTo(s.originX + 0.5, 100.0, s.originZ + 0.5, 0.0F, 0.0F);
             player.removeAllEffects();
@@ -625,6 +652,10 @@ public final class VanillaSculkOracle {
                     Entity source = source(w[5], mobs);
                     BlockState state = w.length > 6 ? parseState(level, w[6]) : null;
                     level.gameEvent(event, at, GameEvent.Context.of(source, state));
+                }
+                case "kill" -> {
+                    Mob mob = mobs.get(Integer.parseInt(w[1].substring(1)));
+                    mob.hurtServer(level, level.damageSources().playerAttack(player), Float.parseFloat(w.length > 2 ? w[2] : "1000"));
                 }
                 case "set" -> level.setBlock(new BlockPos(Integer.parseInt(w[1]), Integer.parseInt(w[2]), Integer.parseInt(w[3])), parseState(level, w[4]), 3);
                 default -> throw new IllegalArgumentException(String.join(" ", w));

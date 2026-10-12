@@ -613,6 +613,8 @@ struct Game<'a> {
     raiding: raids::Raiding,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
+    /// Mobs whose death (`LivingEntity.die`) has been handled.
+    died: HashSet<u32>,
     chest_open: HashMap<(i32, i32, i32), (f32, f32)>,
     /// Item being used (eaten): hotbar slot and ticks used.
     using: Option<(usize, u32)>,
@@ -5987,12 +5989,22 @@ impl Game<'_> {
         }
         Ok(false)
     }
-    /// ExperienceOrb.award: split into vanilla orb sizes.
+    /// ExperienceOrb.award: split into vanilla orb sizes. Each orb first
+    /// tries to merge into an existing one (`tryMergeToExisting` draws its
+    /// merge id from the level random; orbs here keep no entity id, so the
+    /// merge itself is not done), then moves off with its own random.
     fn spawn_orbs(&mut self, at: [f64; 3], mut value: u32) {
         while value > 0 {
             let v = ExperienceOrb::split(value);
             value -= v;
-            let r = &mut self.world.random;
+            let _merge_id = self.world.random.next_int_bound(40);
+            // The orb's own random (unseeded in vanilla), with its rotation draw first.
+            self.next_entity += 1;
+            let mut own = horizon_core::random::LegacyRandom::new(
+                i64::from(self.next_entity) ^ self.world.game_time.wrapping_mul(0x5DEE_CE66D),
+            );
+            let r = &mut own;
+            let _yaw = r.next_float();
             let p = Vec3::new(at[0], at[1], at[2]);
             self.orbs.push(ExperienceOrb {
                 position: p,
@@ -8062,6 +8074,7 @@ pub fn run() -> Result<()> {
         raiding: Default::default(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
+        died: HashSet::new(),
         chest_open: HashMap::new(),
         using: None,
         view: Default::default(),

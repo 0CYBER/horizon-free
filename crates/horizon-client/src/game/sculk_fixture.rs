@@ -51,6 +51,7 @@ struct Scenario {
     warning: Option<i32>,
     mobs: Vec<MobSpec>,
     watch: Vec<[i32; 3]>,
+    regions: Vec<[i32; 6]>,
     actions: Vec<(i32, Vec<String>)>,
 }
 
@@ -114,6 +115,10 @@ fn parse(text: &str) -> Vec<Scenario> {
                 f[2].parse().unwrap_or(0),
                 f[3].parse().unwrap_or(0),
             ]),
+            "region" => {
+                let n = |i: usize| f[i].parse::<i32>().unwrap_or(0);
+                s.regions.push([n(1), n(2), n(3), n(4), n(5), n(6)]);
+            }
             "at" => s.actions.push((
                 f[1].parse().unwrap_or(0),
                 f[2..].iter().map(|x| (*x).to_owned()).collect(),
@@ -324,6 +329,7 @@ impl Game<'_> {
         self.sync_tick_chunks();
         self.mobs.clear();
         self.dropped.clear();
+        self.orbs.clear();
         self.level_events.clear();
         self.ui.rules = Default::default();
         for (rule, value) in [
@@ -443,6 +449,17 @@ impl Game<'_> {
                 }
             }
             m.random = LegacyRandom::new(spec.seed);
+            // EntityType.create equips nothing (that is finalizeSpawn's job).
+            for slot in [
+                &mut m.extra.main_hand,
+                &mut m.extra.off_hand,
+                &mut m.extra.head,
+                &mut m.extra.chest,
+                &mut m.extra.legs,
+                &mut m.extra.feet,
+            ] {
+                *slot = None;
+            }
             names.insert(id, format!("m{}", sources.len()));
             sources.push(id);
             self.mobs.push(m);
@@ -453,7 +470,9 @@ impl Game<'_> {
         self.audio.capture = Some(Vec::new());
         let mut known: HashSet<u32> = self.mobs.iter().map(|m| m.id).collect();
         let mut known_items = self.dropped.len();
+        let mut known_orbs = self.orbs.len();
         let mut last: HashMap<[i32; 3], String> = HashMap::new();
+        let mut region_last: HashMap<[i32; 3], String> = HashMap::new();
         let (mut last_player, mut last_rng) = (String::new(), String::new());
         let mut out = String::new();
         for t in 0..=s.ticks {
@@ -467,6 +486,20 @@ impl Game<'_> {
                 if last.get(p) != Some(&line) {
                     last.insert(*p, line.clone());
                     lines.push(format!("blk {},{},{} {line}", p[0], p[1], p[2]));
+                }
+            }
+            // Regions: every block whose state changed.
+            for r in &s.regions {
+                for x in r[0]..=r[3] {
+                    for y in r[1]..=r[4] {
+                        for z in r[2]..=r[5] {
+                            let state = self.fixture_state_text(self.world.block(x, y, z));
+                            let before = region_last.insert([x, y, z], state.clone());
+                            if t > 0 && before.as_ref() != Some(&state) {
+                                lines.push(format!("set {x},{y},{z} {state}"));
+                            }
+                        }
+                    }
                 }
             }
             let tr = self.sculk.tracker;
@@ -527,6 +560,11 @@ impl Game<'_> {
                 ));
             }
             known_items = self.dropped.len();
+            // Where an orb flies comes from its own random: its value only.
+            for orb in &self.orbs[known_orbs.min(self.orbs.len())..] {
+                lines.push(format!("new minecraft:experience_orb value={}", orb.value));
+            }
+            known_orbs = self.orbs.len();
             for line in dispense_fixture::stop_recording() {
                 if let Some(rest) = line.strip_prefix("L ") {
                     lines.push(format!("level {rest}"));
@@ -591,6 +629,26 @@ impl Game<'_> {
                     };
                     let ctx = self.who_context(who, state);
                     self.post_game_event(event, pos, ctx);
+                }
+                "kill" => {
+                    // LivingEntity.hurtServer with a player attack.
+                    let id = sources
+                        .get(words[1][1..].parse::<usize>().unwrap_or(usize::MAX))
+                        .copied()
+                        .ok_or("kill: no such mob")?;
+                    let amount = words
+                        .get(2)
+                        .and_then(|a| a.parse::<f32>().ok())
+                        .unwrap_or(1000.0);
+                    let at = self
+                        .player
+                        .as_ref()
+                        .map(|p| [p.position.x, p.position.y, p.position.z])
+                        .unwrap_or_default();
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        m.damage(amount, horizon_client::mobs::Damage::player(at));
+                    }
+                    self.last_hurt_by_player.insert(id);
                 }
                 "set" => {
                     let n = |i: usize| words[i].parse::<i32>().unwrap_or(0);

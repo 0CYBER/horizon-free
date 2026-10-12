@@ -1226,20 +1226,28 @@ impl Game<'_> {
         at: [f64; 3],
         experience: impl FnOnce(&mut Self) -> u32,
     ) -> bool {
+        // GameEventDispatcher: catalysts are BY_DISTANCE listeners, handled
+        // nearest first (exact distance to the block centre); a tie keeps the
+        // order they were visited in: chunk x, chunk z, section y, then the
+        // order they registered in. The first one takes the experience.
         let source = block_of(at);
-        let mut nearest: Option<((i32, i32, i32), i64)> = None;
-        for key in self.sculk.index.iter().copied() {
-            let d = dist_sqr(source, key);
-            if d <= 64 && nearest.is_none_or(|(_, best)| d < best) {
-                let is_catalyst = matches!(
-                    self.world.block_entities.get(&key),
-                    Some(BlockEntity::Sculk(e)) if e.kind == SculkKind::Catalyst
-                );
-                if is_catalyst {
-                    nearest = Some((key, d));
-                }
+        let mut candidates: Vec<(f64, (i32, i32, i32), usize, (i32, i32, i32))> = Vec::new();
+        for (order, key) in self.sculk.index.iter().copied().enumerate() {
+            if dist_sqr(source, key) > 64 {
+                continue;
+            }
+            let is_catalyst = matches!(
+                self.world.block_entities.get(&key),
+                Some(BlockEntity::Sculk(e)) if e.kind == SculkKind::Catalyst
+            );
+            if is_catalyst {
+                let c = center(key);
+                let d = (at[0] - c[0]).powi(2) + (at[1] - c[1]).powi(2) + (at[2] - c[2]).powi(2);
+                candidates.push((d, (key.0 >> 4, key.2 >> 4, key.1 >> 4), order, key));
             }
         }
+        candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        let nearest = candidates.first().map(|c| (c.3, ()));
         let Some((key, _)) = nearest else {
             return false;
         };
