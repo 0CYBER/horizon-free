@@ -17,6 +17,7 @@ pub mod caravan;
 pub mod control;
 pub mod copper_golem;
 pub mod creaking;
+pub mod creaking_heart;
 pub mod cube;
 pub mod data;
 pub mod drops;
@@ -35,6 +36,7 @@ pub mod keyframes;
 pub mod leash;
 pub mod living;
 pub mod llama;
+pub mod monster_brain;
 pub mod nautilus;
 pub mod nav;
 pub mod nether;
@@ -556,6 +558,8 @@ pub struct Extra {
     /// `Mob.dropChances` by `EquipmentSlot` (`drops::SLOTS` order) when set
     /// explicitly; None uses the defaults of `drops::drop_chance`.
     pub drop_chances: Option<Box<[f32; 8]>>,
+    /// A breeze's or creaking's brain (`monster_brain`).
+    pub brain: Option<Box<monster_brain::Brain>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -637,6 +641,9 @@ pub enum MobEvent {
     },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
+    /// `Level.playLocalSound`: a sound the client plays for itself, never
+    /// sent by a server (a breeze's whirl and idle sounds).
+    LocalSound(&'static str, [f64; 3], f32, f32),
     /// A level event's sound (`levelEvent`/`globalLevelEvent`): the client
     /// plays it with its own random pitch spread (`(a - b) * spread + 1`),
     /// nothing is drawn from the mob.

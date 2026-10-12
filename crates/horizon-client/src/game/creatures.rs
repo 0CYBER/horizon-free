@@ -86,7 +86,7 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
             .full_collision
     }
 }
-fn seen(m: &Mob, player: Option<[i32; 4]>) -> Seen {
+pub(super) fn seen(m: &Mob, player: Option<[i32; 4]>) -> Seen {
     let villager = m.species() == Species::Villager;
     Seen {
         id: m.id,
@@ -453,9 +453,11 @@ impl Game<'_> {
         let mut events = Vec::new();
         let mut mobs = std::mem::take(&mut self.mobs);
         let mut dead = Vec::new();
+        // The level random (`ServerLevel.getRandom`): behaviours' durations and
+        // the like draw from it, and it goes on from where they left it.
+        let mut scratch = self.world.random.clone();
         {
             let w = self.mob_world_base(&snapshot);
-            let mut scratch = self.world.random.clone();
             let mut pushes = Vec::new();
             mobs.retain_mut(|m| {
                 if !w
@@ -477,6 +479,7 @@ impl Game<'_> {
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
             }
         }
+        self.world.random = scratch;
         self.mobs.append(&mut mobs);
         self.sync_riders();
         self.tick_skeleton_traps();
@@ -644,7 +647,8 @@ impl Game<'_> {
     pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
         for e in events {
             match e {
-                MobEvent::Sound(name, at, volume, pitch) => {
+                MobEvent::Sound(name, at, volume, pitch)
+                | MobEvent::LocalSound(name, at, volume, pitch) => {
                     self.audio
                         .play(&format!("minecraft:{name}"), Some(at), volume, pitch)
                 }

@@ -61,6 +61,8 @@ import net.minecraft.world.clock.WorldClocks;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.monster.creaking.Creaking;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.Mob;
@@ -157,8 +159,17 @@ public final class VanillaMobAiOracle {
         List<String[]> blocks = new ArrayList<>();
         double[] player;
         boolean creative;
+        /** The tick from which the player faces turnYaw (head and body), else 0. */
+        int turnTick = Integer.MAX_VALUE;
+        float turnYaw;
         List<MobSpec> mobs = new ArrayList<>();
         long levelSeed = 0;
+        /** Blocks placed when the scenario starts, so their block entities start afresh and tick. */
+        List<String[]> hearts = new ArrayList<>();
+        /** ServerLevel.isSpawningMonsters during the scenario (a heart spawns creakings). */
+        boolean spawning;
+        /** The player hits a mob for 1 at the start of a tick: {tick, mob index}. */
+        List<int[]> hurts = new ArrayList<>();
     }
 
     static void parse(Path path) throws Exception {
@@ -179,15 +190,25 @@ public final class VanillaMobAiOracle {
                             case "rain" -> s.rain = true;
                             case "thunder" -> s.thunder = true;
                             case "levelseed" -> s.levelSeed = Long.parseLong(kv[1]);
+                            case "spawning" -> s.spawning = true;
                             default -> throw new IllegalArgumentException(line);
                         }
                     }
                 }
                 case "origin" -> { s.originX = Integer.parseInt(f[1]); s.originZ = Integer.parseInt(f[2]); }
                 case "fill", "block" -> s.blocks.add(f);
+                case "heart" -> s.hearts.add(f);
+                case "hurt" -> s.hurts.add(new int[] {Integer.parseInt(f[1]), Integer.parseInt(f[2])});
                 case "player" -> {
                     s.player = new double[] {Double.parseDouble(f[1]), Double.parseDouble(f[2]), Double.parseDouble(f[3])};
-                    s.creative = f.length > 4 && f[4].equals("creative");
+                    for (int i = 4; i < f.length; i++) {
+                        if (f[i].equals("creative")) s.creative = true;
+                        else if (f[i].startsWith("turn=")) {
+                            String[] tv = f[i].substring(5).split(",");
+                            s.turnTick = Integer.parseInt(tv[0]);
+                            s.turnYaw = Float.parseFloat(tv[1]);
+                        } else throw new IllegalArgumentException(line);
+                    }
                 }
                 case "mob" -> {
                     MobSpec m = new MobSpec();
@@ -441,6 +462,11 @@ public final class VanillaMobAiOracle {
                 }
                 player.setGameMode(s.creative ? GameType.CREATIVE : GameType.SURVIVAL);
                 player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
+                // snapTo leaves the head and body as the player was created
+                // (a random head yaw): face +z like the probe's player.
+                player.setYHeadRot(0.0F);
+                player.yHeadRotO = 0.0F;
+                player.setYBodyRot(0.0F);
                 // The player is never ticked during a scenario: give it the water state of
                 // where it stands (isInWater), not the previous scenario's.
                 method(Entity.class, "updateFluidInteraction").invoke(player);
@@ -480,6 +506,42 @@ public final class VanillaMobAiOracle {
                 brains.add(brain);
                 seeds.add(spec.seed);
             }
+            // Hearts start with the scenario: their tickers have not run during the warm-up.
+            var blockLookup = level.holderLookup(Registries.BLOCK);
+            List<BlockPos> heartPositions = new ArrayList<>();
+            for (String[] h : s.hearts) {
+                BlockPos at = new BlockPos(Integer.parseInt(h[1]), Integer.parseInt(h[2]), Integer.parseInt(h[3]));
+                level.setBlock(at, BlockStateParser.parseForBlock(blockLookup, h[4], false).blockState(), 2 | 16);
+                heartPositions.add(at);
+            }
+            // Mobs the level creates during the scenario (a heart's creakings) get a seeded
+            // random, delayed sensors and seeded gates as the scenario's own mobs do, the
+            // n-th with seed 1000 + n; they join the list once in the level.
+            List<Mob> created = new ArrayList<>();
+            Field factoryField = field(EntityType.class, "factory");
+            Object creakingFactory = factoryField.get(EntityTypes.CREAKING);
+            final List<Mob> mobsView = mobs;
+            factoryField.set(EntityTypes.CREAKING, (EntityType.EntityFactory<Creaking>) (type, lvl) -> {
+                Creaking c = new Creaking(type, lvl);
+                try {
+                    long seed = 1000 + created.size();
+                    if (tracing(s)) field(Entity.class, "random").set(c, new TracingRandom(0L, TRACE, mobsView.size() + created.size()));
+                    c.getRandom().setSeed(seed);
+                    @SuppressWarnings("unchecked")
+                    Map<Object, Sensor<?>> cs = (Map<Object, Sensor<?>>) get(c.getBrain(), "sensors");
+                    for (Sensor<?> sensor : cs.values()) sensor.randomlyDelayStart(c.getRandom());
+                    seedGates(c.getBrain(), seed);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+                created.add(c);
+                return c;
+            });
+            boolean spawnMobs = this.getGameRules().get(GameRules.SPAWN_MOBS);
+            boolean spawnMonsters = this.getGameRules().get(GameRules.SPAWN_MONSTERS);
+            this.getGameRules().set(GameRules.SPAWN_MOBS, s.spawning, this);
+            this.getGameRules().set(GameRules.SPAWN_MONSTERS, s.spawning, this);
+            int adopted = 0;
             level.getRandom().setSeed(s.levelSeed);
             SOUNDS.clear();
             Method tickTime = method(ServerLevel.class, "tickTime");
@@ -498,6 +560,12 @@ public final class VanillaMobAiOracle {
                     player.hurtTime = 0;
                     player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
                     player.setDeltaMovement(Vec3.ZERO);
+                    if (t >= s.turnTick) {
+                        // The view vector follows the head (LivingEntity.getViewYRot).
+                        player.setYRot(s.turnYaw);
+                        player.setYHeadRot(s.turnYaw);
+                        player.setYBodyRot(s.turnYaw);
+                    }
                 }
                 TracingRandom.tick = t;
                 TracingRandom.on = tracing(s) && t >= traceFrom() && t <= traceTo();
@@ -509,21 +577,55 @@ public final class VanillaMobAiOracle {
                         seedGates(brains.get(i), seeds.get(i));
                     }
                 }
+                for (int[] hurt : s.hurts) {
+                    if (hurt[0] == t && hurt[1] < mobs.size() && !mobs.get(hurt[1]).isRemoved())
+                        mobs.get(hurt[1]).hurtServer(level, level.damageSources().playerAttack(player), 1.0F);
+                }
                 for (Mob mob : mobs) {
                     if (mob.isRemoved()) continue;
                     mob.checkDespawn();
                     if (mob.isRemoved()) continue;
                     level.tickNonPassenger(mob);
                 }
+                if (!heartPositions.isEmpty()) level.tickBlockEntities();
                 managerTick.invoke(manager);
+                // Created mobs that made it into the level, in creation order.
+                for (; adopted < created.size(); adopted++) {
+                    Mob c = created.get(adopted);
+                    if (!c.isRemoved()) {
+                        mobs.add(c);
+                        brains.add(c.getBrain());
+                        seeds.add(1000L + adopted);
+                    }
+                }
                 for (int i = 0; i < mobs.size(); i++) print(t, i, mobs.get(i));
+                for (BlockPos h : heartPositions) printHeart(t, level, h);
                 for (String sound : SOUNDS) out.println(t + " sound " + sound);
                 for (String line : TRACE) out.println(line);
                 TRACE.clear();
             }
             for (Mob mob : mobs) mob.discard();
+            for (BlockPos h : heartPositions) level.setBlock(h, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 2 | 16);
+            factoryField.set(EntityTypes.CREAKING, creakingFactory);
+            this.getGameRules().set(GameRules.SPAWN_MOBS, spawnMobs, this);
+            this.getGameRules().set(GameRules.SPAWN_MONSTERS, spawnMonsters, this);
             managerTick.invoke(manager);
             out.flush();
+        }
+
+        /** A heart's block state and block entity, and the level random. */
+        static void printHeart(int t, ServerLevel level, BlockPos at) throws Exception {
+            StringBuilder sb = new StringBuilder();
+            sb.append(t).append(" heart ").append(pos(at)).append('\t')
+                .append(level.getBlockState(at).getValue(net.minecraft.world.level.block.CreakingHeartBlock.STATE).getSerializedName());
+            if (level.getBlockEntity(at) instanceof net.minecraft.world.level.block.entity.CreakingHeartBlockEntity be) {
+                sb.append('\t').append(get(be, "ticker")).append(' ').append(get(be, "emitter")).append(' ').append(get(be, "outputSignal"))
+                    .append(' ').append(get(be, "ticksExisted"));
+                Object info = get(be, "creakingInfo");
+                sb.append(' ').append(info == null ? "none" : "linked");
+            }
+            sb.append("\tlrng ").append(Long.toHexString(((java.util.concurrent.atomic.AtomicLong) field(net.minecraft.world.level.levelgen.LegacyRandomSource.class, "seed").get(level.getRandom())).get()));
+            out.println(sb);
         }
 
         /**

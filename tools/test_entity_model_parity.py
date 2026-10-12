@@ -54,6 +54,10 @@ EXTRAS = [
     ('minecraft:skeleton_horse_baby#main', 'BabyHorseModel'), ('minecraft:zombie_horse_baby#main', 'BabyHorseModel'),
     ('minecraft:cave_spider#main', 'SpiderModel'),
     ('minecraft:stray#main', 'SkeletonModel'),
+    # BreezeWindLayer and BreezeEyesLayer bake their own layers into a BreezeModel;
+    # the creaking's emissive eyes layer is a CreakingModel.
+    ('minecraft:breeze#wind', 'BreezeModel'), ('minecraft:breeze#eyes', 'BreezeModel'),
+    ('minecraft:creaking#eyes', 'CreakingModel'),
 ]
 # Layers a renderer reuses for another entity under a different constant.
 SKIP_LAYERS = re.compile(r'(banner|bell|book|skull|head|chest|shulker_box|boat|cushion|conduit|leash|arrow|trident|'
@@ -156,6 +160,8 @@ SPECIES = {
     'skeleton': SKELETON, 'stray': SKELETON, 'wither_skeleton': SKELETON, 'bogged': SKELETON,
     'piglin': PIGLIN, 'piglin_brute': PIGLIN,
     'cat': FELINE, 'ocelot': FELINE,
+    'breeze': [{'idle': 3}, {'shoot': 2}, {'slide': 4}, {'slideBack': 1}, {'inhale': 5}, {'longJump': 2},
+               {'idle': 1, 'shoot': 6}, {'idle': 9, 'slideBack': 7, 'longJump': 3}, {'idle': 2, 'inhale': 0, 'slide': 8}],
     'creaking': [{'canMove': F}, {'attackAnimationState': 2}, {'invulnerabilityAnimationState': 3}, {'deathAnimationState': 1}],
     'evoker': ILLAGER, 'pillager': ILLAGER, 'vindicator': ILLAGER, 'illusioner': ILLAGER,
     'sheep': [{'eatTick': t} for t in (2, 10, 36, 39)],

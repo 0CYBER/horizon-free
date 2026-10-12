@@ -9,8 +9,13 @@ use horizon_client::{
     blocks::BlockFacts,
     chunk::{Chunk, HEIGHT, MIN_Y},
     collisions,
+    containers::{BlockEntity, CreakingHeart},
     items::Items,
     light::{LightTables, light_chunk},
+    mobs::{
+        Damage, MobType, creaking,
+        creaking_heart::{self, HeartEvent, HeartHost},
+    },
     mobs::{
         Mob, MobData, MobEvent, MobTypes, MobWorld, PlayerView, Seen, Species, Who,
         control::Operation, spawning::LocalDifficulty,
@@ -43,6 +48,14 @@ struct Scenario {
     blocks: Vec<Vec<String>>,
     player: Option<[f64; 3]>,
     creative: bool,
+    /// The tick from which the player faces another yaw.
+    turn: Option<(i32, f32)>,
+    /// Creaking hearts placed when the scenario starts.
+    hearts: Vec<Vec<String>>,
+    /// `ServerLevel.isSpawningMonsters`.
+    spawning: bool,
+    /// The player hits a mob for 1 at the start of a tick: (tick, mob index).
+    hurts: Vec<(i32, usize)>,
     mobs: Vec<MobSpec>,
 }
 
@@ -67,19 +80,31 @@ fn parse(text: &str) -> Vec<Scenario> {
                         "rain" => s.rain = true,
                         "thunder" => s.thunder = true,
                         "levelseed" => {}
+                        "spawning" => s.spawning = true,
                         _ => panic!("unknown scenario option {kv}"),
                     }
                 }
             }
             "origin" => s.origin = [f[1].parse().unwrap(), f[2].parse().unwrap()],
             "fill" | "block" => s.blocks.push(f.iter().map(|x| (*x).to_owned()).collect()),
+            "heart" => s.hearts.push(f.iter().map(|x| (*x).to_owned()).collect()),
+            "hurt" => s.hurts.push((f[1].parse().unwrap(), f[2].parse().unwrap())),
             "player" => {
                 s.player = Some([
                     f[1].parse().unwrap(),
                     f[2].parse().unwrap(),
                     f[3].parse().unwrap(),
                 ]);
-                s.creative = f.get(4) == Some(&"creative");
+                for opt in &f[4..] {
+                    if *opt == "creative" {
+                        s.creative = true;
+                    } else if let Some(t) = opt.strip_prefix("turn=") {
+                        let (tick, yaw) = t.split_once(',').unwrap();
+                        s.turn = Some((tick.parse().unwrap(), yaw.parse().unwrap()));
+                    } else {
+                        panic!("unknown player option {opt}");
+                    }
+                }
             }
             "mob" => s.mobs.push(MobSpec {
                 kind: f[1].to_owned(),
@@ -240,6 +265,91 @@ fn seen(m: &Mob) -> Seen {
     }
 }
 
+/// The probe's mobs as a creaking heart sees them: creakings it creates take
+/// the n-th seed from 1000, as the oracle's do.
+struct Host<'a> {
+    mobs: &'a mut Vec<Mob>,
+    added: Vec<Mob>,
+    types: &'a MobTypes,
+    created: &'a mut i64,
+    spawning: bool,
+}
+impl HeartHost for Host<'_> {
+    fn mob(&self, id: u32) -> Option<&Mob> {
+        self.mobs
+            .iter()
+            .chain(self.added.iter())
+            .find(|m| m.id == id)
+    }
+    fn mob_mut(&mut self, id: u32) -> Option<&mut Mob> {
+        self.mobs
+            .iter_mut()
+            .chain(self.added.iter_mut())
+            .find(|m| m.id == id)
+    }
+    fn mob_for_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
+        self.mob(uuid[3] as u32)
+            .filter(|m| !m.removed)
+            .map(|m| m.id)
+    }
+    fn uuid_for(&mut self, id: u32) -> [i32; 4] {
+        [0, 0, 0, id as i32]
+    }
+    fn creaking_type(&self) -> Option<Arc<MobType>> {
+        self.types
+            .types
+            .get("minecraft:creaking")
+            .map(|t| Arc::new(t.clone()))
+    }
+    fn create_mob(&mut self, kind: Arc<MobType>, at: Vec3) -> Mob {
+        let seed = 1000 + *self.created;
+        *self.created += 1;
+        let mut m = Mob::new(200_000 + seed as u32, kind, at, 0.0);
+        m.random = LegacyRandom::new(seed);
+        horizon_client::mobs::monster_brain::init(&mut m, seed);
+        m
+    }
+    fn add_mob(&mut self, m: Mob) {
+        self.added.push(m);
+    }
+    fn spawning_monsters(&self) -> bool {
+        self.spawning
+    }
+}
+/// The heart's state, block entity and the level random, as the oracle
+/// prints them.
+fn print_heart(
+    out: &mut String,
+    t: i32,
+    registry: &BlockRegistry,
+    world: &World,
+    at: [i32; 3],
+    heart: &CreakingHeart,
+    lr: &LegacyRandom,
+) {
+    let state = registry
+        .state(world.block(at[0], at[1], at[2]))
+        .and_then(|s| s.properties.get("creaking_heart_state").cloned())
+        .unwrap_or_default();
+    let _ = writeln!(
+        out,
+        "{t} heart {},{},{}\t{state}\t{} {} {} {} {}\tlrng {:x}",
+        at[0],
+        at[1],
+        at[2],
+        heart.ticker,
+        heart.emitter,
+        heart.output_signal,
+        heart.ticks_existed,
+        if heart.creaking.is_some() {
+            "linked"
+        } else {
+            "none"
+        },
+        lr.state()
+    );
+}
+
 /// Whether an event hurts the scenario's player (survival, normal difficulty,
 /// no armour, made hurtable again every tick by the oracle).
 fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
@@ -355,7 +465,9 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
         u8::from(m.ai.jumping)
     );
     let _ = write!(out, "\trng {:x}", m.random.state());
-    if let Some((acts, mem)) = horizon_client::mobs::villager_brain::describe(m) {
+    if let Some((acts, mem)) = horizon_client::mobs::villager_brain::describe(m)
+        .or_else(|| horizon_client::mobs::monster_brain::describe(m))
+    {
         let _ = write!(out, "\tact {acts}\tmem {mem}");
     }
     out.push('\n');
@@ -425,6 +537,17 @@ fn main() -> horizon_client::Result<()> {
                 }
             }
         }
+        let mut hearts: Vec<([i32; 3], CreakingHeart)> = Vec::new();
+        for h in &s.hearts {
+            let at = [
+                h[1].parse::<i32>().unwrap(),
+                h[2].parse::<i32>().unwrap(),
+                h[3].parse::<i32>().unwrap(),
+            ];
+            world.set(at[0], at[1], at[2], state(registry, &h[4]))?;
+            hearts.push((at, CreakingHeart::default()));
+        }
+        let mut created = 0_i64;
         let keys: Vec<(i32, i32)> = world.chunks.keys().copied().collect();
         let lit: Vec<((i32, i32), Chunk)> = keys
             .iter()
@@ -471,6 +594,11 @@ fn main() -> horizon_client::Result<()> {
                 }
             }
             m.random = LegacyRandom::new(spec.seed);
+            if horizon_client::mobs::monster_brain::has_brain(m.species()) {
+                // The oracle delays the sensors again with the seeded random
+                // and seeds RunOne's shuffles with the mob's seed.
+                horizon_client::mobs::monster_brain::init(&mut m, spec.seed);
+            }
             if m.species() == Species::Villager {
                 // The oracle seeds the random after the brain is built, then
                 // delays the sensors again and seeds the gates' shuffles.
@@ -483,7 +611,7 @@ fn main() -> horizon_client::Result<()> {
             }
             mobs.push(m);
         }
-        let player = s.player.map(|p| {
+        let mut player = s.player.map(|p| {
             let position = Vec3::new(p[0], p[1], p[2]);
             PlayerView {
                 position,
@@ -517,6 +645,26 @@ fn main() -> horizon_client::Result<()> {
         }
         for t in 1..=s.ticks {
             world.game_time += 1;
+            let mut heart_events_later: Vec<HeartEvent> = Vec::new();
+            // Creaking.tick reads the heart's block entity.
+            for (at, h) in &hearts {
+                world.block_entities.insert(
+                    (at[0], at[1], at[2]),
+                    BlockEntity::CreakingHeart(Box::new(h.clone())),
+                );
+            }
+            if let (Some(p), Some((tick, yaw))) = (player.as_mut(), s.turn)
+                && t >= tick
+            {
+                // Entity.calculateViewVector(0, yaw).
+                let r = -yaw * horizon_core::geometry::trig::DEG_TO_RAD;
+                let (cos, sin) = (
+                    horizon_core::geometry::trig::cos(f64::from(r)),
+                    horizon_core::geometry::trig::sin(f64::from(r)),
+                );
+                p.look = [f64::from(sin), -0.0, f64::from(cos)];
+                p.yaw = yaw;
+            }
             let snapshot: Vec<Seen> = mobs.iter().filter(|m| !m.removed).map(seen).collect();
             let w = MobWorld {
                 teams: Default::default(),
@@ -543,6 +691,51 @@ fn main() -> horizon_client::Result<()> {
                 sea_level: -63,
             };
             let mut events = Vec::new();
+            let mut heart_events = Vec::new();
+            let mut added = Vec::new();
+            for &(tick, i) in &s.hurts {
+                if tick != t || i >= mobs.len() || mobs[i].removed {
+                    continue;
+                }
+                let at = player
+                    .as_ref()
+                    .map_or([0.0; 3], |p| [p.position.x, p.position.y, p.position.z]);
+                mobs[i].damage(1.0, Damage::player(at));
+                // Creaking.hurtServer: the heart's reaction, then the sway.
+                if let Some((home, by_player)) = creaking::take_hurt(&mut mobs[i], &w) {
+                    if by_player && let Some((_, h)) = hearts.iter_mut().find(|(at, _)| *at == home)
+                    {
+                        let mut host = Host {
+                            mobs: &mut mobs,
+                            added: Vec::new(),
+                            types: &types,
+                            created: &mut created,
+                            spawning: s.spawning,
+                        };
+                        creaking_heart::creaking_hurt(
+                            h,
+                            home,
+                            &w,
+                            &mut scratch,
+                            &mut host,
+                            &mut heart_events,
+                        );
+                        added.append(&mut host.added);
+                    }
+                    for e in heart_events.drain(..) {
+                        match e {
+                            HeartEvent::Sound(name, _, volume, pitch) => {
+                                events.push(MobEvent::Sound(name, [0.0; 3], volume, pitch))
+                            }
+                            HeartEvent::SetBlock(..) => heart_events_later.push(e),
+                            HeartEvent::Mob(ev) => events.push(ev),
+                            _ => {}
+                        }
+                    }
+                    creaking::sway(&mut mobs[i], &mut events);
+                }
+                events.append(&mut mobs[i].outbox);
+            }
             #[allow(unused_mut)] // filled only with the rng-trace feature
             let mut traces: Vec<String> = Vec::new();
             let mut pushes = Vec::new();
@@ -571,6 +764,38 @@ fn main() -> horizon_client::Result<()> {
             for m in &mut mobs {
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
             }
+            // ServerLevel.tickBlockEntities: the hearts (none ticks once uprooted).
+            heart_events.append(&mut heart_events_later);
+            for (at, h) in &mut hearts {
+                let uprooted = registry
+                    .state(w.world.block(at[0], at[1], at[2]))
+                    .and_then(|s| s.properties.get("creaking_heart_state").cloned())
+                    .is_some_and(|v| v == "uprooted");
+                if uprooted {
+                    continue;
+                }
+                let mut host = Host {
+                    mobs: &mut mobs,
+                    added: Vec::new(),
+                    types: &types,
+                    created: &mut created,
+                    spawning: s.spawning,
+                };
+                creaking_heart::server_tick(h, *at, &w, &mut scratch, &mut host, &mut heart_events);
+                added.append(&mut host.added);
+            }
+            drop(w);
+            mobs.append(&mut added);
+            for e in &heart_events {
+                match e {
+                    HeartEvent::SetBlock(at, st) => world.set(at[0], at[1], at[2], *st)?,
+                    HeartEvent::Sound(name, _, volume, pitch) => {
+                        events.push(MobEvent::Sound(name, [0.0; 3], *volume, *pitch))
+                    }
+                    HeartEvent::Mob(ev) => events.push(ev.clone()),
+                    _ => {}
+                }
+            }
             for (i, m) in mobs.iter().enumerate() {
                 print(&mut out, t, i, m);
             }
@@ -592,6 +817,9 @@ fn main() -> horizon_client::Result<()> {
                         "{t} sound minecraft:entity.player.hurt 3f800000 3f800000"
                     );
                 }
+            }
+            for (at, h) in &hearts {
+                print_heart(&mut out, t, registry, &world, *at, h, &scratch);
             }
             for line in traces {
                 let _ = writeln!(out, "{line}");

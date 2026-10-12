@@ -213,6 +213,9 @@ fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.species() == Species::Wither && m.alive() {
         super::wither::steer(m);
     }
+    if m.species() == Species::Breeze {
+        super::breeze::tick(m, events);
+    }
     match family(m.species()) {
         Family::Hostile => {
             if m.species() == Species::Creeper {
@@ -355,8 +358,9 @@ pub fn tick(
     if !m.no_ai {
         ai_step(m, w, level_random, events);
     }
-    // Mob.tickHeadTurn -> BodyRotationControl.clientTick
-    if m.alive() {
+    // Mob.tickHeadTurn -> BodyRotationControl.clientTick (a frozen
+    // creaking's waits).
+    if m.alive() && !(super::creaking::is_creaking(m) && !super::creaking::can_move(m)) {
         m.body_rotation_tick();
     }
     events.append(&mut m.outbox);
@@ -528,11 +532,14 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             Some(s) => s,
             None => return,
         },
-        // Breeze.playAmbientSound.
-        Species::Breeze => match super::breeze::ambient(m) {
-            Some(s) => s,
-            None => return,
-        },
+        // Breeze.playAmbientSound: a local sound, nothing drawn.
+        Species::Breeze => {
+            if let Some(s) = super::breeze::ambient(m) {
+                let at = [m.position.x, m.position.y, m.position.z];
+                events.push(MobEvent::LocalSound(s, at, 1.0, 1.0));
+            }
+            return;
+        }
         // Creaking.getAmbientSound: silent while awake.
         Species::Creaking if m.extra.flag => return,
         // Shulker.playAmbientSound: silent while closed.
@@ -730,10 +737,6 @@ fn server_ai_step(
     events: &mut Vec<MobEvent>,
 ) {
     m.ai.no_action_time += 1;
-    // A creaking looked at stands still.
-    if super::creaking::is_creaking(m) && !super::creaking::can_move(m) {
-        return;
-    }
     // A saddled mount follows its rider instead of its goals.
     if super::equine::controlled(m) {
         super::equine::ridden_step(m);
@@ -756,7 +759,16 @@ fn server_ai_step(
     }
     m.ai.targets = targets;
     m.ai.goals = goals;
-    m.nav_tick(w);
+    // A creaking looked at stands still: its navigation, move, look and jump
+    // controls wait (CreakingPathNavigation and the Creaking*Control).
+    let frozen = super::creaking::is_creaking(m) && !super::creaking::can_move(m);
+    if !frozen {
+        m.nav_tick(w);
+    }
+    if super::monster_brain::has_brain(m.species()) {
+        // Breeze/Creaking.customServerAiStep: the brain, then updateActivity.
+        super::monster_brain::tick(m, w, level_random, events);
+    }
     if m.species() == Species::Villager {
         // Villager.customServerAiStep: the brain, then the raid sound roll.
         super::villager_brain::tick(m, w, level_random, events);
@@ -765,6 +777,10 @@ fn server_ai_step(
     {
         let mut cx = Cx { w, events };
         custom_server_ai_step(m, &mut cx);
+    }
+    if frozen {
+        m.ai.jumping = false;
+        return;
     }
     m.move_control_tick(w, events);
     m.look_control_tick();
@@ -815,7 +831,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Ravager => super::ravager::ai_step(m, w, events),
         Species::Wither => super::wither::ai_step(m, w, events),
         Species::Allay => super::allay::ai_step(m),
-        Species::Breeze => super::breeze::ai_step(m, events),
+        Species::Breeze => super::breeze::ai_step(m),
         Species::Sniffer => super::sniffer::ai_step(m, events),
         Species::HappyGhast => super::happy_ghast::ai_step(m, w),
         Species::Villager => super::villager::ai_step(m, w),
@@ -935,8 +951,11 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     if family(m.species()) == Family::Guardian && w.fluid(p[0], p[1], p[2]) == Fluid::Water {
         return 10.0 + light();
     }
-    // AbstractNautilus.getWalkTargetValue: everywhere alike.
-    if matches!(m.species(), Species::Nautilus | Species::ZombieNautilus) {
+    // AbstractNautilus and Creaking.getWalkTargetValue: everywhere alike.
+    if matches!(
+        m.species(),
+        Species::Nautilus | Species::ZombieNautilus | Species::Creaking
+    ) {
         return 0.0;
     }
     if m.hostile()
@@ -1081,6 +1100,10 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
             amount,
             source,
         }),
+    }
+    // Mob.doHurtTarget ends with playAttackSound once the hit landed.
+    if super::creaking::is_creaking(m) {
+        m.voice("entity.creaking.attack", cx.events);
     }
     let _ = Fluid::None;
 }

@@ -249,13 +249,12 @@ impl Mob {
         let x_hit = differs(wanted.x, moved.x);
         let z_hit = differs(wanted.z, moved.z);
         self.horizontal_collision = x_hit || z_hit;
+        // A server's mobs are authoritative (`isLocalInstanceAuthoritative`):
+        // the vertical flags update even without vertical movement.
         let moved_vertically = wanted.y.abs() > 0.0;
-        let mut vertical = false;
-        if moved_vertically {
-            vertical = wanted.y != moved.y;
-            self.vertical_collision_below = vertical && wanted.y < 0.0;
-            self.on_ground = self.vertical_collision_below;
-        }
+        let vertical = wanted.y != moved.y;
+        self.vertical_collision_below = vertical && wanted.y < 0.0;
+        self.on_ground = self.vertical_collision_below;
         // LivingEntity.checkFallDamage refreshes the fluid state out of water
         // (touching water resets the fall).
         if !self.fluids.in_water {
@@ -359,6 +358,11 @@ impl Mob {
         ]
     }
     fn cause_fall_damage(&mut self, events: &mut Vec<MobEvent>) {
+        // Breeze.causeFallDamage: a landing from higher than three blocks.
+        if self.species() == super::Species::Breeze && self.fall_distance > 3.0 {
+            let at = [self.position.x, self.position.y, self.position.z];
+            events.push(MobEvent::Sound("entity.breeze.land", at, 1.0, 1.0));
+        }
         if self.kind.flags.fall_immune {
             return;
         }
@@ -391,7 +395,7 @@ impl Mob {
         0.02
     }
     /// Entity.getGravity: none while isNoGravity.
-    fn gravity(&self) -> f64 {
+    pub fn gravity(&self) -> f64 {
         if self.no_gravity {
             0.0
         } else {
