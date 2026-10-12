@@ -135,6 +135,16 @@ pub fn instant(id: &str, amp: i32, scale: f64) -> Option<EffectAction> {
         _ => None,
     }
 }
+/// What an omen's `applyEffectTick` decided.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OmenTick {
+    /// It returned true: the effect counts down as usual.
+    Continue,
+    /// It returned false: the effect goes.
+    Remove,
+    /// It added this effect, then returned false.
+    Add(EffectInstance),
+}
 #[derive(Clone, Debug, Default)]
 pub struct PlayerEffects {
     pub list: Vec<EffectInstance>,
@@ -159,6 +169,71 @@ impl PlayerEffects {
     }
     pub fn clear(&mut self) {
         self.list.clear();
+    }
+    /// `LivingEntity.tickEffects` (server part) with the omens' effect ticks:
+    /// `omen` answers `BadOmenMobEffect` (every tick) and `RaidOmenMobEffect`
+    /// (on its last tick). Returns the actions to apply, in order, and
+    /// whether Raid Omen was newly added.
+    ///
+    /// Bad Omen turning into a new Raid Omen adds an entry to the map being
+    /// iterated: vanilla's iterator then throws a
+    /// `ConcurrentModificationException`, which `tickEffects` swallows. Bad
+    /// Omen stays (not counted down) and the effects after it are not
+    /// ticked; the next tick refreshes Raid Omen and drops Bad Omen.
+    pub fn tick_with(
+        &mut self,
+        omen: &mut dyn FnMut(&EffectInstance) -> OmenTick,
+    ) -> (Vec<EffectAction>, bool) {
+        self.tick_count = self.tick_count.wrapping_add(1);
+        let mut actions = Vec::new();
+        let mut added = false;
+        let mut i = 0;
+        while i < self.list.len() {
+            let e = &self.list[i];
+            if !(e.infinite() || e.duration > 0) {
+                self.list.remove(i);
+                continue;
+            }
+            let t = if e.infinite() {
+                self.tick_count
+            } else {
+                e.duration
+            };
+            if let Some(a) = periodic(e.id, t, e.amplifier) {
+                actions.push(a);
+            }
+            let answer = match e.id {
+                "bad_omen" => omen(e),
+                "raid_omen" if t == 1 => omen(e),
+                _ => OmenTick::Continue,
+            };
+            match answer {
+                OmenTick::Continue => {}
+                OmenTick::Remove => {
+                    self.list.remove(i);
+                    continue;
+                }
+                OmenTick::Add(effect) => {
+                    if let Some(existing) = self.list.iter_mut().find(|x| x.id == effect.id) {
+                        existing.update(&effect);
+                        self.list.remove(i);
+                        continue;
+                    }
+                    self.list.push(effect);
+                    added = true;
+                    break;
+                }
+            }
+            let e = &mut self.list[i];
+            e.tick_down();
+            e.downgrade();
+            if e.infinite() || e.duration > 0 {
+                i += 1;
+            } else {
+                self.list.remove(i);
+            }
+        }
+        (actions, added)
     }
     /// `LivingEntity.tickEffects` (server part): actions to apply, in order.
     pub fn tick(&mut self) -> Vec<EffectAction> {
@@ -324,6 +399,45 @@ impl StatusFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bad_omen_in_a_village_becomes_raid_omen_over_two_ticks() {
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("bad_omen", 100, 1));
+        fx.add(EffectInstance::new("speed", 50, 0));
+        let mut convert = |e: &EffectInstance| match e.id {
+            "bad_omen" => OmenTick::Add(EffectInstance::new("raid_omen", 600, e.amplifier)),
+            _ => OmenTick::Continue,
+        };
+        // The first tick adds Raid Omen and stops there (the iterator's
+        // ConcurrentModificationException): Bad Omen and Speed stay as they were.
+        let (_, added) = fx.tick_with(&mut convert);
+        assert!(added);
+        assert_eq!(fx.get("bad_omen").unwrap().duration, 100);
+        assert_eq!(fx.get("speed").unwrap().duration, 50);
+        assert_eq!(fx.get("raid_omen").unwrap().duration, 600);
+        // The second refreshes Raid Omen and drops Bad Omen.
+        let (_, added) = fx.tick_with(&mut convert);
+        assert!(!added);
+        assert!(fx.get("bad_omen").is_none());
+        assert_eq!(fx.get("speed").unwrap().duration, 49);
+        assert_eq!(fx.get("raid_omen").unwrap().amplifier, 1);
+    }
+    #[test]
+    fn raid_omen_acts_on_its_last_tick() {
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("raid_omen", 2, 0));
+        let mut seen = Vec::new();
+        let mut watch = |e: &EffectInstance| {
+            seen.push(e.duration);
+            OmenTick::Remove
+        };
+        fx.tick_with(&mut watch);
+        assert!(fx.get("raid_omen").is_some());
+        fx.tick_with(&mut watch);
+        assert!(fx.get("raid_omen").is_none());
+        assert_eq!(seen, vec![1]);
+    }
 
     #[test]
     fn update_keeps_stronger_and_hides_longer() {

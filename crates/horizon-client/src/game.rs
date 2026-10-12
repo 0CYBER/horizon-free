@@ -2703,7 +2703,6 @@ impl Game<'_> {
             self.screen = Screen::Dead;
             self.capture(false);
         }
-        self.tick_omens();
         self.tick_effects();
         self.tick_burning();
         self.tick_using();

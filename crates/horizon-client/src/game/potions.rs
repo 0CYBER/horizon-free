@@ -286,7 +286,15 @@ impl Game<'_> {
             // LivingEntity.die → removeAllEffects.
             self.potions.effects.clear();
         }
-        for action in self.potions.effects.tick() {
+        // The omens act from inside the effect tick (BadOmenMobEffect,
+        // RaidOmenMobEffect).
+        let mut effects = std::mem::take(&mut self.potions.effects);
+        let (actions, raid_omen_added) = effects.tick_with(&mut |e| self.omen_tick(e));
+        self.potions.effects = effects;
+        if raid_omen_added {
+            self.raid_omen_added();
+        }
+        for action in actions {
             self.apply_effect_action(action);
         }
         let modifiers = self.potions.effects.modifiers();
