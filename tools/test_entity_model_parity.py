@@ -54,6 +54,9 @@ EXTRAS = [
     ('minecraft:skeleton_horse_baby#main', 'BabyHorseModel'), ('minecraft:zombie_horse_baby#main', 'BabyHorseModel'),
     ('minecraft:cave_spider#main', 'SpiderModel'),
     ('minecraft:stray#main', 'SkeletonModel'),
+    # The warden's emissive layers: its model over each layer's own parts.
+    ('minecraft:warden#tendrils', 'WardenModel'), ('minecraft:warden#heart', 'WardenModel'),
+    ('minecraft:warden#bioluminescent', 'WardenModel'), ('minecraft:warden#pulsating_spots', 'WardenModel'),
 ]
 # Layers a renderer reuses for another entity under a different constant.
 SKIP_LAYERS = re.compile(r'(banner|bell|book|skull|head|chest|shulker_box|boat|cushion|conduit|leash|arrow|trident|'
@@ -189,6 +192,11 @@ SPECIES = {
              {'tongueAnimationState': 3}, {'swimIdleAnimationState': 2, 'isSwimming': T}],
     'rabbit': [{'hopAnimationState': 2}, {'idleHeadTiltAnimationState': 1}],
     'fox': FOX,
+    'warden': [{'tendrilAnimation': 0.7}, {'tendrilAnimation': 1.0, 'heartAnimation': 0.4}, {'heartAnimation': 1.0}]
+              + [{state: start} for state in ('roarAnimationState', 'sniffAnimationState', 'emergeAnimationState',
+                                              'diggingAnimationState', 'attackAnimationState', 'sonicBoomAnimationState')
+                 for start in (50, 20, 100)]
+              + [{'attackAnimationState': 50, 'tendrilAnimation': 0.3, 'roarAnimationState': 40}],
 }
 
 

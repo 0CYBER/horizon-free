@@ -39,15 +39,15 @@ pub const DARKNESS_DURATION: i32 = 260;
 pub const DARKNESS_REAPPLY: i32 = 200;
 
 // AnimState keyframe slots.
-const ROAR: usize = 0;
-const SNIFF: usize = 1;
-const EMERGE: usize = 2;
-const DIGGING: usize = 3;
-const ATTACK: usize = 4;
-const SONIC_BOOM: usize = 5;
+pub const ROAR: usize = 0;
+pub const SNIFF: usize = 1;
+pub const EMERGE: usize = 2;
+pub const DIGGING: usize = 3;
+pub const ATTACK: usize = 4;
+pub const SONIC_BOOM: usize = 5;
 // AnimState values: tendril and heart animation (ticks, 10 at the start).
-const TENDRIL: usize = 0;
-const HEART: usize = 1;
+pub const TENDRIL: usize = 0;
+pub const HEART: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Pose {

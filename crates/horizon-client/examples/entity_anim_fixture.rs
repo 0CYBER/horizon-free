@@ -173,6 +173,23 @@ fn entity_state(mob: &mut Mob, species: Species, case: &Value) {
                 mob.anim.states[i].started = case[k].as_f64().map(|v| v as f32);
             }
         }
+        Species::Warden => {
+            use horizon_client::mobs::warden;
+            mob.anim.v[warden::TENDRIL] = num("tendrilAnimation") * 10.0;
+            mob.anim.vo[warden::TENDRIL] = num("tendrilAnimation") * 10.0;
+            mob.anim.v[warden::HEART] = num("heartAnimation") * 10.0;
+            mob.anim.vo[warden::HEART] = num("heartAnimation") * 10.0;
+            for (i, k) in [
+                (warden::ROAR, "roarAnimationState"),
+                (warden::SNIFF, "sniffAnimationState"),
+                (warden::EMERGE, "emergeAnimationState"),
+                (warden::DIGGING, "diggingAnimationState"),
+                (warden::ATTACK, "attackAnimationState"),
+                (warden::SONIC_BOOM, "sonicBoomAnimationState"),
+            ] {
+                mob.anim.states[i].started = case[k].as_f64().map(|v| v as f32);
+            }
+        }
         Species::Witch if flag("isHoldingItem") => {
             mob.extra.main_hand = Some("minecraft:potion".into());
         }
@@ -222,6 +239,11 @@ fn main() -> horizon_client::Result<()> {
                 || d.model == base
                 || d.model.trim_end_matches("#main") == base.trim_end_matches("#main")
                 || norm(d.model) == base
+                // The warden's emissive layers are its model over other parts.
+                || (["#tendrils", "#heart", "#bioluminescent", "#pulsating_spots"]
+                    .iter()
+                    .any(|s| layer.ends_with(s))
+                    && d.model == format!("{}#main", layer.split('#').next().unwrap_or_default()))
         }) else {
             out.push_str(&format!("{}\n", json!({"skip": "no species"})));
             continue;
