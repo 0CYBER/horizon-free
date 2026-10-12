@@ -1,5 +1,5 @@
 {
- "default": [],
+ "default": ["macmini"],
  "hosts": {
   "macmini": {
    "ssh": "macmini",
@@ -8,7 +8,20 @@
    "setup": "source ~/.cargo/env && export JAVA_HOME=$(/usr/libexec/java_home -v 25) && export PATH=$JAVA_HOME/bin:$PATH",
    "python": "/opt/homebrew/bin/python3.13",
    "rsync": "/opt/homebrew/bin/rsync",
-   "jobs": 14
+   "jobs": 14,
+   "exclude": {
+    "options": "Rust's f64::powf uses the platform libm, which rounds differently on macOS",
+    "chunk_generation": "one ocean ruined portal differs on macOS (platform float math)"
+   }
+  },
+  "thinkpad": {
+   "ssh": "thinkpad",
+   "root": "code/horizon-parity",
+   "shell": "sh -c",
+   "jobs": 2,
+   "nice": 19,
+   "environment": {"PARITY_BUILD_JOBS": "2"},
+   "note": "hosts the Claude account pool: two harnesses at most, at the lowest priority"
   }
  },
  "local_only": {
