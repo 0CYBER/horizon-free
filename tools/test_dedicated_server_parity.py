@@ -313,6 +313,13 @@ def main():
     import difflib
     for line in difflib.unified_diff(vanilla, horizon, 'vanilla', 'horizon', n=0, lineterm=''):
         differences.append(line[:400])
+    # Name the chunks that differ instead of the whole line.
+    chunk_lines = [dict(re.findall(r'(-?\d+,-?\d+)=(\w+)', next((l for l in side if l.startswith('play-chunks')), '')))
+                   for side in (vanilla, horizon)]
+    for key in sorted(set(chunk_lines[0]) | set(chunk_lines[1])):
+        a, b = chunk_lines[0].get(key), chunk_lines[1].get(key)
+        if a != b:
+            differences.append(f'chunk {key}: vanilla {a} horizon {b}')
     if differences or errors:
         raise AssertionError(f'{len([d for d in differences if d[:1] in "+-" and d[:3] not in ("+++", "---")])} differing lines '
                              f'(see {build}/vanilla.txt and horizon.txt):\n' + '\n'.join(differences[:80]))

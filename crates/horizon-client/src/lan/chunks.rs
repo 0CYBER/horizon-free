@@ -356,7 +356,7 @@ fn saved_update_tag(chunk: &Chunk, pos: (i32, i32, i32)) -> Option<Tag> {
     let Tag::Compound(mut c) = crate::block_entity_nbt::canonical(tag)? else {
         return None;
     };
-    for key in ["id", "x", "y", "z", "SpawnPotentials", "components"] {
+    for key in ["id", "x", "y", "z", "keepPacked", "SpawnPotentials", "components"] {
         c.remove(&key.into());
     }
     Some(Tag::Compound(c))
