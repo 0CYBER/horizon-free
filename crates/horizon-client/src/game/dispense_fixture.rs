@@ -38,6 +38,14 @@ pub(super) fn record(line: impl FnOnce() -> String) {
         }
     });
 }
+/// Start recording level and game event lines (another fixture's case).
+pub(super) fn start_recording() {
+    LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
+}
+/// The lines recorded since `start_recording`; recording stops.
+pub(super) fn stop_recording() -> Vec<String> {
+    LOG.with(|log| log.borrow_mut().take()).unwrap_or_default()
+}
 /// `Level.levelEvent` lines for the level events the behaviour library reported.
 pub(super) fn record_events(events: &[horizon_world::level::LevelEvent]) {
     for event in events {

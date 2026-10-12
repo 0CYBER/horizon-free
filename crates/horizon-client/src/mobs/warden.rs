@@ -392,6 +392,19 @@ pub fn register(m: &mut Mob) {
         w.sensor_timer = phase;
     }
 }
+/// `Sensor.randomlyDelayStart` for the warden's sensors, in brain order
+/// (`NEAREST_PLAYERS`, then `WARDEN_ENTITY_SENSOR`, which sets the phase of
+/// the combined scan here).
+pub fn delay_sensors(m: &mut Mob) {
+    if m.species() != Species::Warden {
+        return;
+    }
+    let _players = m.random.next_int_bound(20).unwrap_or(0);
+    let entities = m.random.next_int_bound(20).unwrap_or(0);
+    if let Some(w) = m.extra.warden.as_mut() {
+        w.sensor_timer = entities;
+    }
+}
 /// `Warden.finalizeSpawn`: a minute until it digs back down; a summoned
 /// warden climbs out of the ground first.
 pub fn finalize(m: &mut Mob, triggered: bool, events: &mut Vec<MobEvent>) {

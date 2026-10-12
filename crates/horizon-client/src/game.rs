@@ -72,6 +72,7 @@ mod render_tick;
 mod scoreboard;
 mod screens;
 mod sculk;
+mod sculk_fixture;
 mod shield;
 mod sign_edit;
 mod sniffers;
@@ -1362,7 +1363,10 @@ impl Game<'_> {
             for pos in inside {
                 b.entity_inside(level, ticks, pos);
             }
-            b.tick_scheduled(level, ticks);
+        });
+        self.process_level_events()?;
+        self.tick_scheduled()?;
+        self.with_level(|b, level, ticks| {
             for (x, z, sections) in ticking {
                 b.tick_chunk_random(
                     level,
@@ -1375,6 +1379,28 @@ impl Game<'_> {
             b.tick_block_entities(level, ticks);
         });
         self.process_level_events()
+    }
+    /// `ServerLevel.tick`'s scheduled block then fluid ticks, one at a time:
+    /// the side effects of each (a shrieker summoning a warden, drops, game
+    /// events) happen before the next tick runs, as they do inline in vanilla.
+    pub(super) fn tick_scheduled(&mut self) -> Result<()> {
+        for fluids in [false, true] {
+            if !self.with_level(|b, level, ticks| b.scheduled_begin(level, ticks, fluids)) {
+                continue;
+            }
+            loop {
+                let more =
+                    self.with_level(|b, level, ticks| b.scheduled_step(level, ticks, fluids));
+                if !self.level_events.is_empty() {
+                    self.process_level_events()?;
+                }
+                if !more {
+                    break;
+                }
+            }
+            self.with_level(|b, _, ticks| b.scheduled_finish(ticks, fluids));
+        }
+        Ok(())
     }
     /// Side effects reported by the behaviour library, in vanilla order.
     fn process_level_events(&mut self) -> Result<()> {
@@ -2746,7 +2772,8 @@ impl Game<'_> {
         }
         if running {
             self.tick_block_entities()?;
-            self.tick_sculk()?;
+            self.tick_sculk_entities();
+            self.tick_sculk_blocks()?;
             self.tick_brewing_stands()?;
         }
         if let Some(r) = &self.renderer {
@@ -8157,6 +8184,9 @@ pub fn run() -> Result<()> {
     }
     if let Ok(spec) = std::env::var("HORIZON_DISPENSE_FIXTURE") {
         return game.dispense_fixture(&spec);
+    }
+    if let Ok(spec) = std::env::var("HORIZON_SCULK_FIXTURE") {
+        return game.sculk_fixture(&spec);
     }
     match game.options.world.clone() {
         _ if game.options.server.is_some() => {

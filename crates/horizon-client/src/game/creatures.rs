@@ -437,6 +437,11 @@ impl Game<'_> {
             self.tick_patrol_spawner();
         }
         self.tick_raids();
+        self.tick_creature_entities()
+    }
+    /// The entity phase of `tick_creatures`: every mob's tick, deaths, and the
+    /// projectiles and effects that follow from them.
+    pub(super) fn tick_creature_entities(&mut self) -> Result<()> {
         let uuid = self.level.player_uuid;
         let snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
         let mut events = Vec::new();
@@ -1244,7 +1249,13 @@ impl Game<'_> {
                 .filter(|m| m.alive() && m.species() == Species::Breeze)
                 .map(|m| m.id)
                 .collect();
-            let jitter = self.world.random.next_float();
+            // Drawn only when a breeze could deflect a projectile: an empty
+            // level must not move the level random every tick.
+            let jitter = if breezes.is_empty() || projectiles.is_empty() {
+                0.0
+            } else {
+                self.world.random.next_float()
+            };
             let w = self.mob_world_base(&[]);
             let pw = ProjWorld { w: &w, targets };
             projectiles.retain_mut(|p| {
