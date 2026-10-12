@@ -3,7 +3,8 @@ use horizon_client::{
     brewing, component,
     hud::HudAtlas,
     hud_layout::{self, GuiDraw},
-    hud_overlays::{self, EffectIcon, HeldName, Titles, ToolHighlight},
+    hud_overlays::{self, BossBar, EffectIcon, HeldName, Titles, ToolHighlight},
+    scoreboard::{NumberFormat, RenderType, Scoreboard},
     text::{self, Text},
 };
 use serde_json::Value;
@@ -33,6 +34,9 @@ pub fn run(kind: &str, c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
         "effects" => effects(c, w),
         "title" => title(c, w, h, atlas),
         "selected" => selected(c, w, h, atlas),
+        "boss" => boss(c, w, h, atlas),
+        "jump" => hud_overlays::jump_bar(w, h, int(c, "cooldown", 0), float(c, "jumpScale", 0.0)),
+        "sidebar" => sidebar(c, w, h, atlas),
         _ => Vec::new(),
     }
 }
@@ -114,4 +118,72 @@ fn selected(c: &Value, w: i32, h: i32, atlas: &HudAtlas) -> Vec<GuiDraw> {
     let mode = c["gameMode"].as_str().unwrap_or("survival");
     let can_hurt = mode == "survival" || mode == "adventure";
     highlight.draw(w, h, can_hurt, &atlas.font, background(c))
+}
+
+fn boss(c: &Value, w: i32, h: i32, atlas: &HudAtlas) -> Vec<GuiDraw> {
+    let bars: Vec<BossBar> = c["bars"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|b| BossBar {
+            name: comp(&b["name"]),
+            progress: b["progress"].as_f64().unwrap_or(0.0) as f32,
+            color: b["color"].as_u64().unwrap_or(0) as usize,
+            overlay: b["overlay"].as_u64().unwrap_or(0) as usize,
+        })
+        .collect();
+    hud_overlays::boss_overlay(w, h, &bars, &atlas.font)
+}
+
+/// A `NumberFormat` from the case: null, `{type: blank}`, `{type: fixed,
+/// value}` or `{type: styled, style}`.
+fn number_format(v: &Value) -> Option<NumberFormat> {
+    match v["type"].as_str()? {
+        "blank" => Some(NumberFormat::Blank),
+        "fixed" => Some(NumberFormat::Fixed(v["value"].clone())),
+        "styled" => Some(NumberFormat::Styled(v["style"].clone())),
+        other => panic!("unknown number format {other}"),
+    }
+}
+
+fn sidebar(c: &Value, w: i32, h: i32, atlas: &HudAtlas) -> Vec<GuiDraw> {
+    let mut board = Scoreboard::default();
+    let o = &c["objective"];
+    board.add_objective(
+        "sidebar",
+        "dummy",
+        o["display"].clone(),
+        RenderType::Integer,
+        false,
+        number_format(&o["format"]),
+    );
+    for s in c["scores"].as_array().into_iter().flatten() {
+        let owner = s["owner"].as_str().unwrap_or("");
+        let score = board.score_mut(owner, "sidebar");
+        score.value = s["value"].as_i64().unwrap_or(0) as i32;
+        score.display = (!s["display"].is_null()).then(|| s["display"].clone());
+        score.number_format = number_format(&s["format"]);
+    }
+    for t in c["teams"].as_array().into_iter().flatten() {
+        let name = t["name"].as_str().unwrap_or("");
+        let team = board.add_team(name);
+        team.prefix = t["prefix"].clone();
+        team.suffix = t["suffix"].clone();
+        team.color = t["color"].as_str().map(str::to_owned);
+        for m in t["members"].as_array().into_iter().flatten() {
+            board.add_to_team(m.as_str().unwrap_or(""), name);
+        }
+    }
+    let opacity = c["textOpacity"].as_f64().unwrap_or(0.5);
+    let chat_only = c["chatOnly"].as_bool().unwrap_or(true);
+    let objective = board.objective("sidebar").expect("objective").clone();
+    hud_overlays::sidebar(
+        w,
+        h,
+        &board,
+        &objective,
+        &atlas.font,
+        hud_layout::background_color(chat_only, opacity, 0.3),
+        hud_layout::background_color(chat_only, opacity, 0.4),
+    )
 }

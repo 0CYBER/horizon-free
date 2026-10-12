@@ -435,3 +435,200 @@ impl ToolHighlight {
         out
     }
 }
+
+/// One `LerpingBossEvent` as `BossHealthOverlay` draws it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BossBar {
+    pub name: Text,
+    /// `getProgress()` (the lerped value).
+    pub progress: f32,
+    /// `BossBarColor` ordinal: pink, blue, red, green, yellow, purple, white.
+    pub color: usize,
+    /// `BossBarOverlay` ordinal: progress, notched_6, _10, _12, _20.
+    pub overlay: usize,
+}
+const BOSS_COLORS: [&str; 7] = ["pink", "blue", "red", "green", "yellow", "purple", "white"];
+const BOSS_OVERLAYS: [&str; 5] = [
+    "progress",
+    "notched_6",
+    "notched_10",
+    "notched_12",
+    "notched_20",
+];
+
+/// `BossHealthOverlay.extractRenderState`: the bars in event order, 19 pixels
+/// apart from y = 12 until a third of the screen height.
+pub fn boss_overlay(w: i32, h: i32, bars: &[BossBar], font: &Font) -> Vec<GuiDraw> {
+    let mut out = Vec::new();
+    let mut y_offset = 12;
+    for bar in bars {
+        let x_left = w / 2 - 91;
+        let part = |out: &mut Vec<GuiDraw>, width: i32, kind: &str| {
+            let sprite = |name: String| GuiDraw::Sprite {
+                sprite: Cow::Owned(format!("boss_bar/{name}_{kind}")),
+                x: x_left,
+                y: y_offset,
+                w: width,
+                h: 5,
+                region: Some([182, 5, 0, 0]),
+                color: crate::hud_layout::WHITE,
+            };
+            out.push(sprite(BOSS_COLORS[bar.color].to_owned()));
+            if bar.overlay != 0 {
+                out.push(sprite(BOSS_OVERLAYS[bar.overlay].to_owned()));
+            }
+        };
+        part(&mut out, 182, "background");
+        let progress = crate::hud_layout::lerp_discrete(bar.progress, 0, 182);
+        if progress > 0 {
+            part(&mut out, progress, "progress");
+        }
+        let width = width(font, &bar.name);
+        text(
+            &mut out,
+            bar.name.clone(),
+            w / 2 - width / 2,
+            y_offset - 9,
+            crate::hud_layout::WHITE,
+            true,
+        );
+        y_offset += 10 + 9;
+        if y_offset >= h / 3 {
+            break;
+        }
+    }
+    out
+}
+
+/// `JumpableVehicleBar.extractBackground`: `cooldown` is the mount's jump
+/// cooldown and `scale` the player's `getJumpRidingScale()`.
+pub fn jump_bar(w: i32, h: i32, cooldown: i32, scale: f32) -> Vec<GuiDraw> {
+    let (left, top) = ((w - 182) / 2, h - 24 - 5);
+    let sprite = |name: &'static str, width: i32, region: Option<[i32; 4]>| GuiDraw::Sprite {
+        sprite: Cow::Borrowed(name),
+        x: left,
+        y: top,
+        w: width,
+        h: 5,
+        region,
+        color: crate::hud_layout::WHITE,
+    };
+    let mut out = vec![sprite("hud/jump_bar_background", 182, None)];
+    if cooldown > 0 {
+        out.push(sprite("hud/jump_bar_cooldown", 182, None));
+    } else {
+        let progress = crate::hud_layout::lerp_discrete(scale, 0, 182);
+        if progress > 0 {
+            out.push(sprite(
+                "hud/jump_bar_progress",
+                progress,
+                Some([182, 5, 0, 0]),
+            ));
+        }
+    }
+    out
+}
+
+/// `String.CASE_INSENSITIVE_ORDER` over UTF-16 code units.
+pub fn compare_ignore_case(a: &str, b: &str) -> Ordering {
+    fn single(mut it: impl Iterator<Item = char>, c: char) -> char {
+        match (it.next(), it.next()) {
+            (Some(m), None) => m,
+            _ => c,
+        }
+    }
+    let unit = |u: u16| char::from_u32(u32::from(u));
+    let (x, y): (Vec<u16>, Vec<u16>) = (a.encode_utf16().collect(), b.encode_utf16().collect());
+    for (&p, &q) in x.iter().zip(&y) {
+        if p == q {
+            continue;
+        }
+        let (Some(c1), Some(c2)) = (unit(p), unit(q)) else {
+            return p.cmp(&q);
+        };
+        let (u1, u2) = (single(c1.to_uppercase(), c1), single(c2.to_uppercase(), c2));
+        if u1 != u2 {
+            let (l1, l2) = (single(u1.to_lowercase(), u1), single(u2.to_lowercase(), u2));
+            if l1 != l2 {
+                return (l1 as u32).cmp(&(l2 as u32));
+            }
+        }
+    }
+    x.len().cmp(&y.len())
+}
+
+/// `Hud.displayScoreboardSidebar` for `objective`; `background` and
+/// `header` are `Options.getBackgroundColor(0.3F)` and `(0.4F)`.
+pub fn sidebar(
+    w: i32,
+    h: i32,
+    board: &crate::scoreboard::Scoreboard,
+    objective: &crate::scoreboard::Objective,
+    font: &Font,
+    background: u32,
+    header: u32,
+) -> Vec<GuiDraw> {
+    use crate::scoreboard::NumberFormat;
+    let format = objective.format_or_default(NumberFormat::sidebar_default());
+    let mut entries: Vec<_> = board
+        .list_scores(&objective.name)
+        .into_iter()
+        .filter(|e| !e.is_hidden())
+        .collect();
+    // SCORE_DISPLAY_ORDER: highest value first, then owners case-insensitively.
+    java_sort(&mut entries, |a, b| {
+        b.value
+            .cmp(&a.value)
+            .then_with(|| compare_ignore_case(&a.owner, &b.owner))
+    });
+    entries.truncate(15);
+    let rows: Vec<(Text, Text, i32)> = entries
+        .iter()
+        .map(|e| {
+            let name = match board.players_team(&e.owner) {
+                Some(team) => team.formatted_name(e.owner_name()),
+                None => e.owner_name(),
+            };
+            let score = e.format_value(&format);
+            let score_width = width(font, &score);
+            (name, score, score_width)
+        })
+        .collect();
+    let title = objective.display_text();
+    let title_width = width(font, &title);
+    let spacer = font.width(": ") as i32;
+    let mut biggest = title_width;
+    for (name, _, score_width) in &rows {
+        let extra = if *score_width > 0 {
+            spacer + score_width
+        } else {
+            0
+        };
+        biggest = biggest.max(width(font, name) + extra);
+    }
+    let count = rows.len() as i32;
+    let height = count * 9;
+    let bottom = h / 2 + height / 3;
+    let left = w - biggest - 3;
+    let right = w - 3 + 2;
+    let header_y = bottom - count * 9;
+    let mut out = vec![
+        fill(left - 2, header_y - 9 - 1, right, header_y - 1, header),
+        fill(left - 2, header_y - 1, right, bottom, background),
+    ];
+    let white = crate::hud_layout::WHITE;
+    text(
+        &mut out,
+        title,
+        left + biggest / 2 - title_width / 2,
+        header_y - 9,
+        white,
+        false,
+    );
+    for (i, (name, score, score_width)) in rows.into_iter().enumerate() {
+        let y = bottom - (count - i as i32) * 9;
+        text(&mut out, name, left, y, white, false);
+        text(&mut out, score, right - score_width, y, white, false);
+    }
+    out
+}

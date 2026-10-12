@@ -96,6 +96,17 @@ public final class VanillaHudOracle {
         put(o, OptionInstance.class, "value", value);
         return o;
     }
+    static net.minecraft.network.chat.numbers.NumberFormat numberFormat(JsonElement e) {
+        if (e == null || e.isJsonNull()) return null;
+        var o = e.getAsJsonObject();
+        return switch (o.get("type").getAsString()) {
+            case "blank" -> net.minecraft.network.chat.numbers.BlankFormat.INSTANCE;
+            case "fixed" -> new net.minecraft.network.chat.numbers.FixedFormat(comp(o.get("value")));
+            case "styled" -> new net.minecraft.network.chat.numbers.StyledFormat(
+                net.minecraft.network.chat.Style.Serializer.MAP_CODEC.codec().parse(com.mojang.serialization.JsonOps.INSTANCE, o.get("style")).getOrThrow());
+            default -> throw new IllegalArgumentException(o.toString());
+        };
+    }
     static Method hudMethod(String name, Class<?>... params) throws Exception {
         Method m = Hud.class.getDeclaredMethod(name, params);
         m.setAccessible(true);
@@ -130,6 +141,13 @@ public final class VanillaHudOracle {
         @Override public float getAttackStrengthScale(float a) { return f("attackScale", 1); }
         @Override public Level level() { return level; }
         @Override public boolean isSpectator() { return false; }
+        @Override public net.minecraft.world.entity.PlayerRideableJumping jumpableVehicle() {
+            return (net.minecraft.world.entity.PlayerRideableJumping) Proxy.newProxyInstance(Actor.class.getClassLoader(),
+                new Class<?>[] {net.minecraft.world.entity.PlayerRideableJumping.class},
+                (proxy, method, a) -> method.getName().equals("getJumpCooldown") ? i("cooldown", 0)
+                    : method.getReturnType() == boolean.class ? false : method.getReturnType() == float.class ? 0.0F : null);
+        }
+        @Override public float getJumpRidingScale() { return f("jumpScale", 0); }
         @Override public void playSound(net.minecraft.sounds.SoundEvent sound, float volume, float pitch) { }
     }
 
@@ -284,6 +302,7 @@ public final class VanillaHudOracle {
         Method overlayMessage = hudMethod("extractOverlayMessage", GuiGraphicsExtractor.class, DeltaTracker.class);
         Method selectedName = hudMethod("extractSelectedItemName", GuiGraphicsExtractor.class);
         Method tick = hudMethod("tick");
+        Method sidebar = hudMethod("displayScoreboardSidebar", GuiGraphicsExtractor.class, net.minecraft.world.scores.Objective.class);
         Method level = Class.forName("net.minecraft.client.gui.contextualbar.ContextualBar")
             .getDeclaredMethod("extractExperienceLevel", GuiGraphicsExtractor.class, Font.class, int.class);
         level.setAccessible(true);
@@ -430,6 +449,43 @@ public final class VanillaHudOracle {
                             tick.invoke(hud);
                         }
                         selectedName.invoke(hud, capture);
+                    }
+                    case "boss" -> {
+                        var overlay = new net.minecraft.client.gui.components.BossHealthOverlay(mc);
+                        @SuppressWarnings("unchecked") var events = (Map<UUID, net.minecraft.client.gui.components.LerpingBossEvent>)
+                            field(net.minecraft.client.gui.components.BossHealthOverlay.class, "events").get(overlay);
+                        for (var e : c.getAsJsonArray("bars")) {
+                            var o = e.getAsJsonObject();
+                            var id = UUID.randomUUID();
+                            events.put(id, new net.minecraft.client.gui.components.LerpingBossEvent(id, comp(o.get("name")), o.get("progress").getAsFloat(),
+                                net.minecraft.world.BossEvent.BossBarColor.values()[o.get("color").getAsInt()],
+                                net.minecraft.world.BossEvent.BossBarOverlay.values()[o.get("overlay").getAsInt()], false, false, false));
+                        }
+                        overlay.extractRenderState(capture);
+                    }
+                    case "jump" -> new net.minecraft.client.gui.contextualbar.JumpableVehicleBar(mc).extractBackground(capture, delta);
+                    case "sidebar" -> {
+                        var board = new net.minecraft.world.scores.Scoreboard();
+                        var o = c.getAsJsonObject("objective");
+                        var objective = board.addObjective("sidebar", net.minecraft.world.scores.criteria.ObjectiveCriteria.DUMMY, comp(o.get("display")),
+                            net.minecraft.world.scores.criteria.ObjectiveCriteria.RenderType.INTEGER, false, numberFormat(o.get("format")));
+                        for (var e : c.getAsJsonArray("scores")) {
+                            var sc = e.getAsJsonObject();
+                            var access = board.getOrCreatePlayerScore(net.minecraft.world.scores.ScoreHolder.forNameOnly(sc.get("owner").getAsString()), objective);
+                            access.set(sc.get("value").getAsInt());
+                            if (!sc.get("display").isJsonNull()) access.display(comp(sc.get("display")));
+                            access.numberFormatOverride(numberFormat(sc.get("format")));
+                        }
+                        for (var e : c.getAsJsonArray("teams")) {
+                            var t = e.getAsJsonObject();
+                            var team = board.addPlayerTeam(t.get("name").getAsString());
+                            team.setPlayerPrefix(comp(t.get("prefix")));
+                            team.setPlayerSuffix(comp(t.get("suffix")));
+                            team.setColor(t.get("color").isJsonNull() ? Optional.empty()
+                                : Optional.of(net.minecraft.world.scores.TeamColor.byName(t.get("color").getAsString())));
+                            for (var m : t.getAsJsonArray("members")) board.addPlayerToTeam(m.getAsString(), team);
+                        }
+                        sidebar.invoke(hud, capture, objective);
                     }
                     default -> throw new IllegalArgumentException(c.get("kind").getAsString());
                 }

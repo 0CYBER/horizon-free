@@ -4,9 +4,10 @@ use super::{Dim, Game};
 use horizon_client::mobs::villager as mobs_villager;
 use horizon_client::{
     effects::EffectInstance,
-    hud::{HudBatch, rgba},
+    hud_overlays,
     mobs::{Mob, Species, data, raider},
     raid::{self, Action, BarName, RaidLevel, RaiderInfo, RaiderType, Raids, Spawn},
+    text::Text,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use std::collections::{HashMap, HashSet};
@@ -746,30 +747,11 @@ impl Game<'_> {
         }
     }
 
-    /// The raid boss bars (`BossHealthOverlay`): a red notched bar with the
-    /// raid's title. Returns the next free row.
-    pub(super) fn draw_raid_bar(&self, batch: &mut HudBatch, mut y: f32) -> f32 {
-        let atlas = &self.res.atlas;
+    /// The raid boss bars: red and notched in tens, with the raid's title.
+    pub(super) fn raid_bars(&self, bars: &mut Vec<hud_overlays::BossBar>) {
         for raid in self.raiding.raids.map.values() {
             if !raid.bar.visible || !raid.bar.player || raid.is_stopped() {
                 continue;
-            }
-            let x = (batch.width / 2.0 - 91.0).floor();
-            batch.sprite(atlas, "gui/sprites/boss_bar/red_background", x, y);
-            batch.sprite(atlas, "gui/sprites/boss_bar/notched_10_background", x, y);
-            let p = raid.bar.progress;
-            // Mth.lerpDiscrete(progress, 0, 182).
-            let width = (p * 181.0).floor() as i32 + i32::from(p > 0.0);
-            if width > 0 {
-                let fraction = width as f32 / 182.0;
-                batch.sprite_part(atlas, "gui/sprites/boss_bar/red_progress", x, y, fraction);
-                batch.sprite_part(
-                    atlas,
-                    "gui/sprites/boss_bar/notched_10_progress",
-                    x,
-                    y,
-                    fraction,
-                );
             }
             let title = self.translate("event.minecraft.raid", "Raid");
             let name = match raid.bar.name {
@@ -789,18 +771,13 @@ impl Game<'_> {
                     self.translate("event.minecraft.raid.defeat.full", "Raid - Defeat")
                 }
             };
-            let w = HudBatch::text_width(atlas, &name);
-            batch.text(
-                atlas,
-                &name,
-                (batch.width / 2.0 - w / 2.0).floor(),
-                y - 9.0,
-                rgba(255, 255, 255, 255),
-                true,
-            );
-            y += 19.0;
+            bars.push(hud_overlays::BossBar {
+                name: Text::literal(name),
+                progress: raid.bar.progress,
+                color: 2,
+                overlay: 2,
+            });
         }
-        y
     }
     /// A firework a villager launches to celebrate (`CelebrateVillagersSurvivedRaid`).
     pub(super) fn villager_firework(&mut self, at: [f64; 3], color: usize, flight: u8) {

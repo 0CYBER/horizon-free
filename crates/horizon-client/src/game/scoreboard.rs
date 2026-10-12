@@ -8,9 +8,10 @@ use horizon_client::{
         Context,
         args::{IntRange, Selector},
     },
-    hud::{HudBatch, rgba},
+    hud::HudBatch,
+    hud_layout, hud_overlays,
     save::{self, uuid_from_text, uuid_text},
-    scoreboard::{self as sb, Comp, NumberFormat, Scoreboard, literal},
+    scoreboard::{self as sb, Comp, Scoreboard, literal},
     scoreboard_cmd::{self, Env, Holder},
     text::Text,
 };
@@ -478,84 +479,16 @@ impl Game<'_> {
         else {
             return;
         };
-        let atlas = &self.res.atlas;
-        let default_format = NumberFormat::sidebar_default();
-        let format = objective.format_or_default(default_format);
-        let mut entries: Vec<_> = board
-            .list_scores(&objective.name)
-            .into_iter()
-            .filter(|e| !e.is_hidden())
-            .collect();
-        // Highest score first, then names case-insensitively.
-        entries.sort_by(|a, b| {
-            b.value
-                .cmp(&a.value)
-                .then_with(|| a.owner.to_lowercase().cmp(&b.owner.to_lowercase()))
-        });
-        entries.truncate(15);
-        let rows: Vec<(Text, Text, f32)> = entries
-            .iter()
-            .map(|e| {
-                let name = match board.players_team(&e.owner) {
-                    Some(t) => t.formatted_name(e.owner_name()),
-                    None => e.owner_name(),
-                };
-                let score = e.format_value(&format);
-                let width = atlas.font.width_text(&score);
-                (name, score, width)
-            })
-            .collect();
-        let title = objective.display_text();
-        let title_width = atlas.font.width_text(&title);
-        let spacer = atlas.font.width(": ");
-        let mut biggest = title_width;
-        for (name, _, score_width) in &rows {
-            let extra = if *score_width > 0.0 {
-                spacer + score_width
-            } else {
-                0.0
-            };
-            biggest = biggest.max(atlas.font.width_text(name) + extra);
-        }
-        let count = rows.len() as f32;
-        let height = count * 9.0;
-        let (w, h) = (batch.width, batch.height);
-        let bottom = (h / 2.0).trunc() + (height / 3.0).trunc();
-        let left = w - biggest - 3.0;
-        let right = w - 3.0 + 2.0;
-        let body = rgba(0, 0, 0, (0.3 * 255.0) as u8);
-        let header = rgba(0, 0, 0, (0.4 * 255.0) as u8);
-        let top = bottom - count * 9.0;
-        batch.fill(
-            atlas,
-            left - 2.0,
-            top - 9.0 - 1.0,
-            right - (left - 2.0),
-            9.0,
-            header,
+        let draws = hud_overlays::sidebar(
+            batch.width as i32,
+            batch.height as i32,
+            board,
+            objective,
+            &self.res.atlas.font,
+            self.settings.text_background(0.3),
+            self.settings.text_background(0.4),
         );
-        batch.fill(
-            atlas,
-            left - 2.0,
-            top - 1.0,
-            right - (left - 2.0),
-            bottom - (top - 1.0),
-            body,
-        );
-        let white = rgba(255, 255, 255, 255);
-        batch.text_styled(
-            atlas,
-            &title,
-            left + (biggest / 2.0).trunc() - (title_width / 2.0).trunc(),
-            top - 9.0,
-            white,
-            false,
-        );
-        for (i, (name, score, score_width)) in rows.iter().enumerate() {
-            let y = bottom - (count - i as f32) * 9.0;
-            batch.text_styled(atlas, name, left, y, white, false);
-            batch.text_styled(atlas, score, right - score_width, y, white, false);
-        }
+        hud_layout::paint(batch, &self.res.atlas, &draws);
     }
 }
 

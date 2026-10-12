@@ -2931,8 +2931,7 @@ impl Game<'_> {
         }
         self.draw_effect_icons(&mut batch);
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
-        self.draw_boss_bar(&mut batch);
-        self.draw_custom_bossbars(&mut batch, 12.0 + 19.0 * self.builtin_bar_count() as f32);
+        self.draw_boss_bars(&mut batch);
         self.draw_titles(&mut batch);
         self.draw_scoreboard(&mut batch);
         self.draw_subtitles(&mut batch);

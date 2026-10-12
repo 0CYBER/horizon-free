@@ -115,10 +115,51 @@ def selected(rng, n):
             'displayTime': rng.choice([1.0, 1.0, 0.5, 2.0, 0.123]), 'steps': steps}
 
 
+
+def boss(rng, n):
+    bars = []
+    for _ in range(rng.choice([1, 1, 2, 3, 5, 9])):
+        progress = rng.choice([0.0, 1.0, 0.5, 0.001, 0.999, 1 / 182, round(rng.random(), 4)])
+        bars.append({'name': rng.choice(TITLES), 'progress': progress, 'color': rng.randrange(7), 'overlay': rng.randrange(5)})
+    return {**screen(rng), 'bars': bars}
+
+
+def jump(rng, n):
+    return {**screen(rng), 'cooldown': rng.choice([0, 0, 0, 1, 10]),
+            'jumpScale': rng.choice([0.0, 1.0, 0.4, 0.001, round(rng.random(), 4)])}
+
+
+OWNERS = ['Alex', 'steve', 'Zed', 'bob', 'Bobby', 'ÉLodie', 'élan', '#hidden', 'x', 'LongPlayerName_123', 'Mia', '_under']
+FORMATS = [None, None, None, {'type': 'blank'}, {'type': 'fixed', 'value': {'text': 'FIX', 'color': 'aqua'}},
+           {'type': 'styled', 'style': {'color': 'gold', 'bold': True}}, {'type': 'styled', 'style': {}}]
+
+
+def sidebar(rng, n):
+    """An objective with scores, display names, number formats and teams."""
+    owners = rng.sample(OWNERS, rng.randint(0, len(OWNERS)))
+    if rng.random() < 0.3:  # more rows than the 15 shown
+        owners += [f'p{i}' for i in range(rng.randint(5, 20))]
+    scores = [{'owner': o, 'value': rng.choice([0, 1, -1, 7, 7, 100, 2147483647, -2147483648, rng.randint(-50, 50)]),
+               'display': rng.choice([None, None, None, {'text': 'Shown ' + o, 'color': 'green'}]),
+               'format': rng.choice(FORMATS)} for o in owners]
+    teams = []
+    for t in range(rng.choice([0, 0, 1, 2])):
+        teams.append({'name': f'team{t}', 'prefix': rng.choice([{'text': ''}, {'text': '[A] '}, {'text': '<', 'color': 'red'}]),
+                      'suffix': rng.choice([{'text': ''}, {'text': ' *'}]),
+                      'color': rng.choice([None, 'red', 'blue', 'gold', 'white']),
+                      'members': [o for o in owners if rng.random() < 0.3]})
+    return {**screen(rng), **backdrop(rng),
+            'objective': {'display': rng.choice(TITLES + [{'text': 'Kills'}]), 'format': rng.choice(FORMATS)},
+            'scores': scores, 'teams': teams}
+
+
 # Generators by kind: (rng, index) -> case. Cases are drawn round-robin.
 KINDS = {
     'decorations': decorations,
     'effects': effects,
     'title': title,
     'selected': selected,
+    'boss': boss,
+    'jump': jump,
+    'sidebar': sidebar,
 }
