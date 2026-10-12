@@ -526,13 +526,27 @@ impl Items {
     pub fn has_loot_table(&self, id: &str) -> bool {
         self.loot.contains_key(id)
     }
+    /// The server random sequence the block's loot table draws from.
+    pub fn block_loot_sequence(
+        &self,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+    ) -> Option<String> {
+        let block = registry.state(state)?;
+        let name = block.name.trim_start_matches("minecraft:");
+        let standing = name.replacen("_wall_", "_", 1);
+        let standing = standing.strip_prefix("wall_").unwrap_or(&standing);
+        let standing = standing.replacen("wall_", "", 1);
+        self.loot_sequence(&format!("minecraft:blocks/{name}"))
+            .or_else(|| self.loot_sequence(&format!("minecraft:blocks/{standing}")))
+    }
     /// Evaluate the block's loot table for a player break without explosions.
     pub fn block_drops(
         &self,
         registry: &BlockRegistry,
         state: BlockStateId,
         held: Option<&ItemStack>,
-        random: &mut LegacyRandom,
+        random: &mut impl RandomSource,
     ) -> Vec<ItemStack> {
         let Some(block) = registry.state(state) else {
             return vec![];
@@ -581,6 +595,34 @@ impl Items {
         };
         ctx.evaluate(table, random)
     }
+    /// The server random sequence a loot table draws from (`random_sequence`):
+    /// vanilla's `LootContext.Builder.create` uses it instead of the level random.
+    pub fn loot_sequence(&self, id: &str) -> Option<String> {
+        self.loot.get(id)?["random_sequence"]
+            .as_str()
+            .map(str::to_owned)
+    }
+    /// `loot_table` drawing from any random (a random sequence).
+    pub fn loot_table_from(
+        &self,
+        id: &str,
+        killed_by_player: bool,
+        held: Option<&ItemStack>,
+        random: &mut impl RandomSource,
+    ) -> Vec<ItemStack> {
+        let Some(table) = self.loot.get(id) else {
+            return vec![];
+        };
+        let empty = BTreeMap::new();
+        let ctx = LootContext {
+            items: self,
+            block: "",
+            properties: &empty,
+            held,
+            killed_by_player,
+        };
+        ctx.evaluate(table, random)
+    }
     pub fn entity_drops(
         &self,
         entity: &str,
@@ -604,14 +646,15 @@ impl Items {
     }
 }
 impl LootContext<'_> {
-    fn evaluate(&self, table: &Value, random: &mut LegacyRandom) -> Vec<ItemStack> {
+    fn evaluate(&self, table: &Value, random: &mut impl RandomSource) -> Vec<ItemStack> {
         let ctx = self;
         let mut out = Vec::new();
         for pool in table["pools"].as_array().into_iter().flatten() {
             if !ctx.conditions(pool, random) {
                 continue;
             }
-            let rolls = ctx.number(&pool["rolls"], random).max(0.0) as u32;
+            // LootPool: rolls.getInt (Mth.randomBetweenInclusive for uniform rolls).
+            let rolls = ctx.int_number(&pool["rolls"], random).max(0) as u32;
             for _ in 0..rolls {
                 let mut produced = Vec::new();
                 ctx.choose(
@@ -643,7 +686,7 @@ impl LootContext<'_> {
     fn enchantment_level(&self, id: &str) -> u32 {
         self.held.map_or(0, |h| h.enchantment_level(id))
     }
-    fn number(&self, v: &Value, random: &mut LegacyRandom) -> f32 {
+    fn number(&self, v: &Value, random: &mut impl RandomSource) -> f32 {
         match v {
             Value::Number(n) => n.as_f64().unwrap_or(0.0) as f32,
             Value::Object(o) => match o
@@ -674,7 +717,7 @@ impl LootContext<'_> {
             _ => 1.0,
         }
     }
-    fn int_number(&self, v: &Value, random: &mut LegacyRandom) -> i32 {
+    fn int_number(&self, v: &Value, random: &mut impl RandomSource) -> i32 {
         if let Value::Object(o) = v
             && o.get("type")
                 .and_then(Value::as_str)
@@ -691,7 +734,7 @@ impl LootContext<'_> {
         }
         self.number(v, random).round() as i32
     }
-    fn condition(&self, c: &Value, random: &mut LegacyRandom) -> bool {
+    fn condition(&self, c: &Value, random: &mut impl RandomSource) -> bool {
         let (kind, c) = match c {
             Value::String(s) => (s.as_str(), &Value::Null),
             Value::Object(o) => (o.get("type").and_then(Value::as_str).unwrap_or(""), c),
@@ -800,7 +843,7 @@ impl LootContext<'_> {
             _ => true,
         }
     }
-    fn conditions(&self, o: &Value, random: &mut LegacyRandom) -> bool {
+    fn conditions(&self, o: &Value, random: &mut impl RandomSource) -> bool {
         if let Some(c) = o.get("condition")
             && !self.condition(c, random)
         {
@@ -816,7 +859,7 @@ impl LootContext<'_> {
     fn expand(
         &self,
         e: &Value,
-        random: &mut LegacyRandom,
+        random: &mut impl RandomSource,
         out: &mut Vec<(i32, ItemStack, Value)>,
     ) -> bool {
         if !self.conditions(e, random) {
@@ -874,7 +917,12 @@ impl LootContext<'_> {
             _ => false,
         }
     }
-    fn choose(&self, entries: &[Value], random: &mut LegacyRandom, produced: &mut Vec<ItemStack>) {
+    fn choose(
+        &self,
+        entries: &[Value],
+        random: &mut impl RandomSource,
+        produced: &mut Vec<ItemStack>,
+    ) {
         let mut candidates = Vec::new();
         for e in entries {
             self.expand(e, random, &mut candidates);
@@ -901,7 +949,7 @@ impl LootContext<'_> {
         self.modifiers(&modifiers, &mut stack, random);
         produced.push(stack);
     }
-    fn modifiers(&self, m: &Value, stack: &mut ItemStack, random: &mut LegacyRandom) {
+    fn modifiers(&self, m: &Value, stack: &mut ItemStack, random: &mut impl RandomSource) {
         let list: Vec<&Value> = match m {
             Value::Array(a) => a.iter().collect(),
             Value::Object(_) => vec![m],

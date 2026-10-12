@@ -73,12 +73,13 @@ impl Game<'_> {
                 let uuid = self.uuid_for(id);
                 let b = self.boats.iter().find(|b| b.id == id)?;
                 entity_nbt::boat_to_nbt(
-                    &b.wood,
+                    &b.entity_type(),
                     b.position,
                     b.velocity,
                     b.yaw,
                     uuid,
                     self.persist.raw.get(&id),
+                    b.chest.then_some(&b.items[..]),
                 )
             }
             Target::Cart(id) => {

@@ -198,18 +198,27 @@ impl Game<'_> {
                             });
                         }
                     }
-                    k if super::boats::boat_wood(k).is_some()
-                        && self
-                            .boat_models
-                            .models
-                            .contains_key(super::boats::boat_wood(k).unwrap_or("")) =>
+                    k if super::boats::any_boat_wood(k)
+                        .is_some_and(|(wood, chest)| self.boat_models.has(wood, chest)) =>
                     {
                         if let Some((position, velocity, yaw)) = entity_nbt::boat_from_nbt(&tag) {
                             self.next_entity += 1;
                             let id = self.next_entity;
-                            let wood =
-                                std::sync::Arc::from(super::boats::boat_wood(k).unwrap_or("oak"));
-                            let mut b = super::boats::Boat::new(id, wood, position, yaw);
+                            let (wood, chest) =
+                                super::boats::any_boat_wood(k).unwrap_or(("oak", false));
+                            let mut b = super::boats::Boat::new(
+                                id,
+                                std::sync::Arc::from(wood),
+                                position,
+                                yaw,
+                            );
+                            if chest {
+                                b = b.with_chest();
+                                b.items = horizon_client::save::decode_items(
+                                    tag.get("Items"),
+                                    super::boats::CHEST_SLOTS,
+                                );
+                            }
                             b.velocity = velocity;
                             self.remember(id, uuid, tag);
                             self.boats.push(b);
@@ -536,12 +545,13 @@ impl Game<'_> {
                     .copied()
                     .unwrap_or_else(random_uuid);
                 let tag = entity_nbt::boat_to_nbt(
-                    &b.wood,
+                    &b.entity_type(),
                     b.position,
                     b.velocity,
                     b.yaw,
                     uuid,
                     self.persist.raw.get(&b.id),
+                    b.chest.then_some(&b.items[..]),
                 );
                 out.entry(chunk_of(b.position)).or_default().push(tag);
             }

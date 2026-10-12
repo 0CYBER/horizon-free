@@ -65,6 +65,27 @@ pub(super) struct PotionState {
         std::collections::HashMap<String, horizon_core::random::XoroshiroRandom>,
 }
 
+impl PotionState {
+    /// Thrown potions in flight as (entity type, position, motion), for the
+    /// dispenser parity fixture.
+    pub(super) fn thrown_entities(&self) -> Vec<(&'static str, Vec3, Vec3)> {
+        self.thrown
+            .iter()
+            .map(|t| {
+                let kind = match &*t.stack.item {
+                    "minecraft:lingering_potion" => "minecraft:lingering_potion",
+                    "minecraft:experience_bottle" => "minecraft:experience_bottle",
+                    _ => "minecraft:splash_potion",
+                };
+                (kind, t.position, t.velocity)
+            })
+            .collect()
+    }
+    pub(super) fn clear_thrown(&mut self) {
+        self.thrown.clear();
+    }
+}
+
 impl Game<'_> {
     /// Right-click with a potion, splash/lingering potion or glass bottle.
     pub(super) fn use_potion_item(&mut self, stack: &ItemStack) -> horizon_client::Result<bool> {

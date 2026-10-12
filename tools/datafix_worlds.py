@@ -1,0 +1,342 @@
+#!/usr/bin/env python3
+"""Make sample worlds with older vanilla servers, for the DataFixer harness.
+
+For each listed version, the official server jar (cached under
+.local/datafix/servers/VERSION/server.jar, beside the shared vanilla data) generates a default world around spawn,
+gets a scene of block entities, entities and items in that version's own save
+format (tools/datafix_scene.py), and a bot player joins (with its inventory filled)
+so that player data exists. The saved world is kept in datafix/worlds/VERSION beside the shared vanilla data
+(.local/datafix in a plain checkout), where every worktree finds it.
+
+  datafix_worlds.py [--force] [VERSION...]      (default: every version below)
+"""
+import argparse
+import hashlib
+import json
+import os
+import queue
+import re
+import shutil
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+import uuid
+import zipfile
+import zlib
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import datafix_scene as scene  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+LOCAL = ROOT / '.local' / 'datafix'
+# Old server jars and their worlds are inputs, not outputs: keep them beside the
+# vanilla data, which parallel worktrees share (.local/minecraft links there).
+SHARED = (ROOT / '.local' / 'minecraft').resolve().parent / 'datafix'
+VERSIONS = ['1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
+            '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.2', '26.2']
+MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
+BOT = 'Upgrader'
+UUID_BASE = 0x6000
+
+
+def server_jar(version):
+    path = SHARED / 'servers' / version / 'server.jar'
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        manifest = json.load(urllib.request.urlopen(MANIFEST))
+        entry = next(v for v in manifest['versions'] if v['id'] == version)
+        meta = json.load(urllib.request.urlopen(entry['url']))
+        download = meta['downloads']['server']
+        data = urllib.request.urlopen(download['url']).read()
+        if hashlib.sha1(data).hexdigest() != download['sha1']:
+            sys.exit(f'{version}: server.jar checksum mismatch')
+        path.write_bytes(data)
+    info = json.loads(zipfile.ZipFile(path).read('version.json'))
+    return path, info['world_version'], info['protocol_version']
+
+
+class Server:
+    def __init__(self, directory, jar, port, packs=()):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'eula.txt').write_text('eula=true\n')
+        props = {'server-port': port, 'online-mode': 'false', 'level-name': 'world', 'level-seed': '4242',
+                 'view-distance': '4', 'simulation-distance': '4', 'spawn-protection': '0', 'sync-chunk-writes': 'true',
+                 'enable-rcon': 'false', 'enable-query': 'false', 'max-tick-time': '-1'}
+        if packs:
+            props['initial-enabled-packs'] = ','.join(['vanilla', *packs])
+        (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
+        self.process = subprocess.Popen(['java', '-Xmx2G', '-jar', str(jar), 'nogui'], cwd=directory,
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.lines = []
+        self.queue = queue.Queue()
+        self.counter = 0
+        threading.Thread(target=self._pump, daemon=True).start()
+        self.wait('Done (', 600)
+
+    def _pump(self):
+        for line in self.process.stdout:
+            line = line.rstrip('\n')
+            self.lines.append(line)
+            self.queue.put(line)
+
+    def wait(self, pattern, timeout=60):
+        end = time.time() + timeout
+        seen = []
+        while time.time() < end:
+            try:
+                line = self.queue.get(timeout=1)
+            except queue.Empty:
+                if self.process.poll() is not None:
+                    break
+                continue
+            seen.append(line)
+            if pattern in line:
+                return seen
+        raise TimeoutError(f'no "{pattern}" in {timeout}s; last lines: {seen[-5:]}')
+
+    def run(self, command, timeout=60):
+        self.counter += 1
+        marker = f'@@{self.counter}@@'
+        self.process.stdin.write(command + '\nsay ' + marker + '\n')
+        self.process.stdin.flush()
+        out = self.wait(marker, timeout)
+        return [re.sub(r'^\[[0-9:]+\] \[[^\]]*\]: ', '', l) for l in out[:-1]]
+
+    def stop(self):
+        try:
+            self.process.stdin.write('stop\n')
+            self.process.stdin.flush()
+            self.process.wait(120)
+        except Exception:
+            self.process.kill()
+
+
+def failed(lines):
+    return [l for l in lines if re.search(r'(Unknown|Expected|Incorrect|Invalid|Could not|Unable|Failed|That block|'
+                                          r'error|Malformed|Can\'t)', l, re.I)]
+
+
+# ------------------------------------------------------------------ minimal bot
+
+def varint(v):
+    out = b''
+    v &= 0xFFFFFFFF
+    while True:
+        b = v & 0x7F
+        v >>= 7
+        out += bytes([b | (0x80 if v else 0)])
+        if not v:
+            return out
+
+
+def mcstring(s):
+    data = s.encode()
+    return varint(len(data)) + data
+
+
+def parse_varint(data, pos):
+    value = shift = 0
+    while True:
+        b = data[pos]
+        pos += 1
+        value |= (b & 0x7F) << shift
+        shift += 7
+        if not b & 0x80:
+            return pos, value
+
+
+def offline_uuid(name):
+    digest = bytearray(hashlib.md5(('OfflinePlayer:' + name).encode()).digest())
+    digest[6] = (digest[6] & 0x0F) | 0x30
+    digest[8] = (digest[8] & 0x3F) | 0x80
+    return uuid.UUID(bytes=bytes(digest))
+
+
+class Bot:
+    """Logs in (offline mode) with the given protocol and stays until told to leave."""
+
+    def __init__(self, port, protocol, name):
+        self.sock = socket.create_connection(('127.0.0.1', port), timeout=30)
+        self.threshold = -1
+        self.buffer = b''
+        self.protocol = protocol
+        self.stop = threading.Event()
+        self.send(0, varint(protocol) + mcstring('127.0.0.1') + struct.pack('>H', port) + varint(2))
+        if protocol <= 758:  # 1.18.2: the name only
+            self.send(0, mcstring(name))
+        elif protocol == 759:  # 1.19: no signature data
+            self.send(0, mcstring(name) + b'\x00')
+        elif protocol == 760:  # 1.19.2: no signature data, optional UUID
+            self.send(0, mcstring(name) + b'\x00' + b'\x01' + offline_uuid(name).bytes)
+        elif protocol <= 763:  # 1.19.3 - 1.20.1: optional UUID
+            self.send(0, mcstring(name) + b'\x01' + offline_uuid(name).bytes)
+        else:
+            self.send(0, mcstring(name) + offline_uuid(name).bytes)
+        while True:
+            pid, data = self.receive()
+            if pid == 3:
+                self.threshold = parse_varint(data, 0)[1]
+            elif pid == 2:
+                break
+            elif pid == 0:
+                raise RuntimeError(f'login refused: {data!r}')
+        if protocol >= 764:
+            self.send(3)  # login acknowledged -> configuration
+            self.configure()
+        threading.Thread(target=self.idle, daemon=True).start()
+
+    def configure(self):
+        old = self.protocol < 766  # 1.20.2 - 1.20.4 packet ids
+        finish, keep_alive, ping, disconnect = (2, 3, 4, 1) if old else (3, 4, 5, 2)
+        while True:
+            pid, data = self.receive()
+            if pid == finish:
+                self.send(2 if old else 3)
+                return
+            if pid == keep_alive:
+                self.send(3 if old else 4, data)
+            elif pid == ping:
+                self.send(4 if old else 5, data)
+            elif pid == disconnect:
+                raise RuntimeError(f'disconnected during configuration: {data!r}')
+            elif not old and self.known_packs(data):
+                self.send(7, varint(0))  # claim no packs: the server sends full registries
+
+    @staticmethod
+    def known_packs(data):
+        try:
+            pos, count = parse_varint(data, 0)
+            if count < 1:
+                return False
+            pos, n = parse_varint(data, pos)
+            return data[pos:pos + n] == b'minecraft'
+        except IndexError:
+            return False
+
+    def idle(self):
+        self.sock.settimeout(1.0)
+        while not self.stop.is_set():
+            try:
+                self.receive()
+            except socket.timeout:
+                continue
+            except (EOFError, OSError):
+                break
+
+    def leave(self):
+        self.stop.set()
+        time.sleep(1.5)
+        self.sock.close()
+
+    def read_exact(self, n):
+        while len(self.buffer) < n:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise EOFError('server closed the connection')
+            self.buffer += chunk
+        out, self.buffer = self.buffer[:n], self.buffer[n:]
+        return out
+
+    def read_varint(self):
+        value = shift = 0
+        while True:
+            b = self.read_exact(1)[0]
+            value |= (b & 0x7F) << shift
+            shift += 7
+            if not b & 0x80:
+                return value
+
+    def send(self, packet_id, payload=b''):
+        body = varint(packet_id) + payload
+        if self.threshold >= 0:
+            body = varint(len(body)) + zlib.compress(body) if len(body) >= self.threshold else varint(0) + body
+        self.sock.sendall(varint(len(body)) + body)
+
+    def receive(self):
+        length = self.read_varint()
+        body = self.read_exact(length)
+        if self.threshold >= 0:
+            pos, size = parse_varint(body, 0)
+            body = zlib.decompress(body[pos:]) if size else body[pos:]
+        pos, packet_id = parse_varint(body, 0)
+        return packet_id, body[pos:]
+
+
+# ------------------------------------------------------------------ world
+
+def uuid_nbt(i):
+    return f'[I;{UUID_BASE},0,0,{i}]'
+
+
+def build(version, force=False):
+    jar, data_version, protocol = server_jar(version)
+    target = SHARED / 'worlds' / version
+    if target.exists() and not force:
+        print(f'{version}: kept {target}')
+        return []
+    era = scene.era(data_version)
+    work = LOCAL / 'gen' / version
+    shutil.rmtree(work, ignore_errors=True)
+    port = 30000 + (os.getpid() + data_version) % 20000
+    server = Server(work, jar, port, scene.experiments(data_version))
+    problems = []
+
+    def run(command):
+        out = server.run(command)
+        bad = failed(out)
+        if bad:
+            problems.append((command[:160], bad[:2]))
+        return out
+
+    run('forceload add -48 -48 79 79')
+    run('fill 0 99 0 47 99 47 minecraft:stone')
+    run('fill 0 100 0 47 112 47 minecraft:air')
+    for i, (block, nbt) in enumerate(scene.block_entities(era, data_version)):
+        x, z = 1 + 3 * (i % 15), 1 + 3 * (i // 15)
+        run(f'setblock {x} 100 {z} minecraft:{block}{nbt}')
+    for i, (kind, extra) in enumerate(scene.entities(era, data_version)):
+        x, z = 1.5 + 3 * (i % 15), 25.5 + 3 * (i // 15)
+        fields = f'UUID:{uuid_nbt(i)},NoAI:1b,Silent:1b,NoGravity:1b,Invulnerable:1b,PersistenceRequired:1b'
+        run(f'summon minecraft:{kind} {x} 100 {z} {{{fields}' + (',' + extra if extra else '') + '}')
+    run('setworldspawn 20 101 20')
+    bot = Bot(port, protocol, BOT)
+    time.sleep(3)
+    for command in scene.player_commands(era, BOT, data_version):
+        run(command)
+    time.sleep(3)
+    run('save-all flush')
+    time.sleep(2)
+    bot.leave()
+    time.sleep(2)
+    server.stop()
+    # Copy aside, then rename: an interrupted copy must not look like a finished world.
+    partial = target.with_name(target.name + '.partial')
+    shutil.rmtree(partial, ignore_errors=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(work / 'world', partial)
+    (partial / 'datafix-source.json').write_text(json.dumps(
+        {'version': version, 'data_version': data_version, 'problems': problems}, indent=1))
+    shutil.rmtree(target, ignore_errors=True)
+    partial.rename(target)
+    for command, out in problems:
+        print(f'{version}: command failed: {command}\n   {out}')
+    print(f'{version}: DataVersion {data_version}, world in {target}')
+    return problems
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('versions', nargs='*')
+    p.add_argument('--force', action='store_true')
+    args = p.parse_args()
+    for version in args.versions or VERSIONS:
+        build(version, args.force)
+
+
+if __name__ == '__main__':
+    main()

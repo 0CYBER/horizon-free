@@ -452,9 +452,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     // ---- misc helpers ----
 
-    /// `BaseFireBlock.onPlace` (portal ignition is not modelled).
+    /// `BaseFireBlock.onPlace`: a fire inside an empty obsidian frame (in the
+    /// overworld or the nether) lights it, otherwise one that cannot survive
+    /// goes out.
     fn base_fire_on_place(&mut self, pos: BlockPos, state: BlockStateId, same: bool) {
-        if !same && !self.can_survive(state, pos) {
+        if same {
+            return;
+        }
+        if matches!(
+            self.level.dimension(),
+            super::Dimension::Overworld | super::Dimension::Nether
+        ) && let Some(shape) = self.find_empty_portal_shape(pos, true)
+        {
+            self.create_portal_blocks(&shape);
+            return;
+        }
+        if !self.can_survive(state, pos) {
             self.remove_block(pos, false);
         }
     }

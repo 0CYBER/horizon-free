@@ -29,6 +29,12 @@ pub(super) struct Rocket {
     angled: bool,
     icon: Option<String>,
 }
+impl Rocket {
+    /// Position and motion (the dispenser parity fixture).
+    pub(super) fn motion(&self) -> (Vec3, Vec3) {
+        (self.position, self.velocity)
+    }
+}
 fn fireworks_of(stack: &ItemStack) -> (u8, Vec<FireworkExplosion>) {
     // The item's default component: flight 1, no explosions.
     stack
@@ -39,10 +45,9 @@ fn fireworks_of(stack: &ItemStack) -> (u8, Vec<FireworkExplosion>) {
 impl Game<'_> {
     pub(super) fn new_rocket(&mut self, at: Vec3, stack: &ItemStack, attached: bool) -> Rocket {
         let (flight, explosions) = fireworks_of(stack);
-        let r = &mut self.world.random;
-        let tri = |r: &mut horizon_core::random::LegacyRandom| {
-            0.002297 * (f64::from(r.next_float()) - f64::from(r.next_float()))
-        };
+        // FireworkRocketEntity: motion and lifetime come from the rocket's own random.
+        let r = &mut super::dispenser::entity_random();
+        let tri = |r: &mut horizon_core::random::LegacyRandom| r.triangle(0.0, 0.002297);
         let velocity = Vec3::new(tri(r), 0.05, tri(r));
         let lifetime = 10 * (1 + i32::from(flight))
             + r.next_int_bound(6).unwrap_or(0)

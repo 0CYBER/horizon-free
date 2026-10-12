@@ -19,6 +19,7 @@ mod control;
 mod creaking;
 mod creatures;
 mod crossbow;
+mod dispense_fixture;
 mod dispenser;
 mod dragon;
 mod enchant_effects;
@@ -1027,8 +1028,9 @@ impl Game<'_> {
                         f64::from(pos[2]) + d(z),
                     ];
                     let v = [d(x) - 0.5, d(y) - 0.5, d(z) - 0.5];
+                    // LevelEventHandler (2001) runs on the client: its random, not the level's.
                     let particle =
-                        Particle::terrain(&mut self.world.random, p, v, sprite.clone(), tint);
+                        Particle::terrain(self.particles.random(), p, v, sprite.clone(), tint);
                     self.particles.push(particle);
                 }
             }
@@ -1039,7 +1041,8 @@ impl Game<'_> {
         let Some((sprite, tint)) = self.particle_sprite(state) else {
             return;
         };
-        let r = &mut self.world.random;
+        // Client-side particles draw from the client random, not the level's.
+        let r = self.particles.random();
         let mut p = [0.0; 3];
         for i in 0..3 {
             let base = f64::from(pos[i]);
@@ -1066,7 +1069,8 @@ impl Game<'_> {
     ) {
         self.next_entity += 1;
         let p = Vec3::new(position[0], position[1], position[2]);
-        let bob = self.world.random.next_float() * std::f32::consts::PI * 2.0;
+        // ItemEntity.bobOffs comes from the entity's own random, not the level's.
+        let bob = self.particles.random().next_float() * std::f32::consts::PI * 2.0;
         self.dropped.push(ItemEntity {
             id: self.next_entity,
             stack,
@@ -1079,23 +1083,36 @@ impl Game<'_> {
             bob_offset: bob,
         });
     }
+    /// `Block.getDrops`: the block's loot table, drawing from its server random
+    /// sequence (`LootContext.Builder.create`), else the level random.
+    fn block_loot(&mut self, state: BlockStateId, held: Option<&ItemStack>) -> Vec<ItemStack> {
+        let registry = self.res.assets.registry;
+        match self.res.items.block_loot_sequence(registry, state) {
+            Some(sequence) => {
+                let random = self.rand_sequences.get(&sequence, self.level.seed);
+                self.res.items.block_drops(registry, state, held, random)
+            }
+            None => self
+                .res
+                .items
+                .block_drops(registry, state, held, &mut self.world.random),
+        }
+    }
     /// Block.popResource
     fn pop_resource(&mut self, pos: [i32; 3], mut stack: ItemStack) {
         self.attach_shulker_contents(pos, &mut stack);
         self.attach_container_name(pos, &mut stack);
         self.attach_banner_layers(pos, &mut stack);
+        // Block.popResource: Mth.nextDouble offsets from the level random; the
+        // motion is `new ItemEntity(..)`'s own, from the item's random.
         let r = &mut self.world.random;
-        let mut offset = || f64::from(r.next_float()) * 0.5 - 0.25;
+        let mut offset = || -0.25 + r.next_double() * 0.5;
         let p = [
             f64::from(pos[0]) + 0.5 + offset(),
             f64::from(pos[1]) + 0.5 + offset() - 0.125,
             f64::from(pos[2]) + 0.5 + offset(),
         ];
-        let v = [
-            r.next_double() * 0.2 - 0.1,
-            0.2,
-            r.next_double() * 0.2 - 0.1,
-        ];
+        let v = dispenser::new_item_motion();
         self.spawn_item(stack, p, v, 10);
     }
     /// Player.drop: thrown from the eyes along the view direction.
@@ -1370,6 +1387,7 @@ impl Game<'_> {
     fn process_level_events(&mut self) -> Result<()> {
         let events = std::mem::take(&mut self.level_events);
         self.lan_record_events(&events);
+        dispense_fixture::record_events(&events);
         for event in events {
             match event {
                 LevelEvent::LevelEvent {
@@ -1377,10 +1395,14 @@ impl Game<'_> {
                     pos,
                     data,
                 } => {
-                    // LevelRenderer: destroy particles and the block's break sound.
+                    // LevelEventHandler: destroy particles and the block's
+                    // break sound (none for air).
                     let state = BlockStateId(data as u32);
                     let p = [pos.x, pos.y, pos.z];
                     self.destroy_particles(p, state);
+                    if self.res.facts.is_air(state) {
+                        continue;
+                    }
                     let sounds = self.res.facts.get(state).sounds.clone();
                     let c = [
                         f64::from(pos.x) + 0.5,
@@ -1443,12 +1465,7 @@ impl Game<'_> {
                         let name = self.res.facts.get(state).name.clone();
                         self.release_contents([pos.x, pos.y, pos.z], entity, &name);
                     }
-                    let drops = self.res.items.block_drops(
-                        self.res.assets.registry,
-                        state,
-                        None,
-                        &mut self.world.random,
-                    );
+                    let drops = self.block_loot(state, None);
                     for d in drops {
                         if &*d.item != "minecraft:air" {
                             self.pop_resource([pos.x, pos.y, pos.z], d);
@@ -1794,12 +1811,7 @@ impl Game<'_> {
             let harvest = !facts.requires_tool
                 || self.res.items.correct_for_drops(held.as_ref(), &facts.name);
             if harvest {
-                let drops = self.res.items.block_drops(
-                    self.res.assets.registry,
-                    state,
-                    held.as_ref(),
-                    &mut self.world.random,
-                );
+                let drops = self.block_loot(state, held.as_ref());
                 let silk = held
                     .as_ref()
                     .is_some_and(|h| h.enchantment_level("minecraft:silk_touch") > 0);
@@ -4867,8 +4879,8 @@ impl Game<'_> {
         creative: bool,
     ) -> Result<()> {
         let save_root = std::env::current_dir()?.join("saves").join(folder);
+        horizon_client::save::upgrade_older_world(&save_root)?;
         horizon_client::save::migrate_legacy(&save_root)?;
-        horizon_client::save::check_data_version(&save_root)?;
         self.session_lock = None;
         self.session_lock = Some(horizon_client::save::SessionLock::acquire(&save_root)?);
         self.persist = Default::default();
@@ -8163,6 +8175,9 @@ pub fn run() -> Result<()> {
             .map_err(|e| format!("control socket {}: {e}", path.display()))?;
         eprintln!("Horizon: control socket {}", server.path().display());
         game.control = Some(server);
+    }
+    if let Ok(spec) = std::env::var("HORIZON_DISPENSE_FIXTURE") {
+        return game.dispense_fixture(&spec);
     }
     match game.options.world.clone() {
         _ if game.options.server.is_some() => {

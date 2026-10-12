@@ -1136,22 +1136,19 @@ pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {
     a.on_ground = flag(tag, "OnGround");
     Some(a)
 }
-/// A boat entity (`minecraft:<wood>_boat`, `minecraft:bamboo_raft`).
+/// A boat entity (`minecraft:<wood>_boat`, `minecraft:bamboo_chest_raft`...):
+/// chest boats keep their slots in `Items` (`ContainerHelper.saveAllItems`).
 pub fn boat_to_nbt(
-    wood: &str,
+    id: &str,
     position: Vec3,
     motion: Vec3,
     yaw: f32,
     uuid: [i32; 4],
     raw: Option<&Tag>,
+    items: Option<&[Option<crate::items::ItemStack>]>,
 ) -> Tag {
-    let id = if wood == "bamboo" {
-        "minecraft:bamboo_raft".to_owned()
-    } else {
-        format!("minecraft:{wood}_boat")
-    };
-    Base {
-        id: &id,
+    let mut tag = Base {
+        id,
         uuid,
         position,
         motion,
@@ -1159,7 +1156,11 @@ pub fn boat_to_nbt(
         on_ground: false,
         fall_distance: 0.0,
     }
-    .tag(raw)
+    .tag(raw);
+    if let (Some(items), Tag::Compound(map)) = (items, &mut tag) {
+        map.insert("Items".into(), crate::save::encode_items(items));
+    }
+    tag
 }
 /// A vehicle's base entity tag (boats and minecarts).
 pub fn vehicle_to_nbt(

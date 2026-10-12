@@ -28,6 +28,9 @@ pub(super) enum CartKind {
     Hopper,
     Furnace,
     Tnt,
+    /// `MinecartCommandBlock`; its command block holds no command, so an
+    /// activator rail runs nothing.
+    CommandBlock,
 }
 impl CartKind {
     pub fn from_id(id: &str) -> Option<Self> {
@@ -37,6 +40,7 @@ impl CartKind {
             "hopper_minecart" => Self::Hopper,
             "furnace_minecart" => Self::Furnace,
             "tnt_minecart" => Self::Tnt,
+            "command_block_minecart" => Self::CommandBlock,
             _ => return None,
         })
     }
@@ -47,6 +51,7 @@ impl CartKind {
             Self::Hopper => "minecraft:hopper_minecart",
             Self::Furnace => "minecraft:furnace_minecart",
             Self::Tnt => "minecraft:tnt_minecart",
+            Self::CommandBlock => "minecraft:command_block_minecart",
         }
     }
     fn slots(self) -> usize {
@@ -192,6 +197,7 @@ impl CartModels {
             CartKind::Hopper,
             CartKind::Furnace,
             CartKind::Tnt,
+            CartKind::CommandBlock,
         ];
         let models = kinds
             .into_iter()
@@ -981,6 +987,8 @@ impl Game<'_> {
                 self.prime_cart(&mut c);
                 self.carts[i] = c;
             }
+            // BaseCommandBlock.usedBy: only an operator in creative opens it.
+            CartKind::CommandBlock => return false,
         }
         self.swing_arm();
         true
@@ -990,9 +998,10 @@ impl Game<'_> {
         let Some(key) = self.container.filter(|k| k.1 == CART_KEY_Y) else {
             return;
         };
-        if let Some(BlockEntity::Chest(items)) = self.world.block_entities.remove(&key)
-            && let Some(c) = self.carts.iter_mut().find(|c| c.id as i32 == key.2)
-        {
+        let Some(BlockEntity::Chest(items)) = self.world.block_entities.remove(&key) else {
+            return;
+        };
+        if let Some(c) = self.carts.iter_mut().find(|c| c.id as i32 == key.2) {
             c.items = items;
             let at = [c.position.x, c.position.y, c.position.z];
             if c.kind == CartKind::Chest {
@@ -1000,15 +1009,24 @@ impl Game<'_> {
                 self.audio
                     .play("minecraft:block.chest.close", Some(at), 0.5, pitch);
             }
+        } else if let Some(b) = self.boats.iter_mut().find(|b| b.id as i32 == key.2) {
+            b.items = items;
         }
     }
     /// The open cart's kind when a cart container is shown.
     pub(super) fn open_cart_kind(&self) -> Option<CartKind> {
         let key = self.container.filter(|k| k.1 == CART_KEY_Y)?;
+        // A chest boat's chest shows like a chest minecart's.
         self.carts
             .iter()
             .find(|c| c.id as i32 == key.2)
             .map(|c| c.kind)
+            .or_else(|| {
+                self.boats
+                    .iter()
+                    .any(|b| b.chest && b.id as i32 == key.2)
+                    .then_some(CartKind::Chest)
+            })
     }
     /// `VehicleEntity.hurtServer` from the player's attack.
     pub(super) fn attack_cart(&mut self, damage: f32) -> bool {
@@ -1121,6 +1139,7 @@ impl Game<'_> {
                 ],
             ),
             CartKind::Tnt => registry.default_state("minecraft:tnt"),
+            CartKind::CommandBlock => registry.default_state("minecraft:command_block"),
         }
     }
     /// `AbstractMinecartRenderer` (old render): on the rail between the
@@ -1284,6 +1303,13 @@ impl Minecart {
                     put("Fuel", Tag::Short(self.fuel as i16));
                 }
                 CartKind::Tnt => put("fuse", Tag::Int(self.fuse)),
+                // BaseCommandBlock.save of an empty command block.
+                CartKind::CommandBlock => {
+                    put("Command", Tag::String(JavaString::from("")));
+                    put("SuccessCount", Tag::Int(0));
+                    put("TrackOutput", Tag::Byte(1));
+                    put("UpdateLastExecution", Tag::Byte(1));
+                }
                 CartKind::Rideable => {}
             }
         }
