@@ -37,7 +37,7 @@ LOCAL = ROOT / '.local' / 'datafix'
 # Old server jars and their worlds are inputs, not outputs: keep them beside the
 # vanilla data, which parallel worktrees share (.local/minecraft links there).
 SHARED = (ROOT / '.local' / 'minecraft').resolve().parent / 'datafix'
-VERSIONS = ['1.16.5', '1.17.1', '1.18.1', '1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
+VERSIONS = ['1.12.2', '1.13.2', '1.14.4', '1.16.5', '1.17.1', '1.18.1', '1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
             '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.2', '26.2']
 MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 LOCK = json.loads((ROOT / 'research-lock.json').read_text())['java_runtimes']
