@@ -355,7 +355,9 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
         u8::from(m.ai.jumping)
     );
     let _ = write!(out, "\trng {:x}", m.random.state());
-    if let Some((acts, mem)) = horizon_client::mobs::villager_brain::describe(m) {
+    if let Some((acts, mem)) = horizon_client::mobs::villager_brain::describe(m)
+        .or_else(|| horizon_client::mobs::warden_brain::describe(m))
+    {
         let _ = write!(out, "\tact {acts}\tmem {mem}");
     }
     out.push('\n');
@@ -467,6 +469,12 @@ fn main() -> horizon_client::Result<()> {
                 match flag.as_str() {
                     "persistent" => m.persistent = true,
                     "noai" => m.no_ai = true,
+                    // Warden.finalizeSpawn's own part.
+                    "digcooldown" | "emerge" => horizon_client::mobs::warden::finalize(
+                        &mut m,
+                        flag == "emerge",
+                        &mut Vec::new(),
+                    ),
                     other => panic!("unknown mob flag {other}"),
                 }
             }
@@ -480,6 +488,10 @@ fn main() -> horizon_client::Result<()> {
                     s.time,
                     spec.seed,
                 );
+            }
+            if m.species() == Species::Warden {
+                // As for villagers: the sensors delayed again, the RunOne seeded.
+                horizon_client::mobs::warden::init_brain(&mut m, spec.seed);
             }
             mobs.push(m);
         }

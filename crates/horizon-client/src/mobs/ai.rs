@@ -682,6 +682,10 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let _ = m.random.next_int_bound(4);
     }
     for (who, at) in targets {
+        // Warden.doPush: touching it angers it, then the push itself.
+        if m.species() == Species::Warden {
+            super::warden::do_push(m, w, who, events);
+        }
         // Entity.push(Entity) with `this` the other entity.
         let (mut xa, mut za) = (m.position.x - at.x, m.position.z - at.z);
         let mut dd = xa.abs().max(za.abs());
@@ -758,6 +762,10 @@ fn server_ai_step(
         super::villager_brain::tick(m, w, level_random, events);
         let _ = m.random.next_int_bound(100);
     }
+    if m.species() == Species::Warden {
+        // Warden.customServerAiStep: the brain and its bookkeeping.
+        super::warden::server_ai_step(m, w, level_random, events);
+    }
     {
         let mut cx = Cx { w, events };
         custom_server_ai_step(m, &mut cx);
@@ -782,7 +790,6 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Enderman => super::enderman::custom_server_ai_step(m, cx),
         Species::Blaze => super::nether::blaze_server_ai_step(m, cx),
         Species::ElderGuardian => super::guardian::elder_server_ai_step(m, cx),
-        Species::Warden => super::warden::server_ai_step(m, cx),
         Species::Wither if m.alive() => super::wither::custom_server_ai_step(m, cx.w, cx.events),
         // SpellcasterIllager.customServerAiStep.
         Species::Evoker if m.extra.counter > 0 => m.extra.counter -= 1,

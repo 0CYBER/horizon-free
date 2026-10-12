@@ -467,6 +467,17 @@ public final class VanillaMobAiOracle {
                 for (String flag : spec.flags) {
                     if (flag.equals("persistent")) mob.setPersistenceRequired();
                     else if (flag.equals("noai")) mob.setNoAi(true);
+                    // Warden.finalizeSpawn's own part (Mob.finalizeSpawn draws the level random,
+                    // which is not seeded yet): a minute before digging, or climbing out first.
+                    else if (flag.equals("digcooldown") || flag.equals("emerge")) {
+                        mob.getBrain().setMemoryWithExpiry(net.minecraft.world.entity.ai.memory.MemoryModuleType.DIG_COOLDOWN,
+                            net.minecraft.util.Unit.INSTANCE, 1200L);
+                        if (flag.equals("emerge")) {
+                            mob.setPose(net.minecraft.world.entity.Pose.EMERGING);
+                            mob.getBrain().setMemoryWithExpiry(net.minecraft.world.entity.ai.memory.MemoryModuleType.IS_EMERGING,
+                                net.minecraft.util.Unit.INSTANCE, net.minecraft.world.entity.monster.warden.WardenAi.EMERGE_DURATION);
+                        }
+                    }
                     else throw new IllegalArgumentException(flag);
                 }
                 level.addFreshEntity(mob);

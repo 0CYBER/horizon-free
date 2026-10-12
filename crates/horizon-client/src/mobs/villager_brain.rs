@@ -36,7 +36,8 @@ impl<T> Default for Slot<T> {
     }
 }
 impl<T> Slot<T> {
-    fn tick(&mut self) {
+    /// `MemorySlot.tick` (`Brain.forgetOutdatedMemories`).
+    pub(super) fn tick(&mut self) {
         if self.v.is_some() && self.ttl != NEVER {
             if self.ttl <= 0 {
                 self.clear();
@@ -66,8 +67,15 @@ impl<T> Slot<T> {
     pub fn get(&self) -> Option<&T> {
         self.v.as_ref()
     }
+    pub(super) fn get_mut(&mut self) -> Option<&mut T> {
+        self.v.as_mut()
+    }
     pub fn present(&self) -> bool {
         self.v.is_some()
+    }
+    /// The time to live (`i64::MAX`: never expires).
+    pub fn ttl(&self) -> i64 {
+        self.ttl
     }
 }
 impl<T: Clone> Slot<T> {
@@ -77,7 +85,7 @@ impl<T: Clone> Slot<T> {
 }
 impl<T> Slot<Vec<T>> {
     /// `Brain.setMemory` of a collection: an empty one erases the memory.
-    fn set_list(&mut self, v: Vec<T>) {
+    pub(super) fn set_list(&mut self, v: Vec<T>) {
         if v.is_empty() {
             self.clear();
         } else {
@@ -162,8 +170,8 @@ impl WalkTarget {
 /// cache of `Sensor.isEntityTargetable`.
 #[derive(Clone, Debug, Default)]
 pub struct Visible {
-    list: Vec<Who>,
-    cache: Vec<(Who, bool)>,
+    pub(super) list: Vec<Who>,
+    pub(super) cache: Vec<(Who, bool)>,
 }
 
 /// The memories a villager's brain registers.
