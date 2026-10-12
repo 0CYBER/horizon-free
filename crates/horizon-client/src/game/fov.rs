@@ -8,7 +8,8 @@ use horizon_client::{
         BobState, CameraFluid, FovPlayer, HurtBob, UseItem, bob_matrix, field_of_view_modifier,
     },
     fog::{FogType, fog_type},
-    hud::{HudBatch, rgba},
+    hud::HudBatch,
+    hud_layout, hud_overlays,
 };
 
 /// `Abilities.walkingSpeed`.
@@ -145,26 +146,20 @@ impl Game<'_> {
         self.audio
             .play("minecraft:item.spyglass.stop_using", at, 1.0, 1.0);
     }
-    /// `Hud.extractCameraOverlays`: the scope, its size easing from 0.5 to
-    /// 1.125 at half a step per tick of frame time.
+    /// `Hud.extractCameraOverlays`: the spyglass scope, its size easing
+    /// towards 1.125 by half the frame's game ticks and reset to 0.5 while
+    /// not scoping in first person.
     pub(super) fn draw_spyglass(&mut self, batch: &mut HudBatch) {
+        self.scope_scale += 0.5 * self.frame_ticks * (1.125 - self.scope_scale);
+        if !self.camera_type.first_person() {
+            return;
+        }
         if !self.scoping() {
             self.scope_scale = 0.5;
             return;
         }
-        self.scope_scale += (1.125 - self.scope_scale) * (0.5 * self.frame_ticks).min(1.0);
-        let atlas = &self.res.atlas;
-        let (w, h) = (batch.width, batch.height);
-        let src = w.min(h);
-        let ratio = (w / src).min(h / src) * self.scope_scale;
-        let (sw, sh) = ((src * ratio).floor(), (src * ratio).floor());
-        let (left, top) = (((w - sw) / 2.0).floor(), ((h - sh) / 2.0).floor());
-        let (right, bottom) = (left + sw, top + sh);
-        batch.sprite_scaled(atlas, "misc/spyglass_scope", left, top, sw, sh, u32::MAX);
-        let black = rgba(0, 0, 0, 255);
-        batch.fill(atlas, 0.0, bottom, w, h - bottom, black);
-        batch.fill(atlas, 0.0, 0.0, w, top, black);
-        batch.fill(atlas, 0.0, top, left, bottom - top, black);
-        batch.fill(atlas, right, top, w - right, bottom - top, black);
+        let draws =
+            hud_overlays::spyglass(batch.width as i32, batch.height as i32, self.scope_scale);
+        hud_layout::paint(batch, &self.res.atlas, &draws);
     }
 }

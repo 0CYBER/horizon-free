@@ -267,6 +267,17 @@ impl Mob {
         let max = self.max_path_length();
         self.create_path_raw(w, &[p], reach, max)
     }
+    /// PathNavigation.createPath(Set<BlockPos>, reach): the nearest of
+    /// several targets, without the ground surface search.
+    pub fn create_path_to_any(
+        &mut self,
+        w: &MobWorld,
+        targets: &[[i32; 3]],
+        reach: i32,
+    ) -> Option<Path> {
+        let max = self.max_path_length();
+        self.create_path_raw(w, targets, reach, max)
+    }
     /// PathNavigation.createPath(Entity, reach).
     pub fn create_path_to_entity(
         &mut self,

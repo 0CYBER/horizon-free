@@ -9,6 +9,17 @@ use horizon_core::{
     random::RandomSource,
 };
 
+/// A new projectile entity's own random: vanilla seeds every entity's random
+/// unpredictably, and a projectile's spread (and an arrow's base damage) come
+/// from it, never from the shooter's random.
+pub fn own_random(shooter: &crate::mobs::Mob) -> horizon_core::random::LegacyRandom {
+    horizon_core::random::LegacyRandom::new(
+        i64::from(shooter.id).wrapping_mul(0x9E37_79B9)
+            ^ i64::from(shooter.age)
+            ^ shooter.position.x.to_bits() as i64,
+    )
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProjectileKind {
     /// Arrow with its base damage, critical flag and tipped/stray/bogged effect.

@@ -2,9 +2,10 @@
 //! its boss bar, and its skulls hitting and exploding.
 use super::Game;
 use horizon_client::{
-    hud::{HudBatch, rgba},
+    hud_overlays,
     mobs::{Damage, DamageKind, Species, Who},
     projectiles::{Projectile, ProjectileKind},
+    text::Text,
 };
 
 impl Game<'_> {
@@ -69,12 +70,11 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// The wither boss bars (purple, below the dragon's), within range.
-    pub(super) fn draw_wither_bars(&self, batch: &mut HudBatch, mut y: f32) -> f32 {
+    /// The wither boss bars (purple), within range.
+    pub(super) fn wither_bars(&self, bars: &mut Vec<hud_overlays::BossBar>) {
         let Some(p) = self.player.as_ref() else {
-            return y;
+            return;
         };
-        let atlas = &self.res.atlas;
         for m in self
             .mobs
             .iter()
@@ -83,36 +83,22 @@ impl Game<'_> {
             if m.position.distance_squared(p.position) > 64.0 * 64.0 {
                 continue;
             }
-            let x = (batch.width / 2.0 - 91.0).floor();
             let progress = if m.extra.counter > 0 {
                 1.0 - m.extra.counter as f32 / horizon_client::mobs::wither::INVULNERABLE as f32
             } else {
                 (m.health / m.attrs.max_health).clamp(0.0, 1.0)
             };
-            batch.sprite(atlas, "gui/sprites/boss_bar/purple_background", x, y);
-            batch.sprite_part(
-                atlas,
-                "gui/sprites/boss_bar/purple_progress",
-                x,
-                y,
-                progress,
-            );
             let name = m
                 .custom_name
                 .clone()
                 .unwrap_or_else(|| self.translate("entity.minecraft.wither", "Wither"));
-            let w = HudBatch::text_width(atlas, &name);
-            batch.text(
-                atlas,
-                &name,
-                (batch.width / 2.0 - w / 2.0).floor(),
-                y - 9.0,
-                rgba(255, 255, 255, 255),
-                true,
-            );
-            y += 19.0;
+            bars.push(hud_overlays::BossBar {
+                name: Text::literal(name),
+                progress,
+                color: 5,
+                overlay: 0,
+            });
         }
-        y
     }
     pub(super) fn wither_near(&self) -> bool {
         self.player.as_ref().is_some_and(|p| {

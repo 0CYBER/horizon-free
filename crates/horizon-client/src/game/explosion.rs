@@ -391,11 +391,12 @@ impl Game<'_> {
         let name = self.res.facts.get(state).name.clone();
         let is_tnt = &*name == "minecraft:tnt";
         if !is_tnt {
-            let drops = self.res.items.block_drops(
+            let drops = self.res.items.block_drops_in(
                 self.res.assets.registry,
                 state,
                 None,
                 &mut self.world.random,
+                Some((&mut self.rand_sequences, self.level.seed)),
             );
             for stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {

@@ -127,7 +127,8 @@ def compare(reference, candidate):
     raise AssertionError('Parity outputs changed during comparison')
 
 def run(command, **kwargs):
-    subprocess.run(command, cwd=lab.ROOT, check=True, timeout=300, **kwargs)
+    # A hang guard only: a loaded machine (14 harnesses at once on the Mac mini) can take minutes for one oracle.
+    subprocess.run(command, cwd=lab.ROOT, check=True, timeout=900, **kwargs)
 
 
 def source_hashes(sources):

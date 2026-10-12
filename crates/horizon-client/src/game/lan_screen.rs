@@ -241,7 +241,7 @@ impl Game<'_> {
             }
             if o.parsed_port().is_none() {
                 let t = Text::translate(
-                    "lanServer.port.invalid.new",
+                    "lanServer.port.invalid",
                     &[Text::literal("1024"), Text::literal("65535")],
                 );
                 let first = t.clone();

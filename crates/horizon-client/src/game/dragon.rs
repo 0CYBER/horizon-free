@@ -8,9 +8,11 @@
 //! exit portal, the egg and the next gateway; and its rendering and boss bar.
 use super::{Dim, Game};
 use horizon_client::{
-    hud::{HudBatch, rgba},
+    hud::HudBatch,
+    hud_layout, hud_overlays,
     mesher::Vertex,
     particles::{ParticleOptions, ParticleType},
+    text::Text,
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -1839,30 +1841,30 @@ impl Game<'_> {
         });
         self.breath_clouds.append(&mut clouds);
     }
-    /// The boss bar (`BossHealthOverlay`): name and the pink progress bar.
-    pub(super) fn draw_boss_bar(&self, batch: &mut HudBatch) {
-        let dragon = self.dragon.as_ref().filter(|_| self.dim == Dim::End);
-        let y = self.draw_wither_bars(batch, if dragon.is_some() { 31.0 } else { 12.0 });
-        self.draw_raid_bar(batch, y);
-        let Some(d) = dragon else {
-            return;
-        };
-        let atlas = &self.res.atlas;
-        let x = (batch.width / 2.0 - 91.0).floor();
-        let y = 12.0;
-        batch.sprite(atlas, "gui/sprites/boss_bar/pink_background", x, y);
-        let progress = (d.health / MAX_HEALTH).clamp(0.0, 1.0);
-        batch.sprite_part(atlas, "gui/sprites/boss_bar/pink_progress", x, y, progress);
-        let name = self.translate("entity.minecraft.ender_dragon", "Ender Dragon");
-        let w = HudBatch::text_width(atlas, &name);
-        batch.text(
-            atlas,
-            &name,
-            (batch.width / 2.0 - w / 2.0).floor(),
-            y - 9.0,
-            rgba(255, 255, 255, 255),
-            true,
+    /// `BossHealthOverlay`: the dragon's pink bar, then the withers', the
+    /// raids' and the custom bars, in that order.
+    pub(super) fn draw_boss_bars(&self, batch: &mut HudBatch) {
+        let mut bars = Vec::new();
+        if let Some(d) = self.dragon.as_ref().filter(|_| self.dim == Dim::End) {
+            bars.push(hud_overlays::BossBar {
+                name: Text::literal(
+                    self.translate("entity.minecraft.ender_dragon", "Ender Dragon"),
+                ),
+                progress: (d.health / MAX_HEALTH).clamp(0.0, 1.0),
+                color: 0,
+                overlay: 0,
+            });
+        }
+        self.wither_bars(&mut bars);
+        self.raid_bars(&mut bars);
+        self.custom_bossbars(&mut bars);
+        let draws = hud_overlays::boss_overlay(
+            batch.width as i32,
+            batch.height as i32,
+            &bars,
+            &self.res.atlas.font,
         );
+        hud_layout::paint(batch, &self.res.atlas, &draws);
     }
     /// `music.dragon` while the boss bar plays music.
     pub(super) fn boss_music(&self) -> bool {

@@ -64,6 +64,74 @@ class ParityRunnerTests(unittest.TestCase):
                     self.assertTrue(parity.stale("x", state, parity.Hasher(state["hashes"]), "env"))
 
 
+class RustScopeTests(unittest.TestCase):
+    """PARITY_RUST_SCOPE drops Rust sources only when nothing in the scope can reach them."""
+
+    def crate(self, temp, files):
+        root = Path(temp)
+        (root / "crates/w/src").mkdir(parents=True)
+        (root / "crates/w/examples").mkdir(parents=True)
+        (root / "crates/w/Cargo.toml").write_text("")
+        for name, text in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text)
+        return root
+
+    FILES = {
+        "crates/w/src/lib.rs": "pub mod a;\npub mod b;\n/// The other one.\npub mod c;\npub const V: i32 = 1;\n",
+        "crates/w/src/a.rs": 'pub struct Tag;\npub fn f() -> i32 { let s = "crate::c::x"; crate::V }\n'
+                             "mod tests { fn g() { super::super::b::h(); } }\n",
+        "crates/w/src/b.rs": "pub fn h() {}\n",
+        "crates/w/src/c.rs": "pub struct Other;\nimpl std::fmt::Display for Other { }\nimpl<R: Copy> Foo for R {}\n",
+        "crates/w/examples/probe.rs": "use w::a::f;\nfn main() { f(); }\n",
+    }
+
+    def narrow(self, files, scope):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", self.crate(temp, files)):
+            return parity.narrow_rust_sources(sorted(files), scope)
+
+    def test_a_closed_scope_drops_the_rest(self):
+        kept, note = self.narrow(self.FILES, ["crates/w/src/a.rs", "crates/w/src/b.rs"])
+        self.assertIsNone(note)
+        self.assertEqual(kept, ["crates/w/examples/probe.rs", "crates/w/src/a.rs", "crates/w/src/b.rs",
+                                "crates/w/src/lib.rs#keep:a,b"])
+
+    def test_references_out_of_the_scope_keep_everything(self):
+        files = dict(self.FILES, **{"crates/w/src/b.rs": "pub fn h() { crate::c::Other; }\n"})
+        kept, note = self.narrow(files, ["crates/w/src/a.rs", "crates/w/src/b.rs"])
+        self.assertIn("crate::c::Other", note)
+        self.assertEqual(kept, sorted(files))
+
+    def test_impls_elsewhere_for_scope_types_keep_everything(self):
+        files = dict(self.FILES, **{"crates/w/src/c.rs": "impl From<i32> for crate::a::Tag { }\n"})
+        self.assertIn("Tag", self.narrow(files, ["crates/w/src/a.rs", "crates/w/src/b.rs"])[1])
+
+    def test_new_modules_in_the_crate_root_do_not_count(self):
+        keep = {"a", "b"}
+        root = self.FILES["crates/w/src/lib.rs"]
+        self.assertEqual(parity.crate_root_without_modules(root, keep),
+                         parity.crate_root_without_modules(root + "#[cfg(test)]\nmod d;\n", keep))
+        self.assertNotEqual(parity.crate_root_without_modules(root, keep),
+                            parity.crate_root_without_modules(root + "pub const W: i32 = 2;\n", keep))
+
+    def test_rust_code_blanks_literals_and_comments(self):
+        code = parity.rust_code('let a = "{ crate::x }"; // crate::y\nlet c = \'{\'; fn f<\'a>() { r#"}"# }')
+        self.assertNotIn("crate", code)
+        self.assertEqual(code.count("{"), code.count("}"))
+        self.assertIn("<'a>", code)
+
+
+class ShardTests(unittest.TestCase):
+    def test_a_sharded_harness_runs_as_numbered_entries(self):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)):
+            (Path(temp) / "tools").mkdir()
+            (Path(temp) / "tools/test_x_parity.py").write_text("PARITY_SHARDS = 3\n")
+            (Path(temp) / "tools/test_y_parity.py").write_text("")
+            self.assertEqual(sorted(parity.harnesses()), ["x#1", "x#2", "x#3", "y"])
+            self.assertEqual(parity.SHARDS["x#2"], "2/3")
+            self.assertEqual(parity.base_name("x#2"), "x")
+
+
 class OracleReuseTests(unittest.TestCase):
     """tools/parity_shim.py replays a run only when its inputs and outputs are as recorded."""
 
