@@ -11,6 +11,119 @@ use super::{Cx, FixFn, id_is, renamer};
 use crate::nbt::{Compound, JavaString, Tag};
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
+    out.push((key(1800, 0), |cx| {
+        cx.rename(
+            Ty::ItemName,
+            renamer(&[
+                ("minecraft:cactus_green", "minecraft:green_dye"),
+                ("minecraft:rose_red", "minecraft:red_dye"),
+                ("minecraft:dandelion_yellow", "minecraft:yellow_dye"),
+            ]),
+        )
+    }));
+    out.push((key(1802, 0), |cx| {
+        super::fixes_a::block_rename(
+            cx,
+            &[
+                ("minecraft:stone_slab", "minecraft:smooth_stone_slab"),
+                ("minecraft:sign", "minecraft:oak_sign"),
+                ("minecraft:wall_sign", "minecraft:oak_wall_sign"),
+            ],
+        )
+    }));
+    out.push((key(1802, 0), |cx| {
+        cx.rename(
+            Ty::ItemName,
+            renamer(&[
+                ("minecraft:stone_slab", "minecraft:smooth_stone_slab"),
+                ("minecraft:sign", "minecraft:oak_sign"),
+            ]),
+        )
+    }));
+    out.push((key(1803, 0), item_lore));
+    out.push((key(1904, 0), cat_split));
+    out.push((key(1905, 0), |cx| {
+        level_status(cx, |status| {
+            (status == "postprocessed").then_some("fullchunk")
+        })
+    }));
+    out.push((key(1911, 0), |cx| {
+        level_status(cx, |status| {
+            Some(match status {
+                "structure_references" | "biomes" => "empty",
+                "base" => "surface",
+                "carved" => "carvers",
+                "liquid_carved" => "liquid_carvers",
+                "decorated" => "features",
+                "lighted" => "light",
+                "mobs_spawned" => "spawn",
+                "finalized" => "heightmaps",
+                "fullchunk" => "full",
+                _ => "empty",
+            })
+        })
+    }));
+    out.push((key(1914, 0), |cx| {
+        cx.block_entity("minecraft:chest", |be| {
+            if as_str(be.get("LootTable")).as_deref() == Some("minecraft:chests/village_blacksmith")
+            {
+                set(
+                    be,
+                    "LootTable",
+                    string("minecraft:chests/village/village_weaponsmith"),
+                );
+            }
+        })
+    }));
+    out.push((key(1917, 0), |cx| {
+        cx.entity("minecraft:cat", |e| {
+            if as_int(e.get("CatType"), 0) == 9 {
+                set(e, "CatType", Tag::Int(10));
+            }
+        })
+    }));
+    out.push((key(1918, 0), |cx| villager_data(cx, "minecraft:villager")));
+    out.push((key(1918, 0), |cx| {
+        villager_data(cx, "minecraft:zombie_villager")
+    }));
+    out.push((key(1920, 0), new_village));
+    out.push((key(1925, 0), |cx| {
+        cx.each(Ty::SavedMapIndex, |root| {
+            let old = std::mem::replace(root, Tag::End);
+            *root = Tag::compound([("data", old)]);
+        })
+    }));
+    out.push((key(1928, 0), |cx| {
+        entity_rename(cx, "minecraft:illager_beast", "minecraft:ravager")
+    }));
+    out.push((key(1928, 0), |cx| {
+        cx.rename(
+            Ty::ItemName,
+            renamer(&[(
+                "minecraft:illager_beast_spawn_egg",
+                "minecraft:ravager_spawn_egg",
+            )]),
+        )
+    }));
+    out.push((key(1946, 0), reorganize_poi));
+    out.push((key(1948, 0), ominous_banner_item));
+    out.push((key(1953, 0), ominous_banner_block_entity));
+    out.push((key(1955, 0), villager_level_and_xp));
+    out.push((key(1955, 0), zombie_villager_xp));
+    out.push((key(1961, 0), |cx| {
+        cx.each(Ty::Chunk, |c| {
+            if let Some(level) = c.get_mut("Level") {
+                remove(level, "isLightOn");
+            }
+        })
+    }));
+    out.push((key(1963, 0), |cx| {
+        cx.entity("minecraft:villager", |e| {
+            map_elements_filter(e, "Gossips", |g| {
+                as_str(g.get("Type")).as_deref() != Some("golem")
+            });
+        })
+    }));
     out.push((key(2100, 0), |cx| {
         cx.rename(
             Ty::Recipe,
@@ -1476,3 +1589,216 @@ const BIOMES: &[(&str, &str)] = &[
     ("minecraft:cold_deep_ocean", "minecraft:deep_cold_ocean"),
     ("minecraft:frozen_deep_ocean", "minecraft:deep_frozen_ocean"),
 ];
+
+// ------------------------------------------------------------------ 1800 to 1963
+
+/// `ItemLoreFix`: the lore lines become JSON text components.
+fn item_lore(cx: &mut Cx) {
+    cx.each(Ty::ItemStack, |stack| {
+        let Some(lore) = stack
+            .get_mut("tag")
+            .and_then(|t| t.get_mut("display"))
+            .and_then(|d| d.get_mut("Lore"))
+        else {
+            return;
+        };
+        if let Tag::List(lines) = lore {
+            for line in lines {
+                if let Tag::String(text) = line {
+                    *line = Tag::String(JavaString(super::json::text_component_json(&text.0)));
+                }
+            }
+        }
+    });
+}
+
+/// `EntityCatSplitFix`: tame ocelots become cats. (The vanilla fix sets
+/// `Trusting` on a copy it then drops.)
+fn cat_split(cx: &mut Cx) {
+    cx.each(Ty::Entity, |e| {
+        if !id_is(e, "minecraft:ocelot") {
+            return;
+        }
+        let kind = as_int(e.get("CatType"), 0);
+        if kind > 0 && kind < 4 {
+            set(e, "CatType", Tag::Int(kind));
+            let owner = super::dynamic::as_string(e.get("OwnerUUID"), "");
+            set(e, "OwnerUUID", string(&owner));
+            set(e, "id", string("minecraft:cat"));
+        }
+    });
+}
+
+/// The `Status` of a chunk, mapped (`ChunkStatusFix`, `ChunkStatusFix2`).
+fn level_status(cx: &mut Cx, f: impl Fn(&str) -> Option<&'static str>) {
+    cx.each(Ty::Chunk, |c| {
+        let Some(level) = c.get_mut("Level") else {
+            return;
+        };
+        let status = super::dynamic::as_string(level.get("Status"), "empty");
+        if let Some(new) = f(&status)
+            && new != status
+        {
+            set(level, "Status", string(new));
+        }
+    });
+}
+
+/// A list field filtered by `keep`; a present field that is no list becomes empty.
+fn map_elements_filter(tag: &mut Tag, field: &str, keep: impl Fn(&Tag) -> bool) {
+    if let Some(v) = tag.get_mut(field) {
+        *v = Tag::List(stream(Some(v)).into_iter().filter(|e| keep(e)).collect());
+    }
+}
+
+/// `VillagerDataFix`: profession and career become `VillagerData`.
+fn villager_data(cx: &mut Cx, entity: &str) {
+    cx.entity(entity, |e| {
+        let profession = as_int(e.get("Profession"), 0);
+        let career = as_int(e.get("Career"), 0);
+        let profession = match (profession, career) {
+            (0, 2) => "minecraft:fisherman",
+            (0, 3) => "minecraft:shepherd",
+            (0, 4) => "minecraft:fletcher",
+            (0, _) => "minecraft:farmer",
+            (1, 2) => "minecraft:cartographer",
+            (1, _) => "minecraft:librarian",
+            (2, _) => "minecraft:cleric",
+            (3, 2) => "minecraft:weaponsmith",
+            (3, 3) => "minecraft:toolsmith",
+            (3, _) => "minecraft:armorer",
+            (4, 2) => "minecraft:leatherworker",
+            (4, _) => "minecraft:butcher",
+            (5, _) => "minecraft:nitwit",
+            _ => "minecraft:none",
+        };
+        let level = e.get("CareerLevel").cloned().unwrap_or(Tag::Int(1));
+        remove(e, "Profession");
+        remove(e, "Career");
+        remove(e, "CareerLevel");
+        set(
+            e,
+            "VillagerData",
+            Tag::compound([
+                ("type", string("minecraft:plains")),
+                ("profession", string(profession)),
+                ("level", level),
+            ]),
+        );
+    });
+}
+
+/// `NewVillageFix`: the new village structure takes the old one's name.
+fn new_village(cx: &mut Cx) {
+    cx.each(Ty::Chunk, |c| {
+        let Some(structures) = c.get_mut("Level").and_then(|l| l.get_mut("Structures")) else {
+            return;
+        };
+        if let Some(Tag::Compound(starts)) = structures.get_mut("Starts") {
+            starts.remove(&JavaString::from("Village"));
+            if let Some(v) = starts.remove(&JavaString::from("New_Village")) {
+                starts.insert(JavaString::from("Village"), v);
+            }
+        }
+        if let Some(references) = structures.get_mut("References") {
+            if let Some(v) = remove(references, "New_Village") {
+                set(references, "Village", v);
+            }
+            remove(references, "Village");
+        }
+    });
+    cx.each(Ty::StructureFeature, |s| {
+        if let Some(id) = s.get("id") {
+            let id = as_str(Some(id)).unwrap_or_default();
+            if namespaced(&id) == "minecraft:new_village" {
+                set(s, "id", string("minecraft:village"));
+            }
+        }
+    });
+}
+
+/// `ReorganizePoi`: the sections `0` to `15` move below `Sections`.
+fn reorganize_poi(cx: &mut Cx) {
+    cx.each(Ty::PoiChunk, |poi| {
+        let mut sections = Compound::new();
+        for i in 0..16 {
+            let name = i.to_string();
+            if let Some(records) = remove(poi, &name) {
+                sections.insert(
+                    JavaString::from(name.as_str()),
+                    Tag::compound([("Records", records)]),
+                );
+            }
+        }
+        set(poi, "Sections", Tag::Compound(sections));
+    });
+}
+
+const ILLAGER_BANNER: &str = "\"translate\":\"block.minecraft.illager_banner\"";
+const OMINOUS_BANNER: &str = "\"translate\":\"block.minecraft.ominous_banner\"";
+
+/// `OminousBannerRenameFix`.
+fn ominous_banner_item(cx: &mut Cx) {
+    cx.item(
+        |id| id == "minecraft:white_banner",
+        |stack| {
+            if let Some(name) = stack
+                .get_mut("tag")
+                .and_then(|t| t.get_mut("display"))
+                .and_then(|d| d.get_mut("Name"))
+                && let Some(text) = as_str(Some(name))
+            {
+                *name = string(&text.replace(ILLAGER_BANNER, OMINOUS_BANNER));
+            }
+        },
+    );
+}
+
+/// `OminousBannerBlockEntityRenameFix`.
+fn ominous_banner_block_entity(cx: &mut Cx) {
+    cx.block_entity("minecraft:banner", |be| {
+        if let Some(name) = be.get_mut("CustomName")
+            && let Some(text) = as_str(Some(name))
+        {
+            *name = string(&text.replace(ILLAGER_BANNER, OMINOUS_BANNER));
+        }
+    });
+}
+
+const LEVEL_XP_THRESHOLDS: [i32; 5] = [0, 10, 50, 100, 150];
+
+fn min_xp_per_level(level: i32) -> i32 {
+    LEVEL_XP_THRESHOLDS[(level - 1).clamp(0, 4) as usize]
+}
+
+/// `VillagerRebuildLevelAndXpFix`.
+fn villager_level_and_xp(cx: &mut Cx) {
+    cx.entity("minecraft:villager", |e| {
+        let mut level = as_int(e.get("VillagerData").and_then(|d| d.get("level")), 0);
+        if level == 0 || level == 1 {
+            let offers = e
+                .get("Offers")
+                .and_then(|o| o.get("Recipes"))
+                .map_or(0, |r| stream(Some(r)).len() as i32);
+            level = (offers / 2).clamp(1, 5);
+            if level > 1
+                && let Some(data) = e.get_mut("VillagerData")
+            {
+                set(data, "level", Tag::Int(level));
+            }
+        }
+        if e.get("Xp").and_then(as_number).is_none() {
+            set(e, "Xp", Tag::Int(min_xp_per_level(level)));
+        }
+    });
+}
+
+/// `ZombieVillagerRebuildXpFix`.
+fn zombie_villager_xp(cx: &mut Cx) {
+    cx.entity("minecraft:zombie_villager", |e| {
+        if e.get("Xp").and_then(as_number).is_none() {
+            let level = as_int(e.get("VillagerData").and_then(|d| d.get("level")), 1);
+            set(e, "Xp", Tag::Int(min_xp_per_level(level)));
+        }
+    });
+}
