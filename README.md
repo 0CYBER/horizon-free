@@ -1,3 +1,23 @@
+<p align="center">
+  <img src="docs/media/banner.jpg" alt="Horizon: Minecraft Java Edition 26.3, rewritten from scratch in Rust" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/ludovic111/horizon/actions/workflows/ci.yml"><img src="https://github.com/ludovic111/horizon/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <img src="https://img.shields.io/badge/Minecraft-Java%2026.3-5D9C3F" alt="Minecraft Java 26.3">
+  <img src="https://img.shields.io/badge/Rust-stable-B7410E?logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/vanilla%20parity-80%25-F0795A" alt="Vanilla parity 80%">
+  <img src="https://img.shields.io/badge/platform-Linux-2A2470?logo=linux&logoColor=white" alt="Linux">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-3B2F7E" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <a href="#getting-it"><b>Get started</b></a> ·
+  <a href="#screenshots"><b>Screenshots</b></a> ·
+  <a href="#project-status"><b>Parity status</b></a> ·
+  <a href="docs/native-client.md"><b>Native client guide</b></a>
+</p>
+
 # Horizon
 
 A Rust rewrite of Minecraft: Java Edition 26.3 that aims for one-to-one vanilla parity, checked against the game itself with differential tests.
@@ -5,6 +25,30 @@ A Rust rewrite of Minecraft: Java Edition 26.3 that aims for one-to-one vanilla 
 **Status:** in development, no releases. The native Linux client is playable; Java parity is 80% on `main` (see [Project status](#project-status)).
 
 > Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft. Horizon contains no Minecraft code, assets or data: you need your own legally obtained copy of Minecraft: Java Edition 26.3.
+
+## Screenshots
+
+Captured in the Rust client itself, with vanilla assets and no mods or shaders.
+
+<table>
+  <tr>
+    <td colspan="2"><img src="docs/media/sunset.jpg" alt="Sunset over a savanna river valley and a plains village"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/village.jpg" alt="A plains village with farms, an iron golem and animals"></td>
+    <td width="50%"><img src="docs/media/survival.jpg" alt="Survival at dusk: a zombie attacks near the village"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/nether.jpg" alt="A crimson forest in the Nether with a zombified piglin"></td>
+    <td width="50%"><img src="docs/media/night.jpg" alt="Moonrise over a torch-lit village and river"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/underwater.jpg" alt="Salmon swimming in a river"></td>
+    <td width="50%" valign="middle">
+      Vanilla world generation ported to Rust (terrain, aquifers, carvers, features, villages and the Nether), every block model with smooth lighting and biome tints, the vanilla sky and fog, mobs, the HUD, chat and advancements: everything in these frames is drawn by Horizon.
+    </td>
+  </tr>
+</table>
 
 ## What it does
 

@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Horizon</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A0F2C"/>
+      <stop offset="0.38" stop-color="#26206A"/>
+      <stop offset="0.62" stop-color="#7C3A88"/>
+      <stop offset="0.78" stop-color="#EE6E5A"/>
+      <stop offset="0.9" stop-color="#FFB25E"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF6CF"/>
+      <stop offset="0.5" stop-color="#FFD272"/>
+      <stop offset="1" stop-color="#FF9A44"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.6" r="0.55">
+      <stop offset="0" stop-color="#FFC874" stop-opacity="0.6"/>
+      <stop offset="0.6" stop-color="#FF8A5C" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#FF8A5C" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="far" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A2F7E"/>
+      <stop offset="1" stop-color="#2B1F5E"/>
+    </linearGradient>
+    <linearGradient id="near" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#151A45"/>
+      <stop offset="1" stop-color="#080B22"/>
+    </linearGradient>
+    <clipPath id="tile"><rect width="512" height="512" rx="112"/></clipPath>
+    <clipPath id="sunCut"><rect x="0" y="0" width="512" height="352"/></clipPath>
+    <clipPath id="sunDisc"><circle cx="256" cy="300" r="136"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="512" height="512" fill="url(#sky)"/>
+    <ellipse cx="256" cy="320" rx="300" ry="230" fill="url(#glow)"/>
+    <g clip-path="url(#sunCut)">
+      <circle cx="256" cy="300" r="136" fill="url(#sun)"/>
+      <g clip-path="url(#sunDisc)">
+      <rect x="100" y="262" width="312" height="8" fill="#EE6E5A" opacity="0.5"/>
+      <rect x="100" y="284" width="312" height="11" fill="#EE6E5A" opacity="0.62"/>
+      <rect x="100" y="310" width="312" height="14" fill="#EE6E5A" opacity="0.74"/>
+      </g>
+    </g>
+    <path fill="url(#far)" d="M0 320H64V288H128V320H352V288H416V256H512V512H0Z"/>
+    <path fill="url(#near)" d="M0 384H64V352H192V384H320V352H384V320H448V352H512V512H0Z"/>
+    <g fill="#FFFFFF" opacity="0.07">
+      <rect x="64" y="352" width="4" height="160"/>
+      <rect x="192" y="352" width="4" height="160"/>
+      <rect x="320" y="352" width="4" height="160"/>
+      <rect x="384" y="320" width="4" height="192"/>
+      <rect x="448" y="320" width="4" height="192"/>
+      <rect x="0" y="448" width="512" height="4"/>
+    </g>
+    <rect x="0" y="384" width="64" height="4" fill="#FFB25E" opacity="0.25"/>
+    <rect x="64" y="352" width="128" height="4" fill="#FFB25E" opacity="0.35"/>
+    <rect x="192" y="384" width="128" height="4" fill="#FFB25E" opacity="0.25"/>
+    <rect x="320" y="352" width="64" height="4" fill="#FFB25E" opacity="0.35"/>
+    <rect x="384" y="320" width="64" height="4" fill="#FFB25E" opacity="0.45"/>
+    <rect x="448" y="352" width="64" height="4" fill="#FFB25E" opacity="0.35"/>
+  </g>
+  <rect x="2" y="2" width="508" height="508" rx="110" fill="none" stroke="#FFFFFF" stroke-opacity="0.1" stroke-width="4"/>
+</svg>
