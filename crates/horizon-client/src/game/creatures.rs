@@ -166,6 +166,7 @@ impl Game<'_> {
             yaw: self.yaw,
             hero: self.potions.effects.get("hero_of_the_village").is_some(),
             uuid: self.level.player_uuid.unwrap_or_default(),
+            allies: std::sync::Arc::new(self.player_allies()),
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
@@ -458,7 +459,14 @@ impl Game<'_> {
                 }
                 keep
             });
-            push_apart(&mut mobs);
+            // EntitySelector.pushableBy: the collision rules of the mobs' teams.
+            let teams: Vec<Option<horizon_client::scoreboard::Team>> =
+                if self.score.board.teams.is_empty() {
+                    Vec::new()
+                } else {
+                    mobs.iter().map(|m| self.mob_team(m.id).cloned()).collect()
+                };
+            push_apart(&mut mobs, &teams);
         }
         self.mobs.append(&mut mobs);
         self.sync_riders();
@@ -667,18 +675,21 @@ impl Game<'_> {
                 MobEvent::Shoot(..) => {}
                 MobEvent::Explode(at, radius) => {
                     // The exploding mob causes the damage (Creeper.explodeCreeper).
-                    if let Some(id) = self
+                    let source_mob = self
                         .mobs
                         .iter()
                         .filter(|m| {
                             (m.position.x - at[0]).powi(2) + (m.position.z - at[2]).powi(2) < 1.0
                         })
                         .map(|m| m.id)
-                        .next()
-                    {
+                        .next();
+                    if let Some(id) = source_mob {
                         self.note_attacker("minecraft:explosion", id);
                     }
-                    self.explode(at, radius)?
+                    self.combat.explosion_source = source_mob;
+                    let result = self.explode(at, radius);
+                    self.combat.explosion_source = None;
+                    result?
                 }
                 MobEvent::AttackMob {
                     target,
@@ -2421,8 +2432,12 @@ fn from_loot(stack: &horizon_world::loot::LootStack) -> ItemStack {
     }
     item
 }
-/// Entity.push between overlapping mobs (LivingEntity.pushEntities).
-fn push_apart(mobs: &mut [Mob]) {
+/// Entity.push between overlapping mobs (LivingEntity.pushEntities), unless
+/// their teams' collision rules keep both from pushing the other (`teams`
+/// holds each mob's team, or is empty when there are no teams).
+fn push_apart(mobs: &mut [Mob], teams: &[Option<horizon_client::scoreboard::Team>]) {
+    use horizon_client::scoreboard::pushable_by;
+    let team = |i: usize| teams.get(i).and_then(Option::as_ref);
     let n = mobs.len();
     for i in 0..n {
         if !mobs[i].alive() {
@@ -2435,6 +2450,12 @@ fn push_apart(mobs: &mut [Mob]) {
             }
             // A rider and its vehicle do not push each other.
             if mobs[i].extra.mount == Some(mobs[j].id) || mobs[j].extra.mount == Some(mobs[i].id) {
+                continue;
+            }
+            if !teams.is_empty()
+                && !pushable_by(team(i), team(j), true)
+                && !pushable_by(team(j), team(i), true)
+            {
                 continue;
             }
             let (dx, dz) = (

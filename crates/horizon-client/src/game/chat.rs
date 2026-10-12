@@ -655,15 +655,19 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return;
         };
+        let below_world = p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64);
+        let name = self.player_display_text();
         let message = match cause {
-            Some(key) => Text::translate(&key, &[Text::literal(PLAYER_NAME)]),
-            None if p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64) => {
-                Text::translate("death.attack.outOfWorld", &[Text::literal(PLAYER_NAME)])
-            }
+            Some(key) => Text::translate(&key, &[name]),
+            None if below_world => Text::translate("death.attack.outOfWorld", &[name]),
             None => self.combat_death_message(),
         };
         self.ui.death_text = Some(message.clone());
-        self.system_message(message);
+        // ServerPlayer.die: a team that hides death messages keeps it out of
+        // the dying player's own chat (the death screen still shows it).
+        if horizon_client::scoreboard::own_death_message_shown(self.player_team()) {
+            self.system_message(message);
+        }
     }
     /// F1 hides the HUD (and hand); the screenshot key still works.
     pub(super) fn toggle_hide_gui(&mut self) {

@@ -191,6 +191,15 @@ impl Game<'_> {
                 [d[0] / l, d[1] / l, d[2] / l]
             }
         };
+        // `source.doTeamsAllowDamage(entity)`: the exploding mob spares its
+        // team mates when its team has no friendly fire (they are still pushed).
+        let exploding = self.combat.explosion_source;
+        let teams_allow = |g: &Self, victim: Option<&horizon_client::scoreboard::Team>| {
+            exploding.is_none_or(|id| {
+                horizon_client::scoreboard::teams_allow_damage(g.mob_team(id), victim)
+            })
+        };
+        let player_hurtable = teams_allow(self, self.player_team());
         // Player.
         if let Some(p) = self.player.as_ref() {
             let feet = [p.position.x, p.position.y, p.position.z];
@@ -217,7 +226,7 @@ impl Game<'_> {
                     && let Some(id) = self.motion.health.damage.id("minecraft:explosion")
                 {
                     // Creative players are invulnerable to explosions.
-                    if !creative {
+                    if !creative && player_hurtable {
                         hurt = p
                             .hurt(&self.motion.health, self.world.health_rules, id, amount)
                             .unwrap_or(false);
@@ -236,6 +245,7 @@ impl Game<'_> {
         // Mobs.
         let mut mobs = std::mem::take(&mut self.mobs);
         for m in mobs.iter_mut().filter(|m| m.alive()) {
+            let hurtable = teams_allow(self, self.mob_team(m.id));
             let feet = [m.position.x, m.position.y, m.position.z];
             let dist = distance(feet) / diameter;
             if dist > 1.0 {
@@ -253,7 +263,7 @@ impl Game<'_> {
                 attacker: None,
                 from: Some(center),
             };
-            if !m.damage(damage(dist, exposure), source) {
+            if hurtable && !m.damage(damage(dist, exposure), source) {
                 continue;
             }
             let dir = direction(eye);

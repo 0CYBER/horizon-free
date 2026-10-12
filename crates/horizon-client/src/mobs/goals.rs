@@ -397,7 +397,8 @@ impl Mob {
     /// creative, within range scaled by visibility, optionally visible.
     pub fn can_target_player(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
         let Some(p) = &w.player else { return false };
-        if !p.alive || p.creative {
+        // TargetingConditions.isCombat: never an ally.
+        if !p.alive || p.creative || p.allies.contains(&self.id) {
             return false;
         }
         let mut visibility = 1.0;

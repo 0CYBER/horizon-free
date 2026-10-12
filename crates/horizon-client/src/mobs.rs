@@ -904,6 +904,9 @@ pub struct PlayerView {
     pub hero: bool,
     /// The player's UUID (villagers' gossip is keyed by it).
     pub uuid: [i32; 4],
+    /// The mobs on the player's team (`isAlliedTo`): combat targeting
+    /// leaves the player alone.
+    pub allies: std::sync::Arc<std::collections::HashSet<u32>>,
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,

@@ -20,7 +20,8 @@ use std::collections::HashSet;
 /// What `ServerPlayer` last recorded for the criteria that follow the player.
 #[derive(Default)]
 pub(super) struct Recorded {
-    health: Option<i32>,
+    /// `lastRecordedHealthAndAbsorption` (compared as a float).
+    health_and_absorption: Option<f32>,
     food: Option<i32>,
     air: Option<i32>,
     armor: Option<i32>,
@@ -306,18 +307,29 @@ impl Game<'_> {
                     });
                 }
             }
+            let display = self.player_display_comp();
             if let Some(p) = self.player.as_mut() {
-                let health = (p.health.health() + p.health.absorption()).ceil() as i32;
+                let health_and_absorption = p.health.health() + p.health.absorption();
                 let food = p.health.food.food;
+                // getArmorValue: the armor attribute rounded down.
                 let armor = p
                     .attribute("minecraft:armor")
                     .or_else(|_| p.attribute("armor"))
                     .unwrap_or(0.0)
-                    .ceil() as i32;
+                    .floor() as i32;
                 let rec = &mut self.score.recorded;
                 let board = &mut self.score.board;
+                if rec.health_and_absorption != Some(health_and_absorption) {
+                    rec.health_and_absorption = Some(health_and_absorption);
+                    let value = health_and_absorption.ceil() as i32;
+                    board.for_all_objectives_with(
+                        sb::CRITERIA_HEALTH,
+                        PLAYER_NAME,
+                        Some(&display),
+                        |_| value,
+                    );
+                }
                 for (criteria, last, value) in [
-                    (sb::CRITERIA_HEALTH, &mut rec.health, health),
                     (sb::CRITERIA_FOOD, &mut rec.food, food),
                     // The air supply is full unless the player is drowning.
                     (sb::CRITERIA_AIR, &mut rec.air, 300),
@@ -327,7 +339,12 @@ impl Game<'_> {
                 ] {
                     if *last != Some(value) {
                         *last = Some(value);
-                        board.for_all_objectives(criteria, PLAYER_NAME, |_| value);
+                        board.for_all_objectives_with(
+                            criteria,
+                            PLAYER_NAME,
+                            Some(&display),
+                            |_| value,
+                        );
                     }
                 }
             }
@@ -338,29 +355,39 @@ impl Game<'_> {
     }
     /// `ServerPlayer.die`: the death count.
     pub(super) fn score_player_died(&mut self) {
+        let display = self.player_display_comp();
         let board = &mut self.score.board;
-        board.for_all_objectives(sb::CRITERIA_DEATH_COUNT, PLAYER_NAME, |v| v + 1);
+        board.for_all_objectives_with(sb::CRITERIA_DEATH_COUNT, PLAYER_NAME, Some(&display), |v| {
+            v.wrapping_add(1)
+        });
         // A respawned player has everything to record again.
         self.score.recorded = Recorded::default();
     }
     /// `ServerPlayer.awardKillScore`: total kills and the team kill counts.
     pub(super) fn score_player_killed(&mut self, victim: Target) {
         let victim_name = self.holder_name(victim);
+        let display = self.player_display_comp();
         let board = &mut self.score.board;
-        board.for_all_objectives(sb::CRITERIA_TOTAL_KILLS, PLAYER_NAME, |v| v + 1);
+        let inc = |v: i32| v.wrapping_add(1);
+        board.for_all_objectives_with(sb::CRITERIA_TOTAL_KILLS, PLAYER_NAME, Some(&display), inc);
         if victim == Target::Player {
-            board.for_all_objectives(sb::CRITERIA_PLAYER_KILLS, PLAYER_NAME, |v| v + 1);
+            board.for_all_objectives_with(
+                sb::CRITERIA_PLAYER_KILLS,
+                PLAYER_NAME,
+                Some(&display),
+                inc,
+            );
         }
         let color_of =
             |board: &Scoreboard, name: &str| board.players_team(name).and_then(|t| t.color.clone());
         if let Some(victim_name) = victim_name {
             if let Some(color) = color_of(board, &victim_name) {
                 let criteria = format!("teamkill.{color}");
-                board.for_all_objectives(&criteria, PLAYER_NAME, |v| v + 1);
+                board.for_all_objectives_with(&criteria, PLAYER_NAME, Some(&display), inc);
             }
             if let Some(color) = color_of(board, PLAYER_NAME) {
                 let criteria = format!("killedByTeam.{color}");
-                board.for_all_objectives(&criteria, &victim_name, |v| v + 1);
+                board.for_all_objectives(&criteria, &victim_name, inc);
             }
         }
     }
@@ -369,9 +396,44 @@ impl Game<'_> {
         let Some(uuid) = self.persist.uuids.get(&id).copied() else {
             return;
         };
-        let name = uuid_text(uuid);
-        self.score.board.reset_all(&name);
-        self.score.board.remove_from_team(&name);
+        self.score.board.entity_removed(&uuid_text(uuid));
+    }
+
+    // ---- teams in gameplay -----------------------------------------------------
+
+    /// `Entity.getTeam` of a mob (a mob joins a team by its UUID).
+    pub(super) fn mob_team(&self, id: u32) -> Option<&sb::Team> {
+        let uuid = self.persist.uuids.get(&id)?;
+        self.score.board.players_team(&uuid_text(*uuid))
+    }
+    pub(super) fn player_team(&self) -> Option<&sb::Team> {
+        self.score.board.players_team(PLAYER_NAME)
+    }
+    /// The mobs on the player's team (`isAlliedTo`).
+    pub(super) fn player_allies(&self) -> HashSet<u32> {
+        let Some(team) = self.player_team() else {
+            return HashSet::new();
+        };
+        self.persist
+            .uuids
+            .iter()
+            .filter(|(_, uuid)| team.players.contains(&uuid_text(**uuid)))
+            .map(|(id, _)| *id)
+            .collect()
+    }
+    /// `Player.getDisplayName`: the name with the team's prefix, suffix and colour.
+    pub(super) fn player_display_comp(&self) -> Comp {
+        let name = literal(PLAYER_NAME);
+        match self.player_team() {
+            Some(t) => t.formatted_name_comp(&name),
+            None => name,
+        }
+    }
+    pub(super) fn player_display_text(&self) -> Text {
+        match self.player_team() {
+            Some(t) => t.formatted_name(Text::literal(PLAYER_NAME)),
+            None => Text::literal(PLAYER_NAME),
+        }
     }
 
     // ---- commands ------------------------------------------------------------

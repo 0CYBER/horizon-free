@@ -456,6 +456,7 @@ fn main() -> horizon_client::Result<()> {
                 yaw: 0.0,
                 hero: false,
                 uuid: [0, 0x1234, 0, 0x5678],
+                allies: Default::default(),
             }
         });
         let mut scratch = LegacyRandom::new(0);
