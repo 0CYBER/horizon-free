@@ -1,5 +1,8 @@
 {
- "default": ["macmini"],
+ "default": [
+  "macmini",
+  "thinkpad"
+ ],
  "hosts": {
   "macmini": {
    "ssh": "macmini",
@@ -20,8 +23,11 @@
    "shell": "sh -c",
    "jobs": 2,
    "nice": 19,
-   "environment": {"PARITY_BUILD_JOBS": "2"},
-   "note": "hosts the Claude account pool: two harnesses at most, at the lowest priority"
+   "environment": {
+    "PARITY_BUILD_JOBS": "2"
+   },
+   "note": "hosts the Claude account pool: two harnesses at most, at the lowest priority",
+   "setup": "export PKG_CONFIG_PATH=$HOME/code/horizon-parity/alsa-dev/lib/pkgconfig"
   }
  },
  "local_only": {
