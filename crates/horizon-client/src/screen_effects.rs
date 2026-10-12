@@ -46,8 +46,8 @@ pub struct ScreenInputs<'a> {
     pub frozen: f32,
     /// `Options.vignette`.
     pub vignette: bool,
-    /// Distance to the world border and its warning distance, when close.
-    pub border_warning: Option<f32>,
+    /// `WorldBorder::warning_strength` at the camera (0 when far).
+    pub border_warning: f32,
 }
 
 /// Effect state advanced every tick.
@@ -65,6 +65,22 @@ impl Default for ScreenEffects {
             portal: 0.0,
             o_portal: 0.0,
         }
+    }
+}
+/// `Hud.extractVignette`: the vignette blit colour (ARGB) from
+/// `Hud.vignetteBrightness` and the world border warning strength.
+pub fn vignette_color(vignette_brightness: f32, border_warning: f32) -> u32 {
+    let channel = |v: f32| ((v * 255.0).floor() as i32 & 0xFF) as u32;
+    let argb =
+        |r: f32, g: f32, b: f32| 0xFF00_0000 | channel(r) << 16 | channel(g) << 8 | channel(b);
+    let b = vignette_brightness.clamp(0.0, 1.0);
+    if border_warning > 0.0 {
+        let w = border_warning.clamp(0.0, 1.0);
+        let red = b * (1.0 - w);
+        let green_blue = b + (1.0 - b) * w;
+        argb(red, green_blue, green_blue)
+    } else {
+        argb(b, b, b)
     }
 }
 /// `Lightmap.getBrightness`.
@@ -173,16 +189,9 @@ impl ScreenEffects {
         if input.vignette
             && let Some(rect) = sprite("misc/vignette")
         {
-            let b = self.vignette_brightness.clamp(0.0, 1.0);
-            let color = match input.border_warning {
-                Some(w) if w > 0.0 => {
-                    let w = w.clamp(0.0, 1.0);
-                    let red = b * (1.0 - w);
-                    let gb = b + (1.0 - b) * w;
-                    [red, gb, gb, 1.0]
-                }
-                _ => [b, b, b, 1.0],
-            };
+            let argb = vignette_color(self.vignette_brightness, input.border_warning);
+            let channel = |shift: u32| ((argb >> shift) & 0xFF) as f32 / 255.0;
+            let color = [channel(16), channel(8), channel(0), channel(24)];
             out.push(gui(rect, color, Blend::Vignette));
         }
         for overlay in &input.camera_overlays {
@@ -257,7 +266,7 @@ mod tests {
             camera_overlays: vec![],
             frozen: 0.0,
             vignette: true,
-            border_warning: None,
+            border_warning: 0.0,
         };
         let quads = e.build(&input);
         assert_eq!(quads.len(), 1);

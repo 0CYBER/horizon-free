@@ -156,7 +156,7 @@ impl Game<'_> {
             camera_overlays,
             frozen: 0.0,
             vignette: true,
-            border_warning: None,
+            border_warning: self.border.warning_strength(p.position.x, p.position.z),
         })
     }
     /// `Lightmap.getBrightness(getMaxLocalRawBrightness(eye))`.
