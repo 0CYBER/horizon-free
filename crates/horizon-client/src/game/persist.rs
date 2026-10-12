@@ -815,6 +815,7 @@ impl Game<'_> {
             .chain(self.armor_stands.iter().map(|e| e.id))
             .chain(self.item_frames.iter().map(|e| e.id))
             .chain(self.paintings.iter().map(|e| e.id))
+            .chain(self.others.iter().map(|e| e.id))
             .collect();
         self.persist.uuids.retain(|id, _| alive.contains(id));
         self.persist.raw.retain(|id, _| alive.contains(id));

@@ -1837,8 +1837,16 @@ impl Level {
                 }),
             ),
         ];
-        // Vanilla writes `equipment` even when empty and omits an empty effect list.
-        entries.push(("equipment", Tag::compound(equipment)));
+        // LivingEntity.addAdditionalSaveData omits empty equipment and an empty
+        // effect list. PlayerEquipment.isEmpty also counts the selected hotbar
+        // item, which the codec never writes: holding one saves `equipment: {}`.
+        let holding = self
+            .inventory
+            .iter()
+            .any(|(slot, _, count, _)| i32::from(*slot) == self.selected_slot && *count > 0);
+        if holding || !equipment.is_empty() {
+            entries.push(("equipment", Tag::compound(equipment)));
+        }
         if self.active_effects.is_empty() {
             entries.retain(|(key, _)| *key != "active_effects");
         }
