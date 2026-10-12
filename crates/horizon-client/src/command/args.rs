@@ -1521,15 +1521,26 @@ impl ArgType {
                     reader.skip();
                 }
                 let id = &reader.string[start..reader.cursor];
-                if !crate::scoreboard::criteria_exists(id, reg) {
-                    reader.cursor = start;
-                    return Err(CommandError::tr_at(
-                        "argument.criteria.invalid",
-                        &[&id],
-                        reader,
-                    ));
+                // ObjectiveCriteria.byName: statistics resolve to their canonical name.
+                match crate::scoreboard::criteria_by_name(id, reg) {
+                    Ok(Some(canonical)) => Arg::Str(canonical),
+                    Ok(None) => {
+                        reader.cursor = start;
+                        return Err(CommandError::tr_at(
+                            "argument.criteria.invalid",
+                            &[&id],
+                            reader,
+                        ));
+                    }
+                    Err(_) => {
+                        reader.cursor = start;
+                        return Err(CommandError::tr_at(
+                            "argument.criteria.invalid",
+                            &[&id],
+                            reader,
+                        ));
+                    }
                 }
-                Arg::Str(id.to_owned())
             }
             ArgType::ScoreboardSlot => {
                 let name = reader.read_unquoted_string();
