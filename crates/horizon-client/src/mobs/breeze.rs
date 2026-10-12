@@ -330,7 +330,12 @@ fn tick_shoot(m: &mut Mob, cx: &mut Cx) {
             Some(Who::Mob(m.id)),
         );
         // 5 - 4 * difficulty at normal.
-        p.shoot(&mut m.random, [xd, yd, zd], 0.7, -3.0);
+        p.shoot(
+            &mut crate::projectiles::own_random(m),
+            [xd, yd, zd],
+            0.7,
+            -3.0,
+        );
         cx.events.push(MobEvent::Projectile(p));
         cx.events
             .push(MobEvent::Sound("entity.breeze.shoot", m.center(), 1.5, 1.0));

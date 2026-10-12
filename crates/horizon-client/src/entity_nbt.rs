@@ -407,7 +407,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         }
         // Skeletons are spawned holding a bow (finalizeSpawn); a mob loaded
         // from NBT keeps only its saved equipment.
-        "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged" if raw.is_none() => {
+        "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged"
+            if raw.is_none() && m.extra.main_hand.as_deref() == Some("minecraft:bow") =>
+        {
             map.entry("equipment".into()).or_insert_with(|| {
                 Tag::compound([(
                     "mainhand",
