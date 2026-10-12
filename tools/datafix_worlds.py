@@ -412,6 +412,9 @@ def build(name, force=False):
     for command in scene.player_commands(era, BOT, data_version):
         run(command)
     time.sleep(3)
+    for command, wait in ([] if props else scene.world_commands(data_version)):
+        run(command)
+        time.sleep(wait)
     run('save-all flush')
     time.sleep(2)
     bot.leave()

@@ -372,6 +372,26 @@ def entities(e, version):
     return out
 
 
+def world_commands(version):
+    """(command, seconds to wait) for the scoreboard, a boss bar and a trip through the other
+    dimensions, before 1.17: what makes level.dat, the scoreboard and the other dimension folders carry data."""
+    if version >= 2586:
+        return []
+    return [
+        ('bossbar add upgrade:boss {"text":"Boss"}', 0),
+        ('bossbar set upgrade:boss players @a', 0),
+        ('scoreboard objectives add kills dummy {"text":"Kills"}', 0),
+        ('scoreboard objectives add zombies minecraft.killed:minecraft.zombie', 0),
+        ('scoreboard players set Upgrader kills 3', 0),
+        ('team add red {"text":"Red"}', 0),
+        ('team modify red prefix {"text":"[R]"}', 0),
+        ('team join red Upgrader', 0),
+        ('advancement grant @a only minecraft:story/root', 0),
+        ('execute in minecraft:the_end run tp Upgrader 100 60 0', 20),
+        ('execute in minecraft:the_nether run tp Upgrader 0 80 0', 15),
+    ]
+
+
 def blocks(version):
     """Plain blocks whose states changed over the versions."""
     if version < 2586:
