@@ -111,6 +111,16 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(2531, 0), redstone_wire));
     out.push((key(2533, 0), villager_follow_range));
     out.push((key(2535, 0), shulker_rotation));
+    out.push((key(2537, 0), legacy_dimension_id));
+    out.push((key(2538, 0), level_legacy_world_gen_settings));
+    out.push((key(2550, 0), world_gen_settings));
+    out.push((key(2552, 0), |cx| {
+        cx.rename(
+            Ty::Biome,
+            renamer(&[("minecraft:nether", "minecraft:nether_wastes")]),
+        )
+    }));
+    out.push((key(2553, 0), |cx| cx.rename(Ty::Biome, renamer(BIOMES))));
 }
 
 const FUNGUS: &[(&str, &str)] = &[
@@ -454,7 +464,7 @@ fn animal_uuids(tag: &mut Tag) {
     replace_least_most(tag, "LoveCause", "LoveCause");
 }
 
-const ABSTRACT_HORSES: &[&str] = [
+const ABSTRACT_HORSES: &[&str] = &[
     "minecraft:donkey",
     "minecraft:horse",
     "minecraft:llama",
@@ -463,8 +473,8 @@ const ABSTRACT_HORSES: &[&str] = [
     "minecraft:trader_llama",
     "minecraft:zombie_horse",
 ];
-const TAMEABLE_ANIMALS: &[&str] = ["minecraft:cat", "minecraft:parrot", "minecraft:wolf"];
-const ANIMALS: &[&str] = [
+const TAMEABLE_ANIMALS: &[&str] = &["minecraft:cat", "minecraft:parrot", "minecraft:wolf"];
+const ANIMALS: &[&str] = &[
     "minecraft:bee",
     "minecraft:chicken",
     "minecraft:cow",
@@ -479,7 +489,7 @@ const ANIMALS: &[&str] = [
     "minecraft:turtle",
     "minecraft:hoglin",
 ];
-const MOBS: &[&str] = [
+const MOBS: &[&str] = &[
     "minecraft:bat",
     "minecraft:blaze",
     "minecraft:cave_spider",
@@ -525,7 +535,7 @@ const MOBS: &[&str] = [
     "minecraft:ravager",
     "minecraft:piglin",
 ];
-const PROJECTILES: &[&str] = [
+const PROJECTILES: &[&str] = &[
     "minecraft:arrow",
     "minecraft:dragon_fireball",
     "minecraft:firework_rocket",
@@ -980,3 +990,489 @@ fn shulker_rotation(cx: &mut Cx) {
         }
     });
 }
+
+// ------------------------------------------------------------------ 2537 to 2553
+
+/// `LegacyDimensionIdFix`: numeric dimensions of players and maps become names.
+fn legacy_dimension_id(cx: &mut Cx) {
+    let fix = |v: &mut Tag, field: &str| {
+        if let Some(id) = v.get(field)
+            && let Some(n) = as_number(id)
+        {
+            let name = match n.int_value() {
+                -1 => "minecraft:the_nether",
+                1 => "minecraft:the_end",
+                _ => "minecraft:overworld",
+            };
+            set(v, field, string(name));
+        }
+    };
+    cx.each(Ty::Player, |p| fix(p, "Dimension"));
+    cx.each(Ty::SavedMapData, |m| {
+        if let Some(data) = m.get_mut("data") {
+            fix(data, "dimension");
+        }
+    });
+}
+
+/// `LevelLegacyWorldGenSettingsFix`: the generator settings move into `WorldGenSettings`.
+fn level_legacy_world_gen_settings(cx: &mut Cx) {
+    cx.each(Ty::Level, |data| {
+        let mut settings = data
+            .get("WorldGenSettings")
+            .cloned()
+            .unwrap_or_else(super::dynamic::empty_map);
+        for key in [
+            "RandomSeed",
+            "generatorName",
+            "generatorOptions",
+            "generatorVersion",
+            "legacy_custom_options",
+            "MapFeatures",
+            "BonusChest",
+        ] {
+            if let Some(old) = remove(data, key) {
+                set(&mut settings, key, old);
+            }
+        }
+        set(data, "WorldGenSettings", settings);
+    });
+}
+
+fn map_of(entries: impl IntoIterator<Item = (&'static str, Tag)>) -> Tag {
+    Tag::compound(entries)
+}
+
+fn noise_generator(seed: i64, settings: Tag, biome_source: Tag) -> Tag {
+    map_of([
+        ("type", string("minecraft:noise")),
+        ("biome_source", biome_source),
+        ("seed", Tag::Long(seed)),
+        ("settings", settings),
+    ])
+}
+
+fn vanilla_biome_source(seed: i64, legacy_biome_init_layer: bool, large_biomes: bool) -> Tag {
+    let mut source = map_of([
+        ("type", string("minecraft:vanilla_layered")),
+        ("seed", Tag::Long(seed)),
+        ("large_biomes", Tag::Byte(i8::from(large_biomes))),
+    ]);
+    if legacy_biome_init_layer {
+        set(&mut source, "legacy_biome_init_layer", Tag::Byte(1));
+    }
+    source
+}
+
+fn default_overworld(seed: i64) -> Tag {
+    noise_generator(
+        seed,
+        string("minecraft:overworld"),
+        vanilla_biome_source(seed, false, false),
+    )
+}
+
+/// `WorldGenSettingsFix.vanillaLevels`.
+pub(super) fn vanilla_levels(seed: i64, overworld: Tag, caves: bool) -> Tag {
+    let overworld_type = if caves {
+        "minecraft:overworld_caves"
+    } else {
+        "minecraft:overworld"
+    };
+    map_of([
+        (
+            "minecraft:overworld",
+            map_of([("type", string(overworld_type)), ("generator", overworld)]),
+        ),
+        (
+            "minecraft:the_nether",
+            map_of([
+                ("type", string("minecraft:the_nether")),
+                (
+                    "generator",
+                    noise_generator(
+                        seed,
+                        string("minecraft:nether"),
+                        map_of([
+                            ("type", string("minecraft:multi_noise")),
+                            ("seed", Tag::Long(seed)),
+                            ("preset", string("minecraft:nether")),
+                        ]),
+                    ),
+                ),
+            ]),
+        ),
+        (
+            "minecraft:the_end",
+            map_of([
+                ("type", string("minecraft:the_end")),
+                (
+                    "generator",
+                    noise_generator(
+                        seed,
+                        string("minecraft:end"),
+                        map_of([
+                            ("type", string("minecraft:the_end")),
+                            ("seed", Tag::Long(seed)),
+                        ]),
+                    ),
+                ),
+            ]),
+        ),
+    ])
+}
+
+/// The default `StructureFeatureConfiguration` of a structure: spacing, separation, salt.
+fn structure_default(name: &str) -> (i32, i32, i32) {
+    match name {
+        "minecraft:village" => (32, 8, 10387312),
+        "minecraft:desert_pyramid" => (32, 8, 14357617),
+        "minecraft:igloo" => (32, 8, 14357618),
+        "minecraft:jungle_pyramid" => (32, 8, 14357619),
+        "minecraft:swamp_hut" => (32, 8, 14357620),
+        "minecraft:pillager_outpost" => (32, 8, 165745296),
+        "minecraft:monument" => (32, 5, 10387313),
+        "minecraft:endcity" => (20, 11, 10387313),
+        _ => (80, 20, 10387319), // minecraft:mansion
+    }
+}
+
+/// `NumberUtils.toInt(s, default)` with a minimum.
+fn option_int(value: &str, default: i32, min: i32) -> i32 {
+    value.parse::<i32>().unwrap_or(default).max(min)
+}
+
+fn set_spacing(
+    config: &mut Vec<(&'static str, (i32, i32, i32))>,
+    structure: &'static str,
+    value: &str,
+    min: i32,
+) {
+    let current = config
+        .iter()
+        .find(|(n, _)| *n == structure)
+        .map_or_else(|| structure_default(structure), |(_, c)| *c);
+    let spacing = option_int(value, current.0, min);
+    let updated = (spacing, current.1, current.2);
+    match config.iter_mut().find(|(n, _)| *n == structure) {
+        Some(entry) => entry.1 = updated,
+        None => config.push((structure, updated)),
+    }
+}
+
+/// `WorldGenSettingsFix.fixFlatStructures`.
+fn fix_flat_structures(settings: Option<&Tag>) -> Tag {
+    let (mut distance, mut spread, mut count) = (32, 3, 128);
+    let mut has_stronghold = false;
+    let mut config: Vec<(&'static str, (i32, i32, i32))> = Vec::new();
+    if settings.is_none() {
+        has_stronghold = true;
+        config.push(("minecraft:village", structure_default("minecraft:village")));
+    }
+    if let Some(Tag::Compound(structures)) = settings.and_then(|s| s.get("structures")) {
+        for (structure_key, options) in structures {
+            let Tag::Compound(options) = options else {
+                continue;
+            };
+            let structure = structure_key.to_string_lossy();
+            for (option_key, option_value) in options {
+                let option = option_key.to_string_lossy();
+                let value = as_str(Some(option_value)).unwrap_or_default();
+                if structure == "stronghold" {
+                    has_stronghold = true;
+                    match option.as_str() {
+                        "distance" => distance = option_int(&value, distance, 1),
+                        "spread" => spread = option_int(&value, spread, 1),
+                        "count" => count = option_int(&value, count, 1),
+                        _ => {}
+                    }
+                } else {
+                    match (option.as_str(), structure.as_str()) {
+                        ("distance", "village") => {
+                            set_spacing(&mut config, "minecraft:village", &value, 9)
+                        }
+                        ("distance", "biome_1") => {
+                            for s in [
+                                "minecraft:desert_pyramid",
+                                "minecraft:igloo",
+                                "minecraft:jungle_pyramid",
+                                "minecraft:swamp_hut",
+                                "minecraft:pillager_outpost",
+                            ] {
+                                set_spacing(&mut config, s, &value, 9);
+                            }
+                        }
+                        ("distance", "endcity") => {
+                            set_spacing(&mut config, "minecraft:endcity", &value, 1)
+                        }
+                        ("distance", "mansion") => {
+                            set_spacing(&mut config, "minecraft:mansion", &value, 1)
+                        }
+                        ("separation", "oceanmonument") => {
+                            let current = config
+                                .iter()
+                                .find(|(n, _)| *n == "minecraft:monument")
+                                .map_or_else(
+                                    || structure_default("minecraft:monument"),
+                                    |(_, c)| *c,
+                                );
+                            let spacing = option_int(&value, current.1, 1);
+                            let updated = (spacing, current.1, current.2);
+                            match config.iter_mut().find(|(n, _)| *n == "minecraft:monument") {
+                                Some(entry) => entry.1 = updated,
+                                None => config.push(("minecraft:monument", updated)),
+                            }
+                        }
+                        ("spacing", "oceanmonument") => {
+                            set_spacing(&mut config, "minecraft:monument", &value, 1)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    let mut structures = Compound::new();
+    for (name, (spacing, separation, salt)) in config {
+        structures.insert(
+            JavaString::from(name),
+            map_of([
+                ("spacing", Tag::Int(spacing)),
+                ("separation", Tag::Int(separation)),
+                ("salt", Tag::Int(salt)),
+            ]),
+        );
+    }
+    let mut out = map_of([("structures", Tag::Compound(structures))]);
+    if has_stronghold {
+        set(
+            &mut out,
+            "stronghold",
+            map_of([
+                ("distance", Tag::Int(distance)),
+                ("spread", Tag::Int(spread)),
+                ("count", Tag::Int(count)),
+            ]),
+        );
+    }
+    out
+}
+
+/// `WorldGenSettingsFix`: the legacy generator settings become dimensions.
+fn world_gen_settings(cx: &mut Cx) {
+    cx.each(Ty::WorldGenSettings, |input| {
+        let seed = as_long(input.get("RandomSeed"), 0);
+        let name = as_str(input.get("generatorName")).map(|n| n.to_lowercase());
+        let legacy_custom_options = as_str(input.get("legacy_custom_options")).or_else(|| {
+            (name.as_deref() == Some("customized"))
+                .then(|| as_str(input.get("generatorOptions")))
+                .flatten()
+        });
+        let mut caves = false;
+        let generator = match name.as_deref() {
+            None | Some("customized") => default_overworld(seed),
+            Some("flat") => {
+                let settings = input.get("generatorOptions");
+                let layers = settings
+                    .and_then(|s| s.get("layers"))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        Tag::List(
+                            [
+                                (1, "minecraft:bedrock"),
+                                (2, "minecraft:dirt"),
+                                (1, "minecraft:grass_block"),
+                            ]
+                            .into_iter()
+                            .map(|(h, b)| map_of([("height", Tag::Int(h)), ("block", string(b))]))
+                            .collect(),
+                        )
+                    });
+                map_of([
+                    ("type", string("minecraft:flat")),
+                    (
+                        "settings",
+                        map_of([
+                            ("structures", fix_flat_structures(settings)),
+                            ("layers", layers),
+                            (
+                                "biome",
+                                string(&super::dynamic::as_string(
+                                    settings.and_then(|s| s.get("biome")),
+                                    "minecraft:plains",
+                                )),
+                            ),
+                        ]),
+                    ),
+                ])
+            }
+            Some("debug_all_block_states") => map_of([("type", string("minecraft:debug"))]),
+            Some("buffet") => {
+                let settings = input.get("generatorOptions");
+                let kind = settings
+                    .and_then(|s| s.get("chunk_generator"))
+                    .and_then(|g| as_str(g.get("type")));
+                let noise_settings = match kind.as_deref() {
+                    Some("minecraft:caves") => {
+                        caves = true;
+                        "minecraft:caves"
+                    }
+                    Some("minecraft:floating_islands") => "minecraft:floating_islands",
+                    _ => "minecraft:overworld",
+                };
+                let source = settings
+                    .and_then(|s| s.get("biome_source"))
+                    .cloned()
+                    .unwrap_or_else(|| map_of([("type", string("minecraft:fixed"))]));
+                let fixed = if as_str(source.get("type")).as_deref() == Some("minecraft:fixed") {
+                    let biome = stream(source.get("options").and_then(|o| o.get("biomes")))
+                        .first()
+                        .and_then(|b| as_str(Some(b)))
+                        .unwrap_or_else(|| "minecraft:ocean".to_owned());
+                    let mut fixed = source;
+                    remove(&mut fixed, "options");
+                    set(&mut fixed, "biome", string(&biome));
+                    fixed
+                } else {
+                    source
+                };
+                noise_generator(seed, string(noise_settings), fixed)
+            }
+            Some(other) => {
+                let normal = other == "default";
+                let legacy = other == "default_1_1"
+                    || normal && as_int(input.get("generatorVersion"), 0) == 0;
+                noise_generator(
+                    seed,
+                    string(if other == "amplified" {
+                        "minecraft:amplified"
+                    } else {
+                        "minecraft:overworld"
+                    }),
+                    vanilla_biome_source(seed, legacy, other == "largebiomes"),
+                )
+            }
+        };
+        let mut out = map_of([
+            ("seed", Tag::Long(seed)),
+            (
+                "generate_features",
+                Tag::Byte(i8::from(as_bool(input.get("MapFeatures"), true))),
+            ),
+            (
+                "bonus_chest",
+                Tag::Byte(i8::from(as_bool(input.get("BonusChest"), false))),
+            ),
+            ("dimensions", vanilla_levels(seed, generator, caves)),
+        ]);
+        if let Some(options) = legacy_custom_options {
+            set(&mut out, "legacy_custom_options", string(&options));
+        }
+        *input = out;
+    });
+}
+
+/// `BiomeFix.BIOMES`.
+const BIOMES: &[(&str, &str)] = &[
+    ("minecraft:extreme_hills", "minecraft:mountains"),
+    ("minecraft:swampland", "minecraft:swamp"),
+    ("minecraft:hell", "minecraft:nether_wastes"),
+    ("minecraft:sky", "minecraft:the_end"),
+    ("minecraft:ice_flats", "minecraft:snowy_tundra"),
+    ("minecraft:ice_mountains", "minecraft:snowy_mountains"),
+    ("minecraft:mushroom_island", "minecraft:mushroom_fields"),
+    (
+        "minecraft:mushroom_island_shore",
+        "minecraft:mushroom_field_shore",
+    ),
+    ("minecraft:beaches", "minecraft:beach"),
+    ("minecraft:forest_hills", "minecraft:wooded_hills"),
+    ("minecraft:smaller_extreme_hills", "minecraft:mountain_edge"),
+    ("minecraft:stone_beach", "minecraft:stone_shore"),
+    ("minecraft:cold_beach", "minecraft:snowy_beach"),
+    ("minecraft:roofed_forest", "minecraft:dark_forest"),
+    ("minecraft:taiga_cold", "minecraft:snowy_taiga"),
+    ("minecraft:taiga_cold_hills", "minecraft:snowy_taiga_hills"),
+    ("minecraft:redwood_taiga", "minecraft:giant_tree_taiga"),
+    (
+        "minecraft:redwood_taiga_hills",
+        "minecraft:giant_tree_taiga_hills",
+    ),
+    (
+        "minecraft:extreme_hills_with_trees",
+        "minecraft:wooded_mountains",
+    ),
+    ("minecraft:savanna_rock", "minecraft:savanna_plateau"),
+    ("minecraft:mesa", "minecraft:badlands"),
+    ("minecraft:mesa_rock", "minecraft:wooded_badlands_plateau"),
+    ("minecraft:mesa_clear_rock", "minecraft:badlands_plateau"),
+    ("minecraft:sky_island_low", "minecraft:small_end_islands"),
+    ("minecraft:sky_island_medium", "minecraft:end_midlands"),
+    ("minecraft:sky_island_high", "minecraft:end_highlands"),
+    ("minecraft:sky_island_barren", "minecraft:end_barrens"),
+    ("minecraft:void", "minecraft:the_void"),
+    ("minecraft:mutated_plains", "minecraft:sunflower_plains"),
+    ("minecraft:mutated_desert", "minecraft:desert_lakes"),
+    (
+        "minecraft:mutated_extreme_hills",
+        "minecraft:gravelly_mountains",
+    ),
+    ("minecraft:mutated_forest", "minecraft:flower_forest"),
+    ("minecraft:mutated_taiga", "minecraft:taiga_mountains"),
+    ("minecraft:mutated_swampland", "minecraft:swamp_hills"),
+    ("minecraft:mutated_ice_flats", "minecraft:ice_spikes"),
+    ("minecraft:mutated_jungle", "minecraft:modified_jungle"),
+    (
+        "minecraft:mutated_jungle_edge",
+        "minecraft:modified_jungle_edge",
+    ),
+    (
+        "minecraft:mutated_birch_forest",
+        "minecraft:tall_birch_forest",
+    ),
+    (
+        "minecraft:mutated_birch_forest_hills",
+        "minecraft:tall_birch_hills",
+    ),
+    (
+        "minecraft:mutated_roofed_forest",
+        "minecraft:dark_forest_hills",
+    ),
+    (
+        "minecraft:mutated_taiga_cold",
+        "minecraft:snowy_taiga_mountains",
+    ),
+    (
+        "minecraft:mutated_redwood_taiga",
+        "minecraft:giant_spruce_taiga",
+    ),
+    (
+        "minecraft:mutated_redwood_taiga_hills",
+        "minecraft:giant_spruce_taiga_hills",
+    ),
+    (
+        "minecraft:mutated_extreme_hills_with_trees",
+        "minecraft:modified_gravelly_mountains",
+    ),
+    ("minecraft:mutated_savanna", "minecraft:shattered_savanna"),
+    (
+        "minecraft:mutated_savanna_rock",
+        "minecraft:shattered_savanna_plateau",
+    ),
+    ("minecraft:mutated_mesa", "minecraft:eroded_badlands"),
+    (
+        "minecraft:mutated_mesa_rock",
+        "minecraft:modified_wooded_badlands_plateau",
+    ),
+    (
+        "minecraft:mutated_mesa_clear_rock",
+        "minecraft:modified_badlands_plateau",
+    ),
+    ("minecraft:warm_deep_ocean", "minecraft:deep_warm_ocean"),
+    (
+        "minecraft:lukewarm_deep_ocean",
+        "minecraft:deep_lukewarm_ocean",
+    ),
+    ("minecraft:cold_deep_ocean", "minecraft:deep_cold_ocean"),
+    ("minecraft:frozen_deep_ocean", "minecraft:deep_frozen_ocean"),
+];

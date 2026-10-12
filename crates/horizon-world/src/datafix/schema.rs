@@ -420,7 +420,11 @@ impl Walker<'_> {
             "minecraft:item" | "minecraft:item_frame" | "minecraft:glow_item_frame" => {
                 self.field(Ty::ItemStack, v, "Item");
             }
-            "minecraft:potion" if k < key(4306, 0) => self.field(Ty::ItemStack, v, "Item"),
+            "minecraft:potion" if k < key(4306, 0) => {
+                // V2511_1 renamed the typed field.
+                let field = if k < key(2511, 1) { "Potion" } else { "Item" };
+                self.field(Ty::ItemStack, v, field);
+            }
             "minecraft:splash_potion" | "minecraft:lingering_potion" if k >= key(4306, 0) => {
                 self.field(Ty::ItemStack, v, "Item");
             }
