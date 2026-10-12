@@ -63,8 +63,40 @@ HOST = os.uname().nodename.split(".")[0]
 DEFAULT_MEMORY = 3 << 30  # assumed peak for a harness that never ran here
 
 
+def harness_settings(path):
+    """PARITY_SHARDS and PARITY_RUST_SCOPE, read from a harness's source without running it."""
+    import ast
+    text = Path(path).read_text()
+    settings = {}
+    if "PARITY_" in text:
+        for node in ast.parse(text).body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
+                    and node.targets[0].id in ("PARITY_SHARDS", "PARITY_RUST_SCOPE"):
+                settings[node.targets[0].id] = ast.literal_eval(node.value)
+    return settings
+
+
+SHARDS = {}  # "datafix#2" -> "2/8": the share of a sharded harness each entry runs (PARITY_SHARD)
+
+
 def harnesses():
-    return {path.name[len("test_"):-len("_parity.py")]: path for path in sorted((ROOT / "tools").glob("test_*_parity.py"))}
+    """Harness names and scripts. A harness declaring PARITY_SHARDS = N runs as N entries, NAME#1 to NAME#N."""
+    found = {}
+    for path in sorted((ROOT / "tools").glob("test_*_parity.py")):
+        name = path.name[len("test_"):-len("_parity.py")]
+        count = harness_settings(path).get("PARITY_SHARDS", 1)
+        if count > 1:
+            for index in range(1, count + 1):
+                found[f"{name}#{index}"] = path
+                SHARDS[f"{name}#{index}"] = f"{index}/{count}"
+        else:
+            found[name] = path
+    return found
+
+
+def base_name(name):
+    """The harness a shard belongs to: datafix#2 -> datafix."""
+    return name.split("#")[0]
 
 
 def load_state():
@@ -85,18 +117,45 @@ class Hasher:
         self.cache = cache
 
     def __call__(self, path):
+        real, _, keep = str(path).partition(KEEP)
         try:
-            stat = os.stat(path)
+            stat = os.stat(real)
         except FileNotFoundError:
             return "missing"
         stamp = [stat.st_size, stat.st_mtime_ns]
         cached = self.cache.get(str(path))
         if cached and cached[0] == stamp:
             return cached[1]
-        with open(path, "rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if keep:
+            digest = hashlib.sha256(crate_root_without_modules(Path(real).read_text(), set(keep.split(","))).encode()).hexdigest()
+        else:
+            with open(real, "rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
         self.cache[str(path)] = [stamp, digest]
         return digest
+
+
+# A narrowed crate root: "crates/c/src/lib.rs#keep:a,b" stands for lib.rs without its
+# declarations of modules other than a and b (see narrow_rust_sources).
+KEEP = "#keep:"
+MODULE_DECLARATION = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;\s*$")
+
+
+def crate_root_without_modules(text, keep):
+    """A crate root's text without the `mod x;` lines (and their attributes and doc comments) for modules not in keep."""
+    lines, pending = [], []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("#[", "///", "//!")) and not stripped.startswith("#!["):
+            pending.append(line)
+            continue
+        declared = MODULE_DECLARATION.match(line)
+        if declared and declared.group(1) not in keep:
+            pending = []
+            continue
+        lines += pending + [line]
+        pending = []
+    return "\n".join(lines + pending)
 
 
 def environment_key(hasher):
@@ -162,8 +221,225 @@ def artifacts_of(arguments):
     return found
 
 
-def dependencies(trace):
-    """Repository files a traced harness depended on, relative to ROOT."""
+RUST_PATH = re.compile(r"(?<![\w:])((?:crate|self|super)(?:::super)*|[a-z_][a-z0-9_]*)::((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)")
+RUST_TYPE = re.compile(r"\b(?:struct|enum|trait|union|type)\s+([A-Za-z_]\w*)")
+RUST_MACRO_USE = re.compile(r"\b([A-Za-z_]\w*)!\s*[(\[{]")
+RUST_MACRO_DEFINITION = re.compile(r"macro_rules!\s+([A-Za-z_]\w*)")
+
+
+RUST_LITERAL_START = re.compile(r"//|/\*|(?<![\w])b?r#*\"|\"|'")
+RUST_CODE_CACHE = {}
+
+
+def rust_code(text):
+    """Rust source with comments, string and character literals blanked out (newlines kept)."""
+    cached = RUST_CODE_CACHE.get(text)
+    if cached is not None:
+        return cached
+    out, i, n = [], 0, len(text)
+    def blank(chunk):
+        return re.sub(r"[^\n]", " ", chunk)
+    while i < n:
+        match = RUST_LITERAL_START.search(text, i)
+        if not match:
+            out.append(text[i:])
+            break
+        out.append(text[i:match.start()])
+        i, token = match.start(), match.group()
+        if token == "//":
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+        elif token == "/*":
+            depth, end = 1, i + 2
+            while end < n and depth:
+                nested = re.compile(r"/\*|\*/").search(text, end)
+                if not nested:
+                    end = n
+                    break
+                depth += 1 if nested.group() == "/*" else -1
+                end = nested.end()
+        elif token.endswith('"') and "r" in token:
+            closing = '"' + "#" * token.count("#")
+            end = text.find(closing, match.end())
+            end = n if end < 0 else end + len(closing)
+        elif token == '"':
+            literal = re.compile(r'"(?:\\.|[^"\\])*"', re.DOTALL).match(text, i)
+            end = literal.end() if literal else n
+        else:  # ' starts a character literal or a lifetime
+            literal = re.compile(r"'(?:\\(?:u\{[0-9a-fA-F]*\}|x..|.)|[^\\'\n])'").match(text, i)
+            if not literal:
+                out.append("'")
+                i += 1
+                continue
+            end = literal.end()
+        out.append(blank(text[i:end]))
+        i = end
+    result = "".join(out)
+    RUST_CODE_CACHE[text] = result
+    return result
+
+
+def inline_modules(code):
+    """For blanked Rust code: a function giving the inline modules (`mod x { }`) open at an offset."""
+    import bisect
+    marks, stack, depth = [0], [], 0
+    states = [()]
+    opening = {match.end() - 1: match.group(1) for match in re.finditer(r"\bmod\s+(\w+)\s*\{", code)}
+    for index, c in enumerate(code):
+        if c == "{":
+            depth += 1
+            if index in opening:
+                stack.append((opening[index], depth))
+                marks.append(index); states.append(tuple(name for name, _ in stack))
+        elif c == "}":
+            if stack and stack[-1][1] == depth:
+                stack.pop()
+                marks.append(index); states.append(tuple(name for name, _ in stack))
+            depth -= 1
+    return lambda offset: list(states[bisect.bisect_right(marks, offset) - 1])
+
+
+def impl_targets(header, text, workspace):
+    """Names an impl header (after `impl`) may implement for or with that could be the scope's own types.
+
+    Only the trait and the self type count, by their last path segment; a path
+    starting with an external crate (std::error::Error) can't name a scope type,
+    nor can a bare name the file imports from an external crate or defines itself."""
+    header = re.split(r"\bwhere\b", header)[0].strip().replace("->", "  ")
+    parameters = set()
+    if header.startswith("<"):  # generic parameters
+        depth, start = 0, 1
+        for index, c in enumerate(header):
+            if depth == 1 and c in ",>":
+                parameter = re.match(r"\s*(?:const\s+)?([A-Za-z_]\w*)", header[start:index])
+                if parameter:
+                    parameters.add(parameter.group(1))
+                start = index + 1
+            depth += c == "<"
+            depth -= c == ">"
+            if depth == 0:
+                header = header[index + 1:]
+                break
+    names = set()
+    for part in re.split(r"\bfor\b", header, maxsplit=1):
+        path = re.sub(r"<.*", "", part.strip().lstrip("!&").replace("dyn ", "").strip(), flags=re.DOTALL).strip()
+        segments = [segment for segment in path.split("::") if segment]
+        if not segments:
+            continue
+        head, last = segments[0], segments[-1]
+        if not re.fullmatch(r"[A-Za-z_]\w*", last):
+            names.update(set(re.findall(r"[A-Za-z_]\w*", part)) - {"mut", "const"})  # a tuple, slice or pointer type
+            continue
+        if len(segments) > 1 and head not in ("crate", "self", "super") and head not in workspace:
+            continue  # qualified by an external crate
+        if len(segments) == 1:
+            if re.search(rf"\b(?:struct|enum|trait|union)\s+{last}\b", text):
+                continue  # defined in this file (an import of the same name would not compile)
+            imported = re.search(rf"\buse\s+(\w+)[^;]*\b{last}\b[^;]*;", text)
+            if imported and imported.group(1) not in ("crate", "self", "super", *workspace):
+                continue  # imported from an external crate
+        names.add(last)
+    return names - parameters
+
+
+def narrow_rust_sources(sources, scope):
+    """Drop the workspace Rust sources a harness's declared PARITY_RUST_SCOPE proves it can't reach.
+
+    The scope lists source prefixes (crates/horizon-world/src/nbt.rs,
+    crates/horizon-world/src/datafix/). It applies only if it is closed: no
+    file in it names a module, crate item or macro outside it (crate::,
+    super::, other workspace crates), declares a module it doesn't cover, or
+    includes source; and no file outside it implements anything for a type
+    it defines. Crate roots stay as dependencies without their declarations
+    of unreachable modules, so adding a module elsewhere doesn't count.
+    Probe entry points (examples, bins) are always kept. Returns the kept
+    sources and None, or all of them and the reason the scope isn't closed."""
+    crates = {path.parent.name.replace("-", "_"): path.parent for path in (ROOT / "crates").glob("*/Cargo.toml")}
+    def scoped(path):
+        return any(path == prefix or (prefix.endswith("/") and path.startswith(prefix)) for prefix in scope)
+    rust = [path for path in sources if path.startswith("crates/") and path.endswith(".rs")]
+    entry = [path for path in rust if "/examples/" in path or "/src/bin/" in path or path.endswith("/src/main.rs")]
+    inner = [path for path in rust if scoped(path)]
+    outside = [path for path in rust if path not in inner and path not in entry
+               and not path.endswith("/src/lib.rs")]
+
+    def module_file(crate_dir, parts):
+        """The file of the deepest module named by parts, and how many parts it covers."""
+        for count in range(len(parts), 0, -1):
+            for candidate in (crate_dir / "src" / Path(*parts[:count - 1]) / f"{parts[count - 1]}.rs",
+                              crate_dir / "src" / Path(*parts[:count]) / "mod.rs"):
+                if candidate.is_file():
+                    return str(candidate.relative_to(ROOT)), count
+        return None, 0
+
+    def module_path(path):
+        parts = list(Path(*Path(path).parts[3:]).with_suffix("").parts)  # crates/<crate>/src/...
+        return parts[:-1] if parts[-1] in ("mod", "lib") else parts
+
+    defined_types, used_macros, kept_modules = set(), set(), {}
+    for path in inner + entry:
+        text = rust_code((ROOT / path).read_text(errors="replace"))
+        crate_name = Path(path).parts[1].replace("-", "_")
+        nesting = inline_modules(text)
+        if re.search(r"\binclude!\s*\(", text):
+            return sources, f"{path} includes source"
+        used_macros.update(RUST_MACRO_USE.findall(text))
+        if path in inner:
+            defined_types.update(RUST_TYPE.findall(text))
+            kept_modules.setdefault(crate_name, set()).add(module_path(path)[0] if module_path(path) else "")
+            for line in text.splitlines():
+                declared = MODULE_DECLARATION.match(line)
+                if declared:
+                    child, _ = module_file(crates[crate_name], module_path(path) + [declared.group(1)])
+                    if child and not scoped(child):
+                        return sources, f"{path} declares module {declared.group(1)} outside the scope"
+        for match in RUST_PATH.finditer(text):
+            head, rest = match.groups()
+            parts = rest.split("::")
+            if head in crates:  # a workspace crate
+                base, crate_name = [], head
+            elif head.startswith(("crate", "self", "super")) and path in inner:
+                own, crate_name = module_path(path) + nesting(match.start()), Path(path).parts[1].replace("-", "_")
+                ups = head.count("super")
+                if head != "crate" and ups <= len(nesting(match.start())):
+                    continue  # within this file
+                base = [] if head == "crate" else own[:len(own) - ups]
+            else:
+                continue  # an external crate, a local name or a probe's own module
+            target, covered = module_file(crates[crate_name], base + parts)
+            if target is None:
+                # An item of the crate root: fine if defined there (the narrowed root keeps it), not if re-exported.
+                root = crates[crate_name] / "src" / "lib.rs"
+                item = (base + parts)[0]
+                defined_in_root = root.is_file() and re.search(
+                    rf"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const|static|fn|struct|enum|type|trait|union)\s+{item}\b",
+                    root.read_text(), re.MULTILINE)
+                if not defined_in_root:
+                    return sources, f"{path} names {head}::{rest}, which the crate root doesn't define itself"
+                continue
+            if not scoped(target):
+                return sources, f"{path} names {head}::{rest} ({target})"
+    for path in outside:
+        text = rust_code((ROOT / path).read_text(errors="replace"))
+        defined = set(RUST_MACRO_DEFINITION.findall(text)) & used_macros
+        if defined:
+            return sources, f"the scope uses macro {sorted(defined)[0]}! defined in {path}"
+        for header in re.findall(r"^\s*(?:unsafe\s+)?impl\b([^;{]*)", text, re.MULTILINE):
+            touched = impl_targets(header, text, set(crates)) & defined_types
+            if touched:
+                return sources, f"{path} implements something for {sorted(touched)[0]}, defined in the scope"
+    kept = [path for path in sources if path not in outside and not path.endswith("/src/lib.rs")]
+    for path in sources:
+        if path.endswith("/src/lib.rs"):
+            modules = kept_modules.get(Path(path).parts[1].replace("-", "_")) or {"-"}  # "-": no module of it is reachable
+            kept.append(f"{path}{KEEP}{','.join(sorted(modules))}")
+    return sorted(kept), None
+
+
+def dependencies(trace, scope=None):
+    """Repository files a traced harness depended on, relative to ROOT, and the probes it built.
+
+    With a PARITY_RUST_SCOPE, Rust sources it can't reach are left out (see narrow_rust_sources)."""
     found = set(trace["modules"])
     found.update(trace["read"])
     artifacts = []
@@ -183,13 +459,17 @@ def dependencies(trace):
     kept = set()
     for path in found:
         path = Path(path) if os.path.isabs(path) else ROOT / path
-        if inside(path, ROOT) and not inside(path, LOCAL) and not inside(path, ROOT / "target") and path.is_file():
+        if inside(path, ROOT) and not inside(path, LOCAL) and not inside(path, ROOT / "target") and path.is_file() \
+                and "__pycache__" not in path.parts:  # bytecode caches vary; their sources are dependencies already
             kept.add(str(path.resolve().relative_to(ROOT)))
     unique = []
     for artifact in artifacts:
         if artifact not in unique:
             unique.append(artifact)
-    return sorted(kept), unique
+    kept, note = narrow_rust_sources(sorted(kept), scope) if scope else (sorted(kept), None)
+    if note:
+        print(f"note: PARITY_RUST_SCOPE not applied: {note}", flush=True)
+    return kept, unique
 
 
 def java_sources(arguments):
@@ -223,7 +503,9 @@ def run_environment(reuse_oracles=False):
 
 
 def default_build_jobs():
-    """Cargo jobs for the probe build: every thread, within $FLEET_LOAD_JOBS when the fleet sets it."""
+    """Cargo jobs for the probe build: PARITY_BUILD_JOBS, else every thread, within $FLEET_LOAD_JOBS when set."""
+    if os.environ.get("PARITY_BUILD_JOBS"):
+        return int(os.environ["PARITY_BUILD_JOBS"])
     jobs = os.cpu_count() or 8
     if os.environ.get("FLEET_LOAD_JOBS", "").isdigit():
         jobs = min(jobs, max(1, int(os.environ["FLEET_LOAD_JOBS"])))
@@ -329,17 +611,23 @@ def memory_available():
         return 16 << 30
 
 
-def default_local_jobs():
-    """Harnesses at once on this machine: PARITY_LOCAL_JOBS, else a third of its threads within the fleet budget."""
+REMOTE_LOCAL_JOBS = 3  # harnesses at once here while other machines take the rest
+REMOTE_LOCAL_PEAK = 800 << 20  # heavier harnesses are left to them
+MEMORY_RESERVE = 2 << 30  # what admission leaves free here, for the person at the screen
+
+
+def default_local_jobs(remote=False):
+    """Harnesses at once on this machine: PARITY_LOCAL_JOBS, else a third of its threads (3 when other machines
+    help), within the fleet's budget ($FLEET_LOAD_JOBS)."""
     if os.environ.get("PARITY_LOCAL_JOBS"):
         return int(os.environ["PARITY_LOCAL_JOBS"])
-    jobs = max(1, (os.cpu_count() or 4) // 3)
+    jobs = REMOTE_LOCAL_JOBS if remote else max(1, (os.cpu_count() or 4) // 3)
     if os.environ.get("FLEET_LOAD_JOBS", "").isdigit():
         jobs = min(jobs, max(1, int(os.environ["FLEET_LOAD_JOBS"])))
     return jobs
 
 
-def outcome(name, passed, elapsed, trace_path, hasher=None):
+def outcome(name, script, passed, elapsed, trace_path, hasher=None):
     """The record of a finished harness, from its trace. With a hasher, also the content hash of each dependency."""
     record = {"status": "pass" if passed else "fail", "seconds": round(elapsed, 1),
               "finished": time.strftime("%Y-%m-%dT%H:%M:%S"), "host": HOST}
@@ -348,7 +636,7 @@ def outcome(name, passed, elapsed, trace_path, hasher=None):
     except (OSError, ValueError):
         trace = None  # killed before writing it, or the disk was full: the pass can't be keyed
     if trace:
-        record["dependencies"], record["artifacts"] = dependencies(trace)
+        record["dependencies"], record["artifacts"] = dependencies(trace, harness_settings(script).get("PARITY_RUST_SCOPE"))
         record["peak_bytes"] = trace["peak_bytes"]
         if passed:
             clear_large_outputs(name, trace)
@@ -362,9 +650,11 @@ def outcome(name, passed, elapsed, trace_path, hasher=None):
 class LocalExecutor:
     """Runs harnesses on this machine, within its job count, memory budget and the machine-wide slots."""
 
-    def __init__(self, jobs, memory_budget, timeout):
+    def __init__(self, jobs, memory_budget, timeout, max_peak=None):
         self.name, self.jobs, self.memory_budget, self.timeout = HOST, jobs, memory_budget, timeout
+        self.max_peak = max_peak  # set while other machines can take heavier harnesses
         self.running = {}
+        self.available, self.measured = 0, 0.0
         (STATE_DIR / "logs").mkdir(parents=True, exist_ok=True)
         (STATE_DIR / "traces").mkdir(parents=True, exist_ok=True)
 
@@ -374,10 +664,20 @@ class LocalExecutor:
     def accepts(self, name):
         return True
 
-    def fits(self, expected):
-        return not self.running or sum(item["expected"] for item in self.running.values()) + expected <= self.memory_budget
+    def fits(self, expected, only_here=True):
+        """Admission by recorded peak, within the budget and leaving MEMORY_RESERVE of what is free now.
+        only_here: no other machine can take this harness."""
+        if self.max_peak is not None and expected > self.max_peak and not only_here:
+            return False
+        if time.monotonic() - self.measured > 1:
+            self.available, self.measured = memory_available(), time.monotonic()
+        if not self.running and (self.max_peak is None or only_here):
+            return True  # alone, it must run anyway
+        return sum(item["expected"] for item in self.running.values()) + expected <= self.memory_budget \
+            and self.available - expected >= MEMORY_RESERVE
 
-    def start(self, name, script, reuse, expected):
+    def start(self, name, script, reuse, expected, shard=None):
+        self.measured = 0.0  # measure again before the next start
         slot = machine_slot()
         if slot is None:
             return False  # other runners on this machine hold every slot
@@ -386,13 +686,17 @@ class LocalExecutor:
         log = (STATE_DIR / "logs" / f"{name}.log").open("w")
         environment = run_environment(reuse)
         environment["PARITY_SHIM_OUTPUTS"] = str(outputs_listing(name, fresh=True))
+        environment.pop("PARITY_SHARD", None)
+        if shard:
+            environment["PARITY_SHARD"] = shard
         process = subprocess.Popen([sys.executable, str(Path(__file__)), "--trace", str(trace), str(script)],
                                    cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        self.running[name] = {"process": process, "started": time.monotonic(), "log": log, "expected": expected, "slot": slot}
+        self.running[name] = {"process": process, "started": time.monotonic(), "log": log, "expected": expected,
+                              "slot": slot, "script": script}
         return True
 
     def poll(self):
-        """(name, passed, seconds, trace path) of each harness that finished or timed out."""
+        """(name, script, passed, seconds, trace path) of each harness that finished or timed out."""
         finished = []
         for name, item in list(self.running.items()):
             process, elapsed = item["process"], time.monotonic() - item["started"]
@@ -405,7 +709,7 @@ class LocalExecutor:
             item["log"].close()
             item["slot"].close()
             del self.running[name]
-            finished.append((name, process.returncode == 0, elapsed, STATE_DIR / "traces" / f"{name}.json"))
+            finished.append((name, item["script"], process.returncode == 0, elapsed, STATE_DIR / "traces" / f"{name}.json"))
         return finished
 
     def stop(self):
@@ -464,8 +768,8 @@ class RemoteExecutor:
             return
         environment = " ".join(f"{key}={shlex.quote(str(value))}" for key, value in self.config.get("environment", {}).items())
         command = (f"{self.config.get('setup', 'true')} && cd {shlex.quote(self.mirror)} && "
-                   f"exec env PARITY_MACHINE_JOBS={self.config.get('jobs', 8)} {environment} "
-                   f"{self.config.get('python', 'python3')} tools/parity.py --worker {shlex.quote(shared)}")
+                   f"exec nice -n {int(self.config.get('nice', 0))} env PARITY_MACHINE_JOBS={self.config.get('jobs', 8)} "
+                   f"{environment} {self.config.get('python', 'python3')} tools/parity.py --worker {shlex.quote(shared)}")
         self.process = subprocess.Popen([*ssh, f"{self.config.get('shell', 'sh -c')} {shlex.quote(command)}"],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
         self._send({"prebuild": artifacts, "timeout": self.timeout})
@@ -503,14 +807,15 @@ class RemoteExecutor:
         return self.jobs - len(self.running)
 
     def accepts(self, name):
-        return name not in self.local_only
+        return base_name(name) not in self.local_only and base_name(name) not in self.config.get("exclude", {})
 
-    def fits(self, expected):
+    def fits(self, expected, only_here=False):
         return not self.running or sum(self.running.values()) + expected <= self.memory_budget
 
-    def start(self, name, script, reuse, expected):
+    def start(self, name, script, reuse, expected, shard=None):
         self.running[name] = expected
-        self._send({"run": name, "script": str(Path(script).relative_to(ROOT)), "reuse": reuse, "expected": expected})
+        self._send({"run": name, "script": str(Path(script).relative_to(ROOT)), "reuse": reuse, "expected": expected,
+                    "shard": shard})
         return True
 
     def poll(self):
@@ -565,23 +870,26 @@ def run(selected, state, hasher, environment_digest, executors, reuse_oracles):
         # Remote machines first: they take the longest harnesses and leave this one lighter.
         for executor in executors:
             while queue and executor.free() > 0:
-                pick = next((name for name in queue if executor.accepts(name)
-                             and executor.fits(records.get(name, {}).get("peak_bytes", DEFAULT_MEMORY))), None)
+                pick = next((name for name in queue if executor.accepts(name) and executor.fits(
+                    records.get(name, {}).get("peak_bytes", DEFAULT_MEMORY),
+                    not any(other.accepts(name) and not other.dead for other in executors[:-1]))), None)
                 if pick is None:
                     break
                 reuse = reuse_oracles and records.get(pick, {}).get("oracle_reuse", True) and pick not in retried
-                if not executor.start(pick, selected[pick], reuse, records.get(pick, {}).get("peak_bytes", DEFAULT_MEMORY)):
+                if not executor.start(pick, selected[pick], reuse, records.get(pick, {}).get("peak_bytes", DEFAULT_MEMORY),
+                                      SHARDS.get(pick)):
                     break
                 queue.remove(pick)
                 busy[pick] = (executor, reuse)
-        if queue and not busy and local.jobs == 0 and all(executor.dead for executor in executors[:-1]):
-            local.jobs = 1  # every remote machine is gone: don't stall
+        if executors[:-1] and all(executor.dead for executor in executors[:-1]) and local.max_peak is not None:
+            # Every other machine is gone: this one runs everything.
+            local.max_peak, local.jobs = None, max(local.jobs, default_local_jobs())
         time.sleep(0.2)
         finished = []
         for executor in executors:
             if isinstance(executor, LocalExecutor):
-                for name, passed, elapsed, trace in executor.poll():
-                    finished.append((name, outcome(name, passed, elapsed, trace)))
+                for name, script, passed, elapsed, trace in executor.poll():
+                    finished.append((name, outcome(name, script, passed, elapsed, trace)))
             else:
                 finished += executor.poll()
         for name, record in finished:
@@ -644,7 +952,7 @@ def worker_main(shared_local):
         return 0
     state = load_state()
     hasher = Hasher(state["hashes"])
-    built, errors = prebuild(first["prebuild"], os.cpu_count() or 8) if first["prebuild"] else (True, "")
+    built, errors = prebuild(first["prebuild"], default_build_jobs()) if first["prebuild"] else (True, "")
     executor = LocalExecutor(MACHINE_JOBS, int(memory_available() * 0.75), first["timeout"])
     send({"hello": {"jobs": MACHINE_JOBS, "memory": executor.memory_budget, "built": built, "errors": errors[-4000:]}})
     while True:
@@ -660,10 +968,11 @@ def worker_main(shared_local):
             # Other runners may share this machine: take a slot only while memory allows.
             reserve = message["expected"] + (4 << 30)
             if (executor.running and memory_available() < reserve) or \
-                    not executor.start(message["run"], ROOT / message["script"], message["reuse"], message["expected"]):
+                    not executor.start(message["run"], ROOT / message["script"], message["reuse"], message["expected"],
+                                       message.get("shard")):
                 send({"rejected": message["run"]})
-        for name, passed, elapsed, trace in executor.poll():
-            record = outcome(name, passed, elapsed, trace, hasher)
+        for name, script, passed, elapsed, trace in executor.poll():
+            record = outcome(name, script, passed, elapsed, trace, hasher)
             log = (STATE_DIR / "logs" / f"{name}.log").read_bytes()[-(8 << 20):].decode(errors="replace")
             send({"done": name, "record": record, "log": log})
             save_state(state)
@@ -739,9 +1048,9 @@ def main():
     parser.add_argument("--failed", action="store_true", help="rerun the harnesses that failed last time")
     parser.add_argument("--list", action="store_true", help="print what would run, then stop")
     parser.add_argument("--status", action="store_true", help="print each harness's last result")
-    parser.add_argument("-j", "--jobs", type=int, default=default_local_jobs(),
-                        help="harnesses at once on this machine (default: PARITY_LOCAL_JOBS, else a third of its threads "
-                             "within $FLEET_LOAD_JOBS); every runner on the machine shares PARITY_MACHINE_JOBS slots")
+    parser.add_argument("-j", "--jobs", type=int,
+                        help="harnesses at once on this machine (default: PARITY_LOCAL_JOBS, else 3 with other hosts or a "
+                             "third of its threads, within $FLEET_LOAD_JOBS); runners here share PARITY_MACHINE_JOBS slots")
     parser.add_argument("--hosts", default=os.environ.get("PARITY_HOSTS"),
                         help="comma-separated machines from tools/parity_hosts.json to run harnesses on as well "
                              "(default: PARITY_HOSTS, else the file's default; '' for this machine only)")
@@ -753,6 +1062,9 @@ def main():
     hasher = Hasher(state["hashes"])
     environment = environment_key(hasher)
     records = state["harnesses"]
+    # A sharded harness's name stands for all its shards.
+    args.names = [entry for name in args.names for entry in ([name] if name in found else
+                  [shard for shard in found if base_name(shard) == name] or [name])]
     unknown = [name for name in args.names if name not in found]
     if unknown:
         parser.error("unknown harnesses: " + ", ".join(unknown))
@@ -782,7 +1094,6 @@ def main():
             finished_run([])
         return 0
 
-    jobs = max(0, args.jobs)
     # Harnesses that never ran here have no recorded probes: build them all.
     artifacts = [["all", "", "release"]] if any("artifacts" not in records.get(name, {}) for name in selected) else []
     for name in selected:
@@ -795,8 +1106,11 @@ def main():
     unknown = [host for host in hosts if host not in config["hosts"]]
     if unknown:
         parser.error("unknown hosts (see tools/parity_hosts.json): " + ", ".join(unknown))
-    local_only = [name for name in selected if name in config.get("local_only", {})]
-    if jobs == 0 and (local_only or not hosts):
+    jobs = default_local_jobs(remote=bool(hosts)) if args.jobs is None else max(0, args.jobs)
+    def elsewhere(name):
+        return base_name(name) not in config.get("local_only", {}) and \
+            any(base_name(name) not in config["hosts"][host].get("exclude", {}) for host in hosts)
+    if jobs == 0 and not all(elsewhere(name) for name in selected):
         jobs = 1  # harnesses that can only run here still need a slot
     remotes = [RemoteExecutor(host, config["hosts"][host], artifacts, config.get("local_only", {}), args.timeout)
                for host in hosts]
@@ -812,7 +1126,8 @@ def main():
         where = "".join(f", plus {host}" for host in hosts)
         print(f"Running {len(selected)} harnesses, {jobs} at a time here{where}...", flush=True)
         reuse_oracles = not (args.fresh or args.all)
-        executors = [*remotes, LocalExecutor(jobs, int(memory_available() * 0.75), args.timeout)]
+        executors = [*remotes, LocalExecutor(jobs, int(memory_available() * 0.75), args.timeout,
+                                             REMOTE_LOCAL_PEAK if remotes and args.jobs is None else None)]
         results, elapsed = run(selected, state, hasher, environment_key(hasher), executors, reuse_oracles)
     finally:
         for executor in remotes:
