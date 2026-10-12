@@ -280,7 +280,7 @@ fn spawn_seed(index: usize) -> i64 {
 /// Villager events that act at once in vanilla (`TradeWithVillager` and
 /// `VillagerMakeLove` write the other villager directly).
 fn villager_events(
-    mobs: &mut Vec<Mob>,
+    mobs: &mut [Mob],
     events: &mut Vec<MobEvent>,
     from: usize,
     w: &MobWorld,

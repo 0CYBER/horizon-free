@@ -4142,7 +4142,11 @@ pub fn seen_memories(
     let Some(mm) = mem_ref(m) else {
         return (None, None, false, None);
     };
-    let path = mm.path.present().then(|| m.ai.nav.path.as_ref()).flatten();
+    let path = mm
+        .path
+        .present()
+        .then_some(m.ai.nav.path.as_ref())
+        .flatten();
     let nodes = path.filter(|p| !p.is_done()).map(|p| {
         let n = |i: usize| [p.nodes[i].x, p.nodes[i].y, p.nodes[i].z];
         ((p.next > 0).then(|| n(p.next - 1)), n(p.next))
