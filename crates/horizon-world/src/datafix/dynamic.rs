@@ -239,3 +239,47 @@ pub fn namespaced(id: &str) -> String {
         None => id.to_owned(),
     }
 }
+
+/// `Dynamic.asLongStreamOpt` over `NbtOps`: a long array, or a list or array
+/// whose elements are all numbers.
+pub fn as_long_stream(tag: Option<&Tag>) -> Option<Vec<i64>> {
+    match tag? {
+        Tag::LongArray(v) => Some(v.clone()),
+        t if is_list(Some(t)) => stream(Some(t))
+            .iter()
+            .map(|e| as_number(e).map(Number::long_value))
+            .collect(),
+        _ => None,
+    }
+}
+/// `Dynamic.asIntStreamOpt` over `NbtOps`.
+pub fn as_int_stream(tag: Option<&Tag>) -> Option<Vec<i32>> {
+    match tag? {
+        Tag::IntArray(v) => Some(v.clone()),
+        t if is_list(Some(t)) => stream(Some(t))
+            .iter()
+            .map(|e| as_number(e).map(Number::int_value))
+            .collect(),
+        _ => None,
+    }
+}
+/// `Dynamic.asByteBufferOpt` over `NbtOps`.
+pub fn as_byte_buffer(tag: Option<&Tag>) -> Option<Vec<u8>> {
+    match tag? {
+        Tag::ByteArray(v) => Some(v.clone()),
+        t if is_list(Some(t)) => stream(Some(t))
+            .iter()
+            .map(|e| as_number(e).map(|n| n.byte_value() as u8))
+            .collect(),
+        _ => None,
+    }
+}
+/// `ChunkHeightAndBiomeFix.ceillog2` (`Math.ceil(Math.log(n) / Math.log(2))`,
+/// which is exact for every palette size).
+pub fn ceillog2(n: usize) -> u32 {
+    if n <= 1 {
+        0
+    } else {
+        usize::BITS - (n - 1).leading_zeros()
+    }
+}
