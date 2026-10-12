@@ -490,6 +490,10 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 /// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
 fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    // AbstractHorse.aiStep: the tail swishes now and then (moveTail).
+    if super::equine::is_equine(m.species()) {
+        let _ = m.random.next_int_bound(200);
+    }
     if super::creaking::is_creaking(m) {
         super::creaking::update(m, w, events);
     }

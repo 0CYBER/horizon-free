@@ -464,35 +464,41 @@ fn main() -> horizon_client::Result<()> {
         }
         for t in 1..=s.ticks {
             world.game_time += 1;
-            let snapshot: Vec<Seen> = mobs.iter().filter(|m| !m.removed).map(seen).collect();
-            let w = MobWorld {
-                world: &world,
-                registry,
-                facts: &facts,
-                collision: &collision,
-                data: &data,
-                player: player.clone(),
-                others: &snapshot,
-                daylight: (s.time.rem_euclid(24000)) < 12000,
-                game_time: world.game_time,
-                day_time: world.day_time,
-                raining: s.rain,
-                thundering: s.thunder,
-                nether: false,
-                block_tags: &items.block_tags,
-                biomes: &biomes,
-                mob_griefing: true,
-                difficulty: LocalDifficulty::new(2, world.day_time, 0, 0.0),
-                end: false,
-                world_seed: 0,
-            };
+            let mut snapshot: Vec<Seen> = mobs.iter().filter(|m| !m.removed).map(seen).collect();
             let mut events = Vec::new();
-            for m in &mut mobs {
-                if m.removed {
+            for i in 0..mobs.len() {
+                if mobs[i].removed {
                     continue;
                 }
-                if !m.tick(&w, &mut scratch, &mut events) {
-                    m.removed = true;
+                let w = MobWorld {
+                    world: &world,
+                    registry,
+                    facts: &facts,
+                    collision: &collision,
+                    data: &data,
+                    player: player.clone(),
+                    others: &snapshot,
+                    daylight: (s.time.rem_euclid(24000)) < 12000,
+                    game_time: world.game_time,
+                    day_time: world.day_time,
+                    raining: s.rain,
+                    thundering: s.thunder,
+                    nether: false,
+                    block_tags: &items.block_tags,
+                    biomes: &biomes,
+                    mob_griefing: true,
+                    difficulty: LocalDifficulty::new(2, world.day_time, 0, 0.0),
+                    end: false,
+                    world_seed: 0,
+                };
+                if !mobs[i].tick(&w, &mut scratch, &mut events) {
+                    mobs[i].removed = true;
+                }
+                // ServerLevel ticks entities one after another: the ones
+                // after this mob see it as it is now.
+                if let Some(e) = snapshot.iter_mut().find(|e| e.id == mobs[i].id) {
+                    *e = seen(&mobs[i]);
+                    e.alive &= !mobs[i].removed;
                 }
             }
             for (i, m) in mobs.iter().enumerate() {

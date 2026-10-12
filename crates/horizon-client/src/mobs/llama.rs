@@ -3,9 +3,7 @@
 //! spit ranged attack, hunting wolves (and, for traders, zombies and
 //! illagers) and `LlamaModel`.
 use super::{
-    Mob, MobEvent, MobWorld, Seen, Species, Who,
-    anim::{Poses, State},
-    equine,
+    Mob, MobEvent, MobWorld, Seen, Species, Who, equine,
     goals::{
         Breed, Cx, Float, FollowParent, Goal, HurtByTarget, LookAtPlayer, NearestTarget, Panic,
         Prey, RandomLookAround, Stroll, Tempt, goal_clone,
@@ -14,7 +12,6 @@ use super::{
 };
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, random::RandomSource};
-use std::f32::consts::PI;
 
 pub const VARIANTS: [&str; 4] = ["creamy", "white", "brown", "gray"];
 /// `Llama.getMaxTemper`.
@@ -29,9 +26,10 @@ pub fn is_llama(s: Species) -> bool {
 pub fn is_trader(m: &Mob) -> bool {
     m.species() == Species::TraderLlama
 }
-/// `Llama.getStrength`.
+/// `Llama.getStrength`: the stored strength (0 for a llama that was never
+/// given one; `setStrength` keeps it within 1 to 5).
 pub fn strength(m: &Mob) -> i32 {
-    i32::from(m.extra.variant2).clamp(1, 5)
+    i32::from(m.extra.variant2)
 }
 /// `getInventoryColumns`: a chest holds three rows of `strength` columns.
 pub fn inventory_columns(m: &Mob) -> i32 {
@@ -249,17 +247,6 @@ pub fn decor(m: &Mob) -> Option<(String, String)> {
         };
         (model.into(), format!("entity/equipment/llama_body/{name}"))
     })
-}
-/// `LlamaModel.setupAnim`.
-pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
-    super::anim::quadruped(p, s);
-    let chest = m.extra.chested && !s.baby;
-    for part in ["right_chest", "left_chest"] {
-        if !chest {
-            p.visible(part, false);
-        }
-    }
-    let _ = PI;
 }
 #[cfg(test)]
 mod tests {

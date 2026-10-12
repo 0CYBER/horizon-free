@@ -438,26 +438,34 @@ impl Game<'_> {
         }
         self.tick_raids();
         let uuid = self.level.player_uuid;
-        let snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
+        let mut snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
         let mut events = Vec::new();
         let mut mobs = std::mem::take(&mut self.mobs);
         let mut dead = Vec::new();
         {
-            let w = self.mob_world_base(&snapshot);
             let mut scratch = self.world.random.clone();
-            mobs.retain_mut(|m| {
+            let mut keep = Vec::with_capacity(mobs.len());
+            for (i, m) in mobs.iter_mut().enumerate() {
+                let w = self.mob_world_base(&snapshot);
                 if !w
                     .world
                     .loaded(m.position.x.floor() as i32, m.position.z.floor() as i32)
                 {
-                    return !m.hostile() || m.persistent;
+                    keep.push(!m.hostile() || m.persistent);
+                    continue;
                 }
-                let keep = m.tick(&w, &mut scratch, &mut events);
-                if !keep && !m.alive() && !m.removed {
+                let kept = m.tick(&w, &mut scratch, &mut events);
+                if !kept && !m.alive() && !m.removed {
                     dead.push(m.clone());
                 }
-                keep
-            });
+                keep.push(kept);
+                // ServerLevel ticks entities one after another: the ones
+                // after this mob see it as it is now.
+                snapshot[i] = seen(m, uuid);
+                snapshot[i].alive &= kept;
+            }
+            let mut flags = keep.into_iter();
+            mobs.retain(|_| flags.next().unwrap_or(true));
             push_apart(&mut mobs);
         }
         self.mobs.append(&mut mobs);
