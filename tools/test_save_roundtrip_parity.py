@@ -59,7 +59,7 @@ IGNORED = {
     r'^chunk\.block_entities\..*\.(ticks_since_song_started|Age|BrewTime|warning_level|ticks_in_hive|last_vibration_frequency|listener\..*|RecipesUsed\..*)$':
         'block entity timers advance',
     r'^entity\.(Age|Motion\[\]|Rotation\[\]|Pos\[\]|OnGround|HurtTime|Health|TimeInOverworld|fall_distance|'
-    r'wasOnGround|Fire|Air|DeathTime|Fuse|life|inGround|ticks_in_ground)$': 'entity simulation advances',
+    r'wasOnGround|Fire|Air|DeathTime|Fuse|life|inGround|ticks_in_ground|Time)$': 'entity simulation advances',
     r'^level\.dat\.Data\.(Time|LastPlayed)$': 'clock and wall time of the save',
     r'^level\.dat\.Data\.(ServerBrands.*|singleplayer_uuid)$': 'a client world names its brand and its player',
     r'^entity\.listener\.selector\.(event|tick)$': 'the warden listener holds the last vibration it heard; timing',
@@ -72,12 +72,6 @@ IGNORED = {
 # Real differences that are known and not fixed yet: (pattern -> what is wrong). They are
 # reported, and do not fail the run, so that new differences still do.
 KNOWN_GAPS = {
-    r'^chunk\.block_entities\.\(26, -60, 5\)\.triggered': 'crafter: Horizon derives the BE flag from the block state each tick instead of in neighborChanged',
-    r'^chunk\.sections\.blocks|^chunk\.Heightmaps': 'a falling block entity with NoGravity lands anyway',
-    r'^entity \(28672, 0, 0, 11\)': 'the spider is gone from the Horizon save (not yet explained)',
-    r'^entity \(28672, 0, 0, 30\) minecraft:falling_block': 'the NoGravity falling block landed (above)',
-    r'^entity\.attributes': 'Horizon derives the attribute list of a horse from its own model',
-    r'^entity\.Brain\.memories': 'Horizon gives villagers memories (meeting point) that vanilla had not formed yet',
 }
 
 SUSPICIOUS = re.compile(
@@ -85,7 +79,7 @@ SUSPICIOUS = re.compile(
     r'Recreating|upgrad|DataFix|out of bounds|missing|Mismatch|Discarding)', re.IGNORECASE)
 BENIGN = re.compile(r'(Unpacking |OFFLINE/INSECURE|online-mode|authenticate usernames|hackers|'
                     r'Failed to load properties|Failed to load eula|Unknown or incomplete command|'
-                    r'Can.t keep up|Ignoring unknown|^WARNING: |No key layers|has the following)')
+                    r'Can.t keep up|Ignoring unknown|^WARNING: |No key layers|has the following|udev library)')
 
 
 # ---------------------------------------------------------------- vanilla server
@@ -409,7 +403,14 @@ def compare_chunks(vanilla, horizon, report):
             report.append((f'{path} @{key}', p, q))
 
 
-def compare_entities(vanilla, horizon, report):
+def chunk_of(entity):
+    pos = entity.get('Pos')
+    pos = pos[1] if isinstance(pos, tuple) else pos
+    x, z = (p[1] if isinstance(p, tuple) else p for p in (pos[0], pos[2]))
+    return int(x // 16), int(z // 16)
+
+
+def compare_entities(vanilla, horizon, report, chunks=None):
     def collect(regions):
         out = {}
         for key, root in regions.items():
@@ -418,11 +419,13 @@ def compare_entities(vanilla, horizon, report):
                 out[uuid] = e
         return out
     a, b = collect(vanilla), collect(horizon)
-    # Entities Horizon adds (chunk-generation spawns in the chunks vanilla never
-    # generated) are not part of the scene.
-    extra = [u for u in b if u not in a and not (u and u[0] == UUID_BASE)]
+    # Entities Horizon adds in the chunks vanilla never generated (chunk-generation
+    # spawns) are not part of the scene; anywhere else they are a difference.
+    vanilla_chunks = {chunk_of(e) for e in a.values()} | set(chunks or ())
+    extra = [u for u in b if u not in a and not (u and u[0] == UUID_BASE)
+             and chunk_of(b[u]) not in vanilla_chunks]
     if extra:
-        print(f'  note: Horizon saved {len(extra)} entities that are not in the scene (generated chunks)')
+        print(f'  note: Horizon saved {len(extra)} entities in chunks vanilla never generated')
     for uuid in extra:
         del b[uuid]
     for uuid in sorted(set(a) | set(b), key=str):
@@ -460,7 +463,8 @@ def compare_worlds(vanilla, horizon):
     report = []
     va, ha = dimension(vanilla), dimension(horizon)
     compare_chunks(load_regions(va / 'region'), load_regions(ha / 'region'), report)
-    compare_entities(load_regions(va / 'entities'), load_regions(ha / 'entities'), report)
+    chunks = {(k[1], k[2]) for k in load_regions(va / 'region')}
+    compare_entities(load_regions(va / 'entities'), load_regions(ha / 'entities'), report, chunks)
     for rel in ['level.dat'] + sorted(
             str(p.relative_to(vanilla)) for pattern in ('data/**/*.dat', 'players/**/*.dat')
             for p in vanilla.glob(pattern)):
@@ -497,7 +501,7 @@ def summarize(report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--keep', action='store_true')
-    parser.add_argument('--bin-dir', default=str(ROOT / 'target' / 'fast'))
+    parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build them with the fast profile)')
     parser.add_argument('--vanilla', help='an existing vanilla world folder (skips generation)')
     parser.add_argument('--horizon', help='an existing Horizon-saved world folder (skips the Horizon run)')
     parser.add_argument('--skip-vanilla-load', action='store_true')
@@ -520,7 +524,11 @@ def main():
     if args.horizon:
         h = Path(args.horizon)
     else:
-        h = horizon_resave(v0, RUN / 'h', Path(args.bin_dir))
+        bin_dir = Path(args.bin_dir) if args.bin_dir else None
+        if bin_dir is None:
+            subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '--bins'], cwd=ROOT, check=True)
+            bin_dir = ROOT / os.environ.get('CARGO_TARGET_DIR', 'target') / 'fast'
+        h = horizon_resave(v0, RUN / 'h', bin_dir)
     print('comparing', v0, 'with', h)
     report = compare_worlds(v0, h)
     failures += summarize(report)
@@ -531,13 +539,17 @@ def main():
         shutil.rmtree(RUN / 'v0view', ignore_errors=True)
         shutil.copytree(v0, RUN / 'v0view' / 'world')
         views0, problems0 = view_of_world(RUN / 'v0view')
+        untimed = re.compile(r'^\[[0-9:]+\] ')
+        seen0 = {untimed.sub('', line) for line in problems0}
         for line in problems1:
-            if line not in problems0:
+            if untimed.sub('', line) not in seen0:
                 print('vanilla log (Horizon save):', line)
                 failures += 1
         volatile = re.compile(r'(cooking_time_spent|lit_time_remaining|ticks_since_song_started|Age|BrewTime|'
                               r'ticks_in_hive|triggered|state_updating_resumes_at|LastExecution|last_vibration_frequency|warning_level): -?[0-9]+[a-zA-Z]?')
         volatile2 = re.compile(r'(RecipesUsed: \{[^}]*\}|listener: \{.*\}(?=, x))')
+        # The lit furnace keeps smelting while each game runs: its slots move on.
+        volatile_items = re.compile(r'Items: \[[^\]]*\]')
         for label in views0:
             if label.startswith('entity'):
                 # Entity data moves with the simulation: only require vanilla to load it.
@@ -547,7 +559,10 @@ def main():
                     print(f'VANILLA cannot find {label} in the Horizon save')
                     failures += 1
                 continue
-            if volatile2.sub('', volatile.sub('', views0[label])) != volatile2.sub('', volatile.sub('', views1.get(label, ''))):
+            def stable(text):
+                text = volatile2.sub('', volatile.sub('', text))
+                return volatile_items.sub('', text) if label == 'block 10 furnace' else text
+            if stable(views0[label]) != stable(views1.get(label, '')):
                 print(f'VANILLA VIEW differs: {label}\n   V0 {views0[label][:900]}\n   H  {str(views1.get(label))[:900]}')
                 failures += 1
     print('save round-trip parity', 'FAILED' if failures else 'ok', f'({failures} unexplained differences)')

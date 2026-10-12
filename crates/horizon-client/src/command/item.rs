@@ -1,7 +1,9 @@
 //! ItemParser (item stacks with components, `stone[damage=5]`) and
 //! ItemPredicateArgument (ComponentPredicateParser's packrat grammar:
 //! `#logs[count~1..|!damage]`), with vanilla's errors and suggestions.
-use super::args::{ItemInput, Registries, is_id_char, parse_identifier, read_identifier, suggest_resources};
+use super::args::{
+    ItemInput, Registries, is_id_char, parse_identifier, read_identifier, suggest_resources,
+};
 use super::codec::{either, is_number, not_map, snbt};
 use super::packrat::{Grammar, Reason, State, Sugg, Term, Value, alt, ch, opt, seq};
 use super::{CmdResult, CommandError, Reader, SuggestionsBuilder};
@@ -159,7 +161,10 @@ impl ItemState<'_, '_> {
                 self.sugg = ISugg::Component;
                 let ty = self.component_type()?;
                 if visited.contains(&ty) {
-                    return Err(CommandError::tr("arguments.item.component.repeated", &[&ty]));
+                    return Err(CommandError::tr(
+                        "arguments.item.component.repeated",
+                        &[&ty],
+                    ));
                 }
                 visited.push(ty);
                 self.sugg = ISugg::Nothing;
@@ -167,7 +172,10 @@ impl ItemState<'_, '_> {
             } else {
                 let ty = self.component_type()?;
                 if visited.contains(&ty) {
-                    return Err(CommandError::tr("arguments.item.component.repeated", &[&ty]));
+                    return Err(CommandError::tr(
+                        "arguments.item.component.repeated",
+                        &[&ty],
+                    ));
                 }
                 visited.push(ty.clone());
                 self.sugg = ISugg::Assignment;
@@ -401,10 +409,12 @@ fn predicate_grammar() -> Grammar<IV> {
         "type",
         alt(vec![element, seq(vec![ch('#'), Term::Cut, tag]), any]),
         |s| {
-            Some(IV::Type(match s.scope.get_any(&["element_type", "tag_type"]) {
-                Some(IV::Elem(t)) => Some(t),
-                _ => None,
-            }))
+            Some(IV::Type(
+                match s.scope.get_any(&["element_type", "tag_type"]) {
+                    Some(IV::Elem(t)) => Some(t),
+                    _ => None,
+                },
+            ))
         },
     );
     g.put_term("any_type", ch('*'), |_| Some(IV::Unit));
@@ -415,7 +425,11 @@ fn predicate_grammar() -> Grammar<IV> {
             if r.ids("minecraft:item").iter().any(|i| i == id) {
                 Ok(IV::Elem(TypeRes::Item(id.to_owned())))
             } else {
-                Err(CommandError::tr_at("argument.item.id.invalid", &[&id], reader))
+                Err(CommandError::tr_at(
+                    "argument.item.id.invalid",
+                    &[&id],
+                    reader,
+                ))
             }
         })
     });
@@ -426,7 +440,11 @@ fn predicate_grammar() -> Grammar<IV> {
             if r.tags("minecraft:item").iter().any(|i| i == id) {
                 Ok(IV::Elem(TypeRes::Tag(id.to_owned())))
             } else {
-                Err(CommandError::tr_at("arguments.item.tag.unknown", &[&id], reader))
+                Err(CommandError::tr_at(
+                    "arguments.item.tag.unknown",
+                    &[&id],
+                    reader,
+                ))
             }
         })
     });
@@ -509,29 +527,49 @@ fn predicate_grammar() -> Grammar<IV> {
             if id == "minecraft:count" {
                 return Ok(IV::Comp(id.to_owned()));
             }
-            let known = r.ids("minecraft:data_component_type").iter().any(|c| c == id);
+            let known = r
+                .ids("minecraft:data_component_type")
+                .iter()
+                .any(|c| c == id);
             if known && r.persistent_components.iter().any(|c| c == id) {
                 Ok(IV::Comp(id.to_owned()))
             } else {
-                Err(CommandError::tr_at("arguments.item.component.unknown", &[&id], reader))
+                Err(CommandError::tr_at(
+                    "arguments.item.component.unknown",
+                    &[&id],
+                    reader,
+                ))
             }
         })
     });
     g.put_custom("predicate_type", move |s| {
         let r = reg(s);
         let mut list = vec!["minecraft:count".to_owned()];
-        list.extend(r.ids("minecraft:data_component_predicate_type").iter().cloned());
+        list.extend(
+            r.ids("minecraft:data_component_predicate_type")
+                .iter()
+                .cloned(),
+        );
         lookup(s, id, Rc::new(list), &|id, reader| {
             if id == "minecraft:count"
-                || r.ids("minecraft:data_component_predicate_type").iter().any(|c| c == id)
+                || r.ids("minecraft:data_component_predicate_type")
+                    .iter()
+                    .any(|c| c == id)
             {
                 return Ok(IV::Pred(id.to_owned()));
             }
-            if r.ids("minecraft:data_component_type").iter().any(|c| c == id) {
+            if r.ids("minecraft:data_component_type")
+                .iter()
+                .any(|c| c == id)
+            {
                 // A component existence predicate (decodes Unit).
                 return Ok(IV::Pred(format!("exists:{id}")));
             }
-            Err(CommandError::tr_at("arguments.item.predicate.unknown", &[&id], reader))
+            Err(CommandError::tr_at(
+                "arguments.item.predicate.unknown",
+                &[&id],
+                reader,
+            ))
         })
     });
     g.put_custom("tag", |s| super::snbt::rule_in(s, IV::Tag));

@@ -59,7 +59,10 @@ impl Mat4 {
         if m[0][3] == 0.0 && m[1][3] == 0.0 {
             if m[2][3] == 0.0 && m[3][3] == 1.0 {
                 properties |= AFFINE;
-                if m[0] == [1.0, 0.0, 0.0, 0.0] && m[1] == [0.0, 1.0, 0.0, 0.0] && m[2] == [0.0, 0.0, 1.0, 0.0] {
+                if m[0] == [1.0, 0.0, 0.0, 0.0]
+                    && m[1] == [0.0, 1.0, 0.0, 0.0]
+                    && m[2] == [0.0, 0.0, 1.0, 0.0]
+                {
                     properties |= TRANSLATION | ORTHONORMAL;
                     if m[3][0] == 0.0 && m[3][1] == 0.0 && m[3][2] == 0.0 {
                         properties |= IDENTITY;
@@ -111,12 +114,20 @@ impl Mat4 {
             // mulAffine
             for c in 0..3 {
                 for row in 0..3 {
-                    out[c][row] = fma(m[0][row], r[c][0], fma(m[1][row], r[c][1], m[2][row] * r[c][2]));
+                    out[c][row] = fma(
+                        m[0][row],
+                        r[c][0],
+                        fma(m[1][row], r[c][1], m[2][row] * r[c][2]),
+                    );
                 }
                 out[c][3] = m[c][3];
             }
             for row in 0..3 {
-                out[3][row] = fma(m[0][row], r[3][0], fma(m[1][row], r[3][1], fma(m[2][row], r[3][2], m[3][row])));
+                out[3][row] = fma(
+                    m[0][row],
+                    r[3][0],
+                    fma(m[1][row], r[3][1], fma(m[2][row], r[3][2], m[3][row])),
+                );
             }
             out[3][3] = m[3][3];
             return Self(out, AFFINE | self.1 & right.1 & ORTHONORMAL);
@@ -124,7 +135,12 @@ impl Mat4 {
         if self.has(PERSPECTIVE) && right.has(AFFINE) {
             // mulPerspectiveAffine
             for c in 0..4 {
-                out[c] = [m[0][0] * r[c][0], m[1][1] * r[c][1], m[2][2] * r[c][2], m[2][3] * r[c][2]];
+                out[c] = [
+                    m[0][0] * r[c][0],
+                    m[1][1] * r[c][1],
+                    m[2][2] * r[c][2],
+                    m[2][3] * r[c][2],
+                ];
             }
             out[3][2] = m[2][2] * r[3][2] + m[3][2];
             out[3][3] = m[2][3] * r[3][2];
@@ -134,13 +150,24 @@ impl Mat4 {
             // mulAffineR
             for c in 0..3 {
                 for row in 0..4 {
-                    out[c][row] = fma(m[0][row], r[c][0], fma(m[1][row], r[c][1], m[2][row] * r[c][2]));
+                    out[c][row] = fma(
+                        m[0][row],
+                        r[c][0],
+                        fma(m[1][row], r[c][1], m[2][row] * r[c][2]),
+                    );
                 }
             }
             for row in 0..4 {
-                out[3][row] = fma(m[0][row], r[3][0], fma(m[1][row], r[3][1], fma(m[2][row], r[3][2], m[3][row])));
+                out[3][row] = fma(
+                    m[0][row],
+                    r[3][0],
+                    fma(m[1][row], r[3][1], fma(m[2][row], r[3][2], m[3][row])),
+                );
             }
-            return Self(out, self.1 & !(PERSPECTIVE | IDENTITY | TRANSLATION | ORTHONORMAL));
+            return Self(
+                out,
+                self.1 & !(PERSPECTIVE | IDENTITY | TRANSLATION | ORTHONORMAL),
+            );
         }
         // mul0
         for c in 0..4 {
@@ -148,7 +175,11 @@ impl Mat4 {
                 out[c][row] = fma(
                     m[0][row],
                     r[c][0],
-                    fma(m[1][row], r[c][1], fma(m[2][row], r[c][2], m[3][row] * r[c][3])),
+                    fma(
+                        m[1][row],
+                        r[c][1],
+                        fma(m[2][row], r[c][2], m[3][row] * r[c][3]),
+                    ),
                 );
             }
         }
@@ -162,7 +193,15 @@ impl Mat4 {
         // translateGeneric
         let mut out = *self;
         for row in 0..4 {
-            out.0[3][row] = fma(self.0[0][row], t[0], fma(self.0[1][row], t[1], fma(self.0[2][row], t[2], self.0[3][row])));
+            out.0[3][row] = fma(
+                self.0[0][row],
+                t[0],
+                fma(
+                    self.0[1][row],
+                    t[1],
+                    fma(self.0[2][row], t[2], self.0[3][row]),
+                ),
+            );
         }
         out.1 = self.1 & !(PERSPECTIVE | IDENTITY);
         out
@@ -186,7 +225,8 @@ impl Mat4 {
                 out.0[c][row] = self.0[c][row] * s[c];
             }
         }
-        out.1 = self.1 & !(PERSPECTIVE | IDENTITY | TRANSLATION | if one { 0 } else { ORTHONORMAL });
+        out.1 =
+            self.1 & !(PERSPECTIVE | IDENTITY | TRANSLATION | if one { 0 } else { ORTHONORMAL });
         out
     }
     /// `Matrix4f.rotate(Quaternionfc)`.
@@ -228,7 +268,11 @@ impl Mat4 {
             // rotateGeneric
             for c in 0..3 {
                 for row in 0..4 {
-                    out.0[c][row] = fma(m[0][row], r[c][0], fma(m[1][row], r[c][1], m[2][row] * r[c][2]));
+                    out.0[c][row] = fma(
+                        m[0][row],
+                        r[c][0],
+                        fma(m[1][row], r[c][1], m[2][row] * r[c][2]),
+                    );
                 }
             }
         }
@@ -281,7 +325,11 @@ pub fn quaternion_xyz(x: f32, y: f32, z: f32) -> [f32; 4] {
 /// [0, 2π) and the axis is used as given.
 pub fn quaternion_from_axis_angle(angle: f32, axis: [f32; 3]) -> [f32; 4] {
     let tau = (std::f64::consts::PI * 2.0) as f32;
-    let angle = if angle < 0.0 { tau + angle % tau } else { angle } % tau;
+    let angle = if angle < 0.0 {
+        tau + angle % tau
+    } else {
+        angle
+    } % tau;
     let sin = joml_sin(angle * 0.5);
     let cos = cos_from_sin(sin, angle * 0.5);
     [axis[0] * sin, axis[1] * sin, axis[2] * sin, cos]

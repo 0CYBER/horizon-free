@@ -58,38 +58,223 @@ fn entity_uuid(id: u32) -> u128 {
     0x4856_5a4e_0000_0000_0000_0000_0000_0000u128 | u128::from(id)
 }
 
-/// Species that are AgeableMob (or have a baby flag at the same index).
-fn ageable(kind: &str) -> bool {
-    matches!(
-        kind,
+/// The SynchedEntityData index of the baby flag: AgeableMob.DATA_BABY_ID and
+/// Zombie.DATA_BABY_ID are both the first entry after Mob's (16); Piglin's
+/// comes after AbstractPiglin's zombification flag (17).
+fn baby_index(kind: &str) -> Option<u8> {
+    match kind {
+        "minecraft:piglin" => Some(17),
         "minecraft:cow"
-            | "minecraft:mooshroom"
-            | "minecraft:pig"
-            | "minecraft:sheep"
-            | "minecraft:chicken"
-            | "minecraft:horse"
-            | "minecraft:donkey"
-            | "minecraft:mule"
-            | "minecraft:llama"
-            | "minecraft:cat"
-            | "minecraft:wolf"
-            | "minecraft:fox"
-            | "minecraft:rabbit"
-            | "minecraft:panda"
-            | "minecraft:villager"
-            | "minecraft:zombie"
-            | "minecraft:husk"
-            | "minecraft:drowned"
-            | "minecraft:zombie_villager"
-            | "minecraft:piglin"
-            | "minecraft:hoglin"
-            | "minecraft:goat"
-            | "minecraft:ocelot"
-            | "minecraft:turtle"
-            | "minecraft:strider"
-            | "minecraft:camel"
-            | "minecraft:axolotl"
-    )
+        | "minecraft:mooshroom"
+        | "minecraft:pig"
+        | "minecraft:sheep"
+        | "minecraft:chicken"
+        | "minecraft:horse"
+        | "minecraft:donkey"
+        | "minecraft:mule"
+        | "minecraft:skeleton_horse"
+        | "minecraft:zombie_horse"
+        | "minecraft:llama"
+        | "minecraft:trader_llama"
+        | "minecraft:cat"
+        | "minecraft:wolf"
+        | "minecraft:fox"
+        | "minecraft:rabbit"
+        | "minecraft:panda"
+        | "minecraft:polar_bear"
+        | "minecraft:bee"
+        | "minecraft:frog"
+        | "minecraft:sniffer"
+        | "minecraft:armadillo"
+        | "minecraft:villager"
+        | "minecraft:zombie"
+        | "minecraft:husk"
+        | "minecraft:drowned"
+        | "minecraft:zombie_villager"
+        | "minecraft:zombified_piglin"
+        | "minecraft:hoglin"
+        | "minecraft:goat"
+        | "minecraft:ocelot"
+        | "minecraft:turtle"
+        | "minecraft:strider"
+        | "minecraft:camel"
+        | "minecraft:axolotl"
+        | "minecraft:dolphin"
+        | "minecraft:squid"
+        | "minecraft:glow_squid" => Some(16),
+        _ => None,
+    }
+}
+
+/// A mob's synched data as ServerEntity sends it (only the values that differ
+/// from the defaults the client constructs), with vanilla's entry indices:
+/// Entity 0..=7, LivingEntity 8..=14, Mob 15, then the subclasses.
+fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
+    let mut meta = Vec::new();
+    let kind = m.kind.id.as_str();
+    if m.fire_ticks > 0 {
+        meta.push((0, serializer::BYTE, Value::Byte(1)));
+    }
+    if let Some(name) = &m.custom_name {
+        meta.push((
+            2,
+            serializer::OPTIONAL_COMPONENT,
+            Value::OptText(Some(horizon_protocol::text::literal(name))),
+        ));
+        if m.name_visible {
+            meta.push((3, serializer::BOOLEAN, Value::Bool(true)));
+        }
+    }
+    if m.health < m.kind.max_health {
+        meta.push((9, serializer::FLOAT, Value::Float(m.health.max(0.0))));
+    }
+    if m.is_baby()
+        && let Some(index) = baby_index(kind)
+    {
+        meta.push((index, serializer::BOOLEAN, Value::Bool(true)));
+    }
+    let e = &m.extra;
+    let id = |registry: &str, name: &str| hub.registry_id(registry, &format!("minecraft:{name}"));
+    match kind {
+        // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 when sheared.
+        "minecraft:sheep" => {
+            let value = (e.color & 15) | if e.sheared { 16 } else { 0 };
+            if value != 0 {
+                meta.push((18, serializer::BYTE, Value::Byte(value as i8)));
+            }
+        }
+        "minecraft:cat" | "minecraft:wolf" => {
+            // TamableAnimal.DATA_FLAGS_ID: sitting 1, tame 4.
+            let flags = i8::from(e.sitting) | if e.tame { 4 } else { 0 };
+            if flags != 0 {
+                meta.push((18, serializer::BYTE, Value::Byte(flags)));
+            }
+            let (index, registry, name) = if kind == "minecraft:cat" {
+                let v = horizon_client::mobs::tame::CAT_VARIANTS[(e.variant as usize).min(10)];
+                (20, "minecraft:cat_variant", v)
+            } else {
+                let v = horizon_client::mobs::tame::WOLF_VARIANTS[(e.variant as usize).min(8)].0;
+                (23, "minecraft:wolf_variant", v)
+            };
+            let serializer = if index == 20 {
+                serializer::CAT_VARIANT
+            } else {
+                serializer::WOLF_VARIANT
+            };
+            if let Some(v) = id(registry, name) {
+                meta.push((index, serializer, Value::Id(v)));
+            }
+        }
+        "minecraft:horse"
+        | "minecraft:donkey"
+        | "minecraft:mule"
+        | "minecraft:llama"
+        | "minecraft:trader_llama"
+        | "minecraft:skeleton_horse"
+        | "minecraft:zombie_horse"
+        | "minecraft:camel" => {
+            // AbstractHorse.DATA_ID_FLAGS: tame 2.
+            if e.tame {
+                meta.push((18, serializer::BYTE, Value::Byte(2)));
+            }
+            if kind == "minecraft:horse" {
+                let v = i32::from(e.variant) | i32::from(e.variant2) << 8;
+                if v != 0 {
+                    meta.push((19, serializer::INT, Value::Int(v)));
+                }
+            } else if kind.ends_with("llama") {
+                if e.chested {
+                    meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+                }
+                meta.push((
+                    20,
+                    serializer::INT,
+                    Value::Int(i32::from(e.variant2.max(1))),
+                ));
+                if e.variant != 0 {
+                    meta.push((21, serializer::INT, Value::Int(i32::from(e.variant))));
+                }
+            } else if (kind == "minecraft:donkey" || kind == "minecraft:mule") && e.chested {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+        }
+        // Villager.DATA_VILLAGER_DATA and ZombieVillager's (after Zombie's three).
+        "minecraft:villager" | "minecraft:zombie_villager" => {
+            use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
+            let villager_type = VILLAGER_TYPES[e.variant as usize % VILLAGER_TYPES.len()];
+            let profession = PROFESSIONS[e.variant2 as usize % PROFESSIONS.len()];
+            if let (Some(t), Some(p)) = (
+                id("minecraft:villager_type", villager_type),
+                id("minecraft:villager_profession", profession),
+            ) {
+                let index = if kind == "minecraft:villager" { 19 } else { 20 };
+                let level = i32::from(e.variant3.max(1));
+                meta.push((
+                    index,
+                    serializer::VILLAGER_DATA,
+                    Value::Ids(vec![t, p, level]),
+                ));
+            }
+        }
+        // AbstractCubeMob.ID_SIZE.
+        "minecraft:slime" | "minecraft:magma_cube" => {
+            if e.size > 1 {
+                meta.push((18, serializer::INT, Value::Int(e.size)));
+            }
+        }
+        // Creeper.DATA_IS_POWERED.
+        "minecraft:creeper" if e.charged => {
+            meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        // Enderman.DATA_CARRY_STATE.
+        "minecraft:enderman" => {
+            if let Some(state) = e.carried {
+                meta.push((
+                    16,
+                    serializer::OPTIONAL_BLOCK_STATE,
+                    Value::Id(i32::from(state.0 as u16)),
+                ));
+            }
+        }
+        _ => {}
+    }
+    meta
+}
+
+/// The equipment a mob shows (ClientboundSetEquipmentPacket slots: main hand,
+/// off hand, feet, legs, chest, head, body, saddle).
+fn mob_equipment(m: &Mob, hub: &mut Hub) -> Vec<(u8, Option<horizon_protocol::item::Stack>)> {
+    let e = &m.extra;
+    let mut out = Vec::new();
+    let slots = [
+        (0u8, &e.main_hand),
+        (1, &e.off_hand),
+        (2, &e.feet),
+        (3, &e.legs),
+        (4, &e.chest),
+        (5, &e.head),
+    ];
+    for (slot, item) in slots {
+        if let Some(item) = item {
+            let stack = ItemStack {
+                item: item.clone(),
+                count: 1,
+                damage: 0,
+                extra: None,
+            };
+            out.push((slot, hub.stack(&Some(stack))));
+        }
+    }
+    if e.saddled {
+        let stack = e.saddle_stack.clone().unwrap_or(ItemStack {
+            item: Arc::from("minecraft:saddle"),
+            count: 1,
+            damage: 0,
+            extra: None,
+        });
+        out.push((7, hub.stack(&Some(stack))));
+    }
+    out
 }
 
 pub const HELP: &[&str] = &[
@@ -205,6 +390,7 @@ impl Game<'_> {
                 dimension: self.dim.id().to_owned(),
                 seed: self.level.seed,
                 max_players: MAX_PLAYERS,
+                dedicated: false,
             },
         );
         let port = hub.lan.port;
@@ -307,31 +493,9 @@ impl Game<'_> {
     fn lan_entities(&self, hub: &mut Hub) -> Vec<EntityState> {
         let mut out = Vec::with_capacity(self.mobs.len() + self.dropped.len());
         for m in self.mobs.iter().filter(|m| !m.removed) {
-            let mut meta = Vec::new();
-            if let Some(name) = &m.custom_name {
-                meta.push((
-                    2,
-                    serializer::OPTIONAL_COMPONENT,
-                    Value::OptText(Some(horizon_protocol::text::literal(name))),
-                ));
-                if m.name_visible {
-                    meta.push((3, serializer::BOOLEAN, Value::Bool(true)));
-                }
-            }
-            if m.fire_ticks > 0 {
-                meta.push((0, serializer::BYTE, Value::Byte(1)));
-            }
-            if m.health < m.kind.max_health {
-                meta.push((9, serializer::FLOAT, Value::Float(m.health.max(0.0))));
-            }
             let kind = m.kind.id.as_str();
-            if ageable(kind) && m.is_baby() {
-                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
-            }
-            if kind == "minecraft:sheep" {
-                let value = (m.extra.color & 15) | if m.extra.sheared { 16 } else { 0 };
-                meta.push((17, serializer::BYTE, Value::Byte(value as i8)));
-            }
+            let meta = mob_meta(m, hub);
+            let equipment = mob_equipment(m, hub);
             let (yaw, pitch) = (m.yaw, m.head_pitch);
             out.push(EntityState {
                 id: m.id as i32,
@@ -345,8 +509,7 @@ impl Game<'_> {
                 velocity: [m.velocity.x, m.velocity.y, m.velocity.z],
                 data: 0,
                 meta,
-                equipment: Vec::new(),
-                send_velocity: false,
+                equipment,
             });
         }
         for d in &self.dropped {
@@ -364,7 +527,6 @@ impl Game<'_> {
                 data: 0,
                 meta: vec![(8, serializer::ITEM_STACK, Value::Item(stack))],
                 equipment: Vec::new(),
-                send_velocity: true,
             });
         }
         out
@@ -386,7 +548,7 @@ impl Game<'_> {
             let events = {
                 let mut ctx = TickCtx {
                     world: &mut self.world,
-                    host: &state,
+                    host: Some(&state),
                     entities: &entities,
                     next_entity: &mut self.next_entity,
                     spawn,
@@ -397,6 +559,8 @@ impl Game<'_> {
                     } else {
                         0.0
                     },
+                    tick_rate: self.clock.rate(),
+                    tick_frozen: self.clock.frozen(),
                 };
                 host.hub.tick(&mut ctx)
             };
@@ -454,13 +618,15 @@ impl Game<'_> {
         }
         let mut ctx = TickCtx {
             world: &mut self.world,
-            host: state,
+            host: Some(state),
             entities,
             next_entity: &mut self.next_entity,
             spawn,
             difficulty: i32::from(self.ui.difficulty),
             difficulty_locked: false,
             clock_rate: self.ui.clock.rate,
+            tick_rate: self.clock.rate(),
+            tick_frozen: self.clock.frozen(),
         };
         host.hub.place_new_player(conn, &mut ctx);
     }

@@ -1,9 +1,16 @@
-//! Sound playback: `sounds.json` events with weighted variants, Ogg/Vorbis
-//! decoding, and a small mixer with vanilla's linear distance attenuation
-//! (`SoundInstance.Attenuation.LINEAR`, default range 16 blocks) and stereo panning.
+//! Sound playback: vanilla's `SoundEngine` bookkeeping (`sound_engine`) over a
+//! small mixer standing in for OpenAL: one channel per source with its gain,
+//! pitch, linear distance attenuation (`AL_LINEAR_DISTANCE`, reference 0,
+//! rolloff 1), looping, relative flag and source state, Ogg/Vorbis decoding
+//! (streams on a worker thread) and stereo panning.
 use crate::Result;
+use crate::sound_engine::{
+    Attenuation, Backend, Bound, ChannelId, InstanceId, PlayResult, SoundEngine, SoundInstance,
+    Sounds, TickContext,
+};
+use crate::sound_events::{Sound, SoundRegistry};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use serde_json::Value;
+use horizon_core::random::{LegacyRandom, RandomSource};
 use std::{
     collections::HashMap,
     fs,
@@ -11,46 +18,32 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[derive(Clone, Debug)]
-struct Variant {
-    name: String,
-    volume: f32,
-    pitch: f32,
-    weight: u32,
-    attenuation: f32,
-    is_event: bool,
+/// An OpenAL source's state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum State {
+    Initial,
+    Playing,
+    Paused,
+    Stopped,
 }
-struct Voice {
-    samples: Arc<Vec<f32>>,
+/// An OpenAL source.
+struct Channel {
+    samples: Option<(Arc<Vec<f32>>, u32)>,
     position: f64,
-    step: f64,
-    left: f32,
-    right: f32,
-    /// The sound event and `SoundSource` index (what `/stopsound` matches).
-    event: Arc<str>,
-    source: usize,
+    state: State,
+    gain: f32,
+    pitch: f32,
+    /// `AL_LINEAR_DISTANCE` max distance, or no attenuation.
+    linear: Option<f32>,
+    looping: bool,
+    at: [f32; 3],
+    relative: bool,
 }
 #[derive(Default)]
 struct Mixer {
-    voices: Vec<Voice>,
-    /// The streaming music track (`SoundSource.MUSIC`), kept apart from the
-    /// voice cap and scaled by `music_gain` (MusicManager's fade).
-    music: Option<Voice>,
-    music_gain: f32,
-    /// Tickable sound instances the game keeps a handle to (ambient loops).
-    tracked: Vec<Tracked>,
-}
-struct Tracked {
-    id: u64,
-    voice: Voice,
-    looping: bool,
-    volume: f32,
-}
-/// The current music track: decoding on a worker until the voice exists.
-struct MusicTrack {
-    event: String,
-    /// Set by the decoder thread once the voice is in the mixer (or failed).
-    ready: Arc<std::sync::atomic::AtomicBool>,
+    channels: HashMap<ChannelId, Channel>,
+    listener: [f64; 3],
+    listener_yaw: f32,
 }
 /// A sound the player could have heard (`SoundEventListener.onPlaySound`):
 /// what the subtitle overlay needs.
@@ -58,30 +51,31 @@ struct MusicTrack {
 pub struct Heard {
     /// The `subtitle` translation key of the sound event.
     pub subtitle: String,
-    /// Where it played (None = relative to the listener, e.g. UI sounds).
+    /// The instance's position (relative sounds report their raw coordinates).
     pub at: Option<[f64; 3]>,
     /// `SoundEngine.getRange`: infinite for relative and non-attenuated sounds.
     pub range: f32,
     pub looping: bool,
 }
+/// The mixer side of the engine (`Backend`).
+pub struct MixerBackend {
+    mixer: Arc<Mutex<Mixer>>,
+    root: PathBuf,
+    cache: HashMap<String, Option<(Arc<Vec<f32>>, u32)>>,
+    next: ChannelId,
+    live: bool,
+}
 pub struct Audio {
     _stream: Option<cpal::Stream>,
-    /// `subtitle` keys of `sounds.json` events.
-    subtitles: HashMap<String, String>,
+    pub engine: SoundEngine,
+    backend: MixerBackend,
     /// Record `Heard` sounds (the subtitle overlay is listening).
     pub record_heard: bool,
-    heard: Vec<Heard>,
-    mixer: Arc<Mutex<Mixer>>,
-    rate: u32,
-    root: PathBuf,
-    events: HashMap<String, Vec<Variant>>,
-    cache: HashMap<String, Option<(Arc<Vec<f32>>, u32)>>,
-    seed: u64,
     pub listener: [f64; 3],
     pub listener_yaw: f32,
     pub master: f32,
-    music: Option<MusicTrack>,
-    next_tracked: u64,
+    /// Seeds of positional plays (the client level random's `nextLong`).
+    random: LegacyRandom,
     /// A `SoundSource` index the next sound plays on (`/playsound`).
     source_override: Option<usize>,
     /// Positional sounds played since the last drain, kept while the world
@@ -130,75 +124,247 @@ fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
     }
     Some((mono, rate))
 }
-impl Audio {
-    pub fn new(root: &Path) -> Self {
-        let mut events = HashMap::new();
-        let mut subtitles = HashMap::new();
-        if let Ok(text) = fs::read(root.join("assets/minecraft/sounds.json"))
-            && let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&text)
+impl MixerBackend {
+    fn with(&self, channel: ChannelId, f: impl FnOnce(&mut Channel)) {
+        if let Ok(mut m) = self.mixer.lock()
+            && let Some(c) = m.channels.get_mut(&channel)
         {
-            for (name, def) in map {
-                let variants = def["sounds"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|s| match s {
-                        Value::String(n) => Variant {
-                            name: n.clone(),
-                            volume: 1.0,
-                            pitch: 1.0,
-                            weight: 1,
-                            attenuation: 16.0,
-                            is_event: false,
-                        },
-                        _ => Variant {
-                            name: s["name"].as_str().unwrap_or("").to_owned(),
-                            volume: s["volume"].as_f64().unwrap_or(1.0) as f32,
-                            pitch: s["pitch"].as_f64().unwrap_or(1.0) as f32,
-                            weight: s["weight"].as_u64().unwrap_or(1) as u32,
-                            attenuation: s["attenuation_distance"].as_f64().unwrap_or(16.0) as f32,
-                            is_event: s["type"].as_str() == Some("event"),
-                        },
-                    })
-                    .collect::<Vec<_>>();
-                if let Some(key) = def["subtitle"].as_str() {
-                    subtitles.insert(format!("minecraft:{name}"), key.to_owned());
-                }
-                events.insert(format!("minecraft:{name}"), variants);
-            }
+            f(c);
         }
-        let mixer = Arc::new(Mutex::new(Mixer {
-            music_gain: 1.0,
-            ..Mixer::default()
-        }));
-        let (stream, rate) = match Self::open(mixer.clone()) {
-            Ok(v) => (Some(v.0), v.1),
-            Err(e) => {
-                eprintln!("Horizon: audio unavailable: {e}");
-                (None, 48_000)
+    }
+}
+impl Backend for MixerBackend {
+    fn create(&mut self, _streaming: bool) -> Option<ChannelId> {
+        self.next += 1;
+        let id = self.next;
+        self.mixer.lock().ok()?.channels.insert(
+            id,
+            Channel {
+                samples: None,
+                position: 0.0,
+                state: State::Initial,
+                gain: 1.0,
+                pitch: 1.0,
+                linear: None,
+                looping: false,
+                at: [0.0; 3],
+                relative: false,
+            },
+        );
+        Some(id)
+    }
+    fn destroy(&mut self, channel: ChannelId) {
+        if let Ok(mut m) = self.mixer.lock() {
+            m.channels.remove(&channel);
+        }
+    }
+    fn set_pitch(&mut self, channel: ChannelId, pitch: f32) {
+        self.with(channel, |c| c.pitch = pitch);
+    }
+    fn set_volume(&mut self, channel: ChannelId, volume: f32) {
+        self.with(channel, |c| c.gain = volume);
+    }
+    fn set_attenuation(&mut self, channel: ChannelId, linear: Option<f32>) {
+        self.with(channel, |c| c.linear = linear);
+    }
+    fn set_looping(&mut self, channel: ChannelId, looping: bool) {
+        self.with(channel, |c| c.looping = looping);
+    }
+    fn set_position(&mut self, channel: ChannelId, p: [f64; 3]) {
+        self.with(channel, |c| c.at = [p[0] as f32, p[1] as f32, p[2] as f32]);
+    }
+    fn set_relative(&mut self, channel: ChannelId, relative: bool) {
+        self.with(channel, |c| c.relative = relative);
+    }
+    /// `getCompleteBuffer` (decoded now, cached) or `getStream` (decoded on a
+    /// worker), then attach and `alSourcePlay`. A sound that cannot load
+    /// leaves its source initial, as a failed buffer future does in vanilla.
+    fn start(&mut self, channel: ChannelId, sound: &Sound, looping: bool) {
+        if !self.live {
+            return;
+        }
+        let (namespace, path) = sound.path();
+        let file = self.root.join("assets").join(namespace).join(&path);
+        let attach = move |mixer: &Mutex<Mixer>, samples: Option<(Arc<Vec<f32>>, u32)>| {
+            if let Some(samples) = samples
+                && let Ok(mut m) = mixer.lock()
+                && let Some(c) = m.channels.get_mut(&channel)
+            {
+                c.samples = Some(samples);
+                c.position = 0.0;
+                c.state = State::Playing;
             }
         };
+        if sound.stream {
+            // A streamed sound loops by restarting its stream.
+            let mixer = self.mixer.clone();
+            std::thread::spawn(move || {
+                let samples = decode(&file).map(|(s, r)| (Arc::new(s), r));
+                if looping
+                    && let Ok(mut m) = mixer.lock()
+                    && let Some(c) = m.channels.get_mut(&channel)
+                {
+                    c.looping = true;
+                }
+                attach(&mixer, samples);
+            });
+        } else {
+            let samples = self
+                .cache
+                .entry(format!("{namespace}:{path}"))
+                .or_insert_with(|| decode(&file).map(|(s, r)| (Arc::new(s), r)))
+                .clone();
+            attach(&self.mixer, samples);
+        }
+    }
+    fn stop(&mut self, channel: ChannelId) {
+        self.with(channel, |c| {
+            if c.state != State::Initial {
+                c.state = State::Stopped;
+            }
+        });
+    }
+    fn pause(&mut self, channel: ChannelId) {
+        self.with(channel, |c| {
+            if c.state == State::Playing {
+                c.state = State::Paused;
+            }
+        });
+    }
+    fn unpause(&mut self, channel: ChannelId) {
+        self.with(channel, |c| {
+            if c.state == State::Paused {
+                c.state = State::Playing;
+            }
+        });
+    }
+    fn stopped(&mut self, channel: ChannelId) -> bool {
+        self.mixer
+            .lock()
+            .map(|m| {
+                m.channels
+                    .get(&channel)
+                    .is_none_or(|c| c.state == State::Stopped)
+            })
+            .unwrap_or(true)
+    }
+}
+/// The gain OpenAL applies for distance (`AL_LINEAR_DISTANCE` with reference
+/// distance 0 and rolloff 1: the distance clamps to the max distance).
+fn distance_gain(linear: Option<f32>, distance: f32) -> f32 {
+    match linear {
+        None => 1.0,
+        Some(max) if max > 0.0 => (1.0 - distance.min(max) / max).clamp(0.0, 1.0),
+        Some(_) => 0.0,
+    }
+}
+fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
+    data.fill(0.0);
+    let listener = mixer.listener;
+    let yaw = mixer.listener_yaw.to_radians();
+    // Gains and pans per source for this buffer.
+    let mut voices: Vec<(ChannelId, f32, f32, f64)> = Vec::new();
+    for (id, c) in &mixer.channels {
+        let Some((_, source_rate)) = &c.samples else {
+            continue;
+        };
+        if c.state != State::Playing {
+            continue;
+        }
+        let d = if c.relative {
+            [f64::from(c.at[0]), f64::from(c.at[1]), f64::from(c.at[2])]
+        } else {
+            [
+                f64::from(c.at[0]) - listener[0],
+                f64::from(c.at[1]) - listener[1],
+                f64::from(c.at[2]) - listener[2],
+            ]
+        };
+        let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
+        let gain = c.gain.clamp(0.0, 1.0) * distance_gain(c.linear, distance);
+        // The listener's right vector for a Minecraft yaw.
+        let side = if c.relative {
+            (d[0] as f32) / distance.max(0.001)
+        } else {
+            (-(yaw.cos()) as f64 * d[0] - (yaw.sin()) as f64 * d[2]) as f32 / distance.max(0.001)
+        };
+        let pan = side.clamp(-1.0, 1.0);
+        let left = gain * (1.0 - pan.max(0.0) * 0.6);
+        let right = gain * (1.0 + pan.min(0.0) * 0.6);
+        let step = f64::from(*source_rate) / f64::from(rate) * f64::from(c.pitch.max(0.0));
+        voices.push((*id, left, right, step));
+    }
+    for (id, left, right, step) in voices {
+        let Some(c) = mixer.channels.get_mut(&id) else {
+            continue;
+        };
+        let Some((samples, _)) = c.samples.clone() else {
+            continue;
+        };
+        for frame in data.chunks_mut(channels) {
+            let mut i = c.position as usize;
+            if i + 1 >= samples.len() {
+                if c.looping && samples.len() > 1 {
+                    c.position = 0.0;
+                    i = 0;
+                } else {
+                    c.state = State::Stopped;
+                    break;
+                }
+            }
+            let t = (c.position - i as f64) as f32;
+            let s = samples[i] * (1.0 - t) + samples[i + 1] * t;
+            if channels >= 2 {
+                frame[0] += s * left;
+                frame[1] += s * right;
+            } else {
+                frame[0] += s * (left + right) / 2.0;
+            }
+            c.position += step;
+        }
+    }
+    for s in data.iter_mut() {
+        *s = s.clamp(-1.0, 1.0);
+    }
+}
+impl Audio {
+    pub fn new(root: &Path) -> Self {
+        let registry = SoundRegistry::load(root);
+        let mixer = Arc::new(Mutex::new(Mixer::default()));
+        let (stream, live) = match Self::open(mixer.clone()) {
+            Ok(v) => (Some(v), true),
+            Err(e) => {
+                eprintln!("Horizon: audio unavailable: {e}");
+                (None, false)
+            }
+        };
+        let mut engine = SoundEngine::new(registry);
+        engine.loaded = live;
         Self {
             _stream: stream,
-            subtitles,
+            engine,
+            backend: MixerBackend {
+                mixer,
+                root: root.to_owned(),
+                cache: HashMap::new(),
+                next: 0,
+                live,
+            },
             record_heard: false,
-            heard: Vec::new(),
-            mixer,
-            rate,
-            root: root.to_owned(),
-            events,
-            cache: HashMap::new(),
-            seed: 0x5DEE_CE66,
             listener: [0.0; 3],
             listener_yaw: 0.0,
             master: 1.0,
-            music: None,
-            next_tracked: 0,
+            random: LegacyRandom::new(crate::sound_engine::unique_seed()),
             source_override: None,
             capture: None,
         }
     }
-    fn open(mixer: Arc<Mutex<Mixer>>) -> Result<(cpal::Stream, u32)> {
+    fn open(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
+        // Test runs (harnesses, agents) launch the game on a virtual screen;
+        // keep them off the user's speakers.
+        if std::env::var_os("HORIZON_NO_AUDIO").is_some() {
+            return Err("audio output disabled by HORIZON_NO_AUDIO".into());
+        }
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -209,269 +375,110 @@ impl Audio {
         let stream = device.build_output_stream(
             &config.into(),
             move |data: &mut [f32], _| {
-                data.fill(0.0);
-                let Ok(mut mixer) = mixer.lock() else { return };
-                for frame in data.chunks_mut(channels) {
-                    let (mut l, mut r) = (0.0f32, 0.0f32);
-                    for v in mixer.voices.iter_mut() {
-                        let i = v.position as usize;
-                        if i + 1 >= v.samples.len() {
-                            continue;
-                        }
-                        let t = (v.position - i as f64) as f32;
-                        let s = v.samples[i] * (1.0 - t) + v.samples[i + 1] * t;
-                        l += s * v.left;
-                        r += s * v.right;
-                        v.position += v.step;
-                    }
-                    for t in mixer.tracked.iter_mut() {
-                        let v = &mut t.voice;
-                        let mut i = v.position as usize;
-                        if t.looping && i + 1 >= v.samples.len() {
-                            v.position = 0.0;
-                            i = 0;
-                        }
-                        if i + 1 < v.samples.len() {
-                            let f = (v.position - i as f64) as f32;
-                            let s = (v.samples[i] * (1.0 - f) + v.samples[i + 1] * f) * t.volume;
-                            l += s * v.left;
-                            r += s * v.right;
-                            v.position += v.step;
-                        }
-                    }
-                    let gain = mixer.music_gain;
-                    if let Some(v) = mixer.music.as_mut() {
-                        let i = v.position as usize;
-                        if i + 1 < v.samples.len() {
-                            let t = (v.position - i as f64) as f32;
-                            let s = (v.samples[i] * (1.0 - t) + v.samples[i + 1] * t) * gain;
-                            l += s * v.left;
-                            r += s * v.right;
-                            v.position += v.step;
-                        }
-                    }
-                    if channels >= 2 {
-                        frame[0] = l.clamp(-1.0, 1.0);
-                        frame[1] = r.clamp(-1.0, 1.0);
-                    } else {
-                        frame[0] = ((l + r) / 2.0).clamp(-1.0, 1.0);
-                    }
-                }
-                mixer
-                    .voices
-                    .retain(|v| (v.position as usize) + 1 < v.samples.len());
-                mixer.tracked.retain(|t| {
-                    t.looping || (t.voice.position as usize) + 1 < t.voice.samples.len()
-                });
-                if mixer
-                    .music
-                    .as_ref()
-                    .is_some_and(|v| (v.position as usize) + 1 >= v.samples.len())
-                {
-                    mixer.music = None;
+                if let Ok(mut m) = mixer.lock() {
+                    mix(&mut m, data, channels, rate);
+                } else {
+                    data.fill(0.0);
                 }
             },
             |e| eprintln!("Horizon: audio stream error: {e}"),
             None,
         )?;
         stream.play()?;
-        Ok((stream, rate))
+        Ok(stream)
     }
-    fn random(&mut self) -> u64 {
-        self.seed ^= self.seed << 13;
-        self.seed ^= self.seed >> 7;
-        self.seed ^= self.seed << 17;
-        self.seed
-    }
-    fn resolve(&mut self, event: &str, depth: u32) -> Option<Variant> {
-        let variants = self.events.get(event)?.clone();
-        let total: u32 = variants.iter().map(|v| v.weight).sum();
-        if total == 0 {
-            return None;
+    fn bound(&mut self) -> Bound<'_, MixerBackend> {
+        Bound {
+            engine: &mut self.engine,
+            backend: &mut self.backend,
         }
-        let mut pick = (self.random() % u64::from(total)) as u32;
-        let chosen = variants.into_iter().find(|v| {
-            if pick < v.weight {
-                true
-            } else {
-                pick -= v.weight;
-                false
+    }
+    /// `SoundManager.updateSource`: the camera position and yaw.
+    pub fn set_listener(&mut self, position: [f64; 3], yaw: f32) {
+        self.listener = position;
+        self.listener_yaw = yaw;
+        if let Ok(mut m) = self.backend.mixer.lock() {
+            m.listener = position;
+            m.listener_yaw = yaw;
+        }
+    }
+    /// Sync the volume options, refreshing the categories that changed
+    /// (the option sliders' `refreshCategoryVolume`).
+    fn sync_volumes(&mut self) {
+        let mut volumes = [self.master; 11];
+        for (i, v) in volumes.iter_mut().enumerate().skip(1) {
+            *v = crate::settings::source_volume(i);
+        }
+        for source in 0..11 {
+            if self.engine.source_volumes[source] != volumes[source] {
+                self.engine.source_volumes[source] = volumes[source];
+                self.engine
+                    .refresh_category_volume(source, &mut self.backend);
             }
-        })?;
-        if chosen.is_event && depth < 4 {
-            let name = if chosen.name.contains(':') {
-                chosen.name.clone()
-            } else {
-                format!("minecraft:{}", chosen.name)
-            };
-            let mut inner = self.resolve(&name, depth + 1)?;
-            inner.volume *= chosen.volume;
-            inner.pitch *= chosen.pitch;
-            return Some(inner);
         }
-        Some(chosen)
+        self.engine.listening = self.record_heard;
     }
-    /// Play a sound event at a world position (None = non-positional UI sound).
+    /// `SoundManager.tick(paused)`, once per client tick.
+    pub fn tick(&mut self, paused: bool, ctx: &TickContext) {
+        self.sync_volumes();
+        self.engine.tick(paused, ctx, &mut self.backend);
+    }
+    /// `SoundManager.pauseAllExcept(MUSIC, UI)`.
+    pub fn pause(&mut self) {
+        self.engine.pause_all_except(
+            &[crate::sound_engine::MUSIC, crate::sound_engine::UI],
+            &mut self.backend,
+        );
+    }
+    /// `SoundManager.resume`.
+    pub fn resume(&mut self) {
+        self.engine.resume(&mut self.backend);
+    }
+    /// `SoundManager.stop()`: every sound.
+    pub fn stop_all(&mut self) {
+        self.engine.stop_all(&mut self.backend);
+    }
+    /// Play a sound event at a world position, as `ClientLevel.playLocalSound`
+    /// (a `SimpleSoundInstance` seeded from the level random), or relative to
+    /// the listener without attenuation (`None`).
     pub fn play(&mut self, event: &str, at: Option<[f64; 3]>, volume: f32, pitch: f32) {
+        let seed = self.random.next_long();
+        self.play_seeded(event, at, volume, pitch, seed);
+    }
+    /// `play` with the seed a sound packet carries.
+    pub fn play_seeded(
+        &mut self,
+        event: &str,
+        at: Option<[f64; 3]>,
+        volume: f32,
+        pitch: f32,
+        seed: i64,
+    ) {
         if let (Some(capture), Some(at)) = (self.capture.as_mut(), at) {
             capture.push((event.to_owned(), at, volume, pitch));
         }
-        let Some(variant) = self.resolve(event, 0) else {
-            return;
-        };
-        if self.record_heard
-            && let Some(key) = self.subtitles.get(event)
-        {
-            let range = if at.is_some() {
-                variant.attenuation * volume.max(1.0)
-            } else {
-                f32::INFINITY
-            };
-            self.heard.push(Heard {
-                subtitle: key.clone(),
-                at,
-                range,
-                looping: false,
-            });
-        }
-        if self._stream.is_none() {
-            return;
-        }
-        let file = variant.name.trim_start_matches("minecraft:").to_owned();
-        let entry = self.cache.entry(file.clone()).or_insert_with(|| {
-            decode(
-                &self
-                    .root
-                    .join(format!("assets/minecraft/sounds/{file}.ogg")),
-            )
-            .map(|(s, r)| (Arc::new(s), r))
-        });
-        let Some((samples, rate)) = entry.clone() else {
-            return;
-        };
+        self.sync_volumes();
+        let event = crate::sound_events::normalize(event);
         let source = self
             .source_override
-            .unwrap_or_else(|| crate::settings::sound_source(event));
-        let volume = (volume * variant.volume).clamp(0.0, 1.0)
-            * self.master
-            * crate::settings::source_volume(source);
-        let pitch = (pitch * variant.pitch).clamp(0.5, 2.0);
-        let (mut left, mut right) = (volume, volume);
-        if let Some(p) = at {
-            let d = [
-                p[0] - self.listener[0],
-                p[1] - self.listener[1],
-                p[2] - self.listener[2],
-            ];
-            let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
-            let range = variant.attenuation * volume.max(1.0);
-            let gain = (1.0 - distance / range).clamp(0.0, 1.0);
-            if gain <= 0.0 {
-                return;
-            }
-            let yaw = self.listener_yaw.to_radians();
-            // Right vector of a Minecraft yaw.
-            let side = (-(yaw.cos()) as f64 * d[0] - (yaw.sin()) as f64 * d[2]) as f32
-                / distance.max(0.001);
-            let pan = side.clamp(-1.0, 1.0);
-            left = volume * gain * (1.0 - pan.max(0.0) * 0.6);
-            right = volume * gain * (1.0 + pan.min(0.0) * 0.6);
-        }
-        let step = f64::from(rate) / f64::from(self.rate) * f64::from(pitch);
-        if let Ok(mut m) = self.mixer.lock() {
-            if m.voices.len() > 64 {
-                m.voices.remove(0);
-            }
-            m.voices.push(Voice {
-                samples,
-                position: 0.0,
-                step,
-                left,
-                right,
-                event: event.into(),
+            .unwrap_or_else(|| crate::settings::sound_source(&event));
+        let random = LegacyRandom::new(seed);
+        let instance = match at {
+            Some(at) => SoundInstance::at(&event, source, volume, pitch, random, at),
+            None => SoundInstance::new(
+                &event,
                 source,
-            });
-        }
-    }
-    /// `SoundManager.play` of a music instance (`SimpleSoundInstance.forMusic`:
-    /// non-positional, streamed). Decoding runs on a worker thread; the track
-    /// counts as active from now on. Returns false when nothing can play.
-    pub fn play_music(&mut self, event: &str) -> bool {
-        self.stop_music();
-        if self._stream.is_none() {
-            return false;
-        }
-        let Some(variant) = self.resolve(event, 0) else {
-            return false;
+                volume,
+                pitch,
+                random,
+                false,
+                0,
+                Attenuation::None,
+                [0.0; 3],
+                true,
+            ),
         };
-        let path = self.root.join(format!(
-            "assets/minecraft/sounds/{}.ogg",
-            variant.name.trim_start_matches("minecraft:")
-        ));
-        let volume =
-            variant.volume.clamp(0.0, 1.0) * self.master * crate::settings::event_volume(event);
-        let step_scale = f64::from(variant.pitch.clamp(0.5, 2.0)) / f64::from(self.rate);
-        let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (mixer, done) = (self.mixer.clone(), ready.clone());
-        let music_event = event.to_owned();
-        std::thread::spawn(move || {
-            if let Some((samples, rate)) = decode(&path)
-                && let Ok(mut m) = mixer.lock()
-                && !done.load(std::sync::atomic::Ordering::Acquire)
-            {
-                m.music = Some(Voice {
-                    samples: Arc::new(samples),
-                    position: 0.0,
-                    step: f64::from(rate) * step_scale,
-                    left: volume,
-                    right: volume,
-                    event: music_event.as_str().into(),
-                    source: 1,
-                });
-            }
-            done.store(true, std::sync::atomic::Ordering::Release);
-        });
-        self.music = Some(MusicTrack {
-            event: event.to_owned(),
-            ready,
-        });
-        true
-    }
-    /// `SoundManager.stop` of the music instance.
-    pub fn stop_music(&mut self) {
-        if let Some(track) = self.music.take() {
-            // A decoder still running sees the flag and drops its result.
-            track
-                .ready
-                .store(true, std::sync::atomic::Ordering::Release);
-        }
-        if let Ok(mut m) = self.mixer.lock() {
-            m.music = None;
-        }
-    }
-    /// `SoundManager.isActive`: decoding or still sounding.
-    pub fn music_active(&mut self) -> bool {
-        let Some(track) = &self.music else {
-            return false;
-        };
-        if !track.ready.load(std::sync::atomic::Ordering::Acquire) {
-            return true;
-        }
-        let playing = self.mixer.lock().is_ok_and(|m| m.music.is_some());
-        if !playing {
-            self.music = None;
-        }
-        playing
-    }
-    /// The event of the current music track.
-    pub fn music_event(&self) -> Option<&str> {
-        self.music.as_ref().map(|t| t.event.as_str())
-    }
-    /// Every sound event id (for command completion).
-    pub fn event_names(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.events.keys().cloned().collect();
-        v.sort();
-        v
+        self.play_instance(instance, false);
     }
     /// Play a sound on a given `SoundSource` index (`/playsound`).
     pub fn play_on(
@@ -486,102 +493,111 @@ impl Audio {
         self.play(event, at, volume, pitch);
         self.source_override = None;
     }
+    /// `SimpleSoundInstance.forJukeboxSong` at a jukebox; the handle stays
+    /// until `release`.
+    pub fn play_jukebox_song(&mut self, event: &str, pos: [i32; 3]) -> InstanceId {
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 0.5,
+            f64::from(pos[2]) + 0.5,
+        ];
+        let event = crate::sound_events::normalize(event);
+        let instance = SoundInstance::for_jukebox_song(&event, at, SoundEngine::unseeded());
+        self.play_instance(instance, true).0
+    }
+    /// Stop and drop a held instance.
+    pub fn stop_and_release(&mut self, id: InstanceId) {
+        self.stop_instance(id);
+        self.release(id);
+    }
+    /// Every sound event id (for command completion).
+    pub fn event_names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.engine.registry.names().cloned().collect();
+        v.sort();
+        v
+    }
     /// `ClientboundStopSoundPacket`: stop the playing sounds of an event
     /// and/or a source.
     pub fn stop_sounds(&mut self, event: Option<&str>, source: Option<usize>) {
-        let matches = |v: &Voice| {
-            event.is_none_or(|e| &*v.event == e) && source.is_none_or(|s| v.source == s)
-        };
-        if let Ok(mut m) = self.mixer.lock() {
-            m.voices.retain(|v| !matches(v));
-            m.tracked.retain(|t| !matches(&t.voice));
-            if m.music.as_ref().is_some_and(matches) {
-                m.music = None;
-            }
-        }
-        if self
-            .music
-            .as_ref()
-            .is_some_and(|t| event.is_none_or(|e| t.event == e) && source.is_none_or(|s| s == 1))
-        {
-            self.music = None;
-        }
+        let event = event.map(crate::sound_events::normalize);
+        self.engine
+            .stop_matching(event.as_deref(), source, &mut self.backend);
     }
     /// The sounds played since the last call, for the subtitle overlay.
     pub fn take_heard(&mut self) -> Vec<Heard> {
-        std::mem::take(&mut self.heard)
-    }
-    /// `SoundManager.updateCategoryVolume(MUSIC, gain)`.
-    pub fn set_music_gain(&mut self, gain: f32) {
-        if let Ok(mut m) = self.mixer.lock() {
-            m.music_gain = gain;
-        }
-    }
-    /// Play a relative (non-positional) tickable sound instance the caller
-    /// keeps a handle to: ambient loops (`looping`) and sub-sounds.
-    pub fn play_tracked(&mut self, event: &str, volume: f32, looping: bool) -> Option<u64> {
-        let variant = self.resolve(event, 0)?;
-        if self.record_heard
-            && let Some(key) = self.subtitles.get(event)
-        {
-            self.heard.push(Heard {
-                subtitle: key.clone(),
-                at: None,
-                range: f32::INFINITY,
-                looping,
-            });
-        }
-        self._stream.as_ref()?;
-        let file = variant.name.trim_start_matches("minecraft:").to_owned();
-        let root = &self.root;
-        let (samples, rate) = self
-            .cache
-            .entry(file.clone())
-            .or_insert_with(|| {
-                decode(&root.join(format!("assets/minecraft/sounds/{file}.ogg")))
-                    .map(|(s, r)| (Arc::new(s), r))
+        std::mem::take(&mut self.engine.notifications)
+            .into_iter()
+            .filter_map(|n| {
+                Some(Heard {
+                    subtitle: n.subtitle?,
+                    at: Some(n.position),
+                    range: n.range,
+                    looping: n.looping,
+                })
             })
-            .clone()?;
-        let gain =
-            variant.volume.clamp(0.0, 1.0) * self.master * crate::settings::event_volume(event);
-        let step =
-            f64::from(rate) / f64::from(self.rate) * f64::from(variant.pitch.clamp(0.5, 2.0));
-        self.next_tracked += 1;
-        let id = self.next_tracked;
-        let mut m = self.mixer.lock().ok()?;
-        m.tracked.push(Tracked {
-            id,
-            voice: Voice {
-                samples,
-                position: 0.0,
-                step,
-                left: gain,
-                right: gain,
-                event: event.into(),
-                source: crate::settings::sound_source(event),
-            },
+            .collect()
+    }
+}
+impl Sounds for Audio {
+    fn engine(&mut self) -> &mut SoundEngine {
+        &mut self.engine
+    }
+    fn play_instance(&mut self, instance: SoundInstance, retain: bool) -> (InstanceId, PlayResult) {
+        self.sync_volumes();
+        self.bound().play_instance(instance, retain)
+    }
+    fn play_id(&mut self, id: InstanceId) -> PlayResult {
+        self.sync_volumes();
+        self.bound().play_id(id)
+    }
+    fn stop_instance(&mut self, id: InstanceId) {
+        self.bound().stop_instance(id);
+    }
+    fn update_category_volume(&mut self, source: usize, gain: f32) {
+        self.bound().update_category_volume(source, gain);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn channel(samples: Vec<f32>, linear: Option<f32>, at: [f32; 3], looping: bool) -> Channel {
+        Channel {
+            samples: Some((Arc::new(samples), 48_000)),
+            position: 0.0,
+            state: State::Playing,
+            gain: 1.0,
+            pitch: 1.0,
+            linear,
             looping,
-            volume: volume.clamp(0.0, 1.0),
-        });
-        Some(id)
-    }
-    /// A tracked instance's volume (`AbstractTickableSoundInstance.volume`).
-    pub fn set_tracked_volume(&mut self, id: u64, volume: f32) {
-        if let Ok(mut m) = self.mixer.lock()
-            && let Some(t) = m.tracked.iter_mut().find(|t| t.id == id)
-        {
-            t.volume = volume.clamp(0.0, 1.0);
+            at,
+            relative: false,
         }
     }
-    pub fn stop_tracked(&mut self, id: u64) {
-        if let Ok(mut m) = self.mixer.lock() {
-            m.tracked.retain(|t| t.id != id);
-        }
+
+    #[test]
+    fn linear_attenuation_reaches_zero_at_the_max_distance() {
+        assert_eq!(distance_gain(None, 100.0), 1.0);
+        assert_eq!(distance_gain(Some(16.0), 0.0), 1.0);
+        assert_eq!(distance_gain(Some(16.0), 8.0), 0.5);
+        assert_eq!(distance_gain(Some(16.0), 16.0), 0.0);
+        assert_eq!(distance_gain(Some(16.0), 40.0), 0.0);
     }
-    /// Still sounding (a finished one-shot is gone).
-    pub fn tracked_active(&self, id: u64) -> bool {
-        self.mixer
-            .lock()
-            .is_ok_and(|m| m.tracked.iter().any(|t| t.id == id))
+
+    #[test]
+    fn sources_play_attenuated_then_stop_or_loop() {
+        let mut m = Mixer::default();
+        m.channels
+            .insert(1, channel(vec![1.0; 4], Some(16.0), [8.0, 0.0, 0.0], false));
+        m.channels
+            .insert(2, channel(vec![1.0; 4], None, [0.0; 3], true));
+        let mut data = [0.0f32; 16];
+        mix(&mut m, &mut data, 2, 48_000);
+        assert_eq!(m.channels[&1].state, State::Stopped);
+        assert_eq!(m.channels[&2].state, State::Playing);
+        // Mono sum of the two at the first frame: the far one is half as loud.
+        let first = data[0] + data[1];
+        assert!(first > 1.4 && first < 3.1, "{first}");
     }
 }

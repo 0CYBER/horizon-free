@@ -3,7 +3,7 @@
 //! and High Contrast packs, `pack.mcmeta` metadata and format compatibility,
 //! and an overlay resource root that layers the enabled packs over the
 //! vanilla resources (later packs win), so every loader sees one tree.
-mod pattern;
+pub mod pattern;
 use crate::{text::Text, zip::Zip};
 use pattern::Pattern;
 use std::{

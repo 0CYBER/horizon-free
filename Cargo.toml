@@ -15,6 +15,11 @@ type_complexity = "allow"
 needless_range_loop = "allow"
 large_enum_variant = "allow"
 
+# Line tables keep file:line in backtraces; full debug info made every
+# example and test binary hundreds of megabytes and slow to link.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

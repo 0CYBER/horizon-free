@@ -53,8 +53,17 @@ impl LevelAccess for Cells {
     }
     /// Fresh block entities hold nothing, but a lectern whose state has a book
     /// reads page progress 1 of an empty book: signal 14.
-    fn block_entity_analog_signal(&self, _pos: BlockPos, state: BlockStateId, _direction: Direction) -> i32 {
-        if self.lecterns_with_books.contains(&state) { 14 } else { 0 }
+    fn block_entity_analog_signal(
+        &self,
+        _pos: BlockPos,
+        state: BlockStateId,
+        _direction: Direction,
+    ) -> i32 {
+        if self.lecterns_with_books.contains(&state) {
+            14
+        } else {
+            0
+        }
     }
     /// A chest's fresh block entity: nobody has it open.
     fn recheck_container_openers(&mut self, _pos: BlockPos) -> Option<(i32, i32)> {
@@ -62,7 +71,10 @@ impl LevelAccess for Cells {
     }
     /// A fresh command block entity: unpowered and not automatic.
     fn set_command_block_powered(&mut self, pos: BlockPos, powered: bool) -> Option<(bool, bool)> {
-        Some((self.command_blocks.insert(pos, powered).unwrap_or(false), false))
+        Some((
+            self.command_blocks.insert(pos, powered).unwrap_or(false),
+            false,
+        ))
     }
     fn random(&mut self) -> &mut LegacyRandom {
         &mut self.random
@@ -137,16 +149,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let registry = load_registry(resources)?;
     let behaviours = Behaviours::load(&registry, resources)?;
     let air = registry.default_state("minecraft:air").unwrap();
-    let lecterns_with_books: std::rc::Rc<std::collections::HashSet<BlockStateId>> = std::rc::Rc::new(
-        (0..registry.len() as u32)
-            .map(BlockStateId)
-            .filter(|&id| {
-                registry.state(id).is_some_and(|s| {
-                    s.name == "minecraft:lectern" && s.properties.get("has_book").is_some_and(|v| v == "true")
+    let lecterns_with_books: std::rc::Rc<std::collections::HashSet<BlockStateId>> =
+        std::rc::Rc::new(
+            (0..registry.len() as u32)
+                .map(BlockStateId)
+                .filter(|&id| {
+                    registry.state(id).is_some_and(|s| {
+                        s.name == "minecraft:lectern"
+                            && s.properties.get("has_book").is_some_and(|v| v == "true")
+                    })
                 })
-            })
-            .collect(),
-    );
+                .collect(),
+        );
     let mut out = std::io::BufWriter::new(std::fs::File::create(output)?);
     for (index, line) in std::io::BufReader::new(std::fs::File::open(cases)?)
         .lines()
@@ -320,28 +334,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Dispensing from the fixture's empty block entities, as the
                 // client does: the fail event, plus `block_activate` for a
                 // dispenser; a crafter without a recipe only fails.
-                LevelEvent::BlockEvent { kind: "dispense", pos, state } => {
-                    match behaviours.table.name(*state) {
-                        "minecraft:crafter" => {
-                            let _ = writeln!(result, "L 1050 {} 0", p(*pos));
-                        }
-                        "minecraft:dispenser" => {
-                            let _ = writeln!(result, "L 1001 {} 0", p(*pos));
-                            let _ = writeln!(result, "G {} minecraft:block_activate", p(*pos));
-                        }
-                        _ => {
-                            let _ = writeln!(result, "L 1001 {} 0", p(*pos));
-                        }
+                LevelEvent::BlockEvent {
+                    kind: "dispense",
+                    pos,
+                    state,
+                } => match behaviours.table.name(*state) {
+                    "minecraft:crafter" => {
+                        let _ = writeln!(result, "L 1050 {} 0", p(*pos));
                     }
-                }
+                    "minecraft:dispenser" => {
+                        let _ = writeln!(result, "L 1001 {} 0", p(*pos));
+                        let _ = writeln!(result, "G {} minecraft:block_activate", p(*pos));
+                    }
+                    _ => {
+                        let _ = writeln!(result, "L 1001 {} 0", p(*pos));
+                    }
+                },
                 // DriedGhastBlock.spawnGhastling, as the client does it.
-                LevelEvent::BlockEvent { kind: "spawn_ghastling", .. } => {
+                LevelEvent::BlockEvent {
+                    kind: "spawn_ghastling",
+                    ..
+                } => {
                     let _ = writeln!(result, "E minecraft:happy_ghast");
                     let _ = writeln!(result, "S entity minecraft:entity.ghastling.spawn");
                 }
                 // A fresh shrieker has warning level 0 and so never responds,
                 // and no player is near enough for a portal to spawn a piglin.
-                LevelEvent::BlockEvent { kind: "shrieker_respond" | "portal_spawn", .. } => {}
+                LevelEvent::BlockEvent {
+                    kind: "shrieker_respond" | "portal_spawn",
+                    ..
+                } => {}
                 LevelEvent::BlockEvent { kind, .. } => {
                     let _ = writeln!(result, "X {kind}");
                 }
