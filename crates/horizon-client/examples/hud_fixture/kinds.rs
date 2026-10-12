@@ -3,7 +3,7 @@ use horizon_client::{
     brewing, component,
     hud::HudAtlas,
     hud_layout::{self, GuiDraw},
-    hud_overlays::{self, BossBar, EffectIcon, HeldName, Titles, ToolHighlight},
+    hud_overlays::{self, BossBar, EffectIcon, HeldName, ItemDecorations, Titles, ToolHighlight},
     scoreboard::{NumberFormat, RenderType, Scoreboard},
     text::{self, Text},
 };
@@ -37,6 +37,7 @@ pub fn run(kind: &str, c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
         "boss" => boss(c, w, h, atlas),
         "jump" => hud_overlays::jump_bar(w, h, int(c, "cooldown", 0), float(c, "jumpScale", 0.0)),
         "sidebar" => sidebar(c, w, h, atlas),
+        "decor" => decor(c, atlas),
         _ => Vec::new(),
     }
 }
@@ -186,4 +187,37 @@ fn sidebar(c: &Value, w: i32, h: i32, atlas: &HudAtlas) -> Vec<GuiDraw> {
         hud_layout::background_color(chat_only, opacity, 0.3),
         hud_layout::background_color(chat_only, opacity, 0.4),
     )
+}
+
+/// `itemDecorations` for a stack with a count, damage and an item cooldown
+/// `elapsed` ticks into `duration` (ItemCooldowns.getCooldownPercent).
+fn decor(c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
+    let count = int(c, "count", 1);
+    if count <= 0 {
+        return Vec::new();
+    }
+    let cd = &c["cooldown"];
+    let cooldown = if cd.is_null() {
+        0.0
+    } else {
+        let (duration, elapsed) = (int(cd, "duration", 0), int(cd, "elapsed", 0));
+        if duration <= elapsed {
+            0.0 // ItemCooldowns.tick dropped it
+        } else {
+            let remaining = duration as f32 - (elapsed as f32 + float(c, "partial", 0.0));
+            (remaining / duration as f32).clamp(0.0, 1.0)
+        }
+    };
+    let max_damage = if c["unbreakable"].as_bool().unwrap_or(false) {
+        0
+    } else {
+        int(c, "maxDamage", 0)
+    };
+    let d = ItemDecorations {
+        count: count as u32,
+        count_text: c["countText"].as_str().map(str::to_owned),
+        bar: hud_overlays::damage_bar(int(c, "damage", 0), max_damage),
+        cooldown,
+    };
+    hud_overlays::item_decorations(int(c, "x", 0), int(c, "y", 0), &d, &atlas.font)
 }

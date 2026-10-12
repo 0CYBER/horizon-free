@@ -632,3 +632,63 @@ pub fn sidebar(
     }
     out
 }
+
+/// `Mth.ceil`.
+fn ceil(x: f32) -> i32 {
+    let i = x as i32;
+    if x > i as f32 { i + 1 } else { i }
+}
+
+/// What `GuiGraphicsExtractor.itemDecorations` draws over a stack.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ItemDecorations {
+    pub count: u32,
+    /// The text shown instead of the count, if any.
+    pub count_text: Option<String>,
+    /// `isBarVisible`: `getBarWidth` and `getBarColor` (RGB).
+    pub bar: Option<(i32, u32)>,
+    /// `ItemCooldowns.getCooldownPercent` of the stack.
+    pub cooldown: f32,
+}
+
+/// `Item.getBarWidth` and `getBarColor` for a damaged stack (`isDamaged`).
+pub fn damage_bar(damage: i32, max_damage: i32) -> Option<(i32, u32)> {
+    if max_damage <= 0 || damage <= 0 {
+        return None;
+    }
+    let width = (13.0 - damage as f32 * 13.0 / max_damage as f32)
+        .round()
+        .clamp(0.0, 13.0) as i32;
+    let health = ((max_damage as f32 - damage as f32) / max_damage as f32).max(0.0);
+    Some((width, hsv_to_argb(health / 3.0, 1.0, 1.0, 0)))
+}
+
+/// `GuiGraphicsExtractor.itemDecorations` for a non-empty stack at (x, y):
+/// the durability bar, the cooldown shade and the count.
+pub fn item_decorations(x: i32, y: i32, d: &ItemDecorations, font: &Font) -> Vec<GuiDraw> {
+    let mut out = vec![GuiDraw::Push(Vec::new())];
+    if let Some((width, color)) = d.bar {
+        let (left, top) = (x + 2, y + 13);
+        out.push(fill(left, top, left + 13, top + 2, 0xFF00_0000));
+        out.push(fill(left, top, left + width, top + 1, color | 0xFF00_0000));
+    }
+    if d.cooldown > 0.0 {
+        let top = y + crate::hud_layout::floor(16.0 * (1.0 - d.cooldown));
+        let bottom = top + ceil(16.0 * d.cooldown);
+        out.push(fill(x, top, x + 16, bottom, 0x7FFF_FFFF));
+    }
+    if d.count != 1 || d.count_text.is_some() {
+        let amount = d.count_text.clone().unwrap_or_else(|| d.count.to_string());
+        let w = font.width(&amount) as i32;
+        text(
+            &mut out,
+            Text::literal(amount),
+            x + 19 - 2 - w,
+            y + 6 + 3,
+            crate::hud_layout::WHITE,
+            true,
+        );
+    }
+    out.push(GuiDraw::Pop);
+    out
+}

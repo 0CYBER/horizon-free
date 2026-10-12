@@ -153,6 +153,27 @@ def sidebar(rng, n):
             'scores': scores, 'teams': teams}
 
 
+
+# Items for the decorations: id and max damage (0 = not damageable), checked by the oracle's own stacks.
+DECOR_ITEMS = [('diamond_sword', 1561), ('bow', 384), ('shield', 336), ('flint_and_steel', 64), ('elytra', 432),
+               ('stone', 0), ('ender_pearl', 0), ('apple', 0)]
+
+
+def decor(rng, n):
+    """GuiGraphicsExtractor.itemDecorations: count, durability bar and cooldown shade."""
+    item, max_damage = rng.choice(DECOR_ITEMS)
+    case = {'x': rng.randint(-20, 400), 'y': rng.randint(-20, 300), 'item': item, 'maxDamage': max_damage,
+            'count': rng.choice([1, 1, 2, 16, 64, 99, 0, 10, 127]),
+            'damage': rng.choice([0, 0, 1, max_damage // 2, max_damage - 1, max_damage, rng.randint(0, max(max_damage, 1))]) if max_damage else 0,
+            'unbreakable': rng.random() < 0.1, 'partial': round(rng.random(), 3)}
+    if rng.random() < 0.4:
+        duration = rng.choice([1, 2, 7, 20, 100, 200])
+        case['cooldown'] = {'duration': duration, 'elapsed': rng.choice([0, 1, duration - 1, duration, rng.randint(0, duration)])}
+    if rng.random() < 0.1:
+        case['countText'] = rng.choice(['', '+', '1/2', 'x9'])
+    return case
+
+
 # Generators by kind: (rng, index) -> case. Cases are drawn round-robin.
 KINDS = {
     'decorations': decorations,
@@ -162,4 +183,5 @@ KINDS = {
     'boss': boss,
     'jump': jump,
     'sidebar': sidebar,
+    'decor': decor,
 }

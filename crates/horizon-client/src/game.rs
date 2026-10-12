@@ -108,7 +108,7 @@ use horizon_client::{
     environment::Environment,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
-    hud_layout,
+    hud_layout, hud_overlays,
     items::{ItemStack, Items},
     keymapping::KeyAction,
     light::LightTables,
@@ -2844,26 +2844,30 @@ impl Game<'_> {
         // `GuiGraphics.renderItem`: the resolved item model (tints, foil and
         // special renderers included), then the decorations.
         self.draw_item_model(batch, stack, x, y);
-        let atlas = &self.res.atlas;
-        if stack.count > 1 {
-            let text = stack.count.to_string();
-            let w = HudBatch::text_width(atlas, &text);
-            batch.text(atlas, &text, x + 17.0 - w, y + 9.0, u32::MAX, true);
-        }
-        if let Some(info) = self.res.items.get(&stack.item)
-            && info.max_damage > 0
-            && stack.damage > 0
-        {
-            let f = 1.0 - stack.damage as f32 / info.max_damage as f32;
-            let width = (13.0 * f).round();
-            let hue = f / 3.0;
-            let (r, g) = (
-                (255.0 * (1.0 - hue * 3.0).clamp(0.0, 1.0)) as u8,
-                (255.0 * (hue * 3.0).clamp(0.0, 1.0)) as u8,
-            );
-            batch.fill(atlas, x + 2.0, y + 13.0, 13.0, 2.0, rgba(0, 0, 0, 255));
-            batch.fill(atlas, x + 2.0, y + 13.0, width, 1.0, rgba(r, g, 0, 255));
-        }
+        // GuiGraphicsExtractor.itemDecorations, laid out at the origin and
+        // moved to (x, y). Horizon tracks no item cooldowns to shade yet.
+        let max_damage = self
+            .res
+            .items
+            .get(&stack.item)
+            .map_or(0, |info| info.max_damage as i32);
+        let decorations = hud_overlays::ItemDecorations {
+            count: stack.count,
+            count_text: None,
+            bar: hud_overlays::damage_bar(stack.damage as i32, max_damage),
+            cooldown: 0.0,
+        };
+        let mut draws = vec![hud_layout::GuiDraw::Push(vec![
+            hud_layout::PoseOp::Translate(x, y),
+        ])];
+        draws.extend(hud_overlays::item_decorations(
+            0,
+            0,
+            &decorations,
+            &self.res.atlas.font,
+        ));
+        draws.push(hud_layout::GuiDraw::Pop);
+        hud_layout::paint(batch, &self.res.atlas, &draws);
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);

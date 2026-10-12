@@ -281,7 +281,11 @@ public final class VanillaHudOracle {
             o.add("matrix", a);
             draws.add(o);
         }
-        @Override public void itemDecorations(Font font, ItemStack stack, int x, int y, String count) { }
+        /** Off for the hotbar cases (Horizon draws the decorations with the item). */
+        boolean realDecorations;
+        @Override public void itemDecorations(Font font, ItemStack stack, int x, int y, String count) {
+            if (realDecorations) super.itemDecorations(font, stack, x, y, count);
+        }
     }
 
     public static void main(String[] args) throws Exception {
@@ -388,6 +392,7 @@ public final class VanillaHudOracle {
                 capture.draws = new JsonArray();
                 capture.stack = new Matrix3x2fStack(16);
                 put(capture, GuiGraphicsExtractor.class, "minecraft", mc);
+                put(capture, GuiGraphicsExtractor.class, "pose", capture.stack);
                 float partial = f("partial", 0);
                 DeltaTracker delta = (DeltaTracker) Proxy.newProxyInstance(DeltaTracker.class.getClassLoader(), new Class<?>[] {DeltaTracker.class},
                     (proxy, method, a) -> method.getReturnType() == float.class ? partial : null);
@@ -486,6 +491,24 @@ public final class VanillaHudOracle {
                             for (var m : t.getAsJsonArray("members")) board.addPlayerToTeam(m.getAsString(), team);
                         }
                         sidebar.invoke(hud, capture, objective);
+                    }
+                    case "decor" -> {
+                        var stack = new ItemStack(BuiltInRegistries.ITEM.getValue(Identifier.withDefaultNamespace(c.get("item").getAsString())));
+                        stack.setCount(i("count", 1));
+                        stack.setDamageValue(i("damage", 0));
+                        if (b("unbreakable")) stack.set(net.minecraft.core.component.DataComponents.UNBREAKABLE, net.minecraft.util.Unit.INSTANCE);
+                        var cooldowns = new net.minecraft.world.item.ItemCooldowns();
+                        put(actor, net.minecraft.world.entity.player.Player.class, "cooldowns", cooldowns);
+                        if (c.has("cooldown") && !c.get("cooldown").isJsonNull()) {
+                            var cd = c.getAsJsonObject("cooldown");
+                            cooldowns.addCooldown(stack, cd.get("duration").getAsInt());
+                            for (int n = cd.get("elapsed").getAsInt(); n > 0; n--) cooldowns.tick();
+                        }
+                        var timer = alloc(DeltaTracker.Timer.class);
+                        put(timer, DeltaTracker.Timer.class, "deltaTickResidual", partial);
+                        put(mc, Minecraft.class, "deltaTracker", timer);
+                        capture.realDecorations = true;
+                        capture.itemDecorations(font, stack, i("x", 0), i("y", 0), c.has("countText") ? c.get("countText").getAsString() : null);
                     }
                     default -> throw new IllegalArgumentException(c.get("kind").getAsString());
                 }
