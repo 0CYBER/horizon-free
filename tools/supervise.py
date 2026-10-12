@@ -5,6 +5,7 @@
     python3 tools/supervise.py new dispensers     # worktree ../dispensers on parity/dispensers, from the integration branch
     python3 tools/supervise.py save [AREA ...]    # commit and push unfinished work (before stopping agents)
     python3 tools/supervise.py integrate parity/dispensers   # merge into the integration branch if the gate passes
+    python3 tools/supervise.py integrate parity/a parity/b   # several branches, one gate
 
 The integration branch (`parity-base` by default) is checked out in its own
 worktree; `integrate` merges there, runs tools/gate.py and pushes the
@@ -86,8 +87,10 @@ def new(args):
     git("worktree", "add", "-b", branch, str(path), args.base)
     shared = base_tree.parent / "shared-local"
     (path / ".local").mkdir()
+    # Link the vanilla data, not the shared runner and datafix state beside it.
     for entry in sorted(shared.iterdir()) if shared.is_dir() else []:
-        (path / ".local" / entry.name).symlink_to(entry)
+        if entry.is_dir() and entry.name not in {"parity-shared", "datafix"}:
+            (path / ".local" / entry.name).symlink_to(entry)
     print(f"{path} on {branch}, from {args.base} at {git('rev-parse', '--short', 'HEAD', cwd=path)}")
 
 
@@ -117,24 +120,27 @@ def integrate(args):
     state = base_tree / ".local/parity-runner/state.json"
     known = sorted(name for name, record in json.loads(state.read_text())["harnesses"].items()
                    if record["status"] != "pass") if state.exists() else []
-    merge = subprocess.run(["git", "merge", "--no-ff", "--no-edit", args.branch], cwd=base_tree, capture_output=True, text=True)
-    if merge.returncode:
-        conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=base_tree, check=False)
-        git("merge", "--abort", cwd=base_tree, check=False)
-        print(f"{args.branch} does not merge cleanly into {args.base}. Conflicts:\n{conflicts or merge.stdout + merge.stderr}")
-        print(f"Merge {args.base} into {args.branch}, resolve them there, and integrate again.")
-        return 2
+    for branch in args.branches:
+        merge = subprocess.run(["git", "merge", "--no-ff", "--no-edit", branch], cwd=base_tree, capture_output=True, text=True)
+        if merge.returncode:
+            conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=base_tree, check=False)
+            git("merge", "--abort", cwd=base_tree, check=False)
+            git("reset", "--hard", before, cwd=base_tree)
+            print(f"{branch} does not merge cleanly into {args.base}. Conflicts:\n{conflicts or merge.stdout + merge.stderr}")
+            print(f"Merge {args.base} into {branch}, resolve them there, and integrate again. Nothing was integrated.")
+            return 2
+    names = ", ".join(args.branches)
     if git("rev-parse", "HEAD", cwd=base_tree) == before:
-        print(f"{args.branch} has nothing new for {args.base}.")
+        print(f"{names}: nothing new for {args.base}.")
         return 0
     gate = [sys.executable, "tools/gate.py", "-j", str(args.jobs), "--known-failures", ",".join(known)]
     gate += ["--no-parity"] if args.no_parity else []
     if subprocess.run(gate, cwd=base_tree).returncode:
         git("reset", "--hard", before, cwd=base_tree)
-        print(f"The gate failed, so {args.branch} was not integrated; {args.base} is back at {before[:9]}.")
+        print(f"The gate failed, so {names} were not integrated; {args.base} is back at {before[:9]}.")
         return 1
     git("push", "-q", "origin", f"{args.base}:{args.push_to}", cwd=base_tree)
-    print(f"Integrated {args.branch}; {args.base} pushed to origin/{args.push_to} at {git('rev-parse', '--short', 'HEAD', cwd=base_tree)}.")
+    print(f"Integrated {names}; {args.base} pushed to origin/{args.push_to} at {git('rev-parse', '--short', 'HEAD', cwd=base_tree)}.")
     return 0
 
 
@@ -151,7 +157,7 @@ def main():
     command.add_argument("areas", nargs="*")
     command.set_defaults(run=save)
     command = commands.add_parser("integrate")
-    command.add_argument("branch")
+    command.add_argument("branches", nargs="+", help="merged in order, then gated together")
     command.add_argument("-j", "--jobs", type=int, default=8)
     command.add_argument("--no-parity", action="store_true", help="skip the vanilla harnesses in the gate")
     command.set_defaults(run=integrate)

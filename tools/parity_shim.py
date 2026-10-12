@@ -140,6 +140,14 @@ def files_under(paths):
     return found
 
 
+def note_outputs(outputs):
+    """Tell tools/parity.py which files are oracle outputs, which it keeps when clearing large outputs."""
+    listing = os.environ.get("PARITY_SHIM_OUTPUTS")
+    if listing:
+        with open(listing, "a") as stream:
+            stream.writelines(f"{path}\n" for path in outputs)
+
+
 def reusable(saved, paths, hashes):
     """The recorded inputs are unchanged, nothing was added beside them, and the outputs are as left."""
     outputs = saved["outputs"]
@@ -164,7 +172,9 @@ def main():
     command = {"program": os.path.realpath(program), "arguments": arguments, "cwd": os.getcwd(), "stdin": stdin}
     key = hashlib.sha256(json.dumps(command, sort_keys=True).encode()).hexdigest()
     record = CACHE / f"{key}.json"
-    if record.exists() and reusable(json.loads(record.read_text()), paths, hashes):
+    saved = json.loads(record.read_text()) if record.exists() else None
+    if saved and reusable(saved, paths, hashes):
+        note_outputs(saved["outputs"])
         sys.stdout.buffer.write((CACHE / f"{key}.stdout").read_bytes())
         sys.stderr.buffer.write((CACHE / f"{key}.stderr").read_bytes())
         return 0
@@ -182,6 +192,7 @@ def main():
     temporary = record.with_suffix(f".{os.getpid()}.tmp")
     temporary.write_text(json.dumps({"command": command, "inputs": inputs, "outputs": outputs}))
     temporary.replace(record)
+    note_outputs(outputs)
     return 0
 
 

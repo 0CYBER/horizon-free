@@ -22,6 +22,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULT = ROOT / ".local" / "gate.json"
@@ -65,13 +66,19 @@ def main():
         print(f"{name}...", end=" ", flush=True)
         if name == "vanilla harnesses":
             # Stream the runner's own progress; it keeps per-harness logs.
-            status = subprocess.run(command, cwd=ROOT).returncode
-            if status:
+            run_id = uuid.uuid4().hex
+            subprocess.run(command, cwd=ROOT, env=dict(os.environ, PARITY_RUN_ID=run_id))
+            summary = ROOT / ".local/parity-runner/last-run.json"
+            finished = json.loads(summary.read_text()) if summary.exists() else {}
+            if finished.get("run") != run_id:
+                print("tools/parity.py stopped before finishing its run")
+                status = 1
+            else:
                 known = set(filter(None, args.known_failures.split(",")))
-                state = json.loads((ROOT / ".local/parity-runner/state.json").read_text())["harnesses"]
-                failing = {harness for harness, record in state.items() if record["status"] != "pass"}
+                failing = set(finished["failed"])
                 new = sorted(failing - known)
-                print(f"Failing harnesses: {', '.join(sorted(failing))}; new: {', '.join(new) or 'none'}")
+                if failing:
+                    print(f"Failing harnesses: {', '.join(sorted(failing))}; new: {', '.join(new) or 'none'}")
                 status = 1 if new else 0
         else:
             with log.open("w") as stream:
