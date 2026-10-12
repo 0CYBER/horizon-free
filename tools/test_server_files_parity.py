@@ -132,7 +132,9 @@ def make_cases(build):
     root.mkdir(parents=True)
     count = 0
     for name, data in properties_cases():
-        d = root / name
+        # Numbered: macOS file systems ignore case, and eula-true and
+        # eula-TRUE must not share a folder.
+        d = root / f'{count:04d}-{name}'
         d.mkdir()
         if data is None:
             (d / 'properties.default').write_bytes(b'')
@@ -140,7 +142,9 @@ def make_cases(build):
             (d / 'server.properties').write_bytes(data)
         count += 1
     for name, data in eula_cases():
-        d = root / name
+        # Numbered: macOS file systems ignore case, and eula-true and
+        # eula-TRUE must not share a folder.
+        d = root / f'{count:04d}-{name}'
         d.mkdir()
         if data is None:
             (d / 'eula.missing').write_bytes(b'')
@@ -148,7 +152,9 @@ def make_cases(build):
             (d / 'eula.txt').write_bytes(data)
         count += 1
     for name, files in list_cases():
-        d = root / name
+        # Numbered: macOS file systems ignore case, and eula-true and
+        # eula-TRUE must not share a folder.
+        d = root / f'{count:04d}-{name}'
         d.mkdir()
         for f, text in files.items():
             (d / f).write_text(text, encoding='utf-8')

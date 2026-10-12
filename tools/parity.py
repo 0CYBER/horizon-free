@@ -654,6 +654,7 @@ class LocalExecutor:
         self.name, self.jobs, self.memory_budget, self.timeout = HOST, jobs, memory_budget, timeout
         self.max_peak = max_peak  # set while other machines can take heavier harnesses
         self.running = {}
+        self.dead = False  # this machine never drops out, unlike a remote host
         self.available, self.measured = 0, 0.0
         (STATE_DIR / "logs").mkdir(parents=True, exist_ok=True)
         (STATE_DIR / "traces").mkdir(parents=True, exist_ok=True)
