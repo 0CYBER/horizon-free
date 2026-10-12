@@ -327,7 +327,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             // BlockEntity.preRemoveSideEffects (unless UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS)
             // and removeBlockEntity, before the neighbours hear of the removal.
             let side_effects = update_flags & flags::UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS == 0;
-            self.level.remove_block_entity(pos, old, side_effects);
+            let updates = self.level.remove_block_entity(pos, old, side_effects);
+            for _ in 0..updates {
+                // JukeboxBlockEntity.onSongChanged.
+                let block = self.block_of(old);
+                self.update_neighbors_at(pos, block);
+            }
         }
         let moved = update_flags & flags::UPDATE_MOVE_BY_PISTON != 0;
         if (block_changed

@@ -115,26 +115,50 @@ impl LevelAccess for Cells {
     /// The oracle level's block entities are fresh: containers spill only
     /// empty slots (which still draw their spot), a lectern whose state has a
     /// book drops its empty book, a fresh shrieker has no warning level.
-    fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) {
-        if !side_effects {
-            return;
-        }
-        let slots = match self.removals.get(old.0 as usize) {
-            Some(PreRemove::Contents { slots, .. }) => *slots,
-            Some(PreRemove::Campfire) => 4,
-            Some(PreRemove::Lectern) if self.lecterns_with_books.contains(&old) => {
-                self.events.push(LevelEvent::BlockEvent {
-                    pos,
-                    state: old,
-                    kind: "spawn_item",
-                });
-                return;
+    fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) -> u8 {
+        let kind = self.removals.get(old.0 as usize).copied();
+        if side_effects {
+            let slots = match kind {
+                Some(PreRemove::Contents { slots, .. }) => slots,
+                Some(PreRemove::Campfire) => 4,
+                Some(PreRemove::Lectern) if self.lecterns_with_books.contains(&old) => {
+                    self.events.push(LevelEvent::BlockEvent {
+                        pos,
+                        state: old,
+                        kind: "spawn_item",
+                    });
+                    0
+                }
+                _ => 0,
+            };
+            for _ in 0..slots {
+                drop_item_stack(&mut self.random, pos, 0);
             }
-            _ => return,
-        };
-        for _ in 0..slots {
-            drop_item_stack(&mut self.random, pos, 0);
         }
+        // BlockEntity.setRemoved: a jukebox stops its (absent) song, a beacon
+        // plays its deactivation.
+        match kind {
+            Some(PreRemove::Jukebox) => {
+                self.events.push(LevelEvent::GameEvent {
+                    pos,
+                    event: "minecraft:jukebox_stop_play",
+                    state: Some(old),
+                });
+                self.events.push(LevelEvent::LevelEvent {
+                    id: 1011,
+                    pos,
+                    data: 0,
+                });
+            }
+            Some(PreRemove::Beacon) => self.events.push(LevelEvent::Sound {
+                pos,
+                sound: "minecraft:block.beacon.deactivate".into(),
+                volume: 1.0,
+                pitch: 1.0,
+            }),
+            _ => {}
+        }
+        0
     }
 }
 

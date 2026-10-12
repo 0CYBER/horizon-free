@@ -26,6 +26,9 @@ pub enum PreRemove {
     SculkShrieker,
     /// `CreakingHeartBlockEntity.removeProtector`.
     CreakingHeart,
+    /// No side effect, but `BeaconBlockEntity.setRemoved` plays the
+    /// deactivation sound whenever it goes.
+    Beacon,
 }
 
 /// The side effect of removing the block entity of block `name` (a
@@ -55,6 +58,7 @@ pub fn pre_remove(name: &str) -> PreRemove {
         "lectern" => PreRemove::Lectern,
         "sculk_shrieker" => PreRemove::SculkShrieker,
         "creaking_heart" => PreRemove::CreakingHeart,
+        "beacon" => PreRemove::Beacon,
         _ => PreRemove::Nothing,
     }
 }

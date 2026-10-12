@@ -11,7 +11,10 @@ use horizon_client::{
 use horizon_core::position::BlockPos;
 use horizon_core::random::RandomSource;
 use horizon_world::{
-    level::removal::{self, PreRemove},
+    level::{
+        LevelEvent,
+        removal::{self, PreRemove},
+    },
     registry::BlockStateId,
 };
 use std::collections::HashMap;
@@ -280,23 +283,30 @@ impl GameLevel<'_> {
     /// `BlockEntity.preRemoveSideEffects` and `removeBlockEntity` for the block
     /// entity of `old` at `pos`. A block entity Horizon never created reads as
     /// vanilla's fresh one: an empty container still draws a spot per slot.
-    pub(super) fn remove_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) {
+    pub(super) fn remove_entity(
+        &mut self,
+        pos: BlockPos,
+        old: BlockStateId,
+        side_effects: bool,
+    ) -> u8 {
         let key = (pos.x, pos.y, pos.z);
         if self.remove_saved_entity(pos, old, side_effects) {
-            return;
+            return 0;
         }
         // Sculk blocks and creaking hearts notice their removal on their own tick.
         if matches!(
             self.world.block_entities.get(&key),
             Some(BlockEntity::Sculk(_) | BlockEntity::CreakingHeart(_))
         ) {
-            return;
+            return 0;
         }
         let entity = self.world.block_entities.remove(&key);
         self.world.block_names.remove(&key);
+        let name = self.facts.get(old).name.clone();
+        let kind = removal::pre_remove(&name);
+        let mut neighbour_updates = 0;
         if side_effects {
-            let name = self.facts.get(old).name.clone();
-            match removal::pre_remove(&name) {
+            match kind {
                 PreRemove::Contents { slots, .. } => {
                     let items = entity.as_ref().map_or(&[][..], BlockEntity::slots);
                     for slot in 0..slots {
@@ -310,9 +320,16 @@ impl GameLevel<'_> {
                     }
                 }
                 PreRemove::Jukebox => {
+                    // popOutTheItem: removeTheItem stops a playing song (its
+                    // events and a neighbour update), the record pops, and
+                    // onSongChanged updates the neighbours again.
                     if let Some(BlockEntity::Jukebox(j)) = &entity
                         && let Some(record) = j.record.clone()
                     {
+                        if j.playing {
+                            self.jukebox_stopped(pos, old);
+                            neighbour_updates += 1;
+                        }
                         let at = removal::jukebox_pop_position(&mut self.world.random, pos);
                         self.spill.spawns.push(Spawn {
                             stack: record,
@@ -320,6 +337,7 @@ impl GameLevel<'_> {
                             motion: None,
                             delay: 10,
                         });
+                        neighbour_updates += 1;
                     }
                 }
                 PreRemove::Lectern => {
@@ -348,12 +366,39 @@ impl GameLevel<'_> {
                 PreRemove::ShulkerBox
                 | PreRemove::SculkShrieker
                 | PreRemove::CreakingHeart
+                | PreRemove::Beacon
                 | PreRemove::Nothing => {}
             }
+        }
+        // BlockEntity.setRemoved: a jukebox always reports its song stopping,
+        // a beacon plays its deactivation.
+        match kind {
+            PreRemove::Jukebox => self.jukebox_stopped(pos, old),
+            PreRemove::Beacon => self.events.push(LevelEvent::Sound {
+                pos,
+                sound: "minecraft:block.beacon.deactivate".into(),
+                volume: 1.0,
+                pitch: 1.0,
+            }),
+            _ => {}
         }
         if let Some(entity) = entity {
             self.spill.removed.push(([pos.x, pos.y, pos.z], entity));
         }
+        neighbour_updates
+    }
+    /// The jukebox's `JUKEBOX_STOP_PLAY` game event and level event 1011.
+    fn jukebox_stopped(&mut self, pos: BlockPos, state: BlockStateId) {
+        self.events.push(LevelEvent::GameEvent {
+            pos,
+            event: "minecraft:jukebox_stop_play",
+            state: Some(state),
+        });
+        self.events.push(LevelEvent::LevelEvent {
+            id: 1011,
+            pos,
+            data: 0,
+        });
     }
     /// A block entity Horizon keeps as it was loaded (campfires, decorated
     /// pots, chiseled bookshelves, shelves): its items spill as vanilla's do.

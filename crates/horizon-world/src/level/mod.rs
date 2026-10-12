@@ -398,8 +398,17 @@ pub trait LevelAccess {
     /// another block: run `BlockEntity.preRemoveSideEffects` when
     /// `side_effects` (containers spill their contents, a jukebox pops its
     /// record, a lectern its book...) and remove the block entity. Called
-    /// after the storage write, before `affectNeighborsAfterRemoval`.
-    fn remove_block_entity(&mut self, _pos: BlockPos, _old: BlockStateId, _side_effects: bool) {}
+    /// after the storage write, before `affectNeighborsAfterRemoval`. Returns
+    /// how many times the side effects called `updateNeighborsAt(pos, block)`
+    /// (a jukebox whose song changed), which the caller then runs.
+    fn remove_block_entity(
+        &mut self,
+        _pos: BlockPos,
+        _old: BlockStateId,
+        _side_effects: bool,
+    ) -> u8 {
+        0
+    }
     /// Biome identifier at `pos` (`minecraft:plains`), for features placed by
     /// block behaviour (bone meal flowers). None when unknown.
     fn biome_name(&self, _pos: BlockPos) -> Option<&str> {

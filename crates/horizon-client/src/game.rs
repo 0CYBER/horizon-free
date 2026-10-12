@@ -491,8 +491,8 @@ impl LevelAccess for GameLevel<'_> {
             event => self.events.push(event),
         }
     }
-    fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) {
-        self.remove_entity(pos, old, side_effects);
+    fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) -> u8 {
+        self.remove_entity(pos, old, side_effects)
     }
 }
 /// FallingBlockEntity carrying a block state.
