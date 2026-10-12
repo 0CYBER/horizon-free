@@ -53,7 +53,7 @@ ENTITIES = [
     (1631, 2514, 'evoker_fangs', 'OwnerUUIDMost:35L,OwnerUUIDLeast:36L'),
     (1631, 2514, 'shulker', 'Rotation:[40.0f,0.0f],Peek:0b'),
     (1631, 2514, 'bat', ''),
-    (2100, 2514, "bee", 'HurtBy:"%s",HasNectar:1b,Anger:50' % U1),
+    (2100, 2514, 'bee', 'HurtBy:"%s",HasNectar:1b,Anger:50' % U1),
     (2100, 2514, 'villager', 'VillagerData:{profession:"minecraft:farmer",level:2,type:"minecraft:plains"},Xp:20,'
                              'Brain:{memories:{"minecraft:job_site":{pos:[I;1,2,3],dimension:"minecraft:overworld"}}}'),
 ]
@@ -73,7 +73,7 @@ BLOCK_ENTITIES = [
                                       'final_state:"minecraft:air"}'),
     (1900, 2514, 'jigsaw[facing=east]', '{attachement_type:"minecraft:empty",target_pool:"minecraft:empty"}'),
     (1900, 2514, 'lectern', '{Book:{id:"minecraft:written_book",Count:1b,tag:{title:"L",author:"A",pages:[\'"x"\']}},Page:0}'),
-    (2100, 2514, "bee"ive', '{Bees:[{EntityData:{id:"minecraft:bee"},TicksInHive:3,MinOccupationTicks:600}]}'),
+    (2100, 2514, 'beehive', '{Bees:[{EntityData:{id:"minecraft:bee"},TicksInHive:3,MinOccupationTicks:600}]}'),
 ]
 BLOCK_ENTITIES = [b for b in BLOCK_ENTITIES if b]
 
