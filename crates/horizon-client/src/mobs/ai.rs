@@ -12,7 +12,10 @@ use super::{
     undead,
 };
 use crate::blocks::Fluid;
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{
+    geometry::Vec3,
+    random::{LegacyRandom, RandomSource},
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct Ai {
@@ -264,7 +267,12 @@ fn generic(m: &mut Mob) {
     }
 }
 /// One full entity tick. Returns false when the mob is gone.
-pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
+pub fn tick(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) -> bool {
     if m.removed {
         return false;
     }
@@ -299,7 +307,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
         return false;
     }
     if !m.no_ai {
-        ai_step(m, w, events);
+        ai_step(m, w, level_random, events);
     }
     // Mob.tickHeadTurn -> BodyRotationControl.clientTick
     if m.alive() {
@@ -489,7 +497,7 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
 }
 /// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
-fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
     // AbstractHorse.aiStep: the tail swishes now and then (moveTail).
     if super::equine::is_equine(m.species()) {
         let _ = m.random.next_int_bound(200);
@@ -513,7 +521,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let immobile = m.species() == Species::Ravager && super::ravager::immobile(m)
         || super::villager::sleeping(m);
     if m.alive() && !immobile {
-        server_ai_step(m, w, events);
+        server_ai_step(m, w, level_random, events);
     } else {
         m.ai.jumping = false;
         m.ai.xxa = 0.0;
@@ -576,7 +584,12 @@ fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
     br > 0.5 && m.random.next_float() * 30.0 < (br - 0.4) * 2.0 && !wet && w.can_see_sky(x, y, z)
 }
 /// Mob.serverAiStep
-fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+fn server_ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
     m.ai.no_action_time += 1;
     // A creaking looked at stands still.
     if super::creaking::is_creaking(m) && !super::creaking::can_move(m) {
@@ -605,6 +618,11 @@ fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.ai.targets = targets;
     m.ai.goals = goals;
     m.nav_tick(w);
+    // Sniffer and HappyGhast.customServerAiStep: the brain (a happy ghast's
+    // only while it is a ghastling), then updateActivity.
+    if m.species() == Species::Sniffer || m.species() == Species::HappyGhast && m.is_baby() {
+        super::animal_brain::tick(m, w, level_random, events);
+    }
     {
         let mut cx = Cx { w, events };
         custom_server_ai_step(m, &mut cx);

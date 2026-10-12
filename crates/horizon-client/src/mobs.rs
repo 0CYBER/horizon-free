@@ -1173,10 +1173,10 @@ impl Mob {
     pub fn tick(
         &mut self,
         w: &MobWorld,
-        _random: &mut LegacyRandom,
+        random: &mut LegacyRandom,
         events: &mut Vec<MobEvent>,
     ) -> bool {
-        ai::tick(self, w, events)
+        ai::tick(self, w, random, events)
     }
     pub fn distance_to(&self, p: [f64; 3]) -> f64 {
         let d = [

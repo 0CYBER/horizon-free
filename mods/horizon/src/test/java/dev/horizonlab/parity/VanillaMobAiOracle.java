@@ -14,6 +14,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import net.minecraft.SharedConstants;
@@ -65,7 +66,10 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.AgeableMob;
 import net.minecraft.world.entity.ai.Brain;
+import net.minecraft.world.entity.ai.behavior.BehaviorControl;
 import net.minecraft.world.entity.ai.behavior.BlockPosTracker;
+import net.minecraft.world.entity.ai.behavior.GateBehavior;
+import net.minecraft.world.entity.ai.behavior.ShufflingList;
 import net.minecraft.world.entity.ai.behavior.EntityTracker;
 import net.minecraft.world.entity.ai.control.LookControl;
 import net.minecraft.world.entity.ai.control.MoveControl;
@@ -428,6 +432,8 @@ public final class VanillaMobAiOracle {
                 player.snapTo(s.originX + 5000, -60, s.originZ, 0.0F, 0.0F);
             }
             List<Mob> mobs = new ArrayList<>();
+            List<Brain<?>> brains = new ArrayList<>();
+            List<Long> seeds = new ArrayList<>();
             int id = 100000;
             for (MobSpec spec : s.mobs) {
                 EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(net.minecraft.resources.Identifier.parse(spec.type));
@@ -452,7 +458,10 @@ public final class VanillaMobAiOracle {
                 @SuppressWarnings("unchecked")
                 Map<Object, Sensor<?>> sensors = (Map<Object, Sensor<?>>) get(brain, "sensors");
                 for (Sensor<?> sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
+                seedGates(brain, spec.seed);
                 mobs.add(mob);
+                brains.add(brain);
+                seeds.add(spec.seed);
             }
             level.getRandom().setSeed(s.levelSeed);
             SOUNDS.clear();
@@ -474,6 +483,13 @@ public final class VanillaMobAiOracle {
                 TracingRandom.tick = t;
                 TracingRandom.on = tracing(s) && t >= traceFrom() && t <= traceTo();
                 SOUNDS.clear();
+                for (int i = 0; i < mobs.size(); i++) {
+                    // Villager.refreshBrain builds a new brain with new gates: seed those too.
+                    if (mobs.get(i).getBrain() != brains.get(i)) {
+                        brains.set(i, mobs.get(i).getBrain());
+                        seedGates(brains.get(i), seeds.get(i));
+                    }
+                }
                 for (Mob mob : mobs) {
                     if (mob.isRemoved()) continue;
                     mob.checkDespawn();
@@ -489,6 +505,26 @@ public final class VanillaMobAiOracle {
             for (Mob mob : mobs) mob.discard();
             managerTick.invoke(manager);
             out.flush();
+        }
+
+        /**
+         * Every GateBehavior (RunOne and the gates of TradeWithVillager and VillagerMakeLove) shuffles
+         * its behaviours with its own ShufflingList random, which RandomSource.create() seeds from the
+         * clock: give each a LegacyRandomSource seeded with the mob's seed so runs are reproducible.
+         */
+        static void seedGates(Brain<?> brain, long seed) throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<Integer, Map<?, Set<BehaviorControl<?>>>> byPriority = (Map<Integer, Map<?, Set<BehaviorControl<?>>>>) get(brain, "availableBehaviorsByPriority");
+            for (Map<?, Set<BehaviorControl<?>>> byActivity : byPriority.values())
+                for (Set<BehaviorControl<?>> behaviors : byActivity.values())
+                    for (BehaviorControl<?> behavior : behaviors) seedGate(behavior, seed);
+        }
+
+        static void seedGate(Object behavior, long seed) throws Exception {
+            if (!(behavior instanceof GateBehavior<?>)) return;
+            ShufflingList<?> list = (ShufflingList<?>) field(GateBehavior.class, "behaviors").get(behavior);
+            field(ShufflingList.class, "random").set(list, new net.minecraft.world.level.levelgen.LegacyRandomSource(seed));
+            for (Object child : list) seedGate(child, seed);
         }
 
         static String who(Entity e) {

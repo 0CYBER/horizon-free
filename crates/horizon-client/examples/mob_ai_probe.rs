@@ -316,7 +316,11 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
         f(m.ai.speed),
         u8::from(m.ai.jumping)
     );
-    let _ = writeln!(out, "\trng {:x}", m.random.state());
+    let _ = write!(out, "\trng {:x}", m.random.state());
+    if let Some((acts, mem)) = horizon_client::mobs::animal_brain::describe(m) {
+        let _ = write!(out, "\tact {acts}\tmem {mem}");
+    }
+    out.push('\n');
 }
 
 fn main() -> horizon_client::Result<()> {
@@ -429,6 +433,11 @@ fn main() -> horizon_client::Result<()> {
                 }
             }
             m.random = LegacyRandom::new(spec.seed);
+            // The oracle seeds the random after the brain is built, then
+            // delays the sensors again and seeds the gates' shuffles.
+            if horizon_client::mobs::animal_brain::kind_of(&m).is_some() {
+                horizon_client::mobs::animal_brain::init(&mut m, spec.seed);
+            }
             mobs.push(m);
         }
         let player = s.player.map(|p| {
