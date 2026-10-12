@@ -709,6 +709,9 @@ impl Game<'_> {
                 MobEvent::SoundId(name, at, volume, pitch) => {
                     self.audio.play(&name, Some(at), volume, pitch)
                 }
+                // The sculk layer tracks the game's steps itself
+                // (`entity_motion_events`).
+                MobEvent::GameEvent { .. } => {}
                 MobEvent::AttackPlayer(amount, from) => {
                     self.mob_hits_player(amount, from, "minecraft:mob_attack")
                 }
