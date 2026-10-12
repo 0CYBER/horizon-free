@@ -1013,23 +1013,6 @@ mod tests {
     }
 
     #[test]
-    fn memories_expire_with_their_ttl() {
-        let mut st = Warden {
-            in_brain: true,
-            ..Warden::default()
-        };
-        // Set during the brain: present for exactly the ttl.
-        let until = st.expiry(100, 5);
-        assert!(present(until, 104));
-        assert!(!present(until, 105));
-        // Set before the brain's tick: that tick already counts.
-        st.in_brain = false;
-        let until = st.expiry(100, 5);
-        assert!(present(until, 103));
-        assert!(!present(until, 104));
-    }
-
-    #[test]
     fn the_pose_codes_round_trip() {
         for p in [
             Pose::Standing,

@@ -551,10 +551,10 @@ impl Game<'_> {
                 known.insert(id);
                 names.insert(id, format!("n{}", names.len()));
                 let seed = 0x5eed + names.len() as i64;
-                if seeded.insert(id) {
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                        seed_fresh(m, seed);
-                    }
+                if seeded.insert(id)
+                    && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
+                {
+                    seed_fresh(m, seed);
                 }
                 lines.push(line);
             }
@@ -690,10 +690,10 @@ impl Game<'_> {
             .collect();
         born.sort_unstable();
         for (i, id) in born.into_iter().enumerate() {
-            if seeded.insert(id) {
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                    seed_fresh(m, 0x5eed + (named + i + 1) as i64);
-                }
+            if seeded.insert(id)
+                && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
+            {
+                seed_fresh(m, 0x5eed + (named + i + 1) as i64);
             }
         }
         // Entities: the player's warden spawn tracker, then the mobs.
