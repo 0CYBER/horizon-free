@@ -62,6 +62,58 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
+/// A packed atlas image: sprite name, size and RGBA pixels.
+type PackedImage = (String, u32, u32, Vec<u8>);
+/// Sprites the atlas definitions (`atlases/*.json`) add beyond the texture
+/// files already packed: generated ones (`paletted_permutations` such as the
+/// armour trim sprites, `unstitch` regions) and files listed under another id.
+fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
+    use crate::atlas_sources::{self, SpriteOrigin};
+    let have: std::collections::HashSet<&str> = packed.iter().map(|i| i.0.as_str()).collect();
+    let textures = atlas_sources::list_textures(root);
+    let load = |texture: &str, directory: &str| {
+        decode(&atlas_sources::texture_path(root, texture, directory)).ok()
+    };
+    let mut out: Vec<PackedImage> = Vec::new();
+    let mut added = std::collections::HashSet::new();
+    for (atlas, sources) in atlas_sources::atlases(root) {
+        // The other atlases' renamed files (GUI sprites, particles...) are
+        // looked up by their texture paths here.
+        let item_models = atlas == "minecraft:blocks" || atlas == "minecraft:items";
+        for (id, origin) in atlas_sources::list(&sources, &textures) {
+            if !item_models && matches!(origin, SpriteOrigin::File(_)) {
+                continue;
+            }
+            let name = id.strip_prefix("minecraft:").unwrap_or(&id).to_owned();
+            if have.contains(name.as_str()) || added.contains(&name) {
+                continue;
+            }
+            let image = match &origin {
+                SpriteOrigin::File(texture) => {
+                    let path = texture.strip_prefix("minecraft:").unwrap_or(texture);
+                    // Packed under its own name already: only a renamed file is new.
+                    if path == name {
+                        continue;
+                    }
+                    load(texture, "textures").map(|(w, h, p)| {
+                        // Animated strips keep their first frame, like the packed files.
+                        if h > w && (path.starts_with("block/") || path.starts_with("item/")) {
+                            (w, w, p[..(w * w * 4) as usize].to_vec())
+                        } else {
+                            (w, h, p)
+                        }
+                    })
+                }
+                generated => atlas_sources::generate(generated, &load),
+            };
+            if let Some((w, h, pixels)) = image {
+                added.insert(name.clone());
+                out.push((name, w, h, pixels));
+            }
+        }
+    }
+    out
+}
 impl HudAtlas {
     /// A font glyph's atlas cell (8x8 GUI pixels) and advance.
     pub fn glyph(&self, ch: char) -> Option<(Rect, f32)> {
@@ -136,6 +188,7 @@ impl HudAtlas {
                 .flat_map(|h| h.join().unwrap_or_default())
                 .collect()
         });
+        images.extend(atlas_sprites(root, &images));
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
         // Map textures (game/maps.rs) are written into these slots at run time.
         for i in 0..MAP_SLOTS {

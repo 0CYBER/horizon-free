@@ -379,7 +379,8 @@ impl<'r, 'a> BlockParser<'r, 'a> {
                 }
                 let prefix = b.remaining_lower();
                 for (name, _) in definition {
-                    if !self.properties.iter().any(|(n, _)| n == name) && name.starts_with(&prefix) {
+                    if !self.properties.iter().any(|(n, _)| n == name) && name.starts_with(&prefix)
+                    {
                         b.suggest(format!("{name}="));
                     }
                 }
@@ -439,11 +440,7 @@ impl<'r, 'a> BlockParser<'r, 'a> {
 }
 
 /// BlockStateParser.parseForBlock / parseForTesting (the reader is rewound on errors).
-pub fn parse(
-    reader: &mut Reader,
-    reg: &Registries,
-    for_testing: bool,
-) -> CmdResult<BlockInput> {
+pub fn parse(reader: &mut Reader, reg: &Registries, for_testing: bool) -> CmdResult<BlockInput> {
     let cursor = reader.cursor;
     let r = BlockParser::new(reader, reg, for_testing, true).parse();
     if r.is_err() {

@@ -37,17 +37,6 @@ pub(super) struct Creatures {
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
 }
-/// MobCategory caps (maxInstancesPerChunk with the 17x17 spawnable chunk area).
-const CATEGORIES: [(&str, usize); 7] = [
-    ("monster", 70),
-    ("creature", 10),
-    ("ambient", 15),
-    ("axolotls", 5),
-    ("underground_water_creature", 5),
-    ("water_creature", 5),
-    ("water_ambient", 20),
-];
-
 struct ProjWorld<'a, 'w> {
     w: &'a MobWorld<'w>,
     targets: Vec<(Who, Aabb)>,
@@ -355,99 +344,6 @@ impl Game<'_> {
         }
         horizon_client::chunk::MIN_Y
     }
-    fn weighted_entry(
-        &mut self,
-        entries: &[horizon_client::biome::SpawnEntry],
-    ) -> Option<horizon_client::biome::SpawnEntry> {
-        let total: u32 = entries.iter().map(|e| e.weight).sum();
-        if total == 0 {
-            return None;
-        }
-        let mut r = self.world.random.next_int_bound(total as i32).ok()? as u32;
-        for e in entries {
-            if r < e.weight {
-                return Some(e.clone());
-            }
-            r -= e.weight;
-        }
-        None
-    }
-    /// NaturalSpawner.spawnMobsForChunkGeneration (creature packs at generation).
-    pub(super) fn spawn_generation_creatures(&mut self, cx: i32, cz: i32) {
-        let Some(chunk) = self.world.chunks.get(&(cx, cz)).cloned() else {
-            return;
-        };
-        let biome = self.res.biomes.get(chunk.biome(8, 64, 8)).clone();
-        let Some(entries) = biome.spawns.get("creature").cloned() else {
-            return;
-        };
-        let (xo, zo) = (cx * 16, cz * 16);
-        while self.world.random.next_float() < biome.creature_probability {
-            let Some(entry) = self.weighted_entry(&entries) else {
-                return;
-            };
-            let count = entry.min
-                + self
-                    .world
-                    .random
-                    .next_int_bound((entry.max - entry.min + 1) as i32)
-                    .unwrap_or(0) as u32;
-            let mut x = xo + self.world.random.next_int_bound(16).unwrap_or(0);
-            let mut z = zo + self.world.random.next_int_bound(16).unwrap_or(0);
-            let (sx, sz) = (x, z);
-            let Some(kind) = self.res.mob_types.get(&entry.entity).cloned() else {
-                continue;
-            };
-            for _ in 0..count {
-                let mut success = false;
-                let mut attempts = 0;
-                while !success && attempts < 4 {
-                    attempts += 1;
-                    let mut y = self.motion_top(x, z);
-                    let placement = self.res.mob_data.placement(&entry.entity);
-                    if placement == horizon_client::mobs::data::Placement::OnGround {
-                        let below = self.world.block(x, y - 1, z);
-                        if self.res.mob_data.state(below).flags & horizon_client::mobs::data::LAND
-                            != 0
-                        {
-                            y -= 1;
-                        }
-                    }
-                    let ok = {
-                        let w = self.mob_world_base(&[]);
-                        spawning::placement_ok(kind.species, &w, x, y, z) && {
-                            let mut r = self.world.random.clone();
-
-                            spawning::spawn_rules_ok(kind.species, &w, &mut r, x, y, z)
-                        }
-                    };
-                    if ok {
-                        let width = kind.width;
-                        let fx =
-                            f64::from(x).clamp(f64::from(xo) + width, f64::from(xo) + 16.0 - width);
-                        let fz =
-                            f64::from(z).clamp(f64::from(zo) + width, f64::from(zo) + 16.0 - width);
-                        if self
-                            .spawn_mob(&entry.entity, [fx, f64::from(y), fz], true)
-                            .is_some()
-                        {
-                            success = true;
-                        }
-                    }
-                    x += self.world.random.next_int_bound(5).unwrap_or(0)
-                        - self.world.random.next_int_bound(5).unwrap_or(0);
-                    z += self.world.random.next_int_bound(5).unwrap_or(0)
-                        - self.world.random.next_int_bound(5).unwrap_or(0);
-                    while x < xo || x >= xo + 16 || z < zo || z >= zo + 16 {
-                        x = sx + self.world.random.next_int_bound(5).unwrap_or(0)
-                            - self.world.random.next_int_bound(5).unwrap_or(0);
-                        z = sz + self.world.random.next_int_bound(5).unwrap_or(0)
-                            - self.world.random.next_int_bound(5).unwrap_or(0);
-                    }
-                }
-            }
-        }
-    }
     pub(super) fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
         let (rain, thunder) = self.world.weather.levels(1.0);
         MobWorld {
@@ -467,6 +363,8 @@ impl Game<'_> {
             block_tags: &self.res.items.block_tags,
             biomes: &self.res.biomes,
             mob_griefing: self.ui.rules.bool("mob_griefing"),
+            end: self.dim == Dim::End,
+            world_seed: self.level.seed,
             difficulty: self.local_difficulty(
                 self.player
                     .as_ref()
@@ -514,162 +412,6 @@ impl Game<'_> {
             }
         }
     }
-    /// NaturalSpawner.spawnForChunk over the chunks within 8 of the player.
-    fn spawn_natural(&mut self) {
-        let Some(p) = self.player.as_ref().map(|p| p.position) else {
-            return;
-        };
-        let (pcx, pcz) = (p.x.floor() as i32 >> 4, p.z.floor() as i32 >> 4);
-        let mut counts = [0usize; 7];
-        for m in &self.mobs {
-            if let Some(i) = CATEGORIES.iter().position(|c| c.0 == m.kind.category) {
-                counts[i] += 1;
-            }
-        }
-        let creature_tick = self.world.game_time % 400 == 0;
-        let mut chunks: Vec<(i32, i32)> = (-8..=8)
-            .flat_map(|dx| (-8..=8).map(move |dz| (pcx + dx, pcz + dz)))
-            .filter(|c| self.world.chunks.contains_key(c))
-            .collect();
-        // ChunkMap: shuffled each tick.
-        for i in (1..chunks.len()).rev() {
-            let j = self.world.random.next_int_bound(i as i32 + 1).unwrap_or(0) as usize;
-            chunks.swap(i, j);
-        }
-        for (cx, cz) in chunks {
-            for (ci, (category, cap)) in CATEGORIES.iter().enumerate() {
-                if counts[ci] >= *cap || *category == "creature" && !creature_tick {
-                    continue;
-                }
-                counts[ci] += self.spawn_category_for_chunk(category, cx, cz, p);
-            }
-        }
-    }
-    /// NaturalSpawner.spawnCategoryForPosition at a random point in the chunk.
-    fn spawn_category_for_chunk(
-        &mut self,
-        category: &str,
-        cx: i32,
-        cz: i32,
-        player: Vec3,
-    ) -> usize {
-        let x0 = cx * 16 + self.world.random.next_int_bound(16).unwrap_or(0);
-        let z0 = cz * 16 + self.world.random.next_int_bound(16).unwrap_or(0);
-        let top = self.motion_top(x0, z0) + 1;
-        let min = horizon_client::chunk::MIN_Y;
-        let y = min + self.world.random.next_int_bound(top - min + 1).unwrap_or(0);
-        if y < min + 1 {
-            return 0;
-        }
-        let start = self.res.facts.get(self.world.block(x0, y, z0));
-        if start.full_collision {
-            return 0;
-        }
-        let mut spawned = 0;
-        for _ in 0..3 {
-            let (mut x, mut z) = (x0, z0);
-            let mut entry: Option<horizon_client::biome::SpawnEntry> = None;
-            let mut group = (self.world.random.next_float() * 4.0).ceil() as u32;
-            let mut cluster = 0;
-            let mut i = 0;
-            while i < group {
-                i += 1;
-                x += self.world.random.next_int_bound(6).unwrap_or(0)
-                    - self.world.random.next_int_bound(6).unwrap_or(0);
-                z += self.world.random.next_int_bound(6).unwrap_or(0)
-                    - self.world.random.next_int_bound(6).unwrap_or(0);
-                let (fx, fz) = (f64::from(x) + 0.5, f64::from(z) + 0.5);
-                let d2 = (fx - player.x).powi(2)
-                    + (f64::from(y) - player.y).powi(2)
-                    + (fz - player.z).powi(2);
-                if d2 <= 576.0 {
-                    continue;
-                }
-                if entry.is_none() {
-                    let Some(chunk) = self.world.chunks.get(&(x >> 4, z >> 4)) else {
-                        break;
-                    };
-                    let biome = self.res.biomes.get(chunk.biome(x, y, z)).clone();
-                    let list = match self.structure_spawns(category, [x, y, z]) {
-                        Some(list) => list,
-                        None => match biome.spawns.get(category).cloned() {
-                            Some(list) => list,
-                            None => break,
-                        },
-                    };
-                    let list: Vec<_> = list
-                        .into_iter()
-                        .filter(|e| self.res.mob_types.contains_key(&e.entity))
-                        .collect();
-                    let Some(e) = self.weighted_entry(&list) else {
-                        break;
-                    };
-                    group = e.min
-                        + self
-                            .world
-                            .random
-                            .next_int_bound((e.max - e.min + 1) as i32)
-                            .unwrap_or(0) as u32;
-                    entry = Some(e);
-                }
-                let e = entry.clone().unwrap_or_else(|| unreachable!());
-                let despawn = if category == "water_ambient" {
-                    64.0
-                } else {
-                    128.0
-                };
-                if d2 > despawn * despawn {
-                    continue;
-                }
-                let Some(kind) = self.res.mob_types.get(&e.entity).cloned() else {
-                    break;
-                };
-                let ok = {
-                    let w = self.mob_world_base(&[]);
-                    let mut r = self.world.random.clone();
-                    let placed = spawning::placement_ok(kind.species, &w, x, y, z)
-                        && spawning::spawn_rules_ok(kind.species, &w, &mut r, x, y, z);
-                    let half = kind.width / 2.0;
-                    let room = w.no_collision(Aabb::new(
-                        Vec3::new(fx - half, f64::from(y), fz - half),
-                        Vec3::new(fx + half, f64::from(y) + kind.height, fz + half),
-                    ));
-                    // PathfinderMob.checkSpawnRules: walk target value >= 0 (monsters need darkness).
-                    let light_ok = !kind.category.eq("monster")
-                        || matches!(
-                            kind.species,
-                            Species::Slime
-                                | Species::SulfurCube
-                                | Species::Ghast
-                                | Species::MagmaCube
-                                | Species::Guardian
-                                | Species::ElderGuardian
-                        )
-                        || w.brightness(x, y, z) <= 0.5;
-                    let consumed = r;
-                    (placed && room && light_ok, consumed)
-                };
-                self.world.random = ok.1;
-                if !ok.0 {
-                    continue;
-                }
-                if d2 > 16384.0 && kind.category != "creature" {
-                    continue;
-                }
-                if self
-                    .spawn_mob(&e.entity, [fx, f64::from(y), fz], false)
-                    .is_some()
-                {
-                    cluster += 1;
-                    spawned += 1;
-                    if spawned >= 4 || cluster >= group.max(1) {
-                        return spawned;
-                    }
-                }
-            }
-        }
-        spawned
-    }
     /// Advance every mob one tick, then apply their events.
     pub(super) fn tick_creatures(&mut self) -> Result<()> {
         self.attack_ticks = self.attack_ticks.saturating_add(1);
@@ -688,9 +430,12 @@ impl Game<'_> {
         }
         self.tick_inhabited();
         self.tick_leads();
-        self.tick_wandering_trader();
         self.spawn_natural();
-        self.tick_patrol_spawner();
+        // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
+        if self.ui.rules.bool("spawn_mobs") {
+            self.tick_wandering_trader();
+            self.tick_patrol_spawner();
+        }
         self.tick_raids();
         let uuid = self.level.player_uuid;
         let snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
@@ -718,7 +463,6 @@ impl Game<'_> {
         self.mobs.append(&mut mobs);
         self.sync_riders();
         self.tick_skeleton_traps();
-        self.cache_mob_icons();
         self.tick_apparition();
         self.villager_reputation_tick();
         self.villager_pickups();
@@ -734,18 +478,25 @@ impl Game<'_> {
         self.tick_player_effects();
         self.piglin_pickups();
         self.sulfur_cube_pickups();
+        // Hurt and death sounds of damage dealt outside the mob ticks.
+        let mut queued = Vec::new();
+        for m in &mut self.mobs {
+            queued.append(&mut m.outbox);
+        }
+        self.handle_mob_events(queued)?;
         Ok(())
     }
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
         let by_player = self.last_hurt_by_player.remove(&m.id) || m.ai.last_hurt_by_player > 0;
+        let mut dying = m.clone();
         // LivingEntity.die: the death is heard, and a sculk catalyst nearby
-        // takes the experience.
+        // takes the experience (before the loot is dropped).
         self.sculk_mob_died(m);
         let consumed =
-            self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |game| {
+            self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |_| {
                 if by_player {
-                    experience_reward(m, &mut game.world.random)
+                    horizon_client::mobs::drops::base_experience(&mut dying).max(0) as u32
                 } else {
                     0
                 }
@@ -760,103 +511,8 @@ impl Game<'_> {
         self.score_entity_removed(m.id);
         self.raider_died(m, by_player);
         self.villager_murdered(m, by_player);
-        let held = self.held().cloned();
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
-        if !m.is_baby() {
-            let mut drops = self.res.items.entity_drops(
-                &m.kind.id,
-                by_player,
-                held.as_ref(),
-                &mut self.world.random,
-            );
-            if m.species() == Species::Sheep && !m.extra.sheared {
-                let color = horizon_client::mobs::render::DYE_NAMES[m.extra.color as usize & 15];
-                drops.extend(self.res.items.loot_table(
-                    &format!("minecraft:entities/sheep/{color}"),
-                    by_player,
-                    held.as_ref(),
-                    &mut self.world.random,
-                ));
-            }
-            for d in drops {
-                if d.count > 0 && &*d.item != "minecraft:air" {
-                    self.spawn_item(d, pos, [0.0, 0.2, 0.0], 10);
-                }
-            }
-            // Saddles, horse armour and chests always drop.
-            let mut gear: Vec<&str> = Vec::new();
-            if let Some(saddle) = m.saddle_item() {
-                self.spawn_item(saddle, pos, [0.0, 0.2, 0.0], 10);
-            }
-            // WitherBoss.dropCustomDeathLoot.
-            if m.species() == Species::Wither {
-                gear.push("minecraft:nether_star");
-            }
-            if species_drops_harness(m)
-                && let Some(h) = m.extra.head.as_deref()
-            {
-                gear.push(h);
-            }
-            if m.extra.chested && horizon_client::mobs::equine::is_equine(m.species()) {
-                gear.push("minecraft:chest");
-            }
-            if horizon_client::mobs::equine::is_equine(m.species())
-                && let Some(armor) = m.extra.head.as_deref()
-            {
-                gear.push(armor);
-            }
-            for item in gear {
-                self.spawn_item(ItemStack::new(item, 1), pos, [0.0, 0.2, 0.0], 10);
-            }
-            // AbstractChestedHorse.dropEquipment: the chest contents.
-            for stack in m.extra.items.clone().into_iter().flatten() {
-                self.spawn_item(stack, pos, [0.0, 0.2, 0.0], 10);
-            }
-            self.raider_death_loot(m, pos);
-            let worn = if horizon_client::mobs::equine::is_equine(m.species()) {
-                [None, None, None, None]
-            } else {
-                [
-                    m.extra.head.clone(),
-                    m.extra.chest.clone(),
-                    m.extra.legs.clone(),
-                    m.extra.feet.clone(),
-                ]
-            };
-            for (index, item) in std::iter::once(m.extra.main_hand.clone())
-                .chain(worn)
-                .enumerate()
-            {
-                // Main hand, then head to feet (the enchantment slots).
-                let slot = if index == 0 {
-                    horizon_client::mobs::gear::MAIN
-                } else {
-                    horizon_client::mobs::gear::HEAD + index - 1
-                };
-                // Equipment drop chance 8.5% (+ player kill only).
-                // Vexes never drop their sword.
-                if let Some(item) = &item
-                    && by_player
-                    && &**item != horizon_client::mobs::raider::BANNER
-                    && m.species() != Species::Vex
-                    && self.world.random.next_float() < 0.085
-                {
-                    let mut stack = ItemStack::new(item, 1);
-                    if let Some(g) = horizon_client::mobs::gear::gear(m) {
-                        for (e, l) in &g.slots[slot] {
-                            stack.enchant(e, *l);
-                        }
-                    }
-                    self.spawn_item(stack, pos, [0.0, 0.2, 0.0], 10);
-                }
-            }
-        }
-        if by_player && !consumed {
-            let xp = experience_reward(m, &mut self.world.random);
-            if xp > 0 {
-                self.spawn_orbs(pos, xp);
-            }
-        }
+        self.drop_death_loot(&mut dying, by_player, consumed, pos);
         if m.species() == Species::SulfurCube {
             self.split_sulfur_cube(m);
         }
@@ -878,6 +534,89 @@ impl Game<'_> {
                         horizon_client::mobs::cube::set_size(c, size / 2);
                     }
                 }
+            }
+        }
+    }
+    /// `dropAllDeathLoot` through `mobs::drops`: the entity loot table from the
+    /// world's random sequence, equipment by drop chance, species extras and
+    /// the experience orbs, spawned in order.
+    fn drop_death_loot(&mut self, m: &mut Mob, by_player: bool, consumed: bool, pos: [f64; 3]) {
+        use horizon_client::mobs::{DamageKind, Who, drops};
+        use horizon_world::loot::{LootDamage, LootEntity};
+        let Some(loot) = horizon_client::structure_blocks::loot_data(&self.options.resources)
+        else {
+            return;
+        };
+        let player = || {
+            let mut e = LootEntity::new("minecraft:player");
+            if let Some(held) = self.held() {
+                e.equipment.push(("mainhand".into(), to_loot(held)));
+            }
+            e
+        };
+        let damage = m.last_damage.map(|(d, _)| {
+            let source = match d.attacker {
+                Some(Who::Player) => Some(player()),
+                Some(Who::Mob(id)) => self
+                    .mobs
+                    .iter()
+                    .find(|o| o.id == id)
+                    .map(|o| drops::loot_entity(o, None)),
+                None => None,
+            };
+            let direct = match d.kind {
+                DamageKind::Arrow => Some(LootEntity {
+                    kind: "minecraft:arrow".into(),
+                    ..LootEntity::default()
+                }),
+                DamageKind::Fireball => Some(LootEntity {
+                    kind: "minecraft:fireball".into(),
+                    ..LootEntity::default()
+                }),
+                _ => source.clone(),
+            };
+            let player_source = matches!(d.attacker, Some(Who::Player));
+            LootDamage {
+                kind: damage_type(d.kind, player_source).into(),
+                source,
+                direct,
+            }
+        });
+        let vehicle = m
+            .extra
+            .mount
+            .and_then(|id| self.mobs.iter().find(|o| o.id == id))
+            .map(|o| LootEntity::new(&o.kind.id));
+        let death = drops::Death {
+            loot: &loot,
+            damage,
+            player: by_player.then(player),
+            luck: 0.0,
+            vehicle,
+            mob_drops: self.ui.rules.bool("mob_drops"),
+            world_seed: self.level.seed,
+        };
+        let (items, skulls) = drops::die(m, &death, &mut self.rand_sequences);
+        if skulls
+            && let Some(Who::Mob(id)) = m.last_damage.and_then(|(d, _)| d.attacker)
+            && let Some(creeper) = self.mobs.iter_mut().find(|o| o.id == id)
+        {
+            // Creeper.droppedSkulls: one head per charged explosion.
+            creeper.extra.charged = false;
+        }
+        let raider = horizon_client::mobs::raider::is_raider(m.species());
+        for d in items {
+            match d {
+                drops::Drop::Item(stack) => {
+                    let item = if raider && stack.item == horizon_client::mobs::raider::BANNER {
+                        horizon_client::mobs::raider::ominous_banner()
+                    } else {
+                        from_loot(&stack)
+                    };
+                    self.spawn_item(item, pos, [0.0, 0.2, 0.0], 10);
+                }
+                drops::Drop::Orb(value) if !consumed => self.spawn_orbs(pos, value as u32),
+                drops::Drop::Orb(_) => {}
             }
         }
     }
@@ -950,24 +689,18 @@ impl Game<'_> {
                     if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
                         let hit = t.damage(amount, source);
                         if hit {
-                            let (voice, center, dead) = (
-                                horizon_client::mobs::ai::voice_sounds(t),
-                                t.center(),
-                                !t.alive(),
-                            );
-                            killed = dead;
-                            let pitch = (self.world.random.next_float()
-                                - self.world.random.next_float())
-                                * 0.2
-                                + 1.0;
-                            let s = voice[if dead { 2 } else { 1 }];
-                            if !s.is_empty() {
-                                self.audio.play(
-                                    &format!("minecraft:{s}"),
-                                    Some(center),
-                                    1.0,
-                                    pitch,
-                                );
+                            killed = !t.alive();
+                            // The hurt or death sound the mob raised.
+                            let center = t.center();
+                            for event in std::mem::take(&mut t.outbox) {
+                                if let MobEvent::Sound(s, _, volume, pitch) = event {
+                                    self.audio.play(
+                                        &format!("minecraft:{s}"),
+                                        Some(center),
+                                        volume,
+                                        pitch,
+                                    );
+                                }
                             }
                         }
                     }
@@ -2614,11 +2347,6 @@ impl Game<'_> {
         }
     }
 }
-fn species_drops_harness(m: &Mob) -> bool {
-    // Body equipment set to drop when killed: a harness, nautilus armour, a
-    // sulfur cube's swallowed block.
-    horizon_client::mobs::species::body_slot(m.species())
-}
 fn eat_sound(s: Species) -> &'static str {
     match s {
         Species::Pig => "entity.pig.eat",
@@ -2633,36 +2361,65 @@ fn eat_sound(s: Species) -> &'static str {
     }
 }
 /// Mob.getBaseExperienceReward
-fn experience_reward(m: &Mob, random: &mut impl RandomSource) -> u32 {
-    use Species as S;
-    match m.species() {
-        S::Blaze | S::Ghast | S::Hoglin | S::Zoglin | S::PiglinBrute | S::Breeze => 10,
-        S::Slime | S::MagmaCube => m.extra.size.max(1) as u32,
-        S::Endermite => 3,
-        S::Bat
-        | S::Squid
-        | S::GlowSquid
-        | S::Cod
-        | S::Salmon
-        | S::TropicalFish
-        | S::Pufferfish
-        | S::Dolphin => 1 + random.next_int_bound(3).unwrap_or(0) as u32,
-        S::IronGolem | S::SnowGolem | S::Villager | S::WanderingTrader => 0,
-        // SulfurCube.getBaseExperienceReward.
-        S::SulfurCube if m.is_baby() => 0,
-        S::SulfurCube => 1 + random.next_int_bound(2).unwrap_or(0) as u32,
-        // Animals in the monster category (Animal.getBaseExperienceReward).
-        S::CamelHusk | S::ZombieNautilus => 1 + random.next_int_bound(3).unwrap_or(0) as u32,
-        _ if m.hostile() => {
-            5 + if m.extra.main_hand.is_some() {
-                1 + random.next_int_bound(3).unwrap_or(0) as u32
-            } else {
-                0
-            }
-        }
-        _ if m.is_baby() => 0,
-        _ => 1 + random.next_int_bound(3).unwrap_or(0) as u32,
+/// The damage type id of a Horizon damage kind.
+fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) -> &'static str {
+    use horizon_client::mobs::DamageKind as K;
+    match kind {
+        K::PlayerAttack => "minecraft:player_attack",
+        K::MobAttack => "minecraft:mob_attack",
+        K::Arrow => "minecraft:arrow",
+        K::Thrown => "minecraft:thrown",
+        K::Fireball => "minecraft:fireball",
+        K::Explosion if player => "minecraft:player_explosion",
+        K::Explosion => "minecraft:explosion",
+        K::Fall => "minecraft:fall",
+        K::OnFire => "minecraft:on_fire",
+        K::InFire => "minecraft:in_fire",
+        K::Lava => "minecraft:lava",
+        K::Drown => "minecraft:drown",
+        K::Magic => "minecraft:magic",
+        K::Sting => "minecraft:sting",
+        K::Cactus => "minecraft:cactus",
+        K::Generic => "minecraft:generic",
+        K::InWall => "minecraft:in_wall",
+        K::Thorns => "minecraft:thorns",
+        K::SonicBoom => "minecraft:sonic_boom",
     }
+}
+/// A Horizon item stack as a loot stack (id, count, damage, enchantments).
+fn to_loot(stack: &ItemStack) -> horizon_world::loot::LootStack {
+    horizon_world::loot::LootStack {
+        item: stack.item.to_string(),
+        count: stack.count as i32,
+        damage: stack.damage as i32,
+        enchantments: stack
+            .enchantments()
+            .iter()
+            .map(|(e, l)| (e.to_string(), *l as i32))
+            .collect(),
+        potion: None,
+        map: false,
+        ominous_amplifier: None,
+    }
+}
+/// A generated loot stack as a Horizon item stack.
+fn from_loot(stack: &horizon_world::loot::LootStack) -> ItemStack {
+    let mut item = ItemStack {
+        item: Arc::from(stack.item.as_str()),
+        count: stack.count.max(1) as u32,
+        damage: stack.damage.max(0) as u32,
+        extra: None,
+    };
+    for (id, level) in &stack.enchantments {
+        item.enchant(id, (*level).max(0) as u32);
+    }
+    if let Some(potion) = &stack.potion {
+        item = item.with_potion(potion);
+    }
+    if let Some(amplifier) = stack.ominous_amplifier.filter(|a| *a > 0) {
+        item.data_mut().ominous_amplifier = Some(amplifier as u8);
+    }
+    item
 }
 /// Entity.push between overlapping mobs (LivingEntity.pushEntities).
 fn push_apart(mobs: &mut [Mob]) {
@@ -2707,7 +2464,10 @@ impl Game<'_> {
     pub(super) fn portal_spawn(&mut self, pos: [i32; 3]) {
         // ChunkMap.anyPlayerCloseEnoughForSpawning: a non-spectator within 128
         // blocks of the chunk centre.
-        let centre = [f64::from((pos[0] >> 4) * 16 + 8), f64::from((pos[2] >> 4) * 16 + 8)];
+        let centre = [
+            f64::from((pos[0] >> 4) * 16 + 8),
+            f64::from((pos[2] >> 4) * 16 + 8),
+        ];
         let spectator = self.spectator();
         let Some(close) = self.player.as_ref().filter(|_| !spectator).map(|p| {
             let (dx, dz) = (p.position.x - centre[0], p.position.z - centre[1]);
@@ -2719,7 +2479,9 @@ impl Game<'_> {
             return;
         }
         let mut y = pos[1];
-        while &*self.res.facts.get(self.world.block(pos[0], y, pos[2])).name == "minecraft:nether_portal" {
+        while &*self.res.facts.get(self.world.block(pos[0], y, pos[2])).name
+            == "minecraft:nether_portal"
+        {
             y -= 1;
         }
         // isValidSpawn: a sturdy top face (portal frames emit no light).
@@ -2727,7 +2489,11 @@ impl Game<'_> {
         if below.sturdy_full & (1 << 1) == 0 {
             return;
         }
-        let at = [f64::from(pos[0]) + 0.5, f64::from(y + 1), f64::from(pos[2]) + 0.5];
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(y + 1),
+            f64::from(pos[2]) + 0.5,
+        ];
         let _ = self.spawn_mob("minecraft:zombified_piglin", at, false);
     }
 }

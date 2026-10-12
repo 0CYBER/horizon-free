@@ -78,6 +78,11 @@ impl LegacyRandom {
         }
     }
 
+    /// The 48-bit generator state (differential tests compare it).
+    pub fn state(&self) -> u64 {
+        self.state
+    }
+
     fn bits(&mut self, count: u32) -> i32 {
         self.state = self.state.wrapping_mul(Self::MULTIPLIER).wrapping_add(11) & Self::MASK;
         (self.state >> (48 - count)) as i32

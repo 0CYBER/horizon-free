@@ -94,13 +94,11 @@ impl<V: Clone> Scope<V> {
         let current = self.top_marker;
         let n = self.top_entry - self.top_marker;
         self.setup_new_frame();
-        let mut source = current + 1;
         let mut target = self.top_entry;
-        for _ in 0..n {
+        for source in current + 1..current + 1 + n {
             target += 1;
             let key = self.stack[source].0;
             self.set(target, key, None);
-            source += 1;
         }
         self.top_entry = target;
     }
@@ -139,11 +137,13 @@ impl<V: Clone> Scope<V> {
         }
     }
     pub fn get(&self, atom: Atom) -> Option<V> {
-        self.value_index(&[atom]).and_then(|i| self.stack[i].1.clone())
+        self.value_index(&[atom])
+            .and_then(|i| self.stack[i].1.clone())
     }
     /// Scope.getAny: the newest of several atoms.
     pub fn get_any(&self, atoms: &[Atom]) -> Option<V> {
-        self.value_index(atoms).and_then(|i| self.stack[i].1.clone())
+        self.value_index(atoms)
+            .and_then(|i| self.stack[i].1.clone())
     }
     /// Whether the atom has an entry (even a null one).
     pub fn has(&self, atom: Atom) -> bool {
@@ -385,7 +385,7 @@ impl<'g, V: Value> State<'g, V> {
         r
     }
     fn first_error(&self) -> CommandError {
-        for (_, reason) in &self.errors {
+        if let Some((_, reason)) = self.errors.first() {
             return match reason {
                 Reason::Delayed(key, args) => {
                     let args: Vec<&dyn std::fmt::Display> =

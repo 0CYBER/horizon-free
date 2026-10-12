@@ -462,8 +462,8 @@ impl Game<'_> {
         };
         let m = &self.mobs[i];
         let atlas = &self.res.atlas;
-        let hearts = horizon_client::hud_layout::vehicle_max_hearts(m.attrs.max_health as f32);
-        let draws = horizon_client::hud_layout::vehicle_health(w, h, hearts, m.health as f32);
+        let hearts = horizon_client::hud_layout::vehicle_max_hearts(m.attrs.max_health);
+        let draws = horizon_client::hud_layout::vehicle_health(w, h, hearts, m.health);
         horizon_client::hud_layout::paint(batch, atlas, &draws);
         if m.extra.saddled {
             let x = (w / 2 - 91) as f32;

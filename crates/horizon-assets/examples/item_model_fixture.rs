@@ -240,7 +240,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sprites = Sprites {
         root: root.clone(),
         permutations: PalettedPermutations::from_atlas(
-            &fs::read_to_string(root.join("assets/minecraft/atlases/items.json")).unwrap_or_default(),
+            &fs::read_to_string(root.join("assets/minecraft/atlases/items.json"))
+                .unwrap_or_default(),
         ),
         cache: RefCell::default(),
     };

@@ -47,7 +47,11 @@ fn is_string(t: &Tag) -> bool {
     matches!(t, Tag::String(_))
 }
 fn string(t: &Tag) -> R {
-    if is_string(t) { Ok(()) } else { err("Not a string") }
+    if is_string(t) {
+        Ok(())
+    } else {
+        err("Not a string")
+    }
 }
 fn string_of(t: &Tag) -> Option<String> {
     match t {
@@ -131,9 +135,9 @@ pub fn identifier(t: &Tag) -> Result<(), String> {
             "Not a valid resource location: {s} Non [a-z0-9_.-] character in namespace of location: {ns}:{path}"
         ));
     }
-    let path_ok = path
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-' | '/'));
+    let path_ok = path.chars().all(|c| {
+        c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-' | '/')
+    });
     if !path_ok {
         return Err(format!(
             "Not a valid resource location: {s} Non [a-z0-9/._-] character in path of location: {ns}:{path}"
@@ -208,7 +212,13 @@ fn style_fields(map: &Compound) -> R {
     if let Some(c) = get(map, "color") {
         color(c)?;
     }
-    for key in ["bold", "italic", "underlined", "strikethrough", "obfuscated"] {
+    for key in [
+        "bold",
+        "italic",
+        "underlined",
+        "strikethrough",
+        "obfuscated",
+    ] {
         if let Some(v) = get(map, key)
             && bool_value(v).is_err()
         {
@@ -262,12 +272,13 @@ fn content(kind: &str, map: &Compound) -> bool {
             _ => false,
         },
         "selector" => {
-            get(map, "selector").is_some_and(selector_string) && optional_component(map, "separator")
+            get(map, "selector").is_some_and(selector_string)
+                && optional_component(map, "separator")
         }
         "nbt" => {
-            let path_ok = get(map, "nbt").and_then(string_of).is_some_and(|p| {
-                crate::nbt_path::NbtPath::parse(&p).is_ok()
-            });
+            let path_ok = get(map, "nbt")
+                .and_then(string_of)
+                .is_some_and(|p| crate::nbt_path::NbtPath::parse(&p).is_ok());
             let source = if let Some(e) = get(map, "entity") {
                 selector_string(e)
             } else if let Some(b) = get(map, "block") {
@@ -336,10 +347,9 @@ fn full(t: &Tag) -> R {
     style_fields(map)
 }
 fn component(t: &Tag) -> R {
-    either(
-        either(string(t), || non_empty_list(t, &component)),
-        || full(t),
-    )
+    either(either(string(t), || non_empty_list(t, &component)), || {
+        full(t)
+    })
 }
 /// ComponentSerialization.CODEC.parse: the error message on failure.
 pub fn decode(t: &Tag) -> Result<(), String> {

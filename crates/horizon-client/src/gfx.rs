@@ -40,8 +40,9 @@ pub struct Frame<'a> {
     pub yaw: f32,
     pub pitch: f32,
     pub fov_degrees: f32,
-    /// GameRenderer.bobView: (walk distance, bob amount), interpolated.
-    pub bob: Option<(f32, f32)>,
+    /// The `GameRenderer.bobHurt`/`bobView` pose multiplied into the
+    /// projection (`crate::camera::bob_matrix`).
+    pub bob: Mat4,
     pub sky: Sky,
     /// Render distance in blocks (fog end).
     pub distance: f32,
@@ -1074,14 +1075,7 @@ impl Renderer {
             yaw.cos() * pitch.cos(),
         );
         let far = (frame.distance * 4.0).max(1024.0);
-        let bob = frame.bob.map_or(Mat4::IDENTITY, |(walk, bob)| {
-            let f = -walk * std::f32::consts::PI;
-            Mat4::from_translation(Vec3::new(f.sin() * bob * 0.5, -(f.cos() * bob).abs(), 0.0))
-                * Mat4::from_rotation_z((f.sin() * bob * 3.0).to_radians())
-                * Mat4::from_rotation_x(
-                    ((f - 0.2).cos() * bob).abs().mul_add(5.0, 0.0).to_radians(),
-                )
-        });
+        let bob = frame.bob;
         Mat4::perspective_rh(frame.fov_degrees.to_radians(), aspect, 0.05, far)
             * bob
             * Mat4::look_to_rh(Vec3::ZERO, forward, Vec3::Y)

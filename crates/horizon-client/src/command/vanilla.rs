@@ -322,13 +322,21 @@ pub fn build_with(dev: bool) -> Dispatcher {
     let locate = d.literal(root, "locate");
     d.requires(locate, GAMEMASTERS);
     let s = d.literal(locate, "structure");
-    let a = d.argument(s, "structure", ArgType::ResOrTagKey("minecraft:worldgen/structure"));
+    let a = d.argument(
+        s,
+        "structure",
+        ArgType::ResOrTagKey("minecraft:worldgen/structure"),
+    );
     d.executes(a, "locate.structure");
     let b = d.literal(locate, "biome");
     let a = d.argument(b, "biome", ArgType::ResOrTag("minecraft:worldgen/biome"));
     d.executes(a, "locate.biome");
     let p = d.literal(locate, "poi");
-    let a = d.argument(p, "poi", ArgType::ResOrTag("minecraft:point_of_interest_type"));
+    let a = d.argument(
+        p,
+        "poi",
+        ArgType::ResOrTag("minecraft:point_of_interest_type"),
+    );
     d.executes(a, "locate.poi");
 
     if dev {

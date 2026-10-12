@@ -4,8 +4,27 @@
 //! damage, fire and the walk animation.
 use super::{Mob, MobEvent, MobWorld};
 use crate::{blocks::Fluid, collisions::SceneCollisions};
-use horizon_core::geometry::{Aabb, Vec3};
+use horizon_core::{
+    geometry::{Aabb, Vec3, trig},
+    random::RandomSource,
+};
 
+/// `Entity.moveDist`, `flyDist` and `nextStep`.
+#[derive(Clone, Copy, Debug)]
+pub struct Steps {
+    pub move_dist: f32,
+    pub fly_dist: f32,
+    pub next_step: f32,
+}
+impl Default for Steps {
+    fn default() -> Self {
+        Self {
+            move_dist: 0.0,
+            fly_dist: 0.0,
+            next_step: 1.0,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Fluids {
     pub water: f64,
@@ -87,18 +106,22 @@ impl Mob {
     }
     /// Entity dimensions: the type's, a class's BABY_DIMENSIONS, or the
     /// slime size scaling.
+    /// `EntityDimensions` (float width, height and eye height) widened to double.
     pub fn dims(&self) -> (f64, f64, f64) {
         let k = &self.kind;
-        let (mut w, mut h, mut e) = (k.width, k.height, k.eye_height);
+        let (mut w, mut h, mut e) = (k.width as f32, k.height as f32, k.eye_height as f32);
         // Sniffer.DIGGING_DIMENSIONS: 0.4 lower, its eyes at 0.81.
         if k.species == super::Species::Sniffer && super::sniffer::digging(self) {
-            (h, e) = (h - f64::from(0.4_f32), f64::from(0.81_f32));
+            (h, e) = (h - 0.4, 0.81);
         }
         if self.is_baby() {
             match super::species::def(k.species).baby {
-                super::species::Baby::Abs(bw, bh, be) => (w, h, e) = (bw, bh, be),
+                super::species::Baby::Abs(bw, bh, be) => {
+                    (w, h, e) = (bw as f32, bh as f32, be as f32)
+                }
                 super::species::Baby::Scale(s, eye) => {
-                    (w, h, e) = (w * s, h * s, eye.unwrap_or(e * s))
+                    let s = s as f32;
+                    (w, h, e) = (w * s, h * s, eye.map_or(e * s, |x| x as f32))
                 }
                 super::species::Baby::None => {}
             }
@@ -109,13 +132,13 @@ impl Mob {
             e = 0.85;
         }
         if self.kind.species == super::Species::Pufferfish {
-            let s = super::aquatic::puff_scale(self.extra.size);
+            let s = super::aquatic::puff_scale(self.extra.size) as f32;
             (w, h, e) = (w * s, h * s, e * s);
         } else if self.extra.size > 0 {
-            let s = f64::from(self.extra.size);
+            let s = self.extra.size as f32;
             (w, h, e) = (w * s, h * s, e * s);
         }
-        (w, h, e)
+        (f64::from(w), f64::from(h), f64::from(e))
     }
     pub fn eye_height(&self) -> f64 {
         self.dims().2
@@ -149,8 +172,13 @@ impl Mob {
             return;
         }
         let v = if len_sq > 1.0 {
+            // Vec3.normalize
             let l = len_sq.sqrt();
-            Vec3::new(input.x / l, input.y / l, input.z / l)
+            if l < f64::from(1.0e-5_f32) {
+                Vec3::ZERO
+            } else {
+                Vec3::new(input.x / l, input.y / l, input.z / l)
+            }
         } else {
             input
         };
@@ -159,10 +187,8 @@ impl Mob {
             v.y * f64::from(speed),
             v.z * f64::from(speed),
         );
-        let (s, c) = (
-            f64::from(self.yaw.to_radians().sin()),
-            f64::from(self.yaw.to_radians().cos()),
-        );
+        let angle = f64::from(self.yaw * trig::DEG_TO_RAD);
+        let (s, c) = (f64::from(trig::sin(angle)), f64::from(trig::cos(angle)));
         self.velocity = Vec3::new(
             self.velocity.x + (v.x * c - v.z * s),
             self.velocity.y + v.y,
@@ -181,38 +207,128 @@ impl Mob {
         let moved = scene
             .resolve(self.bounds(), wanted, step, self.on_ground)
             .unwrap_or(Vec3::ZERO);
-        self.position = Vec3::new(
-            self.position.x + moved.x,
-            self.position.y + moved.y,
-            self.position.z + moved.z,
-        );
-        let x_hit = (moved.x - wanted.x).abs() > 1.0e-5;
-        let z_hit = (moved.z - wanted.z).abs() > 1.0e-5;
+        let length = moved.x * moved.x + moved.y * moved.y + moved.z * moved.z;
+        let wanted_length = wanted.x * wanted.x + wanted.y * wanted.y + wanted.z * wanted.z;
+        if length > 1.0e-7 || wanted_length - length < 1.0e-7 {
+            self.position = Vec3::new(
+                self.position.x + moved.x,
+                self.position.y + moved.y,
+                self.position.z + moved.z,
+            );
+        }
+        // !Mth.equal(delta, movement)
+        let differs = |a: f64, b: f64| (b - a).abs() >= f64::from(1.0e-5_f32);
+        let x_hit = differs(wanted.x, moved.x);
+        let z_hit = differs(wanted.z, moved.z);
         self.horizontal_collision = x_hit || z_hit;
-        let vertical = (moved.y - wanted.y).abs() > 1.0e-5;
-        self.vertical_collision_below = vertical && wanted.y < 0.0;
-        self.on_ground = self.vertical_collision_below;
-        if x_hit {
-            self.velocity.x = 0.0;
+        let moved_vertically = wanted.y.abs() > 0.0;
+        let mut vertical = false;
+        if moved_vertically {
+            vertical = wanted.y != moved.y;
+            self.vertical_collision_below = vertical && wanted.y < 0.0;
+            self.on_ground = self.vertical_collision_below;
         }
-        if z_hit {
-            self.velocity.z = 0.0;
-        }
-        if vertical {
-            self.velocity.y = 0.0;
+        // LivingEntity.checkFallDamage refreshes the fluid state out of water
+        // (touching water resets the fall).
+        if !self.fluids.in_water {
+            self.fluids = w.fluids(self.bounds(), self.eye_y());
+            if self.fluids.in_water {
+                self.fall_distance = 0.0;
+            }
         }
         // Entity.checkFallDamage
+        if !self.fluids.in_water && moved.y < 0.0 {
+            self.fall_distance -= f64::from(moved.y as f32);
+        }
         if self.on_ground {
             if self.fall_distance > 0.0 {
                 self.cause_fall_damage(events);
             }
             self.fall_distance = 0.0;
-        } else if moved.y < 0.0 {
-            self.fall_distance -= moved.y;
         }
-        if self.fluids.in_water {
-            self.fall_distance = 0.0;
+        // restituteMovementAfterCollisions with no bounciness: the colliding
+        // components become (signed) zero.
+        if moved_vertically && vertical || self.horizontal_collision {
+            let v = self.velocity;
+            if x_hit {
+                self.velocity.x = -v.x * 0.0;
+            }
+            if z_hit {
+                self.velocity.z = -v.z * 0.0;
+            }
+            if vertical {
+                self.velocity.y = (0.0 - v.y) * 1.0 * 0.0;
+            }
         }
+        self.movement_emission(w, moved, events);
+    }
+    /// Entity.applyMovementEmissionAndPlaySound: walked distance, footsteps
+    /// and swimming sounds.
+    fn movement_emission(&mut self, w: &MobWorld, moved: Vec3, events: &mut Vec<MobEvent>) {
+        if !super::ai::emits_movement(self) || self.extra.mount.is_some() {
+            return;
+        }
+        let full = (moved.length() * f64::from(0.6_f32)) as f32;
+        let horizontal =
+            ((moved.x * moved.x + moved.z * moved.z).sqrt() * f64::from(0.6_f32)) as f32;
+        let on = self.on_pos(1.0e-5);
+        let state = w.world.block(on[0], on[1], on[2]);
+        let climbable = w.facts.get(state).name.as_ref() == "minecraft:powder_snow"
+            || w.has_tag("minecraft:climbable", &w.facts.get(state).name);
+        let steps = &mut self.ai.steps;
+        steps.move_dist += if climbable { full } else { horizontal };
+        steps.fly_dist += full;
+        if steps.move_dist > steps.next_step && !w.facts.is_air(state) {
+            let legacy = self.on_pos(0.2);
+            let legacy_state = w.world.block(legacy[0], legacy[1], legacy[2]);
+            let produced = !w.facts.is_air(legacy_state)
+                && (self.on_ground || climbable)
+                && !self.fluids_swimming();
+            if produced {
+                if let Some((sound, volume, pitch)) =
+                    super::ai::step_sound(self, w, legacy, legacy_state)
+                    && !self.silent
+                {
+                    let at = [self.position.x, self.position.y, self.position.z];
+                    events.push(MobEvent::Sound(sound, at, volume, pitch));
+                }
+                self.ai.steps.next_step = (self.ai.steps.move_dist as i32).wrapping_add(1) as f32;
+            } else if self.fluids.in_water {
+                self.ai.steps.next_step = (self.ai.steps.move_dist as i32).wrapping_add(1) as f32;
+                // Entity.waterSwimSound
+                let v = self.velocity;
+                let volume = 1.0_f32.min(
+                    (v.x * v.x * f64::from(0.2_f32) + v.y * v.y + v.z * v.z * f64::from(0.2_f32))
+                        .sqrt() as f32
+                        * 0.35,
+                );
+                if !super::ai::movement_sounds(self) {
+                    return;
+                }
+                let pitch = 1.0 + (self.random.next_float() - self.random.next_float()) * 0.4;
+                if !self.silent {
+                    let at = [self.position.x, self.position.y, self.position.z];
+                    events.push(MobEvent::Sound(
+                        super::ai::swim_sound(self),
+                        at,
+                        volume,
+                        pitch,
+                    ));
+                }
+            }
+        }
+    }
+    /// Entity.isSwimming (mobs never swim in the player sense).
+    fn fluids_swimming(&self) -> bool {
+        false
+    }
+    /// Entity.getOnPos(offset) without a supporting block record.
+    pub fn on_pos(&self, offset: f32) -> [i32; 3] {
+        [
+            self.position.x.floor() as i32,
+            (self.position.y - f64::from(offset)).floor() as i32,
+            self.position.z.floor() as i32,
+        ]
     }
     fn cause_fall_damage(&mut self, events: &mut Vec<MobEvent>) {
         if self.kind.flags.fall_immune {

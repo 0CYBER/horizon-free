@@ -616,7 +616,8 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
     // A stable insertion sort (the comparator mixes numeric and text order).
     let mut sorted: Vec<Suggestion> = Vec::with_capacity(out.len());
     for s in out {
-        let pos = sorted.partition_point(|x| compare_suggestions(x, &s) != std::cmp::Ordering::Greater);
+        let pos =
+            sorted.partition_point(|x| compare_suggestions(x, &s) != std::cmp::Ordering::Greater);
         sorted.insert(pos, s);
     }
     ((start, end), sorted)
@@ -644,7 +645,8 @@ impl Suggests {
                 for id in &reg.summonable {
                     if args::resource_matches(&contents, id) {
                         let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
-                        let name = crate::lang::get(&format!("entity.{ns}.{}", path.replace('/', ".")));
+                        let name =
+                            crate::lang::get(&format!("entity.{ns}.{}", path.replace('/', ".")));
                         builder.suggest_tooltip(id.clone(), name);
                     }
                 }
@@ -673,7 +675,9 @@ impl Suggests {
                     .trigger_scores
                     .iter()
                     .filter(|(_, scores)| {
-                        targets.iter().any(|t| scores.get(t).is_none_or(|locked| *locked))
+                        targets
+                            .iter()
+                            .any(|t| scores.get(t).is_none_or(|locked| *locked))
                     })
                     .map(|(o, _)| o.as_str())
                     .collect();

@@ -176,13 +176,9 @@ impl Game<'_> {
         self.settings.save(&Self::options_path());
         self.apply_ui_settings();
     }
-    /// Frame limiter for the Max Framerate option: when the next frame is due.
-    pub(super) fn next_frame_due(&self) -> Option<std::time::Instant> {
-        if self.options.frames.is_some() {
-            return None;
-        }
-        // FramerateLimitTracker.getFramerateLimit: the option, throttled when
-        // minimised, idle, or in a menu without a world.
+    /// `FramerateLimitTracker.getFramerateLimit`: the Max Framerate option,
+    /// throttled when minimised, idle, or in a menu without a world.
+    pub(super) fn framerate_limit(&self) -> i32 {
         let context = FrameContext {
             inactivity: if self.settings.inactivity_fps_limit == "minimized" {
                 InactivityFpsLimit::Minimized
@@ -201,11 +197,16 @@ impl Game<'_> {
             has_screen: self.title.is_some() || self.screen != super::Screen::Playing,
             has_overlay: false,
         };
-        let fps = framerate_limit(self.settings.max_fps as i32, context);
-        if fps >= 260 {
-            return None;
+        framerate_limit(self.settings.max_fps as i32, context)
+    }
+    /// `Minecraft.runTick`'s frame limiter: `FramerateLimiter.limitDisplayFPS`
+    /// below 260 frames per second, sleeping then spin-waiting until the
+    /// frame's slot ends (not in scripted frame-count runs).
+    pub(super) fn limit_frame(&mut self) {
+        if self.options.frames.is_some() {
+            return;
         }
-        let due = self.previous + std::time::Duration::from_secs_f64(1.0 / f64::from(fps));
-        (due > std::time::Instant::now()).then_some(due)
+        let limit = self.framerate_limit();
+        horizon_client::window::end_frame(&mut self.limiter, limit, &mut self.frame_clock);
     }
 }

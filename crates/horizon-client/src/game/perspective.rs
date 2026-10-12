@@ -4,12 +4,104 @@
 //! and in the inventory (`InventoryScreen.extractEntityInInventoryFollowsMouse`).
 use super::{Game, Screen};
 use horizon_client::{
+    blocks::BlockFacts,
+    camera::{CameraEntity, LivingCamera},
+    collisions::SceneCollisions,
+};
+use horizon_client::{
     hud::HudBatch,
     mobs::{Anim, Brain, Mob, MobType},
     pose::Pose,
 };
-use horizon_core::geometry::Vec3;
-use std::{path::Path, sync::Arc};
+use horizon_core::{
+    geometry::{Aabb, ShapeOp, Vec3, VoxelShape},
+    position::BlockPos,
+};
+use horizon_world::{
+    collision_context::{CollisionContext, CollisionEntity, CollisionItem},
+    entity_obstruction::EntityIdentity,
+    registry::BlockStateId,
+    world_ray::{RayBlockMode, RayFluidMode, RayWorld, clip_world},
+};
+use std::{io, path::Path, sync::Arc};
+
+/// `Level.clip` with `ClipContext.Block.VISUAL` and no fluids:
+/// `BlockBehaviour.getVisualShape` is the collision shape except for the
+/// blocks that override it.
+struct VisualRays<'a, 'r> {
+    scene: SceneCollisions<'a, 'r>,
+    facts: &'a BlockFacts,
+    context: CollisionContext<'static>,
+}
+impl RayWorld for VisualRays<'_, '_> {
+    type Error = io::Error;
+    type Block = BlockStateId;
+    type Fluid = ();
+    fn block_state(&mut self, p: BlockPos) -> io::Result<BlockStateId> {
+        Ok(self.scene.world.block(p.x, p.y, p.z))
+    }
+    fn fluid_state(&mut self, _: BlockPos) -> io::Result<()> {
+        Ok(())
+    }
+    fn block_shape(
+        &mut self,
+        state: BlockStateId,
+        p: BlockPos,
+        _: RayBlockMode,
+    ) -> io::Result<VoxelShape> {
+        let facts = self.facts.get(state);
+        let name = &*facts.name;
+        // TransparentBlock (glass, stained and tinted glass, copper grates),
+        // IronBarsBlock (bars and panes) and PowderSnowBlock: nothing;
+        // SoulSandBlock and MudBlock: a full block; SnowLayerBlock and
+        // FenceBlock: their outline.
+        if name.ends_with("glass")
+            || name.ends_with("glass_pane")
+            || name.ends_with("_bars")
+            || name.ends_with("copper_grate")
+            || name == "minecraft:powder_snow"
+        {
+            return Ok(VoxelShape::empty());
+        }
+        if name == "minecraft:soul_sand" || name == "minecraft:mud" {
+            return Ok(VoxelShape::block());
+        }
+        if name == "minecraft:snow" || name.ends_with("_fence") {
+            let mut shape = VoxelShape::empty();
+            for b in facts.outline.iter() {
+                let b = b.map(f64::from);
+                let part = VoxelShape::from_box(Aabb::new(
+                    Vec3::new(b[0], b[1], b[2]),
+                    Vec3::new(b[3], b[4], b[5]),
+                ))
+                .map_err(|e| io::Error::other(format!("{e:?}")))?;
+                shape = shape
+                    .join(&part, ShapeOp::OR)
+                    .map_err(|e| io::Error::other(format!("{e:?}")))?;
+            }
+            return Ok(shape);
+        }
+        let binding = self.scene.binding;
+        binding
+            .collision_shape_with_context(&mut self.scene, state, p, &self.context)
+            .map_err(|e| io::Error::other(format!("{e:?}")))
+    }
+    fn interaction_shape(&mut self, _: BlockStateId, _: BlockPos) -> io::Result<VoxelShape> {
+        Ok(VoxelShape::empty())
+    }
+    fn fluid_is_source(&mut self, _: ()) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn fluid_is_empty(&mut self, _: ()) -> io::Result<bool> {
+        Ok(true)
+    }
+    fn fluid_is_water(&mut self, _: ()) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn fluid_shape(&mut self, _: (), _: BlockPos) -> io::Result<VoxelShape> {
+        Ok(VoxelShape::empty())
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum CameraType {
@@ -95,34 +187,99 @@ impl Game<'_> {
     pub(super) fn cycle_camera(&mut self) {
         self.camera_type = self.camera_type.cycle();
     }
-    /// `Camera.setup`: the eye, or a point up to four blocks behind (or in
-    /// front of) it, pulled in where blocks are in the way. Returns the
+    /// `Camera.update` (`alignWithEntity` and `getMaxZoom`): the
+    /// interpolated eye, or a point up to the camera distance behind (or in
+    /// front of) it, pulled in where visual shapes are in the way. Returns the
     /// position, yaw and pitch to render from.
-    pub(super) fn camera_view(&self, eye: glam::DVec3) -> (glam::DVec3, f32, f32) {
-        let (mut yaw, mut pitch) = (self.yaw, self.pitch);
-        if self.camera_type.first_person() || self.player.is_none() || self.sleeping.is_some() {
-            return (eye, yaw, pitch);
-        }
-        if self.camera_type == CameraType::ThirdPersonFront {
-            yaw += 180.0;
-            pitch = -pitch;
-        }
-        let f = super::view_vector(yaw, pitch);
-        let mut dist = 4.0f64;
-        for i in 0..8 {
-            let o = [
-                f64::from((i & 1) * 2 - 1) * 0.1,
-                f64::from((i >> 1 & 1) * 2 - 1) * 0.1,
-                f64::from((i >> 2 & 1) * 2 - 1) * 0.1,
-            ];
-            let from = [eye.x + o[0], eye.y + o[1], eye.z + o[2]];
-            let back = [-f[0], -f[1], -f[2]];
-            if let Some(hit) = self.clip_ray(from, back, dist) {
-                let d = glam::DVec3::from_array(hit.point) - eye;
-                dist = dist.min(d.length());
-            }
-        }
-        (eye - glam::DVec3::from_array(f) * dist, yaw, pitch)
+    pub(super) fn camera_view(&mut self, partial: f32) -> Option<(glam::DVec3, f32, f32)> {
+        let (scale, distance) = {
+            let p = self.player.as_mut()?;
+            (
+                p.attribute("minecraft:scale").unwrap_or(1.0) as f32,
+                p.attribute("minecraft:camera_distance").unwrap_or(4.0),
+            )
+        };
+        let p = self.player.as_ref()?;
+        let sleeping = self.sleeping.map(|(head, _)| {
+            let state = self.world.block(head[0], head[1], head[2]);
+            let props = self.res.assets.registry.state(state).map(|s| &s.properties);
+            // BedBlock.getBedOrientation as Direction.toYRot.
+            props.and_then(|props| match props.get("facing").map(String::as_str) {
+                Some("south") => Some(0.0),
+                Some("west") => Some(90.0),
+                Some("north") => Some(180.0),
+                Some("east") => Some(270.0),
+                _ => None,
+            })
+        });
+        // A living mount at the default scale and camera distance.
+        let mount = self
+            .riding
+            .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+            .map(|_| (1.0, 4.0));
+        let entity = CameraEntity {
+            position: [p.position.x, p.position.y, p.position.z],
+            previous: [
+                self.previous_position.x,
+                self.previous_position.y,
+                self.previous_position.z,
+            ],
+            // Entity.turn moves the old rotation with the new: the mouse
+            // turns the view every frame without interpolation.
+            x_rot: self.pitch,
+            y_rot: self.yaw,
+            x_rot_o: self.pitch,
+            y_rot_o: self.yaw,
+            eye_height: p.dimensions.eye_height,
+            living: Some(LivingCamera {
+                scale,
+                camera_distance: distance,
+                sleeping,
+                dead: None,
+            }),
+            mount,
+        };
+        let mut view = self.view;
+        let kind = match self.camera_type {
+            CameraType::FirstPerson => horizon_client::camera::CameraType::FirstPerson,
+            CameraType::ThirdPersonBack => horizon_client::camera::CameraType::ThirdPersonBack,
+            CameraType::ThirdPersonFront => horizon_client::camera::CameraType::ThirdPersonFront,
+        };
+        let context = CollisionContext::for_entity(
+            CollisionEntity {
+                identity: EntityIdentity(0),
+                y: p.position.y,
+                descending: p.shift_key_down,
+                main_hand: Some(CollisionItem::EMPTY),
+            },
+            false,
+        );
+        let mut rays = VisualRays {
+            scene: SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+            },
+            facts: &self.res.facts,
+            context,
+        };
+        view.align_with_entity(&entity, partial, kind, |from, to| {
+            let hit = clip_world(
+                &mut rays,
+                Vec3::new(from[0], from[1], from[2]),
+                Vec3::new(to[0], to[1], to[2]),
+                RayBlockMode::Visual,
+                RayFluidMode::None,
+                4096,
+            )
+            .ok()?;
+            (!hit.miss).then_some([hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])
+        });
+        self.view = view;
+        Some((
+            glam::DVec3::from_array(view.position),
+            view.y_rot,
+            view.x_rot,
+        ))
     }
     /// Keep the player's model in step with the player (`LivingEntity.tick`
     /// body turning, `WalkAnimationState`, the swing and the pose).
@@ -242,6 +399,7 @@ impl Game<'_> {
             &self.player_armor_layers(),
             out,
         );
+        self.held_item_geometry(m, camera, alpha, packed, true, out);
     }
     /// `extractEntityInInventoryFollowsMouse`: the player in the box
     /// `[x0, x1) x [y0, y1)`, `size` pixels per block, turned toward the
@@ -295,6 +453,7 @@ impl Game<'_> {
             &self.player_armor_layers(),
             &mut verts,
         );
+        self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
         // then the translation and Rz(pi) * Rx(y_angle * 20 degrees).

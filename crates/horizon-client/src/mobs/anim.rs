@@ -101,6 +101,7 @@ impl AnimState {
     pub fn end_tick(&mut self, _swinging: bool) {}
 }
 /// Part poses for one draw, keyed by part name.
+#[derive(Clone)]
 pub struct Poses {
     map: HashMap<String, [f32; 9]>,
     dummy: [f32; 9],
