@@ -6,6 +6,7 @@ pub mod ambience;
 pub mod animate_tick;
 pub mod assets;
 pub mod atlas_sources;
+pub mod attack_strength;
 pub mod attribute_updates;
 pub mod audio;
 pub mod auto_jump;
