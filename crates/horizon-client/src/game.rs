@@ -536,6 +536,8 @@ pub struct Resources {
     names: Names,
     /// clouds.png: (width, height, filled cells).
     clouds: (u32, u32, Vec<bool>),
+    /// misc/forcefield.png: (width, height, RGBA) for the world border wall.
+    forcefield: (u32, u32, Vec<u8>),
     context: Arc<WorkerContext>,
     threads: usize,
     player_arm: Option<horizon_client::mobs::Part>,
@@ -786,6 +788,11 @@ struct Game<'a> {
     exec: commands::execute::ExecState,
     rand_sequences: horizon_client::random_sequences::RandomSequences,
     border: horizon_client::worldborder::WorldBorder,
+    /// `WorldBorderRenderer` and its render state.
+    border_renderer: horizon_client::border_render::BorderRenderer,
+    border_state: horizon_client::border_render::BorderRenderState,
+    /// `Hud.tabList`: the player list's header, footer and heart states.
+    tab_list: horizon_client::tab_list::TabList,
     subtitles: subtitle_hud::SubtitleState,
     adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
@@ -3146,6 +3153,7 @@ impl Game<'_> {
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
         self.draw_chat(&mut batch);
+        self.draw_tab_list(&mut batch);
         match self.screen {
             Screen::Paused => self.draw_pause_menu(&mut batch),
             Screen::Dead => self.draw_death_screen(&mut batch),
@@ -7189,6 +7197,9 @@ impl Game<'_> {
                 (c & 255) as f32 / 255.0,
             ]
         };
+        let border = (!title)
+            .then(|| self.border_draw(camera.to_array(), alpha as f32))
+            .flatten();
         let frame = Frame {
             camera,
             yaw,
@@ -7226,6 +7237,7 @@ impl Game<'_> {
             celestial: &celestial,
             hand: &hand,
             screen: &screen,
+            border,
             game_time: self.world.game_time as f32,
             shader_game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
             end_portal_sprites: ["environment/end_sky", "entity/end_portal/end_portal"].map(|n| {
@@ -7241,6 +7253,39 @@ impl Game<'_> {
             block_flicker: self.res.fog.state.block_light_flicker,
         };
         self.renderer.as_mut().ok_or("renderer")?.render(&frame)
+    }
+    /// `LevelExtractor` / `LevelRenderer`: the world border wall this frame.
+    fn border_draw(
+        &mut self,
+        camera: [f64; 3],
+        partial: f32,
+    ) -> Option<horizon_client::gfx::BorderDraw> {
+        use horizon_client::border_render::{self, BorderRenderer};
+        let distance = f64::from(self.streaming.radius * 16);
+        border_render::extract(
+            &self.border,
+            partial,
+            camera,
+            distance,
+            &mut self.border_state,
+        );
+        // Camera.depthFar, as the renderer's far plane.
+        let depth_far = (distance as f32 * 4.0).max(1024.0);
+        if !self
+            .border_renderer
+            .prepare(&self.border_state, camera, distance, depth_far)
+        {
+            return None;
+        }
+        let millis = self.started.elapsed().as_millis() as i64;
+        Some(horizon_client::gfx::BorderDraw {
+            vertices: self.border_renderer.vertices,
+            rebuilt: self.border_renderer.take_rebuilt(),
+            transforms: self
+                .border_renderer
+                .transforms(&self.border_state, camera, millis),
+            sides: BorderRenderer::sides(&self.border_state, camera, distance),
+        })
     }
     /// A key press while a world is open (keyboard or control socket).
     fn key_pressed(&mut self, key: KeyCode) -> Result<()> {
@@ -7474,6 +7519,7 @@ impl ApplicationHandler for Game<'_> {
                 self.res.atlas.width,
                 self.res.atlas.height,
             ),
+            (&self.res.forcefield.2, self.res.forcefield.0),
         )) {
             Ok(r) => self.renderer = Some(r),
             Err(e) => {
@@ -8088,6 +8134,12 @@ pub fn run() -> Result<()> {
             )
         })
         .unwrap_or((1, 1, vec![false])),
+        forcefield: horizon_client::hud::decode(
+            &root.join("assets/minecraft/textures/misc/forcefield.png"),
+        )
+        .ok()
+        .filter(|(w, h, _)| w == h && w.is_power_of_two())
+        .unwrap_or((1, 1, vec![0; 4])),
         mob_types: MobTypes::load(&root)?
             .types
             .into_iter()
@@ -8300,6 +8352,9 @@ pub fn run() -> Result<()> {
         exec: Default::default(),
         rand_sequences: Default::default(),
         border: Default::default(),
+        border_renderer: Default::default(),
+        border_state: Default::default(),
+        tab_list: Default::default(),
         subtitles: Default::default(),
         adv: Default::default(),
         stats_ui: Default::default(),

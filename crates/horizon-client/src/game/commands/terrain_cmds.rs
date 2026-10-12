@@ -345,7 +345,7 @@ impl Game<'_> {
                     .position_arg(ctx, "pos")
                     .unwrap_or_else(|| self.source_position());
                 let (x, z) = (p[0], p[2]);
-                if self.border.center == [x, z] {
+                if self.border.center() == [x, z] {
                     return Err(err("commands.worldborder.center.failed", &[]));
                 }
                 if x.abs() > 2.999_998_4e7 || z.abs() > 2.999_998_4e7 {
@@ -354,7 +354,7 @@ impl Game<'_> {
                         &[&"2.9999984E7"],
                     ));
                 }
-                self.border.center = [x, z];
+                self.border.set_center([x, z]);
                 self.feedback(Text::translate(
                     "commands.worldborder.center.success",
                     &[Text::literal(float2(x)), Text::literal(float2(z))],

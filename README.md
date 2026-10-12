@@ -34,13 +34,13 @@ round-trip harness has not been rerun.
 | Network protocol and multiplayer | 0.75 | Opens worlds to LAN, but hosting is not tested against a vanilla client; no dedicated server mode |
 | Chunk storage and palettes | 1 | None: client and saves share paletted containers, identical to vanilla over 266 scenarios |
 | Section meshing | 1 | None: 112 scenes and over a million quads identical to vanilla |
-| Rendering | 0.75 | Entity models match over 150 layers; block entity renderers and HUD overlays not compared |
+| Rendering | 0.75 | Entity models and the world border wall match vanilla; block entity renderers and most HUD overlays not compared |
 | Lighting | 1 | None: saved and relit light matches vanilla, slabs and stairs included |
 | World generation | 1 | None: 2,352 whole chunks over 225 structure sites, in all three dimensions, identical to vanilla |
 | Region files and saves | 0.75 | Saves round-trip with vanilla, and worlds from 1.18.2 to 26.2 upgrade as vanilla's DataFixers do over 22 sample worlds; worlds older than 1.18.2 are not upgraded |
 | Entities and physics | 0.75 | Attributes, dimensions, death loot, spawn rules and natural spawning (15,500 NaturalSpawner cases) match; AI not compared; drowned, villagers, traders and the wither unverified |
 | Interaction and inventory | 1 | None: menu clicks match over 8,000 click sequences, the loom and the crafter included; recipe book placement (6,000 cases), its buttons (1,200), the saved book (1,500) and the loom and crafter screens (1,600) match vanilla |
-| Menus, HUD and chat | 0.75 | Commands parse as vanilla over 39,685 inputs, but /item modify, /spectate, /waypoint and /dialog do not run; no tab list or world border rendering |
+| Menus, HUD and chat | 0.75 | Commands parse as vanilla over 39,685 inputs, the player list matches over 844,758 draw calls and the world border renders as vanilla, but /item modify, /spectate, /waypoint and /dialog do not run; player list heads use default skins |
 | Audio | 0.75 | Sound engine, music and ambience not compared with vanilla |
 | Block behaviours and ticking | 0.75 | Block updates, random ticks, redstone, dispensers, crafters (4,000 crafts) and block entity removal (containers spill, 4,000 cases) match vanilla; the copper golem's chest-sorting AI is not compared |
 
@@ -50,7 +50,7 @@ round-trip harness has not been rerun.
 2. Draw every item through the item model pipeline, and add the resource pack screen.
 3. An audio harness: sound engine attenuation, weighted sound events, music and ambience.
 4. A mob AI harness, and an oracle for drowned, villagers, traders and the wither.
-5. The missing commands, the copper golem's brain (chest sorting) in the mob AI harness, the tab list and world border rendering.
+5. The missing commands, the copper golem's brain (chest sorting) in the mob AI harness, and skins for player list heads.
 6. Test LAN hosting with a vanilla client, and add a dedicated server mode.
 
 ```sh
