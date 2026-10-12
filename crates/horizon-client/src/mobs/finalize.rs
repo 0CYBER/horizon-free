@@ -1877,12 +1877,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 super::warden::finalize(m, reason == Reason::Triggered, &mut Vec::new());
                 set_memory(m, "dig_cooldown", 0, 1200);
                 if reason == Reason::Triggered {
-                    set_memory(
-                        m,
-                        "is_emerging",
-                        0,
-                        i64::from(super::warden::EMERGE_DURATION),
-                    );
+                    set_memory(m, "is_emerging", 0, super::warden::EMERGE_DURATION);
                 }
                 self.mob(m, g)
             }
