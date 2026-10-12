@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""The dedicated server against vanilla's, seen from a vanilla client.
+
+The pinned server JAR first generates a world (offline mode, a fixed seed,
+respawn_radius 0) and stops; a vanilla dedicated server and Horizon's
+(`horizon-client --dedicated --nogui`) then serve copies of it with the same
+server.properties, server-icon.png and lists. VanillaProtocolClient, a
+headless client made of vanilla's own codecs (any byte vanilla would not
+read is an error), pings each server, joins it in offline mode through
+login, configuration and play, accepts the spawn teleport, receives the
+chunks around the spawn (their bytes are compared: the world is loaded from
+the same files), chats, runs /list and leaves. The console then runs `list`
+and `say` and `stop`. Compared, all of them exactly:
+
+- the status response (MOTD, players, version, favicon) and the ping;
+- the legacy (pre-1.7, 0xFE) ping reply;
+- the login and configuration packets in order (compression, profile,
+  brand, features, known packs, every registry, tags);
+- the play packets up to the first chunk batch, in order, with entity ids,
+  keep-alive ids and times left out; the chunks sent and their bytes; the
+  replies to the chat message and to /list;
+- the console lines about the player, the chat, `list`, `say` and `stop`;
+- the files the servers leave: server.properties (but the date line),
+  eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json.
+
+Online mode needs Mojang's session servers and is not tested.
+"""
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+import zlib
+
+try:
+    from . import lab, oracle_harness as oh, test_rust_parity as base
+except ImportError:
+    import lab
+    import oracle_harness as oh
+    import test_rust_parity as base
+
+NAME = 'dedicated-server-parity'
+SEED = 12345
+PLAYER = 'Tester'
+PROPERTIES = {
+    'online-mode': 'false',
+    'white-list': 'false',
+    'level-seed': str(SEED),
+    'view-distance': '4',
+    'simulation-distance': '4',
+    'spawn-protection': '0',
+    'max-players': '5',
+    'motd': '\\u00a7aHorizon \\u00a7rparity \\u00e9t\\u00e9',
+    'pause-when-empty-seconds': '-1',
+}
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def icon_png():
+    """A 64x64 RGBA PNG (server-icon.png)."""
+    rows = b''.join(b'\0' + b''.join(bytes((x * 4, y * 4, (x ^ y) * 4, 255)) for x in range(64)) for y in range(64))
+
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 64, 64, 8, 6, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
+
+
+def write_server_dir(directory, port, world=None):
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True)
+    props = dict(PROPERTIES, **{'server-port': str(port)})
+    (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()), encoding='iso-8859-1')
+    (directory / 'eula.txt').write_text('eula=true\n')
+    (directory / 'server-icon.png').write_bytes(icon_png())
+    if world is not None:
+        shutil.copytree(world, directory / 'world')
+        for lock in (directory / 'world').glob('session.lock'):
+            lock.unlink()
+
+
+class Server:
+    """A server process with its console on stdin and its log collected."""
+
+    def __init__(self, command, directory, log_name):
+        self.log_path = directory.parent / f'{log_name}.log'
+        self.log = self.log_path.open('w', encoding='utf-8')
+        self.lines = []
+        self.process = subprocess.Popen(list(map(str, command)), cwd=directory, stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                        encoding='utf-8', errors='replace')
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
+
+    def _read(self):
+        for line in self.process.stdout:
+            self.lines.append(line.rstrip('\n'))
+            self.log.write(line)
+            self.log.flush()
+
+    def wait_for(self, pattern, timeout=300):
+        deadline = time.time() + timeout
+        regex = re.compile(pattern)
+        while time.time() < deadline:
+            if any(regex.search(l) for l in self.lines):
+                return
+            if self.process.poll() is not None:
+                time.sleep(0.5)
+                raise AssertionError(f'{self.log_path.name}: server exited ({self.process.returncode}):\n'
+                                     + '\n'.join(self.lines[-30:]))
+            time.sleep(0.2)
+        raise AssertionError(f'{self.log_path.name}: no line matching {pattern!r} in {timeout} s:\n' + '\n'.join(self.lines[-30:]))
+
+    def console(self, command):
+        self.process.stdin.write(command + '\n')
+        self.process.stdin.flush()
+
+    def stop(self, timeout=120):
+        if self.process.poll() is None:
+            try:
+                self.console('stop')
+                self.process.wait(timeout=timeout)
+            except (BrokenPipeError, subprocess.TimeoutExpired):
+                self.process.kill()
+                self.process.wait()
+        self.reader.join(timeout=10)
+        self.log.close()
+
+
+def legacy_ping(port):
+    """The reply to a 1.6 client's 0xFE 0x01 0xFA MC|PingHost query (LegacyQueryHandler)."""
+    host = 'localhost'
+    data = (b'\xfe\x01\xfa' + struct.pack('>H', 11) + 'MC|PingHost'.encode('utf-16-be')
+            + struct.pack('>H', 7 + 2 * len(host)) + bytes([78]) + struct.pack('>H', len(host))
+            + host.encode('utf-16-be') + struct.pack('>I', port))
+    with socket.create_connection(('127.0.0.1', port), timeout=10) as s:
+        s.sendall(data)
+        reply = b''
+        while True:
+            try:
+                chunk = s.recv(4096)
+            except TimeoutError:
+                return reply.hex() + ' <no close>'
+            if not chunk:
+                break
+            reply += chunk
+    return reply.hex()
+
+
+CONSOLE_LINE = re.compile(r'^\[\d\d:\d\d:\d\d\] \[([^\]]+)\]: (.*)$')
+KEPT = re.compile(r'Tester|\[Server\]|\[Not Secure\]|There are|Stopping|Saving|ThreadedAnvilChunkStorage|All dimensions|Unknown or incomplete')
+
+
+def console_lines(lines):
+    """The console lines the comparison covers, timestamps and ports aside."""
+    out = []
+    for line in lines:
+        m = CONSOLE_LINE.match(line)
+        if not m or not KEPT.search(m.group(2)):
+            continue
+        text = re.sub(r'/127\.0\.0\.1:\d+', '/127.0.0.1:_', m.group(2))
+        text = re.sub(r'entity id \d+', 'entity id _', text)
+        out.append(f'[{m.group(1)}] {text}')
+    return out
+
+
+def server_files(directory):
+    out = []
+    for name in ['server.properties', 'eula.txt', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json']:
+        path = directory / name
+        if not path.exists():
+            out.append(f'{name}: missing')
+            continue
+        text = path.read_bytes().decode('iso-8859-1')
+        if name in ('server.properties', 'eula.txt'):
+            # The second comment line is the date Properties.store wrote.
+            text = re.sub(r'^(#[^\n]*\n)#[^\n]*\n', r'\1#<date>\n', text)
+        out.append(f'{name}: {text!r}')
+    return out
+
+
+def run_side(label, command, directory, client):
+    server = Server(command, directory, label)
+    try:
+        server.wait_for(r'Done \(')
+        port = int(PROPERTIES_PORTS[label])
+        legacy = legacy_ping(port)
+        client(port, directory.parent / f'{label}-client.txt')
+        time.sleep(1)
+        server.console('list')
+        server.console('say console says hi')
+        server.wait_for(r'\[Server\] console says hi', timeout=30)
+    finally:
+        server.stop()
+    transcript = (directory.parent / f'{label}-client.txt').read_text(encoding='utf-8').splitlines()
+    return (['legacy-ping ' + legacy] + transcript + ['console ' + l for l in console_lines(server.lines)]
+            + ['file ' + l for l in server_files(directory)])
+
+
+PROPERTIES_PORTS = {}
+
+
+def main():
+    lock, jars, libraries = base.verify_artifacts()
+    build = lab.LOCAL / NAME
+    build.mkdir(parents=True, exist_ok=True)
+    report = build / 'report.json'
+    report.unlink(missing_ok=True)
+    oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaProtocolClient.java'
+    classes = build / 'classes'
+    shutil.rmtree(classes, ignore_errors=True)
+    classes.mkdir()
+    dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+    oh.run_logged(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-sourcepath',
+                   lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
+                  build, 'compile-java')
+    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
+                  'compile-rust')
+    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
+                                                  cwd=lab.ROOT, text=True))
+    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
+    horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
+
+    # The world, generated once by vanilla.
+    generate = build / 'generate'
+    write_server_dir(generate, free_port())
+    server = Server(vanilla_server, generate, 'generate')
+    try:
+        server.wait_for(r'Done \(')
+        server.console('gamerule respawn_radius 0')
+        server.wait_for(r'respawn_radius', timeout=30)
+    finally:
+        server.stop()
+    world = generate / 'world'
+    (world / 'playerdata').mkdir(exist_ok=True)
+
+    def client(port, out):
+        oh.run_logged(['java', '-Xmx1g', '-Duser.timezone=UTC', '-cp', str(classes) + os.pathsep + dependencies,
+                       'dev.horizonlab.parity.VanillaProtocolClient', '127.0.0.1', port, PLAYER, out], build,
+                      out.stem, timeout=300)
+
+    results = {}
+    for label, command in [('vanilla', vanilla_server), ('horizon', horizon_server)]:
+        PROPERTIES_PORTS[label] = free_port()
+        directory = build / label
+        write_server_dir(directory, PROPERTIES_PORTS[label], world)
+        results[label] = run_side(label, command, directory, client)
+        (build / f'{label}.txt').write_text('\n'.join(results[label]) + '\n', encoding='utf-8')
+    vanilla, horizon = results['vanilla'], results['horizon']
+    errors = [l for l in vanilla + horizon if l.startswith('error')]
+    differences = []
+    import difflib
+    for line in difflib.unified_diff(vanilla, horizon, 'vanilla', 'horizon', n=0, lineterm=''):
+        differences.append(line[:400])
+    if differences or errors:
+        raise AssertionError(f'{len([d for d in differences if d[:1] in "+-" and d[:3] not in ("+++", "---")])} differing lines '
+                             f'(see {build}/vanilla.txt and horizon.txt):\n' + '\n'.join(differences[:80]))
+    lab.write_json(report, dict(
+        schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
+        java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
+        lines=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
+        scope='Dedicated server seen by a vanilla-codec client: status, legacy ping, login, configuration, play '
+              'start, chunks, chat, /list, console list/say/stop, files written. Offline mode.'))
+    print(f'dedicated server: {len(vanilla)} transcript lines identical')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except AssertionError as error:
+        sys.exit(f'{NAME}: {error}')
