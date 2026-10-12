@@ -14,7 +14,7 @@ Horizon is a Rust rewrite of Minecraft Java **26.3** targeting one-to-one vanill
 - shields, maps, books, fireworks, beacons, advancements and statistics;
 - Anvil saves.
 
-Parity is **not** complete. Still missing: the warden and the sculk family, the breeze, sniffer, creaking, happy ghast, llamas and a few other mobs, raids and pillager patrols, villager breeding and gossip, the loom, crafter and recipe book, scoreboards, subtitles, and spawned mob gear enchantments. Multiplayer joins vanilla servers but Horizon cannot host one. See [Rust rewrite status](docs/rust-parity.md).
+Parity is **not** complete. Still missing: the warden and the sculk family, the breeze, sniffer, creaking, happy ghast, llamas and a few other mobs, raids and pillager patrols, villager breeding and gossip, scoreboards, subtitles, and spawned mob gear enchantments. Multiplayer joins vanilla servers but Horizon cannot host one. See [Rust rewrite status](docs/rust-parity.md).
 
 ### Java parity: 84%
 
@@ -39,10 +39,10 @@ round-trip harness has not been rerun.
 | World generation | 1 | None: 2,352 whole chunks over 225 structure sites, in all three dimensions, identical to vanilla |
 | Region files and saves | 0.75 | Saves round-trip with vanilla, and worlds from 1.18.2 to 26.2 upgrade as vanilla's DataFixers do over 22 sample worlds; worlds older than 1.18.2 are not upgraded |
 | Entities and physics | 0.75 | Attributes, dimensions, death loot, spawn rules and natural spawning (15,500 NaturalSpawner cases) match; AI not compared; drowned, villagers, traders and the wither unverified |
-| Interaction and inventory | 1 | None: menu clicks match over 6,000 click sequences |
+| Interaction and inventory | 1 | None: menu clicks match over 8,000 click sequences, the loom and the crafter included; recipe book placement (6,000 cases), its buttons (1,200), the saved book (1,500) and the loom and crafter screens (1,600) match vanilla |
 | Menus, HUD and chat | 0.75 | Commands parse as vanilla over 39,685 inputs, but /item modify, /spectate, /waypoint and /dialog do not run; no tab list or world border rendering |
 | Audio | 0.75 | Sound engine, music and ambience not compared with vanilla |
-| Block behaviours and ticking | 0.75 | Block updates, random ticks, redstone and dispensers match vanilla; a container replaced by another block keeps its contents instead of spilling them, and there are no copper golems |
+| Block behaviours and ticking | 0.75 | Block updates, random ticks, redstone, dispensers and crafters (4,000 crafts) match vanilla; a container replaced by another block keeps its contents instead of spilling them, and there are no copper golems |
 
 ### Next steps
 
